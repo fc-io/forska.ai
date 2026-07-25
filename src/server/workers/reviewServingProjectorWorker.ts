@@ -1182,9 +1182,7 @@ const getLlmStatusRebuildChunkOutputChecksum = async (
         CAST(review_config_hash AS VARCHAR) || ':' ||
         CAST(list_mode_key AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(enabled_prompt_count AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(llm_judged_prompt_count AS VARCHAR), '') || ':' ||
-        COALESCE(llm_status_key, ''),
+        COALESCE(CAST(patch_watermark AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
       ), '')) AS actualChecksum
     FROM mart.review_article_serving_v4 serving
@@ -1242,8 +1240,7 @@ const getHumanStatusRebuildChunkOutputChecksum = async (
         CAST(review_config_hash AS VARCHAR) || ':' ||
         CAST(list_mode_key AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(human_answered_prompt_count AS VARCHAR), '') || ':' ||
-        COALESCE(human_status_key, ''),
+        COALESCE(CAST(patch_watermark AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
       ), '')) AS actualChecksum
     FROM mart.review_article_serving_v4 serving

@@ -74,6 +74,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0171_normalizeReviewJudgmentDetailListModeStorage.sql',
   '../../db/duckdbMigrations/0172_dropReviewJudgmentDetailHydrationStorage.sql',
   '../../db/duckdbMigrations/0173_dropReviewPayloadDisplayStorage.sql',
+  '../../db/duckdbMigrations/0174_dropReviewArticleServingStatusCountCopies.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -163,6 +164,8 @@ const reviewJudgmentDetailHydrationStorageDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0172_dropReviewJudgmentDetailHydrationStorage.sql']
 const reviewPayloadDisplayStorageDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0173_dropReviewPayloadDisplayStorage.sql']
+const reviewArticleServingStatusCountCopyDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0174_dropReviewArticleServingStatusCountCopies.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -870,16 +873,7 @@ test('Phase 1 payload serving schema drops article display metadata storage', ()
 
 test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(
-    getMissingColumns('mart.review_article_serving_v4', [
-      'article_created_at',
-      'sort_key',
-      'activity_sort_at',
-      'llm_status_key',
-      'human_status_key',
-      'llm_judged_prompt_count',
-      'enabled_prompt_count',
-      'human_answered_prompt_count',
-    ]),
+    getMissingColumns('mart.review_article_serving_v4', ['article_created_at', 'sort_key', 'activity_sort_at']),
   ).toEqual([])
   expect(
     getMissingColumns('mart.review_article_serving_v4', [
@@ -929,6 +923,11 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
     'conflict_flag',
     'selected_import_route_id',
     'serving_updated_at',
+    'llm_status_key',
+    'human_status_key',
+    'llm_judged_prompt_count',
+    'enabled_prompt_count',
+    'human_answered_prompt_count',
   ]
   expect(
     [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
@@ -1005,6 +1004,18 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
     'ALTER TABLE mart.review_article_serving_v4_updated_at_repair RENAME TO review_article_serving_v4;',
   )
   expect(reviewArticleServingUpdatedAtDropForwardMigrationSql).not.toContain('serving_updated_at')
+  expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_v4_status_count_repair',
+  )
+  expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).toContain(
+    'DROP TABLE mart.review_article_serving_v4;',
+  )
+  expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_v4_status_count_repair RENAME TO review_article_serving_v4;',
+  )
+  expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('llm_status_key VARCHAR')
+  expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('human_status_key VARCHAR')
+  expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('enabled_prompt_count')
   const articleServingFoundationSchemaSql = reviewServingFoundationSchemaSql.slice(
     reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4'),
     reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_display_patch_v4'),
@@ -1013,6 +1024,9 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(articleServingFoundationSchemaSql).not.toContain('conflict_flag BOOLEAN')
   expect(articleServingFoundationSchemaSql).not.toContain('selected_import_route_id')
   expect(articleServingFoundationSchemaSql).not.toContain('serving_updated_at')
+  expect(articleServingFoundationSchemaSql).not.toContain('llm_status_key')
+  expect(articleServingFoundationSchemaSql).not.toContain('human_status_key')
+  expect(articleServingFoundationSchemaSql).not.toContain('enabled_prompt_count')
   expect(reviewServingFoundationSchemaSql).not.toContain('idx_review_article_serving_v4_publication_year')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_opened')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_sections_completed')

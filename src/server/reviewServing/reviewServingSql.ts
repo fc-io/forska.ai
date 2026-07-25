@@ -442,11 +442,6 @@ const reviewServingArticlePhysicalSelectColumns = [
   'article_created_at',
   'sort_key',
   'activity_sort_at',
-  'llm_status_key',
-  'human_status_key',
-  'llm_judged_prompt_count',
-  'enabled_prompt_count',
-  'human_answered_prompt_count',
 ].map((column) => {
   return `${reviewServingArticleTable}.${column}`
 })

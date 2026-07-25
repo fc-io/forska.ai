@@ -585,33 +585,16 @@ const getApplyHumanStatusServingStatement = (input: {
             AND newer.review_config_hash IS NOT DISTINCT FROM candidate.review_config_hash
             AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
         )
-      ), article_status AS (
-        SELECT
-          list_mode_key,
-          article_id,
-          review_config_hash,
-          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND prompt_id <> 'summary' AND human_status_key = 'answered') AS human_answered_prompt_count,
-          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id = 'summary' AND human_status_key = 'answered') AS human_answered_summary_count
-        FROM latest_prompt
-        GROUP BY list_mode_key, article_id, review_config_hash
       )
       UPDATE mart.review_article_serving_v4 serving
       SET
-        human_answered_prompt_count = CAST(article_status.human_answered_prompt_count AS INTEGER),
-        human_status_key = CASE
-          WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND article_status.human_answered_summary_count > 0 THEN 'answered'
-          WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} THEN 'unanswered'
-          WHEN serving.enabled_prompt_count = 0 THEN NULL
-          WHEN serving.review_config_hash IS DISTINCT FROM ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND serving.enabled_prompt_count = article_status.human_answered_prompt_count THEN 'answered'
-          ELSE 'unanswered'
-        END,
         patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)})
-      FROM article_status
+      FROM changed_article
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
         AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND serving.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash
-        AND serving.list_mode_key = article_status.list_mode_key
-        AND serving.article_id = article_status.article_id
+        AND serving.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash
+        AND serving.list_mode_key = changed_article.list_mode_key
+        AND serving.article_id = changed_article.article_id
         AND EXISTS (
           SELECT 1
           FROM app.review_serving_snapshot_manifest snapshot
@@ -674,32 +657,18 @@ const getApplyHumanStatusServingReplacementStatements = (input: {
               AND newer.review_config_hash IS NOT DISTINCT FROM candidate.review_config_hash
               AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
           )
-        ), article_status AS (
-          SELECT
-            list_mode_key,
-            article_id,
-            review_config_hash,
-            COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND prompt_id <> 'summary' AND human_status_key = 'answered') AS human_answered_prompt_count,
-            COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id = 'summary' AND human_status_key = 'answered') AS human_answered_summary_count
+        ), changed_article AS (
+          SELECT DISTINCT list_mode_key, article_id, review_config_hash
           FROM latest_prompt
-          GROUP BY list_mode_key, article_id, review_config_hash
         )
         SELECT serving.* REPLACE (
-          CAST(article_status.human_answered_prompt_count AS INTEGER) AS human_answered_prompt_count,
-          CASE
-            WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND article_status.human_answered_summary_count > 0 THEN 'answered'
-            WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} THEN 'unanswered'
-            WHEN serving.enabled_prompt_count = 0 THEN NULL
-            WHEN serving.review_config_hash IS DISTINCT FROM ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND serving.enabled_prompt_count = article_status.human_answered_prompt_count THEN 'answered'
-            ELSE 'unanswered'
-          END AS human_status_key,
           GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark
         )
         FROM mart.review_article_serving_v4 serving
-        INNER JOIN article_status
-          ON serving.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash
-          AND serving.list_mode_key = article_status.list_mode_key
-          AND serving.article_id = article_status.article_id
+        INNER JOIN changed_article
+          ON serving.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash
+          AND serving.list_mode_key = changed_article.list_mode_key
+          AND serving.article_id = changed_article.article_id
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
           AND EXISTS (
