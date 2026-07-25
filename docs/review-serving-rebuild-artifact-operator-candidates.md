@@ -43,6 +43,9 @@ current run, the operator-relevant rows include:
 The evidence narrows future operator work, but it does not make an apply action
 safe by itself. The next step for any candidate request is a dry-run operator
 command that preserves request rows and reports refusal reasons before mutation.
+The release and terminalization scripts now also run that dry-run preflight
+inside `--apply` mode; mutation is skipped unless the preflight status is
+`dry_run` and `refusalReasons` is empty.
 
 For failed requestless-bootstrap requests with chunks, use:
 

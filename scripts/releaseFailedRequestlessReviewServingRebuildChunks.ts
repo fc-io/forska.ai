@@ -1,3 +1,7 @@
+import type {
+  ReviewServingChunkManifestRepositoryDatabase,
+  ReviewServingChunkManifestRepositoryTransaction,
+} from '../src/server/reviewServing/reviewServingChunkManifestRepository.ts'
 import {releaseFailedRequestlessReviewServingRebuildChunks} from '../src/server/reviewServing/reviewServingRebuildRequestRepository.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
@@ -20,6 +24,38 @@ const getArgValue = (names: string[]) => {
 
 const hasFlag = (name: string) => {
   return process.argv.slice(2).includes(name)
+}
+
+const getMaintenanceDatabase = (): ReviewServingChunkManifestRepositoryDatabase => {
+  const database = getAppDatabaseService()
+
+  return {
+    ...database,
+    queryJson: <T>(statement: string) => {
+      return database.queryJson<T>(statement, workloadContext)
+    },
+    run: (statement: string) => {
+      return database.run(statement, workloadContext)
+    },
+    transaction: <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return database.transaction(operation, workloadContext) as Promise<T>
+    },
+  }
+}
+
+const printResult = (result: unknown) => {
+  console.log(
+    JSON.stringify(
+      {
+        ...(typeof result === 'object' && result !== null ? result : {result}),
+        acknowledgementRequiredForApply: requiredApplyAcknowledgement,
+        applyRequirement: 'dry-run preflight must report an empty refusalReasons array',
+        mode: 'failed_requestless_chunk_release',
+      },
+      null,
+      2,
+    ),
+  )
 }
 
 const getCliOptions = (): CliOptions => {
@@ -64,40 +100,43 @@ const releaseFailedRequestlessReviewServingRebuildChunksCli = async () => {
     return
   }
 
+  const projectId = options.projectId
+  const requestId = options.requestId
+
   await withDuckdbMaintenanceAccess('release failed requestless review-serving rebuild chunks', async () => {
-    const database = getAppDatabaseService()
+    const database = getMaintenanceDatabase()
+
+    if (!options.apply) {
+      const result = await releaseFailedRequestlessReviewServingRebuildChunks({projectId, requestId}, database)
+
+      printResult(result)
+      return
+    }
+
+    const applyPreflight = await releaseFailedRequestlessReviewServingRebuildChunks({projectId, requestId}, database)
+
+    if (applyPreflight.refusalReasons.length > 0 || applyPreflight.status !== 'dry_run') {
+      process.exitCode = 1
+      printResult({
+        ...applyPreflight,
+        applyPreflight,
+        applySkippedReason: 'preflight_refusal_reasons_not_empty_or_not_dry_run',
+        applied: false,
+        status: 'refused',
+      })
+      return
+    }
+
     const result = await releaseFailedRequestlessReviewServingRebuildChunks(
-      {apply: options.apply, projectId: options.projectId, requestId: options.requestId},
-      {
-        ...database,
-        queryJson: <T>(statement: string) => {
-          return database.queryJson<T>(statement, workloadContext)
-        },
-        run: (statement: string) => {
-          return database.run(statement, workloadContext)
-        },
-        transaction: <T>(
-          operation: (tx: {
-            queryJson: <R>(statement: string) => Promise<R[]>
-            run: (statement: string) => Promise<void>
-          }) => Promise<T>,
-        ) => {
-          return database.transaction(operation, workloadContext)
-        },
-      },
+      {apply: true, projectId, requestId},
+      database,
     )
 
-    console.log(
-      JSON.stringify(
-        {
-          ...result,
-          acknowledgementRequiredForApply: requiredApplyAcknowledgement,
-          mode: 'failed_requestless_chunk_release',
-        },
-        null,
-        2,
-      ),
-    )
+    if (!result.applied || result.refusalReasons.length > 0) {
+      process.exitCode = 1
+    }
+
+    printResult({...result, applyPreflight})
   })
 }
 

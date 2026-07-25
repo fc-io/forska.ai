@@ -549,8 +549,15 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   const accumulatorWrites = statements.filter((statement) => {
     return statement.includes("'__summary_rebuild_partial_accumulator__:") && statement.includes(' AS chunk_id')
   })
+  const contributionCountRefreshes = statements.filter((statement) => {
+    return (
+      statement.includes('UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator')
+      && statement.includes('FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution')
+    )
+  })
 
   expect(accumulatorWrites).toHaveLength(2)
+  expect(contributionCountRefreshes).toHaveLength(1)
   expect(joined).toContain('chunk.snapshot_id = ')
   expect(joined).toContain("partial.chunk_id IN ('chunk-001', 'chunk-002'")
   expect(joined).toContain("partial.chunk_id IN ('chunk-257')")

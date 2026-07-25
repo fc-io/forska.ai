@@ -1,3 +1,7 @@
+import type {
+  ReviewServingChunkManifestRepositoryDatabase,
+  ReviewServingChunkManifestRepositoryTransaction,
+} from '../src/server/reviewServing/reviewServingChunkManifestRepository.ts'
 import {terminalizeStaleZeroChunkReviewServingRebuildRequest} from '../src/server/reviewServing/reviewServingRebuildRequestRepository.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
@@ -34,6 +38,38 @@ const getNonNegativeIntegerOption = (value: string | undefined, fallback: number
   return Number.isInteger(parsedValue) && parsedValue >= 0 ? parsedValue : fallback
 }
 
+const getMaintenanceDatabase = (): ReviewServingChunkManifestRepositoryDatabase => {
+  const database = getAppDatabaseService()
+
+  return {
+    ...database,
+    queryJson: <T>(statement: string) => {
+      return database.queryJson<T>(statement, workloadContext)
+    },
+    run: (statement: string) => {
+      return database.run(statement, workloadContext)
+    },
+    transaction: <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return database.transaction(operation, workloadContext) as Promise<T>
+    },
+  }
+}
+
+const printResult = (result: unknown) => {
+  console.log(
+    JSON.stringify(
+      {
+        ...(typeof result === 'object' && result !== null ? result : {result}),
+        acknowledgementRequiredForApply: requiredApplyAcknowledgement,
+        applyRequirement: 'dry-run preflight must report an empty refusalReasons array',
+        mode: 'zero_chunks',
+      },
+      null,
+      2,
+    ),
+  )
+}
+
 const getCliOptions = (): CliOptions => {
   return {
     acknowledgement: getArgValue(['--ack', '--acknowledgement']) ?? null,
@@ -65,41 +101,49 @@ const terminalizeReviewServingRebuildRequestCli = async () => {
     return
   }
 
+  const projectId = options.projectId
+  const requestId = options.requestId
+
   await withDuckdbMaintenanceAccess('terminalize review-serving rebuild request', async () => {
-    const database = getAppDatabaseService()
-    const result = await terminalizeStaleZeroChunkReviewServingRebuildRequest(
-      {
-        apply: options.apply,
-        minimumAgeMinutes: options.minimumAgeMinutes,
-        projectId: options.projectId,
-        requestId: options.requestId,
-      },
-      {
-        ...database,
-        queryJson: <T>(statement: string) => {
-          return database.queryJson<T>(statement, workloadContext)
-        },
-        run: (statement: string) => {
-          return database.run(statement, workloadContext)
-        },
-        transaction: <T>(
-          operation: (tx: {
-            queryJson: <R>(statement: string) => Promise<R[]>
-            run: (statement: string) => Promise<void>
-          }) => Promise<T>,
-        ) => {
-          return database.transaction(operation, workloadContext)
-        },
-      },
+    const database = getMaintenanceDatabase()
+
+    if (!options.apply) {
+      const result = await terminalizeStaleZeroChunkReviewServingRebuildRequest(
+        {minimumAgeMinutes: options.minimumAgeMinutes, projectId, requestId},
+        database,
+      )
+
+      printResult(result)
+      return
+    }
+
+    const applyPreflight = await terminalizeStaleZeroChunkReviewServingRebuildRequest(
+      {minimumAgeMinutes: options.minimumAgeMinutes, projectId, requestId},
+      database,
     )
 
-    console.log(
-      JSON.stringify(
-        {...result, acknowledgementRequiredForApply: requiredApplyAcknowledgement, mode: 'zero_chunks'},
-        null,
-        2,
-      ),
+    if (applyPreflight.refusalReasons.length > 0 || applyPreflight.status !== 'dry_run') {
+      process.exitCode = 1
+      printResult({
+        ...applyPreflight,
+        applyPreflight,
+        applySkippedReason: 'preflight_refusal_reasons_not_empty_or_not_dry_run',
+        applied: false,
+        status: 'refused',
+      })
+      return
+    }
+
+    const result = await terminalizeStaleZeroChunkReviewServingRebuildRequest(
+      {apply: true, minimumAgeMinutes: options.minimumAgeMinutes, projectId, requestId},
+      database,
     )
+
+    if (!result.applied || result.refusalReasons.length > 0) {
+      process.exitCode = 1
+    }
+
+    printResult({...result, applyPreflight})
   })
 }
 

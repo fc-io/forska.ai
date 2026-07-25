@@ -44,6 +44,14 @@ at a diagnostic project-wide level; it is not an exact per-config runtime
 eligibility report and does not authorize wider predicates, retention
 broadening, or table/schema deletion.
 
+Post-PR #199 follow-up: the requestless release and stale zero-chunk
+terminalization operator scripts keep dry-run diagnostics as the default and now
+perform an internal dry-run preflight before any acknowledged `--apply`. Apply
+is skipped unless the preflight returns `status: "dry_run"` with an empty
+`refusalReasons` array; the scripts print the preflight in the final JSON so the
+empty-refusal gate is explicit and auditable. This does not broaden retention
+cleanup predicates, remove request rows, or touch mart schema drops.
+
 ## Retired Since Original Evidence
 
 | Retired surface                                              | Migration                                             | Current status | Notes                                                                                                                             |
