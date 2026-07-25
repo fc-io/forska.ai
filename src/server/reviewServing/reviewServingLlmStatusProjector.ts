@@ -32,6 +32,8 @@ export type ProjectReviewServingLlmStatusInput = {
   status?: ReviewServingProjectionManifestStatus
 }
 
+export type ProjectReviewServingLlmStatusRangesInput = {ranges: readonly ProjectReviewServingLlmStatusInput[]}
+
 type ProjectPromptConfigRow = {
   answerSchemaHash: string | null
   promptId: string
@@ -220,6 +222,42 @@ const getArticleRangePredicate = (input: {
 
   return `${startPredicate}
           ${endPredicate}`
+}
+
+const getRangeValuesCte = (ranges: readonly ProjectReviewServingLlmStatusInput[]) => {
+  return `article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
+        SELECT * FROM (VALUES ${ranges
+          .map((range) => {
+            return `(${getSqlLiteral(range.chunkStartArticleId ?? null)}, ${getSqlLiteral(range.chunkEndArticleId ?? null)})`
+          })
+          .join(', ')})
+      )`
+}
+
+const assertCompatibleLlmStatusRanges = (ranges: readonly ProjectReviewServingLlmStatusInput[]) => {
+  const firstRange = ranges[0]
+
+  if (firstRange === undefined) {
+    return
+  }
+
+  ranges.forEach((range) => {
+    const matchesListModes =
+      range.listModeKeys.length === firstRange.listModeKeys.length
+      && range.listModeKeys.every((listModeKey, index) => {
+        return listModeKey === firstRange.listModeKeys[index]
+      })
+
+    if (
+      range.claims.length !== 0
+      || range.baseGeneration !== firstRange.baseGeneration
+      || range.projectId !== firstRange.projectId
+      || range.projectionIdentity !== firstRange.projectionIdentity
+      || !matchesListModes
+    ) {
+      throw new Error('cannot batch incompatible LLM status rebuild ranges')
+    }
+  })
 }
 
 const getProjectPromptConfigRows = async (
@@ -727,129 +765,49 @@ const getApplyLlmStatusServingStatement = (input: {
         )`
 }
 
-const getApplyLlmStatusServingReplacementStatements = (input: {
-  baseGeneration: number
-  patchWatermark: number
-  projectId: string
-  projectionIdentity: string
-  recordRows: readonly {
-    articleId: string
-    listModeKey: string
-    llmStatusKey: string | null
-    promptConfigHash: string
-    promptId: string
-    reviewConfigHash: string
-    tombstone: boolean
-  }[]
+const getApplyLlmStatusServingRangeReplacementStatements = (input: {
+  ranges: readonly ProjectReviewServingLlmStatusInput[]
 }) => {
-  const values = input.recordRows
-    .map((row) => {
-      return `(${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.llmStatusKey)}, ${getSqlLiteral(row.tombstone)})`
-    })
-    .join(', ')
+  const firstRange = input.ranges[0]
 
-  return input.recordRows.length === 0
-    ? []
-    : [
-        `CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS
-         WITH changed(review_config_hash, list_mode_key, article_id, prompt_config_hash, prompt_id, llm_status_key, tombstone) AS (
-          SELECT * FROM (VALUES ${values})
-        ), candidate_prompt AS (
-          SELECT
-            changed.review_config_hash,
-            changed.list_mode_key,
-            changed.article_id,
-            changed.prompt_config_hash,
-            changed.prompt_id,
-            changed.llm_status_key,
-            changed.tombstone,
-            ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
-          FROM changed
-          GROUP BY changed.review_config_hash, changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.llm_status_key, changed.tombstone
-        ), latest_prompt AS (
-          SELECT candidate.*
-          FROM candidate_prompt candidate
-          WHERE candidate.patch_watermark = (
-            SELECT MAX(newer.patch_watermark)
-            FROM candidate_prompt newer
-            WHERE newer.review_config_hash = candidate.review_config_hash
-              AND newer.list_mode_key = candidate.list_mode_key
-              AND newer.article_id = candidate.article_id
-              AND newer.prompt_id = candidate.prompt_id
-          )
-        ), changed_article AS (
-          SELECT DISTINCT review_config_hash, list_mode_key, article_id
-          FROM latest_prompt
-        )
-        SELECT serving.* REPLACE (
-          GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark
-        )
-        FROM mart.review_article_serving_v4 serving
-        INNER JOIN changed_article
-          ON serving.review_config_hash = changed_article.review_config_hash
-          AND serving.list_mode_key = changed_article.list_mode_key
-          AND serving.article_id = changed_article.article_id
-        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-          AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-          AND EXISTS (
-            SELECT 1
-            FROM app.review_serving_snapshot_manifest snapshot
-            WHERE snapshot.project_id = serving.project_id
-              AND snapshot.snapshot_id = serving.snapshot_id
-              AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-              AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
-              AND snapshot.snapshot_status IN ('candidate', 'active')
-          )`,
-        `DELETE FROM mart.review_article_serving_v4 serving
-         WHERE EXISTS (
-           SELECT 1
-           FROM review_llm_status_serving_rebuild_v4 replacement
-           WHERE replacement.project_id = serving.project_id
-             AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-             AND replacement.base_generation = serving.base_generation
-             AND replacement.snapshot_id = serving.snapshot_id
-             AND replacement.list_mode_key = serving.list_mode_key
-             AND replacement.article_id = serving.article_id
-         )`,
-        `INSERT INTO mart.review_article_serving_v4 BY NAME
-         SELECT *
-         FROM review_llm_status_serving_rebuild_v4`,
-      ]
-}
+  if (firstRange === undefined) {
+    return []
+  }
 
-const getResetEmptyLlmStatusServingReplacementStatements = (input: {
-  baseGeneration: number
-  chunkEndArticleId?: string | null
-  chunkStartArticleId?: string | null
-  listModeKeys: readonly string[]
-  patchWatermark: number
-  projectId: string
-  projectionIdentity: string
-}) => {
-  const listModePredicate =
-    input.listModeKeys.length === 0
-      ? ''
-      : `AND serving.list_mode_key IN (${input.listModeKeys.map(getSqlLiteral).join(', ')})`
+  assertCompatibleLlmStatusRanges(input.ranges)
+
+  if (firstRange.listModeKeys.length === 0) {
+    return []
+  }
+
+  const listModePredicate = `AND serving.list_mode_key IN (${firstRange.listModeKeys.map(getSqlLiteral).join(', ')})`
 
   return [
     `CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS
-     SELECT serving.* REPLACE (
-       GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark
+     WITH ${getRangeValuesCte(input.ranges)},
+     scoped_serving AS (
+       SELECT DISTINCT serving.*
+       FROM mart.review_article_serving_v4 serving
+       INNER JOIN article_range_filter range
+         ON (range.chunk_start_article_id IS NULL OR serving.article_id >= range.chunk_start_article_id)
+         AND (range.chunk_end_article_id IS NULL OR serving.article_id <= range.chunk_end_article_id)
+       WHERE serving.project_id = ${getSqlLiteral(firstRange.projectId)}
+         AND serving.base_generation = ${getSqlLiteral(firstRange.baseGeneration)}
+         ${listModePredicate}
+         AND EXISTS (
+           SELECT 1
+           FROM app.review_serving_snapshot_manifest snapshot
+           WHERE snapshot.project_id = serving.project_id
+             AND snapshot.snapshot_id = serving.snapshot_id
+             AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+             AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(firstRange.projectionIdentity)}
+             AND snapshot.snapshot_status IN ('candidate', 'active')
+         )
      )
-     FROM mart.review_article_serving_v4 serving
-     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-       AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-       ${listModePredicate}
-       ${getArticleRangePredicate({alias: 'serving', ...input})}
-       AND EXISTS (
-         SELECT 1
-         FROM app.review_serving_snapshot_manifest snapshot
-         WHERE snapshot.project_id = serving.project_id
-           AND snapshot.snapshot_id = serving.snapshot_id
-           AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-           AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
-           AND snapshot.snapshot_status IN ('candidate', 'active')
-       )`,
+     SELECT scoped_serving.* REPLACE (
+       GREATEST(scoped_serving.patch_watermark, 0) AS patch_watermark
+     )
+     FROM scoped_serving`,
     `DELETE FROM mart.review_article_serving_v4 serving
      WHERE EXISTS (
        SELECT 1
@@ -867,11 +825,57 @@ const getResetEmptyLlmStatusServingReplacementStatements = (input: {
   ]
 }
 
+const projectReviewServingLlmStatusClaimlessRanges = async (
+  input: ProjectReviewServingLlmStatusRangesInput,
+  database: ReviewServingLlmStatusProjectorDatabase,
+) => {
+  const {measure, phaseTimings} = getTimedProjector()
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: [],
+        component: 'llmStatus',
+        projectionManifests: [],
+        records: [],
+        repairDirtyWork: [],
+        statements: getApplyLlmStatusServingRangeReplacementStatements(input),
+      },
+      database,
+    )
+  })
+
+  return withDiagnosticsJson(
+    {patchRowCount: 0, patchWatermark: 0},
+    {
+      phaseTimings,
+      llmStatusProjector: {
+        fullRebuildMode: 'range-serving-set-based',
+        rangeCount: input.ranges.length,
+        sourceRowCount: 0,
+        writer: writer.diagnostics,
+      },
+    },
+  )
+}
+
+export const projectReviewServingLlmStatusRanges = async (
+  input: ProjectReviewServingLlmStatusRangesInput,
+  database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService() as ReviewServingLlmStatusProjectorDatabase,
+) => {
+  return projectReviewServingLlmStatusClaimlessRanges(input, database)
+}
+
 export const projectReviewServingLlmStatusPatches = async (
   input: ProjectReviewServingLlmStatusInput,
   database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService() as ReviewServingLlmStatusProjectorDatabase,
 ) => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
+  const patchWatermark = getPatchWatermark(input.claims)
+
+  if (input.claims.length === 0) {
+    return projectReviewServingLlmStatusClaimlessRanges({ranges: [input]}, database)
+  }
+
   const promptConfigRows = await measure('promptConfigQueryMs', async () => {
     return getProjectPromptConfigRows(input.projectId, database)
   })
@@ -883,7 +887,6 @@ export const projectReviewServingLlmStatusPatches = async (
       getArticleScopedRows(input, database),
     ])
   })
-  const patchWatermark = getPatchWatermark(input.claims)
   const rows = [...judgmentRows, ...promptRows, ...projectRows, ...articleRows]
   const recordRows = measureSync('recordTransformMs', () => {
     return rows.flatMap((row) => {
@@ -904,40 +907,18 @@ export const projectReviewServingLlmStatusPatches = async (
     })
   })
   const writer = await measure('writerMs', async () => {
-    const servingStatements =
-      input.claims.length === 0
-        ? [
-            ...getApplyLlmStatusServingReplacementStatements({
-              baseGeneration: input.baseGeneration,
-              patchWatermark,
-              projectId: input.projectId,
-              projectionIdentity: input.projectionIdentity,
-              recordRows,
-            }),
-            ...(recordRows.length === 0 && promptConfigRows.length === 0
-              ? getResetEmptyLlmStatusServingReplacementStatements({
-                  baseGeneration: input.baseGeneration,
-                  chunkEndArticleId: input.chunkEndArticleId,
-                  chunkStartArticleId: input.chunkStartArticleId,
-                  listModeKeys: input.listModeKeys,
-                  patchWatermark,
-                  projectId: input.projectId,
-                  projectionIdentity: input.projectionIdentity,
-                })
-              : []),
-          ]
-        : [
-            getApplyLlmStatusServingStatement({
-              baseGeneration: input.baseGeneration,
-              includeExistingPatchRows: false,
-              patchWatermark,
-              projectId: input.projectId,
-              projectionIdentity: input.projectionIdentity,
-              recordRows,
-            }),
-          ].flatMap((statement) => {
-            return statement === null ? [] : [statement]
-          })
+    const servingStatements = [
+      getApplyLlmStatusServingStatement({
+        baseGeneration: input.baseGeneration,
+        includeExistingPatchRows: false,
+        patchWatermark,
+        projectId: input.projectId,
+        projectionIdentity: input.projectionIdentity,
+        recordRows,
+      }),
+    ].flatMap((statement) => {
+      return statement === null ? [] : [statement]
+    })
 
     return writeReviewServingProjectorComponent(
       {

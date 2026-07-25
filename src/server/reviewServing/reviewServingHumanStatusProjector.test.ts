@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingHumanStatusPatches,
+  projectReviewServingHumanStatusRanges,
   type ReviewServingHumanStatusProjectorDatabase,
 } from './reviewServingHumanStatusProjector.ts'
 import {
@@ -318,7 +319,13 @@ test('human rebuild chunks copy-replace serving without scoped patch rows', asyn
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
   expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
-  expect(joined).toContain('SELECT serving.* REPLACE')
+  expect(joined).toContain('SELECT scoped_serving.* REPLACE')
+  expect(joined).toContain('WITH article_range_filter(chunk_start_article_id, chunk_end_article_id) AS')
+  expect(joined).toContain("('article-3', 'article-3')")
+  expect(joined).toContain('INNER JOIN article_range_filter range')
+  expect(joined).toContain('serving.article_id >= range.chunk_start_article_id')
+  expect(joined).toContain('serving.article_id <= range.chunk_end_article_id')
+  expect(joined).toContain("serving.list_mode_key IN ('human')")
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = 'humanStatus:identity-1'",
@@ -365,4 +372,37 @@ test('human rebuild chunks avoid patch delete and insert batches', async () => {
   )
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(statements.join('\n')).not.toContain('mart.review_human_status_patch_v4')
+})
+
+test('human range rebuild batches write one SQL-native serving replacement statement', async () => {
+  const {database, statements} = createHumanStatusDatabase()
+
+  const result = await projectReviewServingHumanStatusRanges(
+    {
+      ranges: [
+        {...projectInput([]), chunkEndArticleId: 'article-050', chunkStartArticleId: 'article-001'},
+        {...projectInput([]), chunkEndArticleId: 'article-099', chunkStartArticleId: 'article-051'},
+      ],
+    },
+    database,
+  )
+  const replacementStatements = statements.filter((statement) => {
+    return statement.includes('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
+  })
+  const joined = statements.join('\n')
+  const diagnostics = result as typeof result & {
+    diagnosticsJson: {humanStatusProjector: {fullRebuildMode: string; rangeCount: number; sourceRowCount: number}}
+  }
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(diagnostics.diagnosticsJson.humanStatusProjector).toMatchObject({
+    fullRebuildMode: 'range-serving-set-based',
+    rangeCount: 2,
+    sourceRowCount: 0,
+  })
+  expect(replacementStatements).toHaveLength(1)
+  expect(replacementStatements[0]).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(replacementStatements[0]).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(joined).not.toContain('FROM app.project_prompt project_prompt')
+  expect(joined).not.toContain('FROM app."judgment_human" judgment_human')
 })

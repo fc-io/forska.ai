@@ -47,12 +47,18 @@ import {
   projectReviewServingFilterPostingRanges,
   projectReviewServingFilterPostings,
 } from '../reviewServing/reviewServingFilterPostingProjector.ts'
-import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
+import {
+  projectReviewServingHumanStatusPatches,
+  projectReviewServingHumanStatusRanges,
+} from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {
   projectReviewServingJudgmentPayloadArticleRanges,
   projectReviewServingJudgmentPayloadRows,
 } from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
-import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
+import {
+  projectReviewServingLlmStatusPatches,
+  projectReviewServingLlmStatusRanges,
+} from '../reviewServing/reviewServingLlmStatusProjector.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
@@ -3813,6 +3819,12 @@ const canRunLlmStatusRebuildChunkBatch = (chunks: readonly ReviewServingRebuildC
     && chunks.every((chunk) => {
       return chunk.requestId === chunks[0]?.requestId
     })
+    && chunks.every((chunk) => {
+      return chunk.outputBaseGeneration === chunks[0]?.outputBaseGeneration
+    })
+    && chunks.every((chunk) => {
+      return chunk.projectionIdentity === chunks[0]?.projectionIdentity
+    })
   )
 }
 
@@ -3884,22 +3896,23 @@ const runLlmStatusRebuildChunkBatch = async (
 
     const chunkDatabase = getChunkProjectorDatabase(tx)
 
-    await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
-      await previous
-      await projectReviewServingLlmStatusPatches(
-        {
-          baseGeneration: chunk.outputBaseGeneration,
-          chunkEndArticleId: chunk.chunkEndKey,
-          chunkStartArticleId: chunk.chunkStartKey,
-          claims: [],
-          definitionVersion: manifest.definitionVersion,
-          listModeKeys: defaultReviewServingLlmListModeKeys,
-          projectId,
-          projectionIdentity: chunk.projectionIdentity,
-        },
-        chunkDatabase,
-      )
-    }, Promise.resolve())
+    await projectReviewServingLlmStatusRanges(
+      {
+        ranges: input.chunks.map((chunk) => {
+          return {
+            baseGeneration: chunk.outputBaseGeneration,
+            chunkEndArticleId: chunk.chunkEndKey,
+            chunkStartArticleId: chunk.chunkStartKey,
+            claims: [],
+            definitionVersion: manifest.definitionVersion,
+            listModeKeys: defaultReviewServingLlmListModeKeys,
+            projectId,
+            projectionIdentity: chunk.projectionIdentity,
+          }
+        }),
+      },
+      chunkDatabase,
+    )
   })
   const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
@@ -3929,6 +3942,12 @@ const canRunHumanStatusRebuildChunkBatch = (chunks: readonly ReviewServingRebuil
     })
     && chunks.every((chunk) => {
       return chunk.requestId === chunks[0]?.requestId
+    })
+    && chunks.every((chunk) => {
+      return chunk.outputBaseGeneration === chunks[0]?.outputBaseGeneration
+    })
+    && chunks.every((chunk) => {
+      return chunk.projectionIdentity === chunks[0]?.projectionIdentity
     })
   )
 }
@@ -4001,23 +4020,24 @@ const runHumanStatusRebuildChunkBatch = async (
 
     const chunkDatabase = getChunkProjectorDatabase(tx)
 
-    await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
-      await previous
-      await projectReviewServingHumanStatusPatches(
-        {
-          acknowledgeClaims: false,
-          baseGeneration: chunk.outputBaseGeneration,
-          chunkEndArticleId: chunk.chunkEndKey,
-          chunkStartArticleId: chunk.chunkStartKey,
-          claims: [],
-          definitionVersion: manifest.definitionVersion,
-          listModeKeys: defaultReviewServingHumanListModeKeys,
-          projectId,
-          projectionIdentity: chunk.projectionIdentity,
-        },
-        chunkDatabase,
-      )
-    }, Promise.resolve())
+    await projectReviewServingHumanStatusRanges(
+      {
+        ranges: input.chunks.map((chunk) => {
+          return {
+            acknowledgeClaims: false,
+            baseGeneration: chunk.outputBaseGeneration,
+            chunkEndArticleId: chunk.chunkEndKey,
+            chunkStartArticleId: chunk.chunkStartKey,
+            claims: [],
+            definitionVersion: manifest.definitionVersion,
+            listModeKeys: defaultReviewServingHumanListModeKeys,
+            projectId,
+            projectionIdentity: chunk.projectionIdentity,
+          }
+        }),
+      },
+      chunkDatabase,
+    )
   })
   const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
