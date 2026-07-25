@@ -124,7 +124,8 @@ test('buildReviewServingRowsSql uses article ordering and payload hydration for 
   expect(sql).toContain('INNER JOIN mart.review_article_serving_payload_v4 payload')
   expect(sql).toContain('payload.display_identity = $displayIdentity')
   expect(sql).toContain('payload.payload_identity = $payloadIdentity')
-  expect(sql).toContain('payload.abstract_text AS abstract_text')
+  expect(sql).toContain('LEFT(article.article_summary, 2000) AS article_summary')
+  expect(sql).not.toContain('payload.abstract_text')
   expect(sql).toContain('payload.article_title AS article_title')
   expect(sql).toContain('payload.article_external_id AS article_external_id')
   expect(sql).toContain('payload.article_updated_at AS article_updated_at')
@@ -248,6 +249,27 @@ test('buildReviewServingRowsSql separates review and human facet rows', () => {
   expect(humanSql).toContain("'review-human-filter-prompt-answer:v1'")
   expect(humanSql).toContain("'review-human-filter-summary-answer:v1'")
   expect(humanSql).toContain('AND summary_identity = $filterKey')
+})
+
+test('buildReviewServingRowsSql supports batched facet identities', () => {
+  const contract = getRequiredReviewServingReadContract('review.filters.facets')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    countFilterKeysParameter: '$filterKeys',
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND summary_identity IN (SELECT unnest($filterKeys))')
+  expect(sql).not.toContain('AND summary_identity = $filterKey')
 })
 
 test('buildReviewServingRowsSql rejects facet reads without a filter key', () => {

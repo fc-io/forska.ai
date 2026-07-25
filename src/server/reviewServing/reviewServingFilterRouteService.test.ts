@@ -200,10 +200,13 @@ test('review filter route service reads facet and option contracts without raw f
     optionPayload: {facetKey: 'publicationYear', filterType: 'enum', value: '2026'},
   })
   expect(response.searchScope).toMatchObject({mode: 'tokenPrefix', searchIdentity: 'search-identity', text: 'heart'})
-  expect(reader.statements).toHaveLength(5)
+  expect(reader.statements).toHaveLength(2)
   expect(sql).toContain('FROM mart.review_filter_facet_serving_v4')
   expect(sql).toContain('FROM mart.review_filter_option_serving_v4')
   expect(sql).toContain("AND facet_kind = 'review'")
+  expect(sql).toContain('AND summary_identity IN (SELECT unnest(')
+  expect(sql).toContain("'review.filter.promptAnswer'")
+  expect(sql).toContain("'review.filter.publicationYear'")
   expect(sql).toContain('AND search_identity = ')
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)

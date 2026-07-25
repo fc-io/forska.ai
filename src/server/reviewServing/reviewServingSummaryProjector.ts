@@ -586,6 +586,42 @@ const getSummaryRebuildPartialScalarKeyPredicate = (input: {leftAlias: string; r
         AND COALESCE(${input.leftAlias}.facet_value, '') = COALESCE(${input.rightAlias}.facet_value, '')`
 }
 
+const getSummaryRebuildContributionPartialRecordKeyPredicate = (input: {leftAlias: string; rightAlias: string}) => {
+  return `
+        AND (${input.leftAlias}.request_id || '') = (${input.rightAlias}.request_id || '')
+        AND (${input.leftAlias}.chunk_id || '') = (${input.rightAlias}.chunk_id || '')
+        AND (${input.leftAlias}.project_id || '') = (${input.rightAlias}.project_id || '')
+        AND (${input.leftAlias}.review_config_hash || '') = (${input.rightAlias}.review_config_hash || '')
+        AND (${input.leftAlias}.snapshot_id || '') = (${input.rightAlias}.snapshot_id || '')
+        AND (${input.leftAlias}.article_id || '') = (${input.rightAlias}.article_id || '')
+        AND (${input.leftAlias}.component_kind || '') = (${input.rightAlias}.component_kind || '')
+        AND (${input.leftAlias}.summary_definition_version || '') = (${input.rightAlias}.summary_definition_version || '')
+        AND (${input.leftAlias}.summary_kind || '') = (${input.rightAlias}.summary_kind || '')
+        AND (${input.leftAlias}.summary_identity || '') = (${input.rightAlias}.summary_identity || '')
+        AND COALESCE(${input.leftAlias}.list_mode_key, 'global') = COALESCE(${input.rightAlias}.list_mode_key, 'global')
+        AND COALESCE(${input.leftAlias}.count_kind, '') = COALESCE(${input.rightAlias}.count_kind, '')
+        AND COALESCE(${input.leftAlias}.filter_key, '') = COALESCE(${input.rightAlias}.filter_key, '')
+        AND COALESCE(${input.leftAlias}.facet_kind, '') = COALESCE(${input.rightAlias}.facet_kind, '')
+        AND COALESCE(${input.leftAlias}.facet_key, '') = COALESCE(${input.rightAlias}.facet_key, '')
+        AND COALESCE(${input.leftAlias}.facet_value, '') = COALESCE(${input.rightAlias}.facet_value, '')`
+}
+
+const getSummaryRebuildContributionCountKeyPredicate = (input: {contributionAlias: string; summaryAlias: string}) => {
+  return `
+        AND (${input.summaryAlias}.request_id || '') = (${input.contributionAlias}.request_id || '')
+        AND (${input.summaryAlias}.project_id || '') = (${input.contributionAlias}.project_id || '')
+        AND (${input.summaryAlias}.review_config_hash || '') = (${input.contributionAlias}.review_config_hash || '')
+        AND (${input.summaryAlias}.snapshot_id || '') = (${input.contributionAlias}.snapshot_id || '')
+        AND (${input.summaryAlias}.summary_kind || '') = (${input.contributionAlias}.summary_kind || '')
+        AND (${input.summaryAlias}.summary_identity || '') = (${input.contributionAlias}.summary_identity || '')
+        AND COALESCE(${input.summaryAlias}.list_mode_key, 'global') = COALESCE(${input.contributionAlias}.list_mode_key, 'global')
+        AND (${input.summaryAlias}.summary_kind = 'facet' OR ${input.summaryAlias}.count_kind IS NOT DISTINCT FROM ${input.contributionAlias}.count_kind)
+        AND ${input.summaryAlias}.filter_key IS NOT DISTINCT FROM ${input.contributionAlias}.filter_key
+        AND ${input.summaryAlias}.facet_kind IS NOT DISTINCT FROM ${input.contributionAlias}.facet_kind
+        AND ${input.summaryAlias}.facet_key IS NOT DISTINCT FROM ${input.contributionAlias}.facet_key
+        AND ${input.summaryAlias}.facet_value IS NOT DISTINCT FROM ${input.contributionAlias}.facet_value`
+}
+
 const getDirectFullSummaryPartialRecord = (input: {
   chunkId: string
   record: ReviewServingProjectorRecord
@@ -849,104 +885,6 @@ const getSummaryRebuildAccumulatorPartialCount = async (
   return Number(rows[0]?.partialCount ?? 0)
 }
 
-const getRefreshSummaryRebuildAccumulatorCountsStatement = (input: {
-  accumulatorChunkId: string
-  projectId: string
-  requestId: string
-  reviewConfigHash: string
-  snapshotId: string
-}) => {
-  const contributionScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial_contribution'})
-
-  return `
-    UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator
-    SET
-      count_value = CASE
-        WHEN accumulator.availability = 'ready'
-        THEN COALESCE(contribution_counts.count_value, accumulator.count_value)
-        ELSE NULL
-      END,
-      partial_updated_at = now()
-    FROM (
-      SELECT
-        deduplicated.project_id,
-        deduplicated.review_config_hash,
-        deduplicated.snapshot_id,
-        deduplicated.summary_kind,
-        deduplicated.summary_identity,
-        COALESCE(deduplicated.list_mode_key, 'global') AS list_mode_key,
-        deduplicated.count_kind,
-        deduplicated.filter_key,
-        deduplicated.facet_kind,
-        deduplicated.facet_key,
-        deduplicated.facet_value,
-        SUM(COALESCE(deduplicated.contribution_value, 0)) AS count_value
-      FROM (
-        SELECT
-          partial_contribution.project_id,
-          partial_contribution.review_config_hash,
-          partial_contribution.snapshot_id,
-          partial_contribution.article_id,
-          partial_contribution.component_kind,
-          partial_contribution.summary_definition_version,
-          partial_contribution.summary_kind,
-          partial_contribution.summary_identity,
-          partial_contribution.list_mode_key,
-          partial_contribution.count_kind,
-          partial_contribution.filter_key,
-          partial_contribution.facet_kind,
-          partial_contribution.facet_key,
-          partial_contribution.facet_value,
-          ANY_VALUE(partial_contribution.contribution_value) AS contribution_value
-        FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
-        ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
-        WHERE ${contributionScopePredicate}
-          AND partial_contribution.component_kind = 'count'
-        GROUP BY
-          partial_contribution.project_id,
-          partial_contribution.review_config_hash,
-          partial_contribution.snapshot_id,
-          partial_contribution.article_id,
-          partial_contribution.component_kind,
-          partial_contribution.summary_definition_version,
-          partial_contribution.summary_kind,
-          partial_contribution.summary_identity,
-          partial_contribution.list_mode_key,
-          partial_contribution.count_kind,
-          partial_contribution.filter_key,
-          partial_contribution.facet_kind,
-          partial_contribution.facet_key,
-          partial_contribution.facet_value
-      ) deduplicated
-      GROUP BY
-        deduplicated.project_id,
-        deduplicated.review_config_hash,
-        deduplicated.snapshot_id,
-        deduplicated.summary_kind,
-        deduplicated.summary_identity,
-        COALESCE(deduplicated.list_mode_key, 'global'),
-        deduplicated.count_kind,
-        deduplicated.filter_key,
-        deduplicated.facet_kind,
-        deduplicated.facet_key,
-        deduplicated.facet_value
-    ) contribution_counts
-    WHERE accumulator.request_id = ${getSqlLiteral(input.requestId)}
-      AND accumulator.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
-      AND accumulator.project_id = contribution_counts.project_id
-      AND accumulator.review_config_hash = contribution_counts.review_config_hash
-      AND accumulator.snapshot_id = contribution_counts.snapshot_id
-      AND accumulator.summary_kind = contribution_counts.summary_kind
-      AND accumulator.summary_identity = contribution_counts.summary_identity
-      AND COALESCE(accumulator.list_mode_key, 'global') = contribution_counts.list_mode_key
-      AND (accumulator.summary_kind = 'facet' OR accumulator.count_kind IS NOT DISTINCT FROM contribution_counts.count_kind)
-      AND accumulator.filter_key IS NOT DISTINCT FROM contribution_counts.filter_key
-      AND accumulator.facet_kind IS NOT DISTINCT FROM contribution_counts.facet_kind
-      AND accumulator.facet_key IS NOT DISTINCT FROM contribution_counts.facet_key
-      AND accumulator.facet_value IS NOT DISTINCT FROM contribution_counts.facet_value
-  `
-}
-
 const getResetSummaryRebuildAccumulatorStatement = (input: {
   accumulatorChunkId: string
   projectId: string
@@ -964,6 +902,20 @@ const getResetSummaryRebuildAccumulatorStatement = (input: {
   `
 }
 
+const getResetSummaryRebuildContributionAccumulatorStatement = (input: {
+  accumulatorChunkId: string
+  projectId: string
+  requestId: string
+  reviewConfigHash: string
+  snapshotId: string
+}) => {
+  return `
+    DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4
+    WHERE ${getSummaryRebuildPartialScopePredicate(input)}
+      AND chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
+  `
+}
+
 const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   input: {
     accumulatorChunkId: string
@@ -976,11 +928,102 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
   const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})
+  const contributionScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial_contribution'})
   const chunkIdPredicate = getSummaryRebuildPartialChunkIdPredicate(input.chunkIds)
 
   await database.transaction(async (tx) => {
     await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_accumulator_batch
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_accumulator_new
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_first_keys
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_count_delta
+    `)
+    await tx.run(`
       DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_batch
+    `)
+    await tx.run(`
+      CREATE TEMPORARY TABLE temp_summary_rebuild_contribution_accumulator_batch AS
+      SELECT
+        partial_contribution.request_id,
+        ${getSqlLiteral(input.accumulatorChunkId)} AS chunk_id,
+        partial_contribution.project_id,
+        partial_contribution.review_config_hash,
+        partial_contribution.snapshot_id,
+        partial_contribution.article_id,
+        partial_contribution.component_kind,
+        partial_contribution.summary_definition_version,
+        partial_contribution.summary_kind,
+        partial_contribution.summary_identity,
+        COALESCE(partial_contribution.list_mode_key, 'global') AS list_mode_key,
+        partial_contribution.count_kind,
+        partial_contribution.filter_key,
+        partial_contribution.facet_kind,
+        partial_contribution.facet_key,
+        partial_contribution.facet_value,
+        ANY_VALUE(partial_contribution.contribution_value) AS contribution_value,
+        current_timestamp AS contribution_updated_at
+      FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
+      ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
+      WHERE ${contributionScopePredicate}
+        AND partial_contribution.${chunkIdPredicate}
+        AND partial_contribution.component_kind = 'count'
+      GROUP BY
+        partial_contribution.request_id,
+        partial_contribution.project_id,
+        partial_contribution.review_config_hash,
+        partial_contribution.snapshot_id,
+        partial_contribution.article_id,
+        partial_contribution.component_kind,
+        partial_contribution.summary_definition_version,
+        partial_contribution.summary_kind,
+        partial_contribution.summary_identity,
+        COALESCE(partial_contribution.list_mode_key, 'global'),
+        partial_contribution.count_kind,
+        partial_contribution.filter_key,
+        partial_contribution.facet_kind,
+        partial_contribution.facet_key,
+        partial_contribution.facet_value
+    `)
+    await tx.run(`
+      CREATE TEMPORARY TABLE temp_summary_rebuild_contribution_first_keys AS
+      SELECT DISTINCT
+        batch.request_id,
+        batch.chunk_id,
+        batch.project_id,
+        batch.review_config_hash,
+        batch.snapshot_id,
+        batch.summary_kind,
+        batch.summary_identity,
+        batch.list_mode_key,
+        batch.count_kind,
+        batch.filter_key,
+        batch.facet_kind,
+        batch.facet_key,
+        batch.facet_value
+      FROM temp_summary_rebuild_contribution_accumulator_batch batch
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM mart.review_article_summary_contribution_rebuild_partial_v4 existing
+        WHERE existing.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
+          ${getSummaryRebuildContributionCountKeyPredicate({contributionAlias: 'existing', summaryAlias: 'batch'})}
+      )
+    `)
+    await tx.run(`
+      CREATE TEMPORARY TABLE temp_summary_rebuild_contribution_accumulator_new AS
+      SELECT batch.*
+      FROM temp_summary_rebuild_contribution_accumulator_batch batch
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM mart.review_article_summary_contribution_rebuild_partial_v4 existing
+        WHERE TRUE
+          ${getSummaryRebuildContributionPartialRecordKeyPredicate({leftAlias: 'existing', rightAlias: 'batch'})}
+      )
     `)
     await tx.run(`
       CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_batch AS
@@ -1010,6 +1053,15 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
       ${getCompletedSummaryRebuildPartialChunkJoin('partial')}
       WHERE ${scopePredicate}
         AND partial.${chunkIdPredicate}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM mart.review_article_summary_contribution_rebuild_partial_v4 contribution_accumulator
+          WHERE contribution_accumulator.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
+            ${getSummaryRebuildContributionCountKeyPredicate({
+              contributionAlias: 'contribution_accumulator',
+              summaryAlias: 'partial',
+            })}
+        )
       GROUP BY
         partial.request_id,
         partial.project_id,
@@ -1092,7 +1144,116 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
       )
     `)
     await tx.run(`
+      UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator
+      SET
+        count_value = CASE WHEN accumulator.availability = 'ready' THEN 0 ELSE NULL END,
+        partial_updated_at = now()
+      FROM temp_summary_rebuild_contribution_first_keys first_key
+      WHERE accumulator.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
+        ${getSummaryRebuildContributionCountKeyPredicate({contributionAlias: 'first_key', summaryAlias: 'accumulator'})}
+    `)
+    await tx.run(`
+      INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
+        request_id,
+        chunk_id,
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        component_kind,
+        summary_definition_version,
+        summary_kind,
+        summary_identity,
+        list_mode_key,
+        count_kind,
+        filter_key,
+        facet_kind,
+        facet_key,
+        facet_value,
+        contribution_value,
+        contribution_updated_at
+      )
+      SELECT
+        batch.request_id,
+        batch.chunk_id,
+        batch.project_id,
+        batch.review_config_hash,
+        batch.snapshot_id,
+        batch.article_id,
+        batch.component_kind,
+        batch.summary_definition_version,
+        batch.summary_kind,
+        batch.summary_identity,
+        batch.list_mode_key,
+        batch.count_kind,
+        batch.filter_key,
+        batch.facet_kind,
+        batch.facet_key,
+        batch.facet_value,
+        batch.contribution_value,
+        batch.contribution_updated_at
+      FROM temp_summary_rebuild_contribution_accumulator_new batch
+    `)
+    await tx.run(`
+      CREATE TEMPORARY TABLE temp_summary_rebuild_contribution_count_delta AS
+      SELECT
+        batch.request_id,
+        batch.chunk_id,
+        batch.project_id,
+        batch.review_config_hash,
+        batch.snapshot_id,
+        batch.summary_kind,
+        batch.summary_identity,
+        batch.list_mode_key,
+        batch.count_kind,
+        batch.filter_key,
+        batch.facet_kind,
+        batch.facet_key,
+        batch.facet_value,
+        SUM(COALESCE(batch.contribution_value, 0)) AS count_value
+      FROM temp_summary_rebuild_contribution_accumulator_new batch
+      GROUP BY
+        batch.request_id,
+        batch.chunk_id,
+        batch.project_id,
+        batch.review_config_hash,
+        batch.snapshot_id,
+        batch.summary_kind,
+        batch.summary_identity,
+        batch.list_mode_key,
+        batch.count_kind,
+        batch.filter_key,
+        batch.facet_kind,
+        batch.facet_key,
+        batch.facet_value
+    `)
+    await tx.run(`
+      UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator
+      SET
+        count_value = CASE
+          WHEN accumulator.availability = 'ready'
+          THEN COALESCE(accumulator.count_value, 0) + COALESCE(delta.count_value, 0)
+          ELSE NULL
+        END,
+        partial_updated_at = now()
+      FROM temp_summary_rebuild_contribution_count_delta delta
+      WHERE accumulator.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
+        ${getSummaryRebuildContributionCountKeyPredicate({contributionAlias: 'delta', summaryAlias: 'accumulator'})}
+    `)
+    await tx.run(`
       DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_batch
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_count_delta
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_first_keys
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_accumulator_new
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_contribution_accumulator_batch
     `)
   })
 }
@@ -1130,6 +1291,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
   const scopedInput = {...input, accumulatorChunkId, chunkIds}
 
   await database.run(getResetSummaryRebuildAccumulatorStatement(scopedInput))
+  await database.run(getResetSummaryRebuildContributionAccumulatorStatement(scopedInput))
   await reduceSummaryRebuildPartialBatchesIntoAccumulator(scopedInput, database)
 
   const accumulatorPartialCount = await getSummaryRebuildAccumulatorPartialCount(scopedInput, database)
@@ -1140,7 +1302,6 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
 
   await database.transaction(async (tx) => {
     const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
-    await tx.run(getRefreshSummaryRebuildAccumulatorCountsStatement(scopedInput))
     await tx.run(`
       DROP TABLE IF EXISTS temp_summary_rebuild_count_publication
     `)

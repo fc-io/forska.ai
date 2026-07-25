@@ -147,6 +147,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0164_rehydrateReviewPayloadDisplayColumns.sql'),
     'utf8',
   ).trim()
+  const reviewPayloadAbstractTextDropSql = readFileSync(
+    resolve(migrationsFolder, '0165_dropReviewPayloadAbstractText.sql'),
+    'utf8',
+  ).trim()
   const reviewSummaryContributionServingDropSql = readFileSync(
     resolve(migrationsFolder, '0141_dropReviewSummaryContributionServing.sql'),
     'utf8',
@@ -295,6 +299,18 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewPayloadBytesDropSql).not.toContain('PRIMARY KEY')
   expect(reviewPayloadBytesDropSql).not.toContain('payload_bytes')
+  expect(reviewPayloadAbstractTextDropSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_abstract_text_repair',
+  )
+  expect(reviewPayloadAbstractTextDropSql).toContain('DROP TABLE mart.review_article_serving_payload_v4;')
+  expect(reviewPayloadAbstractTextDropSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_abstract_text_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadAbstractTextDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
+  )
+  expect(reviewPayloadAbstractTextDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewPayloadAbstractTextDropSql).not.toContain('abstract_text VARCHAR')
   expect(reviewFilterPostingServingIdentityDropSql).toContain(
     'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
   )
@@ -1015,6 +1031,153 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
         fullTextPreview: 'preview',
         sourceMetadata: '{"source":"fixture"}',
       },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops payload abstract text while preserving source metadata', async () => {
+  const duckdbPath = `/tmp/forska-review-payload-abstract-text-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0165_dropReviewPayloadAbstractText.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_payload_v4 (
+            project_id VARCHAR NOT NULL,
+            display_identity VARCHAR NOT NULL,
+            payload_identity VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            article_title VARCHAR,
+            article_external_id VARCHAR,
+            article_updated_at TIMESTAMPTZ,
+            arxiv_id VARCHAR,
+            biorxiv_id VARCHAR,
+            medrxiv_id VARCHAR,
+            doi VARCHAR,
+            pmid VARCHAR,
+            journal_title VARCHAR,
+            url VARCHAR,
+            source_metadata JSON,
+            abstract_text VARCHAR
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_payload_v4 (
+            project_id,
+            display_identity,
+            payload_identity,
+            snapshot_id,
+            article_id,
+            article_title,
+            source_metadata,
+            abstract_text
+          )
+          VALUES (
+            'project-1',
+            'display-1',
+            'payload-1',
+            'snapshot-1',
+            'article-1',
+            'Display title',
+            json('{"source":"fixture"}'),
+            'abstract should be dropped'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            article_title AS articleTitle,
+            source_metadata AS sourceMetadata
+          FROM mart.review_article_serving_payload_v4
+        \`)
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_article_serving_payload_v4'
+          ORDER BY ordinal_position
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0165_dropReviewPayloadAbstractText.sql'"
+        )
+
+        console.log(JSON.stringify({columns, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      migrationRows: {name: string}[]
+      rows: {articleId: string; articleTitle: string; sourceMetadata: string}[]
+    }
+    const columnNames = new Set(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    )
+
+    expect(columnNames.has('source_metadata')).toBe(true)
+    expect(columnNames.has('abstract_text')).toBe(false)
+    expect(parsed.rows).toEqual([
+      {articleId: 'article-1', articleTitle: 'Display title', sourceMetadata: '{"source":"fixture"}'},
     ])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
