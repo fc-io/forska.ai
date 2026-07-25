@@ -681,9 +681,7 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
     const articleSelectColumns = [
       ...reviewServingArticlePhysicalSelectColumns,
       ...reviewServingArticlePayloadDisplayColumns,
-      ...(contract.key === 'review.prompt.preview'
-        ? ['payload.abstract_text AS abstract_text', 'payload.full_text_preview AS full_text_preview']
-        : []),
+      ...(contract.key === 'review.prompt.preview' ? ['payload.abstract_text AS abstract_text'] : []),
     ].join(', ')
 
     return contract.sort.fields.some((field) => {

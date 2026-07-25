@@ -153,7 +153,6 @@ type ServingArticlePayloadRow = {
   abstract_text?: string | null
   article_created_at?: unknown
   article_id?: string
-  full_text_preview?: string | null
   source_metadata?: unknown
 }
 
@@ -749,9 +748,9 @@ const getArticleRecordFromServing = (input: {
     contentHash: null,
     createdAt: new Date(0),
     doi: input.detail.doi ?? null,
-    fullText: input.fullText?.fullText ?? input.payload?.full_text_preview ?? null,
+    fullText: input.fullText?.fullText ?? null,
     fullTextAssets: null,
-    fullTextCharCount: input.fullText?.fullTextCharCount ?? input.payload?.full_text_preview?.length ?? null,
+    fullTextCharCount: input.fullText?.fullTextCharCount ?? null,
     fullTextConversionAttempts: null,
     fullTextConversionError: null,
     fullTextConversionMetadata: null,
