@@ -86,20 +86,41 @@ const getArticleRangePredicate = (input: {
           ${endPredicate}`
 }
 
-const getActiveArticleCte = (input: ProjectReviewServingJudgmentPayloadInput) => {
+const getArticleRangeFilterCte = (ranges: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]) => {
+  return `article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
+      SELECT * FROM (VALUES ${ranges
+        .map((range) => {
+          return `(${getSqlLiteral(range.chunkStartArticleId)}, ${getSqlLiteral(range.chunkEndArticleId)})`
+        })
+        .join(', ')})
+    )`
+}
+
+const getActiveArticleCte = (
+  input: ProjectReviewServingJudgmentPayloadInput,
+  options: {ranges?: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]} = {},
+) => {
   const articleIds = getClaimArticleIds(input.claims)
   const dirtyArticleCte = getValuesCte('article_id', articleIds)
   const dirtyJoinSql =
     articleIds.length === 0 ? '' : 'INNER JOIN article_id_filter dirty ON dirty.article_id = scope.article_id'
+  const rangeJoinSql =
+    options.ranges === undefined
+      ? ''
+      : `INNER JOIN article_range_filter range
+        ON scope.article_id >= range.chunk_start_article_id
+        AND scope.article_id <= range.chunk_end_article_id`
 
-  return `${dirtyArticleCte}${dirtyArticleCte.length > 0 ? ',' : ''}
+  return `${options.ranges === undefined ? '' : `${getArticleRangeFilterCte(options.ranges)},`}
+    ${dirtyArticleCte}${dirtyArticleCte.length > 0 ? ',' : ''}
     active_article AS (
-      SELECT scope.article_id
+      SELECT DISTINCT scope.article_id
       FROM mart.project_scope_article scope
       ${dirtyJoinSql}
+      ${rangeJoinSql}
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
         AND (scope.in_curated_scope OR scope.in_route_scope)
-        ${getArticleRangePredicate({alias: 'scope', ...input})}
+        ${options.ranges === undefined ? getArticleRangePredicate({alias: 'scope', ...input}) : ''}
     )`
 }
 
@@ -306,7 +327,10 @@ const getReplacementDeleteStatements = (
       })
 }
 
-const getLlmJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgmentPayloadInput) => {
+const getLlmJudgmentDirectInsertStatement = (
+  input: ProjectReviewServingJudgmentPayloadInput,
+  options: {ranges?: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]} = {},
+) => {
   const listModeKeys = getLlmListModeKeys(input.listModeKeys)
 
   return listModeKeys.length === 0
@@ -330,7 +354,7 @@ const getLlmJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgment
         placeholder_kind,
         detail_updated_at
       )
-      WITH ${getActiveArticleCte(input)},
+      WITH ${getActiveArticleCte(input, options)},
       list_mode(list_mode_key) AS (SELECT * FROM (VALUES ${getListModeValuesSql(listModeKeys)})),
       enabled_prompt AS (
         SELECT
@@ -440,7 +464,10 @@ const getLlmJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgment
     `
 }
 
-const getHumanJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgmentPayloadInput) => {
+const getHumanJudgmentDirectInsertStatement = (
+  input: ProjectReviewServingJudgmentPayloadInput,
+  options: {ranges?: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]} = {},
+) => {
   const listModeKeys = getHumanListModeKeys(input.listModeKeys)
 
   return listModeKeys.length === 0
@@ -464,7 +491,7 @@ const getHumanJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgme
         placeholder_kind,
         detail_updated_at
       )
-      WITH ${getActiveArticleCte(input)},
+      WITH ${getActiveArticleCte(input, options)},
       list_mode(list_mode_key) AS (SELECT * FROM (VALUES ${getListModeValuesSql(listModeKeys)})),
       enabled_prompt AS (
         SELECT
@@ -693,6 +720,34 @@ export const projectReviewServingJudgmentPayloadRows = async (
   }
 }
 
+const canUseSetBasedJudgmentPayloadRangeInsert = (
+  ranges: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[],
+) => {
+  const [firstRange] = ranges
+
+  return (
+    firstRange !== undefined
+    && ranges.every((range) => {
+      return (
+        (range.claims === undefined || range.claims.length === 0)
+        && range.chunkEndArticleId !== null
+        && range.chunkEndArticleId !== undefined
+        && range.chunkStartArticleId !== null
+        && range.chunkStartArticleId !== undefined
+        && range.listModeKeys.join('\n') === firstRange.listModeKeys.join('\n')
+        && range.modelId === firstRange.modelId
+        && range.projectId === firstRange.projectId
+        && range.reviewConfigHash === firstRange.reviewConfigHash
+        && range.snapshotId === firstRange.snapshotId
+        && range.useAbstract === firstRange.useAbstract
+        && range.useFulltext === firstRange.useFulltext
+        && range.useFulltextNoImages === firstRange.useFulltextNoImages
+        && range.useTitle === firstRange.useTitle
+      )
+    })
+  )
+}
+
 export const projectReviewServingJudgmentPayloadArticleRanges = async (
   params: {ranges: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]},
   database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingJudgmentPayloadProjectorDatabase,
@@ -703,13 +758,14 @@ export const projectReviewServingJudgmentPayloadArticleRanges = async (
     return {rangeCount: 0, status: 'completed' as const}
   }
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: [],
-      component: 'payload',
-      projectionManifests: [],
-      records: [],
-      statements: params.ranges.flatMap((range) => {
+  const statements = canUseSetBasedJudgmentPayloadRangeInsert(params.ranges)
+    ? [
+        getLlmJudgmentDirectInsertStatement(firstRange, {ranges: params.ranges}),
+        getHumanJudgmentDirectInsertStatement(firstRange, {ranges: params.ranges}),
+      ].filter((statement): statement is string => {
+        return statement !== null
+      })
+    : params.ranges.flatMap((range) => {
         const requestedPayloadKinds = getRequestedPayloadKinds(range.listModeKeys)
         const insertStatements = [
           getLlmJudgmentDirectInsertStatement(range),
@@ -719,8 +775,10 @@ export const projectReviewServingJudgmentPayloadArticleRanges = async (
         })
 
         return [...getReplacementDeleteStatements(range, requestedPayloadKinds), ...insertStatements]
-      }),
-    },
+      })
+
+  await writeReviewServingProjectorComponent(
+    {acknowledgements: [], component: 'payload', projectionManifests: [], records: [], statements},
     database,
   )
 
