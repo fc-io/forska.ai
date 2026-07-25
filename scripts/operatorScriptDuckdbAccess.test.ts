@@ -133,7 +133,12 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     path: 'scripts/requestReviewServingAllProjectsRebuild.ts',
   },
   'db:duck:authorize-review-serving-partial-cleanup': {
-    commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
+    commandIncludes: [
+      'FORSKA_RUNTIME_PROFILE=primary',
+      'DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"',
+      'SERVER_ROLE=maintenance-worker',
+      'SERVER_DUCKDB_OWNER_URL=',
+    ],
     description: 'V4 summary partial cleanup authorization',
     mustContain: [
       'withDuckdbMaintenanceAccess',
