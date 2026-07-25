@@ -310,7 +310,10 @@ test('LLM direct full rebuild chunks copy-replace serving without patch rows', a
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
   expect(joined).toContain('SELECT serving.* REPLACE')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
-  expect(joined).toContain('replacement.llm_status_identity = serving.llm_status_identity')
+  expect(joined).toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
+  )
+  expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
   expect(joined).toContain('replacement.base_generation = serving.base_generation')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })
@@ -340,7 +343,10 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
   expect(resetStatement).toContain("AND serving.article_id <= 'article-9'")
   expect(resetStatement).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
-  expect(joined).toContain('replacement.llm_status_identity = serving.llm_status_identity')
+  expect(joined).toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
+  )
+  expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
   expect(joined).toContain('replacement.base_generation = serving.base_generation')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
@@ -360,7 +366,10 @@ test('LLM rebuild chunks copy-replace serving without scoped patch rows', async 
   expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
-  expect(joined).toContain('replacement.llm_status_identity = serving.llm_status_identity')
+  expect(joined).toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
+  )
+  expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
   expect(joined).toContain('replacement.base_generation = serving.base_generation')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })

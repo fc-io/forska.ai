@@ -78,7 +78,7 @@ export const readReviewServingExportArticles = async (input: {
          AND manifest.snapshot_id = s.snapshot_id
         LEFT JOIN app.review_selected_article_import_v4 selected_base
           ON selected_base.project_id = s.project_id
-         AND selected_base.project_scope_identity = s.project_scope_identity
+         AND selected_base.project_scope_identity = json_extract_string(manifest.composed_identity_json, '$.projectScope.projectionIdentity')
          AND selected_base.selected_import_snapshot_id = manifest.selected_import_snapshot_id
          AND selected_base.article_id = s.article_id
         LEFT JOIN app.article_import_route_source_record selected_source
@@ -94,8 +94,8 @@ export const readReviewServingExportArticles = async (input: {
          AND selected_source.quarantined_at IS NULL
         LEFT JOIN mart.review_article_serving_payload_v4 payload
           ON payload.project_id = s.project_id
-         AND payload.display_identity = s.display_identity
-         AND payload.payload_identity = s.payload_identity
+         AND payload.display_identity = json_extract_string(manifest.composed_identity_json, '$.display.projectionIdentity')
+         AND payload.payload_identity = json_extract_string(manifest.composed_identity_json, '$.payload.projectionIdentity')
          AND payload.snapshot_id = s.snapshot_id
          AND payload.article_id = s.article_id
       )

@@ -196,7 +196,6 @@ test('title search rebuild ranges insert rows with conflict-ignore and no scoped
     selectedImportJoinSql: '',
     snapshotId: 'snapshot-1',
     targetArticleRangePredicateSql: "AND search.article_id >= 'article-1' AND search.article_id <= 'article-2'",
-    titlePrefixLength: 64,
   }
 
   await writeReviewServingTitleSearchRebuildRanges(
@@ -242,7 +241,6 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
     selectedImportJoinSql: '',
     snapshotId: 'snapshot-1',
     targetArticleRangePredicateSql: "AND search.article_id >= 'article-1' AND search.article_id <= 'article-2'",
-    titlePrefixLength: 64,
   }
 
   await writeReviewServingTitleSearchRebuildRanges(

@@ -28,6 +28,8 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql',
   '../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql',
   '../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql',
+  '../../db/duckdbMigrations/0127_dropReviewTitleSearchUnusedColumns.sql',
+  '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -73,6 +75,12 @@ const reviewJudgmentDetailIsAnsweredForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
+const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0127_dropReviewTitleSearchUnusedColumns.sql']
+const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql'
+  ]
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -265,11 +273,12 @@ test('retired patch tables are absent from the active review-serving schema', ()
   )
 })
 
-test('title search serving schema drops repeated activity sort metadata', () => {
-  expect(reviewTitleSearchActivitySortAtDropForwardMigrationSql).toContain(
+test('title search serving schema drops repeated unused metadata', () => {
+  expect(reviewTitleSearchActivitySortAtDropForwardMigrationSql).toContain('Retired by 0127')
+  expect(reviewTitleSearchUnusedColumnDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_title_search_serving_v4_repair',
   )
-  expect(reviewTitleSearchActivitySortAtDropForwardMigrationSql).toContain(
+  expect(reviewTitleSearchUnusedColumnDropForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_title_search_serving_v4_repair RENAME TO review_title_search_serving_v4;',
   )
   expect([...getTableColumns('mart.review_title_search_serving_v4')]).toEqual([
@@ -279,9 +288,9 @@ test('title search serving schema drops repeated activity sort metadata', () => 
     'snapshot_id',
     'token',
     'article_id',
-    'title_prefix',
-    'search_updated_at',
   ])
+  expect(schemaMigrationSql).not.toContain('title_prefix')
+  expect(schemaMigrationSql).not.toContain('search_updated_at')
 })
 
 test('selected import schema drops retired display-copy columns only', () => {
@@ -457,6 +466,24 @@ test('Phase 1 article serving schema preserves review table display metadata', (
       'full_text_conversion_status',
     ]),
   ).toEqual([])
+  const removedIdentityColumns = [
+    'display_identity',
+    'project_scope_identity',
+    'selected_import_identity',
+    'llm_status_identity',
+    'human_status_identity',
+    'posting_identity',
+    'summary_identity',
+    'payload_identity',
+  ]
+  expect(
+    [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
+      return removedIdentityColumns.includes(columnName)
+    }),
+  ).toEqual([])
+  expect(reviewArticleServingIdentityCopyColumnDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_v4_repair',
+  )
   expect(articleMetadataStatusForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_v4 ADD COLUMN IF NOT EXISTS article_updated_at TIMESTAMPTZ;',
   )

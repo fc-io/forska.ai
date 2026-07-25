@@ -95,7 +95,6 @@ export type WriteReviewServingTitleSearchRebuildRowsInput = {
   selectedImportJoinSql: string
   snapshotId: string
   targetArticleRangePredicateSql: string
-  titlePrefixLength: number
 }
 
 export type WriteReviewServingTitleSearchRebuildRangesInput = {
@@ -676,9 +675,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       project_scope_identity,
       snapshot_id,
       token,
-      article_id,
-      title_prefix,
-      search_updated_at
+      article_id
     )
     WITH source_rows AS (
       SELECT
@@ -701,16 +698,14 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
     ), tokenized_source AS (
       SELECT DISTINCT
         source.article_id,
-        token_rows.token,
-        left(source.normalized_title, ${getSqlLiteral(input.titlePrefixLength)}) AS title_prefix
+        token_rows.token
       FROM source
       CROSS JOIN unnest(regexp_split_to_array(source.normalized_title, '[^a-z0-9]+')) AS token_rows(token)
       WHERE token_rows.token <> ''
     ), tokenized AS (
       SELECT
         article_id,
-        token,
-        ANY_VALUE(title_prefix) AS title_prefix
+        token
       FROM tokenized_source
       GROUP BY article_id, token
     ), final_rows AS (
@@ -720,8 +715,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
         ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
         tokenized.token,
-        tokenized.article_id,
-        ANY_VALUE(tokenized.title_prefix) AS title_prefix
+        tokenized.article_id
       FROM tokenized
       GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id
     )
@@ -731,9 +725,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       final_rows.project_scope_identity,
       final_rows.snapshot_id,
       final_rows.token,
-      final_rows.article_id,
-      final_rows.title_prefix,
-      current_timestamp AS search_updated_at
+      final_rows.article_id
     FROM final_rows
     ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING
   `,
@@ -783,7 +775,6 @@ const getReviewServingTitleSearchRebuildCombinedRangeInput = (
       && range.searchIdentity === firstRange.searchIdentity
       && range.selectedImportJoinSql === firstRange.selectedImportJoinSql
       && range.snapshotId === firstRange.snapshotId
-      && range.titlePrefixLength === firstRange.titlePrefixLength
     )
   })
 

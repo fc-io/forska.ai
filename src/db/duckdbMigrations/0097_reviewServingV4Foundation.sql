@@ -486,9 +486,6 @@ CREATE TABLE IF NOT EXISTS mart.review_title_search_serving_v4 (
   snapshot_id VARCHAR NOT NULL,
   token VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
-  title_prefix VARCHAR,
-  activity_sort_at TIMESTAMPTZ,
-  search_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id)
 );
 
@@ -498,14 +495,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4 (
   snapshot_id VARCHAR NOT NULL,
   base_generation BIGINT NOT NULL,
   patch_watermark BIGINT NOT NULL,
-  display_identity VARCHAR NOT NULL,
-  project_scope_identity VARCHAR NOT NULL,
-  selected_import_identity VARCHAR NOT NULL,
-  llm_status_identity VARCHAR NOT NULL,
-  human_status_identity VARCHAR NOT NULL,
-  posting_identity VARCHAR NOT NULL,
-  summary_identity VARCHAR NOT NULL,
-  payload_identity VARCHAR NOT NULL,
   list_mode_key VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
   article_created_at TIMESTAMPTZ,

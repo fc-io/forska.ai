@@ -729,7 +729,6 @@ const getApplyLlmStatusServingStatement = (input: {
         serving_updated_at = current_timestamp
       FROM article_status
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-        AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
         AND serving.review_config_hash = article_status.review_config_hash
         AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
         AND serving.list_mode_key = article_status.list_mode_key
@@ -740,6 +739,7 @@ const getApplyLlmStatusServingStatement = (input: {
           WHERE snapshot.project_id = serving.project_id
             AND snapshot.snapshot_id = serving.snapshot_id
             AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+            AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
             AND snapshot.snapshot_status IN ('candidate', 'active')
         )`
 }
@@ -821,7 +821,6 @@ const getApplyLlmStatusServingReplacementStatements = (input: {
           AND serving.list_mode_key = article_status.list_mode_key
           AND serving.article_id = article_status.article_id
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-          AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
           AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
           AND EXISTS (
             SELECT 1
@@ -829,6 +828,7 @@ const getApplyLlmStatusServingReplacementStatements = (input: {
             WHERE snapshot.project_id = serving.project_id
               AND snapshot.snapshot_id = serving.snapshot_id
               AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+              AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
               AND snapshot.snapshot_status IN ('candidate', 'active')
           )`,
         `DELETE FROM mart.review_article_serving_v4 serving
@@ -836,7 +836,6 @@ const getApplyLlmStatusServingReplacementStatements = (input: {
            SELECT 1
            FROM review_llm_status_serving_rebuild_v4 replacement
            WHERE replacement.project_id = serving.project_id
-             AND replacement.llm_status_identity = serving.llm_status_identity
              AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
              AND replacement.base_generation = serving.base_generation
              AND replacement.snapshot_id = serving.snapshot_id
@@ -874,7 +873,6 @@ const getResetEmptyLlmStatusServingReplacementStatements = (input: {
      )
      FROM mart.review_article_serving_v4 serving
      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-       AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
        AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
        ${listModePredicate}
        ${getArticleRangePredicate({alias: 'serving', ...input})}
@@ -884,6 +882,7 @@ const getResetEmptyLlmStatusServingReplacementStatements = (input: {
          WHERE snapshot.project_id = serving.project_id
            AND snapshot.snapshot_id = serving.snapshot_id
            AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+           AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
            AND snapshot.snapshot_status IN ('candidate', 'active')
        )`,
     `DELETE FROM mart.review_article_serving_v4 serving
@@ -891,7 +890,6 @@ const getResetEmptyLlmStatusServingReplacementStatements = (input: {
        SELECT 1
        FROM review_llm_status_serving_rebuild_v4 replacement
        WHERE replacement.project_id = serving.project_id
-         AND replacement.llm_status_identity = serving.llm_status_identity
          AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
          AND replacement.base_generation = serving.base_generation
          AND replacement.snapshot_id = serving.snapshot_id

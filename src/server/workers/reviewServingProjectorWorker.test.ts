@@ -2102,7 +2102,7 @@ test('worker writes compatible status and posting rebuild chunks through compone
         ] as T[]
       }
 
-      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
         return [
           {
             componentStateJson: componentState,
@@ -2334,7 +2334,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
         ] as T[]
       }
 
-      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
         return [
           {
             componentStateJson: componentState,
@@ -4059,7 +4059,7 @@ test('worker fails inconsistent and superseded foreground rebuild requests befor
   )
   expect(supersededStatement).toContain('newer_request.reason = request.reason')
   expect(supersededStatement).toContain("newer_request.status IN ('admitted', 'running')")
-  expect(supersededStatement).toContain("newer_request.failed_at IS NULL")
+  expect(supersededStatement).toContain('newer_request.failed_at IS NULL')
   expect(supersededStatement).toContain("newer_chunk.status IN ('pending', 'running', 'failed')")
   expect(supersededStatement).toContain("newer_blocked_chunk.status IN ('blocked_over_budget', 'quarantined')")
   expect(inconsistentStatementIndex).toBeGreaterThanOrEqual(0)
@@ -4462,10 +4462,16 @@ test('batched rebuild chunk writers keep claimed leases alive during batch execu
 test('shared rebuild chunk batch writer splits splittable chunks after DuckDB OOM instead of failing the batch', () => {
   const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
   const sharedBatchStart = source.indexOf('const runReviewServingProjectorWorkerRebuildChunkBatchWith = async')
-  const sharedBatchEnd = source.indexOf('\nconst runLlmStatusReviewServingProjectorWorkerRebuildChunkBatch', sharedBatchStart)
+  const sharedBatchEnd = source.indexOf(
+    '\nconst runLlmStatusReviewServingProjectorWorkerRebuildChunkBatch',
+    sharedBatchStart,
+  )
   const sharedBatchSource = source.slice(sharedBatchStart, sharedBatchEnd)
   const recoveryStart = source.indexOf('const recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch = async')
-  const recoveryEnd = source.indexOf('\nconst prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch', recoveryStart)
+  const recoveryEnd = source.indexOf(
+    '\nconst prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch',
+    recoveryStart,
+  )
   const recoverySource = source.slice(recoveryStart, recoveryEnd)
 
   expect(sharedBatchSource).toContain('recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch')
@@ -4543,7 +4549,7 @@ test('selected import runner releases dirty work while base projection is still 
         ] as T[]
       }
 
-      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
         return [
           {
             componentStateJson: {
@@ -4705,7 +4711,7 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
         return [displayChunk] as T[]
       }
 
-      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
         return [
           {
             componentStateJson: componentState,
@@ -4800,7 +4806,7 @@ test('debug rebuild validation mode forces full checksum for chunks without expe
         return [displayChunk] as T[]
       }
 
-      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
         return [
           {
             componentStateJson: componentState,
@@ -4884,7 +4890,7 @@ test('expected-checksum rebuild chunk keeps strict checksum validation', async (
         return [displayChunk] as T[]
       }
 
-      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
         return [
           {
             componentStateJson: componentState,
@@ -5350,11 +5356,19 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
         ] as T[]
       }
 
-      if (statement.includes('AS actualChecksum') && statement.includes('llm_status_identity')) {
+      if (
+        statement.includes('AS actualChecksum')
+        && statement.includes("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
+      ) {
         return [{actualChecksum: 'checksum-llm-status', actualCount: 1}] as T[]
       }
 
-      if (statement.includes('AS actualChecksum') && statement.includes('human_status_identity')) {
+      if (
+        statement.includes('AS actualChecksum')
+        && statement.includes(
+          "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity')",
+        )
+      ) {
         return [{actualChecksum: 'checksum-human-status', actualCount: 1}] as T[]
       }
 
@@ -5416,8 +5430,10 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
       return {status: 'completed'}
     }),
   )
-  expect(joined).toContain('llm_status_identity')
-  expect(joined).toContain('human_status_identity')
+  expect(joined).toContain("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
+  expect(joined).toContain("json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity')")
+  expect(joined).not.toContain('llm_status_identity')
+  expect(joined).not.toContain('human_status_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain(

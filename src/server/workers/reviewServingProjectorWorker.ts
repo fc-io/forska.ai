@@ -1028,10 +1028,16 @@ const getDisplayRebuildChunkOutputChecksum = async (
       ), '')) AS actualChecksum
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND display_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = serving.project_id
+          AND snapshot.snapshot_id = serving.snapshot_id
+          AND json_extract_string(snapshot.composed_identity_json, '$.display.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      )
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1047,10 +1053,16 @@ const getDisplayRebuildChunkOutputCount = async (
       ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND display_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = serving.project_id
+          AND snapshot.snapshot_id = serving.snapshot_id
+          AND json_extract_string(snapshot.composed_identity_json, '$.display.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      )
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1113,8 +1125,7 @@ const getSearchRebuildChunkOutputChecksum = async (
         CAST(snapshot_id AS VARCHAR) || ':' ||
         CAST(project_scope_identity AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        CAST(token AS VARCHAR) || ':' ||
-        COALESCE(title_prefix, ''),
+        CAST(token AS VARCHAR),
         '|' ORDER BY snapshot_id, project_scope_identity, article_id, token
       ), '')) AS actualChecksum
     FROM mart.review_title_search_serving_v4 search
@@ -1165,10 +1176,16 @@ const getLlmStatusRebuildChunkOutputChecksum = async (
       ), '')) AS actualChecksum
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND llm_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = serving.project_id
+          AND snapshot.snapshot_id = serving.snapshot_id
+          AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      )
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1184,10 +1201,16 @@ const getLlmStatusRebuildChunkOutputCount = async (
       ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND llm_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = serving.project_id
+          AND snapshot.snapshot_id = serving.snapshot_id
+          AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      )
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1212,10 +1235,16 @@ const getHumanStatusRebuildChunkOutputChecksum = async (
       ), '')) AS actualChecksum
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND human_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = serving.project_id
+          AND snapshot.snapshot_id = serving.snapshot_id
+          AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      )
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1231,10 +1260,16 @@ const getHumanStatusRebuildChunkOutputCount = async (
       ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND human_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = serving.project_id
+          AND snapshot.snapshot_id = serving.snapshot_id
+          AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      )
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
