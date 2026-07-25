@@ -544,6 +544,9 @@ test('display base rows flow through writer with display fields and selected imp
 
   expect(insertTargetSql).not.toContain('article_title')
   expect(insertTargetSql).not.toContain('article_updated_at')
+  expect(insertTargetSql).not.toContain('publication_year')
+  expect(insertTargetSql).not.toContain('duplicate_flag')
+  expect(insertTargetSql).not.toContain('conflict_flag')
   expect(insertTargetSql).not.toContain('doi')
   expect(inserts.join('\n')).not.toContain('full_text_pdf')
   expect(inserts.join('\n')).not.toContain('full_text_fetched_at')

@@ -294,8 +294,6 @@ const selectedImportChangedColumns = [
   'journal_title',
   'external_id',
   'selected_source_url',
-  'duplicate_flag',
-  'conflict_flag',
   'tombstone',
   'scope_tombstone',
 ].join(', ')
@@ -311,8 +309,6 @@ const selectedImportServingColumns = [
   'sort_key',
   'activity_sort_at',
   'selected_import_route_id',
-  'duplicate_flag',
-  'conflict_flag',
   'llm_status_key',
   'human_status_key',
   'llm_judged_prompt_count',
@@ -518,7 +514,7 @@ const getApplySelectedImportServingStatements = (input: {
 }) => {
   const values = input.rows
     .map((row) => {
-      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? null : row.articleTitle)}, ${getSqlLiteral(row.tombstone ? null : row.journalTitle)}, ${getSqlLiteral(row.tombstone ? null : row.externalId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedSourceUrl)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
+      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? null : row.articleTitle)}, ${getSqlLiteral(row.tombstone ? null : row.journalTitle)}, ${getSqlLiteral(row.tombstone ? null : row.externalId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedSourceUrl)}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
     })
     .join(', ')
   const changedCte = getSelectedImportChangedRowsCte(values)
@@ -560,8 +556,6 @@ const getApplySelectedImportServingStatements = (input: {
             activity_sort_at,
             selected_import_route_id,
             selected_rank_key,
-            duplicate_flag,
-            conflict_flag,
             llm_judged_prompt_count,
             enabled_prompt_count,
             human_answered_prompt_count,
@@ -580,8 +574,6 @@ const getApplySelectedImportServingStatements = (input: {
             COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
             changed.import_route_id,
             changed.selected_rank_key,
-            changed.duplicate_flag,
-            changed.conflict_flag,
             0 AS llm_judged_prompt_count,
             0 AS enabled_prompt_count,
             0 AS human_answered_prompt_count,
@@ -614,8 +606,6 @@ const getApplySelectedImportServingStatements = (input: {
             serving.sort_key,
             serving.activity_sort_at,
             changed.import_route_id AS selected_import_route_id,
-            changed.duplicate_flag,
-            changed.conflict_flag,
             serving.llm_status_key,
             serving.human_status_key,
             serving.llm_judged_prompt_count,
@@ -640,8 +630,6 @@ const getApplySelectedImportServingStatements = (input: {
             )
             AND (
               serving.selected_import_route_id IS DISTINCT FROM changed.import_route_id
-              OR serving.duplicate_flag IS DISTINCT FROM changed.duplicate_flag
-              OR serving.conflict_flag IS DISTINCT FROM changed.conflict_flag
               OR serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}
             )`,
         `DELETE FROM mart.review_article_serving_v4 serving

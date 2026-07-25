@@ -297,8 +297,6 @@ const reviewServingArticlePhysicalSelectColumns = [
   'sort_key',
   'activity_sort_at',
   'selected_import_route_id',
-  'duplicate_flag',
-  'conflict_flag',
   'llm_status_key',
   'human_status_key',
   'llm_judged_prompt_count',
