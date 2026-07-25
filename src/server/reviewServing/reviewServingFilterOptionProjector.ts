@@ -129,6 +129,12 @@ const getOptionModePredicate = (input: ProjectReviewServingFilterOptionsInput) =
   return input.optionMode === 'human' ? "AND detail.payload_kind = 'human'" : "AND detail.payload_kind = 'llm'"
 }
 
+const getDetailListModeExpansionPredicate = (input: ProjectReviewServingFilterOptionsInput) => {
+  return input.optionMode === 'human'
+    ? "detail.list_mode_key = 'human' AND list_mode_key.list_mode_key IN ('human', 'both')"
+    : "detail.list_mode_key = 'llm' AND list_mode_key.list_mode_key IN ('llm', 'both')"
+}
+
 const getPromptAnswerFacetKey = (_input: ProjectReviewServingFilterOptionsInput) => {
   return 'promptAnswer'
 }
@@ -399,7 +405,7 @@ const getReconstructedFilterOptionSourceRows = async (
           SELECT detail.article_id, detail.prompt_id, detail.answered_original AS answerValue
           FROM mart.review_article_judgment_detail_serving_v4 detail
           INNER JOIN active_article active ON active.article_id = detail.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = detail.list_mode_key
+          INNER JOIN list_mode_key_filter list_mode_key ON ${getDetailListModeExpansionPredicate(input)}
           WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
@@ -409,7 +415,7 @@ const getReconstructedFilterOptionSourceRows = async (
           SELECT detail.article_id, detail.prompt_id, unnest(detail.answered_original_as_array) AS answerValue
           FROM mart.review_article_judgment_detail_serving_v4 detail
           INNER JOIN active_article active ON active.article_id = detail.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = detail.list_mode_key
+          INNER JOIN list_mode_key_filter list_mode_key ON ${getDetailListModeExpansionPredicate(input)}
           WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}

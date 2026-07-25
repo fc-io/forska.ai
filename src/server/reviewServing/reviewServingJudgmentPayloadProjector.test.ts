@@ -117,7 +117,9 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(inserts.join('\n')).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain("'llm'")
   expect(joined).toContain("'human'")
-  expect(joined).toContain("'both'")
+  expect(inserts.join('\n')).not.toContain("'both' AS payload_kind")
+  expect(inserts.join('\n')).not.toContain("VALUES ('llm'), ('both')")
+  expect(inserts.join('\n')).not.toContain("VALUES ('human'), ('both')")
   expect(joined).toContain("'summary'")
   expect(joined).toContain("'llm.unanswered'")
   expect(joined).toContain('is_answered')
@@ -193,6 +195,25 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(humanDeleteStatement).toContain("article_id IN ('article-1')")
   expect(humanDeleteStatement).toContain("list_mode_key IS NOT DISTINCT FROM 'human'")
   expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
+test('both-mode judgment payload projection stores canonical llm and human physical list modes only', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase({humanCount: 2, llmCount: 2})
+
+  const result = await projectReviewServingJudgmentPayloadRows(
+    {...projectInput([judgmentClaim()]), listModeKeys: ['both'] as const},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.llmRowCount).toBe(2)
+  expect(result.humanRowCount).toBe(2)
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm')))")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human')))")
+  expect(joined).not.toContain("VALUES ('both')")
+  expect(joined).not.toContain("list_mode_key IS NOT DISTINCT FROM 'both'")
+  expect(joined).toContain("detail.list_mode_key IN ('llm')")
+  expect(joined).toContain("detail.list_mode_key IN ('human')")
 })
 
 test('human payload projection filters rows by active human judgment mode', async () => {
@@ -295,8 +316,10 @@ test('claimless article-range judgment payload rebuild writes detail rows with S
   expect(sourceQueries).toHaveLength(0)
   expect(joined).toContain("article_id >= 'article-1'")
   expect(joined).toContain("article_id <= 'article-9'")
-  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm'), ('both')))")
-  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human'), ('both')))")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm')))")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human')))")
+  expect(joined).not.toContain("VALUES ('llm'), ('both')")
+  expect(joined).not.toContain("VALUES ('human'), ('both')")
   expect(joined).toContain('assessment.id AS assessment_id')
   expect(joined).not.toContain('json_object(')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4 detail')
@@ -332,8 +355,10 @@ test('claimless judgment payload range batches write llm and human inserts once'
   expect(inserts.join('\n')).toContain('SELECT DISTINCT scope.article_id')
   expect(inserts.join('\n')).toContain('INNER JOIN article_range_filter range')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
-  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm'), ('both')))")
-  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human'), ('both')))")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm')))")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human')))")
+  expect(joined).not.toContain("VALUES ('llm'), ('both')")
+  expect(joined).not.toContain("VALUES ('human'), ('both')")
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
   )
@@ -363,7 +388,8 @@ test('article-set judgment hydration reads bounded payload rows with stable orde
 
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('article_id IN (SELECT unnest($articleIds))')
-  expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.list_mode_key = 'both'")
+  expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.list_mode_key = 'human'")
+  expect(sql).toContain("'both' AS list_mode_key")
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
   expect(sql).toContain('ORDER BY article_id ASC, prompt_order ASC NULLS LAST, prompt_id ASC')
   expect(sql).toContain('LIMIT $limit')

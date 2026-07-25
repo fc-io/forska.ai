@@ -1956,6 +1956,295 @@ test('DuckDB migration drops article serving updated-at while preserving rows an
   }
 })
 
+test('DuckDB migration normalizes judgment detail list-mode storage by payload identity', async () => {
+  const duckdbPath = `/tmp/forska-review-judgment-detail-list-mode-normalize-${Date.now()}.duckdb`
+  const targetMigrationFile = '0171_normalizeReviewJudgmentDetailListModeStorage.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL DEFAULT 'llm',
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            prompt_order INTEGER,
+            judgment_id VARCHAR,
+            judgment_model_id VARCHAR,
+            is_answered BOOLEAN,
+            answered_original VARCHAR,
+            answered_original_as_array VARCHAR[],
+            judgment_created_at TIMESTAMPTZ,
+            human_comment VARCHAR,
+            explanation VARCHAR,
+            quotes JSON,
+            placeholder_kind VARCHAR,
+            detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_hydration_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL DEFAULT 'llm',
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            judgment_updated_at TIMESTAMPTZ,
+            chunking_strategy VARCHAR,
+            confidence_original DOUBLE,
+            snapshot_project_id VARCHAR,
+            snapshot_project_model_name VARCHAR,
+            model_name VARCHAR,
+            model_provider VARCHAR,
+            model_thinking VARCHAR,
+            model_version VARCHAR,
+            assessment_id VARCHAR,
+            assessment_judgment_id VARCHAR,
+            assessment_is_correct BOOLEAN,
+            assessment_comment VARCHAR,
+            assessment_created_at TIMESTAMPTZ,
+            assessment_updated_at TIMESTAMPTZ,
+            detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            list_mode_key,
+            payload_kind,
+            article_id,
+            prompt_id,
+            prompt_order,
+            judgment_id,
+            judgment_model_id,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            judgment_created_at,
+            human_comment,
+            explanation,
+            quotes,
+            placeholder_kind,
+            detail_updated_at
+          )
+          VALUES
+            ('project-1', 'config-1', 'snapshot-1', 'llm', 'llm', 'article-1', 'prompt-1', 1, 'llm-canonical', 'model-canonical', true, 'include', ['include'], TIMESTAMPTZ '2026-01-01 00:00:00+00', NULL, 'canonical explanation', '["canonical"]', NULL, TIMESTAMPTZ '2026-01-01 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'both', 'llm', 'article-1', 'prompt-1', 1, 'llm-both', 'model-both', true, 'exclude', ['exclude'], TIMESTAMPTZ '2026-01-02 00:00:00+00', NULL, 'both explanation', '["both"]', NULL, TIMESTAMPTZ '2026-01-02 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'both', 'llm', 'article-2', 'prompt-1', 2, 'llm-both-only', 'model-both-only', true, 'include', ['include'], TIMESTAMPTZ '2026-01-03 00:00:00+00', NULL, 'both only explanation', '["both-only"]', NULL, TIMESTAMPTZ '2026-01-03 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'human', 'human', 'article-3', 'prompt-1', 3, 'human-canonical', NULL, true, 'yes', ['yes'], TIMESTAMPTZ '2026-01-04 00:00:00+00', 'canonical human', NULL, NULL, NULL, TIMESTAMPTZ '2026-01-04 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'both', 'human', 'article-3', 'prompt-1', 3, 'human-both', NULL, true, 'no', ['no'], TIMESTAMPTZ '2026-01-05 00:00:00+00', 'both human', NULL, NULL, NULL, TIMESTAMPTZ '2026-01-05 00:00:00+00')
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_hydration_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            list_mode_key,
+            payload_kind,
+            article_id,
+            prompt_id,
+            judgment_updated_at,
+            chunking_strategy,
+            confidence_original,
+            snapshot_project_id,
+            snapshot_project_model_name,
+            model_name,
+            model_provider,
+            model_thinking,
+            model_version,
+            assessment_id,
+            assessment_judgment_id,
+            assessment_is_correct,
+            assessment_comment,
+            assessment_created_at,
+            assessment_updated_at,
+            detail_updated_at
+          )
+          VALUES
+            ('project-1', 'config-1', 'snapshot-1', 'llm', 'llm', 'article-1', 'prompt-1', TIMESTAMPTZ '2026-01-01 01:00:00+00', 'canonical-strategy', 0.8, 'source-project', 'source-model', 'canonical model', 'openai', 'medium', 'v1', 'assessment-canonical', 'llm-canonical', true, 'canonical assessment', TIMESTAMPTZ '2026-01-01 02:00:00+00', TIMESTAMPTZ '2026-01-01 03:00:00+00', TIMESTAMPTZ '2026-01-01 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'both', 'llm', 'article-1', 'prompt-1', TIMESTAMPTZ '2026-01-02 01:00:00+00', 'both-strategy', 0.9, 'source-project', 'source-model', 'both model', 'openai', 'high', 'v2', 'assessment-both', 'llm-both', false, 'both assessment', TIMESTAMPTZ '2026-01-02 02:00:00+00', TIMESTAMPTZ '2026-01-02 03:00:00+00', TIMESTAMPTZ '2026-01-02 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'both', 'llm', 'article-2', 'prompt-1', TIMESTAMPTZ '2026-01-03 01:00:00+00', 'both-only-strategy', 0.7, NULL, NULL, 'both-only model', 'openai', NULL, 'v1', NULL, NULL, NULL, NULL, NULL, NULL, TIMESTAMPTZ '2026-01-03 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'human', 'human', 'article-3', 'prompt-1', TIMESTAMPTZ '2026-01-04 01:00:00+00', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, TIMESTAMPTZ '2026-01-04 00:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'both', 'human', 'article-3', 'prompt-1', TIMESTAMPTZ '2026-01-05 01:00:00+00', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'both human assessment', NULL, NULL, TIMESTAMPTZ '2026-01-05 00:00:00+00')
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            detail.article_id AS articleId,
+            detail.payload_kind AS payloadKind,
+            detail.list_mode_key AS listModeKey,
+            detail.judgment_id AS judgmentId,
+            detail.answered_original AS answeredOriginal,
+            detail.human_comment AS humanComment,
+            hydration.chunking_strategy AS chunkingStrategy,
+            hydration.model_name AS modelName,
+            hydration.assessment_id AS assessmentId,
+            hydration.assessment_comment AS assessmentComment
+          FROM mart.review_article_judgment_detail_serving_v4 detail
+          INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4 hydration
+            ON hydration.project_id = detail.project_id
+           AND hydration.review_config_hash = detail.review_config_hash
+           AND hydration.snapshot_id = detail.snapshot_id
+           AND hydration.list_mode_key = detail.list_mode_key
+           AND hydration.payload_kind = detail.payload_kind
+           AND hydration.article_id = detail.article_id
+           AND hydration.prompt_id = detail.prompt_id
+          ORDER BY detail.article_id, detail.payload_kind
+        \`)
+        const indexes = await database.queryJson(\`
+          SELECT index_name AS indexName
+          FROM duckdb_indexes()
+          WHERE schema_name = 'mart'
+            AND table_name = 'review_article_judgment_detail_serving_v4'
+          ORDER BY index_name
+        \`)
+        const hydrationIndexes = await database.queryJson(\`
+          SELECT index_name AS indexName
+          FROM duckdb_indexes()
+          WHERE schema_name = 'mart'
+            AND table_name = 'review_article_judgment_detail_hydration_serving_v4'
+          ORDER BY index_name
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0171_normalizeReviewJudgmentDetailListModeStorage.sql'"
+        )
+
+        console.log(JSON.stringify({hydrationIndexes, indexes, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39997',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39998',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      hydrationIndexes: {indexName: string}[]
+      indexes: {indexName: string}[]
+      migrationRows: {name: string}[]
+      rows: {
+        articleId: string
+        answeredOriginal: string | null
+        assessmentComment: string | null
+        assessmentId: string | null
+        chunkingStrategy: string | null
+        humanComment: string | null
+        judgmentId: string | null
+        listModeKey: string
+        modelName: string | null
+        payloadKind: string
+      }[]
+    }
+
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        answeredOriginal: 'include',
+        assessmentComment: 'canonical assessment',
+        assessmentId: 'assessment-canonical',
+        chunkingStrategy: 'canonical-strategy',
+        humanComment: null,
+        judgmentId: 'llm-canonical',
+        listModeKey: 'llm',
+        modelName: 'canonical model',
+        payloadKind: 'llm',
+      },
+      {
+        articleId: 'article-2',
+        answeredOriginal: 'include',
+        assessmentComment: null,
+        assessmentId: null,
+        chunkingStrategy: 'both-only-strategy',
+        humanComment: null,
+        judgmentId: 'llm-both-only',
+        listModeKey: 'llm',
+        modelName: 'both-only model',
+        payloadKind: 'llm',
+      },
+      {
+        articleId: 'article-3',
+        answeredOriginal: 'yes',
+        assessmentComment: null,
+        assessmentId: null,
+        chunkingStrategy: null,
+        humanComment: 'canonical human',
+        judgmentId: 'human-canonical',
+        listModeKey: 'human',
+        modelName: null,
+        payloadKind: 'human',
+      },
+    ])
+    expect(parsed.indexes).toEqual([
+      {indexName: 'idx_review_article_judgment_detail_serving_v4_article'},
+      {indexName: 'idx_review_article_judgment_detail_serving_v4_payload_identity'},
+      {indexName: 'idx_review_article_judgment_detail_serving_v4_repaired_pk'},
+    ])
+    expect(parsed.hydrationIndexes).toEqual([
+      {indexName: 'idx_review_article_judgment_detail_hydration_serving_v4_article'},
+      {indexName: 'idx_review_article_judgment_detail_hydration_serving_v4_payload_identity'},
+      {indexName: 'idx_review_article_judgment_detail_hydration_serving_v4_repaired_pk'},
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
 test('DuckDB migration rehydrates payload display columns after article serving display copies are dropped', async () => {
   const duckdbPath = `/tmp/forska-review-payload-display-rehydrate-${Date.now()}.duckdb`
   const targetMigrationFile = '0164_rehydrateReviewPayloadDisplayColumns.sql'

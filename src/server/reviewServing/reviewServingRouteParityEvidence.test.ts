@@ -305,6 +305,24 @@ const getPayloadKindSqlMatch = (statement: string, contract: ReviewServingReadCo
   return true
 }
 
+const getPhysicalListMode = (contract: ReviewServingReadContract) => {
+  if (contract.servingTable !== 'mart.review_article_judgment_detail_serving_v4' || contract.listMode !== 'both') {
+    return contract.listMode
+  }
+
+  return contract.key === 'review.both.list.humanJudgments' ? 'human' : 'llm'
+}
+
+const getSelectedListModeSqlMatch = (statement: string, contract: ReviewServingReadContract) => {
+  if (contract.servingTable !== 'mart.review_article_judgment_detail_serving_v4') {
+    return true
+  }
+
+  return contract.listMode === 'both'
+    ? containsSql(statement, "'both' AS list_mode_key")
+    : !containsSql(statement, "'both' AS list_mode_key")
+}
+
 const getContractSqlMatch = (
   statement: string,
   contract: ReviewServingReadContract,
@@ -353,8 +371,8 @@ const getContractSqlMatch = (
       : true,
     contract.physicalAccessStrategy !== 'keyedLookup' ? !containsSql(statement, "article_id = 'article-1'") : true,
     contract.physicalAccessStrategy === 'queueOrdering' ? containsSql(statement, "queue_kind = 'unassessed'") : true,
-    contract.listMode && contract.physicalAccessStrategy !== 'queueOrdering'
-      ? containsSql(statement, `list_mode_key = '${contract.listMode}'`)
+    getPhysicalListMode(contract) && contract.physicalAccessStrategy !== 'queueOrdering'
+      ? containsSql(statement, `list_mode_key = '${getPhysicalListMode(contract)}'`)
       : true,
     contract.physicalAccessStrategy === 'postingIntersection' && request.listMode
       ? containsSql(statement, `list_mode_key = '${request.listMode}'`)
@@ -365,6 +383,7 @@ const getContractSqlMatch = (
       : true,
     contract.physicalAccessStrategy === 'tokenPrefixIndex' ? containsSql(statement, 'starts_with(token,') : true,
     getPayloadKindSqlMatch(statement, contract),
+    getSelectedListModeSqlMatch(statement, contract),
     contract.servingTable === 'app.review_serving_snapshot_manifest'
       ? containsSql(statement, `LIMIT ${request.limit}`)
       : true,
