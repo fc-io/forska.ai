@@ -1019,7 +1019,6 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
       DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_batch
     `)
   })
-  await database.run(getRefreshSummaryRebuildAccumulatorCountsStatement(input))
 }
 
 const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
