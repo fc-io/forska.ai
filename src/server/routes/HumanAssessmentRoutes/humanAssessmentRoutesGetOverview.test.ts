@@ -62,6 +62,9 @@ const registerModuleMocks = () => {
       getActiveReviewServingSnapshotManifest: (params: unknown) => {
         return activeManifestRef.current(params)
       },
+      getActiveOrLastKnownGoodReviewServingSnapshotManifest: async (params: unknown) => {
+        return (await activeManifestRef.current(params)) ?? (await lastKnownManifestRef.current(params))
+      },
       getLastKnownGoodReviewServingSnapshotManifest: (params: unknown) => {
         return lastKnownManifestRef.current(params)
       },
@@ -130,12 +133,21 @@ test('human assessment overview reads V4 human count contracts instead of raw ju
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
 
-    return statement.includes('FROM app.project')
-      ? [
-          {id: 'project-low', name: 'Project Low'},
-          {id: 'project-high', name: 'Project High'},
-        ]
-      : []
+    if (statement.includes('FROM app.project')) {
+      return [
+        {id: 'project-low', name: 'Project Low'},
+        {id: 'project-high', name: 'Project High'},
+      ]
+    }
+
+    if (statement.includes('mart.review_article_serving_v4 serving')) {
+      return [
+        {projectId: 'project-low', totalCount: 1},
+        {projectId: 'project-high', totalCount: 3},
+      ]
+    }
+
+    return []
   }
   readReviewServingRowsRef.current = async (request) => {
     readerRequests.push(request)
@@ -162,18 +174,15 @@ test('human assessment overview reads V4 human count contracts instead of raw ju
       userName: 'Local User',
     },
   ])
-  expect(readerRequests).toEqual([
-    expect.objectContaining({
-      contractKey: 'review.human.count',
-      countFilterKey: 'list:all',
-      namedCountKey: 'review.list.total',
-    }),
-    expect.objectContaining({
-      contractKey: 'review.human.count',
-      countFilterKey: 'list:all',
-      namedCountKey: 'review.list.total',
-    }),
-  ])
+  expect(readerRequests).toEqual([])
+  const joinedStatements = statements.join('\n')
+  expect(joinedStatements).toContain('WITH overview_manifest(project_id, review_config_hash, snapshot_id) AS')
+  expect(joinedStatements).toContain("'project-low'")
+  expect(joinedStatements).toContain("'project-high'")
+  expect(joinedStatements).toContain('COUNT(DISTINCT serving.article_id) AS totalCount')
+  expect(joinedStatements).toContain("serving.list_mode_key = 'human'")
+  expect(joinedStatements).toContain("serving.human_status_key = 'answered'")
+  expect(joinedStatements).not.toContain("serving.llm_status_key = 'answered'")
   expect(statements.join('\n')).not.toContain('FROM app.judgment_human')
   expect(statements.join('\n')).not.toContain('FROM app.project_prompt')
   expect(statements.join('\n')).not.toContain('OFFSET')
@@ -182,7 +191,7 @@ test('human assessment overview reads V4 human count contracts instead of raw ju
 test('human assessment overview active project read is not capped after materialization', () => {
   const routeText = readFileSync('src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts', 'utf8')
   const projectRead = routeText.slice(
-    routeText.indexOf('const projects = await getAppDatabaseService().queryJson'),
+    routeText.indexOf('const projects = await database.queryJson'),
     routeText.indexOf('const projectsWithCounts = await Promise.all'),
   )
 
@@ -198,7 +207,15 @@ test('human assessment both-project overview reads V4 both count contracts', asy
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
 
-    return statement.includes('FROM app.project') ? [{id: 'project-both', name: 'Project Both'}] : []
+    if (statement.includes('FROM app.project')) {
+      return [{id: 'project-both', name: 'Project Both'}]
+    }
+
+    if (statement.includes('mart.review_article_serving_v4 serving')) {
+      return [{projectId: 'project-both', totalCount: 2}]
+    }
+
+    return []
   }
   readReviewServingRowsRef.current = async (request) => {
     readerRequests.push(request)
@@ -213,13 +230,9 @@ test('human assessment both-project overview reads V4 both count contracts', asy
   })
 
   expect(response).toEqual({data: [{count: 2, projectId: 'project-both', projectName: 'Project Both'}]})
-  expect(readerRequests).toEqual([
-    expect.objectContaining({
-      contractKey: 'review.both.count',
-      countFilterKey: 'list:all',
-      namedCountKey: 'review.list.total',
-    }),
-  ])
+  expect(readerRequests).toEqual([])
+  expect(statements.join('\n')).toContain("serving.list_mode_key = 'both'")
+  expect(statements.join('\n')).toContain("serving.llm_status_key = 'answered'")
   expect(statements.join('\n')).not.toContain('FROM app.judgment_human')
   expect(statements.join('\n')).not.toContain('FROM app.judgment')
   expect(statements.join('\n')).not.toContain('FROM app.project_prompt')
