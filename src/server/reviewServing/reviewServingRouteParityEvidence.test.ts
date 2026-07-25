@@ -290,12 +290,22 @@ const getAsyncSearchSqlMatch = (
 }
 
 const getPayloadKindSqlMatch = (statement: string, contract: ReviewServingReadContract) => {
+  const judgmentDetailPayloadKindPredicate = (payloadKind: 'human' | 'llm') => {
+    const whereClause = [...statement.matchAll(/\bWHERE\b([\s\S]*?)(?:\bQUALIFY\b|\bORDER\s+BY\b|\bLIMIT\b|$)/giu)]
+      .map((match) => {
+        return match[1] ?? ''
+      })
+      .join('\n')
+
+    return containsSql(whereClause, `mart.review_article_judgment_detail_serving_v4.payload_kind = '${payloadKind}'`)
+  }
+
   if (
     contract.key === 'review.detail.humanJudgments'
     || contract.key === 'review.human.list.judgments'
     || contract.key === 'review.both.list.humanJudgments'
   ) {
-    return containsSql(statement, "payload_kind = 'human'")
+    return judgmentDetailPayloadKindPredicate('human')
   }
 
   if (
@@ -303,7 +313,7 @@ const getPayloadKindSqlMatch = (statement: string, contract: ReviewServingReadCo
     || contract.key === 'review.llm.list.judgments'
     || contract.key === 'review.both.list.judgments'
   ) {
-    return containsSql(statement, "payload_kind = 'llm'")
+    return judgmentDetailPayloadKindPredicate('llm')
   }
 
   return true
@@ -349,8 +359,10 @@ const getContractSqlMatch = (
         : contract.servingTable === 'mart.review_article_judgment_detail_serving_v4'
           ? containsSql(statement, `FROM ${contract.servingTable}`)
             && (judgmentDetailFullHydrationJoin
-              ? containsSql(statement, 'INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4')
-              : !containsSql(statement, 'INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4'))
+              ? containsSql(statement, 'LEFT JOIN app."judgment" llm_judgment')
+                && containsSql(statement, 'LEFT JOIN app."judgment_human" human_judgment')
+                && !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4')
+              : !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4'))
           : containsSql(statement, `FROM ${contract.servingTable} WHERE`)
   const checks = [
     tableMatch,
@@ -461,7 +473,6 @@ const createDatabase = async () => {
 
         return contract ? getContractSqlMatch(statement, contract, caseInput.request) : false
       })
-
       return (
         matchedCase ? rowByContractKey.get(getSqlFixtureKey(matchedCase.routeKey, matchedCase.request)) : []
       ) as T[]

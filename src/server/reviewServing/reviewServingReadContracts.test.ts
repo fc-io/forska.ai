@@ -802,7 +802,6 @@ test('review serving read contracts use planned Phase 1 physical table names', (
     'app.review_serving_snapshot_manifest',
     'mart.review_article_filter_posting_serving_v4',
     'mart.review_article_count_serving_v4',
-    'mart.review_article_judgment_detail_hydration_serving_v4',
     'mart.review_article_judgment_detail_serving_v4',
     'mart.review_article_serving_payload_v4',
     'mart.review_article_serving_v4',

@@ -1468,37 +1468,54 @@ const getJudgmentInputContentRebuildChunkOutputChecksum = async (
         COALESCE(CAST(detail.placeholder_kind AS VARCHAR), '') || ':' ||
         COALESCE(CAST(detail.answered_original AS VARCHAR), '') || ':' ||
         COALESCE(CAST(detail.answered_original_as_array AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(detail.judgment_model_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judgment.model_id AS VARCHAR), '') || ':' ||
         COALESCE(CAST(detail.is_answered AS VARCHAR), '') || ':' ||
         COALESCE(CAST(detail.judgment_created_at AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.judgment_updated_at AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.confidence_original AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.chunking_strategy AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.snapshot_project_id AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.snapshot_project_model_name AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.model_name AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.model_provider AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.model_thinking AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.model_version AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.assessment_id AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.assessment_judgment_id AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.assessment_is_correct AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.assessment_comment AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.assessment_created_at AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(hydration.assessment_updated_at AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(detail.explanation AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(detail.quotes AS VARCHAR), ''),
+        COALESCE(CAST(COALESCE(llm_judgment.updated_at, human_judgment.updated_at, human_summary.updated_at) AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judgment.confidence_original AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judgment.chunking_strategy AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judgment.snapshot_project_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judgment.snapshot_project_model_name AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(COALESCE(model.display_name, model.name, llm_judgment.snapshot_project_model_name) AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(provider_connection.provider_kind AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(json_extract_string(model.metadata_json, '$.options.thinking') AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(model.variant AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment.id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment.judgment_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment.assessment_is_correct AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment.assessment_comment AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment.created_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment.updated_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judgment.explanation AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judgment.quotes AS VARCHAR), ''),
         '|' ORDER BY detail.snapshot_id, detail.review_config_hash, detail.list_mode_key, detail.payload_kind, detail.article_id, detail.prompt_id
       ), '')) AS actualChecksum
     FROM mart.review_article_judgment_detail_serving_v4 detail
-    INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4 hydration
-      ON hydration.project_id = detail.project_id
-      AND hydration.review_config_hash = detail.review_config_hash
-      AND hydration.snapshot_id = detail.snapshot_id
-      AND hydration.list_mode_key = detail.list_mode_key
-      AND hydration.payload_kind = detail.payload_kind
-      AND hydration.article_id = detail.article_id
-      AND hydration.prompt_id = detail.prompt_id
+    LEFT JOIN app."judgment" llm_judgment
+      ON detail.payload_kind = 'llm'
+      AND llm_judgment.id = detail.judgment_id
+      AND llm_judgment.article_id = detail.article_id
+      AND llm_judgment.prompt_id = detail.prompt_id
+      AND llm_judgment.deleted_at IS NULL
+    LEFT JOIN app.judgment_assessment assessment
+      ON assessment.judgment_id = llm_judgment.id
+    LEFT JOIN app.model model
+      ON model.id = llm_judgment.model_id
+    LEFT JOIN app.provider_connection provider_connection
+      ON provider_connection.id = model.provider_connection_id
+    LEFT JOIN app."judgment_human" human_judgment
+      ON detail.payload_kind = 'human'
+      AND detail.prompt_id <> 'summary'
+      AND human_judgment.project_id = ${getSqlLiteral(projectId)}
+      AND human_judgment.id = detail.judgment_id
+      AND human_judgment.article_id = detail.article_id
+      AND human_judgment.prompt_id = detail.prompt_id
+    LEFT JOIN app."judgment_human_summary" human_summary
+      ON detail.payload_kind = 'human'
+      AND detail.prompt_id = 'summary'
+      AND human_summary.project_id = ${getSqlLiteral(projectId)}
+      AND human_summary.id = detail.judgment_id
+      AND human_summary.article_id = detail.article_id
     WHERE detail.project_id = ${getSqlLiteral(projectId)}
       AND ${getAliasedSnapshotIdPredicate('detail', input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'detail', chunk: input.chunk})}

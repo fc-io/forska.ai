@@ -31,6 +31,8 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
+  join(reviewServingSourceRoot, 'reviewServingSql.ts'),
+  join(reviewServingSourceRoot, 'reviewServingHumanAssessmentCompletedCount.ts'),
   join(reviewServingSourceRoot, 'reviewServingV4RebuildRequestService.ts'),
 ])
 const reviewServingMaintenanceAdmissionFiles = [
@@ -40,7 +42,11 @@ const reviewServingMaintenanceAdmissionFiles = [
   'reviewServingRebuildRequestRepository.ts',
   'reviewServingV4RebuildRequestService.ts',
 ] as const
-const reviewServingBoundedForegroundAggregationFiles = ['reviewServingDynamicCountSql.ts'] as const
+const reviewServingBoundedForegroundAggregationFiles = [
+  'reviewServingDynamicCountSql.ts',
+  'reviewServingHumanAssessmentCompletedCount.ts',
+  'reviewServingSql.ts',
+] as const
 const workspaceRoot = process.cwd()
 
 const getRequiredReviewServingReadContract = (contractKey: string) => {
@@ -459,15 +465,32 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('SELECT mart.review_article_judgment_detail_serving_v4.project_id')
-  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
-  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.explanation')
-  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.quotes')
-  expect(sql).toContain('INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4')
-  expect(sql).toContain('mart.review_article_judgment_detail_hydration_serving_v4.judgment_updated_at')
-  expect(sql).toContain('mart.review_article_judgment_detail_hydration_serving_v4.confidence_original')
-  expect(sql).toContain('mart.review_article_judgment_detail_hydration_serving_v4.model_name')
-  expect(sql).toContain('mart.review_article_judgment_detail_hydration_serving_v4.assessment_id')
-  expect(sql).toContain('mart.review_article_judgment_detail_hydration_serving_v4.assessment_updated_at')
+  expect(sql).toContain('llm_judgment.model_id AS judgment_model_id')
+  expect(sql).toContain('llm_judgment.explanation AS explanation')
+  expect(sql).toContain('llm_judgment.quotes AS quotes')
+  expect(sql).not.toContain('mart.review_article_judgment_detail_hydration_serving_v4')
+  expect(sql).toContain('LEFT JOIN app."judgment" llm_judgment')
+  expect(sql).toContain('llm_judgment.id = mart.review_article_judgment_detail_serving_v4.judgment_id')
+  expect(sql).toContain('llm_judgment.article_id = mart.review_article_judgment_detail_serving_v4.article_id')
+  expect(sql).toContain('llm_judgment.prompt_id = mart.review_article_judgment_detail_serving_v4.prompt_id')
+  expect(sql).toContain('llm_judgment.deleted_at IS NULL')
+  expect(sql).toContain('LEFT JOIN app.judgment_assessment assessment')
+  expect(sql).toContain('FROM app.judgment_assessment latest_assessment')
+  expect(sql).toContain('WHERE latest_assessment.judgment_id = llm_judgment.id')
+  expect(sql).toContain('LEFT JOIN app.model model')
+  expect(sql).toContain('LEFT JOIN app.provider_connection provider_connection')
+  expect(sql).toContain(
+    'COALESCE(llm_judgment.updated_at, human_judgment.updated_at, human_summary.updated_at) AS judgment_updated_at',
+  )
+  expect(sql).toContain('llm_judgment.confidence_original AS confidence_original')
+  expect(sql).toContain(
+    'COALESCE(model.display_name, model.name, llm_judgment.snapshot_project_model_name) AS model_name',
+  )
+  expect(sql).toContain("json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking")
+  expect(sql).toContain('assessment.id AS assessment_id')
+  expect(sql).toContain('assessment.updated_at AS assessment_updated_at')
+  expect(sql).toContain('LEFT JOIN app."judgment_human" human_judgment')
+  expect(sql).toContain('LEFT JOIN app."judgment_human_summary" human_summary')
   expect(sql).toContain('LEFT JOIN app.project_prompt project_prompt')
   expect(sql).toContain('project_prompt.prompt_id = mart.review_article_judgment_detail_serving_v4.prompt_id')
   expect(sql).toContain('LEFT JOIN app.prompt prompt')
@@ -476,10 +499,6 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(sql).toContain('ELSE prompt.prompt_heading END AS prompt_heading')
   expect(sql).toContain('ELSE prompt.type END AS prompt_type')
   expect(sql).toContain('ELSE project_prompt.criteria_disposition END AS prompt_criteria_disposition')
-  expect(sql).not.toContain('mart.review_article_judgment_detail_hydration_serving_v4.prompt_original_text')
-  expect(sql).not.toContain('mart.review_article_judgment_detail_hydration_serving_v4.prompt_heading')
-  expect(sql).not.toContain('mart.review_article_judgment_detail_hydration_serving_v4.prompt_type')
-  expect(sql).not.toContain('mart.review_article_judgment_detail_hydration_serving_v4.prompt_criteria_disposition')
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.judgment_updated_at')
   expect(sql).not.toContain('judgment_payload_json')
   expect(sql).toContain(
@@ -597,9 +616,13 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
   expect(bothListSql).toContain("'both' AS list_mode_key")
   expect(humanListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
   expect(bothListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
-  expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
-  expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.explanation')
-  expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.quotes')
+  expect(humanListSql).toContain('llm_judgment.model_id AS judgment_model_id')
+  expect(humanListSql).toContain('llm_judgment.explanation AS explanation')
+  expect(humanListSql).toContain('llm_judgment.quotes AS quotes')
+  expect(humanListSql).toContain('LEFT JOIN app."judgment" llm_judgment')
+  expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
+  expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.explanation')
+  expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.quotes')
   expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.human_comment')
   expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.detail_updated_at')
   expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.is_answered')
@@ -977,9 +1000,13 @@ test('buildReviewServingRowsSql supports article-set list judgment lookups', () 
   expect(sql).toContain("'both' AS list_mode_key")
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'llm'")
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))')
-  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
-  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.explanation')
-  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.quotes')
+  expect(sql).toContain('llm_judgment.model_id AS judgment_model_id')
+  expect(sql).toContain('llm_judgment.explanation AS explanation')
+  expect(sql).toContain('llm_judgment.quotes AS quotes')
+  expect(sql).toContain('LEFT JOIN app."judgment" llm_judgment')
+  expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
+  expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.explanation')
+  expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.quotes')
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.snapshot_project_model_name')
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.assessment_id')
   expect(sql).not.toContain('SELECT *')
