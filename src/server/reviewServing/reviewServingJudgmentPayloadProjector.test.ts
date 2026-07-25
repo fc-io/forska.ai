@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
+  projectReviewServingJudgmentPayloadArticleRanges,
   projectReviewServingJudgmentPayloadRows,
   type ReviewServingJudgmentPayloadProjectorDatabase,
 } from './reviewServingJudgmentPayloadProjector.ts'
@@ -257,6 +258,39 @@ test('claimless article-range judgment payload rebuild writes detail rows with S
   )
   expect(joined).not.toContain('DO UPDATE SET')
   expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
+})
+
+test('claimless judgment payload range batches write llm and human inserts once', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase()
+
+  const result = await projectReviewServingJudgmentPayloadArticleRanges(
+    {
+      ranges: [
+        {...projectInput(), chunkEndArticleId: 'article-050', chunkStartArticleId: 'article-001'},
+        {...projectInput(), chunkEndArticleId: 'article-099', chunkStartArticleId: 'article-051'},
+      ],
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+  const inserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(result).toEqual({rangeCount: 2, status: 'completed'})
+  expect(inserts).toHaveLength(2)
+  expect(inserts.join('\n')).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id) AS')
+  expect(inserts.join('\n')).toContain("('article-001', 'article-050')")
+  expect(inserts.join('\n')).toContain("('article-051', 'article-099')")
+  expect(inserts.join('\n')).toContain('SELECT DISTINCT scope.article_id')
+  expect(inserts.join('\n')).toContain('INNER JOIN article_range_filter range')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm'), ('both')))")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human'), ('both')))")
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
+  )
+  expect(joined).not.toContain('DO UPDATE SET')
 })
 
 test('article-set judgment hydration reads bounded payload rows with stable ordering', () => {
