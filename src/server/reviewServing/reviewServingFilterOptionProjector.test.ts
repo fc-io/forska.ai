@@ -40,9 +40,11 @@ const projectInput = (input?: {
     claims: input?.claims ?? [optionClaim()],
     baseGeneration: 5,
     definitionVersion: 'summary-v1-test',
+    displayIdentity: 'display:identity-1',
     filterOptionIdentity: input?.filterOptionIdentity ?? 'filter-option:identity-1',
     listModeKeys: input?.listModeKeys ?? ['llm'],
     optionMode: input?.optionMode ?? 'review',
+    payloadIdentity: 'payload:identity-1',
     projectId: 'project-1',
     projectionIdentity: 'filter-option:identity-1',
     reviewConfigHash: 'review-config-1',
@@ -178,6 +180,10 @@ test('source query preserves active search and filter scope without using postin
   const joined = statements.join('\n')
 
   expect(sourceStatement).toContain('mart.review_article_serving_v4 serving')
+  expect(sourceStatement).toContain('INNER JOIN mart.review_article_serving_payload_v4 payload')
+  expect(sourceStatement).toContain("payload.display_identity = 'display:identity-1'")
+  expect(sourceStatement).toContain("payload.payload_identity = 'payload:identity-1'")
+  expect(sourceStatement).toContain("COALESCE(payload.article_title, '')")
   expect(sourceStatement).toContain("LIKE LOWER('%heart%')")
   expect(sourceStatement).toContain("('llm'), ('human')")
   expect(sourceStatement).toContain('mart.review_article_judgment_detail_serving_v4 detail')

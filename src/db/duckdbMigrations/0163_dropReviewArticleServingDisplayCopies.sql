@@ -1,6 +1,12 @@
-DROP TABLE IF EXISTS mart.review_article_serving_v4_repair;
+DROP INDEX IF EXISTS mart.idx_review_article_serving_v4_order;
+DROP INDEX IF EXISTS idx_review_article_serving_v4_order;
+DROP INDEX IF EXISTS mart.idx_review_article_serving_v4_publication_year;
+DROP INDEX IF EXISTS idx_review_article_serving_v4_publication_year;
+DROP INDEX IF EXISTS mart.idx_review_article_serving_v4_repaired_pk;
+DROP INDEX IF EXISTS idx_review_article_serving_v4_repaired_pk;
+DROP TABLE IF EXISTS mart.review_article_serving_v4_display_copy_repair;
 
-CREATE TABLE mart.review_article_serving_v4_repair (
+CREATE TABLE mart.review_article_serving_v4_display_copy_repair (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
@@ -28,7 +34,7 @@ CREATE TABLE mart.review_article_serving_v4_repair (
   CHECK (human_answered_prompt_count >= 0)
 );
 
-INSERT INTO mart.review_article_serving_v4_repair
+INSERT INTO mart.review_article_serving_v4_display_copy_repair
 SELECT
   project_id,
   review_config_hash,
@@ -54,7 +60,7 @@ FROM mart.review_article_serving_v4;
 
 DROP TABLE mart.review_article_serving_v4;
 
-ALTER TABLE mart.review_article_serving_v4_repair RENAME TO review_article_serving_v4;
+ALTER TABLE mart.review_article_serving_v4_display_copy_repair RENAME TO review_article_serving_v4;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_v4_repaired_pk
 ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, article_id);
@@ -64,3 +70,5 @@ ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, l
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_v4_publication_year
 ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, publication_year, sort_key, article_id);
+
+DROP TABLE IF EXISTS mart.review_article_serving_v4_display_copy_repair;

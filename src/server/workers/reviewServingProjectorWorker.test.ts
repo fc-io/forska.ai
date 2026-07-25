@@ -5478,6 +5478,8 @@ test('worker refreshes summary filter options when an active-snapshot summary re
     required: [
       {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
       {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'display', projectionIdentity: 'display:project-1'},
+      {baseGeneration: '7', component: 'payload', projectionIdentity: 'payload:project-1'},
       {baseGeneration: '7', component: 'summary', projectionIdentity: 'summary:project-1'},
     ],
   }

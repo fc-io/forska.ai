@@ -6,6 +6,16 @@ CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair (
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
+  article_title VARCHAR,
+  article_external_id VARCHAR,
+  article_updated_at TIMESTAMPTZ,
+  arxiv_id VARCHAR,
+  biorxiv_id VARCHAR,
+  medrxiv_id VARCHAR,
+  doi VARCHAR,
+  pmid VARCHAR,
+  journal_title VARCHAR,
+  url VARCHAR,
   source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR
@@ -14,14 +24,26 @@ CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair (
 INSERT INTO mart.review_article_serving_payload_v4_coverage_repair
 WITH existing_payload AS (
   SELECT
-    project_id,
-    display_identity,
-    payload_identity,
-    snapshot_id,
-    article_id,
-    source_metadata,
-    abstract_text,
-    full_text_preview,
+    COLUMNS(column_name -> column_name IN (
+      'project_id',
+      'display_identity',
+      'payload_identity',
+      'snapshot_id',
+      'article_id',
+      'article_title',
+      'article_external_id',
+      'article_updated_at',
+      'arxiv_id',
+      'biorxiv_id',
+      'medrxiv_id',
+      'doi',
+      'pmid',
+      'journal_title',
+      'url',
+      'source_metadata',
+      'abstract_text',
+      'full_text_preview'
+    )),
     0 AS row_precedence
   FROM mart.review_article_serving_payload_v4
 ),
@@ -58,6 +80,16 @@ serving_payload_gaps AS (
     snapshot_payload_identity.payload_identity,
     serving.snapshot_id,
     serving.article_id,
+    CAST(NULL AS VARCHAR) AS article_title,
+    CAST(NULL AS VARCHAR) AS article_external_id,
+    CAST(NULL AS TIMESTAMPTZ) AS article_updated_at,
+    CAST(NULL AS VARCHAR) AS arxiv_id,
+    CAST(NULL AS VARCHAR) AS biorxiv_id,
+    CAST(NULL AS VARCHAR) AS medrxiv_id,
+    CAST(NULL AS VARCHAR) AS doi,
+    CAST(NULL AS VARCHAR) AS pmid,
+    CAST(NULL AS VARCHAR) AS journal_title,
+    CAST(NULL AS VARCHAR) AS url,
     CAST(NULL AS JSON) AS source_metadata,
     CAST(NULL AS VARCHAR) AS abstract_text,
     CAST(NULL AS VARCHAR) AS full_text_preview,
@@ -77,7 +109,7 @@ serving_payload_gaps AS (
 ),
 payload_union AS (
   SELECT * FROM existing_payload
-  UNION ALL
+  UNION ALL BY NAME
   SELECT * FROM serving_payload_gaps
 )
 SELECT
@@ -86,6 +118,16 @@ SELECT
   payload_identity,
   snapshot_id,
   article_id,
+  article_title,
+  article_external_id,
+  article_updated_at,
+  arxiv_id,
+  biorxiv_id,
+  medrxiv_id,
+  doi,
+  pmid,
+  journal_title,
+  url,
   source_metadata,
   abstract_text,
   full_text_preview

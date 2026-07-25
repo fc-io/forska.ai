@@ -44,18 +44,18 @@ export const readReviewServingExportArticles = async (input: {
       ranked_export_article AS (
         SELECT
           s.article_id AS articleId,
-          s.article_external_id AS articleExternalId,
-          s.arxiv_id AS arxivId,
-          s.biorxiv_id AS biorxivId,
-          s.doi AS doi,
-          s.medrxiv_id AS medrxivId,
-          s.pmid AS pubmedId,
-          s.url AS articleUrl,
-          s.article_title AS articleTitle,
+          payload.article_external_id AS articleExternalId,
+          payload.arxiv_id AS arxivId,
+          payload.biorxiv_id AS biorxivId,
+          payload.doi AS doi,
+          payload.medrxiv_id AS medrxivId,
+          payload.pmid AS pubmedId,
+          payload.url AS articleUrl,
+          payload.article_title AS articleTitle,
           payload.abstract_text AS articleSummary,
           TO_JSON(article.article_authors) AS articleAuthors,
           s.article_created_at AS articleCreatedAt,
-          s.article_updated_at AS articleUpdatedAt,
+          payload.article_updated_at AS articleUpdatedAt,
           selected_source.raw_payload AS articleOriginalData,
           payload.source_metadata AS articleSourceMetadata,
           export_scope.source_project_order AS sourceProjectOrder,
@@ -92,7 +92,7 @@ export const readReviewServingExportArticles = async (input: {
            ELSE selected_base.source_record_key
          END
          AND selected_source.quarantined_at IS NULL
-        LEFT JOIN mart.review_article_serving_payload_v4 payload
+        INNER JOIN mart.review_article_serving_payload_v4 payload
           ON payload.project_id = s.project_id
          AND payload.display_identity = json_extract_string(manifest.composed_identity_json, '$.display.projectionIdentity')
          AND payload.payload_identity = json_extract_string(manifest.composed_identity_json, '$.payload.projectionIdentity')

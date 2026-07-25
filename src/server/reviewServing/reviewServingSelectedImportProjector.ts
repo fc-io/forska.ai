@@ -453,10 +453,6 @@ const selectedImportServingColumns = [
   'article_id',
   'sort_key',
   'activity_sort_at',
-  'article_title',
-  'article_external_id',
-  'journal_title',
-  'url',
   'selected_import_route_id',
   'publication_year',
   'duplicate_flag',
@@ -468,12 +464,6 @@ const selectedImportServingColumns = [
   'human_answered_prompt_count',
   'serving_updated_at',
   'article_created_at',
-  'article_updated_at',
-  'arxiv_id',
-  'biorxiv_id',
-  'medrxiv_id',
-  'doi',
-  'pmid',
 ].join(', ')
 
 const getRefreshSelectedImportServingArticleRangeStatements = (
@@ -529,10 +519,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        scoped.article_id,
        COALESCE(serving.sort_key, scoped.sort_key) AS sort_key,
        COALESCE(serving.activity_sort_at, scoped.activity_sort_at) AS activity_sort_at,
-       COALESCE(selected_hot.article_title, article.article_title) AS article_title,
-       COALESCE(selected_hot.external_id, article.article_id) AS article_external_id,
-       selected_hot.journal_title AS journal_title,
-       COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
        selected.import_route_id AS selected_import_route_id,
        selected_hot.publication_year AS publication_year,
        COALESCE(selected_hot.duplicate_flag, FALSE) AS duplicate_flag,
@@ -543,18 +529,10 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        COALESCE(serving.enabled_prompt_count, 0) AS enabled_prompt_count,
        COALESCE(serving.human_answered_prompt_count, 0) AS human_answered_prompt_count,
        current_timestamp AS serving_updated_at,
-       article.article_created_at,
-       article.article_updated_at,
-       article.arxiv_id,
-       article.biorxiv_id,
-       article.medrxiv_id,
-       article.doi,
-       article.pubmed_id AS pmid
+       scoped.sort_key AS article_created_at
      FROM serving_template template
      INNER JOIN scoped_article scoped
        ON TRUE
-     INNER JOIN app."article" article
-       ON article.id = scoped.article_id
      LEFT JOIN app.review_selected_article_import_v4 selected
        ON selected.project_id = template.project_id
        AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
@@ -566,11 +544,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        AND selected_hot.article_id = selected.article_id
        AND selected_hot.source_record_key = selected.source_record_key
        AND NOT selected_hot.tombstone
-     LEFT JOIN app.article_import_route_source_record selected_source
-       ON selected_source.import_route_id = selected.import_route_id
-       AND selected_source.article_id = selected.article_id
-       AND selected_source.source_record_key = selected.source_record_key
-       AND selected_source.quarantined_at IS NULL
      LEFT JOIN mart.review_article_serving_v4 serving
        ON serving.project_id = template.project_id
        AND serving.review_config_hash = template.review_config_hash

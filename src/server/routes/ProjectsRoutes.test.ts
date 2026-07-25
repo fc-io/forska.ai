@@ -12,10 +12,7 @@ const tempDbPath = tempRuntimeRoot.duckdbPath
 const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
 const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
   .pathname
-const promptPreviewRoutePath = new URL(
-  './projectsRoutes/projectsRoutesGetPromptPreview.ts',
-  import.meta.url,
-).pathname
+const promptPreviewRoutePath = new URL('./projectsRoutes/projectsRoutesGetPromptPreview.ts', import.meta.url).pathname
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -652,10 +649,8 @@ test('project prompt preview uses the first project article and shared prompt bu
       list_mode_key,
       article_id,
       article_created_at,
-      article_updated_at,
       sort_key,
-      activity_sort_at,
-      article_title
+      activity_sort_at
     ) VALUES (
       '${projectId}',
       ${getSqlLiteral(reviewConfigHash)},
@@ -665,10 +660,8 @@ test('project prompt preview uses the first project article and shared prompt bu
       'llm',
       'preview-article-second',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      NULL,
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      'Second article title'
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
     ), (
       '${projectId}',
       ${getSqlLiteral(reviewConfigHash)},
@@ -678,10 +671,8 @@ test('project prompt preview uses the first project article and shared prompt bu
       'human',
       'preview-article-second',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      NULL,
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      'Second article title'
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
     )
   `)
   await runDatabase(`
@@ -691,6 +682,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       payload_identity,
       snapshot_id,
       article_id,
+      article_title,
       source_metadata,
       abstract_text
     ) VALUES (
@@ -699,6 +691,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       'payload:preview-identity',
       'snapshot-preview-route',
       'preview-article-second',
+      'Second article title',
       '{}'::JSON,
       'Second article summary'
     )

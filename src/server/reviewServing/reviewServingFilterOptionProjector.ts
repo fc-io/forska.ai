@@ -19,9 +19,11 @@ export type ProjectReviewServingFilterOptionsInput = {
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
   deleteExisting?: boolean
+  displayIdentity: string
   filterOptionIdentity: string
   listModeKeys: readonly string[]
   optionMode: 'human' | 'review'
+  payloadIdentity: string
   projectId: string
   projectionIdentity: string
   reviewConfigHash: string
@@ -118,7 +120,7 @@ const getSearchPredicate = (searchTitle: string | null | undefined) => {
 
   return trimmedSearch.length === 0
     ? ''
-    : `AND LOWER(COALESCE(serving.article_title, '')) LIKE LOWER(${getSqlLiteral(`%${trimmedSearch}%`)})`
+    : `AND LOWER(COALESCE(payload.article_title, '')) LIKE LOWER(${getSqlLiteral(`%${trimmedSearch}%`)})`
 }
 
 const getOptionModePredicate = (input: ProjectReviewServingFilterOptionsInput) => {
@@ -141,6 +143,12 @@ const getFilterOptionSourceRows = async (
           SELECT DISTINCT serving.article_id
           FROM mart.review_article_serving_v4 serving
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          INNER JOIN mart.review_article_serving_payload_v4 payload
+            ON payload.project_id = serving.project_id
+            AND payload.display_identity = ${getSqlLiteral(input.displayIdentity)}
+            AND payload.payload_identity = ${getSqlLiteral(input.payloadIdentity)}
+            AND payload.snapshot_id = serving.snapshot_id
+            AND payload.article_id = serving.article_id
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}

@@ -112,8 +112,18 @@ type DisplayPatchRow = {
 
 type PayloadProjectionRow = {
   abstractText: string | null
+  articleExternalId: string | null
   articleId: string
+  articleTitle: string | null
+  articleUpdatedAt: Date | string | null
+  arxivId: string | null
+  biorxivId: string | null
+  doi: string | null
+  journalTitle: string | null
+  medrxivId: string | null
+  pmid: string | null
   sourceMetadata: ReviewServingIdentityValue | null
+  url: string | null
 }
 
 type ReviewServingPayloadPatchManifestInput = {
@@ -356,34 +366,24 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
     INSERT INTO mart.review_article_serving_v4 (
       activity_sort_at,
       article_created_at,
-      article_external_id,
       article_id,
-      article_title,
-      article_updated_at,
-      arxiv_id,
-      biorxiv_id,
       base_generation,
       conflict_flag,
-      doi,
       duplicate_flag,
       enabled_prompt_count,
       human_answered_prompt_count,
       human_status_key,
-      journal_title,
       list_mode_key,
       llm_status_key,
       llm_judged_prompt_count,
-      medrxiv_id,
       patch_watermark,
-      pmid,
       project_id,
       publication_year,
       review_config_hash,
       selected_import_route_id,
       serving_updated_at,
       snapshot_id,
-      sort_key,
-      url
+      sort_key
     )
     WITH display_base AS (
       ${getDisplayBaseRowsSql(input, {orderBy: false})}
@@ -394,34 +394,24 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
     SELECT
       display_base.activitySortAt AS activity_sort_at,
       display_base.articleCreatedAt AS article_created_at,
-      display_base.articleExternalId AS article_external_id,
       display_base.articleId AS article_id,
-      display_base.articleTitle AS article_title,
-      display_base.articleUpdatedAt AS article_updated_at,
-      display_base.arxivId AS arxiv_id,
-      display_base.biorxivId AS biorxiv_id,
       ${getSqlLiteral(input.baseGeneration)} AS base_generation,
       COALESCE(display_base.conflictFlag, FALSE) AS conflict_flag,
-      display_base.doi,
       COALESCE(display_base.duplicateFlag, FALSE) AS duplicate_flag,
       0 AS enabled_prompt_count,
       0 AS human_answered_prompt_count,
       NULL AS human_status_key,
-      display_base.journalTitle AS journal_title,
       list_mode.list_mode_key,
       NULL AS llm_status_key,
       0 AS llm_judged_prompt_count,
-      display_base.medrxivId AS medrxiv_id,
       0 AS patch_watermark,
-      display_base.pmid,
       ${getSqlLiteral(input.projectId)} AS project_id,
       display_base.publicationYear AS publication_year,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
       display_base.selectedImportRouteId AS selected_import_route_id,
       current_timestamp AS serving_updated_at,
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      display_base.sortKey AS sort_key,
-      display_base.url
+      display_base.sortKey AS sort_key
     FROM display_base
     CROSS JOIN list_mode
     ORDER BY display_base.articleId ASC, list_mode.list_mode_key ASC
@@ -510,6 +500,31 @@ const getPayloadRowsSql = (
     ${getDirtyArticleCteSql(articleIds)}
     SELECT
       scope.article_id AS articleId,
+      COALESCE(
+        CASE
+          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+          ELSE selected_hot.article_title
+        END,
+        article.article_title
+      ) AS articleTitle,
+      COALESCE(
+        CASE
+          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+          ELSE selected_hot.external_id
+        END,
+        article.article_id
+      ) AS articleExternalId,
+      article.article_updated_at AS articleUpdatedAt,
+      article.arxiv_id AS arxivId,
+      article.biorxiv_id AS biorxivId,
+      article.medrxiv_id AS medrxivId,
+      article.doi,
+      article.pubmed_id AS pmid,
+      CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_hot.journal_title
+      END AS journalTitle,
+      COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
       CASE
         WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
         ELSE json_merge_patch(
@@ -528,6 +543,11 @@ const getPayloadRowsSql = (
       ON selected_base.project_id = scope.project_id
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected_base.article_id = scope.article_id
+    LEFT JOIN app.review_import_article_hot_field selected_hot
+      ON selected_hot.import_route_id = ${selectedImportRouteIdSql}
+      AND selected_hot.article_id = scope.article_id
+      AND selected_hot.source_record_key = ${selectedSourceRecordKeySql}
+      AND NOT selected_hot.tombstone
     LEFT JOIN app.article_import_route_source_record selected_source
       ON selected_source.import_route_id = ${selectedImportRouteIdSql}
       AND selected_source.article_id = scope.article_id
@@ -556,12 +576,22 @@ const getPayloadRecord = (
     table: 'mart.review_article_serving_payload_v4',
     values: {
       abstract_text: row.abstractText,
+      article_external_id: row.articleExternalId,
       article_id: row.articleId,
+      article_title: row.articleTitle,
+      article_updated_at: row.articleUpdatedAt,
+      arxiv_id: row.arxivId,
+      biorxiv_id: row.biorxivId,
+      doi: row.doi,
       display_identity: input.displayIdentity,
+      journal_title: row.journalTitle,
+      medrxiv_id: row.medrxivId,
       payload_identity: input.payloadIdentity,
+      pmid: row.pmid,
       project_id: input.projectId,
       snapshot_id: input.snapshotId,
       source_metadata: row.sourceMetadata,
+      url: row.url,
     },
   }
 }
@@ -574,12 +604,22 @@ const getPayloadRebuildRowsStatements = (
     `
     INSERT INTO mart.review_article_serving_payload_v4 (
       abstract_text,
+      article_external_id,
       article_id,
+      article_title,
+      article_updated_at,
+      arxiv_id,
+      biorxiv_id,
+      doi,
       display_identity,
+      journal_title,
+      medrxiv_id,
       payload_identity,
+      pmid,
       project_id,
       snapshot_id,
-      source_metadata
+      source_metadata,
+      url
     )
     WITH ${
       ranges === undefined
@@ -592,22 +632,42 @@ const getPayloadRebuildRowsStatements = (
     payload_rows AS (
       SELECT
         payload_source.abstractText AS abstract_text,
+        payload_source.articleExternalId AS article_external_id,
         payload_source.articleId AS article_id,
+        payload_source.articleTitle AS article_title,
+        payload_source.articleUpdatedAt AS article_updated_at,
+        payload_source.arxivId AS arxiv_id,
+        payload_source.biorxivId AS biorxiv_id,
+        payload_source.doi,
         ${getSqlLiteral(input.displayIdentity)} AS display_identity,
+        payload_source.journalTitle AS journal_title,
+        payload_source.medrxivId AS medrxiv_id,
         ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
+        payload_source.pmid,
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        payload_source.sourceMetadata AS source_metadata
+        payload_source.sourceMetadata AS source_metadata,
+        payload_source.url
       FROM payload_source
     )
     SELECT
       abstract_text,
+      article_external_id,
       article_id,
+      article_title,
+      article_updated_at,
+      arxiv_id,
+      biorxiv_id,
+      doi,
       display_identity,
+      journal_title,
+      medrxiv_id,
       payload_identity,
+      pmid,
       project_id,
       snapshot_id,
-      source_metadata
+      source_metadata,
+      url
     FROM payload_rows
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
@@ -651,18 +711,9 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
         WHERE ${rowPredicate}`
     : `UPDATE mart.review_article_serving_v4
         SET
-          article_external_id = ${getSqlLiteral(row.articleExternalId)},
           article_created_at = ${getSqlLiteral(row.articleCreatedAt)},
-          article_updated_at = ${getSqlLiteral(row.articleUpdatedAt)},
-          article_title = ${getSqlLiteral(row.articleTitle)},
-          arxiv_id = ${getSqlLiteral(row.arxivId)},
-          biorxiv_id = ${getSqlLiteral(row.biorxivId)},
-          medrxiv_id = ${getSqlLiteral(row.medrxivId)},
-          doi = ${getSqlLiteral(row.doi)},
-          pmid = ${getSqlLiteral(row.pmid)},
           activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
           sort_key = ${getSqlLiteral(row.sortKey)},
-          url = ${getSqlLiteral(row.url)},
           serving_updated_at = current_timestamp
         WHERE ${rowPredicate}`
 }
