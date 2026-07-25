@@ -65,11 +65,14 @@ type ReviewServingJudgmentRow = {
   answered_original_as_array?: string[] | null
   article_id?: string
   detail_updated_at?: unknown
+  explanation?: string | null
+  judgment_created_at?: unknown
   judgment_id?: string | null
-  judgment_payload_json?: unknown
+  judgment_model_id?: string | null
   placeholder_kind?: string | null
   placeholderKind?: string | null
   prompt_id?: string
+  quotes?: unknown
 }
 
 type ReviewServingCountRow = {
@@ -466,20 +469,8 @@ const getArticleExternalId = (row: ReviewServingArticleRow) => {
   return row.article_external_id ?? row.articleExternalId ?? null
 }
 
-const getJudgmentPayload = (row: ReviewServingJudgmentRow) => {
-  return getJsonValue(row.judgment_payload_json ?? null) as Record<string, unknown> | null
-}
-
 const getPayloadString = (value: unknown) => {
   return typeof value === 'string' ? value : ''
-}
-
-const getPayloadModelId = (payload: Record<string, unknown> | null) => {
-  const model = payload?.model
-
-  return model && typeof model === 'object' && !Array.isArray(model)
-    ? getPayloadString((model as {id?: unknown}).id)
-    : ''
 }
 
 const isPlaceholderJudgmentRow = (row: ReviewServingJudgmentRow) => {
@@ -493,10 +484,9 @@ const getJudgmentRowsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) =
     })
     .reduce((acc, row) => {
       const articleId = row.article_id ?? ''
-      const payload = getJudgmentPayload(row)
       const judgment = {
-        id: row.judgment_id ?? getPayloadString(payload?.id),
-        createdAt: getPayloadString(payload?.createdAt) || getPayloadString(row.detail_updated_at),
+        id: row.judgment_id ?? '',
+        createdAt: getPayloadString(row.judgment_created_at) || getPayloadString(row.detail_updated_at),
         articleId,
         articleTitle: '',
         articleCreatedAt: null,
@@ -505,12 +495,12 @@ const getJudgmentRowsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) =
         articleUpdatedYear: null,
         articleImportRoute: null,
         articleImportedBy: null,
-        promptId: row.prompt_id ?? getPayloadString(payload?.promptId),
-        modelId: getPayloadModelId(payload),
-        answeredOriginal: row.answered_original ?? (payload?.answeredOriginal as string | null) ?? null,
+        promptId: row.prompt_id ?? '',
+        modelId: row.judgment_model_id ?? '',
+        answeredOriginal: row.answered_original ?? null,
         answeredOriginalAsArray: row.answered_original_as_array ?? [],
-        explanation: (payload?.explanation as string | null) ?? null,
-        quotes: payload?.quotes ?? null,
+        explanation: row.explanation ?? null,
+        quotes: getJsonValue(row.quotes ?? null),
       }
       const existing = acc.get(articleId) ?? []
 

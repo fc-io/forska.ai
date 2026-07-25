@@ -2622,6 +2622,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     '0135_reviewServingJudgmentDetailPromptScalars.sql',
     '0137_reviewServingJudgmentDetailHumanScalars.sql',
     '0138_dropReviewJudgmentDetailModelId.sql',
+    '0158_reviewJudgmentDetailListScalars.sql',
   ])
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return !targetMigrationFiles.has(fileName)
@@ -2733,7 +2734,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
               'model-a',
               'include',
               ['include'],
-              '{"answer":"include","prompt":{"criteriaDisposition":"include","originalText":"Prompt A text","promptHeading":"Prompt A","type":"yes_no"}}',
+              '{"answer":"include","explanation":"Because A","model":{"id":"model-a"},"prompt":{"criteriaDisposition":"include","originalText":"Prompt A text","promptHeading":"Prompt A","type":"yes_no"},"quotes":["Quote A"]}',
               NULL
             ),
             (
@@ -2802,7 +2803,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           "SELECT admission_state AS admissionState, last_error AS lastError, retry_after AS retryAfter, retry_count AS retryCount, status FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
         )
         const rows = await database.queryJson(
-          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, judgment_created_at AS judgmentCreatedAt, human_comment AS humanComment, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, judgment_payload_json AS judgmentPayloadJson, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
+          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, judgment_model_id AS judgmentModelId, judgment_created_at AS judgmentCreatedAt, human_comment AS humanComment, explanation, quotes, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, judgment_payload_json AS judgmentPayloadJson, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
         )
         const requestRows = await database.queryJson(
           "SELECT admission_state AS admissionState, failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
@@ -2882,7 +2883,10 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       }>
       rows: Array<{
         judgmentId: string | null
+        judgmentModelId: string | null
         judgmentPayloadJson: unknown
+        explanation: string | null
+        quotes: unknown
         humanComment: string | null
         judgmentCreatedAt: string | null
         payloadKind: string
@@ -2915,6 +2919,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       'prompt_id',
       'prompt_order',
       'judgment_id',
+      'judgment_model_id',
       'is_answered',
       'answered_original',
       'answered_original_as_array',
@@ -2924,6 +2929,8 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       'prompt_criteria_disposition',
       'judgment_created_at',
       'human_comment',
+      'explanation',
+      'quotes',
       'judgment_payload_json',
       'placeholder_kind',
       'detail_updated_at',
@@ -2931,7 +2938,10 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     expect(parsed.rows).toEqual([
       {
         judgmentId: 'judgment-a',
+        judgmentModelId: 'model-a',
         judgmentCreatedAt: null,
+        explanation: 'Because A',
+        quotes: expect.anything() as unknown,
         judgmentPayloadJson: expect.anything() as unknown,
         humanComment: null,
         payloadKind: 'llm',
@@ -2943,7 +2953,10 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       },
       {
         judgmentId: null,
+        judgmentModelId: null,
         judgmentCreatedAt: null,
+        explanation: null,
+        quotes: null,
         judgmentPayloadJson: null,
         humanComment: null,
         payloadKind: 'llm',

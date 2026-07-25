@@ -141,7 +141,6 @@ const createReaderDatabase = () => {
             detail_updated_at: '2026-01-04T00:00:00.000Z',
             human_comment: 'human note',
             judgment_created_at: '2026-01-03T00:00:00.000Z',
-            judgment_payload_json: null,
           },
         ] as T[]
       }
@@ -154,12 +153,10 @@ const createReaderDatabase = () => {
             judgment_id: 'llm-1',
             answered_original: 'yes',
             answered_original_as_array: ['yes'],
-            judgment_payload_json: {
-              createdAt: '2026-01-03T00:00:00.000Z',
-              explanation: 'because',
-              model: {id: 'model-1'},
-              quotes: [],
-            },
+            detail_updated_at: '2026-01-03T00:00:00.000Z',
+            explanation: 'because',
+            judgment_model_id: 'model-1',
+            quotes: [],
           },
           {
             article_id: 'article-1',
@@ -167,7 +164,6 @@ const createReaderDatabase = () => {
             judgment_id: null,
             answered_original: null,
             answered_original_as_array: [],
-            judgment_payload_json: null,
             placeholder_kind: 'llm.unanswered',
           },
         ] as T[]

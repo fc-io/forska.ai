@@ -58,6 +58,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0155_dropReviewPayloadServingArticleCreatedAt.sql',
   '../../db/duckdbMigrations/0156_dropReviewPayloadFullTextPreview.sql',
   '../../db/duckdbMigrations/0157_dropReviewSummaryContributionPartialJsonKey.sql',
+  '../../db/duckdbMigrations/0158_reviewJudgmentDetailListScalars.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -111,6 +112,8 @@ const reviewJudgmentDetailHumanScalarsForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0137_reviewServingJudgmentDetailHumanScalars.sql']
 const reviewJudgmentDetailModelIdDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0138_dropReviewJudgmentDetailModelId.sql']
+const reviewJudgmentDetailListScalarsForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0158_reviewJudgmentDetailListScalars.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -267,6 +270,9 @@ const getTableSql = (tableName: string) => {
 }
 
 const getTableColumnSql = (tableName: string) => {
+  const tableColumns = [...getTableColumns(tableName)].map((columnName) => {
+    return `  ${columnName} <resolved>`
+  })
   const alterColumnSql = [
     ...schemaMigrationSql.matchAll(
       new RegExp(`ALTER TABLE ${escapeRegex(tableName)} ADD COLUMN IF NOT EXISTS [^;]+;`, 'g'),
@@ -277,13 +283,17 @@ const getTableColumnSql = (tableName: string) => {
     })
     .join('\n')
 
-  return `${getTableSql(tableName)}\n${alterColumnSql}`
+  return `${getTableSql(tableName)}\n${tableColumns.join('\n')}\n${alterColumnSql}`
 }
 
 const getTableColumns = (tableName: string) => {
+  const unqualifiedTableName = tableName.split('.').at(-1) ?? tableName
   const repairRenames = [
     ...schemaMigrationSql.matchAll(
-      new RegExp(`ALTER TABLE ([a-z_][\\w]*\\.[a-z_][\\w]*) RENAME TO ${tableName.split('.').at(-1)};`, 'g'),
+      new RegExp(
+        `ALTER TABLE ([a-z_][\\w]*\\.[a-z_][\\w]*) RENAME TO (?:[a-z_][\\w]*\\.)?${escapeRegex(unqualifiedTableName)};`,
+        'g',
+      ),
     ),
   ]
   const repairTableName = repairRenames.at(-1)?.[1]
@@ -993,6 +1003,9 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'prompt_criteria_disposition',
       'judgment_created_at',
       'human_comment',
+      'judgment_model_id',
+      'explanation',
+      'quotes',
       'judgment_payload_json',
       'placeholder_kind',
     ]),
@@ -1058,6 +1071,24 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   )
   expect(reviewJudgmentDetailModelIdDropForwardMigrationSql).not.toContain('model_id VARCHAR')
   expect(reviewJudgmentDetailModelIdDropForwardMigrationSql).not.toContain('model_id,')
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_repair',
+  )
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain('judgment_model_id VARCHAR')
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain('explanation VARCHAR')
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain('quotes JSON')
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain(
+    "json_extract_string(judgment_payload_json, '$.model.id')",
+  )
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain(
+    "json_extract_string(judgment_payload_json, '$.explanation')",
+  )
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain(
+    "json_extract(judgment_payload_json, '$.quotes')",
+  )
+  expect(reviewJudgmentDetailListScalarsForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_judgment_detail_serving_v4_repair RENAME TO review_article_judgment_detail_serving_v4;',
+  )
   expect(countScopeForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
   )
