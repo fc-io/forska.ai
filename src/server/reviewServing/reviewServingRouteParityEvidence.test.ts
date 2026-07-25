@@ -235,7 +235,11 @@ const getRouteFilterSqlMatch = (
     filters.conflictFlag && !queueOrdering
       ? containsSql(statement, "filter_kind = 'conflictFlag'") && containsSql(statement, "'true'")
       : true,
-    filters.llmHasJudgment && !queueOrdering ? containsSql(statement, 'llm_judged_prompt_count > 0') : true,
+    filters.llmHasJudgment && !queueOrdering
+      ? containsSql(statement, 'FROM mart.review_article_judgment_detail_serving_v4')
+        && containsSql(statement, "list_mode_key = 'llm'")
+        && containsSql(statement, "payload_kind = 'llm'")
+      : true,
     filters.llmStatus === 'complete' && !queueOrdering ? containsSql(statement, "llm_status_key = 'answered'") : true,
     humanStatus && !queueOrdering ? containsSql(statement, `human_status_key = '${humanStatus}'`) : true,
     promptAnswerValues.length > 0 && !queueOrdering ? containsSql(statement, "filter_kind = 'promptAnswer'") : true,

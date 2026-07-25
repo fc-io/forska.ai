@@ -356,6 +356,7 @@ const getFilteredCountValue = async (
       projectId: params.projectId,
       projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
       reviewConfigHash: manifest.reviewConfigHash,
+      requireLlmJudgment: filters.llmHasJudgment,
       searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
       searchTokenPrefixes,
       servingPredicates: [
@@ -363,7 +364,6 @@ const getFilteredCountValue = async (
           ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
           : '',
         getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
-        filters.llmHasJudgment ? 'AND serving.llm_judged_prompt_count > 0' : '',
         llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : '',
       ],
       snapshotId: manifest.snapshotId,

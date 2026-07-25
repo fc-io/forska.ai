@@ -397,6 +397,21 @@ const isDateOnlyFilter = (value: string) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(value)
 }
 
+const getLlmHasJudgmentPredicate = (articleAlias: string) => {
+  return [
+    'EXISTS (SELECT 1',
+    ' FROM mart.review_article_judgment_detail_serving_v4 llm_judgment_detail',
+    ' WHERE llm_judgment_detail.project_id = $projectId',
+    ' AND llm_judgment_detail.review_config_hash = $reviewConfigHash',
+    ' AND llm_judgment_detail.snapshot_id = $snapshotId',
+    " AND llm_judgment_detail.list_mode_key = 'llm'",
+    " AND llm_judgment_detail.payload_kind = 'llm'",
+    ` AND llm_judgment_detail.article_id = ${articleAlias}.article_id`,
+    ' AND llm_judgment_detail.placeholder_kind IS NULL',
+    ' AND llm_judgment_detail.is_answered IS TRUE)',
+  ].join('')
+}
+
 const getColumnFilterPredicates = (input: {
   contract: ReviewServingReadContract
   request: ReviewServingReaderRequest
@@ -415,7 +430,7 @@ const getColumnFilterPredicates = (input: {
         ? `${articleCreatedAtColumn} < TIMESTAMPTZ $articleCreatedAtTo`
         : `${articleCreatedAtColumn} <= TIMESTAMPTZ $articleCreatedAtTo`
       : '',
-    filters.llmHasJudgment ? 'llm_judged_prompt_count > 0' : '',
+    filters.llmHasJudgment ? getLlmHasJudgmentPredicate(input.contract.servingTable) : '',
     llmStatus ? 'llm_status_key = $llmStatusFilter' : '',
     typeof filters.humanStatus === 'string' ? 'human_status_key = $humanStatusFilter' : '',
   ].filter((predicate) => {

@@ -9,6 +9,7 @@ export type ReviewServingDynamicCountSqlInput = {
   projectId: string
   projectScopeIdentity?: string | null
   reviewConfigHash: string
+  requireLlmJudgment?: boolean
   searchIdentity?: string | null
   searchTokenPrefixes?: readonly string[]
   servingPredicates?: readonly string[]
@@ -85,6 +86,24 @@ unassessed_queue_article_ids AS (
     : ''
 }
 
+const getLlmJudgedArticleIdsCte = (input: ReviewServingDynamicCountSqlInput) => {
+  return input.requireLlmJudgment
+    ? `,
+llm_judged_article_ids AS (
+  SELECT DISTINCT detail.article_id
+  FROM mart.review_article_judgment_detail_serving_v4 detail
+  CROSS JOIN scoped
+  WHERE detail.project_id = scoped.project_id
+    AND detail.review_config_hash = scoped.review_config_hash
+    AND detail.snapshot_id = scoped.snapshot_id
+    AND detail.list_mode_key = 'llm'
+    AND detail.payload_kind = 'llm'
+    AND detail.placeholder_kind IS NULL
+    AND detail.is_answered IS TRUE
+)`
+    : ''
+}
+
 const getFilteredJoinClauses = (input: ReviewServingDynamicCountSqlInput) => {
   return [
     (input.postingFilterGroups ?? []).length > 0
@@ -95,6 +114,9 @@ const getFilteredJoinClauses = (input: ReviewServingDynamicCountSqlInput) => {
       : '',
     input.includeUnassessedQueue
       ? 'JOIN unassessed_queue_article_ids queue_filter_ids ON queue_filter_ids.article_id = filtered_article_ids.article_id'
+      : '',
+    input.requireLlmJudgment
+      ? 'JOIN llm_judged_article_ids llm_judgment_ids ON llm_judgment_ids.article_id = filtered_article_ids.article_id'
       : '',
   ]
     .filter(Boolean)
@@ -122,7 +144,7 @@ export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDyna
         AND serving.snapshot_id = scoped.snapshot_id
         AND serving.list_mode_key = scoped.list_mode_key
         ${servingPredicates}
-    )${getPostingFilteredArticleIdsCte(postingGroups)}${getSearchFilteredArticleIdsCte(input)}${getUnassessedQueueArticleIdsCte(input)}
+    )${getPostingFilteredArticleIdsCte(postingGroups)}${getSearchFilteredArticleIdsCte(input)}${getUnassessedQueueArticleIdsCte(input)}${getLlmJudgedArticleIdsCte(input)}
     SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount
     FROM scoped_serving filtered_article_ids
     ${getFilteredJoinClauses(input)}

@@ -186,6 +186,15 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
   return {database, statements}
 }
 
+const getJudgmentHydrationStatements = (statements: readonly string[]) => {
+  return statements.filter((statement) => {
+    return (
+      statement.includes('FROM mart.review_article_judgment_detail_serving_v4')
+      && statement.includes('article_id IN (SELECT unnest')
+    )
+  })
+}
+
 const expectUnavailableSnapshotRejection = async (promise: Promise<unknown>) => {
   await promise.then(
     () => {
@@ -225,9 +234,7 @@ test('LLM review route chunks judgment hydration above the reader article-set ca
     },
   )
 
-  const judgmentStatements = reader.statements.filter((statement) => {
-    return statement.includes('FROM mart.review_article_judgment_detail_serving_v4')
-  })
+  const judgmentStatements = getJudgmentHydrationStatements(reader.statements)
 
   expect(judgmentStatements).toHaveLength(3)
   expect(judgmentStatements[0]).toContain('article-100')
@@ -250,9 +257,7 @@ test('LLM review route sizes judgment hydration chunks by enabled prompt count',
     },
   )
 
-  const judgmentStatements = reader.statements.filter((statement) => {
-    return statement.includes('FROM mart.review_article_judgment_detail_serving_v4')
-  })
+  const judgmentStatements = getJudgmentHydrationStatements(reader.statements)
 
   expect(judgmentStatements).toHaveLength(2)
   expect(judgmentStatements[0]).toContain('LIMIT 10000')
@@ -358,7 +363,16 @@ test('LLM review prompt-filtered count intersects through one posting CTE', asyn
   expect(countStatement).toContain(
     "unnest(['review:promptAnswer:prompt-1:maybe', 'review:promptAnswer:prompt-1:yes']::VARCHAR[])",
   )
-  expect(countStatement).toContain('serving.llm_judged_prompt_count > 0')
+  expect(countStatement).toContain('llm_judged_article_ids AS')
+  expect(countStatement).toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
+  expect(countStatement).toContain("detail.list_mode_key = 'llm'")
+  expect(countStatement).toContain("detail.payload_kind = 'llm'")
+  expect(countStatement).toContain('detail.placeholder_kind IS NULL')
+  expect(countStatement).toContain('detail.is_answered IS TRUE')
+  expect(countStatement).toContain(
+    'JOIN llm_judged_article_ids llm_judgment_ids ON llm_judgment_ids.article_id = filtered_article_ids.article_id',
+  )
+  expect(countStatement).not.toContain('serving.llm_judged_prompt_count > 0')
 })
 
 test('LLM review multi-prompt count groups posting filters without repeated posting scans', async () => {
@@ -401,7 +415,8 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
   expect(result).toEqual({totalCount: 1, totalPages: 1})
   expect(reader.statements).toHaveLength(2)
   expect(reader.statements[1]).toContain('FROM mart.review_article_serving_v4')
-  expect(reader.statements[1]).toContain('serving.llm_judged_prompt_count > 0')
+  expect(reader.statements[1]).toContain('llm_judged_article_ids AS')
+  expect(reader.statements[1]).not.toContain('serving.llm_judged_prompt_count > 0')
 })
 
 test('LLM review list route rejects when no serving snapshot is readable', async () => {
@@ -432,7 +447,8 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
   )
 
   expect(staleResult.totalCount).toBe(1)
-  expect(staleReader.statements.join('\n')).toContain('serving.llm_judged_prompt_count > 0')
+  expect(staleReader.statements.join('\n')).toContain('llm_judged_article_ids AS')
+  expect(staleReader.statements.join('\n')).not.toContain('serving.llm_judged_prompt_count > 0')
   const indexingReader = createReaderDatabase()
   const missingReader = createReaderDatabase()
 

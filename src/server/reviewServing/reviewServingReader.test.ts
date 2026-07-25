@@ -357,6 +357,7 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
       articleCreatedAtTo: '2026-01-31',
       duplicateFlag: 'true',
       importRoute: 'import-route-1',
+      llmHasJudgment: 'true',
       llmStatus: 'complete',
       promptAnswer: ['prompt-1:yes', 'prompt-2:no'],
       searchTokenPrefix: 'heart',
@@ -404,6 +405,13 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   expect(sql).toContain("filter_2.filter_kind = 'importRoute'")
   expect(sql).toContain("filter_2.filter_value IN (SELECT unnest(['import-route-1']::VARCHAR[]))")
   expect(sql).not.toContain('duplicate_flag = TRUE')
+  expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4 llm_judgment_detail')
+  expect(sql).toContain("llm_judgment_detail.list_mode_key = 'llm'")
+  expect(sql).toContain("llm_judgment_detail.payload_kind = 'llm'")
+  expect(sql).toContain('llm_judgment_detail.article_id = mart.review_article_serving_v4.article_id')
+  expect(sql).toContain('llm_judgment_detail.placeholder_kind IS NULL')
+  expect(sql).toContain('llm_judgment_detail.is_answered IS TRUE')
+  expect(sql).not.toContain('llm_judged_prompt_count > 0')
   expect(sql).toContain("llm_status_key = 'answered'")
   expect(sql).toContain('review:promptAnswer:prompt-1:yes')
   expect(sql).toContain('review:promptAnswer:prompt-2:no')
