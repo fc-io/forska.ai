@@ -251,14 +251,23 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(selectStatement).toContain('json_merge_patch')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
+  expect(selectStatement).not.toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(selectStatement).toContain("selected_base.selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('LEFT(article.article_summary, 2000) AS abstractText')
+  expect(selectStatement).not.toContain('article.article_updated_at AS articleUpdatedAt')
+  expect(selectStatement).not.toContain('AS articleTitle')
+  expect(selectStatement).not.toContain('AS articleExternalId')
+  expect(selectStatement).not.toContain('article.full_text_pdf AS fullTextPdf')
   expect(selectStatement).not.toContain("length(COALESCE(article.full_text, ''))")
   expect(selectStatement).not.toContain('length(COALESCE(article.full_text_html')
   expect(selectStatement).not.toContain('AS payloadBytes')
   expect(insertStatement).toContain('article_created_at')
+  expect(insertStatement).not.toContain('article_external_id')
+  expect(insertStatement).not.toContain('article_title')
+  expect(insertStatement).not.toContain('journal_title')
+  expect(insertStatement).not.toContain('full_text_pdf')
   expect(insertStatement).not.toContain('payload_bytes')
   expect(joined).not.toContain('selected_scoped_article_import')
   expect(joined).not.toContain('payload_json')
@@ -312,18 +321,16 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
       'SELECT',
       '      abstract_text,',
       '      article_created_at,',
-      '      article_external_id,',
       '      article_id,',
-      '      article_title,',
-      '      article_updated_at,',
-      '      arxiv_id,',
-      '      biorxiv_id,',
-      '      doi,',
+      '      display_identity,',
+      '      full_text_preview,',
     ].join('\n'),
   )
-  expect(joined).toContain('      full_text_conversion_status,\n      full_text_fetched_at,\n      full_text_pdf,')
-  expect(joined).toContain('      journal_title,\n      medrxiv_id,')
-  expect(joined).toContain('      pmid,\n      project_id,\n      snapshot_id,\n      source_metadata,\n      url')
+  expect(joined).toContain('      payload_identity,\n      payload_updated_at,')
+  expect(joined).toContain('      project_id,\n      snapshot_id,\n      source_metadata')
+  expect(joined).not.toContain('article_external_id')
+  expect(joined).not.toContain('journal_title')
+  expect(joined).not.toContain('full_text_pdf')
   expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
   expect(joined).toContain('DO NOTHING')
   expect(joined).not.toContain('DO UPDATE SET')
