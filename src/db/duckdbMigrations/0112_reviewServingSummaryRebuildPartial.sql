@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_summary_rebuild_partial_v4 (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
-  serving_key VARCHAR NOT NULL,
   summary_kind VARCHAR NOT NULL,
   summary_identity VARCHAR NOT NULL,
   list_mode_key VARCHAR,
@@ -20,8 +19,24 @@ CREATE TABLE IF NOT EXISTS mart.review_article_summary_rebuild_partial_v4 (
   availability VARCHAR NOT NULL DEFAULT 'ready',
   stale_reason VARCHAR,
   count_value BIGINT,
-  partial_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key)
+  partial_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_summary_rebuild_partial_v4_unique
+ON mart.review_article_summary_rebuild_partial_v4(
+  request_id,
+  chunk_id,
+  project_id,
+  review_config_hash,
+  snapshot_id,
+  summary_kind,
+  summary_identity,
+  COALESCE(list_mode_key, 'global'),
+  COALESCE(count_kind, ''),
+  COALESCE(filter_key, ''),
+  COALESCE(facet_kind, ''),
+  COALESCE(facet_key, ''),
+  COALESCE(facet_value, '')
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_article_summary_rebuild_partial_v4_reduce

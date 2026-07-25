@@ -69,6 +69,8 @@ type ReviewServingJudgmentRow = {
   answered_original_as_array?: string[] | null
   article_id?: string
   detail_updated_at?: unknown
+  human_comment?: string | null
+  judgment_created_at?: unknown
   judgment_id?: string | null
   judgment_payload_json?: unknown
   model_id?: string | null
@@ -625,16 +627,15 @@ const getLlmJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) =
 const getHumanJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) => {
   return rows.reduce((acc, row) => {
     const articleId = row.article_id ?? ''
-    const payload = getJudgmentPayload(row)
     const judgment = {
-      id: row.judgment_id ?? getPayloadString(payload?.id),
-      createdAt: getDateValue(payload?.createdAt ?? row.detail_updated_at),
-      updatedAt: getDateValue(payload?.updatedAt ?? row.detail_updated_at),
+      id: row.judgment_id ?? '',
+      createdAt: getDateValue(row.judgment_created_at ?? row.detail_updated_at),
+      updatedAt: getDateValue(row.detail_updated_at),
       articleId,
       promptId: row.prompt_id ?? '',
-      isAnswered: Boolean(payload?.isAnswered ?? row.answered_original),
-      answer: row.answered_original ?? (payload?.answer as string | null) ?? null,
-      comment: (payload?.comment as string | null) ?? null,
+      isAnswered: Boolean(row.answered_original),
+      answer: row.answered_original ?? null,
+      comment: row.human_comment ?? null,
       projectId: '',
     }
     const existing = acc.get(articleId) ?? []

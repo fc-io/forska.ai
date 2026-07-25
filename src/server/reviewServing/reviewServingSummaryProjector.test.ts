@@ -188,7 +188,6 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       project_id VARCHAR NOT NULL,
       review_config_hash VARCHAR NOT NULL,
       snapshot_id VARCHAR NOT NULL,
-      serving_key VARCHAR NOT NULL,
       summary_kind VARCHAR NOT NULL,
       summary_identity VARCHAR NOT NULL,
       list_mode_key VARCHAR,
@@ -204,8 +203,25 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       availability VARCHAR NOT NULL DEFAULT 'ready',
       stale_reason VARCHAR,
       count_value BIGINT,
-      partial_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      PRIMARY KEY(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key)
+      partial_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    )
+  `)
+  await database.run(`
+    CREATE UNIQUE INDEX idx_review_article_summary_rebuild_partial_v4_unique
+    ON mart.review_article_summary_rebuild_partial_v4(
+      request_id,
+      chunk_id,
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      summary_kind,
+      summary_identity,
+      COALESCE(list_mode_key, 'global'),
+      COALESCE(count_kind, ''),
+      COALESCE(filter_key, ''),
+      COALESCE(facet_kind, ''),
+      COALESCE(facet_key, ''),
+      COALESCE(facet_value, '')
     )
   `)
   await database.run(`
@@ -565,9 +581,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).toContain('FROM temp_summary_rebuild_accumulator_batch batch')
   expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).toContain("(existing.request_id || '') = (batch.request_id || '')")
-  expect(joined).not.toContain(
-    'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
-  )
+  expect(joined).not.toContain('serving_key')
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
   expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_count_publication AS')
   expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_facet_publication AS')
@@ -607,7 +621,6 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
           project_id,
           review_config_hash,
           snapshot_id,
-          serving_key,
           summary_kind,
           summary_identity,
           list_mode_key,
@@ -616,8 +629,8 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
           filter_key,
           count_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2),
-          ('rebuild-summary-1', 'chunk-002', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
+          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2),
+          ('rebuild-summary-1', 'chunk-002', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -669,7 +682,6 @@ test('summary rebuild request finalization ignores stale partial chunks without 
           project_id,
           review_config_hash,
           snapshot_id,
-          serving_key,
           summary_kind,
           summary_identity,
           list_mode_key,
@@ -678,8 +690,8 @@ test('summary rebuild request finalization ignores stale partial chunks without 
           filter_key,
           count_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3),
-          ('rebuild-summary-1', 'chunk-stale', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99)
+          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3),
+          ('rebuild-summary-1', 'chunk-stale', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99)
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -719,7 +731,6 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
           project_id,
           review_config_hash,
           snapshot_id,
-          serving_key,
           summary_kind,
           summary_identity,
           list_mode_key,
@@ -728,8 +739,8 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
           filter_key,
           count_value
         ) VALUES
-          ('rebuild-summary-1', '__summary_rebuild_partial_accumulator__:stale', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99),
-          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
+          ('rebuild-summary-1', '__summary_rebuild_partial_accumulator__:stale', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99),
+          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -804,7 +815,6 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           project_id,
           review_config_hash,
           snapshot_id,
-          serving_key,
           summary_kind,
           summary_identity,
           list_mode_key,
@@ -818,10 +828,10 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           answer_value,
           count_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', NULL, NULL, NULL, 'prompt-1', NULL, 2),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', NULL, NULL, NULL, 'prompt-1', NULL, 2),
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'facet-key', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'facet-key', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2)
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', NULL, NULL, NULL, 'prompt-1', NULL, 2),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', NULL, NULL, NULL, 'prompt-1', NULL, 2),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2)
       `)
       await database.run(`
         INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
@@ -872,8 +882,8 @@ test('summary rebuild request finalization deduplicates overlapping contribution
   }
 })
 
-test('summary rebuild request finalization collapses count rows by serving primary key', async () => {
-  const duckdbPath = `/tmp/forska-summary-count-serving-key-finalize-${Date.now()}.duckdb`
+test('summary rebuild request finalization collapses count rows by scalar serving dimensions', async () => {
+  const duckdbPath = `/tmp/forska-summary-count-scalar-key-finalize-${Date.now()}.duckdb`
 
   try {
     const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
@@ -888,7 +898,6 @@ test('summary rebuild request finalization collapses count rows by serving prima
           project_id,
           review_config_hash,
           snapshot_id,
-          serving_key,
           summary_kind,
           summary_identity,
           list_mode_key,
@@ -897,8 +906,8 @@ test('summary rebuild request finalization collapses count rows by serving prima
           filter_key,
           count_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count-key-a', 'count', 'review.list.total', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 2),
-          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count-key-b', 'count', 'review.list.total.alias', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 3)
+          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.list.total', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 2),
+          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.list.total.alias', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 3)
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -960,7 +969,6 @@ test('summary rebuild request finalization retries from retained contribution pa
           project_id,
           review_config_hash,
           snapshot_id,
-          serving_key,
           summary_kind,
           summary_identity,
           list_mode_key,
@@ -969,8 +977,8 @@ test('summary rebuild request finalization retries from retained contribution pa
           filter_key,
           count_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2)
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2)
       `)
       await database.run(`
         INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
@@ -1238,7 +1246,6 @@ test('summary rebuild request finalization preserves stale facets when no replac
           project_id,
           review_config_hash,
           snapshot_id,
-          serving_key,
           summary_kind,
           summary_identity,
           list_mode_key,
@@ -1252,7 +1259,6 @@ test('summary rebuild request finalization preserves stale facets when no replac
           'project-1',
           'review-config-1',
           'snapshot-1',
-          'count-key',
           'count',
           'review.llm.assessedByPrompt',
           'llm',
