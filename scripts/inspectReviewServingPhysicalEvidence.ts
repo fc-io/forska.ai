@@ -422,7 +422,6 @@ const hotReviewServingTables = [
   'mart.review_title_search_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
   'mart.review_article_summary_rebuild_partial_v4',
-  'mart.review_article_summary_contribution_rebuild_partial_v4',
 ] as const
 
 const preferredProfileColumns = [
@@ -554,7 +553,6 @@ const duplicateKeyCandidates: Record<string, string[]> = {
 }
 
 const retentionCleanupEligibilityTables = [
-  'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'app.review_rebuild_chunk_manifest',
 ] as const
@@ -1025,14 +1023,6 @@ const getManifestReviewConfigHashPredicate = () => {
 const getChunkManifestPartialRowsGonePredicate = () => {
   return `NOT EXISTS (
             SELECT 1
-            FROM mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial
-            WHERE contribution_partial.project_id = candidate.project_id
-              AND contribution_partial.request_id = candidate.request_id
-              AND contribution_partial.chunk_id = candidate.chunk_id
-              AND contribution_partial.snapshot_id = candidate.snapshot_id
-          )
-          AND NOT EXISTS (
-            SELECT 1
             FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
             WHERE summary_partial.project_id = candidate.project_id
               AND summary_partial.request_id = candidate.request_id
@@ -1386,12 +1376,6 @@ const getRebuildArtifactDispositionEvidenceReport = async (
             requestless_chunk.projection_component,
             CAST((
               SELECT COUNT(*)
-              FROM mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial
-              WHERE contribution_partial.project_id = requestless_chunk.project_id
-                AND contribution_partial.chunk_id = requestless_chunk.chunk_id
-                AND contribution_partial.snapshot_id IS NOT DISTINCT FROM requestless_chunk.snapshot_id
-            ) + (
-              SELECT COUNT(*)
               FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
               WHERE summary_partial.project_id = requestless_chunk.project_id
                 AND summary_partial.chunk_id = requestless_chunk.chunk_id
@@ -1427,14 +1411,6 @@ const getRebuildArtifactDispositionEvidenceReport = async (
             request_id,
             chunk_id
           FROM ${table}
-          WHERE project_id = ${getSqlLiteral(projectId)}
-          UNION ALL
-          SELECT
-            'mart.review_article_summary_contribution_rebuild_partial_v4' AS artifact_table,
-            project_id,
-            request_id,
-            chunk_id
-          FROM mart.review_article_summary_contribution_rebuild_partial_v4
           WHERE project_id = ${getSqlLiteral(projectId)}
           UNION ALL
           SELECT
@@ -2432,6 +2408,17 @@ const getSummaryContributionPartialOverlap = async (
   runtime: QueryRuntime,
 ): Promise<SummaryContributionServingPartialOverlap> => {
   try {
+    if (!(await getTableExists(runtime, 'mart.review_article_summary_contribution_rebuild_partial_v4'))) {
+      return {
+        contributionRows: null,
+        error: null,
+        exactCommonColumnOverlapRows: null,
+        note: 'Retired by migration 0176_dropReviewSummaryContributionRebuildPartial.sql; no rebuild-partial contribution overlap was collected.',
+        partialRows: null,
+        partialRowsWithExactCommonContribution: null,
+      }
+    }
+
     const rows = await runReadonlyQuery<{
       contributionRows: number | string
       exactCommonColumnOverlapRows: number | string
@@ -2572,7 +2559,7 @@ const getSummaryContributionServingReadinessReport = async (
           contributionRows: null,
           error: null,
           exactCommonColumnOverlapRows: null,
-          note: 'Not collected because mart.review_article_summary_contribution_v4 is retired. The request-scoped contribution partial table remains inspected separately as an active rebuild artifact.',
+          note: 'Not collected because mart.review_article_summary_contribution_v4 is retired. The request-scoped contribution partial table is also retired by migration 0176.',
           partialRows: null,
           partialRowsWithExactCommonContribution: null,
         },

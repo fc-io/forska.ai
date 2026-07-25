@@ -76,6 +76,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0173_dropReviewPayloadDisplayStorage.sql',
   '../../db/duckdbMigrations/0174_dropReviewArticleServingStatusCountCopies.sql',
   '../../db/duckdbMigrations/0175_dropReviewArticleServingPayload.sql',
+  '../../db/duckdbMigrations/0176_dropReviewSummaryContributionRebuildPartial.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -258,7 +259,6 @@ const reviewServingPhase1Tables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
-  'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
@@ -276,6 +276,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_filter_posting_stats_v4',
   'mart.review_article_judgment_detail_hydration_serving_v4',
   'mart.review_article_serving_payload_v4',
+  'mart.review_article_summary_contribution_rebuild_partial_v4',
 ])
 
 const deltaEnvelopeColumns = [
@@ -1028,28 +1029,15 @@ test('summary contribution serving mart is retired from the review-serving schem
   )
   expect(reviewServingPhase1Tables).not.toContain('mart.review_article_summary_contribution_v4')
   expect(retiredReviewServingTables.has('mart.review_article_summary_contribution_v4')).toBe(true)
-  expect(getTableSql('mart.review_article_summary_contribution_rebuild_partial_v4')).not.toBe('')
 })
 
-test('summary contribution partial key JSON is scalarized in the final review-serving schema', () => {
-  const columns = getTableColumns('mart.review_article_summary_contribution_rebuild_partial_v4')
-
-  expect(
-    [
-      'summary_kind',
-      'summary_identity',
-      'list_mode_key',
-      'count_kind',
-      'filter_key',
-      'facet_kind',
-      'facet_key',
-      'facet_value',
-      'contribution_value',
-    ].filter((columnName) => {
-      return !columns.has(columnName)
-    }),
-  ).toEqual([])
-  expect(columns).not.toContain('contribution_key')
+test('summary contribution rebuild partial mart is retired from the final review-serving schema', () => {
+  expect(getTableSql('mart.review_article_summary_contribution_rebuild_partial_v4')).toBe('')
+  expect(schemaMigrationSql).toContain(
+    'DROP TABLE IF EXISTS mart.review_article_summary_contribution_rebuild_partial_v4;',
+  )
+  expect(reviewServingPhase1Tables).not.toContain('mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(retiredReviewServingTables.has('mart.review_article_summary_contribution_rebuild_partial_v4')).toBe(true)
   expect(reviewSummaryContributionPartialJsonKeyDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_summary_contribution_rebuild_partial_v4_key_repair',
   )

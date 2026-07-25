@@ -185,9 +185,7 @@ export type ReleaseFailedRequestlessReviewServingRebuildChunksResult = {
   status: 'not_found' | 'refused' | 'dry_run' | 'released'
 }
 
-export type ReviewServingSummaryPartialCleanupAuthorizationTable =
-  | 'mart.review_article_summary_contribution_rebuild_partial_v4'
-  | 'mart.review_article_summary_rebuild_partial_v4'
+export type ReviewServingSummaryPartialCleanupAuthorizationTable = 'mart.review_article_summary_rebuild_partial_v4'
 
 export type AuthorizeReviewServingSummaryPartialCleanupInput = {
   apply?: boolean
@@ -1275,14 +1273,11 @@ export const releaseFailedRequestlessReviewServingRebuildChunks = async (
 }
 
 const summaryPartialCleanupAuthorizationTables = new Set<ReviewServingSummaryPartialCleanupAuthorizationTable>([
-  'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
 ])
 
-const getSummaryPartialUpdatedAtColumn = (partialTable: ReviewServingSummaryPartialCleanupAuthorizationTable) => {
-  return partialTable === 'mart.review_article_summary_contribution_rebuild_partial_v4'
-    ? 'contribution_updated_at'
-    : 'partial_updated_at'
+const getSummaryPartialUpdatedAtColumn = (_partialTable: ReviewServingSummaryPartialCleanupAuthorizationTable) => {
+  return 'partial_updated_at'
 }
 
 const getAuthorizationExpiresAt = (input: {expiresAt?: Date | string; now: Date}) => {
