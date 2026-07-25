@@ -57,17 +57,9 @@ export type ResetReviewServingSelectedImportDirtyArticleRangeInput = {
 
 type SelectedImportServingTemplateRow = {
   baseGeneration: number
-  displayIdentity: string
-  humanStatusIdentity: string
   listModeKey: string
-  llmStatusIdentity: string
-  payloadIdentity: string
-  postingIdentity: string
-  projectScopeIdentity: string
   reviewConfigHash: string
-  selectedImportIdentity: string
   snapshotId: string
-  summaryIdentity: string
 }
 
 type SnapshotTemplateRow = {componentStateJson: unknown; reviewConfigHash: string | null; snapshotId: string}
@@ -148,7 +140,6 @@ const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportDirtyInput,
           SELECT serving.article_id
           FROM mart.review_article_serving_v4 serving
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-            AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
             ${getDirtyArticleRangePredicateSql(input, 'serving')}
             AND EXISTS (
@@ -157,6 +148,7 @@ const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportDirtyInput,
               WHERE snapshot.project_id = serving.project_id
                 AND snapshot.snapshot_id = serving.snapshot_id
                 AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
                 AND snapshot.snapshot_status IN ('candidate', 'active')
             )
         )`
@@ -237,46 +229,15 @@ const getSnapshotBaseGeneration = (componentState: SnapshotComponentStates) => {
 const getTemplateRowsFromSnapshot = (row: SnapshotTemplateRow) => {
   const componentState = getSnapshotComponentStates(row.componentStateJson)
   const baseGeneration = getSnapshotBaseGeneration(componentState)
-  const displayIdentity = getSnapshotComponentIdentity(componentState, 'display')
-  const projectScopeIdentity = getSnapshotComponentIdentity(componentState, 'projectScope')
   const selectedImportIdentity = getSnapshotComponentIdentity(componentState, 'selectedImport')
-  const llmStatusIdentity = getSnapshotComponentIdentity(componentState, 'llmStatus')
-  const humanStatusIdentity = getSnapshotComponentIdentity(componentState, 'humanStatus')
-  const postingIdentity = getSnapshotComponentIdentity(componentState, 'posting')
-  const summaryIdentity = getSnapshotComponentIdentity(componentState, 'summary')
-  const payloadIdentity = getSnapshotComponentIdentity(componentState, 'payload')
   const reviewConfigHash = row.reviewConfigHash
 
-  if (
-    reviewConfigHash === null
-    || baseGeneration === null
-    || displayIdentity === null
-    || projectScopeIdentity === null
-    || selectedImportIdentity === null
-    || llmStatusIdentity === null
-    || humanStatusIdentity === null
-    || postingIdentity === null
-    || summaryIdentity === null
-    || payloadIdentity === null
-  ) {
+  if (reviewConfigHash === null || baseGeneration === null || selectedImportIdentity === null) {
     return []
   }
 
   return reviewServingListModes.map((listModeKey): SelectedImportServingTemplateRow => {
-    return {
-      baseGeneration,
-      displayIdentity,
-      humanStatusIdentity,
-      listModeKey,
-      llmStatusIdentity,
-      payloadIdentity,
-      postingIdentity,
-      projectScopeIdentity,
-      reviewConfigHash,
-      selectedImportIdentity,
-      snapshotId: row.snapshotId,
-      summaryIdentity,
-    }
+    return {baseGeneration, listModeKey, reviewConfigHash, snapshotId: row.snapshotId}
   })
 }
 
@@ -302,7 +263,7 @@ const getSelectedImportServingTemplates = async (
 const getTemplateValuesSql = (templates: readonly SelectedImportServingTemplateRow[]) => {
   return templates
     .map((template) => {
-      return `(${getSqlLiteral(template.projectScopeIdentity)}, ${getSqlLiteral(template.reviewConfigHash)}, ${getSqlLiteral(template.snapshotId)}, ${getSqlLiteral(template.baseGeneration)}, ${getSqlLiteral(template.displayIdentity)}, ${getSqlLiteral(template.selectedImportIdentity)}, ${getSqlLiteral(template.llmStatusIdentity)}, ${getSqlLiteral(template.humanStatusIdentity)}, ${getSqlLiteral(template.postingIdentity)}, ${getSqlLiteral(template.summaryIdentity)}, ${getSqlLiteral(template.payloadIdentity)}, ${getSqlLiteral(template.listModeKey)})`
+      return `(${getSqlLiteral(template.reviewConfigHash)}, ${getSqlLiteral(template.snapshotId)}, ${getSqlLiteral(template.baseGeneration)}, ${getSqlLiteral(template.listModeKey)})`
     })
     .join(', ')
 }
@@ -320,16 +281,8 @@ const getFallbackTemplateCte = (input: {projectId: string; templates: readonly S
              fallback.review_config_hash,
              fallback.snapshot_id,
              fallback.base_generation,
-             fallback.display_identity,
-             fallback.project_scope_identity,
-             fallback.selected_import_identity,
-             fallback.llm_status_identity,
-             fallback.human_status_identity,
-             fallback.posting_identity,
-             fallback.summary_identity,
-             fallback.payload_identity,
              fallback.list_mode_key
-           FROM (VALUES ${values}) AS fallback(project_scope_identity, review_config_hash, snapshot_id, base_generation, display_identity, selected_import_identity, llm_status_identity, human_status_identity, posting_identity, summary_identity, payload_identity, list_mode_key)`
+           FROM (VALUES ${values}) AS fallback(review_config_hash, snapshot_id, base_generation, list_mode_key)`
 }
 
 const selectedImportChangedColumns = [
@@ -353,14 +306,6 @@ const selectedImportServingColumns = [
   'snapshot_id',
   'base_generation',
   'patch_watermark',
-  'display_identity',
-  'project_scope_identity',
-  'selected_import_identity',
-  'llm_status_identity',
-  'human_status_identity',
-  'posting_identity',
-  'summary_identity',
-  'payload_identity',
   'list_mode_key',
   'article_id',
   'sort_key',
@@ -436,18 +381,9 @@ const getSelectedImportServingTemplateCte = (input: {
               serving.review_config_hash,
               serving.snapshot_id,
               serving.base_generation,
-              serving.display_identity,
-              serving.project_scope_identity,
-              serving.selected_import_identity,
-              serving.llm_status_identity,
-              serving.human_status_identity,
-              serving.posting_identity,
-              serving.summary_identity,
-              serving.payload_identity,
               serving.list_mode_key
             FROM mart.review_article_serving_v4 serving
             WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-              AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
               AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
               AND EXISTS (
                 SELECT 1
@@ -455,6 +391,7 @@ const getSelectedImportServingTemplateCte = (input: {
                 WHERE snapshot.project_id = serving.project_id
                   AND snapshot.snapshot_id = serving.snapshot_id
                   AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                  AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
                   AND snapshot.snapshot_status IN ('candidate', 'active')
               )
             ${fallbackTemplateCte}
@@ -464,14 +401,6 @@ const getSelectedImportServingTemplateCte = (input: {
               review_config_hash,
               snapshot_id,
               base_generation,
-              display_identity,
-              project_scope_identity,
-              selected_import_identity,
-              llm_status_identity,
-              human_status_identity,
-              posting_identity,
-              summary_identity,
-              payload_identity,
               list_mode_key
             FROM (
               SELECT
@@ -480,15 +409,7 @@ const getSelectedImportServingTemplateCte = (input: {
                   PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id, raw.list_mode_key
                   ORDER BY
                     raw.template_priority ASC,
-                    raw.base_generation DESC,
-                    raw.display_identity ASC,
-                    raw.project_scope_identity ASC,
-                    raw.selected_import_identity ASC,
-                    raw.llm_status_identity ASC,
-                    raw.human_status_identity ASC,
-                    raw.posting_identity ASC,
-                    raw.summary_identity ASC,
-                    raw.payload_identity ASC
+                    raw.base_generation DESC
                 ) AS template_row_rank
               FROM serving_template_raw raw
             ) ranked
@@ -626,7 +547,6 @@ const getApplySelectedImportServingStatements = (input: {
         `WITH ${changedCte}
          DELETE FROM mart.review_article_serving_v4 serving
          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-           AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
            AND EXISTS (
              SELECT 1
@@ -634,6 +554,7 @@ const getApplySelectedImportServingStatements = (input: {
              WHERE snapshot.project_id = serving.project_id
                AND snapshot.snapshot_id = serving.snapshot_id
                AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+               AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
                AND snapshot.snapshot_status IN ('candidate', 'active')
            )
            AND EXISTS (
@@ -649,14 +570,6 @@ const getApplySelectedImportServingStatements = (input: {
             snapshot_id,
             base_generation,
             patch_watermark,
-            display_identity,
-            project_scope_identity,
-            selected_import_identity,
-            llm_status_identity,
-            human_status_identity,
-            posting_identity,
-            summary_identity,
-            payload_identity,
             list_mode_key,
             article_id,
             article_created_at,
@@ -693,14 +606,6 @@ const getApplySelectedImportServingStatements = (input: {
             template.snapshot_id,
             template.base_generation,
             ${getSqlLiteral(input.patchWatermark)} AS patch_watermark,
-            template.display_identity,
-            template.project_scope_identity,
-            template.selected_import_identity,
-            template.llm_status_identity,
-            template.human_status_identity,
-            template.posting_identity,
-            template.summary_identity,
-            template.payload_identity,
             template.list_mode_key,
             changed.article_id,
             article.article_created_at,
@@ -753,14 +658,6 @@ const getApplySelectedImportServingStatements = (input: {
             serving.snapshot_id,
             serving.base_generation,
             GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
-            serving.display_identity,
-            serving.project_scope_identity,
-            serving.selected_import_identity,
-            serving.llm_status_identity,
-            serving.human_status_identity,
-            serving.posting_identity,
-            serving.summary_identity,
-            serving.payload_identity,
             serving.list_mode_key,
             serving.article_id,
             serving.sort_key,
@@ -798,7 +695,6 @@ const getApplySelectedImportServingStatements = (input: {
          INNER JOIN app."article" article
            ON article.id = changed.article_id
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-            AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND changed.scope_tombstone = FALSE
             AND EXISTS (
@@ -807,6 +703,7 @@ const getApplySelectedImportServingStatements = (input: {
               WHERE snapshot.project_id = serving.project_id
                 AND snapshot.snapshot_id = serving.snapshot_id
                 AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
                 AND snapshot.snapshot_status IN ('candidate', 'active')
             )
             AND (

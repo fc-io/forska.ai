@@ -28,12 +28,14 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
+  join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
   join(reviewServingSourceRoot, 'reviewServingV4RebuildRequestService.ts'),
 ])
 const reviewServingMaintenanceAdmissionFiles = [
   'reviewServingChunkManifestRepository.ts',
   'reviewServingJudgmentJobQueueService.ts',
+  'reviewServingProjectorWriter.ts',
   'reviewServingRebuildRequestRepository.ts',
   'reviewServingV4RebuildRequestService.ts',
 ] as const
@@ -86,6 +88,10 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('LEFT JOIN mart.review_article_serving_payload_v4 payload')
+  expect(sql).toContain('payload.display_identity = $displayIdentity')
+  expect(sql).toContain('payload.payload_identity = $payloadIdentity')
+  expect(sql).not.toContain('payload.display_identity = mart.review_article_serving_v4.display_identity')
+  expect(sql).not.toContain('payload.payload_identity = mart.review_article_serving_v4.payload_identity')
   expect(sql).toContain(
     "WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId AND list_mode_key = 'llm'",
   )

@@ -61,7 +61,6 @@ type SelectedImportTitleSqlInput = {
 
 const titleSearchProjectorName = 'title-search-projector'
 const titleSearchTokenizerVersion = 'title-token-v1'
-const titlePrefixLength = 128
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -228,10 +227,6 @@ export const getReviewServingTitleSearchTokens = (title: string | null) => {
   ]
 }
 
-const getTitlePrefix = (title: string | null) => {
-  return getNormalizedTitleToken(title ?? '').slice(0, titlePrefixLength)
-}
-
 const getTitleSearchRows = async (
   input: ProjectReviewServingTitleSearchInput,
   database: ReviewServingTitleSearchProjectorDatabase,
@@ -272,9 +267,7 @@ const getTitleSearchRecord = (
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,
       search_identity: input.searchIdentity,
-      search_updated_at: new Date(),
       snapshot_id: input.snapshotId,
-      title_prefix: getTitlePrefix(row.articleTitle),
       token,
     },
   }
@@ -415,7 +408,6 @@ const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServi
     selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
     snapshotId: input.snapshotId,
     targetArticleRangePredicateSql: getArticleRangePredicate(input, 'search'),
-    titlePrefixLength,
   }
 }
 

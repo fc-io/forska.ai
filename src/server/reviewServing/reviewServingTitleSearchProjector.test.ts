@@ -54,13 +54,7 @@ const searchClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): ReviewServin
 
 test('title search projection writes token rows and search-only component state for dirty articles', async () => {
   const {database, statements} = createTitleSearchDatabase({
-    rows: [
-      {
-        articleId: 'article-1',
-        articleTitle: 'Alpha Beta alpha',
-        tombstone: false,
-      },
-    ],
+    rows: [{articleId: 'article-1', articleTitle: 'Alpha Beta alpha', tombstone: false}],
   })
 
   const result = await projectReviewServingTitleSearchRows(
@@ -109,13 +103,7 @@ test('title search projection writes token rows and search-only component state 
 
 test('title search no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
   const {database, statements} = createTitleSearchDatabase({
-    rows: [
-      {
-        articleId: 'article-1',
-        articleTitle: 'Alpha Beta',
-        tombstone: false,
-      },
-    ],
+    rows: [{articleId: 'article-1', articleTitle: 'Alpha Beta', tombstone: false}],
   })
 
   await projectReviewServingTitleSearchRows(
@@ -142,13 +130,7 @@ test('title search no-ack snapshot passes do not publish shared manifests or wat
 
 test('title search direct projection reads selected import base rows without patch overlay', async () => {
   const {database, statements} = createTitleSearchDatabase({
-    rows: [
-      {
-        articleId: 'article-1',
-        articleTitle: 'Selected Base',
-        tombstone: false,
-      },
-    ],
+    rows: [{articleId: 'article-1', articleTitle: 'Selected Base', tombstone: false}],
   })
 
   const result = await projectReviewServingTitleSearchRows(
@@ -177,13 +159,7 @@ test('title search direct projection reads selected import base rows without pat
 
 test('project-scoped title search rebuilds scoped articles and clears snapshot search rows', async () => {
   const {database, statements} = createTitleSearchDatabase({
-    rows: [
-      {
-        articleId: 'article-2',
-        articleTitle: 'Gamma Delta',
-        tombstone: false,
-      },
-    ],
+    rows: [{articleId: 'article-2', articleTitle: 'Gamma Delta', tombstone: false}],
   })
 
   const result = await projectReviewServingTitleSearchRows(

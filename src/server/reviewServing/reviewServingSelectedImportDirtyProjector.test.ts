@@ -334,7 +334,10 @@ test('project-scoped selected-import rebuilds include previous serving articles 
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(selectStatement).toContain('UNION')
   expect(selectStatement).toContain('FROM mart.review_article_serving_v4 serving')
-  expect(selectStatement).toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
+  expect(selectStatement).toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = 'selectedImport:identity-1'",
+  )
+  expect(selectStatement).not.toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
   expect(selectStatement).toContain("snapshot.selected_import_snapshot_id = 'selected-import-snapshot-1'")
 })
 
@@ -425,7 +428,10 @@ test('selected-import serving insert can seed rows from snapshot templates witho
   expect(servingInsert).not.toContain('source_metadata')
   expect(servingInsert).toContain('review-config-1')
   expect(servingInsert).toContain('snapshot-1')
-  expect(servingInsert).toContain('llmStatus:identity-1')
+  expect(servingInsert).toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = 'selectedImport:identity-1'",
+  )
+  expect(servingInsert).not.toContain('llmStatus:identity-1')
 })
 
 test('selected-import dirty budget is a no-op without legacy runtime patch reads', async () => {

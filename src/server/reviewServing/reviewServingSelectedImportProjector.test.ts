@@ -370,7 +370,10 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).toContain('selected_hot.source_record_key = selected.source_record_key')
   expect(joined).toContain('AND NOT selected.tombstone')
   expect(joined).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(joined).toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
+  expect(joined).toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = 'selectedImport:identity-1'",
+  )
+  expect(joined).not.toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
   expect(joined).toContain('COALESCE(selected_hot.article_title, article.article_title) AS article_title')
   expect(joined).toContain('COALESCE(selected_hot.external_id, article.article_id) AS article_external_id')
   expect(joined).toContain('selected_hot.journal_title AS journal_title')

@@ -461,14 +461,6 @@ const selectedImportServingColumns = [
   'snapshot_id',
   'base_generation',
   'patch_watermark',
-  'display_identity',
-  'project_scope_identity',
-  'selected_import_identity',
-  'llm_status_identity',
-  'human_status_identity',
-  'posting_identity',
-  'summary_identity',
-  'payload_identity',
   'list_mode_key',
   'article_id',
   'sort_key',
@@ -521,18 +513,9 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
          serving.review_config_hash,
          serving.snapshot_id,
          serving.base_generation,
-         serving.display_identity,
-         serving.project_scope_identity,
-         serving.selected_import_identity,
-         serving.llm_status_identity,
-         serving.human_status_identity,
-         serving.posting_identity,
-         serving.summary_identity,
-         serving.payload_identity,
          serving.list_mode_key
        FROM mart.review_article_serving_v4 serving
        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-         AND serving.selected_import_identity = ${getSqlLiteral(input.servingProjectionIdentity)}
          AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
          AND EXISTS (
            SELECT 1
@@ -540,6 +523,7 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
            WHERE snapshot.project_id = serving.project_id
              AND snapshot.snapshot_id = serving.snapshot_id
              AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+             AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.servingProjectionIdentity)}
              AND snapshot.snapshot_status IN ('candidate', 'active')
          )
      ), scoped_article AS (
@@ -559,14 +543,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        template.snapshot_id,
        template.base_generation,
        GREATEST(COALESCE(serving.patch_watermark, 0), ${getSqlLiteral(input.sourceDeltaHighWater)}) AS patch_watermark,
-       template.display_identity,
-       template.project_scope_identity,
-       template.selected_import_identity,
-       template.llm_status_identity,
-       template.human_status_identity,
-       template.posting_identity,
-       template.summary_identity,
-       template.payload_identity,
        template.list_mode_key,
        scoped.article_id,
        COALESCE(serving.sort_key, scoped.sort_key) AS sort_key,
@@ -627,7 +603,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        AND serving.article_id = scoped.article_id`,
     `DELETE FROM mart.review_article_serving_v4 serving
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-        AND serving.selected_import_identity = ${getSqlLiteral(input.servingProjectionIdentity)}
         AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
         AND serving.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
         AND serving.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
@@ -637,6 +612,7 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
           WHERE snapshot.project_id = serving.project_id
             AND snapshot.snapshot_id = serving.snapshot_id
             AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.servingProjectionIdentity)}
             AND snapshot.snapshot_status IN ('candidate', 'active')
         )`,
     `INSERT INTO mart.review_article_serving_v4 (${selectedImportServingColumns})

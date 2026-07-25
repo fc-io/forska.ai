@@ -103,6 +103,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0123_dropReviewTitleSearchActivitySortAt.sql'),
     'utf8',
   ).trim()
+  const reviewTitleSearchUnusedColumnDropSql = readFileSync(
+    resolve(migrationsFolder, '0127_dropReviewTitleSearchUnusedColumns.sql'),
+    'utf8',
+  ).trim()
   const reviewSelectedImportDisplayCopyColumnDropSql = readFileSync(
     resolve(migrationsFolder, '0124_dropReviewSelectedImportDisplayCopyColumns.sql'),
     'utf8',
@@ -119,17 +123,20 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     'DROP TABLE IF EXISTS mart.review_article_filter_posting_patch_v4;',
   )
   expect(reviewArticleDisplayPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_article_display_patch_v4;')
-  expect(reviewTitleSearchActivitySortAtDropSql).toContain('CREATE TABLE mart.review_title_search_serving_v4_repair')
-  expect(reviewTitleSearchActivitySortAtDropSql).toContain('DROP TABLE mart.review_title_search_serving_v4;')
-  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain('Retired by 0127')
+  expect(reviewTitleSearchUnusedColumnDropSql).toContain('CREATE TABLE mart.review_title_search_serving_v4_repair')
+  expect(reviewTitleSearchUnusedColumnDropSql).toContain('DROP TABLE mart.review_title_search_serving_v4;')
+  expect(reviewTitleSearchUnusedColumnDropSql).toContain(
     'ALTER TABLE mart.review_title_search_serving_v4_repair RENAME TO review_title_search_serving_v4;',
   )
-  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
+  expect(reviewTitleSearchUnusedColumnDropSql).toContain(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_repaired_pk',
   )
-  expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('PRIMARY KEY')
-  expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('activity_sort_at')
-  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
+  expect(reviewTitleSearchUnusedColumnDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewTitleSearchUnusedColumnDropSql).not.toContain('activity_sort_at')
+  expect(reviewTitleSearchUnusedColumnDropSql).not.toContain('title_prefix')
+  expect(reviewTitleSearchUnusedColumnDropSql).not.toContain('search_updated_at')
+  expect(reviewTitleSearchUnusedColumnDropSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_token',
   )
   expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(

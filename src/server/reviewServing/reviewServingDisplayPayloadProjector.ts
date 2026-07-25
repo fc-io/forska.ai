@@ -376,7 +376,6 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       biorxiv_id,
       base_generation,
       conflict_flag,
-      display_identity,
       doi,
       duplicate_flag,
       full_text_conversion_status,
@@ -384,31 +383,24 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       enabled_prompt_count,
       full_text_pdf,
       human_answered_prompt_count,
-      human_status_identity,
       human_status_key,
       journal_title,
       list_mode_key,
       llm_status_key,
       llm_judged_prompt_count,
-      llm_status_identity,
       medrxiv_id,
       patch_watermark,
-      payload_identity,
       pmid,
-      posting_identity,
       project_id,
-      project_scope_identity,
       publication_year,
       review_config_hash,
       review_opened,
       review_sections_completed,
-      selected_import_identity,
       selected_import_route_id,
       selected_rank_key,
       serving_updated_at,
       snapshot_id,
       sort_key,
-      summary_identity,
       url
     )
     WITH display_base AS (
@@ -428,7 +420,6 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       display_base.biorxivId AS biorxiv_id,
       ${getSqlLiteral(input.baseGeneration)} AS base_generation,
       COALESCE(display_base.conflictFlag, FALSE) AS conflict_flag,
-      ${getSqlLiteral(input.displayIdentity)} AS display_identity,
       display_base.doi,
       COALESCE(display_base.duplicateFlag, FALSE) AS duplicate_flag,
       display_base.fullTextConversionStatus AS full_text_conversion_status,
@@ -436,31 +427,24 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       0 AS enabled_prompt_count,
       display_base.fullTextPdf AS full_text_pdf,
       0 AS human_answered_prompt_count,
-      ${getSqlLiteral(input.humanStatusIdentity)} AS human_status_identity,
       NULL AS human_status_key,
       display_base.journalTitle AS journal_title,
       list_mode.list_mode_key,
       NULL AS llm_status_key,
       0 AS llm_judged_prompt_count,
-      ${getSqlLiteral(input.llmStatusIdentity)} AS llm_status_identity,
       display_base.medrxivId AS medrxiv_id,
       0 AS patch_watermark,
-      ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
       display_base.pmid,
-      ${getSqlLiteral(input.postingIdentity)} AS posting_identity,
       ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
       display_base.publicationYear AS publication_year,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
       FALSE AS review_opened,
       0 AS review_sections_completed,
-      ${getSqlLiteral(input.selectedImportIdentity)} AS selected_import_identity,
       display_base.selectedImportRouteId AS selected_import_route_id,
       display_base.selectedRankKey AS selected_rank_key,
       current_timestamp AS serving_updated_at,
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
       display_base.sortKey AS sort_key,
-      ${getSqlLiteral(input.summaryIdentity)} AS summary_identity,
       display_base.url
     FROM display_base
     CROSS JOIN list_mode
@@ -710,7 +694,6 @@ const canUseSetBasedPayloadRangeInsert = (ranges: readonly ProjectReviewServingP
 
 const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
   const rowPredicate = `project_id = ${getSqlLiteral(input.projectId)}
-          AND display_identity = ${getSqlLiteral(input.displayIdentity)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           AND base_generation = ${getSqlLiteral(input.baseGeneration)}
           AND article_id = ${getSqlLiteral(row.articleId)}`
