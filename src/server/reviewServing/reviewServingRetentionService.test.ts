@@ -85,7 +85,7 @@ const legacyRetentionTables = [
 
 test('retention cleanup cursor includes selected-import cleanup and wraps over current tables only', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 9}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 8}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -98,20 +98,20 @@ test('retention cleanup cursor includes selected-import cleanup and wraps over c
     cleanupBatchSize: 25,
     cleanupSpecKind: 'snapshot',
     cleanupTable: 'app.review_selected_article_import_v4',
-    cleanupTableIndex: 9,
-    nextCleanupTableIndex: 10,
+    cleanupTableIndex: 8,
+    nextCleanupTableIndex: 9,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).toContain("candidate.project_id = 'project-1'")
   expect(joined).toContain('ORDER BY candidate.selected_import_snapshot_id')
   expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":10')
+  expect(joined).toContain('"tableIndex":9')
 })
 
 test('retention cleanup no longer references legacy patch or contribution tables at runtime', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 13}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -140,90 +140,9 @@ test('retention cleanup no longer references legacy patch or contribution tables
   ).toEqual([])
 })
 
-test('retention cleanup allowlists terminal summary contribution partial cleanup with conservative rebuild guards', async () => {
-  const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 10}, patchWatermark: 0, snapshotId: null},
-  })
-
-  const result = await cleanupReviewServingRetentionState(
-    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
-    database,
-  )
-  const joined = statements.join('\n')
-
-  expect(result).toEqual({
-    cleanupBatchSize: 25,
-    cleanupSpecKind: 'terminalRebuildPartial',
-    cleanupTable: 'mart.review_article_summary_contribution_rebuild_partial_v4',
-    cleanupTableIndex: 10,
-    nextCleanupTableIndex: 11,
-    retentionScope: 'reviewServing:project-1:review-config-1',
-  })
-  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_serving_contribution_partial_cleanup_rowids AS')
-  expect(joined).toContain('CREATE OR REPLACE TABLE mart.review_article_summary_contribution_rebuild_partial_v4 AS')
-  expect(joined).toContain(
-    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_summary_contribution_rebuild_partial_v4_unique',
-  )
-  expect(joined).toContain('summary_identity')
-  expect(joined).not.toContain('contribution_key')
-  expect(joined).toContain(
-    'CREATE INDEX IF NOT EXISTS idx_review_article_summary_contribution_rebuild_partial_v4_publish',
-  )
-  expect(joined).toContain('DROP TABLE IF EXISTS review_serving_contribution_partial_cleanup_rowids')
-  expect(joined).toContain('INNER JOIN app.review_rebuild_request request')
-  expect(joined).toContain('LEFT JOIN app.review_rebuild_chunk_manifest chunk')
-  expect(joined).toContain('chunk.snapshot_id = candidate.snapshot_id')
-  expect(joined).toContain("chunk.projection_component = 'summary'")
-  expect(joined).toContain("candidate.project_id = 'project-1'")
-  expect(joined).toContain("candidate.review_config_hash IS NOT DISTINCT FROM 'review-config-1'")
-  expect(joined).toContain("request.status = 'completed'")
-  expect(joined).toContain("chunk.status = 'completed'")
-  expect(joined).toContain('request.lease_owner IS NULL')
-  expect(joined).toContain('chunk.lease_owner IS NULL')
-  expect(joined).toContain('app.review_rebuild_partial_cleanup_authorization cleanup_authorization')
-  expect(joined).toContain('cleanup_authorization.project_id = candidate.project_id')
-  expect(joined).toContain('cleanup_authorization.review_config_hash = candidate.review_config_hash')
-  expect(joined).toContain('cleanup_authorization.request_id = candidate.request_id')
-  expect(joined).toContain('cleanup_authorization.chunk_id = candidate.chunk_id')
-  expect(joined).toContain('cleanup_authorization.snapshot_id = candidate.snapshot_id')
-  expect(joined).toContain(
-    "cleanup_authorization.partial_table = 'mart.review_article_summary_contribution_rebuild_partial_v4'",
-  )
-  expect(joined).toContain("cleanup_authorization.cleanup_mode = 'stale_orphan_summary_partial'")
-  expect(joined).toContain(
-    "cleanup_authorization.operator_ack = 'authorize-stale-orphan-review-serving-summary-partial-cleanup'",
-  )
-  expect(joined).toContain('cleanup_authorization.expires_at > TIMESTAMPTZ')
-  expect(joined).toContain('cleanup_authorization.expected_row_count = (')
-  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_serving_partial_cleanup_authorization_receipts AS')
-  expect(joined).toContain('CREATE TABLE app.review_rebuild_partial_cleanup_authorization_repair')
-  expect(joined).toContain('DROP TABLE app.review_rebuild_partial_cleanup_authorization')
-  expect(joined).toContain(
-    'ALTER TABLE app.review_rebuild_partial_cleanup_authorization_repair\n    RENAME TO review_rebuild_partial_cleanup_authorization;',
-  )
-  expect(joined).toContain('CREATE INDEX IF NOT EXISTS idx_review_rebuild_partial_cleanup_authorization_lookup')
-  expect(joined).not.toContain('UPDATE app.review_rebuild_partial_cleanup_authorization')
-  expect(joined).toContain('ELSE current_timestamp\n      END AS applied_at')
-  expect(joined).toContain(
-    'COALESCE(receipt.applied_row_count, cleanup_authorization.applied_row_count) AS applied_row_count',
-  )
-  expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4 row_count_partial')
-  expect(joined).toContain('matching_summary_chunk.projection_component = ')
-  expect(joined).toContain("'pending_admission'")
-  expect(joined).toContain("'blocked_over_budget'")
-  expect(joined).toContain("'quarantined'")
-  expect(joined).toContain('retryable_chunk')
-  expect(joined).toContain('last_known_good_snapshot_id')
-  expect(joined).toContain('FROM app.review_serving_snapshot_pin pin')
-  expect(joined).toContain('diagnostic_request.status IN')
-  expect(joined).toContain('ORDER BY candidate.request_id, candidate.chunk_id, candidate.snapshot_id')
-  expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":11')
-})
-
 test('retention cleanup allowlists terminal summary partial cleanup with the same bounded guards', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 9}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -236,8 +155,8 @@ test('retention cleanup allowlists terminal summary partial cleanup with the sam
     cleanupBatchSize: 17,
     cleanupSpecKind: 'terminalRebuildPartial',
     cleanupTable: 'mart.review_article_summary_rebuild_partial_v4',
-    cleanupTableIndex: 11,
-    nextCleanupTableIndex: 12,
+    cleanupTableIndex: 9,
+    nextCleanupTableIndex: 10,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_serving_summary_partial_cleanup_rowids AS')
@@ -258,12 +177,12 @@ test('retention cleanup allowlists terminal summary partial cleanup with the sam
   expect(joined).toContain('FROM app.review_serving_snapshot_pin pin')
   expect(joined).toContain('diagnostic_request.status IN')
   expect(joined).toContain('LIMIT 17')
-  expect(joined).toContain('"tableIndex":12')
+  expect(joined).toContain('"tableIndex":10')
 })
 
 test('retention cleanup allowlists chunk manifest cleanup only after dependent partial rows are gone', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 12}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 10}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -276,7 +195,7 @@ test('retention cleanup allowlists chunk manifest cleanup only after dependent p
     cleanupBatchSize: 9,
     cleanupSpecKind: 'terminalRebuildChunkManifest',
     cleanupTable: 'app.review_rebuild_chunk_manifest',
-    cleanupTableIndex: 12,
+    cleanupTableIndex: 10,
     nextCleanupTableIndex: 0,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
@@ -288,10 +207,7 @@ test('retention cleanup allowlists chunk manifest cleanup only after dependent p
   expect(joined).toContain('cleanup_snapshot.review_config_hash IS NOT DISTINCT FROM')
   expect(joined).toContain("request.status = 'completed'")
   expect(joined).toContain("candidate.status = 'completed'")
-  expect(joined).toContain('mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial')
-  expect(joined).toContain('contribution_partial.request_id = candidate.request_id')
-  expect(joined).toContain('contribution_partial.chunk_id = candidate.chunk_id')
-  expect(joined).toContain('contribution_partial.snapshot_id = candidate.snapshot_id')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).toContain('mart.review_article_summary_rebuild_partial_v4 summary_partial')
   expect(joined).toContain('summary_partial.request_id = candidate.request_id')
   expect(joined).toContain('summary_partial.chunk_id = candidate.chunk_id')

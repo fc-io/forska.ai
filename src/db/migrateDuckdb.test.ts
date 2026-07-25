@@ -219,6 +219,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0157_dropReviewSummaryContributionPartialJsonKey.sql'),
     'utf8',
   ).trim()
+  const reviewSummaryContributionRebuildPartialDropSql = readFileSync(
+    resolve(migrationsFolder, '0176_dropReviewSummaryContributionRebuildPartial.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -600,6 +604,15 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     'ALTER TABLE mart.review_article_summary_contribution_rebuild_partial_v4_key_repair RENAME TO review_article_summary_contribution_rebuild_partial_v4;',
   )
   expect(reviewSummaryContributionPartialJsonKeyDropSql).not.toContain('contribution_key VARCHAR')
+  expect(reviewSummaryContributionRebuildPartialDropSql).toContain(
+    'DROP TABLE IF EXISTS mart.review_article_summary_contribution_rebuild_partial_v4;',
+  )
+  expect(reviewSummaryContributionRebuildPartialDropSql).toContain(
+    "CHECK (partial_table IN ('mart.review_article_summary_rebuild_partial_v4'))",
+  )
+  expect(reviewSummaryContributionRebuildPartialDropSql).not.toContain(
+    "partial_table IN ('mart.review_article_summary_contribution_rebuild_partial_v4'",
+  )
   expect(reviewImportHotFieldProvenanceDebugColumnDropSql).toContain(
     'CREATE TABLE app.review_import_article_hot_field_repair',
   )
@@ -4058,6 +4071,239 @@ test('DuckDB migration scalarizes summary contribution partial keys', async () =
         summaryKind: 'facet',
       },
     ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('DuckDB migration drops retired summary contribution rebuild partial mart and cleanup authorization rows', async () => {
+  const duckdbPath = `/tmp/forska-review-summary-contribution-partial-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0176_dropReviewSummaryContributionRebuildPartial.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_summary_contribution_rebuild_partial_v4 (
+            request_id VARCHAR NOT NULL,
+            chunk_id VARCHAR NOT NULL,
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            component_kind VARCHAR NOT NULL,
+            summary_definition_version VARCHAR NOT NULL,
+            summary_kind VARCHAR NOT NULL,
+            summary_identity VARCHAR NOT NULL,
+            list_mode_key VARCHAR,
+            count_kind VARCHAR,
+            filter_key VARCHAR,
+            facet_kind VARCHAR,
+            facet_key VARCHAR,
+            facet_value VARCHAR,
+            contribution_value BIGINT NOT NULL,
+            contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE UNIQUE INDEX idx_review_article_summary_contribution_rebuild_partial_v4_unique
+          ON mart.review_article_summary_contribution_rebuild_partial_v4(
+            request_id,
+            chunk_id,
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            article_id,
+            component_kind,
+            summary_definition_version,
+            summary_kind,
+            summary_identity,
+            COALESCE(list_mode_key, 'global'),
+            COALESCE(count_kind, ''),
+            COALESCE(filter_key, ''),
+            COALESCE(facet_kind, ''),
+            COALESCE(facet_key, ''),
+            COALESCE(facet_value, '')
+          )
+        \`)
+        await database.run(\`
+          CREATE INDEX idx_review_article_summary_contribution_rebuild_partial_v4_publish
+          ON mart.review_article_summary_contribution_rebuild_partial_v4(request_id, project_id, review_config_hash, snapshot_id)
+        \`)
+        await database.run(\`
+          CREATE TABLE mart.review_article_summary_contribution_rebuild_partial_v4_key_repair (
+            request_id VARCHAR NOT NULL
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_rebuild_partial_cleanup_authorization (
+            authorization_id VARCHAR PRIMARY KEY,
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            request_id VARCHAR NOT NULL,
+            chunk_id VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            partial_table VARCHAR NOT NULL,
+            cleanup_mode VARCHAR NOT NULL,
+            reason VARCHAR NOT NULL,
+            evidence_json JSON NOT NULL DEFAULT '{}',
+            expected_row_count BIGINT NOT NULL,
+            observed_row_count BIGINT NOT NULL,
+            operator_ack VARCHAR NOT NULL,
+            authorized_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            expires_at TIMESTAMPTZ NOT NULL,
+            applied_at TIMESTAMPTZ,
+            applied_row_count BIGINT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            CHECK (
+              partial_table IN (
+                'mart.review_article_summary_contribution_rebuild_partial_v4',
+                'mart.review_article_summary_rebuild_partial_v4'
+              )
+            )
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_rebuild_partial_cleanup_authorization (
+            authorization_id,
+            project_id,
+            review_config_hash,
+            request_id,
+            chunk_id,
+            snapshot_id,
+            partial_table,
+            cleanup_mode,
+            reason,
+            expected_row_count,
+            observed_row_count,
+            operator_ack,
+            authorized_at,
+            expires_at
+          ) VALUES
+            (
+              'authorization-retired',
+              'project-a',
+              'config-a',
+              'request-a',
+              'chunk-a',
+              'snapshot-a',
+              'mart.review_article_summary_contribution_rebuild_partial_v4',
+              'stale_orphan_summary_partial',
+              'retired table',
+              1,
+              1,
+              'ack',
+              TIMESTAMPTZ '2026-07-25T08:00:00Z',
+              TIMESTAMPTZ '2026-07-25T09:00:00Z'
+            ),
+            (
+              'authorization-summary',
+              'project-a',
+              'config-a',
+              'request-a',
+              'chunk-a',
+              'snapshot-a',
+              'mart.review_article_summary_rebuild_partial_v4',
+              'stale_orphan_summary_partial',
+              'active table',
+              2,
+              2,
+              'ack',
+              TIMESTAMPTZ '2026-07-25T08:00:00Z',
+              TIMESTAMPTZ '2026-07-25T09:00:00Z'
+            )
+        \`)
+
+        await migrateDuckdb()
+
+        const tableRows = await database.queryJson(
+          "SELECT table_schema AS tableSchema, table_name AS tableName FROM information_schema.tables WHERE (table_schema = 'mart' AND table_name IN ('review_article_summary_contribution_rebuild_partial_v4', 'review_article_summary_contribution_rebuild_partial_v4_key_repair')) OR (table_schema = 'app' AND table_name = 'review_rebuild_partial_cleanup_authorization_repair') ORDER BY table_schema, table_name"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE index_name IN ('idx_review_article_summary_contribution_rebuild_partial_v4_unique', 'idx_review_article_summary_contribution_rebuild_partial_v4_publish') ORDER BY index_name"
+        )
+        const authorizationRows = await database.queryJson(
+          "SELECT authorization_id AS authorizationId, partial_table AS partialTable FROM app.review_rebuild_partial_cleanup_authorization ORDER BY authorization_id"
+        )
+        const insertResult = await database.queryJson(
+          "INSERT INTO app.review_rebuild_partial_cleanup_authorization (authorization_id, project_id, review_config_hash, request_id, chunk_id, snapshot_id, partial_table, cleanup_mode, reason, expected_row_count, observed_row_count, operator_ack, authorized_at, expires_at) VALUES ('authorization-blocked', 'project-a', 'config-a', 'request-a', 'chunk-a', 'snapshot-a', 'mart.review_article_summary_contribution_rebuild_partial_v4', 'stale_orphan_summary_partial', 'blocked', 1, 1, 'ack', TIMESTAMPTZ '2026-07-25T08:00:00Z', TIMESTAMPTZ '2026-07-25T09:00:00Z') RETURNING authorization_id"
+        ).catch((error) => {
+          return [{error: error instanceof Error ? error.message : String(error)}]
+        })
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0176_dropReviewSummaryContributionRebuildPartial.sql'"
+        )
+
+        console.log(JSON.stringify({authorizationRows, indexRows, insertResult, migrationRows, tableRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      authorizationRows: Array<{authorizationId: string; partialTable: string}>
+      indexRows: {indexName: string}[]
+      insertResult: Array<{authorization_id?: string; error?: string}>
+      migrationRows: {name: string}[]
+      tableRows: {tableName: string; tableSchema: string}[]
+    }
+
+    expect(parsed.tableRows).toEqual([])
+    expect(parsed.indexRows).toEqual([])
+    expect(parsed.authorizationRows).toEqual([
+      {authorizationId: 'authorization-summary', partialTable: 'mart.review_article_summary_rebuild_partial_v4'},
+    ])
+    expect(parsed.insertResult[0]?.error).toContain('CHECK')
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
   }

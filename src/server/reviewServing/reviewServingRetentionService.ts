@@ -74,13 +74,6 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
     keyColumn: 'request_id, chunk_id, snapshot_id',
     orderBy: 'candidate.request_id, candidate.chunk_id, candidate.snapshot_id',
     protectedPredicate: 'snapshot_id',
-    table: 'mart.review_article_summary_contribution_rebuild_partial_v4',
-  },
-  {
-    kind: 'terminalRebuildPartial',
-    keyColumn: 'request_id, chunk_id, snapshot_id',
-    orderBy: 'candidate.request_id, candidate.chunk_id, candidate.snapshot_id',
-    protectedPredicate: 'snapshot_id',
     table: 'mart.review_article_summary_rebuild_partial_v4',
   },
   {
@@ -95,34 +88,6 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
 const retentionTableSpecCount = cleanupTableSpecs.length
 
 const summaryPartialRebuildSqlByTable: Record<string, SummaryPartialRebuildSql> = {
-  'mart.review_article_summary_contribution_rebuild_partial_v4': {
-    createIndexSql: `
-      CREATE INDEX IF NOT EXISTS idx_review_article_summary_contribution_rebuild_partial_v4_publish
-      ON mart.review_article_summary_contribution_rebuild_partial_v4(request_id, project_id, review_config_hash, snapshot_id)
-    `,
-    tempTableName: 'review_serving_contribution_partial_cleanup_rowids',
-    uniqueIndexSql: `
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_summary_contribution_rebuild_partial_v4_unique
-      ON mart.review_article_summary_contribution_rebuild_partial_v4(
-        request_id,
-        chunk_id,
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        article_id,
-        component_kind,
-        summary_definition_version,
-        summary_kind,
-        summary_identity,
-        COALESCE(list_mode_key, 'global'),
-        COALESCE(count_kind, ''),
-        COALESCE(filter_key, ''),
-        COALESCE(facet_kind, ''),
-        COALESCE(facet_key, ''),
-        COALESCE(facet_value, '')
-      )
-    `,
-  },
   'mart.review_article_summary_rebuild_partial_v4': {
     createIndexSql: `
       CREATE INDEX IF NOT EXISTS idx_review_article_summary_rebuild_partial_v4_reduce
@@ -491,12 +456,7 @@ const markAppliedAuthorizedRebuildPartialCleanup = async (
       CHECK (length(trim(request_id)) > 0),
       CHECK (length(trim(chunk_id)) > 0),
       CHECK (length(trim(snapshot_id)) > 0),
-      CHECK (
-        partial_table IN (
-          'mart.review_article_summary_contribution_rebuild_partial_v4',
-          'mart.review_article_summary_rebuild_partial_v4'
-        )
-      ),
+      CHECK (partial_table IN ('mart.review_article_summary_rebuild_partial_v4')),
       CHECK (cleanup_mode IN ('stale_orphan_summary_partial')),
       CHECK (length(trim(reason)) > 0),
       CHECK (expected_row_count >= 0),
@@ -611,14 +571,6 @@ const getManifestReviewConfigHashPredicate = (input: ReviewServingRetentionClean
 
 const getChunkManifestPartialRowsGonePredicate = () => {
   return `NOT EXISTS (
-            SELECT 1
-            FROM mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial
-            WHERE contribution_partial.project_id = candidate.project_id
-              AND contribution_partial.request_id = candidate.request_id
-              AND contribution_partial.chunk_id = candidate.chunk_id
-              AND contribution_partial.snapshot_id = candidate.snapshot_id
-          )
-          AND NOT EXISTS (
             SELECT 1
             FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
             WHERE summary_partial.project_id = candidate.project_id
