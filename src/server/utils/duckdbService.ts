@@ -2198,7 +2198,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         filter_value,
         list_mode_key,
         article_id,
-        posting_updated_at
+        sort_key
       FROM mart.review_article_filter_posting_serving_v4
       ORDER BY
         project_id,
@@ -2211,7 +2211,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       LIMIT 1;
       BEGIN;
       UPDATE mart.review_article_filter_posting_serving_v4
-      SET posting_updated_at = current_timestamp
+      SET sort_key = current_timestamp
       WHERE project_id = (
           SELECT project_id
           FROM startup_probe_review_article_filter_posting_serving_v4
@@ -2250,8 +2250,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       BEGIN;
       UPDATE mart.review_article_filter_posting_serving_v4
-      SET posting_updated_at = (
-        SELECT posting_updated_at
+      SET sort_key = (
+        SELECT sort_key
         FROM startup_probe_review_article_filter_posting_serving_v4
         LIMIT 1
       )

@@ -520,7 +520,6 @@ const getPostingServingRecord = (input: {
       filter_kind: input.row.filterKind,
       filter_value: input.row.filterValue,
       list_mode_key: input.row.listModeKey,
-      posting_updated_at: new Date(),
       project_id: input.projectId,
       review_config_hash: input.reviewConfigHash,
       snapshot_id: input.snapshotId,
@@ -609,8 +608,7 @@ const getInsertFullRebuildServingRowsStatement = (
       filter_value,
       list_mode_key,
       article_id,
-      sort_key,
-      posting_updated_at
+      sort_key
     )
     WITH posting_source AS (${getFullRebuildPostingContributionRowsStatement(input, ranges)}),
     serving_source AS (
@@ -636,8 +634,7 @@ const getInsertFullRebuildServingRowsStatement = (
       posting.filterValue AS filter_value,
       posting.listModeKey AS list_mode_key,
       posting.articleId AS article_id,
-      posting.sortKey AS sort_key,
-      current_timestamp AS posting_updated_at
+      posting.sortKey AS sort_key
     FROM serving_source posting
     ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING`
 }

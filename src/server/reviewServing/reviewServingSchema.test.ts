@@ -41,6 +41,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0137_reviewServingJudgmentDetailHumanScalars.sql',
   '../../db/duckdbMigrations/0138_dropReviewJudgmentDetailModelId.sql',
   '../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql',
+  '../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -94,6 +95,8 @@ const reviewJudgmentDetailModelIdDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0138_dropReviewJudgmentDetailModelId.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
+const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -631,6 +634,14 @@ test('filter posting stats schema drops derived identity and selectivity columns
   expect(reviewFilterPostingServingIdentityDropForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
   )
+  expect(reviewFilterPostingServingUpdatedAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
+  )
+  expect(reviewFilterPostingServingUpdatedAtDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
+  )
+  expect(reviewFilterPostingServingUpdatedAtDropForwardMigrationSql).not.toContain('posting_updated_at')
+  expect(getTableColumns('mart.review_article_filter_posting_serving_v4').has('posting_updated_at')).toBe(false)
 })
 
 test('filter option schema drops reconstructable payload JSON column', () => {
