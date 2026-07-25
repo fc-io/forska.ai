@@ -2624,6 +2624,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     '0138_dropReviewJudgmentDetailModelId.sql',
     '0158_reviewJudgmentDetailListScalars.sql',
     '0159_reviewJudgmentDetailDetailHydrationScalars.sql',
+    '0160_reviewJudgmentDetailHydrationSplit.sql',
   ])
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return !targetMigrationFiles.has(fileName)
@@ -2804,7 +2805,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           "SELECT admission_state AS admissionState, last_error AS lastError, retry_after AS retryAfter, retry_count AS retryCount, status FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
         )
         const rows = await database.queryJson(
-          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, judgment_model_id AS judgmentModelId, judgment_created_at AS judgmentCreatedAt, judgment_updated_at AS judgmentUpdatedAt, human_comment AS humanComment, explanation, quotes, chunking_strategy AS chunkingStrategy, confidence_original AS confidenceOriginal, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, model_name AS modelName, model_provider AS modelProvider, model_thinking AS modelThinking, model_version AS modelVersion, assessment_id AS assessmentId, assessment_judgment_id AS assessmentJudgmentId, assessment_is_correct AS assessmentIsCorrect, assessment_comment AS assessmentComment, assessment_created_at AS assessmentCreatedAt, assessment_updated_at AS assessmentUpdatedAt, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
+          "SELECT detail.project_id AS projectId, detail.payload_kind AS payloadKind, detail.judgment_id AS judgmentId, detail.judgment_model_id AS judgmentModelId, detail.judgment_created_at AS judgmentCreatedAt, hydration.judgment_updated_at AS judgmentUpdatedAt, detail.human_comment AS humanComment, detail.explanation, detail.quotes, hydration.chunking_strategy AS chunkingStrategy, hydration.confidence_original AS confidenceOriginal, hydration.snapshot_project_id AS snapshotProjectId, hydration.snapshot_project_model_name AS snapshotProjectModelName, hydration.model_name AS modelName, hydration.model_provider AS modelProvider, hydration.model_thinking AS modelThinking, hydration.model_version AS modelVersion, hydration.assessment_id AS assessmentId, hydration.assessment_judgment_id AS assessmentJudgmentId, hydration.assessment_is_correct AS assessmentIsCorrect, hydration.assessment_comment AS assessmentComment, hydration.assessment_created_at AS assessmentCreatedAt, hydration.assessment_updated_at AS assessmentUpdatedAt, hydration.prompt_original_text AS promptOriginalText, hydration.prompt_heading AS promptHeading, CAST(hydration.prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, detail.placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 detail INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4 hydration ON hydration.project_id = detail.project_id AND hydration.review_config_hash = detail.review_config_hash AND hydration.snapshot_id = detail.snapshot_id AND hydration.list_mode_key = detail.list_mode_key AND hydration.payload_kind = detail.payload_kind AND hydration.article_id = detail.article_id AND hydration.prompt_id = detail.prompt_id ORDER BY detail.article_id"
         )
         const requestRows = await database.queryJson(
           "SELECT admission_state AS admissionState, failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
@@ -2835,7 +2836,10 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         const columns = await database.queryJson(
           "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' ORDER BY ordinal_position"
         )
-        console.log(JSON.stringify({chunkRows, columns, duplicatePayloadKindAccepted, requestRows, rows, uniqueIndexRows}))
+        const hydrationColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_judgment_detail_hydration_serving_v4' ORDER BY ordinal_position"
+        )
+        console.log(JSON.stringify({chunkRows, columns, duplicatePayloadKindAccepted, hydrationColumns, requestRows, rows, uniqueIndexRows}))
         await database.close()
       `,
     ],
@@ -2868,6 +2872,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       duplicatePayloadKindAccepted: boolean
       columns: Array<{columnName: string}>
+      hydrationColumns: Array<{columnName: string}>
       chunkRows: Array<{
         admissionState: string
         lastError: string | null
@@ -2938,15 +2943,30 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       'is_answered',
       'answered_original',
       'answered_original_as_array',
+      'judgment_created_at',
+      'human_comment',
+      'explanation',
+      'quotes',
+      'placeholder_kind',
+      'detail_updated_at',
+    ])
+    expect(
+      parsed.hydrationColumns.map((row) => {
+        return row.columnName
+      }),
+    ).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'list_mode_key',
+      'payload_kind',
+      'article_id',
+      'prompt_id',
       'prompt_original_text',
       'prompt_heading',
       'prompt_type',
       'prompt_criteria_disposition',
-      'judgment_created_at',
       'judgment_updated_at',
-      'human_comment',
-      'explanation',
-      'quotes',
       'chunking_strategy',
       'confidence_original',
       'snapshot_project_id',
@@ -2961,7 +2981,6 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       'assessment_comment',
       'assessment_created_at',
       'assessment_updated_at',
-      'placeholder_kind',
       'detail_updated_at',
     ])
     const normalizedRows = parsed.rows.map((row) => {

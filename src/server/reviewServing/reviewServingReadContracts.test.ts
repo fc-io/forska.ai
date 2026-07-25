@@ -344,9 +344,9 @@ test('detail row contract does not pin article lookups to a list mode', () => {
   expect(detailJudgments?.allowedFilters).toEqual(['articleId'])
   expect(detailJudgments?.requiredComponents).toContain('payload')
   expect(detailJudgments?.sort.fields).toEqual([
-    "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
-    'prompt_order ASC NULLS LAST',
-    'prompt_id',
+    "CASE mart.review_article_judgment_detail_serving_v4.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
+    'mart.review_article_judgment_detail_serving_v4.prompt_order ASC NULLS LAST',
+    'mart.review_article_judgment_detail_serving_v4.prompt_id',
   ])
 })
 
@@ -802,6 +802,7 @@ test('review serving read contracts use planned Phase 1 physical table names', (
     'app.review_serving_snapshot_manifest',
     'mart.review_article_filter_posting_serving_v4',
     'mart.review_article_count_serving_v4',
+    'mart.review_article_judgment_detail_hydration_serving_v4',
     'mart.review_article_judgment_detail_serving_v4',
     'mart.review_article_serving_payload_v4',
     'mart.review_article_serving_v4',

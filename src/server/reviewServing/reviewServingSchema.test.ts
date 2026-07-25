@@ -60,6 +60,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0157_dropReviewSummaryContributionPartialJsonKey.sql',
   '../../db/duckdbMigrations/0158_reviewJudgmentDetailListScalars.sql',
   '../../db/duckdbMigrations/0159_reviewJudgmentDetailDetailHydrationScalars.sql',
+  '../../db/duckdbMigrations/0160_reviewJudgmentDetailHydrationSplit.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -117,6 +118,8 @@ const reviewJudgmentDetailListScalarsForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0158_reviewJudgmentDetailListScalars.sql']
 const reviewJudgmentDetailHydrationScalarsForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0159_reviewJudgmentDetailDetailHydrationScalars.sql']
+const reviewJudgmentDetailHydrationSplitForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0160_reviewJudgmentDetailHydrationSplit.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -209,6 +212,7 @@ const reviewServingPhase1Tables = [
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_serving_payload_v4',
   'mart.review_article_judgment_detail_serving_v4',
+  'mart.review_article_judgment_detail_hydration_serving_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_count_serving_v4',
@@ -1000,15 +1004,23 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'prompt_id',
       'payload_kind',
       'is_answered',
-      'prompt_original_text',
-      'prompt_heading',
-      'prompt_type',
-      'prompt_criteria_disposition',
       'judgment_created_at',
       'human_comment',
       'judgment_model_id',
       'explanation',
       'quotes',
+      'placeholder_kind',
+    ]),
+  ).toEqual([])
+  expect(
+    getMissingColumns('mart.review_article_judgment_detail_hydration_serving_v4', [
+      'article_id',
+      'prompt_id',
+      'payload_kind',
+      'prompt_original_text',
+      'prompt_heading',
+      'prompt_type',
+      'prompt_criteria_disposition',
       'judgment_updated_at',
       'chunking_strategy',
       'confidence_original',
@@ -1024,11 +1036,12 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'assessment_comment',
       'assessment_created_at',
       'assessment_updated_at',
-      'placeholder_kind',
     ]),
   ).toEqual([])
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('model_id')).toBe(false)
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('judgment_payload_json')).toBe(false)
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('prompt_original_text')).toBe(false)
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('judgment_updated_at')).toBe(false)
   expect(
     getMissingColumns('mart.review_filter_option_serving_v4', [
       'filter_kind',
@@ -1129,6 +1142,22 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   )
   expect(reviewJudgmentDetailHydrationScalarsForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_judgment_detail_serving_v4_repair RENAME TO review_article_judgment_detail_serving_v4;',
+  )
+  expect(reviewJudgmentDetailHydrationSplitForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_hydration_serving_v4',
+  )
+  expect(reviewJudgmentDetailHydrationSplitForwardMigrationSql).toContain(
+    'INSERT INTO mart.review_article_judgment_detail_hydration_serving_v4',
+  )
+  expect(reviewJudgmentDetailHydrationSplitForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_repair',
+  )
+  expect(reviewJudgmentDetailHydrationSplitForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_judgment_detail_serving_v4_repair RENAME TO review_article_judgment_detail_serving_v4;',
+  )
+  expect(reviewJudgmentDetailHydrationSplitForwardMigrationSql).not.toContain('judgment_payload_json')
+  expect(reviewJudgmentDetailHydrationSplitForwardMigrationSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_hydration_serving_v4_article',
   )
   expect(countScopeForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
