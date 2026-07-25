@@ -104,6 +104,10 @@ const createReaderDatabase = () => {
         return [{activity_sort_at: '2026-01-04T00:00:00.000Z', article_id: 'article-1', priority_bucket: 1}] as T[]
       }
 
+      if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
+        return [{promptCount: 1}] as T[]
+      }
+
       if (statement.includes('FROM mart.review_article_serving_v4')) {
         return [
           {
@@ -193,14 +197,13 @@ const createChunkedHydrationReaderDatabase = (articleCount: number, enabledPromp
         return [{totalCount: articleCount}] as T[]
       }
 
+      if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
+        return [{promptCount: enabledPromptCount ?? 1}] as T[]
+      }
+
       if (statement.includes('FROM mart.review_article_serving_v4')) {
         return articleIds.map((articleId) => {
-          return {
-            article_id: articleId,
-            article_title: articleId,
-            ...(enabledPromptCount ? {enabled_prompt_count: enabledPromptCount} : {}),
-            sort_key: '2026-01-01T00:00:00.000Z',
-          }
+          return {article_id: articleId, article_title: articleId, sort_key: '2026-01-01T00:00:00.000Z'}
         }) as T[]
       }
 
@@ -246,7 +249,7 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(firstRow?.judgments[0]?.answer).toBe('yes')
   expect(firstRow?.articleCreatedAt).toBeNull()
   expect(firstRow?.sourceMetadata).toEqual({covidence: {studyId: 'study-1'}})
-  expect(reader.statements).toHaveLength(4)
+  expect(reader.statements).toHaveLength(5)
   expect(sql).toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('LEFT JOIN app.article article')
@@ -395,7 +398,7 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.humanAnswersByPrompt?.['prompt-1']).toEqual(['yes'])
-  expect(reader.statements).toHaveLength(5)
+  expect(reader.statements).toHaveLength(6)
   expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
   expect(sql).toContain("list_mode_key = 'both'")
   expect(sql).toContain("filter_kind = 'llmStatus'")
@@ -434,7 +437,7 @@ test('both review route service chunks judgment hydration at reader article-set 
   expect(judgmentStatements[2]).toContain('article-250')
 })
 
-test('both review route service sizes judgment hydration from enabled prompt count', async () => {
+test('both review route service sizes judgment hydration from bounded enabled prompt metadata', async () => {
   const reader = createChunkedHydrationReaderDatabase(45, 250)
 
   await getBothReviewArticlesFromServing(
@@ -528,8 +531,8 @@ test('human, both, and unassessed routes read one cursor page for numeric direct
   expect(humanResult.page).toBe(1)
   expect(bothResult.page).toBe(1)
   expect(unassessedResult.page).toBe(1)
-  expect(humanReader.statements).toHaveLength(4)
-  expect(bothReader.statements).toHaveLength(5)
+  expect(humanReader.statements).toHaveLength(5)
+  expect(bothReader.statements).toHaveLength(6)
   expect(unassessedReader.statements).toHaveLength(3)
 })
 
