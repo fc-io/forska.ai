@@ -75,18 +75,13 @@ type JudgmentDetailPayloadKindRow = {
   answeredOriginalNonNullRows: number
   judgmentIdNonNullRows: number
   judgmentPayloadNonNullRows: number
-  modelIdNonNullRows: number
   payloadModelIdNonNullRows: number
   payloadKind: string
   placeholderRows: number
   rows: number
 }
 type JudgmentDetailPayloadListModeRow = {judgmentPayloadNonNullRows: number; listModeKey: string; rows: number}
-type JudgmentDetailPayloadSourceJudgmentMatch = {
-  currentConfigMatchingJudgmentRows: number | null
-  currentProjectSourceJudgmentRows: number | null
-  note: string
-}
+type JudgmentDetailPayloadSourceJudgmentEvidence = {currentProjectSourceJudgmentRows: number | null; note: string}
 type JudgmentDetailPayloadTopLevelKeyRow = {
   currentProjectRows: number
   globalRows: number
@@ -101,13 +96,11 @@ type JudgmentDetailPayloadReadinessReport = {
   globalRowCount: number | null
   judgmentPayloadNonNullRows: number | null
   judgmentPayloadNullRows: number | null
-  modelIdNonNullRows: number | null
-  modelIdNullRows: number | null
   note: string
   rowsByListMode: JudgmentDetailPayloadListModeRow[]
   rowsByPayloadKind: JudgmentDetailPayloadKindRow[]
   rowsByPayloadTopLevelKey: JudgmentDetailPayloadTopLevelKeyRow[]
-  sourceJudgmentMatch: JudgmentDetailPayloadSourceJudgmentMatch
+  sourceJudgmentEvidence: JudgmentDetailPayloadSourceJudgmentEvidence
   table: 'mart.review_article_judgment_detail_serving_v4'
   verdict: 'not-authorized' | 'blocked'
 }
@@ -579,14 +572,7 @@ const selectedImportPayloadColumns = [
 
 const selectedImportDisplayCopyColumns = ['publication_year', 'article_title', 'journal_title', 'external_id'] as const
 
-const projectorWatermarkNullableColumns = [
-  'snapshot_id',
-  'import_route_id',
-  'lease_owner',
-  'lease_expires_at',
-  'cursor_json',
-  'last_error',
-] as const
+const projectorWatermarkNullableColumns = ['project_id', 'import_route_id'] as const
 
 const rebuildRequestLifecycleNullableColumns = [
   'retry_after',
@@ -1731,7 +1717,7 @@ const getProjectorWatermarkNullableFieldReport = async (
       currentProjectRows: getNumberOrNull(row.currentProjectRows),
       error: null,
       globalRows: getNumberOrNull(row.globalRows),
-      note: 'Read-only global/current-project aggregate evidence for nullable projector watermark fields. Null evidence is not schema-slimming authorization: import_route_id is part of the watermark identity for import-route scoped watermarks, while the lease/cursor/error/snapshot fields remain protected lifecycle/recovery state until code, recovery, route, benchmark, and live progress proof show otherwise.',
+      note: 'Read-only global/current-project aggregate evidence for nullable projector watermark fields. Null evidence is not schema-slimming authorization: project_id and import_route_id are part of watermark scope/identity for global and import-route scoped watermarks. Retired lease/cursor/error/snapshot placeholders are intentionally not queried.',
       projectId,
       rowsByProjectScope: projectScopeRows,
       rowsBySourcePartition: sourcePartitionRows,
@@ -3190,8 +3176,6 @@ const getJudgmentDetailPayloadReadinessReport = async (
       globalRowCount: number | string
       judgmentPayloadNonNullRows: number | string
       judgmentPayloadNullRows: number | string
-      modelIdNonNullRows: number | string
-      modelIdNullRows: number | string
     }>(
       runtime,
       `
@@ -3200,8 +3184,6 @@ const getJudgmentDetailPayloadReadinessReport = async (
           CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
           CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NULL) AS BIGINT) AS judgmentPayloadNullRows,
           CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows,
-          CAST(COUNT(*) FILTER (WHERE model_id IS NULL) AS BIGINT) AS modelIdNullRows,
-          CAST(COUNT(*) FILTER (WHERE model_id IS NOT NULL) AS BIGINT) AS modelIdNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
         FROM ${table}
@@ -3212,7 +3194,6 @@ const getJudgmentDetailPayloadReadinessReport = async (
       answeredOriginalNonNullRows: number | string
       judgmentIdNonNullRows: number | string
       judgmentPayloadNonNullRows: number | string
-      modelIdNonNullRows: number | string
       payloadModelIdNonNullRows: number | string
       payloadKind: string | null
       placeholderRows: number | string
@@ -3226,7 +3207,6 @@ const getJudgmentDetailPayloadReadinessReport = async (
           CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows,
           CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL) AS BIGINT) AS judgmentIdNonNullRows,
           CAST(COUNT(*) FILTER (WHERE placeholder_kind IS NOT NULL) AS BIGINT) AS placeholderRows,
-          CAST(COUNT(*) FILTER (WHERE model_id IS NOT NULL) AS BIGINT) AS modelIdNonNullRows,
           CAST(COUNT(*) FILTER (
             WHERE json_extract_string(judgment_payload_json, '$.model.id') IS NOT NULL
           ) AS BIGINT) AS payloadModelIdNonNullRows,
@@ -3239,23 +3219,10 @@ const getJudgmentDetailPayloadReadinessReport = async (
         LIMIT ${Math.max(1, limit)}
       `,
     )
-    const sourceJudgmentRows = await runReadonlyQuery<{
-      currentConfigMatchingJudgmentRows: number | string
-      currentProjectSourceJudgmentRows: number | string
-    }>(
+    const sourceJudgmentRows = await runReadonlyQuery<{currentProjectSourceJudgmentRows: number | string}>(
       runtime,
       `
-        WITH current_project_config AS (
-          SELECT
-            model_id,
-            use_title,
-            use_abstract,
-            use_fulltext,
-            use_fulltext_no_images
-          FROM app.project
-          WHERE id = ${getSqlLiteral(projectId)}
-        ),
-        project_scope_article AS (
+        WITH project_scope_article AS (
           SELECT DISTINCT air.article_id
           FROM app.project_import_route project_route
           INNER JOIN app.article_import_route air
@@ -3267,18 +3234,10 @@ const getJudgmentDetailPayloadReadinessReport = async (
           WHERE project_article.project_id = ${getSqlLiteral(projectId)}
         )
         SELECT
-          CAST(COUNT(*) AS BIGINT) AS currentProjectSourceJudgmentRows,
-          CAST(COUNT(*) FILTER (
-            WHERE judgment.model_id IS NOT DISTINCT FROM current_project_config.model_id
-              AND judgment.use_title IS NOT DISTINCT FROM current_project_config.use_title
-              AND judgment.use_abstract IS NOT DISTINCT FROM current_project_config.use_abstract
-              AND judgment.use_fulltext IS NOT DISTINCT FROM current_project_config.use_fulltext
-              AND judgment.use_fulltext_no_images IS NOT DISTINCT FROM current_project_config.use_fulltext_no_images
-          ) AS BIGINT) AS currentConfigMatchingJudgmentRows
+          CAST(COUNT(*) AS BIGINT) AS currentProjectSourceJudgmentRows
         FROM app."judgment" judgment
         INNER JOIN project_scope_article
           ON project_scope_article.article_id = judgment.article_id
-        CROSS JOIN current_project_config
         WHERE judgment.deleted_at IS NULL
       `,
     )
@@ -3366,9 +3325,7 @@ const getJudgmentDetailPayloadReadinessReport = async (
       globalRowCount: getNumberOrNull(row?.globalRowCount),
       judgmentPayloadNonNullRows: getNumberOrNull(row?.judgmentPayloadNonNullRows),
       judgmentPayloadNullRows: getNumberOrNull(row?.judgmentPayloadNullRows),
-      modelIdNonNullRows: getNumberOrNull(row?.modelIdNonNullRows),
-      modelIdNullRows: getNumberOrNull(row?.modelIdNullRows),
-      note: 'Read-only global/current-project evidence for judgment detail payload storage. Detail, list hydration, export, filters, and summaries still consume these columns; this section does not authorize payload, model, or answer-column slimming.',
+      note: 'Read-only global/current-project evidence for judgment detail payload storage. Detail, list hydration, export, filters, and summaries still consume these columns; this section does not authorize payload or answer-column slimming.',
       rowsByListMode: rowsByListMode.map((listModeRow) => {
         return {
           judgmentPayloadNonNullRows: Number(listModeRow.judgmentPayloadNonNullRows ?? 0),
@@ -3382,7 +3339,6 @@ const getJudgmentDetailPayloadReadinessReport = async (
           answeredOriginalNonNullRows: Number(payloadKindRow.answeredOriginalNonNullRows ?? 0),
           judgmentIdNonNullRows: Number(payloadKindRow.judgmentIdNonNullRows ?? 0),
           judgmentPayloadNonNullRows: Number(payloadKindRow.judgmentPayloadNonNullRows ?? 0),
-          modelIdNonNullRows: Number(payloadKindRow.modelIdNonNullRows ?? 0),
           payloadModelIdNonNullRows: Number(payloadKindRow.payloadModelIdNonNullRows ?? 0),
           payloadKind: String(payloadKindRow.payloadKind ?? 'NULL'),
           placeholderRows: Number(payloadKindRow.placeholderRows ?? 0),
@@ -3397,10 +3353,9 @@ const getJudgmentDetailPayloadReadinessReport = async (
           payloadKind: String(keyRow.payloadKind ?? 'NULL'),
         }
       }),
-      sourceJudgmentMatch: {
-        currentConfigMatchingJudgmentRows: getNumberOrNull(sourceJudgmentRows[0]?.currentConfigMatchingJudgmentRows),
+      sourceJudgmentEvidence: {
         currentProjectSourceJudgmentRows: getNumberOrNull(sourceJudgmentRows[0]?.currentProjectSourceJudgmentRows),
-        note: 'Current-project source judgments only prove model_id absence when they match the active project model/content flags. Nonmatching source judgments do not authorize serving model_id removal.',
+        note: 'Current-project source judgment row count is context for payload scalarization only. The old serving mart model identifier column has already been dropped, so this probe intentionally avoids stale model readiness checks.',
       },
       table,
       verdict: 'not-authorized',
@@ -3414,14 +3369,11 @@ const getJudgmentDetailPayloadReadinessReport = async (
       globalRowCount: null,
       judgmentPayloadNonNullRows: null,
       judgmentPayloadNullRows: null,
-      modelIdNonNullRows: null,
-      modelIdNullRows: null,
       note: 'Read-only judgment detail payload evidence collection failed. Failed evidence collection is not field-slimming authorization.',
       rowsByListMode: [],
       rowsByPayloadKind: [],
       rowsByPayloadTopLevelKey: [],
-      sourceJudgmentMatch: {
-        currentConfigMatchingJudgmentRows: null,
+      sourceJudgmentEvidence: {
         currentProjectSourceJudgmentRows: null,
         note: 'Not collected because judgment detail payload readiness collection failed.',
       },
@@ -3782,7 +3734,6 @@ const renderMarkdown = (report: EvidenceReport) => {
       formatValue(row.judgmentPayloadNonNullRows),
       formatValue(row.judgmentIdNonNullRows),
       formatValue(row.placeholderRows),
-      formatValue(row.modelIdNonNullRows),
       formatValue(row.payloadModelIdNonNullRows),
       formatValue(row.answeredOriginalNonNullRows),
       formatValue(row.answeredArrayNonNullRows),
@@ -4303,10 +4254,6 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     `judgment_payload_json non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.judgmentPayloadNonNullRows)}`,
     '',
-    `model_id null rows: ${formatValue(report.judgmentDetailPayloadReadiness.modelIdNullRows)}`,
-    '',
-    `model_id non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.modelIdNonNullRows)}`,
-    '',
     `answered_original non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.answeredOriginalNonNullRows)}`,
     '',
     `answered_original_as_array non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.answeredArrayNonNullRows)}`,
@@ -4323,7 +4270,6 @@ const renderMarkdown = (report: EvidenceReport) => {
             'Payload non-nulls',
             'Judgment ID non-nulls',
             'Placeholder rows',
-            'model_id non-nulls',
             'Payload model.id non-nulls',
             'answered_original non-nulls',
             'answered_original_as_array non-nulls',
@@ -4332,11 +4278,9 @@ const renderMarkdown = (report: EvidenceReport) => {
         )
       : '_No judgment detail payload-kind rows were collected._',
     '',
-    report.judgmentDetailPayloadReadiness.sourceJudgmentMatch.note,
+    report.judgmentDetailPayloadReadiness.sourceJudgmentEvidence.note,
     '',
-    `Current-project source judgment rows: ${formatValue(report.judgmentDetailPayloadReadiness.sourceJudgmentMatch.currentProjectSourceJudgmentRows)}`,
-    '',
-    `Current-project source judgment rows matching active model/config: ${formatValue(report.judgmentDetailPayloadReadiness.sourceJudgmentMatch.currentConfigMatchingJudgmentRows)}`,
+    `Current-project source judgment rows: ${formatValue(report.judgmentDetailPayloadReadiness.sourceJudgmentEvidence.currentProjectSourceJudgmentRows)}`,
     '',
     judgmentDetailListModeRows.length > 0
       ? formatMarkdownTable(['List mode', 'Rows', 'Payload non-nulls'], judgmentDetailListModeRows)
