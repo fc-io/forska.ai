@@ -453,11 +453,6 @@ const selectedImportServingColumns = [
   'article_id',
   'sort_key',
   'activity_sort_at',
-  'llm_status_key',
-  'human_status_key',
-  'llm_judged_prompt_count',
-  'enabled_prompt_count',
-  'human_answered_prompt_count',
   'article_created_at',
 ].join(', ')
 
@@ -514,11 +509,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        scoped.article_id,
        COALESCE(serving.sort_key, scoped.sort_key) AS sort_key,
        COALESCE(serving.activity_sort_at, scoped.activity_sort_at) AS activity_sort_at,
-       COALESCE(serving.llm_status_key, 'unanswered') AS llm_status_key,
-       COALESCE(serving.human_status_key, 'unanswered') AS human_status_key,
-       COALESCE(serving.llm_judged_prompt_count, 0) AS llm_judged_prompt_count,
-       COALESCE(serving.enabled_prompt_count, 0) AS enabled_prompt_count,
-       COALESCE(serving.human_answered_prompt_count, 0) AS human_answered_prompt_count,
        scoped.sort_key AS article_created_at
      FROM serving_template template
      INNER JOIN scoped_article scoped

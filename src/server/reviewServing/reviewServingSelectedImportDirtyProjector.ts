@@ -308,11 +308,6 @@ const selectedImportServingColumns = [
   'article_id',
   'sort_key',
   'activity_sort_at',
-  'llm_status_key',
-  'human_status_key',
-  'llm_judged_prompt_count',
-  'enabled_prompt_count',
-  'human_answered_prompt_count',
   'article_created_at',
 ].join(', ')
 
@@ -552,10 +547,7 @@ const getApplySelectedImportServingStatements = (input: {
             article_created_at,
             sort_key,
             activity_sort_at,
-            selected_rank_key,
-            llm_judged_prompt_count,
-            enabled_prompt_count,
-            human_answered_prompt_count
+            selected_rank_key
           )
           SELECT
             template.project_id,
@@ -568,10 +560,7 @@ const getApplySelectedImportServingStatements = (input: {
             article.article_created_at,
             COALESCE(article.article_created_at, current_timestamp) AS sort_key,
             COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
-            changed.selected_rank_key,
-            0 AS llm_judged_prompt_count,
-            0 AS enabled_prompt_count,
-            0 AS human_answered_prompt_count
+            changed.selected_rank_key
           FROM changed
           INNER JOIN app."article" article
             ON article.id = changed.article_id
@@ -599,11 +588,6 @@ const getApplySelectedImportServingStatements = (input: {
             serving.article_id,
             serving.sort_key,
             serving.activity_sort_at,
-            serving.llm_status_key,
-            serving.human_status_key,
-            serving.llm_judged_prompt_count,
-            serving.enabled_prompt_count,
-            serving.human_answered_prompt_count,
             serving.article_created_at
          FROM mart.review_article_serving_v4 serving
          INNER JOIN changed

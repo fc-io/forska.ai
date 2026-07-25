@@ -706,32 +706,16 @@ const getApplyLlmStatusServingStatement = (input: {
             AND newer.article_id = candidate.article_id
             AND newer.prompt_id = candidate.prompt_id
         )
-      ), article_status AS (
-        SELECT
-          review_config_hash,
-          list_mode_key,
-          article_id,
-          COUNT(*) FILTER (WHERE NOT tombstone) AS enabled_prompt_count,
-          COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered') AS llm_judged_prompt_count
-        FROM latest_prompt
-        GROUP BY review_config_hash, list_mode_key, article_id
       )
       UPDATE mart.review_article_serving_v4 serving
       SET
-        enabled_prompt_count = CAST(article_status.enabled_prompt_count AS INTEGER),
-        llm_judged_prompt_count = CAST(article_status.llm_judged_prompt_count AS INTEGER),
-        llm_status_key = CASE
-          WHEN article_status.enabled_prompt_count = 0 THEN NULL
-          WHEN article_status.enabled_prompt_count = article_status.llm_judged_prompt_count THEN 'answered'
-          ELSE 'unanswered'
-        END,
         patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)})
-      FROM article_status
+      FROM changed_article
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-        AND serving.review_config_hash = article_status.review_config_hash
+        AND serving.review_config_hash = changed_article.review_config_hash
         AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND serving.list_mode_key = article_status.list_mode_key
-        AND serving.article_id = article_status.article_id
+        AND serving.list_mode_key = changed_article.list_mode_key
+        AND serving.article_id = changed_article.article_id
         AND EXISTS (
           SELECT 1
           FROM app.review_serving_snapshot_manifest snapshot
@@ -793,31 +777,18 @@ const getApplyLlmStatusServingReplacementStatements = (input: {
               AND newer.article_id = candidate.article_id
               AND newer.prompt_id = candidate.prompt_id
           )
-        ), article_status AS (
-          SELECT
-            review_config_hash,
-            list_mode_key,
-            article_id,
-            COUNT(*) FILTER (WHERE NOT tombstone) AS enabled_prompt_count,
-            COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered') AS llm_judged_prompt_count
+        ), changed_article AS (
+          SELECT DISTINCT review_config_hash, list_mode_key, article_id
           FROM latest_prompt
-          GROUP BY review_config_hash, list_mode_key, article_id
         )
         SELECT serving.* REPLACE (
-          CAST(article_status.enabled_prompt_count AS INTEGER) AS enabled_prompt_count,
-          CAST(article_status.llm_judged_prompt_count AS INTEGER) AS llm_judged_prompt_count,
-          CASE
-            WHEN article_status.enabled_prompt_count = 0 THEN NULL
-            WHEN article_status.enabled_prompt_count = article_status.llm_judged_prompt_count THEN 'answered'
-            ELSE 'unanswered'
-          END AS llm_status_key,
           GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark
         )
         FROM mart.review_article_serving_v4 serving
-        INNER JOIN article_status
-          ON serving.review_config_hash = article_status.review_config_hash
-          AND serving.list_mode_key = article_status.list_mode_key
-          AND serving.article_id = article_status.article_id
+        INNER JOIN changed_article
+          ON serving.review_config_hash = changed_article.review_config_hash
+          AND serving.list_mode_key = changed_article.list_mode_key
+          AND serving.article_id = changed_article.article_id
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
           AND EXISTS (
@@ -863,9 +834,6 @@ const getResetEmptyLlmStatusServingReplacementStatements = (input: {
   return [
     `CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS
      SELECT serving.* REPLACE (
-       0 AS enabled_prompt_count,
-       0 AS llm_judged_prompt_count,
-       NULL AS llm_status_key,
        GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark
      )
      FROM mart.review_article_serving_v4 serving

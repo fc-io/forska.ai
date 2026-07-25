@@ -1697,12 +1697,7 @@ test('DuckDB migration drops article serving selected-import route copy while pr
 
         const rows = await database.queryJson(\`
           SELECT
-            article_id AS articleId,
-            llm_status_key AS llmStatusKey,
-            human_status_key AS humanStatusKey,
-            llm_judged_prompt_count AS llmJudgedPromptCount,
-            enabled_prompt_count AS enabledPromptCount,
-            human_answered_prompt_count AS humanAnsweredPromptCount
+            article_id AS articleId
           FROM mart.review_article_serving_v4
         \`)
         const columns = await database.queryJson(\`
@@ -1754,14 +1749,7 @@ test('DuckDB migration drops article serving selected-import route copy while pr
       columns: {columnName: string}[]
       indexes: {indexName: string}[]
       migrationRows: {name: string}[]
-      rows: {
-        articleId: string
-        enabledPromptCount: number
-        humanAnsweredPromptCount: number
-        humanStatusKey: string
-        llmJudgedPromptCount: number
-        llmStatusKey: string
-      }[]
+      rows: {articleId: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -1770,20 +1758,16 @@ test('DuckDB migration drops article serving selected-import route copy while pr
     )
 
     expect(columnNames.has('selected_import_route_id')).toBe(false)
+    expect(columnNames.has('llm_status_key')).toBe(false)
+    expect(columnNames.has('human_status_key')).toBe(false)
+    expect(columnNames.has('llm_judged_prompt_count')).toBe(false)
+    expect(columnNames.has('enabled_prompt_count')).toBe(false)
+    expect(columnNames.has('human_answered_prompt_count')).toBe(false)
     expect(parsed.indexes).toEqual([
       {indexName: 'idx_review_article_serving_v4_order'},
       {indexName: 'idx_review_article_serving_v4_repaired_pk'},
     ])
-    expect(parsed.rows).toEqual([
-      {
-        articleId: 'article-1',
-        enabledPromptCount: 4,
-        humanAnsweredPromptCount: 5,
-        humanStatusKey: 'answered',
-        llmJudgedPromptCount: 3,
-        llmStatusKey: 'included',
-      },
-    ])
+    expect(parsed.rows).toEqual([{articleId: 'article-1'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -1895,12 +1879,7 @@ test('DuckDB migration drops article serving updated-at while preserving rows an
 
         const rows = await database.queryJson(\`
           SELECT
-            article_id AS articleId,
-            llm_status_key AS llmStatusKey,
-            human_status_key AS humanStatusKey,
-            llm_judged_prompt_count AS llmJudgedPromptCount,
-            enabled_prompt_count AS enabledPromptCount,
-            human_answered_prompt_count AS humanAnsweredPromptCount
+            article_id AS articleId
           FROM mart.review_article_serving_v4
         \`)
         const columns = await database.queryJson(\`
@@ -1952,14 +1931,7 @@ test('DuckDB migration drops article serving updated-at while preserving rows an
       columns: {columnName: string}[]
       indexes: {indexName: string}[]
       migrationRows: {name: string}[]
-      rows: {
-        articleId: string
-        enabledPromptCount: number
-        humanAnsweredPromptCount: number
-        humanStatusKey: string
-        llmJudgedPromptCount: number
-        llmStatusKey: string
-      }[]
+      rows: {articleId: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -1968,20 +1940,16 @@ test('DuckDB migration drops article serving updated-at while preserving rows an
     )
 
     expect(columnNames.has('serving_updated_at')).toBe(false)
+    expect(columnNames.has('llm_status_key')).toBe(false)
+    expect(columnNames.has('human_status_key')).toBe(false)
+    expect(columnNames.has('llm_judged_prompt_count')).toBe(false)
+    expect(columnNames.has('enabled_prompt_count')).toBe(false)
+    expect(columnNames.has('human_answered_prompt_count')).toBe(false)
     expect(parsed.indexes).toEqual([
       {indexName: 'idx_review_article_serving_v4_order'},
       {indexName: 'idx_review_article_serving_v4_repaired_pk'},
     ])
-    expect(parsed.rows).toEqual([
-      {
-        articleId: 'article-1',
-        enabledPromptCount: 4,
-        humanAnsweredPromptCount: 5,
-        humanStatusKey: 'answered',
-        llmJudgedPromptCount: 3,
-        llmStatusKey: 'included',
-      },
-    ])
+    expect(parsed.rows).toEqual([{articleId: 'article-1'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
