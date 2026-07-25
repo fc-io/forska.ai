@@ -643,14 +643,6 @@ test('project prompt preview uses the first project article and shared prompt bu
       snapshot_id,
       base_generation,
       patch_watermark,
-      display_identity,
-      project_scope_identity,
-      selected_import_identity,
-      llm_status_identity,
-      human_status_identity,
-      posting_identity,
-      summary_identity,
-      payload_identity,
       list_mode_key,
       article_id,
       article_created_at,
@@ -664,14 +656,6 @@ test('project prompt preview uses the first project article and shared prompt bu
       'snapshot-preview-route',
       1,
       0,
-      'display:preview-identity',
-      'projectScope:preview-identity',
-      'selectedImport:preview-identity',
-      'llmStatus:preview-identity',
-      'humanStatus:preview-identity',
-      'posting:preview-identity',
-      'summary:preview-identity',
-      'payload:preview-identity',
       'llm',
       'preview-article-second',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
@@ -691,8 +675,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       article_created_at,
       source_metadata,
       abstract_text,
-      full_text_preview,
-      payload_bytes
+      full_text_preview
     ) VALUES (
       '${projectId}',
       'display:preview-identity',
@@ -702,8 +685,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       '{}'::JSON,
       'Second article summary',
-      NULL,
-      128
+      NULL
     )
   `)
 

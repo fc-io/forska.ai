@@ -1080,8 +1080,7 @@ const getPayloadRebuildChunkOutputChecksum = async (
         CAST(snapshot_id AS VARCHAR) || ':' ||
         CAST(display_identity AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(article_created_at AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(payload_bytes AS VARCHAR), ''),
+        COALESCE(CAST(article_created_at AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, display_identity, article_id
       ), '')) AS actualChecksum
     FROM mart.review_article_serving_payload_v4 payload
@@ -1102,7 +1101,7 @@ const getPayloadRebuildChunkOutputCount = async (
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()},
-      CAST(COALESCE(SUM(payload_bytes), 0) AS INTEGER) AS actualPayloadBytes
+      NULL::INTEGER AS actualPayloadBytes
     FROM mart.review_article_serving_payload_v4 payload
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND payload_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}

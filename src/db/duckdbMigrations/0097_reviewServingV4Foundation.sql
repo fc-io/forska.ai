@@ -668,10 +668,8 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
   source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR,
-  payload_bytes BIGINT NOT NULL DEFAULT 0,
   payload_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, display_identity, payload_identity, snapshot_id, article_id),
-  CHECK (payload_bytes >= 0)
+  PRIMARY KEY(project_id, display_identity, payload_identity, snapshot_id, article_id)
 );
 
 CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
