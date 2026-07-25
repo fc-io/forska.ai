@@ -35,6 +35,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql',
   '../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql',
   '../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql',
+  '../../db/duckdbMigrations/0134_dropReviewArticleServingReviewProgressCopy.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -96,6 +97,8 @@ const reviewPayloadBytesDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql']
 const reviewFilterPostingServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql']
+const reviewArticleServingReviewProgressCopyDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0134_dropReviewArticleServingReviewProgressCopy.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -498,6 +501,8 @@ test('Phase 1 article serving schema preserves review table display metadata', (
     'summary_identity',
     'payload_identity',
     'selected_rank_key',
+    'review_opened',
+    'review_sections_completed',
   ]
   expect(
     [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
@@ -513,6 +518,11 @@ test('Phase 1 article serving schema preserves review table display metadata', (
   expect(reviewArticleServingSelectedRankCopyDropForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_v4_repair RENAME TO review_article_serving_v4;',
   )
+  expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_v4_repair',
+  )
+  expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_opened')
+  expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_sections_completed')
   expect(articleMetadataStatusForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_v4 ADD COLUMN IF NOT EXISTS article_updated_at TIMESTAMPTZ;',
   )

@@ -324,8 +324,6 @@ const selectedImportServingColumns = [
   'llm_judged_prompt_count',
   'enabled_prompt_count',
   'human_answered_prompt_count',
-  'review_opened',
-  'review_sections_completed',
   'serving_updated_at',
   'article_created_at',
   'article_updated_at',
@@ -595,8 +593,6 @@ const getApplySelectedImportServingStatements = (input: {
             llm_judged_prompt_count,
             enabled_prompt_count,
             human_answered_prompt_count,
-            review_opened,
-            review_sections_completed,
             serving_updated_at
           )
           SELECT
@@ -631,8 +627,6 @@ const getApplySelectedImportServingStatements = (input: {
             0 AS llm_judged_prompt_count,
             0 AS enabled_prompt_count,
             0 AS human_answered_prompt_count,
-            FALSE AS review_opened,
-            0 AS review_sections_completed,
             current_timestamp AS serving_updated_at
           FROM changed
           INNER JOIN app."article" article
@@ -675,8 +669,6 @@ const getApplySelectedImportServingStatements = (input: {
             serving.llm_judged_prompt_count,
             serving.enabled_prompt_count,
             serving.human_answered_prompt_count,
-            serving.review_opened,
-            serving.review_sections_completed,
             current_timestamp AS serving_updated_at,
             serving.article_created_at,
             serving.article_updated_at,
