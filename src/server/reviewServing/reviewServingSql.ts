@@ -258,8 +258,6 @@ const reviewServingArticleSelectColumns = [
   'llm_judged_prompt_count',
   'enabled_prompt_count',
   'human_answered_prompt_count',
-  'review_opened',
-  'review_sections_completed',
   'serving_updated_at',
 ].map((column) => {
   return `${reviewServingArticleTable}.${column}`
