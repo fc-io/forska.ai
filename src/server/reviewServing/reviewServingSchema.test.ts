@@ -36,6 +36,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql',
   '../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql',
   '../../db/duckdbMigrations/0134_dropReviewArticleServingReviewProgressCopy.sql',
+  '../../db/duckdbMigrations/0135_reviewServingJudgmentDetailPromptScalars.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -79,6 +80,8 @@ const reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql']
 const reviewJudgmentDetailIsAnsweredForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql']
+const reviewJudgmentDetailPromptScalarsForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0135_reviewServingJudgmentDetailPromptScalars.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -654,6 +657,10 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'prompt_id',
       'payload_kind',
       'is_answered',
+      'prompt_original_text',
+      'prompt_heading',
+      'prompt_type',
+      'prompt_criteria_disposition',
       'judgment_payload_json',
       'placeholder_kind',
     ]),
@@ -679,6 +686,21 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
     "TRY_CAST(json_extract_string(judgment_payload_json, '$.isAnswered') AS BOOLEAN)",
   )
   expect(reviewJudgmentDetailIsAnsweredForwardMigrationSql).toContain(
+    'RENAME TO review_article_judgment_detail_serving_v4',
+  )
+  expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_prompt_scalars_next',
+  )
+  expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain('prompt_original_text VARCHAR')
+  expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain('prompt_heading VARCHAR')
+  expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain('prompt_type VARCHAR')
+  expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain(
+    'prompt_criteria_disposition project_prompt_criteria_disposition_v2',
+  )
+  expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain(
+    'CASE WHEN placeholder_kind IS NOT NULL THEN NULL ELSE judgment_payload_json END AS judgment_payload_json',
+  )
+  expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain(
     'RENAME TO review_article_judgment_detail_serving_v4',
   )
   expect(countScopeForwardMigrationSql).toContain(

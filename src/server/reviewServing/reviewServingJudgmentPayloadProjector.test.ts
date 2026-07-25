@@ -152,6 +152,11 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(llmInsert).toContain('PARTITION BY assessment.judgment_id')
   expect(llmInsert).toContain('assessment.assessment_rank = 1')
   expect(llmInsert).toContain('prompt.original_text AS prompt_original_text')
+  expect(llmInsert).toContain('payload.prompt_original_text')
+  expect(llmInsert).toContain('payload.prompt_heading')
+  expect(llmInsert).toContain('payload.prompt_type')
+  expect(llmInsert).toContain('payload.prompt_criteria_disposition')
+  expect(llmInsert).toContain('CASE WHEN payload.placeholder_kind IS NOT NULL THEN NULL ELSE json_object(')
   expect(llmInsert).toContain('provider_connection.provider_kind AS model_provider')
   expect(llmInsert).toContain("json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking")
   expect(llmInsert).toContain('INNER JOIN article_id_filter dirty ON dirty.article_id = scope.article_id')
@@ -172,6 +177,10 @@ test('human payload projection filters rows by active human judgment mode', asyn
 
   expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'prompt'")
   expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'summary'")
+  expect(humanSelect).toContain('payload.prompt_original_text')
+  expect(humanSelect).toContain('payload.prompt_heading')
+  expect(humanSelect).toContain('payload.prompt_type')
+  expect(humanSelect).toContain('payload.prompt_criteria_disposition')
   expect(humanSelect).toContain(
     "judgment_human_summary.answer IS NOT NULL OR judgment_human_summary.origin = 'covidence_import' AS is_answered",
   )

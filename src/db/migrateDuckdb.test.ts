@@ -498,11 +498,14 @@ test('DuckDB migration drops selected-import display-copy columns while preservi
   }
 })
 
-test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
+test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift and prompt scalar shape', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
-  const targetMigrationFile = '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'
+  const targetMigrationFiles = new Set([
+    '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql',
+    '0135_reviewServingJudgmentDetailPromptScalars.sql',
+  ])
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
-    return fileName !== targetMigrationFile
+    return !targetMigrationFiles.has(fileName)
   })
   const result = globalThis.Bun.spawnSync(
     [
@@ -522,6 +525,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         const database = getAppDatabaseService()
         await database.run('CREATE SCHEMA IF NOT EXISTS app')
         await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run("CREATE TYPE project_prompt_criteria_disposition_v2 AS ENUM ('include', 'exclude', 'combined')")
         await database.run(
           "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
         )
@@ -597,21 +601,37 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
             judgment_payload_json,
             placeholder_kind
           )
-          VALUES (
-            'project-a',
-            'config-a',
-            'snapshot-a',
-            'global',
-            'article-a',
-            'prompt-a',
-            1,
-            'judgment-a',
-            'model-a',
-            'include',
-            ['include'],
-            '{"answer":"include"}',
-            NULL
-          )
+          VALUES
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'global',
+              'article-a',
+              'prompt-a',
+              1,
+              'judgment-a',
+              'model-a',
+              'include',
+              ['include'],
+              '{"answer":"include","prompt":{"criteriaDisposition":"include","originalText":"Prompt A text","promptHeading":"Prompt A","type":"yes_no"}}',
+              NULL
+            ),
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'global',
+              'article-b',
+              'prompt-b',
+              2,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              '{"isAnswered":false,"prompt":{"criteriaDisposition":"exclude","originalText":"Prompt B text","promptHeading":"Prompt B","type":"yes_no"}}',
+              'llm.unanswered'
+            )
         \`)
         await database.run(\`
           INSERT INTO app.review_rebuild_request (request_id, project_id, status, admission_state, retry_after, failed_at, last_error, created_at)
@@ -663,7 +683,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           "SELECT admission_state AS admissionState, last_error AS lastError, retry_after AS retryAfter, retry_count AS retryCount, status FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
         )
         const rows = await database.queryJson(
-          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId FROM mart.review_article_judgment_detail_serving_v4 ORDER BY project_id"
+          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, judgment_payload_json AS judgmentPayloadJson, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
         )
         const requestRows = await database.queryJson(
           "SELECT admission_state AS admissionState, failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
@@ -691,7 +711,10 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
             () => false,
           )
 
-        console.log(JSON.stringify({chunkRows, duplicatePayloadKindAccepted, primaryKeyRows, requestRows, rows}))
+        const columns = await database.queryJson(
+          "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' ORDER BY ordinal_position"
+        )
+        console.log(JSON.stringify({chunkRows, columns, duplicatePayloadKindAccepted, primaryKeyRows, requestRows, rows}))
         await database.close()
       `,
     ],
@@ -723,6 +746,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       duplicatePayloadKindAccepted: boolean
+      columns: Array<{columnName: string}>
       chunkRows: Array<{
         admissionState: string
         lastError: string | null
@@ -738,7 +762,16 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         retryAfter: string | null
         status: string
       }>
-      rows: Array<{judgmentId: string; payloadKind: string; projectId: string}>
+      rows: Array<{
+        judgmentId: string | null
+        judgmentPayloadJson: unknown
+        payloadKind: string
+        placeholderKind: string | null
+        projectId: string
+        promptCriteriaDisposition: string | null
+        promptHeading: string | null
+        promptOriginalText: string | null
+      }>
     }
 
     expect(parsed.chunkRows).toEqual([
@@ -747,7 +780,54 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     expect(parsed.requestRows).toEqual([
       {admissionState: 'admitted', failedAt: null, lastError: null, retryAfter: null, status: 'admitted'},
     ])
-    expect(parsed.rows).toEqual([{judgmentId: 'judgment-a', payloadKind: 'llm', projectId: 'project-a'}])
+    expect(
+      parsed.columns.map((row) => {
+        return row.columnName
+      }),
+    ).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'list_mode_key',
+      'payload_kind',
+      'article_id',
+      'prompt_id',
+      'prompt_order',
+      'judgment_id',
+      'model_id',
+      'is_answered',
+      'answered_original',
+      'answered_original_as_array',
+      'prompt_original_text',
+      'prompt_heading',
+      'prompt_type',
+      'prompt_criteria_disposition',
+      'judgment_payload_json',
+      'placeholder_kind',
+      'detail_updated_at',
+    ])
+    expect(parsed.rows).toEqual([
+      {
+        judgmentId: 'judgment-a',
+        judgmentPayloadJson: expect.anything() as unknown,
+        payloadKind: 'llm',
+        placeholderKind: null,
+        projectId: 'project-a',
+        promptCriteriaDisposition: 'include',
+        promptHeading: 'Prompt A',
+        promptOriginalText: 'Prompt A text',
+      },
+      {
+        judgmentId: null,
+        judgmentPayloadJson: null,
+        payloadKind: 'llm',
+        placeholderKind: 'llm.unanswered',
+        projectId: 'project-a',
+        promptCriteriaDisposition: 'exclude',
+        promptHeading: 'Prompt B',
+        promptOriginalText: 'Prompt B text',
+      },
+    ])
     expect(parsed.primaryKeyRows).toEqual([
       {
         columnNames: [

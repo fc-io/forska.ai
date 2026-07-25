@@ -547,7 +547,7 @@ test('project export download hydrates completed durable job selection as CSV', 
     }
 
     if (statement.includes(judgmentDetailServingFixtureTable)) {
-      if (statement.includes("'$.prompt.promptHeading'")) {
+      if (statement.includes('detail.prompt_heading AS promptHeading')) {
         return [
           {
             id: 'prompt-1',
@@ -611,13 +611,12 @@ test('project export serving queries preserve judgment payload JSON consumers', 
     routeText.indexOf('const getAnswerValue'),
   )
 
-  expect(promptMetadataQuery).toContain(
-    "json_extract_string(detail.judgment_payload_json, '$.prompt.promptHeading') AS promptHeading",
-  )
-  expect(promptMetadataQuery).toContain(
-    "json_extract_string(detail.judgment_payload_json, '$.prompt.originalText') AS originalText",
-  )
-  expect(promptMetadataQuery).toContain("json_extract_string(detail.judgment_payload_json, '$.prompt.type') AS type")
+  expect(promptMetadataQuery).toContain('detail.prompt_heading AS promptHeading')
+  expect(promptMetadataQuery).toContain('detail.prompt_original_text AS originalText')
+  expect(promptMetadataQuery).toContain('detail.prompt_type AS type')
+  expect(promptMetadataQuery).not.toContain("'$.prompt.promptHeading'")
+  expect(promptMetadataQuery).not.toContain("'$.prompt.originalText'")
+  expect(promptMetadataQuery).not.toContain("'$.prompt.type'")
 
   expect(judgmentExportQuery).toContain(
     "json_extract_string(detail.judgment_payload_json, '$.explanation') AS explanation",

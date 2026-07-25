@@ -297,9 +297,9 @@ const getExportPromptDetails = async (input: {
       export_prompt(prompt_id) AS (VALUES ${promptRows})
     SELECT
       detail.prompt_id AS id,
-      json_extract_string(detail.judgment_payload_json, '$.prompt.promptHeading') AS promptHeading,
-      json_extract_string(detail.judgment_payload_json, '$.prompt.originalText') AS originalText,
-      json_extract_string(detail.judgment_payload_json, '$.prompt.type') AS type,
+      detail.prompt_heading AS promptHeading,
+      detail.prompt_original_text AS originalText,
+      detail.prompt_type AS type,
       export_scope.source_project_order AS sourceProjectOrder
     FROM export_scope
     INNER JOIN mart.review_article_judgment_detail_serving_v4 detail

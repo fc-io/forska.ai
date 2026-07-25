@@ -350,6 +350,10 @@ const getLlmJudgmentDirectInsertStatement = (
         is_answered,
         answered_original,
         answered_original_as_array,
+        prompt_original_text,
+        prompt_heading,
+        prompt_type,
+        prompt_criteria_disposition,
         judgment_payload_json,
         placeholder_kind,
         detail_updated_at
@@ -455,7 +459,11 @@ const getLlmJudgmentDirectInsertStatement = (
         payload.is_answered,
         payload.answered_original,
         payload.answered_original_as_array,
-        ${getSqlLlmJudgmentPayload('payload')} AS judgment_payload_json,
+        payload.prompt_original_text,
+        payload.prompt_heading,
+        payload.prompt_type,
+        payload.prompt_criteria_disposition,
+        CASE WHEN payload.placeholder_kind IS NOT NULL THEN NULL ELSE ${getSqlLlmJudgmentPayload('payload')} END AS judgment_payload_json,
         payload.placeholder_kind,
         COALESCE(payload.judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
@@ -487,6 +495,10 @@ const getHumanJudgmentDirectInsertStatement = (
         is_answered,
         answered_original,
         answered_original_as_array,
+        prompt_original_text,
+        prompt_heading,
+        prompt_type,
+        prompt_criteria_disposition,
         judgment_payload_json,
         placeholder_kind,
         detail_updated_at
@@ -572,6 +584,10 @@ const getHumanJudgmentDirectInsertStatement = (
         payload.is_answered,
         payload.answer AS answered_original,
         CASE WHEN payload.answer IS NULL THEN NULL ELSE [payload.answer] END AS answered_original_as_array,
+        payload.prompt_original_text,
+        payload.prompt_heading,
+        payload.prompt_type,
+        payload.prompt_criteria_disposition,
         ${getSqlHumanJudgmentPayload('payload')} AS judgment_payload_json,
         NULL AS placeholder_kind,
         COALESCE(payload.human_judgment_updated_at, current_timestamp) AS detail_updated_at

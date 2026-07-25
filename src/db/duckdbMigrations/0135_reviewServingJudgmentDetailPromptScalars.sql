@@ -1,6 +1,6 @@
-DROP TABLE IF EXISTS mart.review_article_judgment_detail_serving_v4_is_answered_next;
+DROP TABLE IF EXISTS mart.review_article_judgment_detail_serving_v4_prompt_scalars_next;
 
-CREATE TABLE mart.review_article_judgment_detail_serving_v4_is_answered_next (
+CREATE TABLE mart.review_article_judgment_detail_serving_v4_prompt_scalars_next (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE mart.review_article_judgment_detail_serving_v4_is_answered_next (
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)
 );
 
-INSERT INTO mart.review_article_judgment_detail_serving_v4_is_answered_next (
+INSERT INTO mart.review_article_judgment_detail_serving_v4_prompt_scalars_next (
   project_id,
   review_config_hash,
   snapshot_id,
@@ -57,25 +57,21 @@ SELECT
   prompt_order,
   judgment_id,
   model_id,
-  COALESCE(
-    TRY_CAST(json_extract_string(judgment_payload_json, '$.isAnswered') AS BOOLEAN),
-    answered_original IS NOT NULL,
-    FALSE
-  ) AS is_answered,
+  is_answered,
   answered_original,
   answered_original_as_array,
-  prompt_original_text,
-  prompt_heading,
-  prompt_type,
-  prompt_criteria_disposition,
-  judgment_payload_json,
+  json_extract_string(judgment_payload_json, '$.prompt.originalText') AS prompt_original_text,
+  json_extract_string(judgment_payload_json, '$.prompt.promptHeading') AS prompt_heading,
+  json_extract_string(judgment_payload_json, '$.prompt.type') AS prompt_type,
+  TRY_CAST(json_extract_string(judgment_payload_json, '$.prompt.criteriaDisposition') AS project_prompt_criteria_disposition_v2) AS prompt_criteria_disposition,
+  CASE WHEN placeholder_kind IS NOT NULL THEN NULL ELSE judgment_payload_json END AS judgment_payload_json,
   placeholder_kind,
   detail_updated_at
 FROM mart.review_article_judgment_detail_serving_v4;
 
 DROP TABLE mart.review_article_judgment_detail_serving_v4;
 
-ALTER TABLE mart.review_article_judgment_detail_serving_v4_is_answered_next
+ALTER TABLE mart.review_article_judgment_detail_serving_v4_prompt_scalars_next
 RENAME TO review_article_judgment_detail_serving_v4;
 
 CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article
