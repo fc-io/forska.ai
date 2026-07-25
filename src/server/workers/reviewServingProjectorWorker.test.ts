@@ -157,10 +157,21 @@ const createWorkerHarness = (input?: {
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
   const dependencies: ReviewServingProjectorWorkerDependencies = {
-    cleanupRetentionState: async (cleanupInput: {projectId: string; reviewConfigHash?: string | null}) => {
+    cleanupRetentionState: async (cleanupInput: {
+      batchSize?: number
+      projectId: string
+      reviewConfigHash?: string | null
+    }) => {
       cleanupInputs.push(cleanupInput)
 
-      return {retentionScope: cleanupInput.projectId}
+      return {
+        cleanupBatchSize: cleanupInput.batchSize ?? 0,
+        cleanupSpecKind: 'snapshot',
+        cleanupTable: 'mart.review_article_serving_v4',
+        cleanupTableIndex: 0,
+        nextCleanupTableIndex: 1,
+        retentionScope: cleanupInput.projectId,
+      }
     },
     getCleanupTargets: async () => {
       return input?.cleanupTargets ?? []
@@ -4216,7 +4227,20 @@ test('worker schedules cleanup only after its cleanup interval elapses', async (
 
   expect(skipped.cleanup.status).toBe('skipped')
   expect(skippedHarness.cleanupInputs).toEqual([])
-  expect(completed.cleanup).toEqual({retentionScopes: ['project-1'], status: 'completed'})
+  expect(completed.cleanup).toEqual({
+    retentionCleanups: [
+      {
+        cleanupBatchSize: 10,
+        cleanupSpecKind: 'snapshot',
+        cleanupTable: 'mart.review_article_serving_v4',
+        cleanupTableIndex: 0,
+        nextCleanupTableIndex: 1,
+        retentionScope: 'project-1',
+      },
+    ],
+    retentionScopes: ['project-1'],
+    status: 'completed',
+  })
   expect(completed.nextCleanupAtMs).toBe(62_000)
 })
 

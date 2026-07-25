@@ -17,7 +17,19 @@ export type ReviewServingRetentionCleanupInput = {
   reviewConfigHash?: string | null
 }
 
-export type ReviewServingRetentionCleanupResult = {retentionScope: string}
+export type ReviewServingRetentionCleanupSpecKind =
+  | 'snapshot'
+  | 'terminalRebuildChunkManifest'
+  | 'terminalRebuildPartial'
+
+export type ReviewServingRetentionCleanupResult = {
+  cleanupBatchSize: number
+  cleanupSpecKind: ReviewServingRetentionCleanupSpecKind
+  cleanupTable: string
+  cleanupTableIndex: number
+  nextCleanupTableIndex: number
+  retentionScope: string
+}
 
 type RetentionStateRow = {
   baseGeneration: number | null
@@ -27,7 +39,7 @@ type RetentionStateRow = {
 }
 
 type CleanupTableSpec = {
-  kind?: 'snapshot' | 'terminalRebuildChunkManifest' | 'terminalRebuildPartial'
+  kind?: ReviewServingRetentionCleanupSpecKind
   keyColumn: string
   orderBy?: string
   protectedPredicate: string
@@ -445,10 +457,12 @@ export const cleanupReviewServingRetentionState = async (
 
     await deleteCleanupBatch({...input, spec}, tx)
 
+    const nextCleanupTableIndex = (boundedTableIndex + 1) % retentionTableSpecCount
+
     await writeRetentionMark(
       {
         baseGeneration: Number(retentionState?.baseGeneration ?? 0),
-        cursor: {tableIndex: (boundedTableIndex + 1) % retentionTableSpecCount},
+        cursor: {tableIndex: nextCleanupTableIndex},
         patchWatermark: Number(retentionState?.patchWatermark ?? 0),
         retentionScope,
         snapshotId: retentionState?.snapshotId ?? null,
@@ -456,7 +470,14 @@ export const cleanupReviewServingRetentionState = async (
       tx,
     )
 
-    return {retentionScope}
+    return {
+      cleanupBatchSize: input.batchSize,
+      cleanupSpecKind: spec.kind ?? 'snapshot',
+      cleanupTable: spec.table,
+      cleanupTableIndex: boundedTableIndex,
+      nextCleanupTableIndex,
+      retentionScope,
+    }
   })
 }
 

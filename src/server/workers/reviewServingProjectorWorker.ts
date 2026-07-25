@@ -82,6 +82,7 @@ import {
   cleanupReviewServingRetentionState,
   getReviewServingRetentionCleanupTargets,
   type ReviewServingRetentionCleanupInput,
+  type ReviewServingRetentionCleanupResult,
   type ReviewServingRetentionServiceDatabase,
 } from '../reviewServing/reviewServingRetentionService.ts'
 import {projectReviewServingSelectedImportDirty} from '../reviewServing/reviewServingSelectedImportDirtyProjector.ts'
@@ -272,8 +273,16 @@ type ReviewServingProjectorWorkerChunkResult =
   | {chunkId: string; requestId: string | null; status: 'skipped'}
 
 type ReviewServingProjectorWorkerCleanupResult =
-  | {retentionScopes: readonly string[]; status: 'completed'}
-  | {retentionScopes: readonly string[]; status: 'skipped'}
+  | {
+      retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
+      retentionScopes: readonly string[]
+      status: 'completed'
+    }
+  | {
+      retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
+      retentionScopes: readonly string[]
+      status: 'skipped'
+    }
 
 type ReviewServingProjectorWorkerDeltaIntakeResult = {
   convertedPartitions: number
@@ -6380,6 +6389,8 @@ const logReviewServingProjectorWorkerCycle = (result: ReviewServingProjectorWork
       chunkId: result.chunk.chunkId,
       chunkRequestId: 'requestId' in result.chunk ? result.chunk.requestId : null,
       chunkStatus: result.chunk.status,
+      cleanupRetentionCleanups: result.cleanup.retentionCleanups,
+      cleanupRetentionScopes: result.cleanup.retentionScopes,
       cleanupStatus: result.cleanup.status,
       component: 'reviewServingProjectorWorker',
       deltaIntakeStatus: result.deltaIntake.status,
@@ -8340,24 +8351,30 @@ const runReviewServingProjectorWorkerCleanup = async ({
   const lastCleanupAtMs = options.lastCleanupAtMs ?? null
 
   if (!shouldRunCleanup({cleanupIntervalMs, lastCleanupAtMs, nowMs})) {
-    return {retentionScopes: [], status: 'skipped'}
+    return {retentionCleanups: [], retentionScopes: [], status: 'skipped'}
   }
 
   const cleanupTargets = await dependencies.getCleanupTargets?.(database)
   const cleanupRetentionState = dependencies.cleanupRetentionState
 
   if (!cleanupRetentionState || cleanupTargets === undefined || cleanupTargets.length === 0) {
-    return {retentionScopes: [], status: 'skipped'}
+    return {retentionCleanups: [], retentionScopes: [], status: 'skipped'}
   }
 
-  const retentionScopes = await cleanupTargets.reduce<Promise<string[]>>(async (previousScopes, target) => {
-    const scopes = await previousScopes
-    const cleanup = await cleanupRetentionState(target, database)
+  const retentionCleanups = await cleanupTargets.reduce<Promise<ReviewServingRetentionCleanupResult[]>>(
+    async (previousCleanups, target) => {
+      const cleanups = await previousCleanups
+      const cleanup = await cleanupRetentionState(target, database)
 
-    return [...scopes, cleanup.retentionScope]
-  }, Promise.resolve([]))
+      return [...cleanups, cleanup]
+    },
+    Promise.resolve([]),
+  )
+  const retentionScopes = retentionCleanups.map((cleanup) => {
+    return cleanup.retentionScope
+  })
 
-  return {retentionScopes, status: 'completed'}
+  return {retentionCleanups, retentionScopes, status: 'completed'}
 }
 
 const getDeltaIntakePartitions = async (database: ReviewServingProjectorWorkerDatabase, tableName: string) => {
@@ -8488,7 +8505,7 @@ export const runReviewServingProjectorWorkerCycle = async (
         },
       })
   const cleanup = shouldRunOnlyRebuildChunk
-    ? {retentionScopes: [], status: 'skipped' as const}
+    ? {retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
     : await runReviewServingProjectorWorkerCleanup({database, dependencies, options})
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
