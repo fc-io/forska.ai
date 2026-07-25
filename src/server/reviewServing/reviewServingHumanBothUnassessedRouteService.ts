@@ -401,6 +401,31 @@ const getPromptAnswerPredicates = (
   })
 }
 
+const getFlagPostingPredicates = (filters: ReturnType<typeof getRouteFilters>, startIndex = 0) => {
+  return [
+    {filterKind: 'duplicateFlag', enabled: Boolean(filters.duplicateFlag)},
+    {filterKind: 'conflictFlag', enabled: Boolean(filters.conflictFlag)},
+  ]
+    .filter((filter) => {
+      return filter.enabled
+    })
+    .map((filter, index) => {
+      const alias = `flag_filter_${startIndex + index}`
+
+      return `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 ${alias}
+        WHERE ${alias}.project_id = serving.project_id
+          AND ${alias}.review_config_hash = serving.review_config_hash
+          AND ${alias}.snapshot_id = serving.snapshot_id
+          AND ${alias}.list_mode_key = serving.list_mode_key
+          AND ${alias}.article_id = serving.article_id
+          AND ${alias}.filter_kind = ${getSqlLiteral(filter.filterKind)}
+          AND ${alias}.filter_value = 'true'
+      )`
+    })
+}
+
 const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, component: string) => {
   return [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
     return entry.component === component
@@ -513,8 +538,7 @@ const getFilteredCountValue = async (
       ${getUnassessedQueuePredicate(mode)}
       ${filters.articleCreatedAtFrom ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
       ${getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo)}
-      ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
-      ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
+      ${getFlagPostingPredicates(filters).join('\n')}
       ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
       ${typeof filters.humanStatus === 'string' ? `AND serving.human_status_key = ${getSqlLiteral(filters.humanStatus)}` : ''}
       ${getPromptAnswerPredicates(params, mode).join('\n')}
@@ -580,8 +604,7 @@ const getPromptAnswerFilteredCountValue = async (
       ${getUnassessedQueuePredicate(mode)}
       ${filters.articleCreatedAtFrom ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
       ${getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo)}
-      ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
-      ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
+      ${getFlagPostingPredicates(filters).join('\n')}
       ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
       ${typeof filters.humanStatus === 'string' ? `AND serving.human_status_key = ${getSqlLiteral(filters.humanStatus)}` : ''}
       ${remainingPromptPredicates}

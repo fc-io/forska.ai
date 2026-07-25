@@ -229,8 +229,12 @@ const getRouteFilterSqlMatch = (
   return [
     articleCreatedAtFrom ? containsSql(statement, `article_created_at >= TIMESTAMPTZ '${articleCreatedAtFrom}'`) : true,
     filters.articleCreatedAtTo ? containsSql(statement, "article_created_at < TIMESTAMPTZ '2026-02-01'") : true,
-    filters.duplicateFlag && !queueOrdering ? containsSql(statement, 'duplicate_flag = TRUE') : true,
-    filters.conflictFlag && !queueOrdering ? containsSql(statement, 'conflict_flag = TRUE') : true,
+    filters.duplicateFlag && !queueOrdering
+      ? containsSql(statement, "filter_kind = 'duplicateFlag'") && containsSql(statement, "'true'")
+      : true,
+    filters.conflictFlag && !queueOrdering
+      ? containsSql(statement, "filter_kind = 'conflictFlag'") && containsSql(statement, "'true'")
+      : true,
     filters.llmHasJudgment && !queueOrdering ? containsSql(statement, 'llm_judged_prompt_count > 0') : true,
     filters.llmStatus === 'complete' && !queueOrdering ? containsSql(statement, "llm_status_key = 'answered'") : true,
     humanStatus && !queueOrdering ? containsSql(statement, `human_status_key = '${humanStatus}'`) : true,
