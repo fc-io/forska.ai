@@ -104,7 +104,7 @@ const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing')
   return database
 }
 
-const createArticleRows = (articleCount: number, enabledPromptCount?: number) => {
+const createArticleRows = (articleCount: number) => {
   return Array.from({length: articleCount}, (_value, index) => {
     const articleNumber = index + 1
 
@@ -116,11 +116,9 @@ const createArticleRows = (articleCount: number, enabledPromptCount?: number) =>
       article_updated_at: null,
       arxiv_id: `2401.0000${articleNumber}`,
       doi: `10.1000/article-${articleNumber}`,
-      ...(enabledPromptCount ? {enabled_prompt_count: enabledPromptCount} : {}),
       full_text_conversion_status: 'converted',
       full_text_fetched_at: '2026-01-04T00:00:00.000Z',
       journal_title: 'Journal',
-      llm_status_key: 'answered',
       pmid: `1234${articleNumber}`,
       sort_key: `2026-01-01T00:00:00.${String(index).padStart(3, '0')}Z`,
       source_metadata: JSON.stringify({covidence: {studyId: `study-${articleNumber}`}}),
@@ -140,12 +138,12 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
         return [{totalCount}] as T[]
       }
 
-      if (statement.includes('FROM app.project')) {
-        return [{dateFrom: '2026-01-10T00:00:00.000Z', dateTo: '2026-01-20T00:00:00.000Z'}] as T[]
+      if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
+        return [{promptCount: enabledPromptCount ?? 1}] as T[]
       }
 
       if (statement.includes('FROM mart.review_article_serving_v4')) {
-        return createArticleRows(articleCount, enabledPromptCount) as T[]
+        return createArticleRows(articleCount) as T[]
       }
 
       if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
@@ -170,6 +168,10 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
             placeholder_kind: 'llm.unanswered',
           },
         ] as T[]
+      }
+
+      if (statement.includes('FROM app.project')) {
+        return [{dateFrom: '2026-01-10T00:00:00.000Z', dateTo: '2026-01-20T00:00:00.000Z'}] as T[]
       }
 
       return [{availability: 'ready', count_value: totalCount}] as T[]
@@ -238,7 +240,7 @@ test('LLM review route chunks judgment hydration above the reader article-set ca
   expect(judgmentStatements[2]).toContain('article-250')
 })
 
-test('LLM review route sizes judgment hydration chunks by enabled prompt count', async () => {
+test('LLM review route sizes judgment hydration chunks by bounded enabled prompt metadata', async () => {
   const reader = createReaderDatabase(51, 51, 200)
 
   await getLlmReviewArticlesFromServing(
@@ -295,8 +297,9 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
-  expect(reader.statements).toHaveLength(4)
+  expect(reader.statements).toHaveLength(5)
   expect(sql).toContain('FROM mart.review_article_serving_v4')
+  expect(sql).toContain('FROM app.project_prompt')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('LEFT JOIN app.article article')
   expect(sql).toContain('LEFT JOIN app.article_import_route_source_record selected_source')

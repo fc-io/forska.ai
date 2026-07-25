@@ -45,8 +45,6 @@ type ReviewServingArticleRow = {
   canonical_article_id?: string | null
   canonicalArticleId?: string | null
   doi?: string | null
-  enabled_prompt_count?: number | null
-  enabledPromptCount?: number | null
   full_text_pdf?: string | null
   full_text_fetched_at?: unknown
   full_text_conversion_status?: string | null
@@ -578,16 +576,27 @@ const getLlmSummaryAnswer = (
   return answers.length === 0 ? null : answers.includes('no') ? 'no' : answers.includes('maybe') ? 'maybe' : 'yes'
 }
 
-const getJudgmentPromptCount = (rows: readonly ReviewServingArticleRow[]) => {
-  const promptCounts = rows
-    .map((row) => {
-      return row.enabled_prompt_count ?? row.enabledPromptCount ?? 0
-    })
-    .filter((promptCount) => {
-      return promptCount > 0
-    })
+const getEnabledPromptCount = async (
+  projectId: string,
+  dependencies?: ReviewServingRouteDependencies,
+): Promise<number> => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const [row] = await database.queryJson<{promptCount?: number | null; prompt_count?: number | null}>(`
+    SELECT COUNT(*)::INTEGER AS promptCount
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+  `)
 
-  return promptCounts.length === 0 ? defaultJudgmentHydrationPromptCount : Math.max(...promptCounts)
+  return Number(row?.promptCount ?? row?.prompt_count ?? 0)
+}
+
+const getJudgmentHydrationPromptCount = (enabledPromptCount: number) => {
+  return enabledPromptCount > 0 ? enabledPromptCount : defaultJudgmentHydrationPromptCount
 }
 
 const getMaxJudgmentHydrationArticleIds = (promptCount: number) => {
@@ -651,10 +660,11 @@ const readJudgments = async (
   mode: 'both' | 'human',
   rows: readonly ReviewServingArticleRow[],
   kind: 'human' | 'llm',
+  enabledPromptCount: number,
   dependencies?: ReviewServingRouteDependencies,
 ) => {
   const articleIds = rows.map(getArticleId)
-  const promptCount = getJudgmentPromptCount(rows)
+  const promptCount = getJudgmentHydrationPromptCount(enabledPromptCount)
 
   return articleIds.length === 0
     ? []
@@ -723,6 +733,7 @@ export const getHumanReviewArticlesFromServing = async (
     throw new Error(reviewServingSnapshotUnavailableError)
   }
 
+  const enabledPromptCountPromise = getEnabledPromptCount(params.projectId, routeDependencies)
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
     dependencies: routeDependencies,
     label: 'human review rows',
@@ -735,9 +746,12 @@ export const getHumanReviewArticlesFromServing = async (
   })
   const pageRows = pageResult.rows
 
-  const humanRows = await readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', routeDependencies)
+  const enabledPromptCount = await enabledPromptCountPromise
+  const [humanRows, totalCount] = await Promise.all([
+    readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', enabledPromptCount, routeDependencies),
+    getCountValue(effectiveParams, manifest, 'human', routeDependencies),
+  ])
   const judgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
-  const totalCount = await getCountValue(effectiveParams, manifest, 'human', routeDependencies)
   const data = pageRows.map((row) => {
     const judgments = judgmentsByArticleId.get(getArticleId(row)) ?? []
     const summaryJudgment = judgments.find((judgment) => {
@@ -782,6 +796,7 @@ export const getBothReviewArticlesFromServing = async (
     throw new Error(reviewServingSnapshotUnavailableError)
   }
 
+  const enabledPromptCountPromise = getEnabledPromptCount(params.projectId, routeDependencies)
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
     dependencies: routeDependencies,
     label: 'both review rows',
@@ -794,13 +809,14 @@ export const getBothReviewArticlesFromServing = async (
   })
   const pageRows = pageResult.rows
 
-  const [llmRows, humanRows] = await Promise.all([
-    readJudgments(effectiveParams, manifest, 'both', pageRows, 'llm', routeDependencies),
-    readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', routeDependencies),
+  const enabledPromptCount = await enabledPromptCountPromise
+  const [llmRows, humanRows, totalCount] = await Promise.all([
+    readJudgments(effectiveParams, manifest, 'both', pageRows, 'llm', enabledPromptCount, routeDependencies),
+    readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', enabledPromptCount, routeDependencies),
+    getCountValue(effectiveParams, manifest, 'both', routeDependencies),
   ])
   const llmJudgmentsByArticleId = getLlmJudgmentsByArticleId(llmRows)
   const humanJudgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
-  const totalCount = await getCountValue(effectiveParams, manifest, 'both', routeDependencies)
   const data = pageRows.map((row) => {
     const articleId = getArticleId(row)
     const humanJudgments = humanJudgmentsByArticleId.get(articleId) ?? []

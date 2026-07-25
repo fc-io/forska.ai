@@ -39,8 +39,6 @@ type ReviewServingArticleRow = {
   canonical_article_id?: string | null
   canonicalArticleId?: string | null
   doi?: string | null
-  enabled_prompt_count?: number | null
-  enabledPromptCount?: number | null
   full_text_pdf?: string | null
   full_text_fetched_at?: unknown
   full_text_conversion_status?: string | null
@@ -49,8 +47,6 @@ type ReviewServingArticleRow = {
   fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
-  llm_status_key?: string | null
-  llmStatusKey?: string | null
   medrxiv_id?: string | null
   medrxivId?: string | null
   original_data?: unknown
@@ -425,16 +421,27 @@ const getJudgmentRowsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) =
     }, new Map<string, ArticlesReviewsResponse['data'][number]['judgments']>())
 }
 
-const getJudgmentPromptCount = (rows: readonly ReviewServingArticleRow[]) => {
-  const promptCounts = rows
-    .map((row) => {
-      return row.enabled_prompt_count ?? row.enabledPromptCount ?? 0
-    })
-    .filter((promptCount) => {
-      return promptCount > 0
-    })
+const getEnabledPromptCount = async (
+  projectId: string,
+  dependencies?: ReviewServingLlmReviewRouteDependencies,
+): Promise<number> => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const [row] = await database.queryJson<{promptCount?: number | null; prompt_count?: number | null}>(`
+    SELECT COUNT(*)::INTEGER AS promptCount
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+  `)
 
-  return promptCounts.length === 0 ? defaultJudgmentHydrationPromptCount : Math.max(...promptCounts)
+  return Number(row?.promptCount ?? row?.prompt_count ?? 0)
+}
+
+const getJudgmentHydrationPromptCount = (enabledPromptCount: number) => {
+  return enabledPromptCount > 0 ? enabledPromptCount : defaultJudgmentHydrationPromptCount
 }
 
 const getMaxJudgmentHydrationArticleIds = (promptCount: number) => {
@@ -488,10 +495,11 @@ const readJudgments = async (
   params: ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
   rows: readonly ReviewServingArticleRow[],
+  enabledPromptCount: number,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ) => {
   const articleIds = rows.map(getArticleId)
-  const promptCount = getJudgmentPromptCount(rows)
+  const promptCount = getJudgmentHydrationPromptCount(enabledPromptCount)
 
   return articleIds.length === 0
     ? []
@@ -507,6 +515,7 @@ const readJudgments = async (
 const getResponseRows = (
   rows: readonly ReviewServingArticleRow[],
   judgmentRows: readonly ReviewServingJudgmentRow[],
+  enabledPromptCount: number,
 ): ArticlesReviewsResponse['data'] => {
   const judgmentsByArticleId = getJudgmentRowsByArticleId(judgmentRows)
 
@@ -515,6 +524,9 @@ const getResponseRows = (
     const articleCreatedAt = getDateValue(row.article_created_at ?? row.articleCreatedAt)
     const articleUpdatedAt = getDateValue(row.article_updated_at ?? row.articleUpdatedAt)
     const judgments = judgmentsByArticleId.get(articleId) ?? []
+    const judgedPromptIds = judgments.map((judgment) => {
+      return judgment.promptId
+    })
 
     return {
       id: articleId,
@@ -537,10 +549,8 @@ const getResponseRows = (
       sourceMetadata: getJsonValue(row.source_metadata ?? row.sourceMetadata ?? null),
       url: row.url ?? null,
       judgments,
-      judgedPromptIds: judgments.map((judgment) => {
-        return judgment.promptId
-      }),
-      isFullyJudged: (row.llm_status_key ?? row.llmStatusKey) === 'answered',
+      judgedPromptIds,
+      isFullyJudged: enabledPromptCount > 0 && new Set(judgedPromptIds).size >= enabledPromptCount,
     }
   })
 }
@@ -559,6 +569,7 @@ export const getLlmReviewArticlesFromServing = async (
     throw new Error(reviewServingSnapshotUnavailableError)
   }
 
+  const enabledPromptCountPromise = getEnabledPromptCount(params.projectId, {...dependencies, database})
   const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
     {
       ...getBaseReaderRequest(effectiveParams, manifest, limit + 1),
@@ -573,14 +584,16 @@ export const getLlmReviewArticlesFromServing = async (
   }
 
   const pageRows = rowsResult.rows.slice(0, limit)
-  const judgmentRows = await readJudgments(effectiveParams, manifest, pageRows, dependencies)
-
-  const totalCount = await getCountValue(effectiveParams, manifest, {...dependencies, database})
+  const enabledPromptCount = await enabledPromptCountPromise
+  const [judgmentRows, totalCount] = await Promise.all([
+    readJudgments(effectiveParams, manifest, pageRows, enabledPromptCount, dependencies),
+    getCountValue(effectiveParams, manifest, {...dependencies, database}),
+  ])
   const lastRow = pageRows[pageRows.length - 1]
   const hasNextPage = rowsResult.rows.length > limit
 
   return {
-    data: getResponseRows(pageRows, judgmentRows),
+    data: getResponseRows(pageRows, judgmentRows, enabledPromptCount),
     totalCount,
     page,
     limit,
