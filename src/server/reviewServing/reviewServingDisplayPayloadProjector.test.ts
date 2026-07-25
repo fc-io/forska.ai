@@ -160,6 +160,8 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(selectStatement).toContain(
     "COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url",
   )
+  expect(selectStatement).not.toContain('json_merge_patch')
+  expect(selectStatement).not.toContain('sourceMetadata')
   expect(joined).not.toContain('mart.review_article_display_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4')
@@ -497,7 +499,11 @@ test('display base rows flow through writer with display fields and selected imp
   expect(selectStatement).toContain('article.full_text_fetched_at AS fullTextFetchedAt')
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
-  expect(selectStatement).toContain('json_merge_patch')
+  expect(selectStatement).not.toContain('json_merge_patch')
+  expect(selectStatement).not.toContain('sourceMetadata')
+  expect(selectStatement).toContain(
+    "COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url",
+  )
   expect(deletes).toHaveLength(0)
   expect(inserts).toHaveLength(1)
   expect(inserts[0]).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)')
