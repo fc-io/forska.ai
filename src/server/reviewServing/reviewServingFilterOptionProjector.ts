@@ -133,7 +133,181 @@ const getPromptAnswerFacetKey = (_input: ProjectReviewServingFilterOptionsInput)
   return 'promptAnswer'
 }
 
-const getFilterOptionSourceRows = async (
+const isSearchScopedFilterOptionProjection = (input: ProjectReviewServingFilterOptionsInput) => {
+  return (input.searchTitle?.trim() ?? '').length > 0
+}
+
+const getFinalizedFacetOptionSourceRows = async (
+  input: ProjectReviewServingFilterOptionsInput,
+  database: ReviewServingFilterOptionProjectorDatabase,
+) => {
+  if (input.listModeKeys.length === 0) {
+    return []
+  }
+
+  const reviewSummaryIdentities = [
+    {
+      summaryIdentity: 'review.filter.duplicateFlag',
+      summaryDefinitionVersion: filterOptionSummaryDefinitionVersions.reviewDuplicateFlag,
+    },
+    {
+      summaryIdentity: 'review.filter.importRoute',
+      summaryDefinitionVersion: filterOptionSummaryDefinitionVersions.reviewImportRoute,
+    },
+    {
+      summaryIdentity: 'review.filter.promptAnswer',
+      summaryDefinitionVersion: filterOptionSummaryDefinitionVersions.reviewPromptAnswer,
+    },
+    {
+      summaryIdentity: 'review.filter.publicationYear',
+      summaryDefinitionVersion: filterOptionSummaryDefinitionVersions.reviewPublicationYear,
+    },
+  ] as const
+  const humanSummaryIdentities = [
+    {
+      summaryIdentity: 'review.human.filter.promptAnswer',
+      summaryDefinitionVersion: filterOptionSummaryDefinitionVersions.humanPromptAnswer,
+    },
+    {
+      summaryIdentity: 'review.human.filter.summaryAnswer',
+      summaryDefinitionVersion: filterOptionSummaryDefinitionVersions.humanSummaryAnswer,
+    },
+  ] as const
+  const summaryIdentities = input.optionMode === 'human' ? humanSummaryIdentities : reviewSummaryIdentities
+
+  return database.queryJson<FilterOptionSourceRow>(`
+    WITH summary_identity_filter(summary_identity, summary_definition_version) AS (
+      SELECT * FROM (VALUES ${summaryIdentities
+        .map((summary) => {
+          return `(${getSqlLiteral(summary.summaryIdentity)}, ${getSqlLiteral(summary.summaryDefinitionVersion)})`
+        })
+        .join(', ')})
+    ),
+    finalized_facet_options AS (
+      SELECT
+        ${getSqlLiteral(input.optionMode)} AS filterKind,
+        CASE WHEN facet.summary_identity = 'review.human.filter.summaryAnswer' THEN 'promptAnswer' ELSE facet.facet_key END AS facetKey,
+        facet.facet_value AS facetValue,
+        facet.prompt_id AS promptId,
+        facet.answer_id AS answerId,
+        CASE
+          WHEN facet.summary_identity = 'review.human.filter.summaryAnswer' OR facet.facet_key = 'promptAnswer'
+            THEN concat(${getSqlLiteral(input.optionMode)}, ':promptAnswer:', facet.prompt_id, ':', facet.facet_value)
+          ELSE concat(${getSqlLiteral(input.optionMode)}, ':', facet.facet_key, ':', facet.facet_value)
+        END AS optionValueKey,
+        facet.count_value AS countValue,
+        NULL::DOUBLE AS numericMin,
+        NULL::DOUBLE AS numericMax
+      FROM mart.review_filter_facet_serving_v4 facet
+      INNER JOIN summary_identity_filter summary_identity
+        ON summary_identity.summary_identity = facet.summary_identity
+        AND summary_identity.summary_definition_version = facet.summary_definition_version
+      WHERE facet.project_id = ${getSqlLiteral(input.projectId)}
+        AND facet.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND facet.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND facet.availability = 'ready'
+        AND (
+          (
+            facet.summary_identity IN ('review.filter.duplicateFlag', 'review.filter.importRoute', 'review.filter.publicationYear', 'review.filter.promptAnswer')
+            AND facet.facet_kind = 'review'
+          )
+          OR (
+            ${getSqlLiteral(input.optionMode)} = 'human'
+            AND facet.summary_identity IN ('review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer')
+            AND facet.facet_kind = 'human'
+          )
+        )
+    )
+    SELECT * FROM finalized_facet_options
+  `)
+}
+
+const getNoSearchFallbackOptionSourceRows = async (
+  input: ProjectReviewServingFilterOptionsInput,
+  database: ReviewServingFilterOptionProjectorDatabase,
+) => {
+  return input.listModeKeys.length === 0
+    ? []
+    : database.queryJson<FilterOptionSourceRow>(`
+        WITH ${getValuesCte('list_mode_key', input.listModeKeys)},
+        active_article AS (
+          SELECT DISTINCT serving.article_id
+          FROM mart.review_article_serving_v4 serving
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+            AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        ),
+        selected_article AS (
+          SELECT DISTINCT
+            serving.article_id,
+            CASE WHEN selected_base.tombstone THEN NULL ELSE selected_base.import_route_id END AS import_route_id,
+            selected_hot.publication_year,
+            CASE
+              WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+              ELSE COALESCE(selected_hot.duplicate_flag, FALSE)
+            END AS duplicate_flag,
+            CASE
+              WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+              ELSE COALESCE(selected_hot.conflict_flag, FALSE)
+            END AS conflict_flag
+          FROM mart.review_article_serving_v4 serving
+          INNER JOIN active_article active ON active.article_id = serving.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          LEFT JOIN app.review_selected_article_import_v4 selected_base
+            ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
+            AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+            AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND selected_base.article_id = serving.article_id
+          LEFT JOIN app.review_import_article_hot_field selected_hot
+            ON selected_hot.import_route_id = selected_base.import_route_id
+            AND selected_hot.article_id = selected_base.article_id
+            AND selected_hot.source_record_key = selected_base.source_record_key
+            AND NOT selected_hot.tombstone
+          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+            AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        ),
+        option_specific_options AS (
+          SELECT 'human' AS filterKind, 'duplicateFlag' AS facetKey, CAST(selected.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('human:duplicateFlag:', CAST(selected.duplicate_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} = 'human' AND selected.duplicate_flag IS NOT NULL
+          ${aggregateBySql} selected.duplicate_flag
+          UNION ALL
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'conflictFlag' AS facetKey, CAST(selected.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':conflictFlag:', CAST(selected.conflict_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND selected.conflict_flag IS NOT NULL
+          ${aggregateBySql} selected.conflict_flag
+          UNION ALL
+          SELECT 'human' AS filterKind, 'importRoute' AS facetKey, selected.import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('human:importRoute:', selected.import_route_id) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} = 'human' AND selected.import_route_id IS NOT NULL
+          ${aggregateBySql} selected.import_route_id
+          UNION ALL
+          SELECT 'human' AS filterKind, 'publicationYear' AS facetKey, CAST(selected.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('human:publicationYear:', CAST(selected.publication_year AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} = 'human' AND selected.publication_year IS NOT NULL
+          ${aggregateBySql} selected.publication_year
+          UNION ALL
+          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_serving_v4 serving
+          INNER JOIN active_article active ON active.article_id = serving.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.llm_status_key IS NOT NULL
+          ${aggregateBySql} serving.llm_status_key
+          UNION ALL
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, serving.human_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', serving.human_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_serving_v4 serving
+          INNER JOIN active_article active ON active.article_id = serving.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.human_status_key IS NOT NULL
+          ${aggregateBySql} serving.human_status_key
+        )
+        SELECT * FROM option_specific_options WHERE facetValue IS NOT NULL
+      `)
+}
+
+const getReconstructedFilterOptionSourceRows = async (
   input: ProjectReviewServingFilterOptionsInput,
   database: ReviewServingFilterOptionProjectorDatabase,
 ) => {
@@ -262,6 +436,20 @@ const getFilterOptionSourceRows = async (
         UNION ALL SELECT * FROM prompt_answer_options
         UNION ALL SELECT * FROM human_summary_options
       `)
+}
+
+const getFilterOptionSourceRows = async (
+  input: ProjectReviewServingFilterOptionsInput,
+  database: ReviewServingFilterOptionProjectorDatabase,
+) => {
+  if (isSearchScopedFilterOptionProjection(input)) {
+    return getReconstructedFilterOptionSourceRows(input, database)
+  }
+
+  const finalizedFacetRows = await getFinalizedFacetOptionSourceRows(input, database)
+  const fallbackRows = await getNoSearchFallbackOptionSourceRows(input, database)
+
+  return [...finalizedFacetRows, ...fallbackRows]
 }
 
 const getFilterOptionRecord = (input: {

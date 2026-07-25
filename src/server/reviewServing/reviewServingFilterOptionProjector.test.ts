@@ -77,7 +77,7 @@ const createFilterOptionDatabase = (input?: {sourceRows?: readonly Record<string
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
-      if (statement.includes('review_facet_options')) {
+      if (statement.includes('finalized_facet_options') || statement.includes('review_facet_options')) {
         return (input?.sourceRows ?? []) as T[]
       }
 
@@ -131,6 +131,57 @@ test('projects supported enum option payloads into scoped option rows', async ()
   expect(insertStatement).not.toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain('numericPromptAnswer')
   expect(joined).not.toContain('numeric_options')
+})
+
+test('no-search option projection reuses finalized facet rows for migrated facet option identities', async () => {
+  const {database, statements} = createFilterOptionDatabase({
+    sourceRows: [
+      sourceRow({
+        countValue: 4,
+        facetKey: 'duplicateFlag',
+        facetValue: 'false',
+        optionValueKey: 'review:duplicateFlag:false',
+        promptId: null,
+      }),
+      sourceRow({
+        countValue: 2,
+        facetKey: 'publicationYear',
+        facetValue: '2026',
+        optionValueKey: 'review:publicationYear:2026',
+        promptId: null,
+      }),
+      sourceRow(),
+    ],
+  })
+
+  const result = await projectReviewServingFilterOptions(projectInput(), database)
+  const finalizedFacetStatement = statements.find((statement) => {
+    return statement.includes('finalized_facet_options')
+  })
+  const fallbackStatement = statements.find((statement) => {
+    return statement.includes('option_specific_options')
+  })
+
+  expect(result.optionRowCount).toBe(3)
+  expect(finalizedFacetStatement).toContain('FROM mart.review_filter_facet_serving_v4 facet')
+  expect(finalizedFacetStatement).toContain("'review.filter.duplicateFlag'")
+  expect(finalizedFacetStatement).toContain("'review.filter.importRoute'")
+  expect(finalizedFacetStatement).toContain("'review.filter.promptAnswer'")
+  expect(finalizedFacetStatement).toContain("'review.filter.publicationYear'")
+  expect(finalizedFacetStatement).toContain('summary_identity_filter(summary_identity, summary_definition_version)')
+  expect(finalizedFacetStatement).toContain(
+    'summary_identity.summary_definition_version = facet.summary_definition_version',
+  )
+  expect(finalizedFacetStatement).toContain("facet.availability = 'ready'")
+  expect(finalizedFacetStatement).not.toContain('mart.review_article_serving_payload_v4')
+  expect(finalizedFacetStatement).not.toContain('mart.review_article_judgment_detail_serving_v4')
+  expect(fallbackStatement).toContain("'conflictFlag' AS facetKey")
+  expect(fallbackStatement).toContain("'llmStatus' AS facetKey")
+  expect(fallbackStatement).toContain("'humanStatus' AS facetKey")
+  expect(fallbackStatement).toContain("WHERE 'review' = 'human' AND selected.duplicate_flag IS NOT NULL")
+  expect(fallbackStatement).toContain("WHERE 'review' = 'human' AND selected.import_route_id IS NOT NULL")
+  expect(fallbackStatement).toContain("WHERE 'review' = 'human' AND selected.publication_year IS NOT NULL")
+  expect(fallbackStatement).not.toContain('answered_original')
 })
 
 test('filter-option no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -231,13 +282,15 @@ test('human option projection keeps prompt answers separate from summary-mode an
 
   const result = await projectReviewServingFilterOptions(projectInput({optionMode: 'human'}), database)
   const sourceStatement = statements.find((statement) => {
-    return statement.includes('human_summary_options')
+    return statement.includes('finalized_facet_options')
   })
 
-  expect(sourceStatement).toContain("detail.payload_kind = 'human'")
-  expect(sourceStatement).toContain("'promptAnswer' AS facetKey")
-  expect(sourceStatement).toContain("answer.prompt_id = 'summary'")
-  expect(sourceStatement).toContain("answer.prompt_id <> 'summary'")
+  expect(sourceStatement).toContain("'review.human.filter.promptAnswer'")
+  expect(sourceStatement).toContain("'review.human.filter.summaryAnswer'")
+  expect(sourceStatement).toContain("facet.summary_identity = 'review.human.filter.summaryAnswer'")
+  expect(sourceStatement).toContain("THEN 'promptAnswer'")
+  expect(sourceStatement).not.toContain("detail.payload_kind = 'human'")
+  expect(sourceStatement).not.toContain('human_summary_options')
   expect(
     hasOptionValue(result.optionValues, {
       facet_key: 'promptAnswer',
