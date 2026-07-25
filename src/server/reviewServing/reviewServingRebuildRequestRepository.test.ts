@@ -5,11 +5,13 @@ import type {
   ReviewServingChunkManifestRepositoryTransaction,
 } from './reviewServingChunkManifestRepository.ts'
 import {
+  authorizeReviewServingSummaryPartialCleanup,
   boostActiveReviewServingRebuildRequestForProject,
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
   releaseFailedRequestlessReviewServingRebuildChunks,
   type ReviewServingRebuildRequestStatus,
+  reviewServingSummaryPartialCleanupAuthorizationAck,
   terminalizeStaleZeroChunkReviewServingRebuildRequest,
 } from './reviewServingRebuildRequestRepository.ts'
 
@@ -541,6 +543,218 @@ const createFakeReleaseChunk = (overrides: Partial<FakeReleaseChunkRow> = {}): F
     ...overrides,
   }
 }
+
+const createFakePartialCleanupAuthorizationDatabase = (input?: {
+  guardCounts?: Partial<{
+    activeAdmittedRunningPendingOrRunningChunkCount: number
+    affectedRowCount: number
+    allChunkCount: number
+    liveLeaseCount: number
+    matchingSummaryChunkCount: number
+    newestDiagnosticCount: number
+    retryableFailedChunkCount: number
+    snapshotPinCount: number
+    snapshotProtectionCount: number
+    tooNewRowCount: number
+  }>
+  request?: FakeRequestRow | null
+}) => {
+  const statements: string[] = []
+  const request =
+    input?.request === undefined
+      ? createFakeTerminalizationRequest({
+          failedAt: '2026-06-23T14:00:00.000Z',
+          identityJson: '{"reviewConfigHash":"review-config-1"}',
+          requestId: 'rebuild:partial-cleanup',
+          status: 'failed',
+          updatedAt: '2026-06-23T14:00:00.000Z',
+        })
+      : input.request
+  const guardCounts = {
+    activeAdmittedRunningPendingOrRunningChunkCount: 0,
+    affectedRowCount: 4,
+    allChunkCount: 0,
+    liveLeaseCount: 0,
+    matchingSummaryChunkCount: 0,
+    newestDiagnosticCount: 0,
+    retryableFailedChunkCount: 0,
+    snapshotPinCount: 0,
+    snapshotProtectionCount: 0,
+    tooNewRowCount: 0,
+    ...input?.guardCounts,
+  }
+
+  const queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('affectedRowCount') && statement.includes('scoped_partial')) {
+      return [guardCounts] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_request')) {
+      return (request === null ? [] : [request]) as T[]
+    }
+
+    return [] as T[]
+  }
+
+  const run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const database = {
+    queryJson,
+    run,
+    transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return operation({queryJson, run})
+    },
+  } satisfies ReviewServingChunkManifestRepositoryDatabase
+
+  return {database, statements}
+}
+
+const partialCleanupAuthorizationInput = {
+  chunkId: 'chunk:orphan-summary',
+  expectedRowCount: 4,
+  minimumAgeMinutes: 60,
+  now: new Date('2026-06-23T16:00:00.000Z'),
+  operatorAck: reviewServingSummaryPartialCleanupAuthorizationAck,
+  partialTable: 'mart.review_article_summary_rebuild_partial_v4' as const,
+  projectId: 'project-v4',
+  reason: 'orphaned stale summary partial rows from interrupted rebuild',
+  requestId: 'rebuild:partial-cleanup',
+  reviewConfigHash: 'review-config-1',
+  snapshotId: 'snapshot-stale',
+}
+
+test('summary partial cleanup authorization dry-run audits exact orphan identity without inserting', async () => {
+  const {database, statements} = createFakePartialCleanupAuthorizationDatabase()
+
+  const result = await authorizeReviewServingSummaryPartialCleanup(partialCleanupAuthorizationInput, database)
+  const joined = statements.join('\n')
+
+  expect(result).toMatchObject({
+    applied: false,
+    currentRequest: {projectId: 'project-v4', requestId: 'rebuild:partial-cleanup'},
+    expiresAt: '2026-06-23T17:00:00.000Z',
+    guardCounts: {affectedRowCount: 4, allChunkCount: 0, matchingSummaryChunkCount: 0},
+    refusalReasons: [],
+    status: 'dry_run',
+  })
+  expect(result.authorizationId?.startsWith('review-partial-cleanup:')).toBe(true)
+  expect(joined).toContain('FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain("project_id = 'project-v4'")
+  expect(joined).toContain("review_config_hash = 'review-config-1'")
+  expect(joined).toContain("request_id = 'rebuild:partial-cleanup'")
+  expect(joined).toContain("chunk_id = 'chunk:orphan-summary'")
+  expect(joined).toContain("snapshot_id = 'snapshot-stale'")
+  expect(joined).toContain("projection_component = 'summary'")
+  expect(joined).toContain('activeAdmittedRunningPendingOrRunningChunkCount')
+  expect(joined).toContain('retryableFailedChunkCount')
+  expect(joined).toContain('snapshotProtectionCount')
+  expect(joined).toContain('newestDiagnosticCount')
+  expect(joined).not.toContain('INSERT INTO app.review_rebuild_partial_cleanup_authorization')
+})
+
+test('summary partial cleanup authorization apply inserts audited unexpired row after preflight', async () => {
+  const {database, statements} = createFakePartialCleanupAuthorizationDatabase()
+
+  const result = await authorizeReviewServingSummaryPartialCleanup(
+    {...partialCleanupAuthorizationInput, apply: true, expiresAt: '2026-06-23T16:30:00.000Z'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toMatchObject({
+    applied: true,
+    expiresAt: '2026-06-23T16:30:00.000Z',
+    refusalReasons: [],
+    status: 'authorized',
+  })
+  expect(joined).toContain('INSERT INTO app.review_rebuild_partial_cleanup_authorization')
+  expect(joined).toContain("'mart.review_article_summary_rebuild_partial_v4'")
+  expect(joined).toContain("'stale_orphan_summary_partial'")
+  expect(joined).toContain("'authorize-stale-orphan-review-serving-summary-partial-cleanup'")
+  expect(joined).toContain("'orphaned stale summary partial rows from interrupted rebuild'")
+  expect(joined).toContain('expected_row_count')
+  expect(joined).toContain('observed_row_count')
+  expect(joined).toContain('WHERE NOT EXISTS')
+})
+
+test('summary partial cleanup authorization refuses unsafe gates before insert', async () => {
+  const {database, statements} = createFakePartialCleanupAuthorizationDatabase({
+    guardCounts: {
+      activeAdmittedRunningPendingOrRunningChunkCount: 1,
+      affectedRowCount: 3,
+      allChunkCount: 2,
+      liveLeaseCount: 1,
+      matchingSummaryChunkCount: 1,
+      newestDiagnosticCount: 1,
+      retryableFailedChunkCount: 1,
+      snapshotPinCount: 1,
+      snapshotProtectionCount: 1,
+      tooNewRowCount: 1,
+    },
+  })
+
+  const result = await authorizeReviewServingSummaryPartialCleanup(partialCleanupAuthorizationInput, database)
+
+  expect(result).toMatchObject({applied: false, authorizationId: null, status: 'refused'})
+  expect(result.refusalReasons).toEqual([
+    'expected_row_count_mismatch',
+    'partial_rows_too_new',
+    'request_or_chunk_has_live_lease',
+    'active_request_has_pending_or_running_chunks',
+    'retryable_failed_chunks',
+    'snapshot_protected_by_active_or_lkg',
+    'snapshot_protected_by_pin',
+    'newest_diagnostic_request',
+    'non_orphan_summary_chunk_exists',
+  ])
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_partial_cleanup_authorization')
+})
+
+test('summary partial cleanup authorization refuses request project and review config mismatches', async () => {
+  const {database} = createFakePartialCleanupAuthorizationDatabase({
+    request: createFakeTerminalizationRequest({
+      identityJson: '{"reviewConfigHash":"review-config-other"}',
+      projectId: 'project-other',
+      requestId: 'rebuild:partial-cleanup',
+      status: 'failed',
+    }),
+  })
+
+  const result = await authorizeReviewServingSummaryPartialCleanup(partialCleanupAuthorizationInput, database)
+
+  expect(result.refusalReasons).toContain('wrong_project')
+  expect(result.refusalReasons).toContain('review_config_hash_mismatch')
+})
+
+test('summary partial cleanup authorization tolerates legacy request identity without review config hash', async () => {
+  const {database} = createFakePartialCleanupAuthorizationDatabase({
+    request: createFakeTerminalizationRequest({
+      identityJson: '{"requestKind":"v4-review-serving-rebuild"}',
+      requestId: 'rebuild:partial-cleanup',
+      status: 'failed',
+    }),
+  })
+
+  const result = await authorizeReviewServingSummaryPartialCleanup(partialCleanupAuthorizationInput, database)
+
+  expect(result.refusalReasons).toEqual([])
+  expect(result.status).toBe('dry_run')
+})
+
+test('summary partial cleanup authorization requires operator acknowledgement', async () => {
+  const {database} = createFakePartialCleanupAuthorizationDatabase()
+
+  const result = await authorizeReviewServingSummaryPartialCleanup(
+    {...partialCleanupAuthorizationInput, operatorAck: ''},
+    database,
+  )
+
+  expect(result.refusalReasons).toEqual(['missing_operator_ack'])
+})
 
 test('V4 rebuild requests admit budgeted component chunks above the chunk manifest table', async () => {
   const {database, statements} = createFakeRequestDatabase()
