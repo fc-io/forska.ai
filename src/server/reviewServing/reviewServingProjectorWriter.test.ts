@@ -485,7 +485,7 @@ test('selected import snapshot cursor writes unchanged rows through update and i
   expect(writeStatements.join('\n')).not.toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
 })
 
-test('projector writer batches same-shape record upserts into one statement', async () => {
+test('projector writer batches same-shape record replacements into update and insert-missing statements', async () => {
   const {database, statements} = createWriterDatabase()
   const keyColumns = [
     'project_id',
@@ -545,10 +545,19 @@ test('projector writer batches same-shape record upserts into one statement', as
   const insertStatements = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_article_count_serving_v4')
   })
+  const updateStatements = statements.filter((statement) => {
+    return statement.includes('UPDATE mart.review_article_count_serving_v4')
+  })
 
   expect(insertStatements).toHaveLength(1)
+  expect(updateStatements).toHaveLength(1)
+  expect(updateStatements[0]).not.toContain('ON CONFLICT')
+  expect(updateStatements[0]).not.toContain('DO UPDATE SET')
   expect(insertStatements[0]).toContain("'llm'")
   expect(insertStatements[0]).toContain("'human'")
+  expect(insertStatements[0]).toContain('WHERE NOT EXISTS')
+  expect(insertStatements[0]).not.toContain('ON CONFLICT')
+  expect(insertStatements[0]).not.toContain('DO UPDATE SET')
 })
 
 test('projector writer collapses duplicate primary-key records before a DuckDB commit', async () => {

@@ -271,19 +271,13 @@ const writeReviewServingProjectorRecordBatch = async (
   const columns = Object.keys(firstRecord.values)
   const keyColumns = firstRecord.keyColumns
   const table = firstRecord.table
-  const assignments = columns
-    .filter((column) => {
-      return !keyColumns.includes(column)
-    })
+  const incomingAlias = 'incoming'
+  const existingAlias = 'existing'
+  const scanPredicate = keyColumns
     .map((column) => {
-      return `${column} = excluded.${column}`
+      return `(${existingAlias}.${column} || '') = (${incomingAlias}.${column} || '')`
     })
-  const conflictUpdate = assignments.length === 0 ? 'DO NOTHING' : `DO UPDATE SET ${assignments.join(', ')}`
-  const conflictClause =
-    options.insertOnly || options.scanGuardedInsertMissing
-      ? ''
-      : `
-    ON CONFLICT(${keyColumns.join(', ')}) ${conflictUpdate}`
+    .join('\n        AND ')
   const valuesSql = records
     .map((record) => {
       return columns
@@ -295,13 +289,47 @@ const writeReviewServingProjectorRecordBatch = async (
     .join('\n    ),\n    (')
 
   if (options.scanGuardedInsertMissing) {
-    const incomingAlias = 'incoming'
-    const existingAlias = 'existing'
-    const scanPredicate = keyColumns
-      .map((column) => {
-        return `(${existingAlias}.${column} || '') = (${incomingAlias}.${column} || '')`
+    await tx.run(`
+    INSERT INTO ${table} (
+      ${columns.join(',\n      ')}
+    )
+    SELECT ${columns.join(', ')}
+    FROM (
+      VALUES (
+      ${valuesSql}
+    )
+    ) AS ${incomingAlias}(${columns.join(', ')})
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${table} ${existingAlias}
+      WHERE ${scanPredicate}
+    )
+  `)
+    return
+  }
+
+  if (!options.insertOnly) {
+    const updateAssignments = columns
+      .filter((column) => {
+        return !keyColumns.includes(column)
       })
-      .join('\n        AND ')
+      .map((column) => {
+        return `${column} = ${incomingAlias}.${column}`
+      })
+
+    if (updateAssignments.length > 0) {
+      await tx.run(`
+    UPDATE ${table} ${existingAlias}
+    SET
+      ${updateAssignments.join(',\n      ')}
+    FROM (
+      VALUES (
+      ${valuesSql}
+    )
+    ) AS ${incomingAlias}(${columns.join(', ')})
+    WHERE ${scanPredicate}
+  `)
+    }
 
     await tx.run(`
     INSERT INTO ${table} (
@@ -328,7 +356,6 @@ const writeReviewServingProjectorRecordBatch = async (
     ) VALUES (
       ${valuesSql}
     )
-    ${conflictClause}
   `)
 }
 

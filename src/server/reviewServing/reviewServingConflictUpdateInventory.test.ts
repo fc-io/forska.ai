@@ -6,13 +6,7 @@ const projectRoot = process.cwd()
 
 type ConflictUpdateInventoryEntry = {path: string; reason: string; snippet: string}
 
-const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
-  {
-    path: 'src/server/reviewServing/reviewServingProjectorWriter.ts',
-    reason: 'generic writer fallback remains for non-allowlisted tables without a scoped replacement proof',
-    snippet: 'DO UPDATE SET ${assignments.join',
-  },
-]
+const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = []
 
 const readSource = async (path: string) => {
   return globalThis.Bun.file(join(projectRoot, path)).text()
