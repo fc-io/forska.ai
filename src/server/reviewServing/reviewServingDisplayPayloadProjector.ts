@@ -7,7 +7,6 @@ import {
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
-  type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   type ReviewServingProjectorWriterDiagnostics,
   writeReviewServingProjectorComponent,
@@ -232,16 +231,6 @@ const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chu
 
   return `${startPredicate}
       ${endPredicate}`
-}
-
-const getArticleRangeFilterCte = (ranges: readonly ProjectReviewServingPayloadInput[]) => {
-  return `article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
-        SELECT * FROM (VALUES ${ranges
-          .map((range) => {
-            return `(${getSqlLiteral(range.chunkStartArticleId)}, ${getSqlLiteral(range.chunkEndArticleId)})`
-          })
-          .join(', ')})
-      )`
 }
 
 const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, options: {orderBy?: boolean} = {}) => {
@@ -473,91 +462,6 @@ const getPayloadRows = async (
   return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input))
 }
 
-const getPayloadRecord = (
-  input: ProjectReviewServingPayloadInput,
-  row: PayloadProjectionRow,
-): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: ['project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'],
-    table: 'mart.review_article_serving_payload_v4',
-    values: {
-      article_id: row.articleId,
-      display_identity: input.displayIdentity,
-      payload_identity: input.payloadIdentity,
-      project_id: input.projectId,
-      snapshot_id: input.snapshotId,
-    },
-  }
-}
-
-const getPayloadRebuildRowsStatements = (
-  input: ProjectReviewServingPayloadInput,
-  ranges?: readonly ProjectReviewServingPayloadInput[],
-) => {
-  return [
-    `
-    INSERT INTO mart.review_article_serving_payload_v4 (
-      article_id,
-      display_identity,
-      payload_identity,
-      project_id,
-      snapshot_id
-    )
-    WITH ${
-      ranges === undefined
-        ? 'payload_source AS'
-        : `${getArticleRangeFilterCte(ranges)},
-    payload_source AS`
-    } (
-      ${getPayloadRowsSql(input, {orderBy: false, ranges})}
-    ),
-    payload_rows AS (
-      SELECT
-        payload_source.articleId AS article_id,
-        ${getSqlLiteral(input.displayIdentity)} AS display_identity,
-        ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
-        ${getSqlLiteral(input.projectId)} AS project_id,
-        ${getSqlLiteral(input.snapshotId)} AS snapshot_id
-      FROM payload_source
-    )
-    SELECT
-      article_id,
-      display_identity,
-      payload_identity,
-      project_id,
-      snapshot_id
-    FROM payload_rows
-    QUALIFY ROW_NUMBER() OVER (
-      PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
-      ORDER BY article_id ASC
-    ) = 1
-    ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO NOTHING
-  `,
-  ]
-}
-
-const canUseSetBasedPayloadRangeInsert = (ranges: readonly ProjectReviewServingPayloadInput[]) => {
-  const [firstRange] = ranges
-
-  return (
-    firstRange !== undefined
-    && ranges.every((range) => {
-      return (
-        (range.claims === undefined || range.claims.length === 0)
-        && range.chunkEndArticleId !== null
-        && range.chunkEndArticleId !== undefined
-        && range.chunkStartArticleId !== null
-        && range.chunkStartArticleId !== undefined
-        && range.displayIdentity === firstRange.displayIdentity
-        && range.payloadIdentity === firstRange.payloadIdentity
-        && range.projectId === firstRange.projectId
-        && range.selectedImportSnapshotId === firstRange.selectedImportSnapshotId
-        && range.snapshotId === firstRange.snapshotId
-      )
-    })
-  )
-}
-
 const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
   const rowPredicate = `project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
@@ -688,15 +592,7 @@ export const projectReviewServingPayloadRanges = async (
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
-    const [firstRange] = input.ranges
-    const statements =
-      firstRange !== undefined && canUseSetBasedPayloadRangeInsert(input.ranges)
-        ? getPayloadRebuildRowsStatements(firstRange, input.ranges)
-        : input.ranges.flatMap((range) => {
-            return getPayloadRebuildRowsStatements(range)
-          })
-
-    return writeReviewServingProjectorComponent({component: 'payload', statements}, database)
+    return writeReviewServingProjectorComponent({component: 'payload', statements: []}, database)
   })
 
   return withDiagnosticsJson(
@@ -768,10 +664,8 @@ export const projectReviewServingPayloadRows = async (
   const shouldAcknowledgeClaims = hasClaimedWork && input.acknowledgeClaims !== false
   const projectionManifests = getPayloadProjectionManifests(input, claims)
   const patchWatermark = getPatchWatermark(claims)
-  const records = measureSync('recordTransformMs', () => {
-    return rows.map((row) => {
-      return getPayloadRecord(input, row)
-    })
+  measureSync('recordTransformMs', () => {
+    return rows.length
   })
 
   const writer = await measure('writerMs', async () => {
@@ -780,7 +674,7 @@ export const projectReviewServingPayloadRows = async (
         acknowledgements: shouldAcknowledgeClaims ? claims : [],
         component: 'payload',
         projectionManifests,
-        records,
+        records: [],
         statements: [],
         watermark: shouldAcknowledgeClaims
           ? {

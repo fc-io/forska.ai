@@ -585,15 +585,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_filter_posting_serving_v4 (
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)
 );
 
-CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
-  project_id VARCHAR NOT NULL,
-  display_identity VARCHAR NOT NULL,
-  payload_identity VARCHAR NOT NULL,
-  snapshot_id VARCHAR NOT NULL,
-  article_id VARCHAR NOT NULL,
-  PRIMARY KEY(project_id, display_identity, payload_identity, snapshot_id, article_id)
-);
-
 CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
@@ -769,9 +760,6 @@ ON mart.review_article_filter_posting_patch_v4(project_id, posting_identity, bas
 
 CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup
 ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_lookup
-ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article
 ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order);

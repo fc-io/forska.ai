@@ -313,6 +313,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewPayloadBytesDropSql).toContain(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
   )
+  expect(reviewPayloadBytesDropSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4')
   expect(reviewPayloadBytesDropSql).not.toContain('PRIMARY KEY')
   expect(reviewPayloadBytesDropSql).not.toContain('payload_bytes')
   expect(reviewPayloadAbstractTextDropSql).toContain(

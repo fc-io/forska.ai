@@ -219,7 +219,6 @@ const getEstimatedPayloadRows = (input: {
   snapshotCount: number
   summaryHumanJudgmentCount: number
 }) => {
-  const articlePayloadRows = input.components.includes('payload') ? input.scopedArticleCount : 0
   const llmDetailRows = input.components.includes('judgmentInputContent')
     ? input.scopedArticleCount * input.enabledPromptCount * llmStatusListModeFanOut
     : 0
@@ -227,7 +226,7 @@ const getEstimatedPayloadRows = (input: {
     ? (input.humanJudgmentCount + input.summaryHumanJudgmentCount) * humanStatusListModeFanOut
     : 0
 
-  return (articlePayloadRows + llmDetailRows + humanDetailRows) * input.snapshotCount
+  return (llmDetailRows + humanDetailRows) * input.snapshotCount
 }
 
 const getSafeCount = (value: number | string | null | undefined) => {

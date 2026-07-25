@@ -1,5 +1,13 @@
 DROP TABLE IF EXISTS mart.review_article_serving_payload_v4_repair;
 
+CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
+  project_id VARCHAR NOT NULL,
+  display_identity VARCHAR NOT NULL,
+  payload_identity VARCHAR NOT NULL,
+  snapshot_id VARCHAR NOT NULL,
+  article_id VARCHAR NOT NULL
+);
+
 CREATE TABLE mart.review_article_serving_payload_v4_repair (
   project_id VARCHAR NOT NULL,
   display_identity VARCHAR NOT NULL,

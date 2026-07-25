@@ -803,7 +803,6 @@ test('review serving read contracts use planned Phase 1 physical table names', (
     'mart.review_article_filter_posting_serving_v4',
     'mart.review_article_count_serving_v4',
     'mart.review_article_judgment_detail_serving_v4',
-    'mart.review_article_serving_payload_v4',
     'mart.review_article_serving_v4',
     'mart.review_filter_facet_serving_v4',
     'mart.review_filter_option_serving_v4',
@@ -925,7 +924,6 @@ test('detail read inventory maps to the mounted project review route', () => {
   expect(detailInventoryEntries[0]).toMatchObject({
     contractKeys: [
       'review.detail.row',
-      'review.detail.payload',
       'review.detail.judgments',
       'review.detail.humanJudgments',
       'review.prompt.badges',

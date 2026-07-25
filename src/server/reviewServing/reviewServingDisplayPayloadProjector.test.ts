@@ -237,9 +237,6 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   const selectStatement = statements.find((statement) => {
     return statement.includes('ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC')
   })
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_article_serving_payload_v4')
-  })
   const joined = statements.join('\n')
 
   expect(result).toEqual({payloadRowCount: 1, patchWatermark: 0})
@@ -264,18 +261,12 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(selectStatement).not.toContain("length(COALESCE(article.full_text, ''))")
   expect(selectStatement).not.toContain('length(COALESCE(article.full_text_html')
   expect(selectStatement).not.toContain('AS payloadBytes')
-  expect(insertStatement).not.toContain('article_created_at')
-  expect(insertStatement).not.toContain('article_external_id')
-  expect(insertStatement).not.toContain('article_title')
-  expect(insertStatement).not.toContain('journal_title')
-  expect(insertStatement).not.toContain('full_text_pdf')
-  expect(insertStatement).not.toContain('payload_bytes')
-  expect(insertStatement).not.toContain('source_metadata')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
   expect(joined).not.toContain('selected_scoped_article_import')
   expect(joined).not.toContain('payload_json')
 })
 
-test('payload rebuild ranges insert payload rows idempotently with SQL-native range statements', async () => {
+test('payload rebuild ranges no longer write article payload serving rows', async () => {
   const {database, statements} = createDisplayPayloadDatabase()
 
   const result = await projectReviewServingPayloadRanges(
@@ -313,22 +304,18 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
   expect(result).toEqual({rangeCount: 2})
   expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(joined).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
-  expect(insertStatements).toHaveLength(1)
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_payload_v4')
-  expect(joined).toContain('payload_source AS')
-  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
-  expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(insertStatements).toHaveLength(0)
+  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
+  expect(joined).not.toContain('payload_source AS')
+  expect(joined).not.toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(joined).not.toContain('abstract_text')
   expect(joined).not.toContain('full_text_preview')
-  expect(joined).toContain('      payload_identity,\n      project_id,')
   expect(joined).not.toContain('payload_updated_at')
-  expect(joined).toContain('      project_id,\n      snapshot_id')
   expect(joined).not.toContain('source_metadata')
   expect(joined).not.toContain('article_external_id')
   expect(joined).not.toContain('journal_title')
   expect(joined).not.toContain('full_text_pdf')
-  expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
-  expect(joined).toContain('DO NOTHING')
+  expect(joined).not.toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
   expect(joined).not.toContain('DO UPDATE SET')
   expect(joined).not.toContain('payload_bytes = excluded.payload_bytes')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')

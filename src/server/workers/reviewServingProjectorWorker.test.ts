@@ -1315,7 +1315,10 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
       ] as T[]
     }
 
-    if (statement.includes('FROM mart.review_article_serving_payload_v4 payload')) {
+    if (
+      statement.includes("json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity')")
+      && statement.includes('FROM payload_article')
+    ) {
       return [{actualChecksum: 'checksum-payload-batch', actualCount: 2, actualPayloadBytes: 12}] as T[]
     }
 
@@ -1358,9 +1361,9 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
   expect(result.chunkBatchCount).toBe(2)
   expect(harness.claimInputs).toHaveLength(2)
   expect(harness.runChunkInputs).toEqual([])
-  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
-  expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_payload_v4')
+  expect(joined).not.toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(joined).not.toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
   expect(joined).toContain('payloadBatchWriter')
 })
 
@@ -5152,7 +5155,10 @@ test('payload and search rebuild chunk executors write bounded base rows and com
         ] as T[]
       }
 
-      if (statement.includes('FROM mart.review_article_serving_payload_v4 payload')) {
+      if (
+        statement.includes("json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity')")
+        && statement.includes('FROM payload_article')
+      ) {
         return [{actualChecksum: 'checksum-payload-1', actualCount: 1}] as T[]
       }
 
@@ -5186,7 +5192,7 @@ test('payload and search rebuild chunk executors write bounded base rows and com
 
   expect(payloadResult).toEqual({status: 'completed'})
   expect(searchResult).toEqual({status: 'completed'})
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_payload_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
   expect(joined).toContain("scope.article_id >= 'article-001'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
