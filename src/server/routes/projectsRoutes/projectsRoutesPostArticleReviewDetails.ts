@@ -97,11 +97,19 @@ type ServingJudgmentDetailRow = {
   answered_original?: string | null
   answered_original_as_array?: unknown
   article_id?: string
+  assessment_comment?: string | null
+  assessment_created_at?: unknown
+  assessment_id?: string | null
+  assessment_is_correct?: boolean | null
+  assessment_judgment_id?: string | null
+  assessment_updated_at?: unknown
   detail_updated_at?: unknown
+  explanation?: string | null
   human_comment?: string | null
   judgment_created_at?: unknown
   judgment_id?: string | null
-  judgment_payload_json?: unknown
+  judgment_model_id?: string | null
+  judgment_updated_at?: unknown
   placeholder_kind?: string | null
   prompt_criteria_disposition?: 'include' | 'exclude' | 'combined' | null
   prompt_heading?: string | null
@@ -109,6 +117,33 @@ type ServingJudgmentDetailRow = {
   prompt_original_text?: string | null
   prompt_order?: number | null
   prompt_type?: string | null
+  chunking_strategy?: string | null
+  confidence_original?: number | null
+  is_answered?: boolean | null
+  model_name?: string | null
+  model_provider?: string | null
+  model_thinking?: string | null
+  model_version?: string | null
+  quotes?: unknown
+  snapshot_project_id?: string | null
+  snapshot_project_model_name?: string | null
+}
+
+const getServingAssessmentValues = (row: ServingJudgmentDetailRow): JudgmentAssessmentRecord[] => {
+  if (!row.assessment_id) {
+    return []
+  }
+
+  return [
+    {
+      id: row.assessment_id,
+      judgmentId: row.assessment_judgment_id ?? row.judgment_id ?? '',
+      assessmentIsCorrect: row.assessment_is_correct ?? false,
+      assessmentComment: row.assessment_comment ?? null,
+      createdAt: getDateValue(row.assessment_created_at) ?? new Date(0),
+      updatedAt: getDateValue(row.assessment_updated_at) ?? new Date(0),
+    },
+  ]
 }
 
 type ReviewServingDetailRowsRequest = Parameters<typeof readReviewServingRows>[0]
@@ -176,14 +211,6 @@ type ProjectPromptRow = {
   originProjectId: string | null
 }
 
-type ModelDisplayPayload = {
-  id?: string | null
-  name?: string | null
-  provider?: string | null
-  thinking?: string | null
-  version?: string | null
-}
-
 type ReviewJudgmentDetail = {
   judgment: JudgmentRecord
   prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
@@ -219,12 +246,6 @@ type CovidenceRelatedRecord = {
 
 type CovidenceRelatedRecordsResult = {overflow: boolean; records: CovidenceRelatedRecord[]}
 
-const getJsonObjectValue = (value: unknown): Record<string, unknown> => {
-  const parsed = getJsonValue(value)
-
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
-}
-
 const getServingDateValue = (value: unknown) => {
   return getDateValue(value) ?? null
 }
@@ -253,10 +274,6 @@ const getPromptRowFromServingDetail = (row: {
     promptHeading: row.prompt_heading ?? null,
     type: row.prompt_type ?? null,
   }
-}
-
-const getModelPayload = (payload: Record<string, unknown>): ModelDisplayPayload => {
-  return getJsonObjectValue(payload.model) as ModelDisplayPayload
 }
 
 const upsertPromptRow = (promptRowsById: Map<string, ProjectPromptRow>, promptRow: ProjectPromptRow) => {
@@ -337,40 +354,38 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       return row.placeholder_kind === null || row.placeholder_kind === undefined
     })
     .map((row) => {
-      const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
       const prompt = getPromptRowFromServingDetail(row)
-      const model = getModelPayload(payload)
 
       return {
-        judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, `placeholder:${promptId}`),
-        judgmentAssessments: payload.assessments ?? [],
-        judgmentCreatedAt: row.judgment_created_at ?? payload.createdAt ?? null,
-        judgmentUpdatedAt: payload.updatedAt ?? row.detail_updated_at ?? null,
+        judgmentId: row.judgment_id ?? `placeholder:${promptId}`,
+        judgmentAssessments: getServingAssessmentValues(row),
+        judgmentCreatedAt: row.judgment_created_at ?? null,
+        judgmentUpdatedAt: row.judgment_updated_at ?? row.detail_updated_at ?? null,
         judgmentArticleId: row.article_id ?? params.articleId,
-        judgmentModelId: getStringPayloadValue(model.id, ''),
+        judgmentModelId: getStringPayloadValue(row.judgment_model_id, ''),
         judgmentPromptId: promptId,
         judgmentProjectId: params.projectId,
         judgmentUseTitle: params.projectReviewConfig.useTitle,
         judgmentUseAbstract: params.projectReviewConfig.useAbstract,
         judgmentUseFulltext: params.projectReviewConfig.useFulltext,
         judgmentUseFulltextNoImages: params.projectReviewConfig.useFulltextNoImages,
-        judgmentChunkingStrategy: (payload.chunkingStrategy as string | null | undefined) ?? null,
-        judgmentIsAnswered: (payload.isAnswered as boolean | null | undefined) ?? false,
+        judgmentChunkingStrategy: row.chunking_strategy ?? null,
+        judgmentIsAnswered: row.is_answered ?? false,
         judgmentAnsweredOriginal: row.answered_original ?? null,
         judgmentAnsweredOriginalAsArray: row.answered_original_as_array ?? null,
-        judgmentConfidenceOriginal: (payload.confidenceOriginal as number | null | undefined) ?? 50,
-        judgmentExplanation: (payload.explanation as string | null | undefined) ?? null,
-        judgmentQuotes: payload.quotes ?? [],
-        judgmentSnapshotProjectId: (payload.snapshotProjectId as string | null | undefined) ?? null,
-        judgmentSnapshotProjectModelName: (payload.snapshotProjectModelName as string | null | undefined) ?? null,
+        judgmentConfidenceOriginal: row.confidence_original ?? 50,
+        judgmentExplanation: row.explanation ?? null,
+        judgmentQuotes: row.quotes ?? [],
+        judgmentSnapshotProjectId: row.snapshot_project_id ?? null,
+        judgmentSnapshotProjectModelName: row.snapshot_project_model_name ?? null,
         promptOriginalText: prompt.originalText,
         promptHeading: prompt.promptHeading,
         modelMetadataJson: null,
-        modelName: model.name ?? null,
-        modelProvider: model.provider ?? null,
-        modelThinking: model.thinking ?? null,
-        modelVersion: model.version ?? null,
+        modelName: row.model_name ?? null,
+        modelProvider: row.model_provider ?? null,
+        modelThinking: row.model_thinking ?? null,
+        modelVersion: row.model_version ?? null,
       }
     })
 

@@ -217,51 +217,6 @@ const getPayloadProjectionManifests = (
   return getPayloadManifestInputs(input, claims)
 }
 
-const getSqlPromptDisplayPayload = (alias: string) => {
-  return `json_object(
-    'criteriaDisposition', ${alias}.prompt_criteria_disposition,
-    'id', ${alias}.prompt_id,
-    'order', ${alias}.prompt_order,
-    'originalText', COALESCE(${alias}.prompt_original_text, ''),
-    'promptHeading', ${alias}.prompt_heading,
-    'type', ${alias}.prompt_type
-  )`
-}
-
-const getSqlLlmJudgmentPayload = (alias: string) => {
-  return `json_object(
-    'assessments', CASE WHEN ${alias}.assessment_id IS NULL THEN [] ELSE [json_object(
-      'assessmentComment', ${alias}.assessment_comment,
-      'assessmentIsCorrect', COALESCE(${alias}.assessment_is_correct, FALSE),
-      'createdAt', ${alias}.assessment_created_at,
-      'id', ${alias}.assessment_id,
-      'judgmentId', ${alias}.judgment_id,
-      'updatedAt', ${alias}.assessment_updated_at
-    )] END,
-    'chunkingStrategy', ${alias}.chunking_strategy,
-    'confidenceOriginal', ${alias}.confidence_original,
-    'createdAt', ${alias}.judgment_created_at,
-    'explanation', ${alias}.explanation,
-    'id', COALESCE(${alias}.judgment_id, concat('placeholder:', ${alias}.prompt_id)),
-    'isAnswered', COALESCE(${alias}.is_answered, FALSE),
-    'model', json_object(
-      'id', ${alias}.model_id,
-      'metadataJson', ${alias}.model_metadata_json,
-      'name', ${alias}.model_display_name,
-      'provider', ${alias}.model_provider,
-      'thinking', ${alias}.model_thinking,
-      'version', ${alias}.model_version
-    ),
-    'payloadReference', json_object('kind', CASE WHEN ${alias}.placeholder_kind IS NULL THEN 'llm_judgment' ELSE 'placeholder' END, 'judgmentId', ${alias}.judgment_id),
-    'placeholderKind', ${alias}.placeholder_kind,
-    'prompt', ${getSqlPromptDisplayPayload(alias)},
-    'quotes', ${alias}.quotes,
-    'snapshotProjectId', ${alias}.snapshot_project_id,
-    'snapshotProjectModelName', ${alias}.snapshot_project_model_name,
-    'updatedAt', ${alias}.judgment_updated_at
-  )`
-}
-
 const getReplacementDeleteStatements = (
   input: ProjectReviewServingJudgmentPayloadInput,
   payloadKinds: readonly JudgmentPayloadKind[],
@@ -342,10 +297,24 @@ const getLlmJudgmentDirectInsertStatement = (
         prompt_type,
         prompt_criteria_disposition,
         judgment_created_at,
+        judgment_updated_at,
         human_comment,
         explanation,
         quotes,
-        judgment_payload_json,
+        chunking_strategy,
+        confidence_original,
+        snapshot_project_id,
+        snapshot_project_model_name,
+        model_name,
+        model_provider,
+        model_thinking,
+        model_version,
+        assessment_id,
+        assessment_judgment_id,
+        assessment_is_correct,
+        assessment_comment,
+        assessment_created_at,
+        assessment_updated_at,
         placeholder_kind,
         detail_updated_at
       )
@@ -408,7 +377,6 @@ const getLlmJudgmentDirectInsertStatement = (
           judgment.snapshot_project_id,
           judgment.snapshot_project_model_name,
           COALESCE(model.display_name, model.name, judgment.snapshot_project_model_name) AS model_display_name,
-          model.metadata_json AS model_metadata_json,
           provider_connection.provider_kind AS model_provider,
           json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking,
           model.variant AS model_version,
@@ -417,6 +385,7 @@ const getLlmJudgmentDirectInsertStatement = (
           prompt.prompt_type,
           prompt.prompt_criteria_disposition,
           assessment.id AS assessment_id,
+          assessment.judgment_id AS assessment_judgment_id,
           assessment.assessment_is_correct,
           assessment.assessment_comment,
           assessment.created_at AS assessment_created_at,
@@ -455,10 +424,24 @@ const getLlmJudgmentDirectInsertStatement = (
         payload.prompt_type,
         payload.prompt_criteria_disposition,
         payload.judgment_created_at,
+        payload.judgment_updated_at,
         NULL AS human_comment,
         payload.explanation,
         payload.quotes,
-        CASE WHEN payload.placeholder_kind IS NOT NULL THEN NULL ELSE ${getSqlLlmJudgmentPayload('payload')} END AS judgment_payload_json,
+        payload.chunking_strategy,
+        payload.confidence_original,
+        payload.snapshot_project_id,
+        payload.snapshot_project_model_name,
+        payload.model_display_name AS model_name,
+        payload.model_provider,
+        payload.model_thinking,
+        payload.model_version,
+        payload.assessment_id,
+        payload.assessment_judgment_id,
+        payload.assessment_is_correct,
+        payload.assessment_comment,
+        payload.assessment_created_at,
+        payload.assessment_updated_at,
         payload.placeholder_kind,
         COALESCE(payload.judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
@@ -495,10 +478,24 @@ const getHumanJudgmentDirectInsertStatement = (
         prompt_type,
         prompt_criteria_disposition,
         judgment_created_at,
+        judgment_updated_at,
         human_comment,
         explanation,
         quotes,
-        judgment_payload_json,
+        chunking_strategy,
+        confidence_original,
+        snapshot_project_id,
+        snapshot_project_model_name,
+        model_name,
+        model_provider,
+        model_thinking,
+        model_version,
+        assessment_id,
+        assessment_judgment_id,
+        assessment_is_correct,
+        assessment_comment,
+        assessment_created_at,
+        assessment_updated_at,
         placeholder_kind,
         detail_updated_at
       )
@@ -588,10 +585,24 @@ const getHumanJudgmentDirectInsertStatement = (
         payload.prompt_type,
         payload.prompt_criteria_disposition,
         payload.human_judgment_created_at AS judgment_created_at,
+        payload.human_judgment_updated_at AS judgment_updated_at,
         payload.comment AS human_comment,
         NULL AS explanation,
         NULL AS quotes,
-        NULL AS judgment_payload_json,
+        NULL AS chunking_strategy,
+        NULL AS confidence_original,
+        NULL AS snapshot_project_id,
+        NULL AS snapshot_project_model_name,
+        NULL AS model_name,
+        NULL AS model_provider,
+        NULL AS model_thinking,
+        NULL AS model_version,
+        NULL AS assessment_id,
+        NULL AS assessment_judgment_id,
+        NULL AS assessment_is_correct,
+        NULL AS assessment_comment,
+        NULL AS assessment_created_at,
+        NULL AS assessment_updated_at,
         NULL AS placeholder_kind,
         COALESCE(payload.human_judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload

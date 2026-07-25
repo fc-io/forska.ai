@@ -134,19 +134,6 @@ beforeEach(() => {
   }
 })
 
-const getPromptRow = (id: string, order: number) => {
-  return {
-    criteriaDisposition: 'include',
-    enabled: true,
-    id,
-    order,
-    originalText: `Prompt ${order + 1}`,
-    originProjectId: null,
-    promptHeading: `Prompt ${order + 1}`,
-    type: 'string',
-  }
-}
-
 const getServingArticleRow = () => {
   return {
     article_created_at: '2024-01-01T00:00:00.000Z',
@@ -174,31 +161,25 @@ const getServingJudgmentRow = () => {
     answered_original: 'yes',
     answered_original_as_array: ['yes'],
     article_id: 'article-1',
+    assessment_comment: 'looks good',
+    assessment_created_at: '2024-01-05T00:00:00.000Z',
+    assessment_id: 'assessment-1',
+    assessment_is_correct: true,
+    assessment_judgment_id: 'judgment-1',
+    assessment_updated_at: '2024-01-05T00:00:00.000Z',
+    chunking_strategy: null,
+    confidence_original: 80,
     detail_updated_at: '2024-01-04T00:00:00.000Z',
+    explanation: 'because',
+    is_answered: true,
     judgment_id: 'judgment-1',
-    judgment_payload_json: {
-      assessments: [
-        {
-          assessmentComment: 'looks good',
-          assessmentIsCorrect: true,
-          createdAt: '2024-01-05T00:00:00.000Z',
-          id: 'assessment-1',
-          judgmentId: 'judgment-1',
-          updatedAt: '2024-01-05T00:00:00.000Z',
-        },
-      ],
-      chunkingStrategy: null,
-      confidenceOriginal: 80,
-      createdAt: '2024-01-03T00:00:00.000Z',
-      explanation: 'because',
-      id: 'judgment-1',
-      isAnswered: true,
-      model: {id: 'model-1', name: 'Model One', provider: 'openai', thinking: 'high', version: 'v1'},
-      prompt: getPromptRow('prompt-1', 0),
-      quotes: [],
-      updatedAt: '2024-01-04T00:00:00.000Z',
-    },
+    judgment_model_id: 'model-1',
     judgment_created_at: '2024-01-03T00:00:00.000Z',
+    judgment_updated_at: '2024-01-04T00:00:00.000Z',
+    model_name: 'Model One',
+    model_provider: 'openai',
+    model_thinking: 'high',
+    model_version: 'v1',
     payload_kind: 'llm',
     placeholder_kind: null,
     prompt_criteria_disposition: 'include',
@@ -207,6 +188,9 @@ const getServingJudgmentRow = () => {
     prompt_original_text: 'Prompt 1',
     prompt_order: 0,
     prompt_type: 'string',
+    quotes: [],
+    snapshot_project_id: null,
+    snapshot_project_model_name: null,
   }
 }
 
@@ -277,36 +261,37 @@ test('project review details hydrates article, judgments, and assessments from V
   ).toEqual(['review.detail.row', 'review.detail.payload', 'review.detail.judgments', 'review.detail.humanJudgments'])
 })
 
-test('project review details keeps V4 judgment payload JSON keys on the serving contract boundary', () => {
+test('project review details reads migrated V4 judgment fields from scalar columns', () => {
   const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
   const detailJudgmentHydration = routeText.slice(
     routeText.indexOf('const getProjectReviewDetailJudgmentRows'),
     routeText.indexOf('const getProjectReviewDetailHumanRows'),
   )
 
-  expect(detailJudgmentHydration).toContain('const payload = getJsonObjectValue(row.judgment_payload_json)')
+  expect(detailJudgmentHydration).toContain('judgmentAssessments: getServingAssessmentValues(row)')
   expect(detailJudgmentHydration).toContain('getPromptRowFromServingDetail(row)')
-  expect(detailJudgmentHydration).toContain('getModelPayload(payload)')
-  expect(detailJudgmentHydration).toContain('judgmentAssessments: payload.assessments ?? []')
-  expect(detailJudgmentHydration).toContain('judgmentCreatedAt: row.judgment_created_at ?? payload.createdAt ?? null')
-  expect(detailJudgmentHydration).toContain('judgmentUpdatedAt: payload.updatedAt ?? row.detail_updated_at ?? null')
+  expect(detailJudgmentHydration).toContain('judgmentCreatedAt: row.judgment_created_at ?? null')
   expect(detailJudgmentHydration).toContain(
-    'judgmentChunkingStrategy: (payload.chunkingStrategy as string | null | undefined) ?? null',
+    'judgmentUpdatedAt: row.judgment_updated_at ?? row.detail_updated_at ?? null',
   )
-  expect(detailJudgmentHydration).toContain(
-    'judgmentIsAnswered: (payload.isAnswered as boolean | null | undefined) ?? false',
-  )
-  expect(detailJudgmentHydration).toContain(
-    'judgmentConfidenceOriginal: (payload.confidenceOriginal as number | null | undefined) ?? 50',
-  )
-  expect(detailJudgmentHydration).toContain(
-    'judgmentExplanation: (payload.explanation as string | null | undefined) ?? null',
-  )
-  expect(detailJudgmentHydration).toContain('judgmentQuotes: payload.quotes ?? []')
-  expect(detailJudgmentHydration).toContain('modelName: model.name ?? null')
-  expect(detailJudgmentHydration).toContain('modelProvider: model.provider ?? null')
-  expect(detailJudgmentHydration).toContain('modelThinking: model.thinking ?? null')
-  expect(detailJudgmentHydration).toContain('modelVersion: model.version ?? null')
+  expect(detailJudgmentHydration).toContain("judgmentModelId: getStringPayloadValue(row.judgment_model_id, '')")
+  expect(detailJudgmentHydration).toContain('judgmentChunkingStrategy: row.chunking_strategy ?? null')
+  expect(detailJudgmentHydration).toContain('judgmentIsAnswered: row.is_answered ?? false')
+  expect(detailJudgmentHydration).toContain('judgmentConfidenceOriginal: row.confidence_original ?? 50')
+  expect(detailJudgmentHydration).toContain('judgmentExplanation: row.explanation ?? null')
+  expect(detailJudgmentHydration).toContain('judgmentQuotes: row.quotes ?? []')
+  expect(detailJudgmentHydration).toContain('judgmentSnapshotProjectId: row.snapshot_project_id ?? null')
+  expect(detailJudgmentHydration).toContain('judgmentSnapshotProjectModelName: row.snapshot_project_model_name ?? null')
+  expect(detailJudgmentHydration).toContain('modelName: row.model_name ?? null')
+  expect(detailJudgmentHydration).toContain('modelProvider: row.model_provider ?? null')
+  expect(detailJudgmentHydration).toContain('modelThinking: row.model_thinking ?? null')
+  expect(detailJudgmentHydration).toContain('modelVersion: row.model_version ?? null')
+  expect(detailJudgmentHydration).not.toContain('payload.createdAt')
+  expect(detailJudgmentHydration).not.toContain('payload.updatedAt')
+  expect(detailJudgmentHydration).not.toContain('payload.chunkingStrategy')
+  expect(detailJudgmentHydration).not.toContain('payload.confidenceOriginal')
+  expect(detailJudgmentHydration).not.toContain('judgment_payload_json')
+  expect(detailJudgmentHydration).not.toContain('getModelPayload')
 })
 
 test('project review details reads human answer and comment from scalar detail columns', () => {
