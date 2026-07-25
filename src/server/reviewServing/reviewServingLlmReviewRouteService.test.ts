@@ -143,7 +143,7 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
-      if (statement.includes('COUNT(DISTINCT serving.article_id)')) {
+      if (statement.includes(' AS totalCount')) {
         return [{totalCount}] as T[]
       }
 
@@ -300,13 +300,13 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(reader.statements).toHaveLength(4)
   expect(sql).toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
-  expect(sql).toContain('COUNT(DISTINCT serving.article_id)')
+  expect(sql).toContain('COUNT(DISTINCT filtered_article_ids.article_id)')
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   expect(sql).toContain("article_created_at >= TIMESTAMPTZ '2026-01-10T00:00:00.000Z'")
   expect(sql).toContain("article_created_at <= TIMESTAMPTZ '2026-01-20T00:00:00.000Z'")
-  expect(sql).toContain("flag_filter_0.filter_kind = 'duplicateFlag'")
-  expect(sql).toContain("flag_filter_1.filter_kind = 'conflictFlag'")
-  expect(sql).toContain("flag_filter_0.filter_value = 'true'")
+  expect(sql).toContain("posting.filter_kind = 'duplicateFlag'")
+  expect(sql).toContain("posting.filter_kind = 'conflictFlag'")
+  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['true']::VARCHAR[]))")
   expect(sql).not.toContain('serving.duplicate_flag = TRUE')
   expect(sql).not.toContain('serving.conflict_flag = TRUE')
   forbiddenSqlFragments.forEach((fragment) => {
@@ -331,9 +331,10 @@ test('LLM review route tokenizes title search like the title search projector an
   expect(sql).toContain("search.search_identity = 'search-identity'")
   expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
   expect(sql).not.toContain('prompt_anchor')
+  expect(sql).toContain('search_filtered_article_ids AS')
 })
 
-test('LLM review prompt-filtered count starts from the posting mart', async () => {
+test('LLM review prompt-filtered count intersects through one posting CTE', async () => {
   const reader = createReaderDatabase()
   const result = await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {'prompt-1': ['yes', 'maybe']}},
@@ -344,20 +345,20 @@ test('LLM review prompt-filtered count starts from the posting mart', async () =
     },
   )
   const countStatement = reader.statements.find((statement) => {
-    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   })
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
-  expect(countStatement).toContain('FROM mart.review_article_filter_posting_serving_v4 prompt_anchor')
-  expect(countStatement).toContain('JOIN mart.review_article_serving_v4 serving')
-  expect(countStatement).toContain("prompt_anchor.filter_kind = 'promptAnswer'")
+  expect(countStatement).toContain('posting_filtered_article_ids AS')
+  expect(countStatement).toContain('FROM mart.review_article_filter_posting_serving_v4 posting')
+  expect(countStatement).toContain("posting.filter_kind = 'promptAnswer'")
   expect(countStatement).toContain(
     "unnest(['review:promptAnswer:prompt-1:maybe', 'review:promptAnswer:prompt-1:yes']::VARCHAR[])",
   )
   expect(countStatement).toContain('serving.llm_judged_prompt_count > 0')
 })
 
-test('LLM review multi-prompt count uses one posting anchor plus remaining prompt EXISTS', async () => {
+test('LLM review multi-prompt count groups posting filters without repeated posting scans', async () => {
   const reader = createReaderDatabase()
 
   await countLlmReviewArticlesFromServing(
@@ -369,18 +370,18 @@ test('LLM review multi-prompt count uses one posting anchor plus remaining promp
     },
   )
   const countStatement = reader.statements.find((statement) => {
-    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   })
 
-  expect(countStatement).toContain('FROM mart.review_article_filter_posting_serving_v4 prompt_anchor')
-  expect(countStatement?.match(/FROM mart\.review_article_filter_posting_serving_v4/gu)).toHaveLength(2)
+  expect(countStatement).toContain('posting_filtered_article_ids AS')
+  expect(countStatement?.match(/FROM mart\.review_article_filter_posting_serving_v4/gu)).toHaveLength(1)
   expect(countStatement).toContain(
-    "prompt_anchor.filter_value IN (SELECT unnest(['review:promptAnswer:prompt-1:maybe', 'review:promptAnswer:prompt-1:yes']::VARCHAR[]))",
+    "posting.filter_value IN (SELECT unnest(['review:promptAnswer:prompt-1:maybe', 'review:promptAnswer:prompt-1:yes']::VARCHAR[]))",
   )
-  expect(countStatement).toContain('FROM mart.review_article_filter_posting_serving_v4 prompt_filter_0')
   expect(countStatement).toContain(
-    "prompt_filter_0.filter_value IN (SELECT unnest(['review:promptAnswer:prompt-2:no']::VARCHAR[]))",
+    "posting.filter_value IN (SELECT unnest(['review:promptAnswer:prompt-2:no']::VARCHAR[]))",
   )
+  expect(countStatement).toContain('HAVING COUNT(DISTINCT CASE')
 })
 
 test('LLM review count route service requires reviewed LLM rows without row hydration', async () => {
