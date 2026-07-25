@@ -44,6 +44,7 @@ import {
   projectReviewServingFilterOptions,
 } from '../reviewServing/reviewServingFilterOptionProjector.ts'
 import {
+  projectReviewServingFilterPostingRanges,
   projectReviewServingFilterPostings,
   refreshReviewServingFilterPostingStats,
 } from '../reviewServing/reviewServingFilterPostingProjector.ts'
@@ -3939,6 +3940,7 @@ const canRunPostingRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChu
 const completePostingRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -3948,7 +3950,10 @@ const completePostingRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {postingBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+        postingBatchWriter: {rangeCount: input.batchRangeCount},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -3991,6 +3996,7 @@ const runPostingRebuildChunkBatch = async (
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -4001,39 +4007,41 @@ const runPostingRebuildChunkBatch = async (
 
     await snapshots.reduce<Promise<void>>(async (previousSnapshot, snapshot) => {
       await previousSnapshot
-      await input.chunks.reduce<Promise<void>>(async (previousChunk, chunk) => {
-        await previousChunk
-        await projectReviewServingFilterPostings(
-          {
-            acknowledgeClaims: false,
-            baseGeneration: chunk.outputBaseGeneration,
-            chunkEndArticleId: chunk.chunkEndKey,
-            chunkStartArticleId: chunk.chunkStartKey,
-            claims: [],
-            definitionVersion: manifest.definitionVersion,
-            listModeKeys: reviewServingListModes,
-            projectId,
-            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-            projectionIdentity: chunk.projectionIdentity,
-            refreshFullRebuildStats: false,
-            reviewConfigHash: requireReviewConfigHash(snapshot),
-            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-            snapshotId: snapshot.snapshotId,
-          },
-          chunkDatabase,
-        )
-      }, Promise.resolve())
+      await projectReviewServingFilterPostingRanges(
+        {
+          ranges: input.chunks.map((chunk) => {
+            return {
+              acknowledgeClaims: false,
+              baseGeneration: chunk.outputBaseGeneration,
+              chunkEndArticleId: chunk.chunkEndKey,
+              chunkStartArticleId: chunk.chunkStartKey,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              listModeKeys: reviewServingListModes,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              projectionIdentity: chunk.projectionIdentity,
+              refreshFullRebuildStats: false,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              snapshotId: snapshot.snapshotId,
+            }
+          }),
+        },
+        chunkDatabase,
+      )
       await refreshReviewServingFilterPostingStats(
         {projectId, reviewConfigHash: requireReviewConfigHash(snapshot), snapshotId: snapshot.snapshotId},
         chunkDatabase,
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completePostingRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())

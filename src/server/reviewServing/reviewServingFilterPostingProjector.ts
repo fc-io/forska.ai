@@ -40,6 +40,8 @@ export type ProjectReviewServingFilterPostingsInput = {
   refreshFullRebuildStats?: boolean
 }
 
+export type ProjectReviewServingFilterPostingRangesInput = {ranges: readonly ProjectReviewServingFilterPostingsInput[]}
+
 type PostingContributionRow = {
   articleId: string
   filterKind: string
@@ -202,7 +204,34 @@ const getPostingRowsAsContributionRows = (rows: readonly PostingContributionRow[
   return [...liveRowsByArticleAndStatsKey.values()]
 }
 
-const getDirtyArticleCte = (input: ProjectReviewServingFilterPostingsInput, articleIds: readonly string[]) => {
+const getRangeValuesCte = (ranges: readonly ProjectReviewServingFilterPostingsInput[]) => {
+  return `article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
+        SELECT * FROM (VALUES ${ranges
+          .map((range) => {
+            return `(${getSqlLiteral(range.chunkStartArticleId ?? null)}, ${getSqlLiteral(range.chunkEndArticleId ?? null)})`
+          })
+          .join(', ')})
+      )`
+}
+
+const getDirtyArticleCte = (
+  input: ProjectReviewServingFilterPostingsInput,
+  articleIds: readonly string[],
+  ranges?: readonly ProjectReviewServingFilterPostingsInput[],
+) => {
+  if (ranges !== undefined) {
+    return `${getRangeValuesCte(ranges)},
+      article_id_filter(article_id) AS (
+        SELECT DISTINCT scope.article_id
+        FROM mart.project_scope_article scope
+        INNER JOIN article_range_filter range
+          ON (range.chunk_start_article_id IS NULL OR scope.article_id >= range.chunk_start_article_id)
+          AND (range.chunk_end_article_id IS NULL OR scope.article_id <= range.chunk_end_article_id)
+        WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+          AND (scope.in_curated_scope OR scope.in_route_scope)
+      )`
+  }
+
   return articleIds.length > 0
     ? getValuesCte('article_id', articleIds)
     : `article_id_filter(article_id) AS (
@@ -218,9 +247,12 @@ const getPostingContributionRowsStatement = (input: ProjectReviewServingFilterPo
   return getFullRebuildPostingContributionRowsStatement(input)
 }
 
-const getFullRebuildPostingContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+const getFullRebuildPostingContributionRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  ranges?: readonly ProjectReviewServingFilterPostingsInput[],
+) => {
   return `
-        WITH ${getDirtyArticleCte(input, getClaimArticleIds(input.claims))},
+        WITH ${getDirtyArticleCte(input, getClaimArticleIds(input.claims), ranges)},
         ${getListModeCte(input.listModeKeys)},
         scoped_article AS (
           SELECT
@@ -581,7 +613,10 @@ const getDeleteServingRowsStatement = (
           AND serving.list_mode_key = deleted.list_mode_key`
 }
 
-const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+const getInsertFullRebuildServingRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  ranges?: readonly ProjectReviewServingFilterPostingsInput[],
+) => {
   return `INSERT INTO mart.review_article_filter_posting_serving_v4 (
       project_id,
       review_config_hash,
@@ -594,7 +629,7 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       sort_key,
       posting_updated_at
     )
-    WITH posting_source AS (${getFullRebuildPostingContributionRowsStatement(input)}),
+    WITH posting_source AS (${getFullRebuildPostingContributionRowsStatement(input, ranges)}),
     serving_source AS (
       SELECT
         CAST(posting.filterKind AS VARCHAR) AS filterKind,
@@ -708,6 +743,21 @@ export const refreshReviewServingFilterPostingStats = async (
 const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
   const insertStatements = input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(input)]
   const statsStatements = input.refreshFullRebuildStats === false ? [] : [getInsertFullRebuildStatsRowsStatement(input)]
+
+  return [...insertStatements, ...statsStatements]
+}
+
+const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPostingRangesInput) => {
+  const firstRange = input.ranges[0]
+
+  if (firstRange === undefined) {
+    return []
+  }
+
+  const insertStatements =
+    firstRange.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(firstRange, input.ranges)]
+  const statsStatements =
+    firstRange.refreshFullRebuildStats === false ? [] : [getInsertFullRebuildStatsRowsStatement(firstRange)]
 
   return [...insertStatements, ...statsStatements]
 }
@@ -1091,6 +1141,59 @@ export const projectReviewServingFilterPostings = async (
         selectivity: getRecordValue(record, 'selectivity'),
       }
     }),
+    validationResult: undefined,
+  }
+}
+
+export const projectReviewServingFilterPostingRanges = async (
+  input: ProjectReviewServingFilterPostingRangesInput,
+  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService() as ReviewServingFilterPostingProjectorDatabase,
+) => {
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const firstRange = input.ranges[0]
+
+  if (firstRange === undefined) {
+    return {
+      diagnosticsJson: {phaseTimings, postingProjector: {fullRebuildMode: 'range-set-based', rangeCount: 0}},
+      patchRowCount: 0,
+      servingRowCount: 0,
+      statsValues: [],
+      validationResult: undefined,
+    }
+  }
+
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: [],
+        component: 'posting',
+        projectionManifests: [],
+        records: [],
+        repairDirtyWork: [],
+        statements: getFullRebuildRangeWriteStatements(input),
+      },
+      database,
+    )
+  })
+
+  return {
+    diagnosticsJson: {
+      phaseTimings,
+      postingProjector: {
+        fullRebuildMode: 'range-set-based',
+        rangeCount: input.ranges.length,
+        writer: writerResult.diagnostics,
+      },
+    },
+    patchRowCount: 0,
+    servingRowCount: 0,
+    statsValues: [],
     validationResult: undefined,
   }
 }
