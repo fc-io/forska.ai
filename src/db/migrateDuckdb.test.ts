@@ -127,6 +127,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0133_dropReviewFilterPostingServingIdentity.sql'),
     'utf8',
   ).trim()
+  const reviewFilterPostingServingUpdatedAtDropSql = readFileSync(
+    resolve(migrationsFolder, '0140_dropReviewFilterPostingServingUpdatedAt.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -227,6 +231,20 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewFilterPostingServingIdentityDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterPostingServingIdentityDropSql).not.toContain('posting_identity')
+  expect(reviewFilterPostingServingUpdatedAtDropSql).toContain(
+    'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
+  )
+  expect(reviewFilterPostingServingUpdatedAtDropSql).toContain(
+    'DROP TABLE mart.review_article_filter_posting_serving_v4;',
+  )
+  expect(reviewFilterPostingServingUpdatedAtDropSql).toContain(
+    'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
+  )
+  expect(reviewFilterPostingServingUpdatedAtDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_repaired_pk',
+  )
+  expect(reviewFilterPostingServingUpdatedAtDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewFilterPostingServingUpdatedAtDropSql).not.toContain('posting_updated_at')
   expect(reviewArticleServingReviewProgressCopyDropSql).toContain('CREATE TABLE mart.review_article_serving_v4_repair')
   expect(reviewArticleServingReviewProgressCopyDropSql).toContain('DROP TABLE mart.review_article_serving_v4;')
   expect(reviewArticleServingReviewProgressCopyDropSql).toContain(

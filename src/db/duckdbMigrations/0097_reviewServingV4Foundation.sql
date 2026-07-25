@@ -638,7 +638,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_filter_posting_serving_v4 (
   list_mode_key VARCHAR NOT NULL,
   sort_key TIMESTAMPTZ NOT NULL,
   article_id VARCHAR NOT NULL,
-  posting_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)
 );
 
