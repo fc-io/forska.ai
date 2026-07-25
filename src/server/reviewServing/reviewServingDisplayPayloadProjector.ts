@@ -80,10 +80,7 @@ type DisplayProjectionRow = {
   biorxivId: string | null
   conflictFlag: boolean | null
   doi: string | null
-  fullTextConversionStatus: string | null
-  fullTextFetchedAt: Date | string | null
   duplicateFlag: boolean | null
-  fullTextPdf: string | null
   journalTitle: string | null
   medrxivId: string | null
   pmid: string | null
@@ -104,9 +101,6 @@ type DisplayPatchRow = {
   arxivId: string | null
   biorxivId: string | null
   doi: string | null
-  fullTextConversionStatus: string | null
-  fullTextFetchedAt: Date | string | null
-  fullTextPdf: string | null
   journalTitle: string | null
   medrxivId: string | null
   pmid: string | null
@@ -299,9 +293,6 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
         ELSE selected_hot.journal_title
       END AS journalTitle,
       COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-      article.full_text_pdf AS fullTextPdf,
-      article.full_text_fetched_at AS fullTextFetchedAt,
-      article.full_text_conversion_status AS fullTextConversionStatus,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.import_route_id
@@ -377,10 +368,7 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       conflict_flag,
       doi,
       duplicate_flag,
-      full_text_conversion_status,
-      full_text_fetched_at,
       enabled_prompt_count,
-      full_text_pdf,
       human_answered_prompt_count,
       human_status_key,
       journal_title,
@@ -418,10 +406,7 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       COALESCE(display_base.conflictFlag, FALSE) AS conflict_flag,
       display_base.doi,
       COALESCE(display_base.duplicateFlag, FALSE) AS duplicate_flag,
-      display_base.fullTextConversionStatus AS full_text_conversion_status,
-      display_base.fullTextFetchedAt AS full_text_fetched_at,
       0 AS enabled_prompt_count,
-      display_base.fullTextPdf AS full_text_pdf,
       0 AS human_answered_prompt_count,
       NULL AS human_status_key,
       display_base.journalTitle AS journal_title,
@@ -469,9 +454,6 @@ const getDisplayPatchRows = async (
           article.medrxiv_id AS medrxivId,
           article.doi,
           article.pubmed_id AS pmid,
-          article.full_text_pdf AS fullTextPdf,
-          article.full_text_fetched_at AS fullTextFetchedAt,
-          article.full_text_conversion_status AS fullTextConversionStatus,
           CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_hot.journal_title END AS journalTitle,
           COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
           CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_hot.publication_year END AS publicationYear,
@@ -693,9 +675,6 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
           medrxiv_id = ${getSqlLiteral(row.medrxivId)},
           doi = ${getSqlLiteral(row.doi)},
           pmid = ${getSqlLiteral(row.pmid)},
-          full_text_pdf = ${getSqlLiteral(row.fullTextPdf)},
-          full_text_fetched_at = ${getSqlLiteral(row.fullTextFetchedAt)},
-          full_text_conversion_status = ${getSqlLiteral(row.fullTextConversionStatus)},
           activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
           sort_key = ${getSqlLiteral(row.sortKey)},
           url = ${getSqlLiteral(row.url)},

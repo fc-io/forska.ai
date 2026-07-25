@@ -704,10 +704,15 @@ test('Phase 1 article serving schema preserves review table display metadata', (
       'medrxiv_id',
       'doi',
       'pmid',
+    ]),
+  ).toEqual([])
+  expect(
+    getMissingColumns('mart.review_article_serving_v4', [
+      'full_text_pdf',
       'full_text_fetched_at',
       'full_text_conversion_status',
     ]),
-  ).toEqual([])
+  ).toEqual(['full_text_pdf', 'full_text_fetched_at', 'full_text_conversion_status'])
   const removedIdentityColumns = [
     'display_identity',
     'project_scope_identity',

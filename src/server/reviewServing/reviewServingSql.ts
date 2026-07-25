@@ -84,6 +84,10 @@ const getNormalizedSqlAlias = (alias: string | undefined) => {
 const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
   return reviewServingSqlForbiddenPatterns
     .filter((forbiddenPattern) => {
+      if (forbiddenPattern.label === 'raw article table scan' && hasBoundedArticleLookupJoin(sql)) {
+        return false
+      }
+
       return forbiddenPattern.pattern.test(sql)
     })
     .map((forbiddenPattern) => {
@@ -113,6 +117,23 @@ const getReviewServingSqlTableReferenceDetails = (sql: string): ReviewServingSql
     })
 }
 
+const hasBoundedArticleLookupJoin = (sql: string) => {
+  return (
+    /\bleft\s+join\s+app\.article\s+article\s+on\s+article\.id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(
+      sql,
+    )
+    || /\bleft\s+join\s+app\.article\s+article[`',\s]*\n\s*`?\s*on\s+article\.id\s*=\s*\$\{reviewServingArticleTable\}\.article_id\b/iu.test(
+      sql,
+    )
+  )
+}
+
+const isBoundedArticleLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
+  return (
+    tableReference.table === 'app.article' && tableReference.alias === 'article' && hasBoundedArticleLookupJoin(sql)
+  )
+}
+
 const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
   if (!options.requireRegisteredTable) {
     return []
@@ -129,6 +150,9 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
       ? [{label: 'registered serving table', pattern: 'FROM <registered review-serving table>'}]
       : []
   const unregisteredTableViolations = tableReferences
+    .filter((tableReference) => {
+      return tableReference !== 'app.article' || !hasBoundedArticleLookupJoin(sql)
+    })
     .filter((tableReference) => {
       return !allowedTables.has(tableReference)
     })
@@ -169,6 +193,10 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
     return required
       ? tableReferences
           .filter((tableReference, tableReferenceIndex) => {
+            if (isBoundedArticleLookupReference(sql, tableReference)) {
+              return false
+            }
+
             const predicateClause = tableReferenceIndex === 0 ? wherePredicateClause : scopedPredicateClause
 
             return !getScopePredicatePattern(tableReference, field).test(predicateClause)
@@ -260,9 +288,9 @@ const reviewServingArticlePayloadDisplayColumns = [
   `${reviewServingArticleTable}.pmid AS pmid`,
   `${reviewServingArticleTable}.journal_title AS journal_title`,
   `${reviewServingArticleTable}.url AS url`,
-  `${reviewServingArticleTable}.full_text_pdf AS full_text_pdf`,
-  `${reviewServingArticleTable}.full_text_fetched_at AS full_text_fetched_at`,
-  `${reviewServingArticleTable}.full_text_conversion_status AS full_text_conversion_status`,
+  `article.full_text_pdf AS full_text_pdf`,
+  `article.full_text_fetched_at AS full_text_fetched_at`,
+  `article.full_text_conversion_status AS full_text_conversion_status`,
 ].map((column) => {
   return column
 })
@@ -732,6 +760,8 @@ export const buildReviewServingRowsSql = (params: {
           ` AND payload.snapshot_id = ${params.snapshotIdParameter}`,
           ` AND payload.snapshot_id = ${reviewServingArticleTable}.snapshot_id`,
           ` AND payload.article_id = ${reviewServingArticleTable}.article_id`,
+          ` LEFT JOIN app.article article`,
+          ` ON article.id = ${reviewServingArticleTable}.article_id`,
         ].join('')
       : ''
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''

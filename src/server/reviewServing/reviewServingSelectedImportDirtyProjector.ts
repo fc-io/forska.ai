@@ -314,7 +314,6 @@ const selectedImportServingColumns = [
   'article_external_id',
   'journal_title',
   'url',
-  'full_text_pdf',
   'selected_import_route_id',
   'publication_year',
   'duplicate_flag',
@@ -332,8 +331,6 @@ const selectedImportServingColumns = [
   'medrxiv_id',
   'doi',
   'pmid',
-  'full_text_fetched_at',
-  'full_text_conversion_status',
 ].join(', ')
 
 const getSelectedImportChangedRowsCte = (values: string) => {
@@ -582,9 +579,6 @@ const getApplySelectedImportServingStatements = (input: {
             pmid,
             journal_title,
             url,
-            full_text_pdf,
-            full_text_fetched_at,
-            full_text_conversion_status,
             selected_import_route_id,
             selected_rank_key,
             publication_year,
@@ -616,9 +610,6 @@ const getApplySelectedImportServingStatements = (input: {
             article.pubmed_id AS pmid,
             changed.journal_title,
             COALESCE(changed.selected_source_url, article.url) AS url,
-            article.full_text_pdf,
-            article.full_text_fetched_at,
-            article.full_text_conversion_status,
             changed.import_route_id,
             changed.selected_rank_key,
             changed.publication_year,
@@ -659,7 +650,6 @@ const getApplySelectedImportServingStatements = (input: {
             COALESCE(changed.external_id, article.article_id) AS article_external_id,
             changed.journal_title,
             COALESCE(changed.selected_source_url, article.url) AS url,
-            serving.full_text_pdf,
             changed.import_route_id AS selected_import_route_id,
             changed.publication_year,
             changed.duplicate_flag,
@@ -676,9 +666,7 @@ const getApplySelectedImportServingStatements = (input: {
             serving.biorxiv_id,
             serving.medrxiv_id,
             serving.doi,
-            serving.pmid,
-            serving.full_text_fetched_at,
-            serving.full_text_conversion_status
+            serving.pmid
          FROM mart.review_article_serving_v4 serving
          INNER JOIN changed
            ON changed.article_id = serving.article_id

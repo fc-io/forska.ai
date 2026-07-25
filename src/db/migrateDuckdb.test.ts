@@ -167,6 +167,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0151_backfillReviewPayloadServingCoverage.sql'),
     'utf8',
   ).trim()
+  const reviewArticleServingFullTextCopyDropSql = readFileSync(
+    resolve(migrationsFolder, '0152_dropReviewArticleServingFullTextCopies.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -392,6 +396,18 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewPayloadServingCoverageBackfillSql).not.toContain('ADD COLUMN')
   expect(reviewPayloadServingCoverageBackfillSql).not.toContain('article_title')
   expect(reviewPayloadServingCoverageBackfillSql).not.toContain('full_text_pdf')
+  expect(reviewArticleServingFullTextCopyDropSql).toContain('CREATE TABLE mart.review_article_serving_v4_repair')
+  expect(reviewArticleServingFullTextCopyDropSql).toContain('DROP TABLE mart.review_article_serving_v4;')
+  expect(reviewArticleServingFullTextCopyDropSql).toContain(
+    'ALTER TABLE mart.review_article_serving_v4_repair RENAME TO review_article_serving_v4;',
+  )
+  expect(reviewArticleServingFullTextCopyDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_v4_repaired_pk',
+  )
+  expect(reviewArticleServingFullTextCopyDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewArticleServingFullTextCopyDropSql).not.toContain('full_text_pdf')
+  expect(reviewArticleServingFullTextCopyDropSql).not.toContain('full_text_fetched_at')
+  expect(reviewArticleServingFullTextCopyDropSql).not.toContain('full_text_conversion_status')
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).toContain(
     'CREATE TABLE app.review_serving_projector_watermark_repair',
   )
@@ -932,6 +948,208 @@ test('DuckDB migration backfills missing payload rows for every serving snapshot
       },
     ])
     expect(parsed.duplicateGroups).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops article-serving full-text copies while preserving serving rows', async () => {
+  const duckdbPath = `/tmp/forska-review-article-serving-full-text-copy-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0152_dropReviewArticleServingFullTextCopies.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            base_generation BIGINT NOT NULL,
+            patch_watermark BIGINT NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            article_created_at TIMESTAMPTZ,
+            article_updated_at TIMESTAMPTZ,
+            sort_key TIMESTAMPTZ NOT NULL,
+            activity_sort_at TIMESTAMPTZ NOT NULL,
+            article_title VARCHAR NOT NULL,
+            article_external_id VARCHAR,
+            arxiv_id VARCHAR,
+            biorxiv_id VARCHAR,
+            medrxiv_id VARCHAR,
+            doi VARCHAR,
+            pmid VARCHAR,
+            journal_title VARCHAR,
+            url VARCHAR,
+            full_text_pdf VARCHAR,
+            full_text_fetched_at TIMESTAMPTZ,
+            full_text_conversion_status VARCHAR,
+            selected_import_route_id VARCHAR,
+            publication_year INTEGER,
+            duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            llm_status_key VARCHAR,
+            human_status_key VARCHAR,
+            llm_judged_prompt_count INTEGER NOT NULL DEFAULT 0,
+            enabled_prompt_count INTEGER NOT NULL DEFAULT 0,
+            human_answered_prompt_count INTEGER NOT NULL DEFAULT 0,
+            serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            base_generation,
+            patch_watermark,
+            list_mode_key,
+            article_id,
+            article_created_at,
+            article_updated_at,
+            sort_key,
+            activity_sort_at,
+            article_title,
+            article_external_id,
+            doi,
+            pmid,
+            url,
+            full_text_pdf,
+            full_text_fetched_at,
+            full_text_conversion_status,
+            selected_import_route_id,
+            duplicate_flag,
+            conflict_flag,
+            serving_updated_at
+          )
+          VALUES (
+            'project-1',
+            'review-config-1',
+            'snapshot-1',
+            3,
+            4,
+            'llm',
+            'article-1',
+            TIMESTAMPTZ '2026-01-01 00:00:00+00',
+            TIMESTAMPTZ '2026-01-02 00:00:00+00',
+            TIMESTAMPTZ '2026-01-01 00:00:00+00',
+            TIMESTAMPTZ '2026-01-02 00:00:00+00',
+            'Article title',
+            'external-1',
+            '10.1000/example',
+            '12345',
+            'https://example.test/article-1',
+            'article-1.pdf',
+            TIMESTAMPTZ '2026-01-03 00:00:00+00',
+            'converted',
+            'route-1',
+            FALSE,
+            FALSE,
+            TIMESTAMPTZ '2026-01-04 00:00:00+00'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            article_title AS articleTitle,
+            doi,
+            url
+          FROM mart.review_article_serving_v4
+        \`)
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_article_serving_v4'
+          ORDER BY ordinal_position
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0152_dropReviewArticleServingFullTextCopies.sql'"
+        )
+
+        console.log(JSON.stringify({columns, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      migrationRows: {name: string}[]
+      rows: {articleId: string; articleTitle: string; doi: string; url: string}[]
+    }
+    const columnNames = new Set(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    )
+
+    expect(columnNames.has('article_title')).toBe(true)
+    expect(columnNames.has('doi')).toBe(true)
+    expect(columnNames.has('full_text_pdf')).toBe(false)
+    expect(columnNames.has('full_text_fetched_at')).toBe(false)
+    expect(columnNames.has('full_text_conversion_status')).toBe(false)
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        articleTitle: 'Article title',
+        doi: '10.1000/example',
+        url: 'https://example.test/article-1',
+      },
+    ])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)

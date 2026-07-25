@@ -457,7 +457,6 @@ const selectedImportServingColumns = [
   'article_external_id',
   'journal_title',
   'url',
-  'full_text_pdf',
   'selected_import_route_id',
   'publication_year',
   'duplicate_flag',
@@ -475,8 +474,6 @@ const selectedImportServingColumns = [
   'medrxiv_id',
   'doi',
   'pmid',
-  'full_text_fetched_at',
-  'full_text_conversion_status',
 ].join(', ')
 
 const getRefreshSelectedImportServingArticleRangeStatements = (
@@ -536,9 +533,8 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        COALESCE(selected_hot.external_id, article.article_id) AS article_external_id,
        selected_hot.journal_title AS journal_title,
        COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-      article.full_text_pdf,
-      selected.import_route_id AS selected_import_route_id,
-      selected_hot.publication_year AS publication_year,
+       selected.import_route_id AS selected_import_route_id,
+       selected_hot.publication_year AS publication_year,
        COALESCE(selected_hot.duplicate_flag, FALSE) AS duplicate_flag,
        COALESCE(selected_hot.conflict_flag, FALSE) AS conflict_flag,
        COALESCE(serving.llm_status_key, 'unanswered') AS llm_status_key,
@@ -553,9 +549,7 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        article.biorxiv_id,
        article.medrxiv_id,
        article.doi,
-       article.pubmed_id AS pmid,
-       article.full_text_fetched_at,
-       article.full_text_conversion_status
+       article.pubmed_id AS pmid
      FROM serving_template template
      INNER JOIN scoped_article scoped
        ON TRUE
