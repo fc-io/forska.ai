@@ -230,7 +230,20 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
         : criteria.llmStatus === 'partial'
           ? `AND s.llm_status_key = ${getSqlLiteral('unanswered')}`
           : ''
-  const llmHasJudgmentPredicate = shouldRequireLlmJudgment ? 'AND s.llm_judged_prompt_count > 0' : ''
+  const llmHasJudgmentPredicate = shouldRequireLlmJudgment
+    ? `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_judgment_detail_serving_v4 llm_judgment_detail
+        WHERE llm_judgment_detail.project_id = s.project_id
+          AND llm_judgment_detail.review_config_hash = s.review_config_hash
+          AND llm_judgment_detail.snapshot_id = s.snapshot_id
+          AND llm_judgment_detail.list_mode_key = ${getSqlLiteral('llm')}
+          AND llm_judgment_detail.payload_kind = ${getSqlLiteral('llm')}
+          AND llm_judgment_detail.article_id = s.article_id
+          AND llm_judgment_detail.placeholder_kind IS NULL
+          AND llm_judgment_detail.is_answered IS TRUE
+      )`
+    : ''
   const queuePredicate =
     listMode === 'unassessed'
       ? `AND EXISTS (
