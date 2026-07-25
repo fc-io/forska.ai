@@ -86,7 +86,7 @@ const jobServingSort = {direction: 'desc', fields: ['updated_at', 'job_id']} as 
 const reviewFilterFacetSort = {direction: 'asc', fields: ['facet_key', 'facet_value']} as const
 const detailRowListModePrioritySort =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
-const promptPreviewCreatedAtSort = 'article_created_at ASC NULLS LAST'
+const promptPreviewCreatedAtSort = `${reviewArticleServingTable}.article_created_at ASC NULLS LAST`
 const reviewedRowCursorFields = ['sort_key DESC', 'article_id ASC'] as const
 const reviewedRowSort = {direction: 'desc', fields: ['sort_key', 'article_id ASC']} as const
 const unassessedRowCursorFields = ['activity_sort_at DESC', 'article_id DESC'] as const
@@ -659,7 +659,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [],
-    cursorFields: [promptPreviewCreatedAtSort, 'article_id'],
+    cursorFields: [promptPreviewCreatedAtSort, 'article_id', detailRowListModePrioritySort],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.prompt.preview',
     listMode: null,
@@ -671,8 +671,8 @@ export const reviewServingReadContractList = [
     physicalAccessStrategy: 'orderedPrefix',
     requiredComponents: ['judgmentInputContent', 'projectScope', 'selectedImport', 'payload'],
     searchMode: 'none',
-    servingTable: reviewArticlePayloadServingTable,
-    sort: {direction: 'asc', fields: [promptPreviewCreatedAtSort, 'article_id']},
+    servingTable: reviewArticleServingTable,
+    sort: {direction: 'asc', fields: [promptPreviewCreatedAtSort, 'article_id', detailRowListModePrioritySort]},
     workloadClass: 'foregroundReviewRows',
   }),
   defineContract({

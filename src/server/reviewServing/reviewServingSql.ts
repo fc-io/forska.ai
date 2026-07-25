@@ -667,6 +667,10 @@ const getReviewServingRowsSqlJobPredicate = (params: {
 }
 
 const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingReadContract) => {
+  if (contract.key === 'review.prompt.preview') {
+    return ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY ${reviewServingArticleTable}.article_id)`
+  }
+
   return contract.servingTable === reviewServingJudgmentDetailTable
     ? ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY article_id, prompt_id)`
     : ''
@@ -677,6 +681,9 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
     const articleSelectColumns = [
       ...reviewServingArticlePhysicalSelectColumns,
       ...reviewServingArticlePayloadDisplayColumns,
+      ...(contract.key === 'review.prompt.preview'
+        ? ['payload.abstract_text AS abstract_text', 'payload.full_text_preview AS full_text_preview']
+        : []),
     ].join(', ')
 
     return contract.sort.fields.some((field) => {

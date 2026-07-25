@@ -3493,19 +3493,41 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'article_id',
     ])
     expect(payloadProbe?.repairStrategy).toBe('empty-derived')
+    expect(payloadProbe?.postRepairSql).toContain('INSERT INTO mart.review_article_serving_payload_v4')
+    expect(payloadProbe?.postRepairSql).toContain('app.review_serving_snapshot_manifest')
+    expect(payloadProbe?.postRepairSql).toContain('mart.review_article_serving_v4')
+    expect(payloadProbe?.postRepairSql).toContain(
+      'ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO NOTHING',
+    )
     expect(payloadProbe?.postRepairSql).toContain("projection_component = 'payload'")
     expect(payloadProbe?.postRepairSql).toContain("status = 'pending'")
     expect(payloadProbe?.postRepairSql).toContain('app.review_rebuild_request')
     expect(payloadProbe?.mutationProbeSql).toContain("projection_component = 'payload'")
-    expect(payloadProbe?.mutationProbeSql).toContain('SET article_created_at = current_timestamp')
+    expect(payloadProbe?.mutationProbeSql).toContain("SET abstract_text = COALESCE(abstract_text, '')")
+    expect(payloadProbe?.mutationProbeSql).not.toContain('SET article_created_at')
     expect(payloadProbe?.mutationProbeSql).not.toContain('payload_updated_at')
     expect(payloadProbe?.mutationProbeSql).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
     expect(payloadProbe?.mutationProbeSql).not.toContain('INSERT INTO mart.review_article_serving_payload_v4 BY NAME')
     expect(payloadProbe?.skipGenericDeleteInsertProbe).toBe(true)
     expect(payloadProbe?.schemaRequirements).toContainEqual({
+      columnNames: ['abstract_text'],
+      schemaName: 'mart',
+      tableName: 'review_article_serving_payload_v4',
+    })
+    expect(payloadProbe?.schemaRequirements).toContainEqual({
       columnNames: ['chunk_end_key', 'chunk_start_key', 'last_error', 'projection_component', 'project_id', 'status'],
       schemaName: 'app',
       tableName: 'review_rebuild_chunk_manifest',
+    })
+    expect(payloadProbe?.postRepairSchemaRequirements).toContainEqual({
+      columnNames: ['component_state_json', 'project_id', 'snapshot_id'],
+      schemaName: 'app',
+      tableName: 'review_serving_snapshot_manifest',
+    })
+    expect(payloadProbe?.postRepairSchemaRequirements).toContainEqual({
+      columnNames: ['article_id', 'project_id', 'snapshot_id'],
+      schemaName: 'mart',
+      tableName: 'review_article_serving_v4',
     })
     const legacyPatchProbeTables = parsed.firstPreflightSpecs
       .filter((spec) => {

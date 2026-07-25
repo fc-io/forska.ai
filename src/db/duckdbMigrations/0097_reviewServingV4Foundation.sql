@@ -612,7 +612,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
-  article_created_at TIMESTAMPTZ,
   article_title VARCHAR,
   article_external_id VARCHAR,
   article_updated_at TIMESTAMPTZ,
@@ -813,9 +812,6 @@ ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash,
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_lookup
 ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order
-ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article
 ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order);

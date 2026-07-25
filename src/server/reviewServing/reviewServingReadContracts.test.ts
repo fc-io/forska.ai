@@ -226,6 +226,22 @@ test('direct ordered row contracts advertise only migrated route filters', () =>
       ['activity_sort_at DESC', 'article_id DESC'],
       ['activity_sort_at', 'article_id'],
     ],
+    [
+      'review.prompt.preview',
+      [],
+      [],
+      'none',
+      [
+        'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+        'article_id',
+        "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
+      ],
+      [
+        'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+        'article_id',
+        "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
+      ],
+    ],
   ])
 })
 
@@ -280,13 +296,25 @@ test('title-search row contracts keep ordering and cursors on primary article se
   ])
 })
 
-test('prompt preview contract does not advertise prompt filters on article payload serving rows', () => {
+test('prompt preview contract orders article serving rows while requiring payload hydration', () => {
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 
   expect(promptPreview?.allowedFilters).toEqual([])
-  expect(promptPreview?.cursorFields).toEqual(['article_created_at ASC NULLS LAST', 'article_id'])
-  expect(promptPreview?.servingTable).toBe('mart.review_article_serving_payload_v4')
-  expect(promptPreview?.sort).toEqual({direction: 'asc', fields: ['article_created_at ASC NULLS LAST', 'article_id']})
+  expect(promptPreview?.cursorFields).toEqual([
+    'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+    'article_id',
+    "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
+  ])
+  expect(promptPreview?.requiredComponents).toContain('payload')
+  expect(promptPreview?.servingTable).toBe('mart.review_article_serving_v4')
+  expect(promptPreview?.sort).toEqual({
+    direction: 'asc',
+    fields: [
+      'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+      'article_id',
+      "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
+    ],
+  })
 })
 
 test('unassessed row contract requires display and payload dependencies', () => {

@@ -105,7 +105,7 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   )
 })
 
-test('buildReviewServingRowsSql uses payload identities for payload serving tables', () => {
+test('buildReviewServingRowsSql uses article ordering and payload hydration for prompt preview', () => {
   const contract = getRequiredReviewServingReadContract('review.prompt.preview')
   const sql = buildReviewServingRowsSql({
     contract,
@@ -121,12 +121,20 @@ test('buildReviewServingRowsSql uses payload identities for payload serving tabl
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_payload_v4 payload')
+  expect(sql).toContain('payload.display_identity = $displayIdentity')
+  expect(sql).toContain('payload.payload_identity = $payloadIdentity')
+  expect(sql).toContain('payload.abstract_text AS abstract_text')
+  expect(sql).toContain('payload.full_text_preview AS full_text_preview')
   expect(sql).toContain(
-    'WHERE mart.review_article_serving_payload_v4.project_id = $projectId AND display_identity = $displayIdentity AND payload_identity = $payloadIdentity AND snapshot_id = $snapshotId',
+    'WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId',
   )
-  expect(sql).not.toContain('review_config_hash')
-  expect(sql).not.toContain('AND list_mode_key =')
-  expect(sql).toContain('ORDER BY article_created_at ASC NULLS LAST, article_id ASC')
+  expect(sql).toContain(
+    "QUALIFY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END = min(CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END) OVER (PARTITION BY mart.review_article_serving_v4.article_id)",
+  )
+  expect(sql).toContain(
+    "ORDER BY mart.review_article_serving_v4.article_created_at ASC NULLS LAST, article_id ASC, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC",
+  )
   expect(sql).not.toContain('ASC NULLS LAST ASC')
 })
 

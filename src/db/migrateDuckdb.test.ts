@@ -179,6 +179,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0154_dropReviewImportHotFieldProvenanceDebugColumns.sql'),
     'utf8',
   ).trim()
+  const reviewPayloadServingArticleCreatedAtDropSql = readFileSync(
+    resolve(migrationsFolder, '0155_dropReviewPayloadServingArticleCreatedAt.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -427,6 +431,20 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
   )
   expect(reviewPayloadServingUpdatedAtDropSql).not.toContain('payload_updated_at')
+  expect(reviewPayloadServingArticleCreatedAtDropSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_article_created_at_repair',
+  )
+  expect(reviewPayloadServingArticleCreatedAtDropSql).toContain('DROP TABLE mart.review_article_serving_payload_v4;')
+  expect(reviewPayloadServingArticleCreatedAtDropSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_article_created_at_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadServingArticleCreatedAtDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
+  )
+  expect(reviewPayloadServingArticleCreatedAtDropSql).not.toContain('article_created_at TIMESTAMPTZ')
+  expect(reviewPayloadServingArticleCreatedAtDropSql).not.toContain(
+    'idx_review_article_serving_payload_v4_preview_order',
+  )
   expect(reviewImportHotFieldProvenanceDebugColumnDropSql).toContain(
     'CREATE TABLE app.review_import_article_hot_field_repair',
   )
@@ -757,7 +775,7 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
       }),
     )
 
-    expect(columnNames.has('article_created_at')).toBe(true)
+    expect(columnNames.has('article_created_at')).toBe(false)
     expect(columnNames.has('source_metadata')).toBe(true)
     expect(columnNames.has('abstract_text')).toBe(true)
     expect(columnNames.has('full_text_preview')).toBe(true)
@@ -912,7 +930,7 @@ test('DuckDB migration drops payload updated-at copy while preserving payload co
       }),
     )
 
-    expect(columnNames.has('article_created_at')).toBe(true)
+    expect(columnNames.has('article_created_at')).toBe(false)
     expect(columnNames.has('source_metadata')).toBe(true)
     expect(columnNames.has('abstract_text')).toBe(true)
     expect(columnNames.has('full_text_preview')).toBe(true)

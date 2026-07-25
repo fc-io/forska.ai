@@ -663,6 +663,19 @@ test('project prompt preview uses the first project article and shared prompt bu
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       'Second article title'
+    ), (
+      '${projectId}',
+      ${getSqlLiteral(reviewConfigHash)},
+      'snapshot-preview-route',
+      1,
+      0,
+      'human',
+      'preview-article-second',
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      NULL,
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      'Second article title'
     )
   `)
   await runDatabase(`
@@ -672,7 +685,6 @@ test('project prompt preview uses the first project article and shared prompt bu
       payload_identity,
       snapshot_id,
       article_id,
-      article_created_at,
       source_metadata,
       abstract_text,
       full_text_preview
@@ -682,7 +694,6 @@ test('project prompt preview uses the first project article and shared prompt bu
       'payload:preview-identity',
       'snapshot-preview-route',
       'preview-article-second',
-      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       '{}'::JSON,
       'Second article summary',
       NULL
