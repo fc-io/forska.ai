@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS app.idx_review_project_import_delta_cursor_route;
+DROP INDEX IF EXISTS idx_review_project_import_delta_cursor_route;
+DROP TABLE IF EXISTS app.review_project_import_delta_cursor;

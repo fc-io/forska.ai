@@ -45,6 +45,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0141_dropReviewSummaryContributionServing.sql',
   '../../db/duckdbMigrations/0142_reviewRebuildPartialCleanupAuthorization.sql',
   '../../db/duckdbMigrations/0143_dropReviewSelectedImportBaseFlags.sql',
+  '../../db/duckdbMigrations/0144_dropReviewProjectImportDeltaCursor.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -56,6 +57,8 @@ const schemaMigrationSql = reviewServingPhase1MigrationPaths
     return reviewServingPhase1MigrationSqlByPath[migrationPath]
   })
   .join('\n')
+const reviewServingFoundationSchemaSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0097_reviewServingV4Foundation.sql']
 const payloadOrderForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0098_reviewServingPayloadOrderColumns.sql']
 const countScopeForwardMigrationSql =
@@ -104,6 +107,8 @@ const reviewSummaryContributionServingDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0141_dropReviewSummaryContributionServing.sql']
 const reviewSelectedImportBaseFlagDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0143_dropReviewSelectedImportBaseFlags.sql']
+const reviewProjectImportDeltaCursorDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0144_dropReviewProjectImportDeltaCursor.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -141,7 +146,6 @@ const reviewServingPhase1Tables = [
   'app.review_import_article_hot_field',
   'app.review_serving_dirty_work',
   'app.review_serving_dirty_work_ack',
-  'app.review_project_import_delta_cursor',
   'app.review_serving_projector_watermark',
   'app.review_projection_identity_manifest',
   'app.review_rebuild_request',
@@ -484,6 +488,19 @@ test('runtime review-serving code does not reference retired patch storage', () 
 test('Phase 1 schema migration includes the common delta envelope', () => {
   expect(getMissingColumns('app.import_run_article_delta', deltaEnvelopeColumns)).toEqual([])
   expect(getMissingColumns('app.review_change_delta', deltaEnvelopeColumns)).toEqual([])
+})
+
+test('project import delta cursor is retired from the review-serving schema', () => {
+  expect(getTableSql('app.review_project_import_delta_cursor')).toBe('')
+  expect(reviewServingFoundationSchemaSql).not.toContain('app.review_project_import_delta_cursor')
+  expect(reviewServingFoundationSchemaSql).not.toContain('idx_review_project_import_delta_cursor_route')
+  expect(reviewProjectImportDeltaCursorDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS app.idx_review_project_import_delta_cursor_route;',
+      'DROP INDEX IF EXISTS idx_review_project_import_delta_cursor_route;',
+      'DROP TABLE IF EXISTS app.review_project_import_delta_cursor;',
+    ].join('\n'),
+  )
 })
 
 test('Phase 1 schema migration separates logical snapshots from component bases and patches', () => {

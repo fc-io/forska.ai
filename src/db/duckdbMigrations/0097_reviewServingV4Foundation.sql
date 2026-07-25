@@ -188,25 +188,6 @@ CREATE TABLE IF NOT EXISTS app.review_serving_dirty_work_ack (
   CHECK (completed_source_high_water_mark >= 0)
 );
 
-CREATE TABLE IF NOT EXISTS app.review_project_import_delta_cursor (
-  project_id VARCHAR NOT NULL,
-  import_route_id VARCHAR NOT NULL,
-  source_delta_high_water BIGINT NOT NULL DEFAULT 0,
-  cursor_json JSON,
-  status VARCHAR NOT NULL DEFAULT 'ready',
-  lease_owner VARCHAR,
-  lease_expires_at TIMESTAMPTZ,
-  retry_count INTEGER NOT NULL DEFAULT 0,
-  last_error VARCHAR,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, import_route_id),
-  CHECK (length(trim(project_id)) > 0),
-  CHECK (length(trim(import_route_id)) > 0),
-  CHECK (source_delta_high_water >= 0),
-  CHECK (retry_count >= 0)
-);
-
 CREATE TABLE IF NOT EXISTS app.review_serving_projector_watermark (
   watermark_id VARCHAR NOT NULL,
   projector_name VARCHAR NOT NULL,
@@ -790,9 +771,6 @@ ON app.review_serving_dirty_work(project_id, dirty_kind, latest_source_high_wate
 
 CREATE INDEX IF NOT EXISTS idx_review_serving_dirty_work_ack_component
 ON app.review_serving_dirty_work_ack(projection_component, projection_identity, source_partition, completed_source_high_water_mark);
-
-CREATE INDEX IF NOT EXISTS idx_review_project_import_delta_cursor_route
-ON app.review_project_import_delta_cursor(import_route_id, source_delta_high_water);
 
 CREATE INDEX IF NOT EXISTS idx_review_projection_identity_manifest_component
 ON app.review_projection_identity_manifest(project_id, projection_component, status, base_generation, patch_watermark);
