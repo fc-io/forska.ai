@@ -199,7 +199,6 @@ const getServingJudgmentRow = () => {
       updatedAt: '2024-01-04T00:00:00.000Z',
     },
     judgment_created_at: '2024-01-03T00:00:00.000Z',
-    model_id: 'model-1',
     payload_kind: 'llm',
     placeholder_kind: null,
     prompt_criteria_disposition: 'include',

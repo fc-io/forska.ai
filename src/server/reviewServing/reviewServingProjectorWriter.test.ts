@@ -156,7 +156,6 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   await writeReviewServingQueueRebuildRows(
     {
       projectId: 'project-1',
-      queueIdentitySql: "'queue:article-1:prompt-1'",
       rangePredicateSql: "AND article_id >= 'article-1' AND article_id <= 'article-2'",
       rebuildSourceCtesSql: `queue_union AS (
         SELECT
@@ -179,7 +178,7 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   })
 
   expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO NOTHING',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id) DO NOTHING',
   )
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('queue_updated_at = excluded.queue_updated_at')
@@ -797,7 +796,6 @@ test('projector writer uses insert-only judgment detail replacement rows after s
             judgment_id: 'judgment-old',
             judgment_payload_json: {answer: 'old'},
             list_mode_key: 'llm',
-            model_id: 'model-1',
             payload_kind: 'llm',
             placeholder_kind: null,
             project_id: 'project-1',
@@ -818,7 +816,6 @@ test('projector writer uses insert-only judgment detail replacement rows after s
             judgment_id: 'judgment-new',
             judgment_payload_json: {answer: 'new'},
             list_mode_key: 'llm',
-            model_id: 'model-1',
             payload_kind: 'llm',
             placeholder_kind: null,
             project_id: 'project-1',

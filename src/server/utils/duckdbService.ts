@@ -2017,8 +2017,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           priority_bucket,
           activity_sort_at,
           article_id,
-          prompt_id,
-          queue_identity
+          prompt_id
         FROM mart.review_unassessed_queue_serving_v4
         GROUP BY
           project_id,
@@ -2028,8 +2027,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           priority_bucket,
           activity_sort_at,
           article_id,
-          prompt_id,
-          queue_identity
+          prompt_id
         HAVING COUNT(*) > 1
       )
     `,
@@ -2046,7 +2044,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         activity_sort_at,
         article_id,
         prompt_id,
-        queue_identity,
         queue_updated_at
       FROM mart.review_unassessed_queue_serving_v4
       ORDER BY
@@ -2057,8 +2054,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         priority_bucket,
         activity_sort_at,
         article_id,
-        prompt_id,
-        queue_identity
+        prompt_id
       LIMIT 1;
       BEGIN;
       UPDATE mart.review_unassessed_queue_serving_v4
@@ -2098,13 +2094,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           FROM startup_probe_review_unassessed_queue_serving_v4
           LIMIT 1
         )
-        AND prompt_id = (
+        AND prompt_id IS NOT DISTINCT FROM (
           SELECT prompt_id
-          FROM startup_probe_review_unassessed_queue_serving_v4
-          LIMIT 1
-        )
-        AND queue_identity = (
-          SELECT queue_identity
           FROM startup_probe_review_unassessed_queue_serving_v4
           LIMIT 1
         );
@@ -2151,13 +2142,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           FROM startup_probe_review_unassessed_queue_serving_v4
           LIMIT 1
         )
-        AND prompt_id = (
+        AND prompt_id IS NOT DISTINCT FROM (
           SELECT prompt_id
-          FROM startup_probe_review_unassessed_queue_serving_v4
-          LIMIT 1
-        )
-        AND queue_identity = (
-          SELECT queue_identity
           FROM startup_probe_review_unassessed_queue_serving_v4
           LIMIT 1
         );
@@ -2173,7 +2159,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'activity_sort_at',
       'article_id',
       'prompt_id',
-      'queue_identity',
     ],
     schemaName: 'mart',
     tableName: 'review_unassessed_queue_serving_v4',

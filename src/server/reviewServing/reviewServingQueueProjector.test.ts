@@ -49,7 +49,6 @@ const queueRow = (input?: Record<string, unknown>) => {
     articleId: 'article-1',
     priorityBucket: 0,
     promptId: 'prompt-1',
-    queueIdentity: null,
     queueKind: 'unassessed',
     reviewConfigHash: 'review-config-1',
     tombstone: false,

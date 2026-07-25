@@ -1,6 +1,5 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -51,7 +50,6 @@ type QueueSourceRow = {
   articleId: string
   priorityBucket: number | null
   promptId: string | null
-  queueIdentity: string | null
   queueKind: string
   reviewConfigHash: string | null
   tombstone: boolean
@@ -247,10 +245,6 @@ const getQueueServingRangePredicate = (input: {
           ${endPredicate}`
 }
 
-const getQueueIdentitySql = (input: {promptId: string; queueKind: string; reviewConfigHash: string}) => {
-  return `'{"promptId":' || CAST(to_json(${input.promptId}) AS VARCHAR) || ',"queueKind":' || CAST(to_json(${input.queueKind}) AS VARCHAR) || ',"reviewConfigHash":' || CAST(to_json(${input.reviewConfigHash}) AS VARCHAR) || '}'`
-}
-
 const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput) => {
   return `scoped_article AS (
       SELECT
@@ -410,17 +404,6 @@ const getQueueDirtyArticleCte = (
     : getDirtyArticleCte(input.projectId, articleIds, promptIds)
 }
 
-const getQueueIdentity = (row: QueueSourceRow) => {
-  return (
-    row.queueIdentity
-    ?? getStableReviewServingJson({
-      promptId: row.promptId,
-      queueKind: row.queueKind,
-      reviewConfigHash: row.reviewConfigHash,
-    })
-  )
-}
-
 const getQueueRows = async (input: ProjectReviewServingQueueInput, database: ReviewServingQueueProjectorDatabase) => {
   const broadProjectClaim = hasProjectScopedClaim(input.claims)
   const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
@@ -447,7 +430,6 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
           queue.article_id AS articleId,
           queue.prompt_id AS promptId,
           queue.review_config_hash AS reviewConfigHash,
-          ${getSqlLiteral(null)} AS queueIdentity,
           queue.queue_kind AS queueKind,
           queue.priority_bucket AS priorityBucket,
           queue.activity_sort_at AS activitySortAt,
@@ -482,7 +464,6 @@ const getUnassessedQueueServingRecord = (
           'activity_sort_at',
           'article_id',
           'prompt_id',
-          'queue_identity',
         ],
         table: 'mart.review_unassessed_queue_serving_v4',
         values: {
@@ -491,7 +472,6 @@ const getUnassessedQueueServingRecord = (
           priority_bucket: row.priorityBucket ?? 0,
           project_id: input.projectId,
           prompt_id: row.promptId,
-          queue_identity: getQueueIdentity(row),
           queue_kind: row.queueKind,
           queue_updated_at: new Date(),
           review_config_hash: row.reviewConfigHash,
@@ -627,11 +607,6 @@ export const projectReviewServingQueueRebuildRows = async (
 const getReviewServingQueueRebuildWriterInput = (input: ProjectReviewServingQueueRebuildInput) => {
   return {
     projectId: input.projectId,
-    queueIdentitySql: getQueueIdentitySql({
-      promptId: 'queue.prompt_id',
-      queueKind: 'queue.queue_kind',
-      reviewConfigHash: 'queue.review_config_hash',
-    }),
     rangePredicateSql: getQueueServingRangePredicate(input),
     rebuildSourceCtesSql: getQueueRebuildSourceCtes(input),
     reviewConfigHash: input.reviewConfigHash,

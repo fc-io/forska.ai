@@ -102,7 +102,6 @@ type ServingJudgmentDetailRow = {
   judgment_created_at?: unknown
   judgment_id?: string | null
   judgment_payload_json?: unknown
-  model_id?: string | null
   placeholder_kind?: string | null
   prompt_criteria_disposition?: 'include' | 'exclude' | 'combined' | null
   prompt_heading?: string | null
@@ -341,7 +340,6 @@ const getProjectReviewDetailJudgmentRows = async (params: {
     .map((row) => {
       const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
-      const modelId = row.model_id ?? ''
       const prompt = getPromptRowFromServingDetail(row)
       const model = getModelPayload(payload)
 
@@ -351,7 +349,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
         judgmentCreatedAt: row.judgment_created_at ?? payload.createdAt ?? null,
         judgmentUpdatedAt: payload.updatedAt ?? row.detail_updated_at ?? null,
         judgmentArticleId: row.article_id ?? params.articleId,
-        judgmentModelId: modelId,
+        judgmentModelId: getStringPayloadValue(model.id, ''),
         judgmentPromptId: promptId,
         judgmentProjectId: params.projectId,
         judgmentUseTitle: params.projectReviewConfig.useTitle,

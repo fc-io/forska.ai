@@ -160,16 +160,19 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
           {
             article_id: 'article-1',
             prompt_id: 'prompt-1',
-            model_id: 'model-1',
             judgment_id: 'judgment-1',
             answered_original: 'yes',
             answered_original_as_array: ['yes'],
-            judgment_payload_json: {createdAt: '2026-01-03T00:00:00.000Z', explanation: 'because', quotes: []},
+            judgment_payload_json: {
+              createdAt: '2026-01-03T00:00:00.000Z',
+              explanation: 'because',
+              model: {id: 'model-1'},
+              quotes: [],
+            },
           },
           {
             article_id: 'article-1',
             prompt_id: 'prompt-2',
-            model_id: 'model-1',
             judgment_id: null,
             answered_original: null,
             answered_original_as_array: [],

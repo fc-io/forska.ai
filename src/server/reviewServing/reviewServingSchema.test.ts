@@ -39,6 +39,8 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0135_reviewServingJudgmentDetailPromptScalars.sql',
   '../../db/duckdbMigrations/0136_dropReviewSummaryPartialServingKey.sql',
   '../../db/duckdbMigrations/0137_reviewServingJudgmentDetailHumanScalars.sql',
+  '../../db/duckdbMigrations/0138_dropReviewJudgmentDetailModelId.sql',
+  '../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -88,6 +90,10 @@ const reviewSummaryPartialServingKeyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0136_dropReviewSummaryPartialServingKey.sql']
 const reviewJudgmentDetailHumanScalarsForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0137_reviewServingJudgmentDetailHumanScalars.sql']
+const reviewJudgmentDetailModelIdDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0138_dropReviewJudgmentDetailModelId.sql']
+const reviewQueueServingIdentityDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -341,6 +347,25 @@ test('selected import schema drops retired display-copy columns only', () => {
     'tombstone',
     'selected_import_updated_at',
   ])
+})
+
+test('unassessed queue serving schema drops derived queue identity', () => {
+  expect([...getTableColumns('mart.review_unassessed_queue_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'queue_kind',
+    'priority_bucket',
+    'activity_sort_at',
+    'article_id',
+    'prompt_id',
+    'queue_updated_at',
+  ])
+  expect(reviewQueueServingIdentityDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_unassessed_queue_serving_v4_without_queue_identity',
+  )
+  expect(reviewQueueServingIdentityDropForwardMigrationSql).toContain('MAX(queue_updated_at) AS queue_updated_at')
+  expect(reviewQueueServingIdentityDropForwardMigrationSql).not.toContain('queue_identity VARCHAR')
 })
 
 test('projector watermark schema keeps lifecycle recovery fields nullable', () => {
@@ -707,6 +732,7 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'placeholder_kind',
     ]),
   ).toEqual([])
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('model_id')).toBe(false)
   expect(
     getMissingColumns('mart.review_filter_option_serving_v4', [
       'filter_kind',
@@ -759,6 +785,14 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(reviewJudgmentDetailHumanScalarsForwardMigrationSql).toContain(
     'RENAME TO review_article_judgment_detail_serving_v4',
   )
+  expect(reviewJudgmentDetailModelIdDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_repair',
+  )
+  expect(reviewJudgmentDetailModelIdDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_judgment_detail_serving_v4_repair RENAME TO review_article_judgment_detail_serving_v4;',
+  )
+  expect(reviewJudgmentDetailModelIdDropForwardMigrationSql).not.toContain('model_id VARCHAR')
+  expect(reviewJudgmentDetailModelIdDropForwardMigrationSql).not.toContain('model_id,')
   expect(countScopeForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
   )
