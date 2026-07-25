@@ -376,7 +376,6 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       patch_watermark,
       project_id,
       review_config_hash,
-      selected_import_route_id,
       serving_updated_at,
       snapshot_id,
       sort_key
@@ -401,7 +400,6 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       0 AS patch_watermark,
       ${getSqlLiteral(input.projectId)} AS project_id,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
-      display_base.selectedImportRouteId AS selected_import_route_id,
       current_timestamp AS serving_updated_at,
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
       display_base.sortKey AS sort_key
