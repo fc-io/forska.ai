@@ -253,28 +253,40 @@ const getFullRebuildSummaryContributionRows = async (
             AND NOT selected_hot.tombstone
         ),
         llm_detail AS (
-          SELECT detail.*
+          SELECT
+            detail.article_id,
+            detail.prompt_id,
+            list_mode_key.list_mode_key,
+            detail.answered_original,
+            detail.answered_original_as_array
           FROM article_id_filter dirty
           INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
             ON detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND detail.payload_kind = 'llm'
+            AND detail.list_mode_key = 'llm'
             AND detail.article_id = dirty.article_id
           INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = detail.list_mode_key
+            ON list_mode_key.list_mode_key IN ('llm', 'both')
         ),
         human_detail AS (
-          SELECT detail.*
+          SELECT
+            detail.article_id,
+            detail.prompt_id,
+            list_mode_key.list_mode_key,
+            detail.is_answered,
+            detail.answered_original
           FROM article_id_filter dirty
           INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
             ON detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND detail.payload_kind = 'human'
+            AND detail.list_mode_key = 'human'
             AND detail.article_id = dirty.article_id
           INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = detail.list_mode_key
+            ON list_mode_key.list_mode_key IN ('human', 'both')
         ),
         base_counts AS (
           SELECT serving.article_id AS articleId, 'count' AS summaryKind, 'review.list.total' AS countKind, 'list:all' AS filterKey, serving.list_mode_key AS listModeKey, 'review.list.total' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason

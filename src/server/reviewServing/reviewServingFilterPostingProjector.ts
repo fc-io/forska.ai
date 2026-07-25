@@ -263,28 +263,39 @@ const getFullRebuildPostingContributionRowsStatement = (
           SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
         ),
         llm_detail AS (
-          SELECT detail.*
+          SELECT
+            detail.article_id,
+            detail.prompt_id,
+            list_mode_key.list_mode_key,
+            detail.answered_original,
+            detail.answered_original_as_array
           FROM scoped_article scoped
           INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
             ON detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND detail.payload_kind = 'llm'
+            AND detail.list_mode_key = 'llm'
             AND detail.article_id = scoped.article_id
           INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = detail.list_mode_key
+            ON list_mode_key.list_mode_key IN ('llm', 'both')
         ),
         human_detail AS (
-          SELECT detail.*
+          SELECT
+            detail.article_id,
+            detail.prompt_id,
+            list_mode_key.list_mode_key,
+            detail.answered_original
           FROM scoped_article scoped
           INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
             ON detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND detail.payload_kind = 'human'
+            AND detail.list_mode_key = 'human'
             AND detail.article_id = scoped.article_id
           INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = detail.list_mode_key
+            ON list_mode_key.list_mode_key IN ('human', 'both')
         ),
         llm_postings AS (
           SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue

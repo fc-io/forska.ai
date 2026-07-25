@@ -71,6 +71,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0168_dropReviewArticleServingSelectedImportRouteId.sql',
   '../../db/duckdbMigrations/0169_dropReviewPayloadSourceMetadata.sql',
   '../../db/duckdbMigrations/0170_dropReviewArticleServingUpdatedAt.sql',
+  '../../db/duckdbMigrations/0171_normalizeReviewJudgmentDetailListModeStorage.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -152,6 +153,10 @@ const reviewPayloadSourceMetadataDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0169_dropReviewPayloadSourceMetadata.sql']
 const reviewArticleServingUpdatedAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0170_dropReviewArticleServingUpdatedAt.sql']
+const reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0171_normalizeReviewJudgmentDetailListModeStorage.sql'
+  ]
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -1371,6 +1376,34 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(countScopeForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
   expect(filterOptionValueForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_filter_option_serving_v4')
   expect(filterOptionValueForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
+})
+
+test('judgment detail list-mode normalization keeps only canonical payload identities', () => {
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_repair',
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_hydration_serving_v4_repair',
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    "WHEN payload_kind = 'human' THEN 'human'",
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    "WHEN payload_kind = 'llm' THEN 'llm'",
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    'PARTITION BY project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id',
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    "WHEN list_mode_key = 'both' THEN 1",
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_payload_identity',
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_judgment_detail_hydration_serving_v4_payload_identity',
+  )
+  expect(reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql).not.toContain('PRIMARY KEY')
 })
 
 test('judgment detail payload-kind forward migration repairs already-applied V4 table shape', () => {

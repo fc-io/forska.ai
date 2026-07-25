@@ -385,7 +385,6 @@ const reviewServingJudgmentDetailFullColumns = [
     'project_id',
     'review_config_hash',
     'snapshot_id',
-    'list_mode_key',
     'payload_kind',
     'article_id',
     'prompt_id',
@@ -432,7 +431,6 @@ const reviewServingJudgmentDetailRouteListColumns = [
   'project_id',
   'review_config_hash',
   'snapshot_id',
-  'list_mode_key',
   'payload_kind',
   'article_id',
   'prompt_id',
@@ -456,9 +454,13 @@ const reviewServingJudgmentDetailFullColumnContractKeys = new Set<ReviewServingR
 ])
 
 const getReviewServingJudgmentDetailSelectColumns = (contract: ReviewServingReadContract) => {
-  return reviewServingJudgmentDetailFullColumnContractKeys.has(contract.key)
+  const listModeColumn =
+    contract.listMode === 'both' ? "'both' AS list_mode_key" : `${reviewServingJudgmentDetailTable}.list_mode_key`
+  const columns = reviewServingJudgmentDetailFullColumnContractKeys.has(contract.key)
     ? reviewServingJudgmentDetailFullColumns
     : reviewServingJudgmentDetailRouteListColumns
+
+  return [...columns.slice(0, 3), listModeColumn, ...columns.slice(3)]
 }
 
 const getReviewServingJudgmentDetailHydrationJoin = (params: {
@@ -569,7 +571,14 @@ const getReviewServingRowsSqlListModePredicate = (params: {
         : 'list_mode_key'
 
   if (params.contract.listMode) {
-    return ` AND ${listModeColumn} = ${getSqlStringLiteral(params.contract.listMode)}`
+    const physicalListMode =
+      params.contract.servingTable === reviewServingJudgmentDetailTable && params.contract.listMode === 'both'
+        ? params.contract.key === 'review.both.list.humanJudgments'
+          ? 'human'
+          : 'llm'
+        : params.contract.listMode
+
+    return ` AND ${listModeColumn} = ${getSqlStringLiteral(physicalListMode)}`
   }
 
   return reviewServingRuntimeListModeStrategies.has(params.contract.physicalAccessStrategy)

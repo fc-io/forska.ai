@@ -125,15 +125,19 @@ const getActiveArticleCte = (
 }
 
 const getLlmListModeKeys = (listModeKeys: readonly ReviewServingListMode[]) => {
-  return listModeKeys.filter((listModeKey) => {
+  return listModeKeys.some((listModeKey) => {
     return listModeKey === 'llm' || listModeKey === 'both'
   })
+    ? (['llm'] as const)
+    : []
 }
 
 const getHumanListModeKeys = (listModeKeys: readonly ReviewServingListMode[]) => {
-  return listModeKeys.filter((listModeKey) => {
+  return listModeKeys.some((listModeKey) => {
     return listModeKey === 'human' || listModeKey === 'both'
   })
+    ? (['human'] as const)
+    : []
 }
 
 const getRequestedPayloadKinds = (listModeKeys: readonly ReviewServingListMode[]) => {
