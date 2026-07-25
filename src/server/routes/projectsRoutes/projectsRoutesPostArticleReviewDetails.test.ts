@@ -201,8 +201,12 @@ const getServingJudgmentRow = () => {
     model_id: 'model-1',
     payload_kind: 'llm',
     placeholder_kind: null,
+    prompt_criteria_disposition: 'include',
+    prompt_heading: 'Prompt 1',
     prompt_id: 'prompt-1',
+    prompt_original_text: 'Prompt 1',
     prompt_order: 0,
+    prompt_type: 'string',
   }
 }
 
@@ -284,7 +288,7 @@ test('project review details keeps V4 judgment payload JSON keys on the serving 
   )
 
   expect(detailJudgmentHydration).toContain('const payload = getJsonObjectValue(row.judgment_payload_json)')
-  expect(detailJudgmentHydration).toContain('getPromptPayload(payload, promptId)')
+  expect(detailJudgmentHydration).toContain('getPromptRowFromServingDetail(row)')
   expect(detailJudgmentHydration).toContain('getModelPayload(payload)')
   expect(detailJudgmentHydration).toContain('judgmentAssessments: payload.assessments ?? []')
   expect(detailJudgmentHydration).toContain('judgmentCreatedAt: payload.createdAt ?? null')
@@ -316,6 +320,7 @@ test('project review details keeps human answer and comment payload fallbacks', 
   )
 
   expect(detailHumanHydration).toContain('const payload = getJsonObjectValue(row.judgment_payload_json)')
+  expect(detailHumanHydration).toContain('getPromptRowFromServingDetail(row)')
   expect(detailHumanHydration).toContain(
     'answer: row.answered_original ?? (payload.answer as string | null | undefined) ?? null',
   )

@@ -102,8 +102,12 @@ type ServingJudgmentDetailRow = {
   judgment_payload_json?: unknown
   model_id?: string | null
   placeholder_kind?: string | null
+  prompt_criteria_disposition?: 'include' | 'exclude' | 'combined' | null
+  prompt_heading?: string | null
   prompt_id?: string
+  prompt_original_text?: string | null
   prompt_order?: number | null
+  prompt_type?: string | null
 }
 
 type ReviewServingDetailRowsRequest = Parameters<typeof readReviewServingRows>[0]
@@ -115,8 +119,12 @@ type ServingHumanJudgmentDetailRow = {
   judgment_id?: string | null
   judgment_payload_json?: unknown
   payload_kind?: string
+  prompt_criteria_disposition?: 'include' | 'exclude' | 'combined' | null
+  prompt_heading?: string | null
   prompt_id?: string
+  prompt_original_text?: string | null
   prompt_order?: number | null
+  prompt_type?: string | null
 }
 
 type ServingArticleDetailRow = {
@@ -165,15 +173,6 @@ type ProjectPromptRow = {
   enabled: boolean | null
   criteriaDisposition: 'include' | 'exclude' | 'combined' | null
   originProjectId: string | null
-}
-
-type PromptDisplayPayload = {
-  criteriaDisposition?: 'include' | 'exclude' | 'combined' | null
-  id?: string | null
-  order?: number | null
-  originalText?: string | null
-  promptHeading?: string | null
-  type?: string | null
 }
 
 type ModelDisplayPayload = {
@@ -233,18 +232,25 @@ const getStringPayloadValue = (value: unknown, fallback: string) => {
   return typeof value === 'string' ? value : fallback
 }
 
-const getPromptPayload = (payload: Record<string, unknown>, promptId: string): ProjectPromptRow => {
-  const prompt = getJsonObjectValue(payload.prompt) as PromptDisplayPayload
+const getPromptRowFromServingDetail = (row: {
+  prompt_criteria_disposition?: 'include' | 'exclude' | 'combined' | null
+  prompt_heading?: string | null
+  prompt_id?: string
+  prompt_original_text?: string | null
+  prompt_order?: number | null
+  prompt_type?: string | null
+}): ProjectPromptRow => {
+  const promptId = row.prompt_id ?? ''
 
   return {
-    criteriaDisposition: prompt.criteriaDisposition ?? null,
+    criteriaDisposition: row.prompt_criteria_disposition ?? null,
     enabled: true,
-    id: prompt.id ?? promptId,
-    order: prompt.order ?? null,
-    originalText: prompt.originalText ?? '',
+    id: promptId,
+    order: row.prompt_order ?? null,
+    originalText: row.prompt_original_text ?? '',
     originProjectId: null,
-    promptHeading: prompt.promptHeading ?? null,
-    type: prompt.type ?? null,
+    promptHeading: row.prompt_heading ?? null,
+    type: row.prompt_type ?? null,
   }
 }
 
@@ -322,9 +328,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
   }
 
   const promptRowsById = rows.reduce((promptMap, row) => {
-    const promptId = row.prompt_id ?? ''
-    const payload = getJsonObjectValue(row.judgment_payload_json)
-    return upsertPromptRow(promptMap, getPromptPayload(payload, promptId))
+    return upsertPromptRow(promptMap, getPromptRowFromServingDetail(row))
   }, new Map<string, ProjectPromptRow>())
 
   const judgmentRows = rows
@@ -335,7 +339,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
       const modelId = row.model_id ?? ''
-      const prompt = getPromptPayload(payload, promptId)
+      const prompt = getPromptRowFromServingDetail(row)
       const model = getModelPayload(payload)
 
       return {
@@ -396,7 +400,7 @@ const getProjectReviewDetailHumanRows = async (params: {
     .map((row) => {
       const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
-      const prompt = getPromptPayload(payload, promptId)
+      const prompt = getPromptRowFromServingDetail(row)
 
       return {
         judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, ''),
