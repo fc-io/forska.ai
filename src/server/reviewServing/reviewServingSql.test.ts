@@ -27,6 +27,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingRetentionService.ts'),
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
+  join(reviewServingSourceRoot, 'reviewServingDynamicCountSql.ts'),
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
@@ -39,6 +40,7 @@ const reviewServingMaintenanceAdmissionFiles = [
   'reviewServingRebuildRequestRepository.ts',
   'reviewServingV4RebuildRequestService.ts',
 ] as const
+const reviewServingBoundedForegroundAggregationFiles = ['reviewServingDynamicCountSql.ts'] as const
 const workspaceRoot = process.cwd()
 
 const getRequiredReviewServingReadContract = (contractKey: string) => {
@@ -393,9 +395,15 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND mart.review_article_serving_v4.article_id = $articleId')
+  expect(sql).toContain('article.source_metadata')
+  expect(sql).toContain('selected_source.import_metadata')
+  expect(sql).toContain('json_merge_patch')
+  expect(sql).toContain('END AS source_metadata')
   expect(sql).toContain(
-    "payload.source_metadata AS source_metadata, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
+    "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
   )
+  expect(sql).not.toContain('payload.source_metadata')
+  expect(sql).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
   expect(sql).toContain('SELECT mart.review_article_serving_v4.project_id')
   expect(sql).not.toContain('mart.review_article_serving_v4.*')
   expect(sql).toContain(
@@ -1196,11 +1204,15 @@ test('reviewServing read source files are statically guarded without scanning pr
   expect(sourceViolations).toEqual([])
 })
 
-test('reviewServing SQL guard exclusions are classified maintenance or admission code', () => {
+test('reviewServing SQL guard exclusions are classified bounded or maintenance code', () => {
   const excludedReviewServingFiles = [...sqlGuardExcludedFiles].map((filePath) => {
     return relative(reviewServingSourceRoot, filePath)
   })
-  const expectedExcludedFiles = [...reviewServingMaintenanceAdmissionFiles, 'reviewServingResidualReadAllowlist.ts']
+  const expectedExcludedFiles = [
+    ...reviewServingMaintenanceAdmissionFiles,
+    ...reviewServingBoundedForegroundAggregationFiles,
+    'reviewServingResidualReadAllowlist.ts',
+  ]
 
   expectedExcludedFiles.forEach((fileName) => {
     expect(excludedReviewServingFiles).toContain(fileName)

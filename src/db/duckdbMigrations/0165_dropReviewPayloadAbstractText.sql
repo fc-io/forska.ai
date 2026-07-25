@@ -15,12 +15,11 @@ CREATE TABLE mart.review_article_serving_payload_v4_abstract_text_repair (
   doi VARCHAR,
   pmid VARCHAR,
   journal_title VARCHAR,
-  url VARCHAR,
-  source_metadata JSON
+  url VARCHAR
 );
 
 INSERT INTO mart.review_article_serving_payload_v4_abstract_text_repair BY NAME
-SELECT COLUMNS(column_name -> column_name IN ('project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id', 'article_title', 'article_external_id', 'article_updated_at', 'arxiv_id', 'biorxiv_id', 'medrxiv_id', 'doi', 'pmid', 'journal_title', 'url', 'source_metadata'))
+SELECT COLUMNS(column_name -> column_name IN ('project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id', 'article_title', 'article_external_id', 'article_updated_at', 'arxiv_id', 'biorxiv_id', 'medrxiv_id', 'doi', 'pmid', 'journal_title', 'url'))
 FROM mart.review_article_serving_payload_v4;
 
 DROP TABLE mart.review_article_serving_payload_v4;

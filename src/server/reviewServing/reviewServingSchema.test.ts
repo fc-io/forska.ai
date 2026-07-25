@@ -69,6 +69,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0166_dropReviewArticleServingPublicationYear.sql',
   '../../db/duckdbMigrations/0167_dropReviewArticleServingSelectedFlagCopies.sql',
   '../../db/duckdbMigrations/0168_dropReviewArticleServingSelectedImportRouteId.sql',
+  '../../db/duckdbMigrations/0169_dropReviewPayloadSourceMetadata.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -146,6 +147,8 @@ const reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0168_dropReviewArticleServingSelectedImportRouteId.sql'
   ]
+const reviewPayloadSourceMetadataDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0169_dropReviewPayloadSourceMetadata.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -693,11 +696,10 @@ test('Phase 1 schema migration keeps raw payloads out of import hot fields', () 
 
 test('Phase 1 schema migration keeps raw payloads out of hot serving tables', () => {
   expect(
-    hotServingTables.flatMap((tableName) => {
+    [...hotServingTables, 'mart.review_article_serving_payload_v4'].flatMap((tableName) => {
       return getTableSql(tableName).includes('source_metadata JSON') ? [tableName] : []
     }),
   ).toEqual([])
-  expect(getTableSql('mart.review_article_serving_payload_v4')).toContain('source_metadata JSON')
 })
 
 test('Phase 1 payload serving schema drops prompt preview ordering copies', () => {
@@ -715,7 +717,6 @@ test('Phase 1 payload serving schema drops prompt preview ordering copies', () =
 test('Phase 1 payload serving schema preserves article display metadata for row hydration', () => {
   expect(
     getMissingColumns('mart.review_article_serving_payload_v4', [
-      'source_metadata',
       'article_title',
       'article_external_id',
       'article_updated_at',
@@ -730,6 +731,7 @@ test('Phase 1 payload serving schema preserves article display metadata for row 
   ).toEqual([])
   expect(getTableColumns('mart.review_article_serving_payload_v4').has('abstract_text')).toBe(false)
   expect(getTableColumns('mart.review_article_serving_payload_v4').has('full_text_preview')).toBe(false)
+  expect(getTableColumns('mart.review_article_serving_payload_v4').has('source_metadata')).toBe(false)
   expect(
     [...getTableColumns('mart.review_article_serving_payload_v4')].filter((columnName) => {
       return ['full_text_pdf', 'full_text_fetched_at', 'full_text_conversion_status', 'payload_updated_at'].includes(
@@ -815,6 +817,14 @@ test('Phase 1 payload serving schema preserves article display metadata for row 
     'ALTER TABLE mart.review_article_serving_payload_v4_full_text_preview_repair RENAME TO review_article_serving_payload_v4;',
   )
   expect(reviewPayloadFullTextPreviewDropForwardMigrationSql).not.toContain('full_text_preview VARCHAR')
+  expect(reviewPayloadSourceMetadataDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_source_metadata_repair',
+  )
+  expect(reviewPayloadSourceMetadataDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_source_metadata_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadSourceMetadataDropForwardMigrationSql).not.toContain('source_metadata JSON')
+  expect(reviewPayloadSourceMetadataDropForwardMigrationSql).not.toContain("'source_metadata'")
 })
 
 test('Phase 1 article serving schema drops duplicated display metadata', () => {

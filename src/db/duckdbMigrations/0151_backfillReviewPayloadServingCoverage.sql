@@ -16,7 +16,6 @@ CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair (
   pmid VARCHAR,
   journal_title VARCHAR,
   url VARCHAR,
-  source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR
 );
@@ -40,7 +39,6 @@ WITH existing_payload AS (
       'pmid',
       'journal_title',
       'url',
-      'source_metadata',
       'abstract_text',
       'full_text_preview'
     )),
@@ -90,7 +88,6 @@ serving_payload_gaps AS (
     CAST(NULL AS VARCHAR) AS pmid,
     CAST(NULL AS VARCHAR) AS journal_title,
     CAST(NULL AS VARCHAR) AS url,
-    CAST(NULL AS JSON) AS source_metadata,
     CAST(NULL AS VARCHAR) AS abstract_text,
     CAST(NULL AS VARCHAR) AS full_text_preview,
     1 AS row_precedence
@@ -128,7 +125,6 @@ SELECT
   pmid,
   journal_title,
   url,
-  source_metadata,
   abstract_text,
   full_text_preview
 FROM payload_union

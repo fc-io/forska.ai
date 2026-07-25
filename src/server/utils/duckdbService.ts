@@ -2428,7 +2428,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         payload_identity,
         snapshot_id,
         article_id,
-        source_metadata,
         abstract_text
       )
       WITH snapshot_component_state AS (
@@ -2463,7 +2462,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         snapshot_payload_identity.payload_identity,
         serving.snapshot_id,
         serving.article_id,
-        CAST(NULL AS JSON) AS source_metadata,
         CAST(NULL AS VARCHAR) AS abstract_text
       FROM mart.review_article_serving_v4 serving
       INNER JOIN snapshot_payload_identity

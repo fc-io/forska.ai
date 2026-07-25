@@ -52,12 +52,18 @@ export const readReviewServingExportArticles = async (input: {
           payload.pmid AS pubmedId,
           payload.url AS articleUrl,
           payload.article_title AS articleTitle,
-          payload.abstract_text AS articleSummary,
+          LEFT(article.article_summary, 2000) AS articleSummary,
           TO_JSON(article.article_authors) AS articleAuthors,
           s.article_created_at AS articleCreatedAt,
           payload.article_updated_at AS articleUpdatedAt,
           selected_source.raw_payload AS articleOriginalData,
-          payload.source_metadata AS articleSourceMetadata,
+          CASE
+            WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
+            ELSE json_merge_patch(
+              COALESCE(article.source_metadata, CAST('{}' AS JSON)),
+              COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
+            )
+          END AS articleSourceMetadata,
           export_scope.source_project_order AS sourceProjectOrder,
           ROW_NUMBER() OVER (
             PARTITION BY s.article_id
