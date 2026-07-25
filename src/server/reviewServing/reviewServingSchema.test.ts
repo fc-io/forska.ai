@@ -47,6 +47,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0143_dropReviewSelectedImportBaseFlags.sql',
   '../../db/duckdbMigrations/0144_dropReviewProjectImportDeltaCursor.sql',
   '../../db/duckdbMigrations/0146_reviewServingPayloadDisplayFields.sql',
+  '../../db/duckdbMigrations/0147_dropReviewFilterPostingStats.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -122,6 +123,8 @@ const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
   ]
 const reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql']
+const reviewFilterPostingStatsDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0147_dropReviewFilterPostingStats.sql']
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -164,7 +167,6 @@ const reviewServingPhase1Tables = [
   'mart.review_title_search_serving_v4',
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
-  'mart.review_filter_posting_stats_v4',
   'mart.review_article_serving_payload_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
@@ -182,6 +184,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_display_patch_v4',
   'mart.review_selected_import_patch_v4',
   'mart.review_article_summary_contribution_v4',
+  'mart.review_filter_posting_stats_v4',
 ])
 
 const deltaEnvelopeColumns = [
@@ -715,23 +718,28 @@ test('summary contribution serving mart is retired from the review-serving schem
   expect(getTableSql('mart.review_article_summary_contribution_rebuild_partial_v4')).not.toBe('')
 })
 
-test('filter posting stats schema drops derived identity and selectivity columns', () => {
-  expect(reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql).toContain(
-    'CREATE TABLE mart.review_filter_posting_stats_v4_repair',
+test('filter posting stats mart is retired from the review-serving schema', () => {
+  expect(reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql.trim()).toBe(
+    [
+      '-- Retired by 0147_dropReviewFilterPostingStats.sql.',
+      '-- Filter-posting stats are no longer materialized, so the old derived-column',
+      '-- repair is intentionally skipped for fresh databases.',
+    ].join('\n'),
   )
-  expect(reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql).toContain(
-    'ALTER TABLE mart.review_filter_posting_stats_v4_repair RENAME TO review_filter_posting_stats_v4;',
+  expect(reviewFilterPostingStatsDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_filter_posting_stats_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_lookup;',
+      'DROP INDEX IF EXISTS mart.idx_review_filter_posting_stats_v4_repaired_pk;',
+      'DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_repaired_pk;',
+      'DROP TABLE IF EXISTS mart.review_filter_posting_stats_v4;',
+    ].join('\n'),
   )
-  expect([...getTableColumns('mart.review_filter_posting_stats_v4')]).toEqual([
-    'project_id',
-    'review_config_hash',
-    'snapshot_id',
-    'filter_kind',
-    'filter_value',
-    'list_mode_key',
-    'cardinality',
-    'stats_updated_at',
-  ])
+  expect(getTableSql('mart.review_filter_posting_stats_v4')).toBe('')
+  expect(schemaMigrationSql).not.toContain('CREATE TABLE IF NOT EXISTS mart.review_filter_posting_stats_v4')
+  expect(schemaMigrationSql).not.toContain('CREATE INDEX IF NOT EXISTS idx_review_filter_posting_stats_v4_lookup')
+  expect(reviewServingPhase1Tables).not.toContain('mart.review_filter_posting_stats_v4')
+  expect(retiredReviewServingTables.has('mart.review_filter_posting_stats_v4')).toBe(true)
   expect(schemaMigrationSql).not.toContain('selectivity DOUBLE')
   expect(getTableColumns('mart.review_article_filter_posting_serving_v4').has('posting_identity')).toBe(false)
   expect(reviewFilterPostingServingIdentityDropForwardMigrationSql).toContain(

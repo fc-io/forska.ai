@@ -61,7 +61,6 @@ const createPostingDatabase = (input?: {
   contributionRows?: readonly Record<string, unknown>[]
   existingRows?: readonly Record<string, unknown>[]
   newRows?: readonly Record<string, unknown>[]
-  statsRows?: readonly Record<string, unknown>[]
   totalRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
@@ -90,25 +89,8 @@ const createPostingDatabase = (input?: {
         return (input?.existingRows ?? []) as T[]
       }
 
-      if (
-        statement.includes('SUM(contribution.contribution_value)')
-        && statement.includes('GROUP BY filter.contribution_key')
-      ) {
-        return (input?.contributionTotalRows
-          ?? (input?.statsRows ?? []).map((row) => {
-            return {contributionKey: contributionKey(row), contributionValue: row.cardinality ?? 0}
-          })) as T[]
-      }
-
-      if (statement.includes('stats_key_filter') && statement.includes('COUNT(serving.article_id)')) {
-        return (input?.contributionTotalRows
-          ?? (input?.statsRows ?? []).map((row) => {
-            return {contributionKey: contributionKey(row), contributionValue: row.cardinality ?? 0}
-          })) as T[]
-      }
-
-      if (statement.includes('FROM mart.review_filter_posting_stats_v4')) {
-        return (input?.statsRows ?? []) as T[]
+      if (statement.includes('SUM(contribution.contribution_value)')) {
+        return (input?.contributionTotalRows ?? []) as T[]
       }
 
       if (statement.includes('AS totalArticleCount')) {
@@ -164,21 +146,14 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[], listModeKe
   }
 }
 
-test('answer changes update posting stats from old and new contribution diffs', async () => {
+test('answer changes update serving postings without derived stats writes', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:no'})],
     newRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:yes'})],
-    statsRows: [
-      {cardinality: 3, filterKind: 'promptAnswer', filterValue: 'review:promptAnswer:prompt-1:no', listModeKey: 'llm'},
-      {cardinality: 7, filterKind: 'promptAnswer', filterValue: 'review:promptAnswer:prompt-1:yes', listModeKey: 'llm'},
-    ],
   })
 
   const result = await projectReviewServingFilterPostings(projectInput([postingClaim()]), database)
   const joined = statements.join('\n')
-  const statsInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_filter_posting_stats_v4')
-  })
 
   expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(1)
@@ -189,22 +164,9 @@ test('answer changes update posting stats from old and new contribution diffs', 
     'mart.review_article_filter_posting_serving_v4': 1,
   })
   expect(joined).not.toContain('scope.source_updated_at')
-  expect(result.statsValues).toContainEqual({
-    cardinality: 2,
-    filterKind: 'promptAnswer',
-    filterValue: 'review:promptAnswer:prompt-1:no',
-    listModeKey: 'llm',
-  })
-  expect(result.statsValues).toContainEqual({
-    cardinality: 8,
-    filterKind: 'promptAnswer',
-    filterValue: 'review:promptAnswer:prompt-1:yes',
-    listModeKey: 'llm',
-  })
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
+  expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
-  expect(statsInsert).toBeDefined()
-  expect(statsInsert).not.toContain('ON CONFLICT')
 })
 
 test('posting no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -218,24 +180,20 @@ test('posting no-ack snapshot passes do not publish shared manifests or watermar
   expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 
-test('full posting rebuilds refresh stats from serving state without JS contribution totals', async () => {
+test('full posting rebuilds write serving state without derived stats refresh', async () => {
   const row = postingRow({filterKind: 'conflictFlag', filterValue: 'false', listModeKey: 'both'})
   const {database, statements} = createPostingDatabase({
     contributionTotalRows: [{contributionKey: contributionKey(row), contributionValue: '2'}],
     existingRows: [],
     newRows: [row],
-    statsRows: [
-      {cardinality: '343341342341341300', filterKind: 'conflictFlag', filterValue: 'false', listModeKey: 'both'},
-    ],
     totalRows: [{listModeKey: 'both', totalArticleCount: '10'}],
   })
 
-  const result = await projectReviewServingFilterPostings(projectInput([], ['both']), database)
+  await projectReviewServingFilterPostings(projectInput([], ['both']), database)
   const joined = statements.join('\n')
 
-  expect(result.statsValues).toEqual([])
-  expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
-  expect(joined).toContain('COUNT(*) AS cardinality')
+  expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
+  expect(joined).not.toContain('COUNT(*) AS cardinality')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
@@ -288,7 +246,6 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).not.toContain('posting_updated_at = excluded.posting_updated_at')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
   expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
-  expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('WITH posting_source AS')
   expect(joined).toContain('serving_source AS')
   expect(joined).toContain('GROUP BY\n        CAST(posting.filterKind AS VARCHAR)')
@@ -328,19 +285,14 @@ test('full posting rebuilds scope set-based serving upserts to article ranges', 
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
 })
 
-test('chunked full posting rebuilds can defer stats refresh outside chunk writes', async () => {
+test('chunked full posting rebuilds skip retired stats refresh', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [],
     newRows: [postingRow({articleId: 'article-2', filterKind: 'importRoute', filterValue: 'route-1'})],
   })
 
   await projectReviewServingFilterPostings(
-    {
-      ...projectInput([]),
-      chunkEndArticleId: 'article-9',
-      chunkStartArticleId: 'article-2',
-      refreshFullRebuildStats: false,
-    },
+    {...projectInput([]), chunkEndArticleId: 'article-9', chunkStartArticleId: 'article-2'},
     database,
   )
 
@@ -362,18 +314,8 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
   const result = await projectReviewServingFilterPostingRanges(
     {
       ranges: [
-        {
-          ...projectInput([]),
-          chunkEndArticleId: 'article-3',
-          chunkStartArticleId: 'article-1',
-          refreshFullRebuildStats: false,
-        },
-        {
-          ...projectInput([]),
-          chunkEndArticleId: 'article-9',
-          chunkStartArticleId: 'article-4',
-          refreshFullRebuildStats: false,
-        },
+        {...projectInput([]), chunkEndArticleId: 'article-3', chunkStartArticleId: 'article-1'},
+        {...projectInput([]), chunkEndArticleId: 'article-9', chunkStartArticleId: 'article-4'},
       ],
     },
     database,
@@ -401,11 +343,10 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
   expectNoLegacyPostingSourcePatchTables(joined)
 })
 
-test('deletes write tombstones, remove serving rows, and decrement stats in the writer transaction', async () => {
+test('deletes write tombstones and remove serving rows without derived stats writes', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterKind: 'llmStatus', filterValue: 'answered'})],
     newRows: [],
-    statsRows: [{cardinality: 4, filterKind: 'llmStatus', filterValue: 'answered', listModeKey: 'llm'}],
   })
 
   const result = await projectReviewServingFilterPostings(
@@ -416,14 +357,9 @@ test('deletes write tombstones, remove serving rows, and decrement stats in the 
 
   expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(0)
-  expect(result.statsValues).toContainEqual({
-    cardinality: 3,
-    filterKind: 'llmStatus',
-    filterValue: 'answered',
-    listModeKey: 'llm',
-  })
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
+  expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('WHERE NOT EXISTS')
@@ -433,7 +369,6 @@ test('membership removals scope through project_scope_article and tombstone exis
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterKind: 'importRoute', filterValue: 'route-1'})],
     newRows: [],
-    statsRows: [{cardinality: 1, filterKind: 'importRoute', filterValue: 'route-1', listModeKey: 'llm'}],
   })
 
   await projectReviewServingFilterPostings(
@@ -452,13 +387,9 @@ test('selected-import rank changes move filter contribution between selected imp
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterKind: 'importRoute', filterValue: 'route-old'})],
     newRows: [postingRow({filterKind: 'importRoute', filterValue: 'route-new'})],
-    statsRows: [
-      {cardinality: 5, filterKind: 'importRoute', filterValue: 'route-old', listModeKey: 'llm'},
-      {cardinality: 1, filterKind: 'importRoute', filterValue: 'route-new', listModeKey: 'llm'},
-    ],
   })
 
-  const result = await projectReviewServingFilterPostings(
+  await projectReviewServingFilterPostings(
     projectInput([postingClaim({dirtyKind: 'importRoute.article.rankFields.updated'})]),
     database,
   )
@@ -466,18 +397,6 @@ test('selected-import rank changes move filter contribution between selected imp
     return statement.includes('FROM posting_union')
   })
 
-  expect(result.statsValues).toContainEqual({
-    cardinality: 4,
-    filterKind: 'importRoute',
-    filterValue: 'route-old',
-    listModeKey: 'llm',
-  })
-  expect(result.statsValues).toContainEqual({
-    cardinality: 2,
-    filterKind: 'importRoute',
-    filterValue: 'route-new',
-    listModeKey: 'llm',
-  })
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('scoped.scope_tombstone AS tombstone')
@@ -632,11 +551,10 @@ test('project-scoped posting rebuilds delete tombstoned serving rows without pro
   expect(deleteStatement).not.toContain('article_id IN')
 })
 
-test('list modes keep posting stats and serving rows separated', async () => {
+test('list modes keep serving rows scoped without derived stats rows', async () => {
   const {database} = createPostingDatabase({
     existingRows: [],
     newRows: [postingRow({listModeKey: 'llm'}), postingRow({listModeKey: 'human'})],
-    statsRows: [],
     totalRows: [
       {listModeKey: 'llm', totalArticleCount: 10},
       {listModeKey: 'human', totalArticleCount: 5},
@@ -646,16 +564,4 @@ test('list modes keep posting stats and serving rows separated', async () => {
   const result = await projectReviewServingFilterPostings(projectInput([postingClaim()], ['llm', 'human']), database)
 
   expect(result.servingRowCount).toBe(2)
-  expect(result.statsValues).toContainEqual({
-    cardinality: 1,
-    filterKind: 'promptAnswer',
-    filterValue: 'review:promptAnswer:prompt-1:yes',
-    listModeKey: 'llm',
-  })
-  expect(result.statsValues).toContainEqual({
-    cardinality: 1,
-    filterKind: 'promptAnswer',
-    filterValue: 'review:promptAnswer:prompt-1:yes',
-    listModeKey: 'human',
-  })
 })

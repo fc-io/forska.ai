@@ -46,7 +46,6 @@ import {
 import {
   projectReviewServingFilterPostingRanges,
   projectReviewServingFilterPostings,
-  refreshReviewServingFilterPostingStats,
 } from '../reviewServing/reviewServingFilterPostingProjector.ts'
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {
@@ -361,7 +360,6 @@ type RebuildChunkOutputChecksumRow = {
   actualPayloadBytes?: number | null
 }
 type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
-type RebuildRequestPostingChunkCountRow = {postingChunkCount: number}
 type SummaryFilterOptionProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
 type RebuildRequestSnapshotPromotionRow = {
   hasPostingRebuildChunks: boolean
@@ -638,7 +636,14 @@ const withRequestlessAdoptionLock = async <T>(requestId: string, run: () => Prom
   const current = new Promise<void>((resolve) => {
     releaseLock = resolve
   })
-  const chained = previous.then(() => current, () => current)
+  const chained = previous.then(
+    () => {
+      return current
+    },
+    () => {
+      return current
+    },
+  )
   requestlessAdoptionLocks.set(requestId, chained)
 
   await previous.catch(() => {})
@@ -1896,7 +1901,6 @@ const runPostingRebuildChunk = async (
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               projectionIdentity: input.chunk.projectionIdentity,
-              refreshFullRebuildStats: input.chunk.requestId === null,
               reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
@@ -2964,10 +2968,7 @@ const canRunSelectedImportRebuildChunkBatch = (chunks: readonly ReviewServingReb
   return (
     chunks.length > 1
     && chunks.every((chunk) => {
-      return (
-        chunk.projectionComponent === 'selectedImport'
-        && !shouldRunFullSelectedImportRebuildChunk(chunk)
-      )
+      return chunk.projectionComponent === 'selectedImport' && !shouldRunFullSelectedImportRebuildChunk(chunk)
     })
   )
 }
@@ -4055,17 +4056,12 @@ const runPostingRebuildChunkBatch = async (
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               projectionIdentity: chunk.projectionIdentity,
-              refreshFullRebuildStats: false,
               reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
             }
           }),
         },
-        chunkDatabase,
-      )
-      await refreshReviewServingFilterPostingStats(
-        {projectId, reviewConfigHash: requireReviewConfigHash(snapshot), snapshotId: snapshot.snapshotId},
         chunkDatabase,
       )
     }, Promise.resolve())
@@ -5398,20 +5394,6 @@ const getNextCompletedUnfinalizedRebuildRequestChunk = async (input: {
   return row === undefined ? null : getReviewServingRebuildChunkManifest({chunkId: row.chunkId}, input.database)
 }
 
-const getRebuildRequestHasPostingChunks = async (
-  requestId: string,
-  database: ReviewServingChunkManifestRepositoryDatabase,
-) => {
-  const [row] = await database.queryJson<RebuildRequestPostingChunkCountRow>(`
-    SELECT CAST(COUNT(*) AS INTEGER) AS postingChunkCount
-    FROM app.review_rebuild_chunk_manifest
-    WHERE request_id = ${getSqlLiteral(requestId)}
-      AND projection_component = 'posting'
-  `)
-
-  return Number(row?.postingChunkCount ?? 0) > 0
-}
-
 const getRebuildRequestSummaryFilterOptionProjections = async (
   requestId: string,
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -5428,24 +5410,6 @@ const getRebuildRequestSummaryFilterOptionProjections = async (
       AND status = 'completed'
     ORDER BY project_id ASC, projection_identity ASC, output_base_generation ASC
   `)
-}
-
-const refreshPostingStatsForRebuildRequestSnapshots = async (
-  promotionRows: readonly RebuildRequestSnapshotPromotionRow[],
-  database: ReviewServingProjectorWorkerDatabase,
-) => {
-  await promotionRows.reduce<Promise<void>>(async (previous, row) => {
-    await previous
-
-    if (row.reviewConfigHash === null) {
-      throw new Error(`cannot refresh posting stats without review config hash for snapshot ${row.snapshotId}`)
-    }
-
-    await refreshReviewServingFilterPostingStats(
-      {projectId: row.projectId, reviewConfigHash: row.reviewConfigHash, snapshotId: row.snapshotId},
-      database,
-    )
-  }, Promise.resolve())
 }
 
 const refreshSummaryFilterOptionsForProjections = async (
@@ -5876,7 +5840,7 @@ const finalizeErroredCompletedReviewServingRebuildRequest = async (
 const finalizeCompletedReviewServingRebuildRequest = async (
   chunk: ReviewServingRebuildChunkManifest,
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
-  options: {deleteSummaryFilterOptions?: boolean; refreshDerivedOutputs?: boolean; refreshPostingStats?: boolean} = {},
+  options: {deleteSummaryFilterOptions?: boolean; refreshDerivedOutputs?: boolean} = {},
 ) => {
   if (chunk.requestId === null) {
     return
@@ -5893,22 +5857,12 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     return
   }
 
-  const hasPostingChunks = await getRebuildRequestHasPostingChunks(chunk.requestId, database)
   const reductionRows = await getRebuildRequestSnapshotReductionTargets(chunk.requestId, database)
   const promotionRows = await getRebuildRequestSnapshotPromotions(chunk.requestId, database)
   const summaryFilterOptionProjections = await getRebuildRequestSummaryFilterOptionProjections(
     chunk.requestId,
     database,
   )
-
-  if (hasPostingChunks && options.refreshPostingStats !== false) {
-    await refreshPostingStatsForRebuildRequestSnapshots(
-      reductionRows.filter((row) => {
-        return row.hasPostingRebuildChunks
-      }),
-      database,
-    )
-  }
 
   await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
     {requestId: chunk.requestId, snapshots: reductionRows},
@@ -6789,28 +6743,33 @@ const adoptRequestlessRebuildChunk = async (
     return input.chunk
   }
 
-  return withRequestlessAdoptionLock(adoption.requestId, () => database.transaction(async (tx) => {
-    const adoptionInputWatermarkPredicate =
-      adoption.reason === 'requestless_summary_range_rebuild'
-        ? `AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}`
-        : ''
-    await requireClaimedRebuildChunk(input, tx)
-    const existingRequests = await tx.queryJson<{requestId: string}>(`
+  return withRequestlessAdoptionLock(adoption.requestId, () => {
+    return database.transaction(async (tx) => {
+      const adoptionInputWatermarkPredicate =
+        adoption.reason === 'requestless_summary_range_rebuild'
+          ? `AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}`
+          : ''
+      await requireClaimedRebuildChunk(input, tx)
+      const existingRequests = await tx.queryJson<{requestId: string}>(`
       SELECT existing_request.request_id AS requestId
       FROM app.review_rebuild_request existing_request
     `)
-    const existingChunkLinks = await tx.queryJson<{requestId: string | null}>(`
+      const existingChunkLinks = await tx.queryJson<{requestId: string | null}>(`
       SELECT chunk.request_id AS requestId
       FROM app.review_rebuild_chunk_manifest chunk
       WHERE chunk.request_id IS NOT NULL
     `)
 
-    const adoptionRequestExists =
-      existingRequests.some((request) => request.requestId === adoption.requestId)
-      || existingChunkLinks.some((chunk) => chunk.requestId === adoption.requestId)
+      const adoptionRequestExists =
+        existingRequests.some((request) => {
+          return request.requestId === adoption.requestId
+        })
+        || existingChunkLinks.some((chunk) => {
+          return chunk.requestId === adoption.requestId
+        })
 
-    if (!adoptionRequestExists) {
-      await tx.run(`
+      if (!adoptionRequestExists) {
+        await tx.run(`
         INSERT INTO app.review_rebuild_request (
           request_id,
           project_id,
@@ -6850,8 +6809,8 @@ const adoptRequestlessRebuildChunk = async (
           now()
         )
       `)
-    }
-    await tx.run(`
+      }
+      await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
       SET
         request_id = ${getSqlLiteral(adoption.requestId)},
@@ -6865,14 +6824,15 @@ const adoptRequestlessRebuildChunk = async (
         AND status NOT IN ('blocked_over_budget', 'quarantined')
     `)
 
-    const adoptedChunk = await getReviewServingRebuildChunkManifest({chunkId: input.chunk.chunkId}, tx)
+      const adoptedChunk = await getReviewServingRebuildChunkManifest({chunkId: input.chunk.chunkId}, tx)
 
-    if (adoptedChunk === null || adoptedChunk.requestId !== adoption.requestId) {
-      throw new Error(`failed to adopt requestless rebuild chunk ${input.chunk.chunkId}`)
-    }
+      if (adoptedChunk === null || adoptedChunk.requestId !== adoption.requestId) {
+        throw new Error(`failed to adopt requestless rebuild chunk ${input.chunk.chunkId}`)
+      }
 
-    return adoptedChunk
-  }))
+      return adoptedChunk
+    })
+  })
 }
 
 const claimReviewServingProjectorWorkerRebuildChunkInput = async ({
@@ -7351,7 +7311,10 @@ const recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch = async (input: {
   }
 
   const recoverableChunks = input.claimedChunks.filter((claimed) => {
-    return splittableArticleRangeRebuildComponents.has(claimed.chunk.projectionComponent) && canSplitRebuildChunk(claimed.chunk)
+    return (
+      splittableArticleRangeRebuildComponents.has(claimed.chunk.projectionComponent)
+      && canSplitRebuildChunk(claimed.chunk)
+    )
   })
 
   if (recoverableChunks.length !== input.claimedChunks.length) {

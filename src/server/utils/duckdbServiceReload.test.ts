@@ -614,7 +614,6 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       'mart.review_title_search_serving_v4',
       'mart.review_unassessed_queue_serving_v4',
       'mart.review_article_filter_posting_serving_v4',
-      'mart.review_filter_posting_stats_v4',
       'mart.review_article_serving_payload_v4',
     ])
     expect(parsed.createCount).toBe(1)
@@ -1126,7 +1125,7 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
       parsed.preflightSpecsHistory[1]?.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
-    ).toContain('mart.review_filter_posting_stats_v4')
+    ).toContain('mart.review_article_filter_posting_serving_v4')
     expect(parsed.checkpointCount).toBe(1)
     expect(parsed.walExists).toBe(false)
     expect(parsed.createCount).toBe(1)
@@ -1851,26 +1850,10 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?commit-fatal-index-marker-test=' + Date.now())
-        let indexedTargetAfterStats = null
+        let indexedTargetAfterPosting = null
         await duckdbService.runDuckdbTransaction(async (tx) => {
           await tx.run('DELETE FROM mart.review_article_filter_posting_serving_v4 WHERE 1 = 0')
-          await tx.run(\`
-            INSERT INTO mart.review_filter_posting_stats_v4 (
-              project_id,
-              review_config_hash,
-              snapshot_id,
-              posting_identity,
-              filter_kind,
-              filter_value,
-              list_mode_key,
-              cardinality,
-              selectivity,
-              stats_updated_at
-            ) VALUES ('project-1', 'review-1', 'snapshot-1', 'posting-1', 'kind', 'value', 'both', 1, 1, current_timestamp)
-            ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)
-            DO UPDATE SET cardinality = excluded.cardinality
-          \`)
-          indexedTargetAfterStats = globalThis.__forskaDuckdbServiceState.controlTransactionIndexedMutationTarget
+          indexedTargetAfterPosting = globalThis.__forskaDuckdbServiceState.controlTransactionIndexedMutationTarget
           await tx.run('UPDATE app.review_serving_dirty_work SET status = status WHERE 1 = 0')
           await tx.run(\`
             INSERT INTO app.review_serving_projector_watermark (watermark_id, updated_at)
@@ -1879,7 +1862,7 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
         })
 
         const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
-        console.log(JSON.stringify({indexedTargetAfterStats, marker}))
+        console.log(JSON.stringify({indexedTargetAfterPosting, marker}))
       `,
     ],
     {
@@ -1907,17 +1890,16 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
       )
     }
 
-    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult & {indexedTargetAfterStats: string | null}>(
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult & {indexedTargetAfterPosting: string | null}>(
       result.stdout.toString(),
     )
 
-    expect(parsed.indexedTargetAfterStats).toBe('mart.review_filter_posting_stats_v4')
+    expect(parsed.indexedTargetAfterPosting).toBe('mart.review_article_filter_posting_serving_v4')
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
       repairSpecs: [
         {schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},
-        {schemaName: 'mart', tableName: 'review_filter_posting_stats_v4'},
         {schemaName: 'app', tableName: 'review_serving_projector_watermark'},
       ],
       schemaName: 'mart',
@@ -2850,7 +2832,7 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
     expect(
       parsed.preflightSpecsHistory.some((specs) => {
         return specs.some((spec) => {
-          return spec.schemaName === 'mart' && spec.tableName === 'review_filter_posting_stats_v4'
+          return spec.schemaName === 'mart' && spec.tableName === 'review_article_filter_posting_serving_v4'
         })
       }),
     ).toBe(true)
@@ -3498,16 +3480,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     const postingStatsProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_posting_stats_v4'
     })
-    expect(postingStatsProbe?.lowMemoryStartupPreflight).toBe(true)
-    expect(postingStatsProbe?.repairPrimaryKeyColumns).toEqual([
-      'project_id',
-      'review_config_hash',
-      'snapshot_id',
-      'filter_kind',
-      'filter_value',
-      'list_mode_key',
-    ])
-    expect(postingStatsProbe?.skipGenericDeleteInsertProbe).toBe(true)
+    expect(postingStatsProbe).toBeUndefined()
     const payloadProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_payload_v4'
     })
