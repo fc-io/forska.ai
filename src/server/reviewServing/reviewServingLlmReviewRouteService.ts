@@ -296,6 +296,13 @@ const getFlagPostingFilterGroups = (filters: ReturnType<typeof getRouteFilters>)
     })
 }
 
+const getStatusPostingFilterGroups = (filters: ReturnType<typeof getRouteFilters>) => {
+  const llmStatusValue =
+    filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
+
+  return llmStatusValue ? [{filterKind: 'llmStatus', filterValues: [llmStatusValue]}] : []
+}
+
 const getCountValue = async (
   params: ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -343,8 +350,6 @@ const getFilteredCountValue = async (
 ): Promise<number> => {
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const filters = getRouteFilters(params)
-  const llmStatusValue =
-    filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
   const [row] = await database.queryJson<{totalCount: number}>(`
     ${getReviewServingDynamicFilteredCountSql({
@@ -352,6 +357,7 @@ const getFilteredCountValue = async (
       postingFilterGroups: [
         ...getPromptAnswerPostingFilterGroups(params.prompts),
         ...getFlagPostingFilterGroups(filters),
+        ...getStatusPostingFilterGroups(filters),
       ],
       projectId: params.projectId,
       projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
@@ -364,7 +370,6 @@ const getFilteredCountValue = async (
           ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
           : '',
         getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
-        llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : '',
       ],
       snapshotId: manifest.snapshotId,
     })}

@@ -223,6 +223,8 @@ const getRouteFilterSqlMatch = (
   const filters = request.filters ?? {}
   const articleCreatedAtFrom = getStringFilterValue(filters.articleCreatedAtFrom)
   const humanStatus = getStringFilterValue(filters.humanStatus)
+  const llmStatusValue =
+    filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
   const promptAnswerValues = Array.isArray(filters.promptAnswer) ? filters.promptAnswer : []
   const queueOrdering = contract.physicalAccessStrategy === 'queueOrdering'
 
@@ -240,8 +242,12 @@ const getRouteFilterSqlMatch = (
         && containsSql(statement, "list_mode_key = 'llm'")
         && containsSql(statement, "payload_kind = 'llm'")
       : true,
-    filters.llmStatus === 'complete' && !queueOrdering ? containsSql(statement, "llm_status_key = 'answered'") : true,
-    humanStatus && !queueOrdering ? containsSql(statement, `human_status_key = '${humanStatus}'`) : true,
+    llmStatusValue && !queueOrdering
+      ? containsSql(statement, "filter_kind = 'llmStatus'") && containsSql(statement, `'${llmStatusValue}'`)
+      : true,
+    humanStatus && !queueOrdering
+      ? containsSql(statement, "filter_kind = 'humanStatus'") && containsSql(statement, `'${humanStatus}'`)
+      : true,
     promptAnswerValues.length > 0 && !queueOrdering ? containsSql(statement, "filter_kind = 'promptAnswer'") : true,
     queueOrdering
       ? true

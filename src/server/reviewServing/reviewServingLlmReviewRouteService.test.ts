@@ -307,9 +307,12 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(sql).toContain("article_created_at <= TIMESTAMPTZ '2026-01-20T00:00:00.000Z'")
   expect(sql).toContain("posting.filter_kind = 'duplicateFlag'")
   expect(sql).toContain("posting.filter_kind = 'conflictFlag'")
+  expect(sql).toContain("posting.filter_kind = 'llmStatus'")
   expect(sql).toContain("posting.filter_value IN (SELECT unnest(['true']::VARCHAR[]))")
+  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).not.toContain('serving.duplicate_flag = TRUE')
   expect(sql).not.toContain('serving.conflict_flag = TRUE')
+  expect(sql).not.toContain('serving.llm_status_key =')
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })

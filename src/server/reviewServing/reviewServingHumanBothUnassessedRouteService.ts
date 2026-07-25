@@ -404,6 +404,18 @@ const getFlagPostingFilterGroups = (filters: ReturnType<typeof getRouteFilters>)
     })
 }
 
+const getStatusPostingFilterGroups = (filters: ReturnType<typeof getRouteFilters>) => {
+  const llmStatusValue = filters.llmStatus === 'complete' ? 'answered' : null
+  const humanStatusValue = typeof filters.humanStatus === 'string' ? filters.humanStatus : null
+
+  return [
+    {filterKind: 'llmStatus', filterValues: llmStatusValue ? [llmStatusValue] : []},
+    {filterKind: 'humanStatus', filterValues: humanStatusValue ? [humanStatusValue] : []},
+  ].filter((filter) => {
+    return filter.filterValues.length > 0
+  })
+}
+
 const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, component: string) => {
   return [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
     return entry.component === component
@@ -461,7 +473,6 @@ const getFilteredCountValue = async (
 ): Promise<number> => {
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const filters = getRouteFilters(params, mode)
-  const llmStatusValue = filters.llmStatus === 'complete' ? 'answered' : null
   const searchTokenPrefixes = filters.searchTokenPrefix ? getSearchTokenPrefixes(params.search) : []
   const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
     database,
@@ -472,6 +483,7 @@ const getFilteredCountValue = async (
       postingFilterGroups: [
         ...getPromptAnswerPostingFilterGroups(params, mode),
         ...getFlagPostingFilterGroups(filters),
+        ...getStatusPostingFilterGroups(filters),
       ],
       projectId: params.projectId,
       projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
@@ -483,10 +495,6 @@ const getFilteredCountValue = async (
           ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
           : '',
         getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
-        llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : '',
-        typeof filters.humanStatus === 'string'
-          ? `AND serving.human_status_key = ${getSqlLiteral(filters.humanStatus)}`
-          : '',
       ],
       snapshotId: manifest.snapshotId,
     })}
