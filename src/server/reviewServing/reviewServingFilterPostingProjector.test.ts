@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
+  projectReviewServingFilterPostingRanges,
   projectReviewServingFilterPostings,
   type ReviewServingFilterPostingProjectorDatabase,
 } from './reviewServingFilterPostingProjector.ts'
@@ -352,6 +353,50 @@ test('chunked full posting rebuilds can defer stats refresh outside chunk writes
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
 })
 
+test('posting range rebuilds write compatible chunks through one range-aware serving statement', async () => {
+  const {database, statements} = createPostingDatabase()
+
+  const result = await projectReviewServingFilterPostingRanges(
+    {
+      ranges: [
+        {
+          ...projectInput([]),
+          chunkEndArticleId: 'article-3',
+          chunkStartArticleId: 'article-1',
+          refreshFullRebuildStats: false,
+        },
+        {
+          ...projectInput([]),
+          chunkEndArticleId: 'article-9',
+          chunkStartArticleId: 'article-4',
+          refreshFullRebuildStats: false,
+        },
+      ],
+    },
+    database,
+  )
+
+  const servingInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  })
+  const joined = statements.join('\n')
+
+  expect(result.diagnosticsJson.postingProjector).toMatchObject({fullRebuildMode: 'range-set-based', rangeCount: 2})
+  expect(servingInserts).toHaveLength(1)
+  expect(servingInserts[0]).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(servingInserts[0]).toContain("('article-1', 'article-3'), ('article-4', 'article-9')")
+  expect(servingInserts[0]).toContain('SELECT DISTINCT scope.article_id')
+  expect(servingInserts[0]).toContain(
+    'range.chunk_start_article_id IS NULL OR scope.article_id >= range.chunk_start_article_id',
+  )
+  expect(servingInserts[0]).toContain(
+    'range.chunk_end_article_id IS NULL OR scope.article_id <= range.chunk_end_article_id',
+  )
+  expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
+  expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+  expectNoLegacyPostingSourcePatchTables(joined)
+})
+
 test('deletes write tombstones, remove serving rows, and decrement stats in the writer transaction', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterKind: 'llmStatus', filterValue: 'answered'})],
@@ -443,7 +488,10 @@ test('selected-import filter postings prefer hot fields for payload filters whil
     newRows: [postingRow({filterKind: 'publicationYear', filterValue: '2026'})],
   })
 
-  await projectReviewServingFilterPostings(projectInput([postingClaim({dirtyKind: 'importRoute.article.hotFields.updated'})]), database)
+  await projectReviewServingFilterPostings(
+    projectInput([postingClaim({dirtyKind: 'importRoute.article.hotFields.updated'})]),
+    database,
+  )
   const selectStatement = statements.find((statement) => {
     return statement.includes('FROM posting_union')
   })
@@ -461,7 +509,9 @@ test('selected-import filter postings prefer hot fields for payload filters whil
   expect(selectStatement).toContain(
     'COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag',
   )
-  expect(selectStatement).toContain('COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag')
+  expect(selectStatement).toContain(
+    'COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag',
+  )
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
 })

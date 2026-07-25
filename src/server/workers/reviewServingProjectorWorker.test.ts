@@ -157,10 +157,21 @@ const createWorkerHarness = (input?: {
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
   const dependencies: ReviewServingProjectorWorkerDependencies = {
-    cleanupRetentionState: async (cleanupInput: {projectId: string; reviewConfigHash?: string | null}) => {
+    cleanupRetentionState: async (cleanupInput: {
+      batchSize?: number
+      projectId: string
+      reviewConfigHash?: string | null
+    }) => {
       cleanupInputs.push(cleanupInput)
 
-      return {retentionScope: cleanupInput.projectId}
+      return {
+        cleanupBatchSize: cleanupInput.batchSize ?? 0,
+        cleanupSpecKind: 'snapshot',
+        cleanupTable: 'mart.review_article_serving_v4',
+        cleanupTableIndex: 0,
+        nextCleanupTableIndex: 1,
+        retentionScope: cleanupInput.projectId,
+      }
     },
     getCleanupTargets: async () => {
       return input?.cleanupTargets ?? []
@@ -4216,7 +4227,20 @@ test('worker schedules cleanup only after its cleanup interval elapses', async (
 
   expect(skipped.cleanup.status).toBe('skipped')
   expect(skippedHarness.cleanupInputs).toEqual([])
-  expect(completed.cleanup).toEqual({retentionScopes: ['project-1'], status: 'completed'})
+  expect(completed.cleanup).toEqual({
+    retentionCleanups: [
+      {
+        cleanupBatchSize: 10,
+        cleanupSpecKind: 'snapshot',
+        cleanupTable: 'mart.review_article_serving_v4',
+        cleanupTableIndex: 0,
+        nextCleanupTableIndex: 1,
+        retentionScope: 'project-1',
+      },
+    ],
+    retentionScopes: ['project-1'],
+    status: 'completed',
+  })
   expect(completed.nextCleanupAtMs).toBe(62_000)
 })
 
@@ -4353,6 +4377,7 @@ test('worker default dependencies wire real projector runners instead of an empt
   expect(source).toContain('projectReviewServingSelectedImportBatch')
   expect(source).toContain('projectReviewServingSelectedImportDirty')
   expect(source).toContain('projectReviewServingQueuePatches')
+  expect(source).toContain('projectReviewServingFilterPostingRanges')
   expect(source).toContain('projectReviewServingFilterPostings')
   expect(source).toContain('projectReviewServingSummaries')
   expect(source).toContain('projectReviewServingPayloadRanges')
@@ -4361,6 +4386,25 @@ test('worker default dependencies wire real projector runners instead of an empt
   expect(source).toContain('projectReviewServingDisplayPatches')
   expect(source).toContain('projectReviewServingTitleSearchRows')
   expect(source).toContain("component: 'judgmentInputContent'")
+})
+
+test('posting rebuild batches use the range projector while preserving per-chunk completion', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const start = source.indexOf('const runPostingRebuildChunkBatch = async')
+  const end = source.indexOf('\nexport const runReviewServingProjectorWorkerClaimedRebuildChunk', start + 1)
+
+  expect(start).toBeGreaterThanOrEqual(0)
+
+  const batchSource = source.slice(start, end === -1 ? undefined : end)
+
+  expect(batchSource).toContain('projectReviewServingFilterPostingRanges')
+  expect(batchSource).toContain('ranges: input.chunks.map')
+  expect(batchSource).toContain('refreshReviewServingFilterPostingStats')
+  expect(batchSource).toContain('completePostingRebuildChunkAfterBatchWrite')
+  expect(batchSource).toContain('const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)')
+  expect(batchSource).toContain('batchWriteMs, chunk')
+  expect(batchSource).not.toContain('await projectReviewServingFilterPostings(')
+  expect(source).toContain('phaseTimings: {batchWriteMs: input.batchWriteMs}')
 })
 
 test('high-fanout rebuild chunks commit idempotent output separately from completion', () => {

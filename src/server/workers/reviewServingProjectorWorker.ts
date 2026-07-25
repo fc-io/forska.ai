@@ -44,6 +44,7 @@ import {
   projectReviewServingFilterOptions,
 } from '../reviewServing/reviewServingFilterOptionProjector.ts'
 import {
+  projectReviewServingFilterPostingRanges,
   projectReviewServingFilterPostings,
   refreshReviewServingFilterPostingStats,
 } from '../reviewServing/reviewServingFilterPostingProjector.ts'
@@ -82,6 +83,7 @@ import {
   cleanupReviewServingRetentionState,
   getReviewServingRetentionCleanupTargets,
   type ReviewServingRetentionCleanupInput,
+  type ReviewServingRetentionCleanupResult,
   type ReviewServingRetentionServiceDatabase,
 } from '../reviewServing/reviewServingRetentionService.ts'
 import {projectReviewServingSelectedImportDirty} from '../reviewServing/reviewServingSelectedImportDirtyProjector.ts'
@@ -272,8 +274,16 @@ type ReviewServingProjectorWorkerChunkResult =
   | {chunkId: string; requestId: string | null; status: 'skipped'}
 
 type ReviewServingProjectorWorkerCleanupResult =
-  | {retentionScopes: readonly string[]; status: 'completed'}
-  | {retentionScopes: readonly string[]; status: 'skipped'}
+  | {
+      retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
+      retentionScopes: readonly string[]
+      status: 'completed'
+    }
+  | {
+      retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
+      retentionScopes: readonly string[]
+      status: 'skipped'
+    }
 
 type ReviewServingProjectorWorkerDeltaIntakeResult = {
   convertedPartitions: number
@@ -3930,6 +3940,7 @@ const canRunPostingRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChu
 const completePostingRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -3939,7 +3950,10 @@ const completePostingRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {postingBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+        postingBatchWriter: {rangeCount: input.batchRangeCount},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -3982,6 +3996,7 @@ const runPostingRebuildChunkBatch = async (
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -3992,39 +4007,41 @@ const runPostingRebuildChunkBatch = async (
 
     await snapshots.reduce<Promise<void>>(async (previousSnapshot, snapshot) => {
       await previousSnapshot
-      await input.chunks.reduce<Promise<void>>(async (previousChunk, chunk) => {
-        await previousChunk
-        await projectReviewServingFilterPostings(
-          {
-            acknowledgeClaims: false,
-            baseGeneration: chunk.outputBaseGeneration,
-            chunkEndArticleId: chunk.chunkEndKey,
-            chunkStartArticleId: chunk.chunkStartKey,
-            claims: [],
-            definitionVersion: manifest.definitionVersion,
-            listModeKeys: reviewServingListModes,
-            projectId,
-            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-            projectionIdentity: chunk.projectionIdentity,
-            refreshFullRebuildStats: false,
-            reviewConfigHash: requireReviewConfigHash(snapshot),
-            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-            snapshotId: snapshot.snapshotId,
-          },
-          chunkDatabase,
-        )
-      }, Promise.resolve())
+      await projectReviewServingFilterPostingRanges(
+        {
+          ranges: input.chunks.map((chunk) => {
+            return {
+              acknowledgeClaims: false,
+              baseGeneration: chunk.outputBaseGeneration,
+              chunkEndArticleId: chunk.chunkEndKey,
+              chunkStartArticleId: chunk.chunkStartKey,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              listModeKeys: reviewServingListModes,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              projectionIdentity: chunk.projectionIdentity,
+              refreshFullRebuildStats: false,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              snapshotId: snapshot.snapshotId,
+            }
+          }),
+        },
+        chunkDatabase,
+      )
       await refreshReviewServingFilterPostingStats(
         {projectId, reviewConfigHash: requireReviewConfigHash(snapshot), snapshotId: snapshot.snapshotId},
         chunkDatabase,
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completePostingRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())
@@ -6380,6 +6397,8 @@ const logReviewServingProjectorWorkerCycle = (result: ReviewServingProjectorWork
       chunkId: result.chunk.chunkId,
       chunkRequestId: 'requestId' in result.chunk ? result.chunk.requestId : null,
       chunkStatus: result.chunk.status,
+      cleanupRetentionCleanups: result.cleanup.retentionCleanups,
+      cleanupRetentionScopes: result.cleanup.retentionScopes,
       cleanupStatus: result.cleanup.status,
       component: 'reviewServingProjectorWorker',
       deltaIntakeStatus: result.deltaIntake.status,
@@ -8340,24 +8359,30 @@ const runReviewServingProjectorWorkerCleanup = async ({
   const lastCleanupAtMs = options.lastCleanupAtMs ?? null
 
   if (!shouldRunCleanup({cleanupIntervalMs, lastCleanupAtMs, nowMs})) {
-    return {retentionScopes: [], status: 'skipped'}
+    return {retentionCleanups: [], retentionScopes: [], status: 'skipped'}
   }
 
   const cleanupTargets = await dependencies.getCleanupTargets?.(database)
   const cleanupRetentionState = dependencies.cleanupRetentionState
 
   if (!cleanupRetentionState || cleanupTargets === undefined || cleanupTargets.length === 0) {
-    return {retentionScopes: [], status: 'skipped'}
+    return {retentionCleanups: [], retentionScopes: [], status: 'skipped'}
   }
 
-  const retentionScopes = await cleanupTargets.reduce<Promise<string[]>>(async (previousScopes, target) => {
-    const scopes = await previousScopes
-    const cleanup = await cleanupRetentionState(target, database)
+  const retentionCleanups = await cleanupTargets.reduce<Promise<ReviewServingRetentionCleanupResult[]>>(
+    async (previousCleanups, target) => {
+      const cleanups = await previousCleanups
+      const cleanup = await cleanupRetentionState(target, database)
 
-    return [...scopes, cleanup.retentionScope]
-  }, Promise.resolve([]))
+      return [...cleanups, cleanup]
+    },
+    Promise.resolve([]),
+  )
+  const retentionScopes = retentionCleanups.map((cleanup) => {
+    return cleanup.retentionScope
+  })
 
-  return {retentionScopes, status: 'completed'}
+  return {retentionCleanups, retentionScopes, status: 'completed'}
 }
 
 const getDeltaIntakePartitions = async (database: ReviewServingProjectorWorkerDatabase, tableName: string) => {
@@ -8488,7 +8513,7 @@ export const runReviewServingProjectorWorkerCycle = async (
         },
       })
   const cleanup = shouldRunOnlyRebuildChunk
-    ? {retentionScopes: [], status: 'skipped' as const}
+    ? {retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
     : await runReviewServingProjectorWorkerCleanup({database, dependencies, options})
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
