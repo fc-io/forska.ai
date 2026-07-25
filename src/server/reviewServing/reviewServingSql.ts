@@ -81,7 +81,7 @@ const getNormalizedSqlAlias = (alias: string | undefined) => {
   return normalizedAlias && !sqlClauseKeywords.has(normalizedAlias) ? normalizedAlias : null
 }
 
-const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
+export const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
   return reviewServingSqlForbiddenPatterns
     .filter((forbiddenPattern) => {
       if (forbiddenPattern.label === 'raw article table scan' && hasBoundedArticleLookupJoin(sql)) {

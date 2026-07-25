@@ -4,8 +4,7 @@ import {
   type ReviewServingReaderRequest,
   type ReviewServingReaderResult,
 } from './reviewServingReader.ts'
-import {getReviewServingSqlShapeViolations} from './reviewServingSql.ts'
-import {reviewServingSqlForbiddenPatterns} from './reviewServingSqlForbiddenPatterns.ts'
+import {getReviewServingSqlForbiddenPatternViolations, getReviewServingSqlShapeViolations} from './reviewServingSql.ts'
 
 const snapshotScopedTables = new Set(['app.review_serving_snapshot_manifest'])
 
@@ -249,9 +248,7 @@ const getSqlMismatches = <T>(caseInput: ReviewServingRouteParityCase<T>, result:
   const sqlShapeViolations = sql
     ? getReviewServingSqlShapeViolations(sql, {requireSnapshotScope})
     : result.diagnostics.sqlShapeViolations
-  const forbiddenViolations = reviewServingSqlForbiddenPatterns.filter((forbiddenPattern) => {
-    return forbiddenPattern.pattern.test(sql)
-  })
+  const forbiddenViolations = getReviewServingSqlForbiddenPatternViolations(sql)
   const shapeMismatches =
     sqlShapeViolations.length === 0
       ? []

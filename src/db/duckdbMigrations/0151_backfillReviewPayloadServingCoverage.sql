@@ -9,8 +9,7 @@ CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair (
   article_created_at TIMESTAMPTZ,
   source_metadata JSON,
   abstract_text VARCHAR,
-  full_text_preview VARCHAR,
-  payload_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+  full_text_preview VARCHAR
 );
 
 INSERT INTO mart.review_article_serving_payload_v4_coverage_repair
@@ -25,7 +24,6 @@ WITH existing_payload AS (
     source_metadata,
     abstract_text,
     full_text_preview,
-    payload_updated_at,
     0 AS row_precedence
   FROM mart.review_article_serving_payload_v4
 ),
@@ -66,7 +64,6 @@ serving_payload_gaps AS (
     CAST(NULL AS JSON) AS source_metadata,
     CAST(NULL AS VARCHAR) AS abstract_text,
     CAST(NULL AS VARCHAR) AS full_text_preview,
-    current_timestamp AS payload_updated_at,
     1 AS row_precedence
   FROM mart.review_article_serving_v4 serving
   INNER JOIN snapshot_payload_identity
@@ -95,12 +92,11 @@ SELECT
   article_created_at,
   source_metadata,
   abstract_text,
-  full_text_preview,
-  payload_updated_at
+  full_text_preview
 FROM payload_union
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
-  ORDER BY row_precedence ASC, payload_updated_at DESC
+  ORDER BY row_precedence ASC, article_created_at DESC NULLS LAST
 ) = 1;
 
 DROP TABLE mart.review_article_serving_payload_v4;

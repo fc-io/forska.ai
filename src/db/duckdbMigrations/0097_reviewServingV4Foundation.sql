@@ -120,7 +120,6 @@ CREATE TABLE IF NOT EXISTS app.review_import_article_hot_field (
   import_route_id VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
   source_record_key VARCHAR NOT NULL,
-  source_record_hash VARCHAR,
   source_kind VARCHAR,
   selected_rank_key VARCHAR,
   selected_rank_numeric DOUBLE,
@@ -128,15 +127,11 @@ CREATE TABLE IF NOT EXISTS app.review_import_article_hot_field (
   article_title VARCHAR,
   journal_title VARCHAR,
   external_id VARCHAR,
-  duplicate_key VARCHAR,
   duplicate_flag BOOLEAN,
   conflict_flag BOOLEAN,
   filter_bucket_key VARCHAR,
   filter_bucket_value VARCHAR,
-  source_updated_at TIMESTAMPTZ,
   tombstone BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(import_route_id, article_id, source_record_key),
   CHECK (length(trim(import_route_id)) > 0),
   CHECK (length(trim(article_id)) > 0),
@@ -634,7 +629,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
   source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR,
-  payload_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(project_id, display_identity, payload_identity, snapshot_id, article_id)
 );
 

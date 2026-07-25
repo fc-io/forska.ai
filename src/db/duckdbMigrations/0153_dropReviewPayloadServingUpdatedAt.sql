@@ -1,6 +1,6 @@
-DROP TABLE IF EXISTS mart.review_article_serving_payload_v4_repair;
+DROP TABLE IF EXISTS mart.review_article_serving_payload_v4_updated_at_repair;
 
-CREATE TABLE mart.review_article_serving_payload_v4_repair (
+CREATE TABLE mart.review_article_serving_payload_v4_updated_at_repair (
   project_id VARCHAR NOT NULL,
   display_identity VARCHAR NOT NULL,
   payload_identity VARCHAR NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE mart.review_article_serving_payload_v4_repair (
   full_text_preview VARCHAR
 );
 
-INSERT INTO mart.review_article_serving_payload_v4_repair
+INSERT INTO mart.review_article_serving_payload_v4_updated_at_repair
 SELECT
   project_id,
   display_identity,
@@ -27,7 +27,7 @@ FROM mart.review_article_serving_payload_v4;
 
 DROP TABLE mart.review_article_serving_payload_v4;
 
-ALTER TABLE mart.review_article_serving_payload_v4_repair RENAME TO review_article_serving_payload_v4;
+ALTER TABLE mart.review_article_serving_payload_v4_updated_at_repair RENAME TO review_article_serving_payload_v4;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk
 ON mart.review_article_serving_payload_v4(project_id, display_identity, payload_identity, snapshot_id, article_id);
@@ -37,3 +37,5 @@ ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order
 ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);
+
+DROP TABLE IF EXISTS mart.review_article_serving_payload_v4_updated_at_repair;

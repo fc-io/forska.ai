@@ -55,7 +55,6 @@ test('import hot fields derive compact typed row for selected-import ranking and
     publicationYear: 2024,
     selectedRankNumeric: 0,
     sourceKind: 'covidence',
-    sourceRecordHash: 'hash-1',
     sourceRecordKey: 'covidence:#1',
     tombstone: false,
   })
@@ -80,8 +79,6 @@ test('missing source hot fields are typed null values without raw JSON fallback'
     journalTitle: null,
     publicationYear: null,
     sourceKind: null,
-    sourceRecordHash: null,
-    sourceUpdatedAt: null,
     tombstone: false,
   })
   expect(row.selectedRankKey).toBe('3110:article-2:record-2')
@@ -113,7 +110,6 @@ test('hot-field replacement writes scoped delete then compact insert without ind
     'article_title',
     'journal_title',
     'external_id',
-    'duplicate_key',
     'duplicate_flag',
     'conflict_flag',
     'filter_bucket_key',
@@ -151,6 +147,11 @@ test('hot-field replacement writes scoped delete then compact insert without ind
   expect(statement).not.toContain('mart.review')
   expect(statement).not.toContain('review_selected_article_import_v4')
   expect(statement).not.toContain('review_serving_snapshot_manifest')
+  expect(statement).not.toContain('source_record_hash')
+  expect(statement).not.toContain('duplicate_key')
+  expect(statement).not.toContain('source_updated_at')
+  expect(statement).not.toContain('created_at')
+  expect(statement).not.toContain('updated_at')
 })
 
 test('projector column contract covers ranking, display, filters, postings, and contribution keys without raw JSON', () => {

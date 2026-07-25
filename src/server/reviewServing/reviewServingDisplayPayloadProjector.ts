@@ -564,7 +564,6 @@ const getPayloadRecord = (
       display_identity: input.displayIdentity,
       full_text_preview: row.fullTextPreview,
       payload_identity: input.payloadIdentity,
-      payload_updated_at: new Date(),
       project_id: input.projectId,
       snapshot_id: input.snapshotId,
       source_metadata: row.sourceMetadata,
@@ -585,7 +584,6 @@ const getPayloadRebuildRowsStatements = (
       display_identity,
       full_text_preview,
       payload_identity,
-      payload_updated_at,
       project_id,
       snapshot_id,
       source_metadata
@@ -606,7 +604,6 @@ const getPayloadRebuildRowsStatements = (
         ${getSqlLiteral(input.displayIdentity)} AS display_identity,
         payload_source.fullTextPreview AS full_text_preview,
         ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
-        current_timestamp AS payload_updated_at,
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
         payload_source.sourceMetadata AS source_metadata
@@ -619,14 +616,13 @@ const getPayloadRebuildRowsStatements = (
       display_identity,
       full_text_preview,
       payload_identity,
-      payload_updated_at,
       project_id,
       snapshot_id,
       source_metadata
     FROM payload_rows
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
-      ORDER BY article_created_at DESC NULLS LAST, payload_updated_at DESC
+      ORDER BY article_created_at DESC NULLS LAST, article_id ASC
     ) = 1
     ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO NOTHING
   `,

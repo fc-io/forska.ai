@@ -1738,7 +1738,7 @@ test('syncImportedArticlesWithTx emits import deltas and hot fields without affe
           "SELECT change_kind AS changeKind, source_operation AS sourceOperation, source_record_key AS sourceRecordKey, source_record_hash AS sourceRecordHash, publication_year AS publicationYear, tombstone FROM app.import_run_article_delta ORDER BY source_high_water_mark ASC"
         )
         const hotFieldRows = await database.queryJson(
-          "SELECT external_id AS externalId, publication_year AS publicationYear, source_record_hash AS sourceRecordHash, source_record_key AS sourceRecordKey, tombstone FROM app.review_import_article_hot_field ORDER BY source_record_key ASC, tombstone ASC"
+          "SELECT external_id AS externalId, publication_year AS publicationYear, source_record_key AS sourceRecordKey, tombstone FROM app.review_import_article_hot_field ORDER BY source_record_key ASC, tombstone ASC"
         )
         const [dirtyWorkCountRow] = await database.queryJson(
           "SELECT COUNT(*)::INTEGER AS count FROM app.review_serving_dirty_work"
@@ -1796,7 +1796,6 @@ test('syncImportedArticlesWithTx emits import deltas and hot fields without affe
       hotFieldRows: Array<{
         externalId: string
         publicationYear: number | null
-        sourceRecordHash: string
         sourceRecordKey: string
         tombstone: boolean
       }>
@@ -1831,20 +1830,8 @@ test('syncImportedArticlesWithTx emits import deltas and hot fields without affe
       tombstone: true,
     })
     expect(parsed.hotFieldRows).toEqual([
-      {
-        externalId: 'external-delta-a',
-        publicationYear: 2026,
-        sourceRecordHash: 'hash-delta-a-2',
-        sourceRecordKey: 'delta-source-a',
-        tombstone: false,
-      },
-      {
-        externalId: 'external-delta-b',
-        publicationYear: 2025,
-        sourceRecordHash: 'hash-delta-b-1',
-        sourceRecordKey: 'delta-source-b',
-        tombstone: true,
-      },
+      {externalId: 'external-delta-a', publicationYear: 2026, sourceRecordKey: 'delta-source-a', tombstone: false},
+      {externalId: 'external-delta-b', publicationYear: 2025, sourceRecordKey: 'delta-source-b', tombstone: true},
     ])
     expect(parsed.dirtyWorkCountRow.count).toBe(0)
     expect(parsed.outboxCountRow.count).toBe(0)
