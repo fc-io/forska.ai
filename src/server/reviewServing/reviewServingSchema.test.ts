@@ -31,6 +31,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0127_dropReviewTitleSearchUnusedColumns.sql',
   '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql',
   '../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql',
+  '../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -84,6 +85,8 @@ const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
   ]
 const reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql']
+const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -522,6 +525,33 @@ test('filter posting stats schema drops derived identity and selectivity columns
   expect(schemaMigrationSql).not.toContain('selectivity DOUBLE')
 })
 
+test('filter option schema drops reconstructable payload JSON column', () => {
+  expect(reviewFilterOptionPayloadJsonDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_filter_option_serving_v4_repair',
+  )
+  expect(reviewFilterOptionPayloadJsonDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_filter_option_serving_v4_repair RENAME TO review_filter_option_serving_v4;',
+  )
+  expect([...getTableColumns('mart.review_filter_option_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'search_identity',
+    'filter_option_identity',
+    'option_value_key',
+    'filter_kind',
+    'facet_key',
+    'facet_value',
+    'prompt_id',
+    'answer_id',
+    'numeric_min',
+    'numeric_max',
+    'count_value',
+    'option_updated_at',
+  ])
+  expect(getTableColumns('mart.review_filter_option_serving_v4').has('option_payload_json')).toBe(false)
+})
+
 test('Phase 1 schema migration creates contract cursor and sort columns on non-job serving tables', () => {
   const missingColumns = reviewServingReadContractList
     .filter((contract) => {
@@ -592,7 +622,6 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
     getMissingColumns('mart.review_filter_option_serving_v4', [
       'filter_kind',
       'filter_option_identity',
-      'option_payload_json',
       'option_value_key',
       'search_identity',
     ]),

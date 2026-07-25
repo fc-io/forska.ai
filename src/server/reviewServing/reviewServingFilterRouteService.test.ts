@@ -115,7 +115,6 @@ const createReaderDatabase = () => {
             facet_key: 'promptAnswer',
             facet_value: 'yes',
             filter_kind: 'review',
-            option_payload_json: {filterType: 'enum', promptId: 'prompt-1', value: 'yes'},
             option_value_key: 'review:promptAnswer:prompt-1:yes',
             prompt_id: 'prompt-1',
           },
@@ -124,7 +123,6 @@ const createReaderDatabase = () => {
             facet_key: 'promptAnswer',
             facet_value: '5',
             filter_kind: 'review',
-            option_payload_json: {filterType: 'numeric', promptId: 'prompt-2', value: '5'},
             option_value_key: 'review:promptAnswer:prompt-2:5',
             prompt_id: 'prompt-2',
           },
@@ -133,7 +131,6 @@ const createReaderDatabase = () => {
             facet_key: 'promptAnswer',
             facet_value: '10',
             filter_kind: 'review',
-            option_payload_json: {filterType: 'numeric', promptId: 'prompt-2', value: '10'},
             option_value_key: 'review:promptAnswer:prompt-2:10',
             prompt_id: 'prompt-2',
           },
@@ -142,7 +139,6 @@ const createReaderDatabase = () => {
             facet_key: 'publicationYear',
             facet_value: '2026',
             filter_kind: 'review',
-            option_payload_json: {facetKey: 'publicationYear', filterType: 'enum', value: '2026'},
             option_value_key: 'review:publicationYear:2026',
           },
         ] as T[]
@@ -196,7 +192,13 @@ test('review filter route service reads facet and option contracts without raw f
     },
   ])
   expect(response.facets[0]).toMatchObject({facet_key: 'promptAnswer', summary_identity: 'review.filter.promptAnswer'})
-  expect(response.filterOptions[0]).toMatchObject({optionValueKey: 'review:promptAnswer:prompt-1:yes'})
+  expect(response.filterOptions[0]).toMatchObject({
+    optionPayload: {filterType: 'enum', promptId: 'prompt-1', value: 'yes'},
+    optionValueKey: 'review:promptAnswer:prompt-1:yes',
+  })
+  expect(response.filterOptions[3]).toMatchObject({
+    optionPayload: {facetKey: 'publicationYear', filterType: 'enum', value: '2026'},
+  })
   expect(response.searchScope).toMatchObject({mode: 'tokenPrefix', searchIdentity: 'search-identity', text: 'heart'})
   expect(reader.statements).toHaveLength(5)
   expect(sql).toContain('FROM mart.review_filter_facet_serving_v4')
@@ -245,7 +247,6 @@ test('human filter route service keeps summary-mode answer scope from serving op
               facet_key: 'promptAnswer',
               facet_value: 'include',
               filter_kind: 'human',
-              option_payload_json: {filterType: 'enum', promptId: 'summary', summaryMode: true, value: 'include'},
               option_value_key: 'human:promptAnswer:summary:include',
               prompt_id: 'summary',
             },
@@ -268,6 +269,12 @@ test('human filter route service keeps summary-mode answer scope from serving op
       promptName: 'Overall human screening decision',
     },
   ])
+  expect(response.filterOptions[0]?.optionPayload).toEqual({
+    filterType: 'enum',
+    promptId: 'summary',
+    summaryMode: true,
+    value: 'include',
+  })
   expect(statements.join('\n')).toContain("AND facet_kind = 'human'")
 })
 
@@ -304,7 +311,6 @@ test('human filter route service keeps prompt filters for prompt-mode projects',
               facet_key: 'promptAnswer',
               facet_value: 'include',
               filter_kind: 'human',
-              option_payload_json: {filterType: 'enum', promptId: 'prompt-1', value: 'include'},
               option_value_key: 'human:promptAnswer:prompt-1:include',
               prompt_id: 'prompt-1',
             },

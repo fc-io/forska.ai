@@ -38,7 +38,6 @@ type FilterOptionSourceRow = {
   filterKind: string
   numericMax: number | null
   numericMin: number | null
-  optionPayloadJson: Record<string, unknown> | string | null
   optionValueKey: string
   promptId: string | null
 }
@@ -148,42 +147,42 @@ const getFilterOptionSourceRows = async (
             ${getSearchPredicate(input.searchTitle)}
         ),
         review_facet_options AS (
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'duplicateFlag' AS facetKey, CAST(serving.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':duplicateFlag:', CAST(serving.duplicate_flag AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'duplicateFlag', 'value', CAST(serving.duplicate_flag AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'duplicateFlag' AS facetKey, CAST(serving.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':duplicateFlag:', CAST(serving.duplicate_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
           WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${aggregateBySql} serving.duplicate_flag
           UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'conflictFlag' AS facetKey, CAST(serving.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':conflictFlag:', CAST(serving.conflict_flag AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'conflictFlag', 'value', CAST(serving.conflict_flag AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'conflictFlag' AS facetKey, CAST(serving.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':conflictFlag:', CAST(serving.conflict_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
           WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${aggregateBySql} serving.conflict_flag
           UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'importRoute' AS facetKey, serving.selected_import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':importRoute:', serving.selected_import_route_id) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'importRoute', 'value', serving.selected_import_route_id) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'importRoute' AS facetKey, serving.selected_import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':importRoute:', serving.selected_import_route_id) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
           WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.selected_import_route_id IS NOT NULL
           ${aggregateBySql} serving.selected_import_route_id
           UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'publicationYear' AS facetKey, CAST(serving.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':publicationYear:', CAST(serving.publication_year AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'publicationYear', 'value', CAST(serving.publication_year AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'publicationYear' AS facetKey, CAST(serving.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':publicationYear:', CAST(serving.publication_year AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
           WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.publication_year IS NOT NULL
           ${aggregateBySql} serving.publication_year
           UNION ALL
-          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'llmStatus', 'value', serving.llm_status_key) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
           WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.llm_status_key IS NOT NULL
           ${aggregateBySql} serving.llm_status_key
           UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, serving.human_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', serving.human_status_key) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'humanStatus', 'value', serving.human_status_key) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, serving.human_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', serving.human_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
@@ -213,14 +212,14 @@ const getFilterOptionSourceRows = async (
             AND array_length(detail.answered_original_as_array) > 0
         ),
         prompt_answer_options AS (
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, ${getSqlLiteral(getPromptAnswerFacetKey(input))} AS facetKey, answer.answerValue AS facetValue, answer.prompt_id AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':', ${getSqlLiteral(getPromptAnswerFacetKey(input))}, ':', answer.prompt_id, ':', answer.answerValue) AS optionValueKey, json_object('filterType', 'enum', 'promptId', answer.prompt_id, 'value', answer.answerValue) AS optionPayloadJson, COUNT(DISTINCT answer.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, ${getSqlLiteral(getPromptAnswerFacetKey(input))} AS facetKey, answer.answerValue AS facetValue, answer.prompt_id AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':', ${getSqlLiteral(getPromptAnswerFacetKey(input))}, ':', answer.prompt_id, ':', answer.answerValue) AS optionValueKey, COUNT(DISTINCT answer.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM answer_values answer
           WHERE NULLIF(TRIM(COALESCE(answer.answerValue, '')), '') IS NOT NULL
             AND (${getSqlLiteral(input.optionMode)} <> 'human' OR answer.prompt_id <> 'summary')
           ${aggregateBySql} answer.prompt_id, answer.answerValue
         ),
         human_summary_options AS (
-          SELECT 'human' AS filterKind, 'promptAnswer' AS facetKey, answer.answerValue AS facetValue, 'summary' AS promptId, NULL::INTEGER AS answerId, concat('human:promptAnswer:summary:', answer.answerValue) AS optionValueKey, json_object('filterType', 'enum', 'promptId', 'summary', 'summaryMode', true, 'value', answer.answerValue) AS optionPayloadJson, COUNT(DISTINCT answer.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT 'human' AS filterKind, 'promptAnswer' AS facetKey, answer.answerValue AS facetValue, 'summary' AS promptId, NULL::INTEGER AS answerId, concat('human:promptAnswer:summary:', answer.answerValue) AS optionValueKey, COUNT(DISTINCT answer.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM answer_values answer
           WHERE ${getSqlLiteral(input.optionMode)} = 'human'
             AND answer.prompt_id = 'summary'
@@ -231,10 +230,6 @@ const getFilterOptionSourceRows = async (
         UNION ALL SELECT * FROM prompt_answer_options
         UNION ALL SELECT * FROM human_summary_options
       `)
-}
-
-const getOptionPayload = (row: FilterOptionSourceRow) => {
-  return typeof row.optionPayloadJson === 'string' ? row.optionPayloadJson : (row.optionPayloadJson ?? {})
 }
 
 const getFilterOptionRecord = (input: {
@@ -266,7 +261,6 @@ const getFilterOptionRecord = (input: {
       filter_option_identity: input.filterOptionIdentity,
       numeric_max: input.row.numericMax,
       numeric_min: input.row.numericMin,
-      option_payload_json: getOptionPayload(input.row),
       option_updated_at: new Date(),
       option_value_key: input.row.optionValueKey,
       project_id: input.projectId,
