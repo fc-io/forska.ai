@@ -294,7 +294,7 @@ const reviewServingArticlePayloadDisplayColumns = [
 ].map((column) => {
   return column
 })
-const reviewServingJudgmentDetailListColumns = [
+const reviewServingJudgmentDetailFullColumns = [
   'project_id',
   'review_config_hash',
   'snapshot_id',
@@ -336,6 +336,38 @@ const reviewServingJudgmentDetailListColumns = [
 ].map((column) => {
   return `${reviewServingJudgmentDetailTable}.${column}`
 })
+const reviewServingJudgmentDetailRouteListColumns = [
+  'project_id',
+  'review_config_hash',
+  'snapshot_id',
+  'list_mode_key',
+  'payload_kind',
+  'article_id',
+  'prompt_id',
+  'prompt_order',
+  'judgment_id',
+  'judgment_model_id',
+  'answered_original',
+  'answered_original_as_array',
+  'judgment_created_at',
+  'human_comment',
+  'explanation',
+  'quotes',
+  'placeholder_kind',
+  'detail_updated_at',
+].map((column) => {
+  return `${reviewServingJudgmentDetailTable}.${column}`
+})
+const reviewServingJudgmentDetailFullColumnContractKeys = new Set<ReviewServingReadContract['key']>([
+  'review.detail.judgments',
+  'review.detail.humanJudgments',
+])
+
+const getReviewServingJudgmentDetailSelectColumns = (contract: ReviewServingReadContract) => {
+  return reviewServingJudgmentDetailFullColumnContractKeys.has(contract.key)
+    ? reviewServingJudgmentDetailFullColumns
+    : reviewServingJudgmentDetailRouteListColumns
+}
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
@@ -734,7 +766,7 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
   }
 
   if (contract.servingTable === reviewServingJudgmentDetailTable) {
-    const selectColumns = reviewServingJudgmentDetailListColumns.join(', ')
+    const selectColumns = getReviewServingJudgmentDetailSelectColumns(contract).join(', ')
 
     return contract.sort.fields.some((field) => {
       return field.includes(reviewServingListModePrioritySql)
