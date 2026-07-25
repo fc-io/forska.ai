@@ -183,6 +183,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0155_dropReviewPayloadServingArticleCreatedAt.sql'),
     'utf8',
   ).trim()
+  const reviewPayloadServingFullTextPreviewDropSql = readFileSync(
+    resolve(migrationsFolder, '0156_dropReviewPayloadFullTextPreview.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -445,6 +449,17 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewPayloadServingArticleCreatedAtDropSql).not.toContain(
     'idx_review_article_serving_payload_v4_preview_order',
   )
+  expect(reviewPayloadServingFullTextPreviewDropSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_full_text_preview_repair',
+  )
+  expect(reviewPayloadServingFullTextPreviewDropSql).toContain('DROP TABLE mart.review_article_serving_payload_v4;')
+  expect(reviewPayloadServingFullTextPreviewDropSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_full_text_preview_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadServingFullTextPreviewDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
+  )
+  expect(reviewPayloadServingFullTextPreviewDropSql).not.toContain('full_text_preview VARCHAR')
   expect(reviewImportHotFieldProvenanceDebugColumnDropSql).toContain(
     'CREATE TABLE app.review_import_article_hot_field_repair',
   )

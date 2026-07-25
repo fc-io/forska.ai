@@ -125,7 +125,7 @@ test('buildReviewServingRowsSql uses article ordering and payload hydration for 
   expect(sql).toContain('payload.display_identity = $displayIdentity')
   expect(sql).toContain('payload.payload_identity = $payloadIdentity')
   expect(sql).toContain('payload.abstract_text AS abstract_text')
-  expect(sql).toContain('payload.full_text_preview AS full_text_preview')
+  expect(sql).not.toContain('payload.full_text_preview')
   expect(sql).toContain(
     'WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId',
   )

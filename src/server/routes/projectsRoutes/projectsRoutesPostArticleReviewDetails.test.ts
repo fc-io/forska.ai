@@ -232,10 +232,7 @@ test('project review details hydrates article, judgments, and assessments from V
     return request.contractKey === 'review.detail.row'
       ? {rows: [getServingArticleRow()], status: 'accepted'}
       : request.contractKey === 'review.detail.payload'
-        ? {
-            rows: [{abstract_text: 'Abstract', article_id: 'article-1', full_text_preview: 'Full text'}],
-            status: 'accepted',
-          }
+        ? {rows: [{abstract_text: 'Abstract', article_id: 'article-1'}], status: 'accepted'}
         : request.contractKey === 'review.detail.judgments'
           ? {rows: [getServingJudgmentRow()], status: 'accepted'}
           : {rows: [], status: 'accepted'}
@@ -243,7 +240,7 @@ test('project review details hydrates article, judgments, and assessments from V
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
-    article: {articleSummary: string; articleTitle: string; fullText: string; id: string}
+    article: {articleSummary: string; articleTitle: string; fullText: string | null; id: string}
     judgments: Array<{
       assessments: Array<{id: string}>
       id: string
@@ -262,7 +259,7 @@ test('project review details hydrates article, judgments, and assessments from V
   expect(body.article).toMatchObject({
     articleSummary: 'Abstract',
     articleTitle: 'Article 1',
-    fullText: 'Full text',
+    fullText: null,
     id: 'article-1',
   })
   expect(body.judgments[0]?.id).toBe('judgment-1')

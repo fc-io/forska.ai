@@ -17,12 +17,7 @@ import {assertProjectIsActive} from './projectAccessGuard.ts'
 const defaultJudgmentModelContext = 32768
 const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 
-type PromptPreviewServingRow = {
-  abstract_text: string | null
-  article_id: string
-  full_text_preview: string | null
-  source_metadata: unknown
-}
+type PromptPreviewServingRow = {abstract_text: string | null; article_id: string; source_metadata: unknown}
 type PromptPreviewDetailRow = {
   article_created_at: unknown
   article_external_id: string | null

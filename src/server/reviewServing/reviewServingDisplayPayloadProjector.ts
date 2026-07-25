@@ -113,7 +113,6 @@ type DisplayPatchRow = {
 type PayloadProjectionRow = {
   abstractText: string | null
   articleId: string
-  fullTextPreview: string | null
   sourceMetadata: ReviewServingIdentityValue | null
 }
 
@@ -559,7 +558,6 @@ const getPayloadRecord = (
       abstract_text: row.abstractText,
       article_id: row.articleId,
       display_identity: input.displayIdentity,
-      full_text_preview: row.fullTextPreview,
       payload_identity: input.payloadIdentity,
       project_id: input.projectId,
       snapshot_id: input.snapshotId,
@@ -578,7 +576,6 @@ const getPayloadRebuildRowsStatements = (
       abstract_text,
       article_id,
       display_identity,
-      full_text_preview,
       payload_identity,
       project_id,
       snapshot_id,
@@ -597,7 +594,6 @@ const getPayloadRebuildRowsStatements = (
         payload_source.abstractText AS abstract_text,
         payload_source.articleId AS article_id,
         ${getSqlLiteral(input.displayIdentity)} AS display_identity,
-        payload_source.fullTextPreview AS full_text_preview,
         ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
@@ -608,7 +604,6 @@ const getPayloadRebuildRowsStatements = (
       abstract_text,
       article_id,
       display_identity,
-      full_text_preview,
       payload_identity,
       project_id,
       snapshot_id,

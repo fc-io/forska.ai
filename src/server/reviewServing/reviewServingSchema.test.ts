@@ -56,6 +56,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0153_dropReviewPayloadServingUpdatedAt.sql',
   '../../db/duckdbMigrations/0154_dropReviewImportHotFieldProvenanceDebugColumns.sql',
   '../../db/duckdbMigrations/0155_dropReviewPayloadServingArticleCreatedAt.sql',
+  '../../db/duckdbMigrations/0156_dropReviewPayloadFullTextPreview.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -151,6 +152,8 @@ const reviewImportHotFieldProvenanceDebugColumnDropForwardMigrationSql =
   ]
 const reviewPayloadArticleCreatedAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0155_dropReviewPayloadServingArticleCreatedAt.sql']
+const reviewPayloadFullTextPreviewDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0156_dropReviewPayloadFullTextPreview.sql']
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -273,11 +276,13 @@ const getTableColumnSql = (tableName: string) => {
 }
 
 const getTableColumns = (tableName: string) => {
-  const repairTableName = `${tableName}_repair`
-  const hasRepairRename = schemaMigrationSql.includes(
-    `ALTER TABLE ${repairTableName} RENAME TO ${tableName.split('.').at(-1)};`,
-  )
-  const sourceTableSql = hasRepairRename ? getTableSql(repairTableName) : getTableSql(tableName)
+  const repairRenames = [
+    ...schemaMigrationSql.matchAll(
+      new RegExp(`ALTER TABLE ([a-z_][\\w]*\\.[a-z_][\\w]*) RENAME TO ${tableName.split('.').at(-1)};`, 'g'),
+    ),
+  ]
+  const repairTableName = repairRenames.at(-1)?.[1]
+  const sourceTableSql = repairTableName ? getTableSql(repairTableName) : getTableSql(tableName)
   const columns = new Set(
     [...sourceTableSql.matchAll(/^ {2}([a-z_][\w]*)\s+/gm)].map((match) => {
       return match[1]
@@ -660,13 +665,8 @@ test('Phase 1 payload serving schema drops prompt preview ordering copies', () =
 })
 
 test('Phase 1 payload serving schema drops display-copy hydration fields after detail routes read display rows', () => {
-  expect(
-    getMissingColumns('mart.review_article_serving_payload_v4', [
-      'source_metadata',
-      'abstract_text',
-      'full_text_preview',
-    ]),
-  ).toEqual([])
+  expect(getMissingColumns('mart.review_article_serving_payload_v4', ['source_metadata', 'abstract_text'])).toEqual([])
+  expect(getTableColumns('mart.review_article_serving_payload_v4').has('full_text_preview')).toBe(false)
   expect(
     [...getTableColumns('mart.review_article_serving_payload_v4')].filter((columnName) => {
       return [
@@ -736,6 +736,13 @@ test('Phase 1 payload serving schema drops display-copy hydration fields after d
   expect(reviewPayloadArticleCreatedAtDropForwardMigrationSql).not.toContain(
     'idx_review_article_serving_payload_v4_preview_order',
   )
+  expect(reviewPayloadFullTextPreviewDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_full_text_preview_repair',
+  )
+  expect(reviewPayloadFullTextPreviewDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_full_text_preview_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadFullTextPreviewDropForwardMigrationSql).not.toContain('full_text_preview VARCHAR')
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {
