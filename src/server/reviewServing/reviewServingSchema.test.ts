@@ -32,6 +32,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql',
   '../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql',
   '../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql',
+  '../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -87,6 +88,8 @@ const reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql']
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
+const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -481,6 +484,7 @@ test('Phase 1 article serving schema preserves review table display metadata', (
     'posting_identity',
     'summary_identity',
     'payload_identity',
+    'selected_rank_key',
   ]
   expect(
     [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
@@ -489,6 +493,12 @@ test('Phase 1 article serving schema preserves review table display metadata', (
   ).toEqual([])
   expect(reviewArticleServingIdentityCopyColumnDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_serving_v4_repair',
+  )
+  expect(reviewArticleServingSelectedRankCopyDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_v4_repair',
+  )
+  expect(reviewArticleServingSelectedRankCopyDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_v4_repair RENAME TO review_article_serving_v4;',
   )
   expect(articleMetadataStatusForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_v4 ADD COLUMN IF NOT EXISTS article_updated_at TIMESTAMPTZ;',
