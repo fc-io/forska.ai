@@ -201,24 +201,26 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       snapshot_id,
       base_generation,
       patch_watermark,
-      display_identity,
-      project_scope_identity,
-      selected_import_identity,
-      llm_status_identity,
-      human_status_identity,
-      posting_identity,
-      summary_identity,
-      payload_identity,
       list_mode_key,
       article_id,
       article_created_at,
-      article_updated_at,
       sort_key,
-      activity_sort_at,
-      article_title
+      activity_sort_at
     ) VALUES ${articleRows
       .map((article) => {
-        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', 1, 0, 'display:${prefix}', 'projectScope:${prefix}', 'selectedImport:${prefix}', 'llmStatus:${prefix}', 'humanStatus:${prefix}', 'posting:${prefix}', 'summary:${prefix}', 'payload:${prefix}', 'llm', '${article.id}', TIMESTAMPTZ '${article.createdAt}', NULL, TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}', '${article.title}')`
+        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', 1, 0, 'llm', '${article.id}', TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}')`
+      })
+      .join(', ')};
+
+    INSERT INTO mart.review_article_serving_payload_v4 (
+      project_id,
+      display_identity,
+      payload_identity,
+      snapshot_id,
+      article_id
+    ) VALUES ${articleRows
+      .map((article) => {
+        return `('${projectId}', 'display:${prefix}', 'payload:${prefix}', '${prefix}-snapshot', '${article.id}')`
       })
       .join(', ')};
   `)

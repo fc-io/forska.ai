@@ -241,9 +241,9 @@ test('source query preserves active search and filter scope without using postin
   const joined = statements.join('\n')
 
   expect(sourceStatement).toContain('mart.review_article_serving_v4 serving')
-  expect(sourceStatement).toContain('INNER JOIN mart.review_article_serving_payload_v4 payload')
-  expect(sourceStatement).toContain("payload.display_identity = 'display:identity-1'")
-  expect(sourceStatement).toContain("payload.payload_identity = 'payload:identity-1'")
+  expect(sourceStatement).not.toContain('INNER JOIN mart.review_article_serving_payload_v4 payload')
+  expect(sourceStatement).not.toContain("payload.display_identity = 'display:identity-1'")
+  expect(sourceStatement).not.toContain("payload.payload_identity = 'payload:identity-1'")
   expect(sourceStatement).toContain('LEFT JOIN app.article article')
   expect(sourceStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
   expect(sourceStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
