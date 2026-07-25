@@ -39,8 +39,6 @@ type SelectedImportCursor = {articleId: string; processedRowCount: number; rankK
 type SelectedImportProjectionRow = {
   articleId: string
   articleTitle: string | null
-  conflictFlag: boolean | null
-  duplicateFlag: boolean | null
   externalId: string | null
   importRouteId: string | null
   journalTitle: string | null
@@ -231,8 +229,6 @@ const getSelectedImportProjectionRows = async (
             hot.article_title,
             hot.journal_title,
             hot.external_id,
-            hot.duplicate_flag,
-            hot.conflict_flag,
             hot.tombstone,
             CASE WHEN hot.selected_rank_numeric IS NULL THEN ${nullRankNumericSort} ELSE hot.selected_rank_numeric END AS rank_numeric_sort,
             CASE
@@ -285,8 +281,6 @@ const getSelectedImportProjectionRows = async (
           candidate.article_title AS articleTitle,
           candidate.journal_title AS journalTitle,
           candidate.external_id AS externalId,
-          candidate.duplicate_flag AS duplicateFlag,
-          candidate.conflict_flag AS conflictFlag,
           candidate.tombstone,
           candidate.rank_numeric_sort AS rankNumericSort,
           candidate.rank_key_sort AS rankKeySort
@@ -325,8 +319,6 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       source_record_key,
       selected_rank_key,
       selected_rank_numeric,
-      duplicate_flag,
-      conflict_flag,
       tombstone,
       selected_import_updated_at
     )
@@ -346,8 +338,6 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
         hot.article_title,
         hot.journal_title,
         hot.external_id,
-        hot.duplicate_flag,
-        hot.conflict_flag,
         hot.tombstone,
         CASE WHEN hot.selected_rank_numeric IS NULL THEN ${nullRankNumericSort} ELSE hot.selected_rank_numeric END AS rank_numeric_sort,
         CASE
@@ -406,8 +396,6 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       candidate.source_record_key,
       candidate.selected_rank_key,
       candidate.selected_rank_numeric,
-      candidate.duplicate_flag,
-      candidate.conflict_flag,
       candidate.tombstone,
       current_timestamp AS selected_import_updated_at
     FROM selected_import_winner candidate
@@ -551,8 +539,8 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
       article.full_text_pdf,
       selected.import_route_id AS selected_import_route_id,
       selected_hot.publication_year AS publication_year,
-       COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag,
-       COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag,
+       COALESCE(selected_hot.duplicate_flag, FALSE) AS duplicate_flag,
+       COALESCE(selected_hot.conflict_flag, FALSE) AS conflict_flag,
        COALESCE(serving.llm_status_key, 'unanswered') AS llm_status_key,
        COALESCE(serving.human_status_key, 'unanswered') AS human_status_key,
        COALESCE(serving.llm_judged_prompt_count, 0) AS llm_judged_prompt_count,
@@ -642,8 +630,6 @@ const getSelectedImportProjectorRecord = (
     table: 'app.review_selected_article_import_v4',
     values: {
       article_id: row.articleId,
-      conflict_flag: row.conflictFlag,
-      duplicate_flag: row.duplicateFlag,
       import_route_id: row.importRouteId,
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,

@@ -44,6 +44,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql',
   '../../db/duckdbMigrations/0141_dropReviewSummaryContributionServing.sql',
   '../../db/duckdbMigrations/0142_reviewRebuildPartialCleanupAuthorization.sql',
+  '../../db/duckdbMigrations/0143_dropReviewSelectedImportBaseFlags.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -101,6 +102,8 @@ const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql']
 const reviewSummaryContributionServingDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0141_dropReviewSummaryContributionServing.sql']
+const reviewSelectedImportBaseFlagDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0143_dropReviewSelectedImportBaseFlags.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -333,7 +336,7 @@ test('title search serving schema drops repeated unused metadata', () => {
   expect(schemaMigrationSql).not.toContain('search_updated_at')
 })
 
-test('selected import schema drops retired display-copy columns only', () => {
+test('selected import schema drops retired display-copy and selected-base flag columns', () => {
   expect(reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql).toContain(
     'CREATE TABLE app.review_selected_article_import_v4_repair',
   )
@@ -349,11 +352,20 @@ test('selected import schema drops retired display-copy columns only', () => {
     'source_record_key',
     'selected_rank_key',
     'selected_rank_numeric',
-    'duplicate_flag',
-    'conflict_flag',
     'tombstone',
     'selected_import_updated_at',
   ])
+  expect(reviewSelectedImportBaseFlagDropForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_selected_article_import_v4_flag_repair',
+  )
+  expect(reviewSelectedImportBaseFlagDropForwardMigrationSql).toContain(
+    'DROP TABLE app.review_selected_article_import_v4;',
+  )
+  expect(reviewSelectedImportBaseFlagDropForwardMigrationSql).toContain(
+    'ALTER TABLE app.review_selected_article_import_v4_flag_repair RENAME TO review_selected_article_import_v4;',
+  )
+  expect(reviewSelectedImportBaseFlagDropForwardMigrationSql).not.toContain('duplicate_flag')
+  expect(reviewSelectedImportBaseFlagDropForwardMigrationSql).not.toContain('conflict_flag')
 })
 
 test('unassessed queue serving schema drops derived queue identity', () => {
