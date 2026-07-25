@@ -65,7 +65,13 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
   'db:duck:inspect-review-serving-physical-evidence': {
     commandIncludes: ['DUCKDB_PATH=', 'runtime/primary/forska.duckdb'],
     description: 'V4 physical storage shape readonly snapshot diagnostics',
-    mustContain: ['createDuckdbSnapshotForCli', 'getReadOnlyDuckdbRuntimeOptions', 'DuckDBInstance.create'],
+    mustContain: [
+      'createDuckdbSnapshotForCli',
+      'getReadOnlyDuckdbRuntimeOptions',
+      'DuckDBInstance.create',
+      "verdict: 'retired'",
+      'no row, duplicate, index, or recoverability inspection was attempted',
+    ],
     path: 'scripts/inspectReviewServingPhysicalEvidence.ts',
   },
   'db:duck:mig': {commandIncludes: ['bun run db:mig'], description: 'migration alias'},

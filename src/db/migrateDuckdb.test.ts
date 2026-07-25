@@ -131,6 +131,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0140_dropReviewFilterPostingServingUpdatedAt.sql'),
     'utf8',
   ).trim()
+  const reviewSummaryContributionServingDropSql = readFileSync(
+    resolve(migrationsFolder, '0141_dropReviewSummaryContributionServing.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -287,6 +291,125 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('journal_title')
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('external_id')
   expect(reviewSelectedImportPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_selected_import_patch_v4;')
+  expect(reviewSummaryContributionServingDropSql).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_article_summary_contribution_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_article_summary_contribution_v4_lookup;',
+      'DROP TABLE IF EXISTS mart.review_article_summary_contribution_v4;',
+    ].join('\n'),
+  )
+})
+
+test('DuckDB migration drops retired summary contribution serving table and lookup index', async () => {
+  const duckdbPath = `/tmp/forska-review-summary-contribution-serving-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0141_dropReviewSummaryContributionServing.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_summary_contribution_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            component_kind VARCHAR NOT NULL,
+            summary_definition_version VARCHAR NOT NULL,
+            contribution_key VARCHAR NOT NULL,
+            contribution_value BIGINT NOT NULL,
+            contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE INDEX idx_review_article_summary_contribution_v4_lookup
+          ON mart.review_article_summary_contribution_v4(
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            component_kind,
+            summary_definition_version,
+            contribution_key
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const tableRows = await database.queryJson(
+          "SELECT table_name AS tableName FROM information_schema.tables WHERE table_schema = 'mart' AND table_name = 'review_article_summary_contribution_v4'"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE index_name = 'idx_review_article_summary_contribution_v4_lookup'"
+        )
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0141_dropReviewSummaryContributionServing.sql'"
+        )
+
+        console.log(JSON.stringify({indexRows, migrationRows, tableRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      indexRows: {indexName: string}[]
+      migrationRows: {name: string}[]
+      tableRows: {tableName: string}[]
+    }
+
+    expect(parsed.tableRows).toEqual([])
+    expect(parsed.indexRows).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
 })
 
 test('DuckDB migration drops selected-import display-copy columns while preserving retained rows and upserts', async () => {

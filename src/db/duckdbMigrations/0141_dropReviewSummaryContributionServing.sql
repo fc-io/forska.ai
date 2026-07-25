@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS mart.idx_review_article_summary_contribution_v4_lookup;
+DROP INDEX IF EXISTS idx_review_article_summary_contribution_v4_lookup;
+DROP TABLE IF EXISTS mart.review_article_summary_contribution_v4;

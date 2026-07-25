@@ -42,6 +42,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0138_dropReviewJudgmentDetailModelId.sql',
   '../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql',
   '../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql',
+  '../../db/duckdbMigrations/0141_dropReviewSummaryContributionServing.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -97,6 +98,8 @@ const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql']
+const reviewSummaryContributionServingDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0141_dropReviewSummaryContributionServing.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -153,7 +156,6 @@ const reviewServingPhase1Tables = [
   'mart.review_filter_posting_stats_v4',
   'mart.review_article_serving_payload_v4',
   'mart.review_article_judgment_detail_serving_v4',
-  'mart.review_article_summary_contribution_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_count_serving_v4',
@@ -168,6 +170,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_filter_posting_patch_v4',
   'mart.review_article_display_patch_v4',
   'mart.review_selected_import_patch_v4',
+  'mart.review_article_summary_contribution_v4',
 ])
 
 const deltaEnvelopeColumns = [
@@ -607,6 +610,24 @@ test('selected import patch mart is retired from the review-serving schema', () 
   expect(schemaMigrationSql).not.toContain('idx_review_selected_import_patch_v4_lookup')
   expect(reviewServingPhase1Tables).not.toContain('mart.review_selected_import_patch_v4')
   expect(retiredReviewServingTables.has('mart.review_selected_import_patch_v4')).toBe(true)
+})
+
+test('summary contribution serving mart is retired from the review-serving schema', () => {
+  expect(reviewSummaryContributionServingDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_article_summary_contribution_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_article_summary_contribution_v4_lookup;',
+      'DROP TABLE IF EXISTS mart.review_article_summary_contribution_v4;',
+    ].join('\n'),
+  )
+  expect(getTableSql('mart.review_article_summary_contribution_v4')).toBe('')
+  expect(schemaMigrationSql).not.toContain('CREATE TABLE IF NOT EXISTS mart.review_article_summary_contribution_v4')
+  expect(schemaMigrationSql).not.toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_summary_contribution_v4_lookup',
+  )
+  expect(reviewServingPhase1Tables).not.toContain('mart.review_article_summary_contribution_v4')
+  expect(retiredReviewServingTables.has('mart.review_article_summary_contribution_v4')).toBe(true)
+  expect(getTableSql('mart.review_article_summary_contribution_rebuild_partial_v4')).not.toBe('')
 })
 
 test('filter posting stats schema drops derived identity and selectivity columns', () => {

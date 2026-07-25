@@ -344,7 +344,7 @@ type SummaryContributionServingReadinessReport = {
   table: 'mart.review_article_summary_contribution_v4'
   topContributionKeys: SummaryContributionServingRowCount[]
   topProjects: {projectId: string; rowCount: number}[]
-  verdict: 'not-authorized' | 'blocked'
+  verdict: 'retired' | 'not-authorized' | 'blocked'
 }
 type UnassessedQueueServingConsumerCount = {
   currentProjectRows: number | null
@@ -428,7 +428,6 @@ const hotReviewServingTables = [
   'mart.review_filter_posting_stats_v4',
   'mart.review_title_search_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
-  'mart.review_article_summary_contribution_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
 ] as const
@@ -840,6 +839,21 @@ const getIndexes = async (runtime: QueryRuntime, table: string) => {
   } catch {
     return []
   }
+}
+
+const getTableExists = async (runtime: QueryRuntime, table: string) => {
+  const {schemaName, tableName} = getTableParts(table)
+  const rows = await runReadonlyQuery<{tableCount: number | string}>(
+    runtime,
+    `
+      SELECT CAST(COUNT(*) AS BIGINT) AS tableCount
+      FROM information_schema.tables
+      WHERE table_schema = ${getSqlLiteral(schemaName)}
+        AND table_name = ${getSqlLiteral(tableName)}
+    `,
+  )
+
+  return Number(rows[0]?.tableCount ?? 0) > 0
 }
 
 const getSizeProxies = async (
@@ -2523,6 +2537,41 @@ const getSummaryContributionServingReadinessReport = async (
   ]
 
   try {
+    if (!(await getTableExists(runtime, table))) {
+      return {
+        activeOrLastKnownGoodSnapshotProtectedRows: null,
+        columnCount: null,
+        columns: [],
+        duplicateProbes: [],
+        error: null,
+        globalRowCount: null,
+        indexes: [],
+        missingSnapshotManifestRows: null,
+        nonzeroProjectCount: null,
+        note: 'Retired by migration 0141_dropReviewSummaryContributionServing.sql; no row, duplicate, index, or recoverability inspection was attempted for the dropped serving ledger.',
+        partialRebuildOverlap: {
+          contributionRows: null,
+          error: null,
+          exactCommonColumnOverlapRows: null,
+          note: 'Not collected because mart.review_article_summary_contribution_v4 is retired. The request-scoped contribution partial table remains inspected separately as an active rebuild artifact.',
+          partialRows: null,
+          partialRowsWithExactCommonContribution: null,
+        },
+        pinnedSnapshotRows: null,
+        recoverabilityClassification:
+          'retired: mart.review_article_summary_contribution_v4 is expected to be absent after migration 0141; this report does not pretend rows were inspected.',
+        recoverabilityComparisons: [],
+        rowsByComponentKind: [],
+        rowsByProject: [],
+        rowsBySnapshotStatus: [],
+        rowsBySummaryDefinitionVersion: [],
+        table,
+        topContributionKeys: [],
+        topProjects: [],
+        verdict: 'retired',
+      }
+    }
+
     const columns = await getTableColumns(runtime, table)
     const manifestColumns = await getTableColumns(runtime, 'app.review_serving_snapshot_manifest')
     const hasSnapshotStatus = hasColumn(manifestColumns, 'snapshot_status')
@@ -3472,7 +3521,11 @@ const renderMarkdown = (report: EvidenceReport) => {
         `\`${row.requestDisposition}\``,
         formatValue(row.requests),
         formatValue(row.chunkRows),
-        row.sampleRequestIds.map((requestId) => `\`${requestId}\``).join(', '),
+        row.sampleRequestIds
+          .map((requestId) => {
+            return `\`${requestId}\``
+          })
+          .join(', '),
       ]
     },
   )
@@ -3871,7 +3924,13 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     rebuildRequestLifecycleColumnRows.length > 0
       ? formatMarkdownTable(
-          ['Lifecycle column', 'Global nulls', 'Global non-nulls', 'Current-project nulls', 'Current-project non-nulls'],
+          [
+            'Lifecycle column',
+            'Global nulls',
+            'Global non-nulls',
+            'Current-project nulls',
+            'Current-project non-nulls',
+          ],
           rebuildRequestLifecycleColumnRows,
         )
       : '_No rebuild request lifecycle column evidence rows were collected._',
