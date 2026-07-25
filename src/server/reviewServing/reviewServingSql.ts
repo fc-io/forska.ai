@@ -724,7 +724,7 @@ export const buildReviewServingRowsSql = (params: {
   const articlePayloadJoin =
     params.contract.servingTable === reviewServingArticleTable
       ? [
-          ` LEFT JOIN ${reviewServingPayloadTable} payload`,
+          ` INNER JOIN ${reviewServingPayloadTable} payload`,
           ` ON payload.project_id = ${params.projectIdParameter}`,
           ` AND payload.project_id = ${reviewServingArticleTable}.project_id`,
           ` AND payload.display_identity = ${params.displayIdentityParameter}`,

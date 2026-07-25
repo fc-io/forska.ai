@@ -87,7 +87,7 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain('LEFT JOIN mart.review_article_serving_payload_v4 payload')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_payload_v4 payload')
   expect(sql).toContain('payload.display_identity = $displayIdentity')
   expect(sql).toContain('payload.payload_identity = $payloadIdentity')
   expect(sql).toContain('mart.review_article_serving_v4.article_title AS article_title')
@@ -983,7 +983,7 @@ test('assertReviewServingSqlShape requires driving-table scope predicates in the
   const sql = `
     SELECT s.article_id
     FROM mart.review_article_serving_v4 s
-    LEFT JOIN mart.review_article_serving_payload_v4 payload
+    INNER JOIN mart.review_article_serving_payload_v4 payload
       ON s.project_id = ?
       AND s.snapshot_id = ?
       AND payload.project_id = ?

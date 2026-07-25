@@ -51,6 +51,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0148_backfillReviewPayloadDisplayFields.sql',
   '../../db/duckdbMigrations/0149_dropReviewPayloadDisplayCopyColumns.sql',
   '../../db/duckdbMigrations/0150_dropReviewServingProjectorWatermarkLifecyclePlaceholders.sql',
+  '../../db/duckdbMigrations/0151_backfillReviewPayloadServingCoverage.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -136,6 +137,8 @@ const reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0150_dropReviewServingProjectorWatermarkLifecyclePlaceholders.sql'
   ]
+const reviewPayloadServingCoverageBackfillForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0151_backfillReviewPayloadServingCoverage.sql']
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -659,17 +662,14 @@ test('Phase 1 payload serving schema drops display-copy hydration fields after d
     }),
   ).toEqual([])
   expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).toContain(
-    'CREATE TABLE mart.review_article_serving_payload_v4_display_repair',
+    'Retired by 0149_dropReviewPayloadDisplayCopyColumns.sql',
   )
-  expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).toContain(
-    'ALTER TABLE mart.review_article_serving_payload_v4_display_repair RENAME TO review_article_serving_payload_v4;',
-  )
-  expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).not.toContain('ADD COLUMN')
+  expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).not.toContain('CREATE TABLE')
+  expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).not.toContain('ALTER TABLE')
   expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain(
-    'UPDATE mart.review_article_serving_payload_v4 AS payload',
+    'Retired by 0149_dropReviewPayloadDisplayCopyColumns.sql',
   )
-  expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain('FROM mart.review_article_serving_v4')
-  expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain('payload.article_title IS NULL')
+  expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).not.toContain('UPDATE')
   expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_serving_payload_v4_repair',
   )
@@ -679,6 +679,20 @@ test('Phase 1 payload serving schema drops display-copy hydration fields after d
   expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).not.toContain('article_title')
   expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).not.toContain('article_external_id')
   expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).not.toContain('full_text_pdf')
+  expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair',
+  )
+  expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).toContain(
+    'FROM mart.review_article_serving_v4 serving',
+  )
+  expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).toContain(
+    'FROM app.review_serving_snapshot_manifest manifest',
+  )
+  expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).toContain(
+    "json_extract_string(component_state.value, '$.projectionIdentity')",
+  )
+  expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).not.toContain('article_title')
+  expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).not.toContain('full_text_pdf')
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {
