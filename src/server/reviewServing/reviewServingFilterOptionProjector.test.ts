@@ -118,9 +118,14 @@ test('projects supported enum option payloads into scoped option rows', async ()
   ).toBe(true)
   expect(joined).toContain('DELETE FROM mart.review_filter_option_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_option_serving_v4')
+  expect(joined).not.toContain('UPDATE mart.review_filter_option_serving_v4')
   expect(joined.indexOf('INSERT INTO mart.review_filter_option_serving_v4')).toBeLessThan(
     joined.indexOf('INSERT INTO app.review_projection_identity_manifest'),
   )
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_filter_option_serving_v4')
+  })
+  expect(insertStatement).not.toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain('numericPromptAnswer')
   expect(joined).not.toContain('numeric_options')
 })
