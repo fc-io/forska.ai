@@ -85,6 +85,7 @@ type ReviewServingLlmReviewRouteDependencies = {
   database?: ReviewServingReaderDatabase
   manifestDatabase?: ReviewServingManifestRepositoryDatabase
 }
+type PromptAnswerFilterGroup = {filterValues: string[]}
 
 const maxReviewPageSize = 500
 const defaultReviewLimit = 100
@@ -148,6 +149,31 @@ const getPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) =
       return `${promptId}:${answer}`
     })
   })
+}
+
+const getPromptAnswerFilterGroups = (prompts: Record<string, string[]> | undefined): PromptAnswerFilterGroup[] => {
+  return Object.entries(prompts ?? {})
+    .filter(([, values]) => {
+      return values.length > 0
+    })
+    .sort(([leftPromptId], [rightPromptId]) => {
+      return leftPromptId.localeCompare(rightPromptId)
+    })
+    .map(([promptId, values]) => {
+      return {
+        filterValues: [...values]
+          .sort((leftValue, rightValue) => {
+            return leftValue.localeCompare(rightValue)
+          })
+          .map((value) => {
+            return `review:promptAnswer:${promptId}:${value}`
+          }),
+      }
+    })
+}
+
+const hasPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) => {
+  return getPromptAnswerFilterGroups(prompts).length > 0
 }
 
 const getRouteFilters = (params: ArticlesReviewsParams) => {
@@ -248,16 +274,8 @@ const getDateToPredicate = (column: string, value: unknown) => {
 }
 
 const getPromptAnswerPredicates = (prompts: Record<string, string[]> | undefined) => {
-  return Object.entries(prompts ?? {})
-    .filter(([, values]) => {
-      return values.length > 0
-    })
-    .map(([promptId, values], index) => {
-      const filterValues = values.map((value) => {
-        return `review:promptAnswer:${promptId}:${value}`
-      })
-
-      return `AND EXISTS (
+  return getPromptAnswerFilterGroups(prompts).map((group, index) => {
+    return `AND EXISTS (
         SELECT 1
         FROM mart.review_article_filter_posting_serving_v4 prompt_filter_${index}
         WHERE prompt_filter_${index}.project_id = serving.project_id
@@ -266,16 +284,16 @@ const getPromptAnswerPredicates = (prompts: Record<string, string[]> | undefined
           AND prompt_filter_${index}.list_mode_key = serving.list_mode_key
           AND prompt_filter_${index}.article_id = serving.article_id
           AND prompt_filter_${index}.filter_kind = 'promptAnswer'
-          AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
+          AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(group.filterValues)}::VARCHAR[]))
       )`
-    })
+  })
 }
 
 const getCountValue = async (
   params: ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
-) => {
+): Promise<number> => {
   if (hasDynamicFilters(params)) {
     return getFilteredCountValue(params, manifest, dependencies)
   }
@@ -315,7 +333,11 @@ const getFilteredCountValue = async (
   params: ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
-) => {
+): Promise<number> => {
+  if (hasPromptAnswerFilters(params.prompts)) {
+    return getPromptAnswerFilteredCountValue(params, manifest, dependencies)
+  }
+
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const filters = getRouteFilters(params)
   const llmStatusValue =
@@ -351,6 +373,86 @@ const getFilteredCountValue = async (
       ${filters.llmHasJudgment ? 'AND serving.llm_judged_prompt_count > 0' : ''}
       ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
       ${getPromptAnswerPredicates(params.prompts).join('\n')}
+      ${searchPredicate}
+  `)
+
+  return Number(row?.totalCount ?? 0)
+}
+
+const getPromptAnswerFilteredCountValue = async (
+  params: ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  dependencies?: ReviewServingLlmReviewRouteDependencies,
+): Promise<number> => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const filters = getRouteFilters(params)
+  const promptGroups = getPromptAnswerFilterGroups(params.prompts)
+  const [anchorGroup, ...remainingGroups] = promptGroups
+  const llmStatusValue =
+    filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
+  const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
+  const searchPredicate =
+    searchTokenPrefixes.length > 0
+      ? `AND NOT EXISTS (
+        SELECT 1 FROM (SELECT unnest(${getSqlLiteral(searchTokenPrefixes)}::VARCHAR[]) AS token_prefix) search_prefix
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM mart.review_title_search_serving_v4 search
+          WHERE search.project_id = serving.project_id
+            AND search.search_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'search') ?? '')}
+            AND search.project_scope_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'projectScope') ?? '')}
+            AND search.snapshot_id = serving.snapshot_id
+            AND search.article_id = serving.article_id
+            AND starts_with(search.token, search_prefix.token_prefix)
+        )
+      )`
+      : ''
+  const remainingPromptPredicates = remainingGroups
+    .map((group, index) => {
+      return `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 prompt_filter_${index}
+        WHERE prompt_filter_${index}.project_id = serving.project_id
+          AND prompt_filter_${index}.review_config_hash = serving.review_config_hash
+          AND prompt_filter_${index}.snapshot_id = serving.snapshot_id
+          AND prompt_filter_${index}.list_mode_key = serving.list_mode_key
+          AND prompt_filter_${index}.article_id = serving.article_id
+          AND prompt_filter_${index}.filter_kind = 'promptAnswer'
+          AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(group.filterValues)}::VARCHAR[]))
+      )`
+    })
+    .join('\n')
+
+  if (!anchorGroup) {
+    return getFilteredCountValue({...params, prompts: {}}, manifest, dependencies)
+  }
+
+  const [row] = await database.queryJson<{totalCount: number}>(`
+    SELECT COUNT(DISTINCT serving.article_id) AS totalCount
+    FROM mart.review_article_filter_posting_serving_v4 prompt_anchor
+    JOIN mart.review_article_serving_v4 serving
+      ON serving.project_id = prompt_anchor.project_id
+     AND serving.review_config_hash = prompt_anchor.review_config_hash
+     AND serving.snapshot_id = prompt_anchor.snapshot_id
+     AND serving.list_mode_key = prompt_anchor.list_mode_key
+     AND serving.article_id = prompt_anchor.article_id
+    WHERE prompt_anchor.project_id = ${getSqlLiteral(params.projectId)}
+      AND prompt_anchor.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
+      AND prompt_anchor.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
+      AND prompt_anchor.list_mode_key = 'llm'
+      AND prompt_anchor.filter_kind = 'promptAnswer'
+      AND prompt_anchor.filter_value IN (SELECT unnest(${getSqlLiteral(anchorGroup.filterValues)}::VARCHAR[]))
+      AND serving.project_id = ${getSqlLiteral(params.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
+      AND serving.list_mode_key = 'llm'
+      ${filters.articleCreatedAtFrom ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
+      ${getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo)}
+      ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
+      ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
+      ${filters.llmHasJudgment ? 'AND serving.llm_judged_prompt_count > 0' : ''}
+      ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
+      ${remainingPromptPredicates}
       ${searchPredicate}
   `)
 
