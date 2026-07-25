@@ -43,6 +43,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql',
   '../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql',
   '../../db/duckdbMigrations/0141_dropReviewSummaryContributionServing.sql',
+  '../../db/duckdbMigrations/0142_reviewRebuildPartialCleanupAuthorization.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -521,6 +522,31 @@ test('Phase 5B schema migration adds rebuild request admission above chunk manif
       'diagnostics_json',
     ]),
   ).toEqual([])
+})
+
+test('review-serving schema includes audited summary partial cleanup authorization', () => {
+  expect(
+    getMissingColumns('app.review_rebuild_partial_cleanup_authorization', [
+      'authorization_id',
+      'project_id',
+      'review_config_hash',
+      'request_id',
+      'chunk_id',
+      'snapshot_id',
+      'partial_table',
+      'cleanup_mode',
+      'reason',
+      'evidence_json',
+      'expected_row_count',
+      'observed_row_count',
+      'operator_ack',
+      'authorized_at',
+      'expires_at',
+      'applied_at',
+      'applied_row_count',
+    ]),
+  ).toEqual([])
+  expect(schemaMigrationSql).toContain('idx_review_rebuild_partial_cleanup_authorization_lookup')
 })
 
 test('Phase 1 schema migration keeps raw payloads out of import hot fields', () => {

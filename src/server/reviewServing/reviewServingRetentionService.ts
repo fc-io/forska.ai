@@ -302,6 +302,42 @@ const getTerminalRebuildChunkPredicate = (chunkSource: string) => {
           AND ${chunkSource}.admission_state = 'admitted'`
 }
 
+const getAuthorizedRebuildPartialCleanupPredicate = (
+  input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
+) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_partial_cleanup_authorization authorization
+            WHERE authorization.project_id = candidate.project_id
+              AND authorization.review_config_hash = candidate.review_config_hash
+              AND authorization.request_id = candidate.request_id
+              AND authorization.chunk_id = candidate.chunk_id
+              AND authorization.snapshot_id = candidate.snapshot_id
+              AND authorization.partial_table = ${getSqlLiteral(input.spec.table)}
+              AND authorization.cleanup_mode = 'stale_orphan_summary_partial'
+              AND authorization.operator_ack = 'authorize-stale-orphan-review-serving-summary-partial-cleanup'
+              AND authorization.expires_at > ${getTimestampLiteral(input.now)}
+              AND authorization.expected_row_count = (
+                SELECT CAST(COUNT(*) AS BIGINT)
+                FROM ${input.spec.table} row_count_partial
+                WHERE row_count_partial.project_id = candidate.project_id
+                  AND row_count_partial.review_config_hash = candidate.review_config_hash
+                  AND row_count_partial.request_id = candidate.request_id
+                  AND row_count_partial.chunk_id = candidate.chunk_id
+                  AND row_count_partial.snapshot_id = candidate.snapshot_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_chunk_manifest matching_summary_chunk
+                WHERE matching_summary_chunk.project_id = candidate.project_id
+                  AND matching_summary_chunk.request_id = candidate.request_id
+                  AND matching_summary_chunk.chunk_id = candidate.chunk_id
+                  AND matching_summary_chunk.snapshot_id = candidate.snapshot_id
+                  AND matching_summary_chunk.projection_component = 'summary'
+              )
+          )`
+}
+
 const deleteTerminalRebuildPartialCleanupBatch = async (
   input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
   database: ReviewServingRetentionServiceTransaction,
@@ -314,7 +350,7 @@ const deleteTerminalRebuildPartialCleanupBatch = async (
         INNER JOIN app.review_rebuild_request request
           ON request.request_id = candidate.request_id
           AND request.project_id = candidate.project_id
-        INNER JOIN app.review_rebuild_chunk_manifest chunk
+        LEFT JOIN app.review_rebuild_chunk_manifest chunk
           ON chunk.request_id = candidate.request_id
           AND chunk.chunk_id = candidate.chunk_id
           AND chunk.project_id = candidate.project_id
@@ -322,9 +358,17 @@ const deleteTerminalRebuildPartialCleanupBatch = async (
           AND chunk.projection_component = 'summary'
         WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
           AND ${getReviewConfigHashPredicate(input)}
-          AND request.status = 'completed'
-          AND request.admission_state = 'admitted'
-          AND ${getTerminalRebuildChunkPredicate('chunk')}
+          AND request.lease_owner IS NULL
+          AND request.lease_expires_at IS NULL
+          AND (chunk.request_id IS NULL OR (chunk.lease_owner IS NULL AND chunk.lease_expires_at IS NULL))
+          AND (
+            (
+              request.status = 'completed'
+              AND request.admission_state = 'admitted'
+              AND ${getTerminalRebuildChunkPredicate('chunk')}
+            )
+            OR (${getAuthorizedRebuildPartialCleanupPredicate(input)})
+          )
           AND NOT (${getActiveSnapshotManifestGuardPredicate(input.spec.protectedPredicate)})
           AND NOT (${getActiveSnapshotPinGuardPredicate(input.spec.protectedPredicate, input.now)})
           AND NOT (${getProtectedRebuildRequestPredicate('request', input.now)})
