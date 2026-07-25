@@ -422,7 +422,6 @@ const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
 const reviewServingArticleTable = 'mart.review_article_serving_v4'
 const reviewServingSelectedImportTable = 'app.review_selected_article_import_v4'
-const reviewServingPayloadTable = 'mart.review_article_serving_payload_v4'
 const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
@@ -533,9 +532,9 @@ const reviewServingJudgmentDetailRouteListColumns = [
   ].map((column) => {
     return `${reviewServingJudgmentDetailTable}.${column}`
   }),
-  `llm_judgment.model_id AS judgment_model_id`,
-  `llm_judgment.explanation AS explanation`,
-  `llm_judgment.quotes AS quotes`,
+  `NULL AS judgment_model_id`,
+  `NULL AS explanation`,
+  `NULL AS quotes`,
 ]
 const reviewServingJudgmentDetailFullColumnContractKeys = new Set<ReviewServingReadContract['key']>([
   'review.detail.judgments',
@@ -558,6 +557,10 @@ const getReviewServingJudgmentDetailAuthoritativeHydrationJoin = (params: {
   reviewConfigHashParameter: string
   snapshotIdParameter: string
 }) => {
+  if (!reviewServingJudgmentDetailFullColumnContractKeys.has(params.contract.key)) {
+    return ''
+  }
+
   const llmJudgmentJoin = [
     ` LEFT JOIN app."judgment" llm_judgment`,
     ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'llm'`,
@@ -567,41 +570,39 @@ const getReviewServingJudgmentDetailAuthoritativeHydrationJoin = (params: {
     ` AND llm_judgment.deleted_at IS NULL`,
   ].join('')
 
-  return reviewServingJudgmentDetailFullColumnContractKeys.has(params.contract.key)
-    ? [
-        llmJudgmentJoin,
-        ` LEFT JOIN app.judgment_assessment assessment`,
-        ` ON assessment.id = (`,
-        ` SELECT latest_assessment.id`,
-        ` FROM app.judgment_assessment latest_assessment`,
-        ` WHERE latest_assessment.judgment_id = llm_judgment.id`,
-        ` ORDER BY latest_assessment.updated_at DESC NULLS LAST, latest_assessment.created_at DESC NULLS LAST, latest_assessment.id DESC`,
-        ` LIMIT 1`,
-        ` )`,
-        ` LEFT JOIN app.model model`,
-        ` ON model.id = llm_judgment.model_id`,
-        ` LEFT JOIN app.provider_connection provider_connection`,
-        ` ON provider_connection.id = model.provider_connection_id`,
-        ` LEFT JOIN app."judgment_human" human_judgment`,
-        ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'human'`,
-        ` AND ${reviewServingJudgmentDetailTable}.prompt_id <> 'summary'`,
-        ` AND human_judgment.project_id = ${params.projectIdParameter}`,
-        ` AND human_judgment.id = ${reviewServingJudgmentDetailTable}.judgment_id`,
-        ` AND human_judgment.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
-        ` AND human_judgment.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
-        ` LEFT JOIN app."judgment_human_summary" human_summary`,
-        ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'human'`,
-        ` AND ${reviewServingJudgmentDetailTable}.prompt_id = 'summary'`,
-        ` AND human_summary.project_id = ${params.projectIdParameter}`,
-        ` AND human_summary.id = ${reviewServingJudgmentDetailTable}.judgment_id`,
-        ` AND human_summary.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
-        ` LEFT JOIN app.project_prompt project_prompt`,
-        ` ON project_prompt.project_id = ${params.projectIdParameter}`,
-        ` AND project_prompt.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
-        ` LEFT JOIN app.prompt prompt`,
-        ` ON prompt.id = ${reviewServingJudgmentDetailTable}.prompt_id`,
-      ].join('')
-    : llmJudgmentJoin
+  return [
+    llmJudgmentJoin,
+    ` LEFT JOIN app.judgment_assessment assessment`,
+    ` ON assessment.id = (`,
+    ` SELECT latest_assessment.id`,
+    ` FROM app.judgment_assessment latest_assessment`,
+    ` WHERE latest_assessment.judgment_id = llm_judgment.id`,
+    ` ORDER BY latest_assessment.updated_at DESC NULLS LAST, latest_assessment.created_at DESC NULLS LAST, latest_assessment.id DESC`,
+    ` LIMIT 1`,
+    ` )`,
+    ` LEFT JOIN app.model model`,
+    ` ON model.id = llm_judgment.model_id`,
+    ` LEFT JOIN app.provider_connection provider_connection`,
+    ` ON provider_connection.id = model.provider_connection_id`,
+    ` LEFT JOIN app."judgment_human" human_judgment`,
+    ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'human'`,
+    ` AND ${reviewServingJudgmentDetailTable}.prompt_id <> 'summary'`,
+    ` AND human_judgment.project_id = ${params.projectIdParameter}`,
+    ` AND human_judgment.id = ${reviewServingJudgmentDetailTable}.judgment_id`,
+    ` AND human_judgment.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
+    ` AND human_judgment.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+    ` LEFT JOIN app."judgment_human_summary" human_summary`,
+    ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'human'`,
+    ` AND ${reviewServingJudgmentDetailTable}.prompt_id = 'summary'`,
+    ` AND human_summary.project_id = ${params.projectIdParameter}`,
+    ` AND human_summary.id = ${reviewServingJudgmentDetailTable}.judgment_id`,
+    ` AND human_summary.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
+    ` LEFT JOIN app.project_prompt project_prompt`,
+    ` ON project_prompt.project_id = ${params.projectIdParameter}`,
+    ` AND project_prompt.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+    ` LEFT JOIN app.prompt prompt`,
+    ` ON prompt.id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+  ].join('')
 }
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
@@ -614,10 +615,6 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   searchIdentityParameter: string
   snapshotIdParameter: string
 }) => {
-  if (params.contract.servingTable === reviewServingPayloadTable) {
-    return ` AND display_identity = ${params.displayIdentityParameter} AND payload_identity = ${params.payloadIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
-  }
-
   if (params.contract.servingTable === reviewServingSnapshotManifestTable) {
     return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND snapshot_status IN ('active', 'retired')`
   }

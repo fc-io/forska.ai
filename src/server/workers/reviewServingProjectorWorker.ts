@@ -1088,6 +1088,25 @@ const getPayloadRebuildChunkOutputChecksum = async (
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH payload_article AS (
+      SELECT
+        serving.snapshot_id,
+        json_extract_string(snapshot.composed_identity_json, '$.display.projectionIdentity') AS display_identity,
+        serving.article_id,
+        MIN(serving.article_created_at) AS article_created_at
+      FROM mart.review_article_serving_v4 serving
+      INNER JOIN app.review_serving_snapshot_manifest snapshot
+        ON snapshot.project_id = serving.project_id
+       AND snapshot.snapshot_id = serving.snapshot_id
+      WHERE serving.project_id = ${getSqlLiteral(projectId)}
+        AND json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+        AND ${getAliasedSnapshotIdPredicate('serving', input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      GROUP BY
+        serving.snapshot_id,
+        display_identity,
+        serving.article_id
+    )
     SELECT
       CAST(COUNT(*) AS INTEGER) AS actualCount,
       sha256(COALESCE(string_agg(
@@ -1097,11 +1116,7 @@ const getPayloadRebuildChunkOutputChecksum = async (
         COALESCE(CAST(article_created_at AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, display_identity, article_id
       ), '')) AS actualChecksum
-    FROM mart.review_article_serving_payload_v4 payload
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND payload_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'payload', chunk: input.chunk})}
+    FROM payload_article
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1113,14 +1128,26 @@ const getPayloadRebuildChunkOutputCount = async (
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH payload_article AS (
+      SELECT
+        serving.snapshot_id,
+        serving.article_id
+      FROM mart.review_article_serving_v4 serving
+      INNER JOIN app.review_serving_snapshot_manifest snapshot
+        ON snapshot.project_id = serving.project_id
+       AND snapshot.snapshot_id = serving.snapshot_id
+      WHERE serving.project_id = ${getSqlLiteral(projectId)}
+        AND json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+        AND ${getAliasedSnapshotIdPredicate('serving', input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+      GROUP BY
+        serving.snapshot_id,
+        serving.article_id
+    )
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()},
       NULL::INTEGER AS actualPayloadBytes
-    FROM mart.review_article_serving_payload_v4 payload
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND payload_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'payload', chunk: input.chunk})}
+    FROM payload_article
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}

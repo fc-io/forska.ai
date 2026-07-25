@@ -625,10 +625,13 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
   expect(bothListSql).toContain("'both' AS list_mode_key")
   expect(humanListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
   expect(bothListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
-  expect(humanListSql).toContain('llm_judgment.model_id AS judgment_model_id')
-  expect(humanListSql).toContain('llm_judgment.explanation AS explanation')
-  expect(humanListSql).toContain('llm_judgment.quotes AS quotes')
-  expect(humanListSql).toContain('LEFT JOIN app."judgment" llm_judgment')
+  expect(humanListSql).toContain('NULL AS judgment_model_id')
+  expect(humanListSql).toContain('NULL AS explanation')
+  expect(humanListSql).toContain('NULL AS quotes')
+  expect(humanListSql).not.toContain('llm_judgment.model_id AS judgment_model_id')
+  expect(humanListSql).not.toContain('llm_judgment.explanation AS explanation')
+  expect(humanListSql).not.toContain('llm_judgment.quotes AS quotes')
+  expect(humanListSql).not.toContain('LEFT JOIN app."judgment" llm_judgment')
   expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
   expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.explanation')
   expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.quotes')
@@ -1009,10 +1012,13 @@ test('buildReviewServingRowsSql supports article-set list judgment lookups', () 
   expect(sql).toContain("'both' AS list_mode_key")
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'llm'")
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))')
-  expect(sql).toContain('llm_judgment.model_id AS judgment_model_id')
-  expect(sql).toContain('llm_judgment.explanation AS explanation')
-  expect(sql).toContain('llm_judgment.quotes AS quotes')
-  expect(sql).toContain('LEFT JOIN app."judgment" llm_judgment')
+  expect(sql).toContain('NULL AS judgment_model_id')
+  expect(sql).toContain('NULL AS explanation')
+  expect(sql).toContain('NULL AS quotes')
+  expect(sql).not.toContain('llm_judgment.model_id AS judgment_model_id')
+  expect(sql).not.toContain('llm_judgment.explanation AS explanation')
+  expect(sql).not.toContain('llm_judgment.quotes AS quotes')
+  expect(sql).not.toContain('LEFT JOIN app."judgment" llm_judgment')
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.explanation')
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.quotes')
@@ -1251,13 +1257,13 @@ test('assertReviewServingSqlShape requires driving-table scope predicates in the
   const sql = `
     SELECT s.article_id
     FROM mart.review_article_serving_v4 s
-    INNER JOIN mart.review_article_serving_payload_v4 payload
+    INNER JOIN mart.review_article_filter_posting_serving_v4 posting
       ON s.project_id = ?
       AND s.snapshot_id = ?
-      AND payload.project_id = ?
-      AND payload.snapshot_id = ?
-      AND payload.article_id = s.article_id
-    WHERE payload.payload_identity = ?
+      AND posting.project_id = ?
+      AND posting.snapshot_id = ?
+      AND posting.article_id = s.article_id
+    WHERE posting.filter_kind = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
     LIMIT ?
   `
@@ -1267,8 +1273,8 @@ test('assertReviewServingSqlShape requires driving-table scope predicates in the
 
   expect(violations).toContain('project scoped read: s')
   expect(violations).toContain('snapshot scoped read: s')
-  expect(violations).not.toContain('project scoped read: payload')
-  expect(violations).not.toContain('snapshot scoped read: payload')
+  expect(violations).not.toContain('project scoped read: posting')
+  expect(violations).not.toContain('snapshot scoped read: posting')
 })
 
 test('assertReviewServingSqlShape rejects literal scope predicates', () => {

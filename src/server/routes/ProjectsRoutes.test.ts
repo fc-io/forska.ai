@@ -675,22 +675,6 @@ test('project prompt preview uses the first project article and shared prompt bu
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
     )
   `)
-  await runDatabase(`
-    INSERT INTO mart.review_article_serving_payload_v4 (
-      project_id,
-      display_identity,
-      payload_identity,
-      snapshot_id,
-      article_id
-    ) VALUES (
-      '${projectId}',
-      'display:preview-identity',
-      'payload:preview-identity',
-      'snapshot-preview-route',
-      'preview-article-second'
-    )
-  `)
-
   const response = await app.handle(
     new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
   )

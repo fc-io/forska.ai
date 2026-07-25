@@ -184,8 +184,6 @@ type ServingArticleDetailRow = {
   url?: string | null
 }
 
-type ServingArticlePayloadRow = {article_id?: string}
-
 type ArticleFullTextRow = {
   articleSummary: string | null
   fullText: string | null
@@ -722,27 +720,10 @@ const readProjectReviewArticleDetail = async (input: {
   })
 }
 
-const readProjectReviewArticlePayload = async (input: {
-  articleId: string
-  projectId: string
-  reviewConfigHash: string | null
-}) => {
-  return readReviewServingRows<ServingArticlePayloadRow>({
-    articleId: input.articleId,
-    contractKey: 'review.detail.payload',
-    estimatedResultRows: 1,
-    limit: 1,
-    projectId: input.projectId,
-    reviewConfigHash: input.reviewConfigHash,
-    searchMode: 'none',
-  })
-}
-
 const getArticleRecordFromServing = (input: {
   articleId: string
   detail: ServingArticleDetailRow
   fullText: ArticleFullTextRow | null
-  payload: ServingArticlePayloadRow | null
 }): ArticleRecord => {
   const sourceMetadata = getJsonValue(input.detail.source_metadata)
 
@@ -802,10 +783,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         throw new Error('Project not found')
       }
 
-      const [articleDetailResult, articlePayloadResult] = await Promise.all([
-        readProjectReviewArticleDetail({articleId, projectId, reviewConfigHash}),
-        readProjectReviewArticlePayload({articleId, projectId, reviewConfigHash}),
-      ])
+      const articleDetailResult = await readProjectReviewArticleDetail({articleId, projectId, reviewConfigHash})
 
       if (articleDetailResult.status === 'rejected') {
         return getUnavailableReviewDetail({
@@ -821,8 +799,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return getUnavailableReviewDetail({articleId, reason: 'detail row unavailable'})
       }
 
-      const [articlePayload, articleFullTextRows, allArticleJudgments] = await Promise.all([
-        Promise.resolve(articlePayloadResult.status === 'accepted' ? (articlePayloadResult.rows[0] ?? null) : null),
+      const [articleFullTextRows, allArticleJudgments] = await Promise.all([
         getAppDatabaseService().queryJson<ArticleFullTextRow>(
           `
           SELECT
@@ -845,7 +822,6 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         articleId,
         detail: articleDetail,
         fullText: articleFullTextRows[0] ?? null,
-        payload: articlePayload,
       })
       const covidenceRelatedRecordsResult = await getCovidenceRelatedRecords({article, projectId})
       const covidenceRelatedRecords = covidenceRelatedRecordsResult.records

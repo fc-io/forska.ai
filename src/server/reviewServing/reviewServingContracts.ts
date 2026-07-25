@@ -146,7 +146,6 @@ export const reviewServingReadContractKeys = [
   'review.prompt.badges',
   'review.queue.unassessed',
   'review.detail.row',
-  'review.detail.payload',
   'review.detail.judgments',
   'review.detail.humanJudgments',
   'review.llm.list.judgments',

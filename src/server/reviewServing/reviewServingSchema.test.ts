@@ -75,6 +75,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0172_dropReviewJudgmentDetailHydrationStorage.sql',
   '../../db/duckdbMigrations/0173_dropReviewPayloadDisplayStorage.sql',
   '../../db/duckdbMigrations/0174_dropReviewArticleServingStatusCountCopies.sql',
+  '../../db/duckdbMigrations/0175_dropReviewArticleServingPayload.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -166,6 +167,8 @@ const reviewPayloadDisplayStorageDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0173_dropReviewPayloadDisplayStorage.sql']
 const reviewArticleServingStatusCountCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0174_dropReviewArticleServingStatusCountCopies.sql']
+const reviewPayloadServingDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0175_dropReviewArticleServingPayload.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -218,8 +221,6 @@ const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql']
-const reviewPayloadBytesDropForwardMigrationSql =
-  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql']
 const reviewFilterPostingServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql']
 const reviewArticleServingReviewProgressCopyDropForwardMigrationSql =
@@ -256,7 +257,6 @@ const reviewServingPhase1Tables = [
   'mart.review_title_search_serving_v4',
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
-  'mart.review_article_serving_payload_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
@@ -275,6 +275,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_summary_contribution_v4',
   'mart.review_filter_posting_stats_v4',
   'mart.review_article_judgment_detail_hydration_serving_v4',
+  'mart.review_article_serving_payload_v4',
 ])
 
 const deltaEnvelopeColumns = [
@@ -340,6 +341,10 @@ const getTableColumnSql = (tableName: string) => {
 }
 
 const getTableColumns = (tableName: string) => {
+  if (retiredReviewServingTables.has(tableName)) {
+    return new Set<string>()
+  }
+
   const unqualifiedTableName = tableName.split('.').at(-1) ?? tableName
   const repairRenames = [
     ...schemaMigrationSql.matchAll(
@@ -719,56 +724,18 @@ test('Phase 1 schema migration keeps raw payloads out of hot serving tables', ()
   ).toEqual([])
 })
 
-test('Phase 1 payload serving schema drops prompt preview ordering copies', () => {
-  expect(getMissingColumns('mart.review_article_serving_payload_v4', ['article_id'])).toEqual([])
-  expect(getTableColumns('mart.review_article_serving_payload_v4').has('article_created_at')).toBe(false)
-  expect(getTableColumns('mart.review_article_serving_payload_v4').has('payload_bytes')).toBe(false)
-  expect(reviewPayloadBytesDropForwardMigrationSql).toContain(
-    'CREATE TABLE mart.review_article_serving_payload_v4_repair',
+test('Phase 1 payload serving table is retired from the final schema', () => {
+  expect(getTableSql('mart.review_article_serving_payload_v4')).toBe('')
+  expect([...getTableColumns('mart.review_article_serving_payload_v4')]).toEqual([])
+  expect(reviewPayloadServingDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS idx_review_article_serving_payload_v4_lookup;',
   )
-  expect(reviewPayloadBytesDropForwardMigrationSql).toContain(
-    'ALTER TABLE mart.review_article_serving_payload_v4_repair RENAME TO review_article_serving_payload_v4;',
+  expect(reviewPayloadServingDropForwardMigrationSql).toContain(
+    'DROP TABLE IF EXISTS mart.review_article_serving_payload_v4;',
   )
 })
 
-test('Phase 1 payload serving schema drops article display metadata storage', () => {
-  const payloadColumns = getTableColumns('mart.review_article_serving_payload_v4')
-
-  expect(
-    getMissingColumns('mart.review_article_serving_payload_v4', [
-      'project_id',
-      'display_identity',
-      'payload_identity',
-      'snapshot_id',
-      'article_id',
-    ]),
-  ).toEqual([])
-  expect(
-    [
-      'article_title',
-      'article_external_id',
-      'article_updated_at',
-      'arxiv_id',
-      'biorxiv_id',
-      'medrxiv_id',
-      'doi',
-      'pmid',
-      'journal_title',
-      'url',
-    ].flatMap((columnName) => {
-      return payloadColumns.has(columnName) ? [columnName] : []
-    }),
-  ).toEqual([])
-  expect(getTableColumns('mart.review_article_serving_payload_v4').has('abstract_text')).toBe(false)
-  expect(getTableColumns('mart.review_article_serving_payload_v4').has('full_text_preview')).toBe(false)
-  expect(getTableColumns('mart.review_article_serving_payload_v4').has('source_metadata')).toBe(false)
-  expect(
-    [...getTableColumns('mart.review_article_serving_payload_v4')].filter((columnName) => {
-      return ['full_text_pdf', 'full_text_fetched_at', 'full_text_conversion_status', 'payload_updated_at'].includes(
-        columnName,
-      )
-    }),
-  ).toEqual([])
+test('historical payload serving slimming migrations remain ordered before final retirement', () => {
   expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).toContain(
     'Retired by 0149_dropReviewPayloadDisplayCopyColumns.sql',
   )
@@ -869,6 +836,9 @@ test('Phase 1 payload serving schema drops article display metadata storage', ()
   expect(reviewPayloadDisplayStorageDropForwardMigrationSql).not.toContain('article_title VARCHAR')
   expect(reviewPayloadDisplayStorageDropForwardMigrationSql).not.toContain('article_external_id VARCHAR')
   expect(reviewPayloadDisplayStorageDropForwardMigrationSql).not.toContain('article_updated_at TIMESTAMPTZ')
+  expect(getLastDropTableIndex('mart.review_article_serving_payload_v4')).toBeGreaterThan(
+    schemaMigrationSql.indexOf(reviewPayloadDisplayStorageDropForwardMigrationSql),
+  )
 })
 
 test('Phase 1 article serving schema drops duplicated display metadata', () => {

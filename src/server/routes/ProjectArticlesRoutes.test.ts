@@ -212,17 +212,6 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       })
       .join(', ')};
 
-    INSERT INTO mart.review_article_serving_payload_v4 (
-      project_id,
-      display_identity,
-      payload_identity,
-      snapshot_id,
-      article_id
-    ) VALUES ${articleRows
-      .map((article) => {
-        return `('${projectId}', 'display:${prefix}', 'payload:${prefix}', '${prefix}-snapshot', '${article.id}')`
-      })
-      .join(', ')};
   `)
 
   return {articleRows, importedFromProjectId, projectId}

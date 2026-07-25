@@ -1,0 +1,6 @@
+DROP INDEX IF EXISTS mart.idx_review_article_serving_payload_v4_lookup;
+DROP INDEX IF EXISTS idx_review_article_serving_payload_v4_lookup;
+DROP INDEX IF EXISTS mart.idx_review_article_serving_payload_v4_repaired_pk;
+DROP INDEX IF EXISTS idx_review_article_serving_payload_v4_repaired_pk;
+
+DROP TABLE IF EXISTS mart.review_article_serving_payload_v4;

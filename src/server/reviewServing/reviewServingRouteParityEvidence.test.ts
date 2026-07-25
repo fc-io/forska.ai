@@ -95,10 +95,7 @@ const getReviewConfigSqlMatch = (
   contract: ReviewServingReadContract,
   request: ReviewServingReaderRequest,
 ) => {
-  if (
-    contract.servingTable === 'mart.review_article_serving_payload_v4'
-    || contract.servingTable === 'mart.review_title_search_serving_v4'
-  ) {
+  if (contract.servingTable === 'mart.review_title_search_serving_v4') {
     return true
   }
 
@@ -365,7 +362,8 @@ const getContractSqlMatch = (
               ? containsSql(statement, 'LEFT JOIN app."judgment" llm_judgment')
                 && containsSql(statement, 'LEFT JOIN app."judgment_human" human_judgment')
                 && !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4')
-              : !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4'))
+              : !containsSql(statement, 'LEFT JOIN app."judgment" llm_judgment')
+                && !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4'))
           : containsSql(statement, `FROM ${contract.servingTable} WHERE`)
   const checks = [
     tableMatch,

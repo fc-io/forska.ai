@@ -98,12 +98,6 @@ export const readReviewServingExportArticles = async (input: {
          AND selected_source.article_id = s.article_id
          AND selected_source.source_record_key = selected_base.source_record_key
          AND selected_source.quarantined_at IS NULL
-        INNER JOIN mart.review_article_serving_payload_v4 payload
-          ON payload.project_id = s.project_id
-         AND payload.display_identity = json_extract_string(manifest.composed_identity_json, '$.display.projectionIdentity')
-         AND payload.payload_identity = json_extract_string(manifest.composed_identity_json, '$.payload.projectionIdentity')
-         AND payload.snapshot_id = s.snapshot_id
-         AND payload.article_id = s.article_id
       )
     SELECT * EXCLUDE (exportArticleRank)
     FROM ranked_export_article

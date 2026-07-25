@@ -68,7 +68,6 @@ const defaultCountFilters = [
 ] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
 const reviewArticleServingTable = 'mart.review_article_serving_v4'
-const reviewArticlePayloadServingTable = 'mart.review_article_serving_payload_v4'
 const reviewCountServingTable = 'mart.review_article_count_serving_v4'
 const reviewFacetServingTable = 'mart.review_filter_facet_serving_v4'
 const reviewFilterOptionServingTable = 'mart.review_filter_option_serving_v4'
@@ -507,24 +506,6 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: ['articleId'],
-    cursorFields: ['article_id'],
-    freshnessBehavior: 'requireReadySnapshot',
-    key: 'review.detail.payload',
-    listMode: null,
-    maxEstimatedResultBytes: 1_000_000,
-    maxPageSize: 1,
-    maxResultRows: 1,
-    namedFastCounts: [],
-    optionalComponents: [],
-    physicalAccessStrategy: 'keyedLookup',
-    requiredComponents: ['display', 'payload'],
-    searchMode: 'none',
-    servingTable: reviewArticlePayloadServingTable,
-    sort: {direction: 'asc', fields: ['article_id']},
-    workloadClass: 'foregroundReviewRows',
-  }),
-  defineContract({
-    allowedFilters: ['articleId'],
     cursorFields: [detailJudgmentListModePrioritySort, detailJudgmentPromptOrderSort, detailJudgmentPromptIdSort],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.detail.judgments',
@@ -937,7 +918,6 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.detail.row',
-      'review.detail.payload',
       'review.detail.judgments',
       'review.detail.humanJudgments',
       'review.prompt.badges',
@@ -965,7 +945,7 @@ export const reviewServingReadContractRouteInventory = [
     surfaces: ['health'],
   },
   {
-    contractKeys: ['review.prompt.preview', 'review.detail.payload'],
+    contractKeys: ['review.prompt.preview'],
     method: 'GET',
     mounted: true,
     productRoute: '/api/projects/:id/prompts/:promptId/preview',

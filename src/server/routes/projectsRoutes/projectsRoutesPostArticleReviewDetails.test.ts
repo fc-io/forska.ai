@@ -227,11 +227,9 @@ test('project review details hydrates article, judgments, and assessments from V
 
     return request.contractKey === 'review.detail.row'
       ? {rows: [getServingArticleRow()], status: 'accepted'}
-      : request.contractKey === 'review.detail.payload'
-        ? {rows: [{article_id: 'article-1'}], status: 'accepted'}
-        : request.contractKey === 'review.detail.judgments'
-          ? {rows: [getServingJudgmentRow()], status: 'accepted'}
-          : {rows: [], status: 'accepted'}
+      : request.contractKey === 'review.detail.judgments'
+        ? {rows: [getServingJudgmentRow()], status: 'accepted'}
+        : {rows: [], status: 'accepted'}
   }
 
   const response = await postReviewDetailsRequest()
@@ -270,7 +268,7 @@ test('project review details hydrates article, judgments, and assessments from V
     servingRequests.map((request) => {
       return request.contractKey
     }),
-  ).toEqual(['review.detail.row', 'review.detail.payload', 'review.detail.judgments', 'review.detail.humanJudgments'])
+  ).toEqual(['review.detail.row', 'review.detail.judgments', 'review.detail.humanJudgments'])
 })
 
 test('project review details reads migrated V4 judgment fields from scalar columns', () => {
