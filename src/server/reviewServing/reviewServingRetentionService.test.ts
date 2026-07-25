@@ -193,8 +193,18 @@ test('retention cleanup allowlists terminal summary contribution partial cleanup
   )
   expect(joined).toContain('cleanup_authorization.expires_at > TIMESTAMPTZ')
   expect(joined).toContain('cleanup_authorization.expected_row_count = (')
-  expect(joined).toContain('applied_at = current_timestamp')
-  expect(joined).toContain('applied_row_count = (')
+  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_serving_partial_cleanup_authorization_receipts AS')
+  expect(joined).toContain('CREATE TABLE app.review_rebuild_partial_cleanup_authorization_repair')
+  expect(joined).toContain('DROP TABLE app.review_rebuild_partial_cleanup_authorization')
+  expect(joined).toContain(
+    'ALTER TABLE app.review_rebuild_partial_cleanup_authorization_repair\n    RENAME TO review_rebuild_partial_cleanup_authorization;',
+  )
+  expect(joined).toContain('CREATE INDEX IF NOT EXISTS idx_review_rebuild_partial_cleanup_authorization_lookup')
+  expect(joined).not.toContain('UPDATE app.review_rebuild_partial_cleanup_authorization')
+  expect(joined).toContain('ELSE current_timestamp\n      END AS applied_at')
+  expect(joined).toContain(
+    'COALESCE(receipt.applied_row_count, cleanup_authorization.applied_row_count) AS applied_row_count',
+  )
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4 row_count_partial')
   expect(joined).toContain('matching_summary_chunk.projection_component = ')
   expect(joined).toContain("'pending_admission'")

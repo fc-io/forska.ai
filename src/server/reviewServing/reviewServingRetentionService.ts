@@ -437,33 +437,117 @@ const markAppliedAuthorizedRebuildPartialCleanup = async (
   database: ReviewServingRetentionServiceTransaction,
 ) => {
   await database.run(`
-    UPDATE app.review_rebuild_partial_cleanup_authorization
-    SET
-      applied_at = current_timestamp,
-      applied_row_count = (
-        SELECT CAST(COUNT(*) AS BIGINT)
-        FROM ${rebuildSql.tempTableName} cleaned_row
-        WHERE cleaned_row.project_id = app.review_rebuild_partial_cleanup_authorization.project_id
-          AND cleaned_row.review_config_hash = app.review_rebuild_partial_cleanup_authorization.review_config_hash
-          AND cleaned_row.request_id = app.review_rebuild_partial_cleanup_authorization.request_id
-          AND cleaned_row.chunk_id = app.review_rebuild_partial_cleanup_authorization.chunk_id
-          AND cleaned_row.snapshot_id = app.review_rebuild_partial_cleanup_authorization.snapshot_id
+    DROP TABLE IF EXISTS review_serving_partial_cleanup_authorization_receipts;
+
+    CREATE OR REPLACE TEMP TABLE review_serving_partial_cleanup_authorization_receipts AS
+      SELECT
+        cleanup_authorization.authorization_id,
+        CAST(COUNT(*) AS BIGINT) AS applied_row_count
+      FROM app.review_rebuild_partial_cleanup_authorization cleanup_authorization
+      INNER JOIN ${rebuildSql.tempTableName} cleaned_row
+        ON cleaned_row.project_id = cleanup_authorization.project_id
+        AND cleaned_row.review_config_hash = cleanup_authorization.review_config_hash
+        AND cleaned_row.request_id = cleanup_authorization.request_id
+        AND cleaned_row.chunk_id = cleanup_authorization.chunk_id
+        AND cleaned_row.snapshot_id = cleanup_authorization.snapshot_id
+      WHERE cleanup_authorization.partial_table = ${getSqlLiteral(input.spec.table)}
+        AND cleanup_authorization.cleanup_mode = 'stale_orphan_summary_partial'
+        AND cleanup_authorization.operator_ack = 'authorize-stale-orphan-review-serving-summary-partial-cleanup'
+        AND cleanup_authorization.expires_at > ${getTimestampLiteral(input.now)}
+        AND cleanup_authorization.applied_at IS NULL
+      GROUP BY cleanup_authorization.authorization_id;
+
+    DROP TABLE IF EXISTS app.review_rebuild_partial_cleanup_authorization_repair;
+
+    CREATE TABLE app.review_rebuild_partial_cleanup_authorization_repair (
+      authorization_id VARCHAR PRIMARY KEY,
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      request_id VARCHAR NOT NULL,
+      chunk_id VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      partial_table VARCHAR NOT NULL,
+      cleanup_mode VARCHAR NOT NULL,
+      reason VARCHAR NOT NULL,
+      evidence_json JSON NOT NULL DEFAULT '{}',
+      expected_row_count BIGINT NOT NULL,
+      observed_row_count BIGINT NOT NULL,
+      operator_ack VARCHAR NOT NULL,
+      authorized_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      expires_at TIMESTAMPTZ NOT NULL,
+      applied_at TIMESTAMPTZ,
+      applied_row_count BIGINT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      CHECK (length(trim(authorization_id)) > 0),
+      CHECK (length(trim(project_id)) > 0),
+      CHECK (length(trim(review_config_hash)) > 0),
+      CHECK (length(trim(request_id)) > 0),
+      CHECK (length(trim(chunk_id)) > 0),
+      CHECK (length(trim(snapshot_id)) > 0),
+      CHECK (
+        partial_table IN (
+          'mart.review_article_summary_contribution_rebuild_partial_v4',
+          'mart.review_article_summary_rebuild_partial_v4'
+        )
       ),
-      updated_at = current_timestamp
-    WHERE partial_table = ${getSqlLiteral(input.spec.table)}
-      AND cleanup_mode = 'stale_orphan_summary_partial'
-      AND operator_ack = 'authorize-stale-orphan-review-serving-summary-partial-cleanup'
-      AND expires_at > ${getTimestampLiteral(input.now)}
-      AND applied_at IS NULL
-      AND EXISTS (
-        SELECT 1
-        FROM ${rebuildSql.tempTableName} cleaned_row
-        WHERE cleaned_row.project_id = app.review_rebuild_partial_cleanup_authorization.project_id
-          AND cleaned_row.review_config_hash = app.review_rebuild_partial_cleanup_authorization.review_config_hash
-          AND cleaned_row.request_id = app.review_rebuild_partial_cleanup_authorization.request_id
-          AND cleaned_row.chunk_id = app.review_rebuild_partial_cleanup_authorization.chunk_id
-          AND cleaned_row.snapshot_id = app.review_rebuild_partial_cleanup_authorization.snapshot_id
-      )
+      CHECK (cleanup_mode IN ('stale_orphan_summary_partial')),
+      CHECK (length(trim(reason)) > 0),
+      CHECK (expected_row_count >= 0),
+      CHECK (observed_row_count >= 0),
+      CHECK (applied_row_count IS NULL OR applied_row_count >= 0),
+      CHECK (length(trim(operator_ack)) > 0),
+      CHECK (expires_at > authorized_at)
+    );
+
+    INSERT INTO app.review_rebuild_partial_cleanup_authorization_repair
+    SELECT
+      cleanup_authorization.authorization_id,
+      cleanup_authorization.project_id,
+      cleanup_authorization.review_config_hash,
+      cleanup_authorization.request_id,
+      cleanup_authorization.chunk_id,
+      cleanup_authorization.snapshot_id,
+      cleanup_authorization.partial_table,
+      cleanup_authorization.cleanup_mode,
+      cleanup_authorization.reason,
+      cleanup_authorization.evidence_json,
+      cleanup_authorization.expected_row_count,
+      cleanup_authorization.observed_row_count,
+      cleanup_authorization.operator_ack,
+      cleanup_authorization.authorized_at,
+      cleanup_authorization.expires_at,
+      CASE
+        WHEN receipt.authorization_id IS NULL THEN cleanup_authorization.applied_at
+        ELSE current_timestamp
+      END AS applied_at,
+      COALESCE(receipt.applied_row_count, cleanup_authorization.applied_row_count) AS applied_row_count,
+      cleanup_authorization.created_at,
+      CASE
+        WHEN receipt.authorization_id IS NULL THEN cleanup_authorization.updated_at
+        ELSE current_timestamp
+      END AS updated_at
+    FROM app.review_rebuild_partial_cleanup_authorization cleanup_authorization
+    LEFT JOIN review_serving_partial_cleanup_authorization_receipts receipt
+      ON receipt.authorization_id = cleanup_authorization.authorization_id;
+
+    DROP TABLE app.review_rebuild_partial_cleanup_authorization;
+
+    ALTER TABLE app.review_rebuild_partial_cleanup_authorization_repair
+    RENAME TO review_rebuild_partial_cleanup_authorization;
+
+    CREATE INDEX IF NOT EXISTS idx_review_rebuild_partial_cleanup_authorization_lookup
+    ON app.review_rebuild_partial_cleanup_authorization(
+      project_id,
+      review_config_hash,
+      request_id,
+      chunk_id,
+      snapshot_id,
+      partial_table,
+      expires_at
+    );
+
+    DROP TABLE IF EXISTS review_serving_partial_cleanup_authorization_receipts;
   `)
 }
 
