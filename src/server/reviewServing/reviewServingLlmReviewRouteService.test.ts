@@ -163,12 +163,10 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
             judgment_id: 'judgment-1',
             answered_original: 'yes',
             answered_original_as_array: ['yes'],
-            judgment_payload_json: {
-              createdAt: '2026-01-03T00:00:00.000Z',
-              explanation: 'because',
-              model: {id: 'model-1'},
-              quotes: [],
-            },
+            detail_updated_at: '2026-01-03T00:00:00.000Z',
+            explanation: 'because',
+            judgment_model_id: 'model-1',
+            quotes: [],
           },
           {
             article_id: 'article-1',
@@ -176,7 +174,6 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
             judgment_id: null,
             answered_original: null,
             answered_original_as_array: [],
-            judgment_payload_json: null,
             placeholder_kind: 'llm.unanswered',
           },
         ] as T[]

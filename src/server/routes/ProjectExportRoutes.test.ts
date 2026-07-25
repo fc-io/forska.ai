@@ -600,7 +600,7 @@ test('project export download hydrates completed durable job selection as CSV', 
   )
 })
 
-test('project export serving queries preserve judgment payload JSON consumers', () => {
+test('project export serving queries read prompt and judgment scalars', () => {
   const routeText = readFileSync('src/server/routes/ProjectExportRoutes.ts', 'utf8')
   const promptMetadataQuery = routeText.slice(
     routeText.indexOf('const getExportPromptDetails'),
@@ -618,11 +618,10 @@ test('project export serving queries preserve judgment payload JSON consumers', 
   expect(promptMetadataQuery).not.toContain("'$.prompt.originalText'")
   expect(promptMetadataQuery).not.toContain("'$.prompt.type'")
 
-  expect(judgmentExportQuery).toContain(
-    "json_extract_string(detail.judgment_payload_json, '$.explanation') AS explanation",
-  )
-  expect(judgmentExportQuery).toContain("json_extract(detail.judgment_payload_json, '$.quotes') AS quotes")
-  expect(judgmentExportQuery).toContain('detail.judgment_payload_json AS judgmentPayloadJson')
+  expect(judgmentExportQuery).toContain('detail.explanation AS explanation')
+  expect(judgmentExportQuery).toContain('detail.quotes AS quotes')
+  expect(judgmentExportQuery).not.toContain('detail.judgment_payload_json')
+  expect(judgmentExportQuery).not.toContain('json_extract')
   expect(judgmentExportQuery).toContain('TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray')
   expect(judgmentExportQuery).toContain('detail.answered_original AS answeredOriginal')
 })

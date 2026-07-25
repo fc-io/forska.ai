@@ -56,7 +56,6 @@ type ExportJudgmentRow = {
   answeredOriginalAsArray: unknown
   articleId: string
   explanation: string | null
-  judgmentPayloadJson?: unknown
   promptId: string
   quotes: unknown
 }
@@ -400,9 +399,8 @@ const getExportJudgments = async (input: {
           detail.prompt_id AS promptId,
           detail.answered_original AS answeredOriginal,
           TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray,
-          json_extract_string(detail.judgment_payload_json, '$.explanation') AS explanation,
-          json_extract(detail.judgment_payload_json, '$.quotes') AS quotes,
-          detail.judgment_payload_json AS judgmentPayloadJson,
+          detail.explanation AS explanation,
+          detail.quotes AS quotes,
           export_scope.source_project_order AS sourceProjectOrder,
           ROW_NUMBER() OVER (
             PARTITION BY detail.article_id, detail.prompt_id

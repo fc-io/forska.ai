@@ -294,6 +294,33 @@ const reviewServingArticlePayloadDisplayColumns = [
 ].map((column) => {
   return column
 })
+const reviewServingJudgmentDetailListColumns = [
+  'project_id',
+  'review_config_hash',
+  'snapshot_id',
+  'list_mode_key',
+  'payload_kind',
+  'article_id',
+  'prompt_id',
+  'prompt_order',
+  'judgment_id',
+  'judgment_model_id',
+  'is_answered',
+  'answered_original',
+  'answered_original_as_array',
+  'prompt_original_text',
+  'prompt_heading',
+  'prompt_type',
+  'prompt_criteria_disposition',
+  'judgment_created_at',
+  'human_comment',
+  'explanation',
+  'quotes',
+  'placeholder_kind',
+  'detail_updated_at',
+].map((column) => {
+  return `${reviewServingJudgmentDetailTable}.${column}`
+})
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
@@ -689,6 +716,20 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
     })
       ? `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
       : `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata`
+  }
+
+  if (contract.servingTable === reviewServingJudgmentDetailTable) {
+    const detailSelectColumns =
+      contract.key === 'review.detail.judgments' || contract.key === 'review.detail.humanJudgments'
+        ? [...reviewServingJudgmentDetailListColumns, `${reviewServingJudgmentDetailTable}.judgment_payload_json`]
+        : reviewServingJudgmentDetailListColumns
+    const selectColumns = detailSelectColumns.join(', ')
+
+    return contract.sort.fields.some((field) => {
+      return field.includes(reviewServingListModePrioritySql)
+    })
+      ? `SELECT ${selectColumns}, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
+      : `SELECT ${selectColumns}`
   }
 
   return contract.sort.fields.some((field) => {

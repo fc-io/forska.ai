@@ -391,8 +391,13 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(sql).toContain('SELECT mart.review_article_judgment_detail_serving_v4.project_id')
+  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
+  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.explanation')
+  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.quotes')
+  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.judgment_payload_json')
   expect(sql).toContain(
-    "SELECT *, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
+    "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
   )
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id = $articleId')
   expect(sql).toContain("AND payload_kind = 'llm'")
@@ -464,6 +469,13 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
   expect(bothListSql).toContain("AND list_mode_key = 'both'")
   expect(humanListSql).toContain("AND payload_kind = 'human'")
   expect(bothListSql).toContain("AND payload_kind = 'human'")
+  expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
+  expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.explanation')
+  expect(humanListSql).toContain('mart.review_article_judgment_detail_serving_v4.quotes')
+  expect(humanListSql).not.toContain('SELECT *')
+  expect(humanListSql).not.toContain('judgment_payload_json')
+  expect(bothListSql).not.toContain('SELECT *')
+  expect(bothListSql).not.toContain('judgment_payload_json')
 })
 
 test('buildReviewServingRowsSql applies posting filter keys before row ordering', () => {
@@ -818,6 +830,11 @@ test('buildReviewServingRowsSql supports article-set list judgment lookups', () 
   expect(sql).toContain("AND list_mode_key = 'both'")
   expect(sql).toContain("AND payload_kind = 'llm'")
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.judgment_model_id')
+  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.explanation')
+  expect(sql).toContain('mart.review_article_judgment_detail_serving_v4.quotes')
+  expect(sql).not.toContain('SELECT *')
+  expect(sql).not.toContain('judgment_payload_json')
 })
 
 test('buildReviewServingRowsSql supports article-set row hydration lookups', () => {
