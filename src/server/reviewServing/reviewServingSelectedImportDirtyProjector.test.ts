@@ -162,6 +162,8 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain('existing.article_id = changed.article_id')
   expect(joined).toContain('changed.import_route_id AS selected_import_route_id')
   expect(joined).toContain('changed.selected_rank_key')
+  expect(joined).not.toContain('changed.publication_year')
+  expect(joined).not.toContain('serving.publication_year')
   expect(joined).not.toContain('COALESCE(changed.article_title, article.article_title) AS article_title')
   expect(joined).not.toContain('COALESCE(changed.external_id, article.article_id) AS article_external_id')
   expect(joined).not.toContain('COALESCE(changed.selected_source_url, article.url) AS url')

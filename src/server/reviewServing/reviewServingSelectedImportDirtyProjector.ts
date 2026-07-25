@@ -311,7 +311,6 @@ const selectedImportServingColumns = [
   'sort_key',
   'activity_sort_at',
   'selected_import_route_id',
-  'publication_year',
   'duplicate_flag',
   'conflict_flag',
   'llm_status_key',
@@ -561,7 +560,6 @@ const getApplySelectedImportServingStatements = (input: {
             activity_sort_at,
             selected_import_route_id,
             selected_rank_key,
-            publication_year,
             duplicate_flag,
             conflict_flag,
             llm_judged_prompt_count,
@@ -582,7 +580,6 @@ const getApplySelectedImportServingStatements = (input: {
             COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
             changed.import_route_id,
             changed.selected_rank_key,
-            changed.publication_year,
             changed.duplicate_flag,
             changed.conflict_flag,
             0 AS llm_judged_prompt_count,
@@ -617,7 +614,6 @@ const getApplySelectedImportServingStatements = (input: {
             serving.sort_key,
             serving.activity_sort_at,
             changed.import_route_id AS selected_import_route_id,
-            changed.publication_year,
             changed.duplicate_flag,
             changed.conflict_flag,
             serving.llm_status_key,
@@ -644,7 +640,6 @@ const getApplySelectedImportServingStatements = (input: {
             )
             AND (
               serving.selected_import_route_id IS DISTINCT FROM changed.import_route_id
-              OR serving.publication_year IS DISTINCT FROM changed.publication_year
               OR serving.duplicate_flag IS DISTINCT FROM changed.duplicate_flag
               OR serving.conflict_flag IS DISTINCT FROM changed.conflict_flag
               OR serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}

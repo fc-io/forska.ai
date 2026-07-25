@@ -4766,6 +4766,8 @@ export const getDefaultReviewServingProjectorRunners = (
         const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
         const displayIdentity = requireSnapshotComponentIdentity(snapshot, 'display')
         const payloadIdentity = requireSnapshotComponentIdentity(snapshot, 'payload')
+        const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
+        const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
         const reviewFilterOptionsResult = await projectReviewServingFilterOptions(
           {
             acknowledgeClaims: false,
@@ -4784,9 +4786,11 @@ export const getDefaultReviewServingProjectorRunners = (
             optionMode: 'review',
             payloadIdentity,
             projectId,
+            projectScopeIdentity,
             projectionIdentity: manifest.projectionIdentity,
             reviewConfigHash: requireReviewConfigHash(snapshot),
             searchIdentity,
+            selectedImportSnapshotId,
             snapshotId: snapshot.snapshotId,
           },
           database,
@@ -4809,9 +4813,11 @@ export const getDefaultReviewServingProjectorRunners = (
             optionMode: 'human',
             payloadIdentity,
             projectId,
+            projectScopeIdentity,
             projectionIdentity: manifest.projectionIdentity,
             reviewConfigHash: requireReviewConfigHash(snapshot),
             searchIdentity,
+            selectedImportSnapshotId,
             snapshotId: snapshot.snapshotId,
           },
           database,
@@ -5475,6 +5481,8 @@ const refreshSummaryFilterOptionsForProjections = async (
       const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
       const displayIdentity = requireSnapshotComponentIdentity(snapshot, 'display')
       const payloadIdentity = requireSnapshotComponentIdentity(snapshot, 'payload')
+      const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
+      const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
 
       await projectReviewServingFilterOptions(
         {
@@ -5494,9 +5502,11 @@ const refreshSummaryFilterOptionsForProjections = async (
           optionMode: 'review',
           payloadIdentity,
           projectId: row.projectId,
+          projectScopeIdentity,
           projectionIdentity: row.projectionIdentity,
           reviewConfigHash: requireReviewConfigHash(snapshot),
           searchIdentity,
+          selectedImportSnapshotId,
           snapshotId: snapshot.snapshotId,
         },
         database,
@@ -5519,9 +5529,11 @@ const refreshSummaryFilterOptionsForProjections = async (
           optionMode: 'human',
           payloadIdentity,
           projectId: row.projectId,
+          projectScopeIdentity,
           projectionIdentity: row.projectionIdentity,
           reviewConfigHash: requireReviewConfigHash(snapshot),
           searchIdentity,
+          selectedImportSnapshotId,
           snapshotId: snapshot.snapshotId,
         },
         database,

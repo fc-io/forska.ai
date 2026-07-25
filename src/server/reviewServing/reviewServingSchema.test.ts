@@ -66,6 +66,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0163_dropReviewArticleServingDisplayCopies.sql',
   '../../db/duckdbMigrations/0164_rehydrateReviewPayloadDisplayColumns.sql',
   '../../db/duckdbMigrations/0165_dropReviewPayloadAbstractText.sql',
+  '../../db/duckdbMigrations/0166_dropReviewArticleServingPublicationYear.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -135,6 +136,8 @@ const reviewPayloadDisplayRehydrationForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0164_rehydrateReviewPayloadDisplayColumns.sql']
 const reviewPayloadAbstractTextDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0165_dropReviewPayloadAbstractText.sql']
+const reviewArticleServingPublicationYearDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0166_dropReviewArticleServingPublicationYear.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -813,7 +816,6 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
       'sort_key',
       'activity_sort_at',
       'selected_import_route_id',
-      'publication_year',
       'duplicate_flag',
       'conflict_flag',
       'llm_status_key',
@@ -866,6 +868,7 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
     'selected_rank_key',
     'review_opened',
     'review_sections_completed',
+    'publication_year',
   ]
   expect(
     [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
@@ -896,6 +899,21 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(articleServingDisplayCopyRepairSql).not.toContain('article_title VARCHAR')
   expect(articleServingDisplayCopyRepairSql).not.toContain('article_external_id VARCHAR')
   expect(articleServingDisplayCopyRepairSql).not.toContain('journal_title VARCHAR')
+  expect(articleServingDisplayCopyRepairSql).not.toContain('publication_year INTEGER')
+  expect(reviewArticleServingPublicationYearDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_v4_publication_year_repair',
+  )
+  expect(reviewArticleServingPublicationYearDropForwardMigrationSql).toContain(
+    'DROP TABLE mart.review_article_serving_v4;',
+  )
+  expect(reviewArticleServingPublicationYearDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_v4_publication_year_repair RENAME TO review_article_serving_v4;',
+  )
+  expect(reviewArticleServingPublicationYearDropForwardMigrationSql).not.toContain('publication_year INTEGER')
+  expect(reviewArticleServingPublicationYearDropForwardMigrationSql).not.toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_serving_v4_publication_year',
+  )
+  expect(reviewServingFoundationSchemaSql).not.toContain('idx_review_article_serving_v4_publication_year')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_opened')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_sections_completed')
   expect(articleMetadataStatusForwardMigrationSql).not.toContain('ALTER TABLE mart.review_article_serving_v4')

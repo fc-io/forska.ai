@@ -12,7 +12,6 @@ CREATE TABLE mart.review_article_serving_v4_repair (
   sort_key TIMESTAMPTZ NOT NULL,
   activity_sort_at TIMESTAMPTZ NOT NULL,
   selected_import_route_id VARCHAR,
-  publication_year INTEGER,
   duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
   conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
   llm_status_key VARCHAR,
@@ -41,7 +40,6 @@ SELECT
   sort_key,
   activity_sort_at,
   selected_import_route_id,
-  publication_year,
   duplicate_flag,
   conflict_flag,
   llm_status_key,
@@ -61,6 +59,3 @@ ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, l
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_v4_order
 ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, sort_key, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_article_serving_v4_publication_year
-ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, publication_year, sort_key, article_id);
