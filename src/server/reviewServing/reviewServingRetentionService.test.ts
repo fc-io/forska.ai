@@ -164,6 +164,8 @@ test('retention cleanup allowlists terminal summary contribution partial cleanup
   expect(joined).toContain(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_summary_contribution_rebuild_partial_v4_unique',
   )
+  expect(joined).toContain('summary_identity')
+  expect(joined).not.toContain('contribution_key')
   expect(joined).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_article_summary_contribution_rebuild_partial_v4_publish',
   )

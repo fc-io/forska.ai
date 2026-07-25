@@ -187,6 +187,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0156_dropReviewPayloadFullTextPreview.sql'),
     'utf8',
   ).trim()
+  const reviewSummaryContributionPartialJsonKeyDropSql = readFileSync(
+    resolve(migrationsFolder, '0157_dropReviewSummaryContributionPartialJsonKey.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -460,6 +464,16 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
   )
   expect(reviewPayloadServingFullTextPreviewDropSql).not.toContain('full_text_preview VARCHAR')
+  expect(reviewSummaryContributionPartialJsonKeyDropSql).toContain(
+    'CREATE TABLE mart.review_article_summary_contribution_rebuild_partial_v4_key_repair',
+  )
+  expect(reviewSummaryContributionPartialJsonKeyDropSql).toContain(
+    "json_extract_string(contribution_key, '$.summaryIdentity') AS summary_identity",
+  )
+  expect(reviewSummaryContributionPartialJsonKeyDropSql).toContain(
+    'ALTER TABLE mart.review_article_summary_contribution_rebuild_partial_v4_key_repair RENAME TO review_article_summary_contribution_rebuild_partial_v4;',
+  )
+  expect(reviewSummaryContributionPartialJsonKeyDropSql).not.toContain('contribution_key VARCHAR')
   expect(reviewImportHotFieldProvenanceDebugColumnDropSql).toContain(
     'CREATE TABLE app.review_import_article_hot_field_repair',
   )
@@ -2059,6 +2073,212 @@ test('DuckDB migration drops retired summary contribution serving table and look
     expect(parsed.tableRows).toEqual([])
     expect(parsed.indexRows).toEqual([])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('DuckDB migration scalarizes summary contribution partial keys', async () => {
+  const duckdbPath = `/tmp/forska-review-summary-contribution-partial-key-${Date.now()}.duckdb`
+  const targetMigrationFile = '0157_dropReviewSummaryContributionPartialJsonKey.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_summary_contribution_rebuild_partial_v4 (
+            request_id VARCHAR NOT NULL,
+            chunk_id VARCHAR NOT NULL,
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            component_kind VARCHAR NOT NULL,
+            summary_definition_version VARCHAR NOT NULL,
+            contribution_key VARCHAR NOT NULL,
+            contribution_value BIGINT NOT NULL,
+            contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
+            request_id,
+            chunk_id,
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            article_id,
+            component_kind,
+            summary_definition_version,
+            contribution_key,
+            contribution_value,
+            contribution_updated_at
+          ) VALUES
+            (
+              'request-a',
+              'chunk-a',
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'article-a',
+              'count',
+              'review-serving-summary:v1',
+              '{"countKind":"review.list.total","facetKind":null,"facetKey":null,"facetValue":null,"filterKey":"list:all","listModeKey":"llm","summaryIdentity":"review.list.total","summaryKind":"count"}',
+              7,
+              TIMESTAMPTZ '2026-07-25T08:00:00Z'
+            ),
+            (
+              'request-a',
+              'chunk-a',
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'article-a',
+              'count',
+              'review-serving-summary:v1',
+              '{"answerId":2,"countKind":"review.list.total","facetKind":null,"facetKey":null,"facetValue":null,"filterKey":"list:all","listModeKey":"llm","summaryIdentity":"review.list.total","summaryKind":"count"}',
+              5,
+              TIMESTAMPTZ '2026-07-25T08:02:00Z'
+            ),
+            (
+              'request-a',
+              'chunk-a',
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'article-b',
+              'count',
+              'review-serving-summary:v1',
+              '{"countKind":"review.human.filter.summaryAnswer","facetKind":"human","facetKey":"summaryAnswer","facetValue":"yes","filterKey":null,"listModeKey":null,"summaryIdentity":"review.human.filter.summaryAnswer","summaryKind":"facet"}',
+              3,
+              TIMESTAMPTZ '2026-07-25T08:01:00Z'
+            )
+        \`)
+
+        await migrateDuckdb()
+
+        const columns = await database.queryJson(
+          "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_summary_contribution_rebuild_partial_v4' ORDER BY ordinal_position"
+        )
+        const indexes = await database.queryJson(
+          "SELECT index_name AS indexName, sql FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_summary_contribution_rebuild_partial_v4' ORDER BY index_name"
+        )
+        const rows = await database.queryJson(
+          "SELECT article_id AS articleId, summary_kind AS summaryKind, summary_identity AS summaryIdentity, list_mode_key AS listModeKey, count_kind AS countKind, filter_key AS filterKey, facet_kind AS facetKind, facet_key AS facetKey, facet_value AS facetValue, CAST(contribution_value AS INTEGER) AS contributionValue FROM mart.review_article_summary_contribution_rebuild_partial_v4 ORDER BY article_id"
+        )
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0157_dropReviewSummaryContributionPartialJsonKey.sql'"
+        )
+
+        console.log(JSON.stringify({columns, indexes, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: Array<{columnName: string}>
+      indexes: Array<{indexName: string; sql: string}>
+      migrationRows: {name: string}[]
+      rows: Array<{
+        articleId: string
+        contributionValue: number
+        countKind: string
+        facetKey: string | null
+        facetKind: string | null
+        facetValue: string | null
+        filterKey: string | null
+        listModeKey: string
+        summaryIdentity: string
+        summaryKind: string
+      }>
+    }
+    const columns = parsed.columns.map((row) => {
+      return row.columnName
+    })
+    const uniqueIndexSql = parsed.indexes.find((row) => {
+      return row.indexName === 'idx_review_article_summary_contribution_rebuild_partial_v4_unique'
+    })?.sql
+
+    expect(columns).not.toContain('contribution_key')
+    expect(columns).toContain('summary_identity')
+    expect(uniqueIndexSql).toContain("COALESCE(list_mode_key, 'global')")
+    expect(uniqueIndexSql).toContain("COALESCE(facet_value, '')")
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-a',
+        contributionValue: 12,
+        countKind: 'review.list.total',
+        facetKey: null,
+        facetKind: null,
+        facetValue: null,
+        filterKey: 'list:all',
+        listModeKey: 'llm',
+        summaryIdentity: 'review.list.total',
+        summaryKind: 'count',
+      },
+      {
+        articleId: 'article-b',
+        contributionValue: 3,
+        countKind: 'review.human.filter.summaryAnswer',
+        facetKey: 'summaryAnswer',
+        facetKind: 'human',
+        facetValue: 'yes',
+        filterKey: null,
+        listModeKey: 'global',
+        summaryIdentity: 'review.human.filter.summaryAnswer',
+        summaryKind: 'facet',
+      },
+    ])
   } finally {
     removeFileIfExists(duckdbPath)
   }

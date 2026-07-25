@@ -113,7 +113,14 @@ const summaryPartialRebuildSqlByTable: Record<string, SummaryPartialRebuildSql> 
         article_id,
         component_kind,
         summary_definition_version,
-        contribution_key
+        summary_kind,
+        summary_identity,
+        COALESCE(list_mode_key, 'global'),
+        COALESCE(count_kind, ''),
+        COALESCE(filter_key, ''),
+        COALESCE(facet_kind, ''),
+        COALESCE(facet_key, ''),
+        COALESCE(facet_value, '')
       )
     `,
   },

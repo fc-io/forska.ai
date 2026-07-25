@@ -641,6 +641,12 @@ const getDirectFullSummaryContributionPartialRecord = (input: {
   snapshotId: string
   requestId: string
 }) => {
+  const identity = parseSummaryContributionKey(input.row.contributionKey)
+
+  if (identity === null) {
+    return null
+  }
+
   return {
     keyColumns: [
       'request_id',
@@ -651,17 +657,31 @@ const getDirectFullSummaryContributionPartialRecord = (input: {
       'article_id',
       'component_kind',
       'summary_definition_version',
-      'contribution_key',
+      'summary_kind',
+      'summary_identity',
+      'list_mode_key',
+      'count_kind',
+      'filter_key',
+      'facet_kind',
+      'facet_key',
+      'facet_value',
     ],
     table: 'mart.review_article_summary_contribution_rebuild_partial_v4',
     values: {
       article_id: input.row.articleId,
       component_kind: 'count',
-      contribution_key: input.row.contributionKey,
       contribution_value: input.row.contributionValue,
+      count_kind: identity.countKind,
+      facet_key: identity.facetKey,
+      facet_kind: identity.facetKind,
+      facet_value: identity.facetValue,
+      filter_key: identity.filterKey,
+      list_mode_key: identity.listModeKey ?? 'global',
       project_id: input.projectId,
       review_config_hash: input.reviewConfigHash,
       snapshot_id: input.snapshotId,
+      summary_identity: identity.summaryIdentity,
+      summary_kind: identity.summaryKind,
       summary_definition_version: 'review-serving-summary:v1',
       chunk_id: input.chunkId,
       contribution_updated_at: new Date(),
@@ -678,9 +698,32 @@ const getDirectFullSummaryContributionPartialRecords = (input: {
   snapshotId: string
   requestId: string
 }) => {
-  return input.contributionRows.map((row) => {
-    return getDirectFullSummaryContributionPartialRecord({...input, row})
+  const recordsByKey = new Map<string, ReviewServingProjectorRecord>()
+
+  input.contributionRows.forEach((row) => {
+    const record = getDirectFullSummaryContributionPartialRecord({...input, row})
+
+    if (record === null) {
+      return
+    }
+
+    const recordKey = record.keyColumns
+      .map((column) => {
+        return String(record.values[column] ?? '')
+      })
+      .join('\0')
+    const existingRecord = recordsByKey.get(recordKey)
+
+    if (existingRecord === undefined) {
+      recordsByKey.set(recordKey, record)
+      return
+    }
+
+    existingRecord.values.contribution_value =
+      Number(existingRecord.values.contribution_value ?? 0) + Number(record.values.contribution_value ?? 0)
   })
+
+  return [...recordsByKey.values()]
 }
 
 const getDirectFullSummaryPartialDeleteStatements = (input: ProjectReviewServingSummariesInput) => {
@@ -829,14 +872,14 @@ const getRefreshSummaryRebuildAccumulatorCountsStatement = (input: {
         deduplicated.project_id,
         deduplicated.review_config_hash,
         deduplicated.snapshot_id,
-        json_extract_string(deduplicated.contribution_key, '$.summaryKind') AS summary_kind,
-        json_extract_string(deduplicated.contribution_key, '$.summaryIdentity') AS summary_identity,
-        COALESCE(json_extract_string(deduplicated.contribution_key, '$.listModeKey'), 'global') AS list_mode_key,
-        json_extract_string(deduplicated.contribution_key, '$.countKind') AS count_kind,
-        json_extract_string(deduplicated.contribution_key, '$.filterKey') AS filter_key,
-        json_extract_string(deduplicated.contribution_key, '$.facetKind') AS facet_kind,
-        json_extract_string(deduplicated.contribution_key, '$.facetKey') AS facet_key,
-        json_extract_string(deduplicated.contribution_key, '$.facetValue') AS facet_value,
+        deduplicated.summary_kind,
+        deduplicated.summary_identity,
+        COALESCE(deduplicated.list_mode_key, 'global') AS list_mode_key,
+        deduplicated.count_kind,
+        deduplicated.filter_key,
+        deduplicated.facet_kind,
+        deduplicated.facet_key,
+        deduplicated.facet_value,
         SUM(COALESCE(deduplicated.contribution_value, 0)) AS count_value
       FROM (
         SELECT
@@ -846,7 +889,14 @@ const getRefreshSummaryRebuildAccumulatorCountsStatement = (input: {
           partial_contribution.article_id,
           partial_contribution.component_kind,
           partial_contribution.summary_definition_version,
-          partial_contribution.contribution_key,
+          partial_contribution.summary_kind,
+          partial_contribution.summary_identity,
+          partial_contribution.list_mode_key,
+          partial_contribution.count_kind,
+          partial_contribution.filter_key,
+          partial_contribution.facet_kind,
+          partial_contribution.facet_key,
+          partial_contribution.facet_value,
           ANY_VALUE(partial_contribution.contribution_value) AS contribution_value
         FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
         ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
@@ -859,20 +909,27 @@ const getRefreshSummaryRebuildAccumulatorCountsStatement = (input: {
           partial_contribution.article_id,
           partial_contribution.component_kind,
           partial_contribution.summary_definition_version,
-          partial_contribution.contribution_key
+          partial_contribution.summary_kind,
+          partial_contribution.summary_identity,
+          partial_contribution.list_mode_key,
+          partial_contribution.count_kind,
+          partial_contribution.filter_key,
+          partial_contribution.facet_kind,
+          partial_contribution.facet_key,
+          partial_contribution.facet_value
       ) deduplicated
       GROUP BY
         deduplicated.project_id,
         deduplicated.review_config_hash,
         deduplicated.snapshot_id,
-        json_extract_string(deduplicated.contribution_key, '$.summaryKind'),
-        json_extract_string(deduplicated.contribution_key, '$.summaryIdentity'),
-        COALESCE(json_extract_string(deduplicated.contribution_key, '$.listModeKey'), 'global'),
-        json_extract_string(deduplicated.contribution_key, '$.countKind'),
-        json_extract_string(deduplicated.contribution_key, '$.filterKey'),
-        json_extract_string(deduplicated.contribution_key, '$.facetKind'),
-        json_extract_string(deduplicated.contribution_key, '$.facetKey'),
-        json_extract_string(deduplicated.contribution_key, '$.facetValue')
+        deduplicated.summary_kind,
+        deduplicated.summary_identity,
+        COALESCE(deduplicated.list_mode_key, 'global'),
+        deduplicated.count_kind,
+        deduplicated.filter_key,
+        deduplicated.facet_kind,
+        deduplicated.facet_key,
+        deduplicated.facet_value
     ) contribution_counts
     WHERE accumulator.request_id = ${getSqlLiteral(input.requestId)}
       AND accumulator.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
