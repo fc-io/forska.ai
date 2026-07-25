@@ -291,16 +291,18 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
     database,
   )
   const joined = statements.join('\n')
+  const insertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_serving_payload_v4')
+  })
 
   expect(result).toEqual({rangeCount: 2})
   expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(joined).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
+  expect(insertStatements).toHaveLength(1)
   expect(joined).toContain('INSERT INTO mart.review_article_serving_payload_v4')
-  expect(joined).toContain('WITH payload_source AS')
-  expect(joined).toContain("scope.article_id >= 'article-001'")
-  expect(joined).toContain("scope.article_id <= 'article-050'")
-  expect(joined).toContain("scope.article_id >= 'article-051'")
-  expect(joined).toContain("scope.article_id <= 'article-099'")
+  expect(joined).toContain('payload_source AS')
+  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
   expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
   expect(joined).toContain('DO NOTHING')
   expect(joined).not.toContain('DO UPDATE SET')
@@ -308,7 +310,6 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
   expect(joined).not.toContain('payload_bytes = excluded.payload_bytes')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('selected_patch')
-  expect(joined).not.toContain('VALUES (')
 })
 
 test('payload claimed updates avoid indexed deletes for removed article cleanup', async () => {
