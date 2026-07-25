@@ -3305,6 +3305,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(articleServingProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
     expect(articleServingProbe?.mutationProbeSql).toContain('app.review_rebuild_chunk_manifest')
     expect(articleServingProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
+    expect(articleServingProbe?.mutationProbeSql).not.toContain('UPDATE mart.review_article_serving_v4')
+    expect(articleServingProbe?.mutationProbeSql).not.toContain('serving_updated_at')
     const selectedImportProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_selected_article_import_v4'
     })

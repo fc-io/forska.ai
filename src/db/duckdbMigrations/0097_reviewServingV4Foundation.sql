@@ -473,7 +473,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4 (
   llm_judged_prompt_count INTEGER NOT NULL DEFAULT 0,
   enabled_prompt_count INTEGER NOT NULL DEFAULT 0,
   human_answered_prompt_count INTEGER NOT NULL DEFAULT 0,
-  serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, article_id),
   CHECK (base_generation >= 0),
   CHECK (patch_watermark >= 0)

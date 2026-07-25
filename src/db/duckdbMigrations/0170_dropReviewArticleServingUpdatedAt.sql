@@ -2,9 +2,9 @@ DROP INDEX IF EXISTS mart.idx_review_article_serving_v4_order;
 DROP INDEX IF EXISTS idx_review_article_serving_v4_order;
 DROP INDEX IF EXISTS mart.idx_review_article_serving_v4_repaired_pk;
 DROP INDEX IF EXISTS idx_review_article_serving_v4_repaired_pk;
-DROP TABLE IF EXISTS mart.review_article_serving_v4_selected_flag_repair;
+DROP TABLE IF EXISTS mart.review_article_serving_v4_updated_at_repair;
 
-CREATE TABLE mart.review_article_serving_v4_selected_flag_repair (
+CREATE TABLE mart.review_article_serving_v4_updated_at_repair (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
@@ -27,13 +27,13 @@ CREATE TABLE mart.review_article_serving_v4_selected_flag_repair (
   CHECK (human_answered_prompt_count >= 0)
 );
 
-INSERT INTO mart.review_article_serving_v4_selected_flag_repair BY NAME
+INSERT INTO mart.review_article_serving_v4_updated_at_repair BY NAME
 SELECT COLUMNS(column_name -> column_name IN ('project_id', 'review_config_hash', 'snapshot_id', 'base_generation', 'patch_watermark', 'list_mode_key', 'article_id', 'article_created_at', 'sort_key', 'activity_sort_at', 'llm_status_key', 'human_status_key', 'llm_judged_prompt_count', 'enabled_prompt_count', 'human_answered_prompt_count'))
 FROM mart.review_article_serving_v4;
 
 DROP TABLE mart.review_article_serving_v4;
 
-ALTER TABLE mart.review_article_serving_v4_selected_flag_repair RENAME TO review_article_serving_v4;
+ALTER TABLE mart.review_article_serving_v4_updated_at_repair RENAME TO review_article_serving_v4;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_v4_repaired_pk
 ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, article_id);
@@ -41,4 +41,4 @@ ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, l
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_v4_order
 ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, sort_key, article_id);
 
-DROP TABLE IF EXISTS mart.review_article_serving_v4_selected_flag_repair;
+DROP TABLE IF EXISTS mart.review_article_serving_v4_updated_at_repair;

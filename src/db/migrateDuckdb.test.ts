@@ -1758,6 +1758,204 @@ test('DuckDB migration drops article serving selected-import route copy while pr
   }
 })
 
+test('DuckDB migration drops article serving updated-at while preserving rows and indexes', async () => {
+  const duckdbPath = `/tmp/forska-review-article-serving-updated-at-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0170_dropReviewArticleServingUpdatedAt.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            base_generation BIGINT NOT NULL,
+            patch_watermark BIGINT NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            article_created_at TIMESTAMPTZ,
+            sort_key TIMESTAMPTZ NOT NULL,
+            activity_sort_at TIMESTAMPTZ NOT NULL,
+            llm_status_key VARCHAR,
+            human_status_key VARCHAR,
+            llm_judged_prompt_count INTEGER NOT NULL DEFAULT 0,
+            enabled_prompt_count INTEGER NOT NULL DEFAULT 0,
+            human_answered_prompt_count INTEGER NOT NULL DEFAULT 0,
+            serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE UNIQUE INDEX idx_review_article_serving_v4_repaired_pk
+          ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)
+        \`)
+        await database.run(\`
+          CREATE INDEX idx_review_article_serving_v4_order
+          ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, sort_key, article_id)
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            base_generation,
+            patch_watermark,
+            list_mode_key,
+            article_id,
+            article_created_at,
+            sort_key,
+            activity_sort_at,
+            llm_status_key,
+            human_status_key,
+            llm_judged_prompt_count,
+            enabled_prompt_count,
+            human_answered_prompt_count,
+            serving_updated_at
+          )
+          VALUES (
+            'project-1',
+            'review-config-1',
+            'snapshot-1',
+            1,
+            2,
+            'llm',
+            'article-1',
+            TIMESTAMPTZ '2026-01-01 00:00:00+00',
+            TIMESTAMPTZ '2026-01-01 00:00:00+00',
+            TIMESTAMPTZ '2026-01-02 00:00:00+00',
+            'included',
+            'answered',
+            3,
+            4,
+            5,
+            TIMESTAMPTZ '2026-01-03 00:00:00+00'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            llm_status_key AS llmStatusKey,
+            human_status_key AS humanStatusKey,
+            llm_judged_prompt_count AS llmJudgedPromptCount,
+            enabled_prompt_count AS enabledPromptCount,
+            human_answered_prompt_count AS humanAnsweredPromptCount
+          FROM mart.review_article_serving_v4
+        \`)
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_article_serving_v4'
+          ORDER BY ordinal_position
+        \`)
+        const indexes = await database.queryJson(\`
+          SELECT index_name AS indexName
+          FROM duckdb_indexes()
+          WHERE schema_name = 'mart'
+            AND table_name = 'review_article_serving_v4'
+          ORDER BY index_name
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0170_dropReviewArticleServingUpdatedAt.sql'"
+        )
+
+        console.log(JSON.stringify({columns, indexes, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      indexes: {indexName: string}[]
+      migrationRows: {name: string}[]
+      rows: {
+        articleId: string
+        enabledPromptCount: number
+        humanAnsweredPromptCount: number
+        humanStatusKey: string
+        llmJudgedPromptCount: number
+        llmStatusKey: string
+      }[]
+    }
+    const columnNames = new Set(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    )
+
+    expect(columnNames.has('serving_updated_at')).toBe(false)
+    expect(parsed.indexes).toEqual([
+      {indexName: 'idx_review_article_serving_v4_order'},
+      {indexName: 'idx_review_article_serving_v4_repaired_pk'},
+    ])
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        enabledPromptCount: 4,
+        humanAnsweredPromptCount: 5,
+        humanStatusKey: 'answered',
+        llmJudgedPromptCount: 3,
+        llmStatusKey: 'included',
+      },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
 test('DuckDB migration rehydrates payload display columns after article serving display copies are dropped', async () => {
   const duckdbPath = `/tmp/forska-review-payload-display-rehydrate-${Date.now()}.duckdb`
   const targetMigrationFile = '0164_rehydrateReviewPayloadDisplayColumns.sql'

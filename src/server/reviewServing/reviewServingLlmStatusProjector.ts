@@ -725,8 +725,7 @@ const getApplyLlmStatusServingStatement = (input: {
           WHEN article_status.enabled_prompt_count = article_status.llm_judged_prompt_count THEN 'answered'
           ELSE 'unanswered'
         END,
-        patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
-        serving_updated_at = current_timestamp
+        patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)})
       FROM article_status
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
         AND serving.review_config_hash = article_status.review_config_hash
@@ -812,8 +811,7 @@ const getApplyLlmStatusServingReplacementStatements = (input: {
             WHEN article_status.enabled_prompt_count = article_status.llm_judged_prompt_count THEN 'answered'
             ELSE 'unanswered'
           END AS llm_status_key,
-          GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
-          current_timestamp AS serving_updated_at
+          GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark
         )
         FROM mart.review_article_serving_v4 serving
         INNER JOIN article_status
@@ -868,8 +866,7 @@ const getResetEmptyLlmStatusServingReplacementStatements = (input: {
        0 AS enabled_prompt_count,
        0 AS llm_judged_prompt_count,
        NULL AS llm_status_key,
-       GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
-       current_timestamp AS serving_updated_at
+       GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark
      )
      FROM mart.review_article_serving_v4 serving
      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}

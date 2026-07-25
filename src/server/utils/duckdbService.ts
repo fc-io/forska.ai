@@ -1622,17 +1622,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       SELECT *
       FROM fallback_row;
       BEGIN;
-      UPDATE mart.review_article_serving_v4
-      SET serving_updated_at = current_timestamp
-      WHERE EXISTS (
-        SELECT 1
-        FROM startup_probe_review_article_serving_v4 probe
-        WHERE mart.review_article_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
-          AND mart.review_article_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
-          AND mart.review_article_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
-          AND mart.review_article_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
-          AND mart.review_article_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
-      );
       DELETE FROM mart.review_article_serving_v4
       WHERE EXISTS (
         SELECT 1
