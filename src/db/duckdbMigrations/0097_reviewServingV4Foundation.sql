@@ -721,6 +721,7 @@ CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   prompt_order INTEGER,
   judgment_id VARCHAR,
   model_id VARCHAR,
+  is_answered BOOLEAN,
   answered_original VARCHAR,
   answered_original_as_array VARCHAR[],
   judgment_payload_json JSON,

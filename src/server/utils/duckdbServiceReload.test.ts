@@ -18,6 +18,7 @@ const removePathIfExists = (path: string) => {
 type StartupRepairSpecJson = {
   lowMemoryStartupPreflight?: boolean
   mutationProbeSql?: string
+  postRepairDependencySpecs?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
   postRepairSql?: string
   postRepairSchemaRequirements?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
   recreateRepairPrimaryKeyIndex?: boolean
@@ -3244,7 +3245,11 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       schemaName: 'mart',
       tableName: 'review_article_judgment_detail_serving_v4',
     })
-    expect(parsed.repairManifest?.repairedTables).toEqual(['mart.review_article_judgment_detail_serving_v4'])
+    expect(parsed.repairManifest?.repairedTables).toEqual([
+      'app.review_rebuild_request',
+      'app.review_rebuild_chunk_manifest',
+      'mart.review_article_judgment_detail_serving_v4',
+    ])
     expect(parsed.repairBackupContent).toBe('database-after-lock-holder')
     expect(parsed.repairOptions?.checkpoint_threshold).toBe('8GB')
     expect(parsed.repairScript).toContain("await connection.run('CHECKPOINT')")
@@ -3268,7 +3273,11 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       parsed.repairSpecs.map((spec) => {
         return {schemaName: spec.schemaName, tableName: spec.tableName}
       }),
-    ).toEqual([{schemaName: 'mart', tableName: 'review_article_judgment_detail_serving_v4'}])
+    ).toEqual([
+      {schemaName: 'app', tableName: 'review_rebuild_request'},
+      {schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'},
+      {schemaName: 'mart', tableName: 'review_article_judgment_detail_serving_v4'},
+    ])
     expect(
       parsed.preflightSpecs.map((spec) => {
         return {schemaName: spec.schemaName, tableName: spec.tableName}
@@ -3385,6 +3394,10 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     )
     expect(judgmentDetailProbe?.skipGenericDeleteInsertProbe).toBe(true)
     expect(judgmentDetailProbe?.repairStrategy).toBe('empty-derived')
+    expect(judgmentDetailProbe?.postRepairDependencySpecs).toEqual([
+      {schemaName: 'app', tableName: 'review_rebuild_request'},
+      {schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'},
+    ])
     expect(judgmentDetailProbe?.postRepairSql).toContain("projection_component = 'judgmentInputContent'")
     expect(judgmentDetailProbe?.postRepairSql).toContain("status = 'pending'")
     expect(judgmentDetailProbe?.postRepairSql).toContain('app.review_rebuild_request')

@@ -119,6 +119,8 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(joined).toContain("'both'")
   expect(joined).toContain("'summary'")
   expect(joined).toContain("'llm.unanswered'")
+  expect(joined).toContain('is_answered')
+  expect(joined).toContain('payload.is_answered')
   expect(joined).toContain('payloadReference')
   expect(joined).toContain('human_summary')
 })

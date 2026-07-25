@@ -26,6 +26,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0122_dropReviewArticleDisplayPatchV4.sql',
   '../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql',
   '../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql',
+  '../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -67,6 +68,8 @@ const reviewTitleSearchActivitySortAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql']
 const reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql']
+const reviewJudgmentDetailIsAnsweredForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql']
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -537,6 +540,7 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'article_id',
       'prompt_id',
       'payload_kind',
+      'is_answered',
       'judgment_payload_json',
       'placeholder_kind',
     ]),
@@ -555,6 +559,16 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   )
   expect(countScopeForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_article_judgment_detail_serving_v4')
   expect(countScopeForwardMigrationSql).toContain("payload_kind VARCHAR NOT NULL DEFAULT 'llm'")
+  expect(reviewJudgmentDetailIsAnsweredForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_is_answered_next',
+  )
+  expect(reviewJudgmentDetailIsAnsweredForwardMigrationSql).toContain('is_answered BOOLEAN')
+  expect(reviewJudgmentDetailIsAnsweredForwardMigrationSql).toContain(
+    "TRY_CAST(json_extract_string(judgment_payload_json, '$.isAnswered') AS BOOLEAN)",
+  )
+  expect(reviewJudgmentDetailIsAnsweredForwardMigrationSql).toContain(
+    'RENAME TO review_article_judgment_detail_serving_v4',
+  )
   expect(countScopeForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
   )

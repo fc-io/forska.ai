@@ -232,6 +232,7 @@ type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
   lowMemoryStartupPreflight?: boolean
   mutationProbeSql: string
+  postRepairDependencySpecs?: DuckdbStartupSchemaRequirement[]
   postRepairSql?: string
   postRepairSchemaRequirements?: DuckdbStartupSchemaRequirement[]
   recreateRepairPrimaryKeyIndex?: boolean
@@ -1772,6 +1773,10 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_article_judgment_detail_serving_v4;
     `,
     lowMemoryStartupPreflight: true,
+    postRepairDependencySpecs: [
+      {schemaName: 'app', tableName: 'review_rebuild_request'},
+      {schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'},
+    ],
     postRepairSchemaRequirements: [
       {
         columnNames: ['projection_component', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
@@ -1946,6 +1951,10 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_title_search_serving_v4;
     `,
+    postRepairDependencySpecs: [
+      {schemaName: 'app', tableName: 'review_rebuild_request'},
+      {schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'},
+    ],
     postRepairSchemaRequirements: [
       {
         columnNames: ['projection_component', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
@@ -2557,6 +2566,10 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_article_serving_payload_v4;
     `,
     lowMemoryStartupPreflight: true,
+    postRepairDependencySpecs: [
+      {schemaName: 'app', tableName: 'review_rebuild_request'},
+      {schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'},
+    ],
     postRepairSchemaRequirements: [
       {
         columnNames: ['projection_component', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
@@ -3722,11 +3735,47 @@ const getDuckdbStartupPreflightSpecsForRuntime = (
   })
 }
 
+const expandDuckdbStartupIndexedTableRepairSpecs = (
+  repairSpecs: DuckdbStartupIndexedTableRepairSpec[],
+): DuckdbStartupIndexedTableRepairSpec[] => {
+  const expandedRepairSpecs: DuckdbStartupIndexedTableRepairSpec[] = []
+  const addedRepairSpecKeys = new Set<string>()
+
+  const addRepairSpec = (repairSpec: DuckdbStartupIndexedTableRepairSpec) => {
+    const repairSpecKey = `${repairSpec.schemaName}.${repairSpec.tableName}`
+
+    if (addedRepairSpecKeys.has(repairSpecKey)) {
+      return
+    }
+
+    addedRepairSpecKeys.add(repairSpecKey)
+    expandedRepairSpecs.push(repairSpec)
+  }
+
+  for (const repairSpec of repairSpecs) {
+    for (const dependencySpec of repairSpec.postRepairDependencySpecs ?? []) {
+      const dependencyRepairSpec = duckdbStartupIndexedTableRepairSpecs.find((candidate) => {
+        return candidate.schemaName === dependencySpec.schemaName && candidate.tableName === dependencySpec.tableName
+      })
+
+      if (dependencyRepairSpec !== undefined) {
+        addRepairSpec(dependencyRepairSpec)
+      }
+    }
+
+    addRepairSpec(repairSpec)
+  }
+
+  return expandedRepairSpecs
+}
+
 const getDuckdbStartupIndexedTableRepairSpecs = (error: unknown): DuckdbStartupIndexedTableRepairSpec[] => {
   const candidateRepairSpecs = error instanceof Error ? (error as DuckdbStartupPreflightError).repairSpecs : null
   const repairSpecs = Array.isArray(candidateRepairSpecs) ? candidateRepairSpecs : []
 
-  return repairSpecs.length === 0 ? duckdbStartupIndexedTableRepairSpecs : repairSpecs
+  return expandDuckdbStartupIndexedTableRepairSpecs(
+    repairSpecs.length === 0 ? duckdbStartupIndexedTableRepairSpecs : repairSpecs,
+  )
 }
 
 const getDuckdbStartupPreflightRepairMarkerFromError = (error: unknown) => {

@@ -393,9 +393,8 @@ test('projects human summary-answer facets independently from prompt answers', a
   expect(selectStatement).toContain("project_settings.human_judgment_mode <> 'summary'")
   expect(selectStatement).toContain("project_settings.human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('human.prompt_id')
-  expect(selectStatement).toContain(
-    "human.answered_original IS NOT NULL OR COALESCE(TRY_CAST(json_extract_string(human.judgment_payload_json, '$.isAnswered') AS BOOLEAN), FALSE)",
-  )
+  expect(selectStatement).toContain('COALESCE(human.is_answered, human.answered_original IS NOT NULL, FALSE)')
+  expect(selectStatement).not.toContain("json_extract_string(human.judgment_payload_json, '$.isAnswered')")
 })
 
 test('projects llm prompt-answer facets from array answers', async () => {
