@@ -3431,9 +3431,9 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'activity_sort_at',
       'article_id',
       'prompt_id',
-      'queue_identity',
     ])
     expect(queueServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_unassessed_queue_serving_v4')
+    expect(queueServingProbe?.mutationProbeSql).not.toContain('queue_identity')
     const countServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_count_serving_v4'
     })

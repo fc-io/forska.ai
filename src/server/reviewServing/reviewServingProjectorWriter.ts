@@ -124,7 +124,6 @@ const reviewServingDeleteFreeSummaryScanGuardedInsertMissingTables = new Set<str
 
 export type WriteReviewServingQueueRebuildRowsInput = {
   projectId: string
-  queueIdentitySql: string
   rangePredicateSql: string
   rebuildSourceCtesSql: string
   reviewConfigHash: string
@@ -846,7 +845,6 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       project_id,
       review_config_hash,
       snapshot_id,
-      queue_identity,
       queue_kind,
       priority_bucket,
       activity_sort_at,
@@ -860,7 +858,6 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
         ${getSqlLiteral(input.projectId)} AS project_id,
         queue.review_config_hash,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        ${input.queueIdentitySql} AS queue_identity,
         queue.queue_kind,
         queue.priority_bucket,
         queue.activity_sort_at,
@@ -874,7 +871,6 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       project_id,
       review_config_hash,
       snapshot_id,
-      queue_identity,
       queue_kind,
       priority_bucket,
       activity_sort_at,
@@ -891,11 +887,10 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
         priority_bucket,
         activity_sort_at,
         article_id,
-        prompt_id,
-        queue_identity
+        prompt_id
       ORDER BY queue_updated_at DESC
     ) = 1
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO NOTHING
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id) DO NOTHING
   `,
   ]
 }

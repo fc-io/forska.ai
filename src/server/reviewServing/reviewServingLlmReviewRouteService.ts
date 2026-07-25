@@ -67,7 +67,6 @@ type ReviewServingJudgmentRow = {
   detail_updated_at?: unknown
   judgment_id?: string | null
   judgment_payload_json?: unknown
-  model_id?: string | null
   placeholder_kind?: string | null
   placeholderKind?: string | null
   prompt_id?: string
@@ -475,6 +474,14 @@ const getPayloadString = (value: unknown) => {
   return typeof value === 'string' ? value : ''
 }
 
+const getPayloadModelId = (payload: Record<string, unknown> | null) => {
+  const model = payload?.model
+
+  return model && typeof model === 'object' && !Array.isArray(model)
+    ? getPayloadString((model as {id?: unknown}).id)
+    : ''
+}
+
 const isPlaceholderJudgmentRow = (row: ReviewServingJudgmentRow) => {
   return (row.placeholder_kind ?? row.placeholderKind ?? null) !== null
 }
@@ -499,7 +506,7 @@ const getJudgmentRowsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) =
         articleImportRoute: null,
         articleImportedBy: null,
         promptId: row.prompt_id ?? getPayloadString(payload?.promptId),
-        modelId: row.model_id ?? getPayloadString(payload?.modelId),
+        modelId: getPayloadModelId(payload),
         answeredOriginal: row.answered_original ?? (payload?.answeredOriginal as string | null) ?? null,
         answeredOriginalAsArray: row.answered_original_as_array ?? [],
         explanation: (payload?.explanation as string | null) ?? null,

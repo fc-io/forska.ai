@@ -73,7 +73,6 @@ type ReviewServingJudgmentRow = {
   judgment_created_at?: unknown
   judgment_id?: string | null
   judgment_payload_json?: unknown
-  model_id?: string | null
   placeholder_kind?: string | null
   placeholderKind?: string | null
   prompt_id?: string
@@ -599,6 +598,14 @@ const getJudgmentPayload = (row: ReviewServingJudgmentRow) => {
   return getJsonValue(row.judgment_payload_json ?? null) as Record<string, unknown> | null
 }
 
+const getPayloadModelId = (payload: Record<string, unknown> | null) => {
+  const model = payload?.model
+
+  return model && typeof model === 'object' && !Array.isArray(model)
+    ? getPayloadString((model as {id?: unknown}).id)
+    : ''
+}
+
 const getLlmJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) => {
   return rows
     .filter((row) => {
@@ -612,7 +619,7 @@ const getLlmJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) =
         createdAt: getPayloadString(payload?.createdAt) || getPayloadString(row.detail_updated_at),
         articleId,
         promptId: row.prompt_id ?? '',
-        modelId: row.model_id ?? getPayloadString(payload?.modelId),
+        modelId: getPayloadModelId(payload),
         answeredOriginal: row.answered_original ?? (payload?.answeredOriginal as string | null) ?? null,
         answeredOriginalAsArray: row.answered_original_as_array ?? [],
         explanation: (payload?.explanation as string | null) ?? null,
