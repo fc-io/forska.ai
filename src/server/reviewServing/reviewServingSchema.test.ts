@@ -46,6 +46,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0142_reviewRebuildPartialCleanupAuthorization.sql',
   '../../db/duckdbMigrations/0143_dropReviewSelectedImportBaseFlags.sql',
   '../../db/duckdbMigrations/0144_dropReviewProjectImportDeltaCursor.sql',
+  '../../db/duckdbMigrations/0146_reviewServingPayloadDisplayFields.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -109,6 +110,8 @@ const reviewSelectedImportBaseFlagDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0143_dropReviewSelectedImportBaseFlags.sql']
 const reviewProjectImportDeltaCursorDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0144_dropReviewProjectImportDeltaCursor.sql']
+const reviewServingPayloadDisplayFieldsForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0146_reviewServingPayloadDisplayFields.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -605,6 +608,33 @@ test('Phase 1 payload serving schema preserves prompt preview article ordering',
   expect(reviewPayloadBytesDropForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_payload_v4_repair RENAME TO review_article_serving_payload_v4;',
   )
+})
+
+test('Phase 1 payload serving schema carries active display hydration fields', () => {
+  expect(
+    getMissingColumns('mart.review_article_serving_payload_v4', [
+      'article_title',
+      'article_external_id',
+      'article_updated_at',
+      'arxiv_id',
+      'biorxiv_id',
+      'medrxiv_id',
+      'doi',
+      'pmid',
+      'journal_title',
+      'url',
+      'full_text_pdf',
+      'full_text_fetched_at',
+      'full_text_conversion_status',
+    ]),
+  ).toEqual([])
+  expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_display_repair',
+  )
+  expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_display_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).not.toContain('ADD COLUMN')
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {

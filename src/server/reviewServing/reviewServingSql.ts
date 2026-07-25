@@ -225,7 +225,7 @@ const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_se
 const reviewServingListModePrioritySql =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 const reviewServingListModePriorityAlias = 'list_mode_priority'
-const reviewServingArticleSelectColumns = [
+const reviewServingArticlePhysicalSelectColumns = [
   'project_id',
   'review_config_hash',
   'snapshot_id',
@@ -234,21 +234,8 @@ const reviewServingArticleSelectColumns = [
   'list_mode_key',
   'article_id',
   'article_created_at',
-  'article_updated_at',
   'sort_key',
   'activity_sort_at',
-  'article_title',
-  'article_external_id',
-  'arxiv_id',
-  'biorxiv_id',
-  'medrxiv_id',
-  'doi',
-  'pmid',
-  'journal_title',
-  'url',
-  'full_text_pdf',
-  'full_text_fetched_at',
-  'full_text_conversion_status',
   'selected_import_route_id',
   'publication_year',
   'duplicate_flag',
@@ -261,6 +248,23 @@ const reviewServingArticleSelectColumns = [
   'serving_updated_at',
 ].map((column) => {
   return `${reviewServingArticleTable}.${column}`
+})
+const reviewServingArticlePayloadDisplayColumns = [
+  'article_title',
+  'article_external_id',
+  'article_updated_at',
+  'arxiv_id',
+  'biorxiv_id',
+  'medrxiv_id',
+  'doi',
+  'pmid',
+  'journal_title',
+  'url',
+  'full_text_pdf',
+  'full_text_fetched_at',
+  'full_text_conversion_status',
+].map((column) => {
+  return `COALESCE(payload.${column}, ${reviewServingArticleTable}.${column}) AS ${column}`
 })
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
@@ -642,7 +646,10 @@ const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingR
 
 const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
   if (contract.servingTable === reviewServingArticleTable) {
-    const articleSelectColumns = reviewServingArticleSelectColumns.join(', ')
+    const articleSelectColumns = [
+      ...reviewServingArticlePhysicalSelectColumns,
+      ...reviewServingArticlePayloadDisplayColumns,
+    ].join(', ')
 
     return contract.sort.fields.some((field) => {
       return field.includes(reviewServingListModePrioritySql)
