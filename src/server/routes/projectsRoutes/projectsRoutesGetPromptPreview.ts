@@ -18,7 +18,7 @@ const defaultJudgmentModelContext = 32768
 const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 
 type PromptPreviewServingRow = {
-  abstract_text: string | null
+  article_summary: string | null
   article_created_at: unknown
   article_external_id: string | null
   article_id: string
@@ -105,7 +105,7 @@ const getPromptPreviewArticleRecord = (input: {
     articleAuthors: null,
     articleCreatedAt: getDateValue(input.row.article_created_at),
     articleId: input.row.article_external_id,
-    articleSummary: input.row.abstract_text,
+    articleSummary: input.row.article_summary,
     articleTitle: input.row.article_title ?? '',
     articleUpdatedAt: getDateValue(input.row.article_updated_at),
     articleVersion: null,
@@ -242,10 +242,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
             stripImages: projectRow.useFulltextNoImages,
           }).processedText
         : null
-    const firstArticle = getPromptPreviewArticleRecord({
-      fullText: fullTextResult,
-      row: previewArticle,
-    })
+    const firstArticle = getPromptPreviewArticleRecord({fullText: fullTextResult, row: previewArticle})
 
     if (needsFulltext && !fullTextResult) {
       return getUnavailablePromptPreview({

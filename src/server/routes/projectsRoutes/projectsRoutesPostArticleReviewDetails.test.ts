@@ -127,7 +127,19 @@ beforeEach(() => {
     }
   }
   queryJsonRef.current = async (_statement) => {
-    return []
+    return _statement.includes('FROM app.article')
+      ? [
+          {
+            articleSummary: 'Abstract',
+            fullText: null,
+            fullTextCharCount: null,
+            fullTextHtml: null,
+            fullTextOriginalFormat: null,
+            fullTextSource: null,
+            importRoute: null,
+          },
+        ]
+      : []
   }
   reviewServingRowsRef.current = async () => {
     return {rows: [], status: 'accepted'}
@@ -216,7 +228,7 @@ test('project review details hydrates article, judgments, and assessments from V
     return request.contractKey === 'review.detail.row'
       ? {rows: [getServingArticleRow()], status: 'accepted'}
       : request.contractKey === 'review.detail.payload'
-        ? {rows: [{abstract_text: 'Abstract', article_id: 'article-1'}], status: 'accepted'}
+        ? {rows: [{article_id: 'article-1'}], status: 'accepted'}
         : request.contractKey === 'review.detail.judgments'
           ? {rows: [getServingJudgmentRow()], status: 'accepted'}
           : {rows: [], status: 'accepted'}

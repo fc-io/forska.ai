@@ -574,6 +574,7 @@ const getReviewServingRowsSqlCountPredicate = (params: {
 const getReviewServingRowsSqlFacetVersionPredicate = (params: {
   contract: ReviewServingReadContract
   countFilterKeyParameter?: string | null
+  countFilterKeysParameter?: string | null
 }) => {
   if (params.contract.servingTable !== reviewServingFilterFacetTable) {
     return ''
@@ -594,11 +595,13 @@ const getReviewServingRowsSqlFacetVersionPredicate = (params: {
     throw new Error(`Missing facet summary definition for ${params.contract.key}`)
   }
 
-  const countFilterKeyParameter = getRequiredReviewServingRowsSqlParameter(
-    params.countFilterKeyParameter,
-    'facet filter key',
-    params.contract,
-  )
+  const summaryIdentityPredicate = params.countFilterKeysParameter
+    ? ` AND summary_identity IN (SELECT unnest(${params.countFilterKeysParameter}))`
+    : ` AND summary_identity = ${getRequiredReviewServingRowsSqlParameter(
+        params.countFilterKeyParameter,
+        'facet filter key',
+        params.contract,
+      )}`
 
   const facetKindPredicate =
     params.contract.key === 'review.human.filters.facets' ? " AND facet_kind = 'human'" : " AND facet_kind = 'review'"
@@ -607,7 +610,7 @@ const getReviewServingRowsSqlFacetVersionPredicate = (params: {
       ? ` AND summary_definition_version = ${facetDefinitionVersions[0]}`
       : ` AND summary_definition_version IN (${facetDefinitionVersions.join(', ')})`
 
-  return `${facetKindPredicate}${summaryVersionPredicate} AND summary_identity = ${countFilterKeyParameter}`
+  return `${facetKindPredicate}${summaryVersionPredicate}${summaryIdentityPredicate}`
 }
 
 const getRequiredReviewServingRowsSqlParameter = (
@@ -836,7 +839,7 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
     const articleSelectColumns = [
       ...reviewServingArticlePhysicalSelectColumns,
       ...reviewServingArticlePayloadDisplayColumns,
-      ...(contract.key === 'review.prompt.preview' ? ['payload.abstract_text AS abstract_text'] : []),
+      ...(contract.key === 'review.prompt.preview' ? ['LEFT(article.article_summary, 2000) AS article_summary'] : []),
     ].join(', ')
 
     return contract.sort.fields.some((field) => {
@@ -911,6 +914,7 @@ export const buildReviewServingRowsSql = (params: {
   articleIdsParameter?: string | null
   contract: ReviewServingReadContract
   countFilterKeyParameter?: string | null
+  countFilterKeysParameter?: string | null
   cursorPredicate?: string
   displayIdentityParameter: string
   filterOptionIdentityParameter?: string | null

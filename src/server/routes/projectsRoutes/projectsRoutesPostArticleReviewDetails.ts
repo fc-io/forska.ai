@@ -184,14 +184,10 @@ type ServingArticleDetailRow = {
   url?: string | null
 }
 
-type ServingArticlePayloadRow = {
-  abstract_text?: string | null
-  article_created_at?: unknown
-  article_id?: string
-  source_metadata?: unknown
-}
+type ServingArticlePayloadRow = {article_created_at?: unknown; article_id?: string; source_metadata?: unknown}
 
 type ArticleFullTextRow = {
+  articleSummary: string | null
   fullText: string | null
   fullTextCharCount: number | null
   fullTextHtml: string | null
@@ -754,7 +750,7 @@ const getArticleRecordFromServing = (input: {
     articleAuthors: null,
     articleCreatedAt: getDateValue(input.detail.article_created_at ?? input.payload?.article_created_at),
     articleId: input.detail.article_external_id ?? null,
-    articleSummary: input.payload?.abstract_text ?? null,
+    articleSummary: input.fullText?.articleSummary ?? null,
     articleTitle: input.detail.article_title ?? '',
     articleUpdatedAt: getDateValue(input.detail.article_updated_at),
     articleVersion: null,
@@ -830,6 +826,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         getAppDatabaseService().queryJson<ArticleFullTextRow>(
           `
           SELECT
+            LEFT(article_summary, 2000) AS articleSummary,
             full_text AS fullText,
             full_text_char_count AS fullTextCharCount,
             full_text_html AS fullTextHtml,

@@ -46,6 +46,7 @@ export type ReviewServingReaderRequest = {
   articleIds?: readonly string[] | null
   contractKey: string
   countFilterKey?: string | null
+  countFilterKeys?: readonly string[] | null
   countState?: ReviewServingCountState | null
   cursor?: string | null
   estimatedHydratedPayloadBytes?: number
@@ -667,6 +668,7 @@ const getSql = (input: {
     articleIdsParameter: input.request.articleIds ? '$articleIds' : null,
     contract: input.contract,
     countFilterKeyParameter: input.request.countFilterKey ? '$countFilterKey' : null,
+    countFilterKeysParameter: input.request.countFilterKeys?.length ? '$countFilterKeys' : null,
     cursorPredicate: input.cursorPredicate,
     displayIdentityParameter: getRequiredIdentityParameter(input.manifest, 'display'),
     filterKindParameter: input.request.filterKind ? '$filterKind' : null,
@@ -729,6 +731,7 @@ const bindReviewServingRowsSql = (
     articleCreatedAtFrom: getFilterString(request.filters?.articleCreatedAtFrom),
     articleCreatedAtTo: getExclusiveDateToFilter(getFilterString(request.filters?.articleCreatedAtTo)),
     countFilterKey: request.countFilterKey ?? null,
+    countFilterKeys: request.countFilterKeys ?? [],
     displayIdentity: componentStates.display?.projectionIdentity,
     filterKind: request.filterKind ?? null,
     filterOptionIdentity: request.filterOptionIdentity ?? null,

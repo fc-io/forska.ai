@@ -215,7 +215,6 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   const {database, statements} = createDisplayPayloadDatabase({
     payloadRows: [
       {
-        abstractText: 'Abstract preview',
         articleCreatedAt: '2026-01-01T00:00:00.000Z',
         articleId: 'article-1',
         fullTextPreview: 'Full text preview',
@@ -255,7 +254,8 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(selectStatement).toContain("selected_base.selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
-  expect(selectStatement).toContain('LEFT(article.article_summary, 2000) AS abstractText')
+  expect(selectStatement).not.toContain('LEFT(article.article_summary, 2000) AS abstractText')
+  expect(selectStatement).not.toContain('article.article_summary')
   expect(selectStatement).toContain('article.article_updated_at AS articleUpdatedAt')
   expect(selectStatement).toContain('AS articleTitle')
   expect(selectStatement).toContain('AS articleExternalId')
@@ -316,7 +316,7 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
   expect(joined).toContain('payload_source AS')
   expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
-  expect(joined).toContain('      abstract_text,\n      article_external_id,\n      article_id,')
+  expect(joined).not.toContain('abstract_text')
   expect(joined).not.toContain('full_text_preview')
   expect(joined).toContain('      payload_identity,\n      pmid,\n      project_id,')
   expect(joined).not.toContain('payload_updated_at')
@@ -327,7 +327,6 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
   expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
   expect(joined).toContain('DO NOTHING')
   expect(joined).not.toContain('DO UPDATE SET')
-  expect(joined).not.toContain('abstract_text = excluded.abstract_text')
   expect(joined).not.toContain('payload_bytes = excluded.payload_bytes')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('selected_patch')
@@ -365,7 +364,6 @@ test('project-scoped payload rebuilds read scoped articles and avoid indexed pay
   const {database, statements} = createDisplayPayloadDatabase({
     payloadRows: [
       {
-        abstractText: 'Abstract preview',
         articleCreatedAt: '2026-01-01T00:00:00.000Z',
         articleId: 'article-2',
         fullTextPreview: 'Full text preview',

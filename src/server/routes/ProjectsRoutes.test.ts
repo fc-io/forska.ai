@@ -683,8 +683,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       snapshot_id,
       article_id,
       article_title,
-      source_metadata,
-      abstract_text
+      source_metadata
     ) VALUES (
       '${projectId}',
       'display:preview-identity',
@@ -692,8 +691,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       'snapshot-preview-route',
       'preview-article-second',
       'Second article title',
-      '{}'::JSON,
-      'Second article summary'
+      '{}'::JSON
     )
   `)
 

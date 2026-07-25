@@ -272,27 +272,19 @@ const readFacetRows = async (
   mode: ReviewServingFilterMode,
   dependencies?: ReviewServingFilterRouteDependencies,
 ) => {
-  const baseRequest = getBaseReaderRequest(params, manifest, filterFacetRouteLimit)
-  const results = await Promise.all(
-    getFacetSummaryIdentities(mode).map((summaryIdentity) => {
-      return readReviewServingRows<ReviewServingFacetRow>(
-        {
-          ...baseRequest,
-          contractKey: mode === 'human' ? 'review.human.filters.facets' : 'review.filters.facets',
-          countFilterKey: summaryIdentity,
-        },
-        getReaderDependencies(dependencies),
-      )
-    }),
+  const summaryIdentities = getFacetSummaryIdentities(mode)
+  const result = await readReviewServingRows<ReviewServingFacetRow>(
+    {
+      ...getBaseReaderRequest(params, manifest, filterFacetRouteLimit),
+      contractKey: mode === 'human' ? 'review.human.filters.facets' : 'review.filters.facets',
+      countFilterKey: summaryIdentities[0] ?? null,
+      countFilterKeys: summaryIdentities,
+    },
+    getReaderDependencies(dependencies),
   )
-  const diagnostics = results.map((result) => {
-    return result.diagnostics
-  })
-  const facets = results.flatMap((result) => {
-    return result.status === 'accepted' ? result.rows : []
-  })
+  const facets = result.status === 'accepted' ? result.rows : []
 
-  return {diagnostics, facets}
+  return {diagnostics: [result.diagnostics], facets}
 }
 
 const readOptionRows = async (

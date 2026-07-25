@@ -111,7 +111,6 @@ type DisplayPatchRow = {
 }
 
 type PayloadProjectionRow = {
-  abstractText: string | null
   articleExternalId: string | null
   articleId: string
   articleTitle: string | null
@@ -532,7 +531,6 @@ const getPayloadRowsSql = (
           COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
         )
       END AS sourceMetadata,
-      LEFT(article.article_summary, 2000) AS abstractText,
       LEFT(COALESCE(article.full_text, regexp_replace(COALESCE(article.full_text_html, ''), '<[^>]+>', '', 'g')), 2000) AS fullTextPreview
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
@@ -575,7 +573,6 @@ const getPayloadRecord = (
     keyColumns: ['project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'],
     table: 'mart.review_article_serving_payload_v4',
     values: {
-      abstract_text: row.abstractText,
       article_external_id: row.articleExternalId,
       article_id: row.articleId,
       article_title: row.articleTitle,
@@ -603,7 +600,6 @@ const getPayloadRebuildRowsStatements = (
   return [
     `
     INSERT INTO mart.review_article_serving_payload_v4 (
-      abstract_text,
       article_external_id,
       article_id,
       article_title,
@@ -631,7 +627,6 @@ const getPayloadRebuildRowsStatements = (
     ),
     payload_rows AS (
       SELECT
-        payload_source.abstractText AS abstract_text,
         payload_source.articleExternalId AS article_external_id,
         payload_source.articleId AS article_id,
         payload_source.articleTitle AS article_title,
@@ -651,7 +646,6 @@ const getPayloadRebuildRowsStatements = (
       FROM payload_source
     )
     SELECT
-      abstract_text,
       article_external_id,
       article_id,
       article_title,

@@ -656,7 +656,10 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   )
   const joined = statements.join('\n')
   const accumulatorWrites = statements.filter((statement) => {
-    return statement.includes("'__summary_rebuild_partial_accumulator__:") && statement.includes(' AS chunk_id')
+    return statement.includes('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_batch AS')
+  })
+  const contributionAccumulatorWrites = statements.filter((statement) => {
+    return statement.includes('CREATE TEMPORARY TABLE temp_summary_rebuild_contribution_accumulator_batch AS')
   })
   const contributionCountRefreshes = statements.filter((statement) => {
     return (
@@ -666,13 +669,17 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   })
 
   expect(accumulatorWrites).toHaveLength(2)
-  expect(contributionCountRefreshes).toHaveLength(1)
+  expect(contributionAccumulatorWrites).toHaveLength(2)
+  expect(contributionCountRefreshes).toHaveLength(0)
   expect(joined).toContain('chunk.snapshot_id = ')
   expect(joined).toContain("partial.chunk_id IN ('chunk-001', 'chunk-002'")
   expect(joined).toContain("partial.chunk_id IN ('chunk-257')")
   expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_batch AS')
+  expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_contribution_accumulator_batch AS')
+  expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_contribution_count_delta AS')
   expect(joined).toContain('UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator')
   expect(joined).toContain('FROM temp_summary_rebuild_accumulator_batch batch')
+  expect(joined).toContain('FROM temp_summary_rebuild_contribution_count_delta delta')
   expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).toContain("(existing.request_id || '') = (batch.request_id || '')")
   expect(joined).not.toContain('serving_key')
@@ -683,6 +690,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).toContain('USING temp_summary_rebuild_count_publication replacement')
   expect(joined).toContain('DELETE FROM mart.review_filter_facet_serving_v4 serving')
   expect(joined).toContain('USING temp_summary_rebuild_facet_publication replacement')
+  expect(joined).not.toContain('SELECT\n        deduplicated.project_id')
   expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key) DO UPDATE SET',
   )
@@ -696,7 +704,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     statements.filter((statement) => {
       return statement.includes('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
     }),
-  ).toHaveLength(0)
+  ).toHaveLength(1)
 })
 
 test('summary rebuild request finalization reduces conflicting partial chunks in DuckDB', async () => {
@@ -976,6 +984,100 @@ test('summary rebuild request finalization deduplicates overlapping contribution
   }
 })
 
+test('summary rebuild request finalization deduplicates contribution partials across accumulator batches', async () => {
+  const duckdbPath = `/tmp/forska-summary-batched-duplicate-contribution-finalize-${Date.now()}.duckdb`
+  const chunkIds = Array.from({length: 257}, (_, index) => {
+    return `chunk-${String(index + 1).padStart(3, '0')}`
+  })
+  const countContributionKey = contributionKey({
+    answerId: null,
+    answerValue: null,
+    availability: 'ready',
+    countKind: 'review.llm.assessedByPrompt',
+    facetKind: null,
+    facetKey: null,
+    facetValue: null,
+    filterKey: 'prompt:prompt-1',
+    listModeKey: 'llm',
+    promptId: 'prompt-1',
+    staleReason: null,
+    summaryIdentity: 'review.llm.assessedByPrompt',
+    summaryKind: 'count',
+  })
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds})
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES ${chunkIds
+          .map((chunkId) => {
+            return `('rebuild-summary-1', '${chunkId}', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 1)`
+          })
+          .join(', ')}
+      `)
+      await database.run(`
+        INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id,
+          component_kind,
+          summary_definition_version,
+          ${contributionPartialKeyColumns},
+          contribution_value
+        ) VALUES ${chunkIds
+          .map((chunkId, index) => {
+            const articleId = index >= 255 ? 'article-boundary' : `article-${String(index + 1).padStart(3, '0')}`
+            return `('rebuild-summary-1', '${chunkId}', 'project-1', 'review-config-1', 'snapshot-1', '${articleId}', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1)`
+          })
+          .join(', ')}
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+      const accumulatorContributionRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_article_summary_contribution_rebuild_partial_v4
+        WHERE chunk_id LIKE '__summary_rebuild_partial_accumulator__:%'
+      `)
+
+      expect(countRows).toEqual([{countValue: '256'}])
+      expect(accumulatorContributionRows).toEqual([{total: '256'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
 test('summary rebuild request finalization collapses count rows by scalar serving dimensions', async () => {
   const duckdbPath = `/tmp/forska-summary-count-scalar-key-finalize-${Date.now()}.duckdb`
 
@@ -1126,10 +1228,17 @@ test('summary rebuild request finalization retries from retained contribution pa
       const retainedContributionRows = await database.queryJson<{total: string}>(`
         SELECT CAST(COUNT(*) AS VARCHAR) AS total
         FROM mart.review_article_summary_contribution_rebuild_partial_v4
+        WHERE chunk_id NOT LIKE '__summary_rebuild_partial_accumulator__:%'
+      `)
+      const accumulatorContributionRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_article_summary_contribution_rebuild_partial_v4
+        WHERE chunk_id LIKE '__summary_rebuild_partial_accumulator__:%'
       `)
 
       expect(countRows).toEqual([{countValue: '3'}])
       expect(retainedContributionRows).toEqual([{total: '4'}])
+      expect(accumulatorContributionRows).toEqual([{total: '3'}])
     } finally {
       close()
     }
