@@ -90,7 +90,6 @@ type DisplayProjectionRow = {
   publicationYear: number | null
   selectedImportRouteId: string | null
   selectedRankKey: string | null
-  sourceMetadata: ReviewServingIdentityValue | null
   sortKey: Date | string
   url: string | null
 }
@@ -112,7 +111,6 @@ type DisplayPatchRow = {
   medrxivId: string | null
   pmid: string | null
   publicationYear: number | null
-  sourceMetadata: ReviewServingIdentityValue | null
   sortKey: Date | string | null
   tombstone: boolean
   url: string | null
@@ -297,13 +295,6 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       article.medrxiv_id AS medrxivId,
       article.doi,
       article.pubmed_id AS pmid,
-      CASE
-        WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
-        ELSE json_merge_patch(
-          COALESCE(article.source_metadata, CAST('{}' AS JSON)),
-          COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
-        )
-      END AS sourceMetadata,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_hot.journal_title
@@ -501,13 +492,6 @@ const getDisplayPatchRows = async (
           article.medrxiv_id AS medrxivId,
           article.doi,
           article.pubmed_id AS pmid,
-          CASE
-            WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
-            ELSE json_merge_patch(
-              COALESCE(article.source_metadata, CAST('{}' AS JSON)),
-              COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
-            )
-          END AS sourceMetadata,
           article.full_text_pdf AS fullTextPdf,
           article.full_text_fetched_at AS fullTextFetchedAt,
           article.full_text_conversion_status AS fullTextConversionStatus,
