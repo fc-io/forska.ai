@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingLlmStatusPatches,
+  projectReviewServingLlmStatusRanges,
   type ReviewServingLlmStatusProjectorDatabase,
 } from './reviewServingLlmStatusProjector.ts'
 
@@ -269,7 +270,7 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   )
 })
 
-test('LLM full rebuild chunks fan out only over current enabled prompts', async () => {
+test('LLM full rebuild chunks copy serving rows without prompt fanout source scans', async () => {
   const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
 
   const result = await projectReviewServingLlmStatusPatches(
@@ -284,14 +285,16 @@ test('LLM full rebuild chunks fan out only over current enabled prompts', async 
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
-  expect(projectSelect).toContain('FROM app.project_prompt project_prompt')
-  expect(projectSelect).toContain('INNER JOIN app.prompt prompt')
-  expect(projectSelect).toContain('project_prompt.enabled')
-  expect(projectSelect).toContain('NOT project_prompt.archived')
-  expect(projectSelect).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
-  expect(projectSelect).not.toContain('UNION')
-  expect(projectSelect).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(projectSelect).toBeUndefined()
+  expect(applyStatement).toContain('FROM mart.review_article_serving_v4 serving')
+  expect(applyStatement).toContain('WITH article_range_filter(chunk_start_article_id, chunk_end_article_id) AS')
+  expect(applyStatement).toContain("('article-3', 'article-3')")
+  expect(applyStatement).toContain('INNER JOIN article_range_filter range')
+  expect(applyStatement).toContain('serving.article_id >= range.chunk_start_article_id')
+  expect(applyStatement).toContain('serving.article_id <= range.chunk_end_article_id')
+  expect(applyStatement).toContain("serving.list_mode_key IN ('global')")
   expect(applyStatement).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(applyStatement).not.toContain('FROM app.project_prompt project_prompt')
 })
 
 test('LLM direct full rebuild chunks copy-replace serving without patch rows', async () => {
@@ -308,7 +311,7 @@ test('LLM direct full rebuild chunks copy-replace serving without patch rows', a
   expect(joined).not.toContain('INSERT INTO mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
-  expect(joined).toContain('SELECT serving.* REPLACE')
+  expect(joined).toContain('SELECT scoped_serving.* REPLACE')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
@@ -335,12 +338,13 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(insertStatement).toBeUndefined()
-  expect(resetStatement).toContain('SELECT serving.* REPLACE')
+  expect(resetStatement).toContain('SELECT scoped_serving.* REPLACE')
   expect(resetStatement).not.toContain('llm_judged_prompt_count')
   expect(resetStatement).not.toContain('llm_status_key')
   expect(resetStatement).toContain("serving.list_mode_key IN ('global')")
-  expect(resetStatement).toContain("AND serving.article_id >= 'article-1'")
-  expect(resetStatement).toContain("AND serving.article_id <= 'article-9'")
+  expect(resetStatement).toContain("('article-1', 'article-9')")
+  expect(resetStatement).toContain('serving.article_id >= range.chunk_start_article_id')
+  expect(resetStatement).toContain('serving.article_id <= range.chunk_end_article_id')
   expect(resetStatement).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain(
@@ -387,6 +391,39 @@ test('LLM rebuild chunks avoid patch delete and insert batches', async () => {
   )
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(statements.join('\n')).not.toContain('mart.review_llm_status_patch_v4')
+})
+
+test('LLM range rebuild batches write one SQL-native serving replacement statement', async () => {
+  const {database, statements} = createLlmStatusDatabase()
+
+  const result = await projectReviewServingLlmStatusRanges(
+    {
+      ranges: [
+        {...projectInput([]), chunkEndArticleId: 'article-050', chunkStartArticleId: 'article-001'},
+        {...projectInput([]), chunkEndArticleId: 'article-099', chunkStartArticleId: 'article-051'},
+      ],
+    },
+    database,
+  )
+  const replacementStatements = statements.filter((statement) => {
+    return statement.includes('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
+  })
+  const joined = statements.join('\n')
+  const diagnostics = result as typeof result & {
+    diagnosticsJson: {llmStatusProjector: {fullRebuildMode: string; rangeCount: number; sourceRowCount: number}}
+  }
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(diagnostics.diagnosticsJson.llmStatusProjector).toMatchObject({
+    fullRebuildMode: 'range-serving-set-based',
+    rangeCount: 2,
+    sourceRowCount: 0,
+  })
+  expect(replacementStatements).toHaveLength(1)
+  expect(replacementStatements[0]).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(replacementStatements[0]).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(joined).not.toContain('FROM app.project_prompt project_prompt')
+  expect(joined).not.toContain('FROM app."judgment" judgment')
 })
 
 test('article judgment-input claims rebuild article-scoped LLM status rows', async () => {
