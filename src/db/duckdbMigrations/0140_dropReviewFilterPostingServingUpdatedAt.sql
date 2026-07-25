@@ -7,7 +7,6 @@ CREATE TABLE mart.review_article_filter_posting_serving_v4_repair (
   filter_kind VARCHAR NOT NULL,
   filter_value VARCHAR NOT NULL,
   list_mode_key VARCHAR NOT NULL,
-  sort_key TIMESTAMPTZ NOT NULL,
   article_id VARCHAR NOT NULL
 );
 
@@ -19,7 +18,6 @@ SELECT
   filter_kind,
   filter_value,
   list_mode_key,
-  sort_key,
   article_id
 FROM mart.review_article_filter_posting_serving_v4;
 

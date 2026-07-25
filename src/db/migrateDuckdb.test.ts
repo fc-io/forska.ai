@@ -135,6 +135,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0140_dropReviewFilterPostingServingUpdatedAt.sql'),
     'utf8',
   ).trim()
+  const reviewFilterPostingServingSortKeyDropSql = readFileSync(
+    resolve(migrationsFolder, '0162_dropReviewFilterPostingServingSortKey.sql'),
+    'utf8',
+  ).trim()
   const reviewSummaryContributionServingDropSql = readFileSync(
     resolve(migrationsFolder, '0141_dropReviewSummaryContributionServing.sql'),
     'utf8',
@@ -297,6 +301,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewFilterPostingServingIdentityDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterPostingServingIdentityDropSql).not.toContain('posting_identity')
+  expect(reviewFilterPostingServingIdentityDropSql).not.toContain('sort_key TIMESTAMPTZ')
   expect(reviewFilterPostingServingUpdatedAtDropSql).toContain(
     'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
   )
@@ -311,6 +316,24 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewFilterPostingServingUpdatedAtDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterPostingServingUpdatedAtDropSql).not.toContain('posting_updated_at')
+  expect(reviewFilterPostingServingUpdatedAtDropSql).not.toContain('sort_key TIMESTAMPTZ')
+  expect(reviewFilterPostingServingSortKeyDropSql).toContain(
+    'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
+  )
+  expect(reviewFilterPostingServingSortKeyDropSql).toContain(
+    'DROP TABLE mart.review_article_filter_posting_serving_v4;',
+  )
+  expect(reviewFilterPostingServingSortKeyDropSql).toContain(
+    'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
+  )
+  expect(reviewFilterPostingServingSortKeyDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_repaired_pk',
+  )
+  expect(reviewFilterPostingServingSortKeyDropSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup',
+  )
+  expect(reviewFilterPostingServingSortKeyDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewFilterPostingServingSortKeyDropSql).not.toContain('sort_key TIMESTAMPTZ')
   expect(reviewArticleServingReviewProgressCopyDropSql).toContain('CREATE TABLE mart.review_article_serving_v4_repair')
   expect(reviewArticleServingReviewProgressCopyDropSql).toContain('DROP TABLE mart.review_article_serving_v4;')
   expect(reviewArticleServingReviewProgressCopyDropSql).toContain(
@@ -492,6 +515,148 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).not.toContain('lease_owner')
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).not.toContain('cursor_json')
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).not.toContain('last_error')
+})
+
+test('DuckDB migration drops review filter posting serving sort key while preserving rows', async () => {
+  const duckdbPath = `/tmp/forska-review-filter-posting-sort-key-${Date.now()}.duckdb`
+  const targetMigrationFile = '0162_dropReviewFilterPostingServingSortKey.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {withDuckdbMaintenanceAccess}, {getMaintenanceDuckdbWorkloadContext, resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbScriptAccess.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        const workloadContext = getMaintenanceDuckdbWorkloadContext('migrateDuckdb.test.filterPostingSortKey')
+        await withDuckdbMaintenanceAccess('filter posting sort-key migration test', async () => {
+          await database.run('CREATE SCHEMA IF NOT EXISTS mart', workloadContext)
+          await database.run(
+            "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            workloadContext
+          )
+          await database.run(
+            "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+              .map((fileName) => {
+                return `('${fileName.replaceAll("'", "''")}')`
+              })
+              .join(', ')}",
+            workloadContext
+          )
+          await database.run(\`
+            CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+              project_id VARCHAR NOT NULL,
+              review_config_hash VARCHAR NOT NULL,
+              snapshot_id VARCHAR NOT NULL,
+              filter_kind VARCHAR NOT NULL,
+              filter_value VARCHAR NOT NULL,
+              list_mode_key VARCHAR NOT NULL,
+              sort_key TIMESTAMPTZ NOT NULL,
+              article_id VARCHAR NOT NULL
+            )
+          \`, workloadContext)
+          await database.run(\`
+            CREATE INDEX idx_review_article_filter_posting_serving_v4_lookup
+            ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, sort_key, article_id)
+          \`, workloadContext)
+          await database.run(\`
+            INSERT INTO mart.review_article_filter_posting_serving_v4
+            VALUES ('project-1', 'review-config-1', 'snapshot-1', 'promptAnswer', 'yes', 'llm', TIMESTAMPTZ '2026-01-01T00:00:00Z', 'article-1')
+          \`, workloadContext)
+
+          await migrateDuckdb()
+
+          const columns = await database.queryJson(
+            "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_filter_posting_serving_v4' ORDER BY ordinal_position",
+            workloadContext
+          )
+          const indexes = await database.queryJson(
+            "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_filter_posting_serving_v4' ORDER BY index_name",
+            workloadContext
+          )
+          const migrationRows = await database.queryJson(
+            "SELECT name FROM app_schema_migration WHERE name = '${targetMigrationFile}'",
+            workloadContext
+          )
+          const rows = await database.queryJson(
+            'SELECT * FROM mart.review_article_filter_posting_serving_v4 ORDER BY article_id',
+            workloadContext
+          )
+
+          console.log(JSON.stringify({columns, indexes, migrationRows, rows}))
+        })
+      `,
+    ],
+    {
+      cwd: resolve(import.meta.dir, '../..'),
+      env: {...process.env, DUCKDB_PATH: duckdbPath, FORSKA_DB_PATH: duckdbPath, NODE_ENV: 'test'},
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  removeFileIfExists(duckdbPath)
+  removeFileIfExists(`${duckdbPath}.wal`)
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to migrate filter posting sort key')
+  }
+
+  const output = result.stdout.toString()
+  const parsedLine = output.split('\n').find((line) => {
+    return line.startsWith('{"columns"')
+  })
+
+  expect(parsedLine).toBeDefined()
+
+  const parsed = JSON.parse(parsedLine ?? '{}') as {
+    columns: {columnName: string}[]
+    indexes: {indexName: string}[]
+    migrationRows: {name: string}[]
+    rows: Array<Record<string, unknown>>
+  }
+  const columns = parsed.columns.map((column) => {
+    return column.columnName
+  })
+  const indexes = parsed.indexes.map((index) => {
+    return index.indexName
+  })
+
+  expect(columns).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'filter_kind',
+    'filter_value',
+    'list_mode_key',
+    'article_id',
+  ])
+  expect(indexes).toContain('idx_review_article_filter_posting_serving_v4_repaired_pk')
+  expect(indexes).toContain('idx_review_article_filter_posting_serving_v4_lookup')
+  expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  expect(parsed.rows).toEqual([
+    {
+      article_id: 'article-1',
+      filter_kind: 'promptAnswer',
+      filter_value: 'yes',
+      list_mode_key: 'llm',
+      project_id: 'project-1',
+      review_config_hash: 'review-config-1',
+      snapshot_id: 'snapshot-1',
+    },
+  ])
 })
 
 test('DuckDB migration marks retired payload display hydration as applied without rebuilding payload', async () => {

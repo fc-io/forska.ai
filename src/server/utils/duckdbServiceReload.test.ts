@@ -3474,8 +3474,12 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'article_id',
     ])
     expect(articleFilterPostingProbe?.mutationProbeSql).toContain(
-      'UPDATE mart.review_article_filter_posting_serving_v4',
+      'DELETE FROM mart.review_article_filter_posting_serving_v4',
     )
+    expect(articleFilterPostingProbe?.mutationProbeSql).toContain(
+      'INSERT INTO mart.review_article_filter_posting_serving_v4',
+    )
+    expect(articleFilterPostingProbe?.mutationProbeSql).not.toContain('sort_key')
     expect(articleFilterPostingProbe?.skipGenericDeleteInsertProbe).toBe(true)
     const postingStatsProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_posting_stats_v4'

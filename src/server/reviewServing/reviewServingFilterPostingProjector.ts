@@ -42,15 +42,12 @@ type PostingContributionRow = {
   filterKind: string
   filterValue: string
   listModeKey: string
-  sortKey: Date | string
   tombstone: boolean
 }
 
 type PostingValidationCountRow = {actualChecksum: string | null; actualCount: number | string | null}
 
 const filterPostingProjectorName = 'filter-posting-projector'
-const stalePostingSortAt = '1970-01-01T00:00:00.000Z'
-
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
 }
@@ -204,7 +201,6 @@ const getFullRebuildPostingContributionRowsStatement = (
         scoped_article AS (
           SELECT
             scope.article_id,
-            COALESCE(scope.article_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(stalePostingSortAt)}) AS sort_key,
             NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
           FROM article_id_filter dirty
           INNER JOIN mart.project_scope_article scope
@@ -214,7 +210,6 @@ const getFullRebuildPostingContributionRowsStatement = (
         selected_import_state AS (
           SELECT
             scoped.article_id,
-            scoped.sort_key,
             selected.import_route_id,
             selected.selected_rank_key,
             selected_hot.publication_year AS publication_year,
@@ -234,16 +229,16 @@ const getFullRebuildPostingContributionRowsStatement = (
             AND NOT selected_hot.tombstone
         ),
         selected_postings AS (
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'importRoute' AS filterKind, selected.import_route_id AS filterValue
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.tombstone AS tombstone, 'importRoute' AS filterKind, selected.import_route_id AS filterValue
           FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
           UNION ALL
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'publicationYear' AS filterKind, CAST(selected.publication_year AS VARCHAR) AS filterValue
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.tombstone AS tombstone, 'publicationYear' AS filterKind, CAST(selected.publication_year AS VARCHAR) AS filterValue
           FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
           UNION ALL
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'duplicateFlag' AS filterKind, CAST(selected.duplicate_flag AS VARCHAR) AS filterValue
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.tombstone AS tombstone, 'duplicateFlag' AS filterKind, CAST(selected.duplicate_flag AS VARCHAR) AS filterValue
           FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
           UNION ALL
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'conflictFlag' AS filterKind, CAST(selected.conflict_flag AS VARCHAR) AS filterValue
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.tombstone AS tombstone, 'conflictFlag' AS filterKind, CAST(selected.conflict_flag AS VARCHAR) AS filterValue
           FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
         ),
         scoped_serving AS (
@@ -258,10 +253,10 @@ const getFullRebuildPostingContributionRowsStatement = (
             ON list_mode_key.list_mode_key = serving.list_mode_key
         ),
         serving_status_postings AS (
-          SELECT serving.article_id AS articleId, serving.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'llmStatus' AS filterKind, serving.llm_status_key AS filterValue
+          SELECT serving.article_id AS articleId, serving.list_mode_key AS listModeKey, FALSE AS tombstone, 'llmStatus' AS filterKind, serving.llm_status_key AS filterValue
           FROM scoped_serving serving
           UNION ALL
-          SELECT serving.article_id AS articleId, serving.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'humanStatus' AS filterKind, serving.human_status_key AS filterValue
+          SELECT serving.article_id AS articleId, serving.list_mode_key AS listModeKey, FALSE AS tombstone, 'humanStatus' AS filterKind, serving.human_status_key AS filterValue
           FROM scoped_serving serving
         ),
         project_settings AS (
@@ -292,7 +287,7 @@ const getFullRebuildPostingContributionRowsStatement = (
             ON list_mode_key.list_mode_key = detail.list_mode_key
         ),
         llm_postings AS (
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue
           FROM scoped_article scoped
           INNER JOIN llm_detail llm
             ON llm.article_id = scoped.article_id
@@ -302,7 +297,7 @@ const getFullRebuildPostingContributionRowsStatement = (
             ON serving.article_id = llm.article_id
             AND serving.list_mode_key = llm.list_mode_key
           UNION ALL
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value) AS filterValue
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value) AS filterValue
           FROM scoped_article scoped
           INNER JOIN llm_detail llm
             ON llm.article_id = scoped.article_id
@@ -314,7 +309,7 @@ const getFullRebuildPostingContributionRowsStatement = (
           WHERE answer.answer_value IS NOT NULL
         ),
         human_postings AS (
-          SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original) AS filterValue
+          SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original) AS filterValue
           FROM scoped_article scoped
           INNER JOIN human_detail human
             ON human.article_id = scoped.article_id
@@ -337,7 +332,7 @@ const getFullRebuildPostingContributionRowsStatement = (
           UNION ALL SELECT * FROM llm_postings
           UNION ALL SELECT * FROM human_postings
         )
-        SELECT articleId, filterKind, filterValue, listModeKey, sortKey, tombstone
+        SELECT articleId, filterKind, filterValue, listModeKey, tombstone
         FROM posting_union
         WHERE filterValue IS NOT NULL
         ORDER BY listModeKey ASC, filterKind ASC, filterValue ASC, articleId ASC
@@ -373,7 +368,6 @@ const getExistingPostingRows = async (
           serving.filter_kind AS filterKind,
           serving.filter_value AS filterValue,
           serving.list_mode_key AS listModeKey,
-          serving.sort_key AS sortKey,
           FALSE AS tombstone
         FROM mart.review_article_filter_posting_serving_v4 serving
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
@@ -408,7 +402,6 @@ const getPostingServingRecord = (input: {
       project_id: input.projectId,
       review_config_hash: input.reviewConfigHash,
       snapshot_id: input.snapshotId,
-      sort_key: input.row.sortKey,
     },
   }
 }
@@ -467,8 +460,7 @@ const getInsertFullRebuildServingRowsStatement = (
       filter_kind,
       filter_value,
       list_mode_key,
-      article_id,
-      sort_key
+      article_id
     )
     WITH posting_source AS (${getFullRebuildPostingContributionRowsStatement(input, ranges)}),
     serving_source AS (
@@ -476,8 +468,7 @@ const getInsertFullRebuildServingRowsStatement = (
         CAST(posting.filterKind AS VARCHAR) AS filterKind,
         CAST(posting.filterValue AS VARCHAR) AS filterValue,
         CAST(posting.listModeKey AS VARCHAR) AS listModeKey,
-        CAST(posting.articleId AS VARCHAR) AS articleId,
-        MAX(posting.sortKey) AS sortKey
+        CAST(posting.articleId AS VARCHAR) AS articleId
       FROM posting_source posting
       WHERE NOT posting.tombstone
       GROUP BY
@@ -493,8 +484,7 @@ const getInsertFullRebuildServingRowsStatement = (
       posting.filterKind AS filter_kind,
       posting.filterValue AS filter_value,
       posting.listModeKey AS list_mode_key,
-      posting.articleId AS article_id,
-      posting.sortKey AS sort_key
+      posting.articleId AS article_id
     FROM serving_source posting
     ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING`
 }

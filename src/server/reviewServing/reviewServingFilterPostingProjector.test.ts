@@ -13,7 +13,6 @@ const postingRow = (input?: Record<string, unknown>) => {
     filterKind: 'promptAnswer',
     filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'llm',
-    sortKey: '2026-06-16T10:00:00.000Z',
     tombstone: false,
     ...input,
   }
@@ -164,6 +163,7 @@ test('answer changes update serving postings without derived stats writes', asyn
     'mart.review_article_filter_posting_serving_v4': 1,
   })
   expect(joined).not.toContain('scope.source_updated_at')
+  expect(joined).not.toContain('sort_key')
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')

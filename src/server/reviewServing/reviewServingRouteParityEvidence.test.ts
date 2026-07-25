@@ -314,12 +314,18 @@ const getContractSqlMatch = (
           statement,
           `FROM ${contract.servingTable} INNER JOIN mart.review_article_serving_payload_v4 payload`,
         )
-      : contract.servingTable === 'mart.review_article_judgment_detail_serving_v4'
-        ? containsSql(statement, `FROM ${contract.servingTable}`)
-          && (judgmentDetailFullHydrationJoin
-            ? containsSql(statement, 'INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4')
-            : !containsSql(statement, 'INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4'))
-        : containsSql(statement, `FROM ${contract.servingTable} WHERE`)
+      : contract.servingTable === 'mart.review_article_filter_posting_serving_v4'
+        ? containsSql(statement, `FROM ${contract.servingTable} INNER JOIN mart.review_article_serving_v4`)
+          && containsSql(
+            statement,
+            'mart.review_article_serving_v4.article_id = mart.review_article_filter_posting_serving_v4.article_id',
+          )
+        : contract.servingTable === 'mart.review_article_judgment_detail_serving_v4'
+          ? containsSql(statement, `FROM ${contract.servingTable}`)
+            && (judgmentDetailFullHydrationJoin
+              ? containsSql(statement, 'INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4')
+              : !containsSql(statement, 'INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4'))
+          : containsSql(statement, `FROM ${contract.servingTable} WHERE`)
   const checks = [
     tableMatch,
     getReviewConfigSqlMatch(statement, contract, request),
