@@ -572,28 +572,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_display_patch_v4 (
   CHECK (patch_watermark >= 0)
 );
 
-CREATE TABLE IF NOT EXISTS mart.review_selected_import_patch_v4 (
-  project_id VARCHAR NOT NULL,
-  project_scope_identity VARCHAR NOT NULL,
-  selected_import_snapshot_id VARCHAR NOT NULL,
-  patch_watermark BIGINT NOT NULL,
-  article_id VARCHAR NOT NULL,
-  import_route_id VARCHAR,
-  source_record_key VARCHAR,
-  selected_rank_key VARCHAR,
-  selected_rank_numeric DOUBLE,
-  publication_year INTEGER,
-  article_title VARCHAR,
-  journal_title VARCHAR,
-  external_id VARCHAR,
-  duplicate_flag BOOLEAN,
-  conflict_flag BOOLEAN,
-  tombstone BOOLEAN NOT NULL DEFAULT FALSE,
-  patch_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id),
-  CHECK (patch_watermark >= 0)
-);
-
 CREATE TABLE IF NOT EXISTS mart.review_llm_status_patch_v4 (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
@@ -885,9 +863,6 @@ ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, l
 
 CREATE INDEX IF NOT EXISTS idx_review_article_display_patch_v4_lookup
 ON mart.review_article_display_patch_v4(project_id, display_identity, base_generation, patch_watermark, sort_key, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_selected_import_patch_v4_lookup
-ON mart.review_selected_import_patch_v4(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, selected_rank_key, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_llm_status_patch_v4_lookup
 ON mart.review_llm_status_patch_v4(project_id, review_config_hash, prompt_config_hash, base_generation, patch_watermark, list_mode_key, article_id);
