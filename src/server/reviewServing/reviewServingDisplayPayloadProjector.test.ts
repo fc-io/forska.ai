@@ -307,6 +307,23 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
   expect(joined).toContain('payload_source AS')
   expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(joined).toContain(
+    [
+      'SELECT',
+      '      abstract_text,',
+      '      article_created_at,',
+      '      article_external_id,',
+      '      article_id,',
+      '      article_title,',
+      '      article_updated_at,',
+      '      arxiv_id,',
+      '      biorxiv_id,',
+      '      doi,',
+    ].join('\n'),
+  )
+  expect(joined).toContain('      full_text_conversion_status,\n      full_text_fetched_at,\n      full_text_pdf,')
+  expect(joined).toContain('      journal_title,\n      medrxiv_id,')
+  expect(joined).toContain('      pmid,\n      project_id,\n      snapshot_id,\n      source_metadata,\n      url')
   expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
   expect(joined).toContain('DO NOTHING')
   expect(joined).not.toContain('DO UPDATE SET')
