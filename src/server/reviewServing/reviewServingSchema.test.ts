@@ -33,6 +33,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql',
   '../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql',
   '../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql',
+  '../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -90,6 +91,8 @@ const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql']
+const reviewPayloadBytesDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -460,6 +463,13 @@ test('Phase 1 schema migration keeps raw payloads out of hot serving tables', ()
 
 test('Phase 1 payload serving schema preserves prompt preview article ordering', () => {
   expect(getMissingColumns('mart.review_article_serving_payload_v4', ['article_created_at', 'article_id'])).toEqual([])
+  expect(getTableColumns('mart.review_article_serving_payload_v4').has('payload_bytes')).toBe(false)
+  expect(reviewPayloadBytesDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_repair',
+  )
+  expect(reviewPayloadBytesDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_repair RENAME TO review_article_serving_payload_v4;',
+  )
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {

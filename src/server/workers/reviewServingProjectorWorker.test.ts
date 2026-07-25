@@ -5103,7 +5103,6 @@ test('payload and search rebuild chunk executors write bounded base rows and com
             articleCreatedAt: '2026-06-16T10:00:00.000Z',
             articleId: 'article-050',
             fullTextPreview: 'Full text',
-            payloadBytes: 15,
             sourceMetadata: null,
           },
         ] as T[]

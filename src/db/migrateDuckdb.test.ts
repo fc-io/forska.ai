@@ -119,6 +119,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0131_dropReviewArticleServingSelectedRankCopy.sql'),
     'utf8',
   ).trim()
+  const reviewPayloadBytesDropSql = readFileSync(
+    resolve(migrationsFolder, '0132_dropReviewPayloadBytes.sql'),
+    'utf8',
+  ).trim()
   const reviewSelectedImportDisplayCopyColumnDropSql = readFileSync(
     resolve(migrationsFolder, '0124_dropReviewSelectedImportDisplayCopyColumns.sql'),
     'utf8',
@@ -187,6 +191,16 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewArticleServingSelectedRankCopyDropSql).not.toContain('PRIMARY KEY')
   expect(reviewArticleServingSelectedRankCopyDropSql).not.toContain('selected_rank_key')
+  expect(reviewPayloadBytesDropSql).toContain('CREATE TABLE mart.review_article_serving_payload_v4_repair')
+  expect(reviewPayloadBytesDropSql).toContain('DROP TABLE mart.review_article_serving_payload_v4;')
+  expect(reviewPayloadBytesDropSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadBytesDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
+  )
+  expect(reviewPayloadBytesDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewPayloadBytesDropSql).not.toContain('payload_bytes')
   expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
     'CREATE TABLE app.review_selected_article_import_v4_repair',
   )

@@ -219,7 +219,6 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
         articleCreatedAt: '2026-01-01T00:00:00.000Z',
         articleId: 'article-1',
         fullTextPreview: 'Full text preview',
-        payloadBytes: 34,
         sourceMetadata: {source: 'fixture'},
       },
     ],
@@ -256,8 +255,11 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('LEFT(article.article_summary, 2000) AS abstractText')
+  expect(selectStatement).not.toContain("length(COALESCE(article.full_text, ''))")
+  expect(selectStatement).not.toContain('length(COALESCE(article.full_text_html')
+  expect(selectStatement).not.toContain('AS payloadBytes')
   expect(insertStatement).toContain('article_created_at')
-  expect(insertStatement).toContain('payload_bytes')
+  expect(insertStatement).not.toContain('payload_bytes')
   expect(joined).not.toContain('selected_scoped_article_import')
   expect(joined).not.toContain('payload_json')
 })
@@ -350,7 +352,6 @@ test('project-scoped payload rebuilds read scoped articles and avoid indexed pay
         articleCreatedAt: '2026-01-01T00:00:00.000Z',
         articleId: 'article-2',
         fullTextPreview: 'Full text preview',
-        payloadBytes: 34,
         sourceMetadata: {source: 'fixture'},
       },
     ],

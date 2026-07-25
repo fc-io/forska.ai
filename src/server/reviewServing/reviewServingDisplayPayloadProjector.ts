@@ -121,7 +121,6 @@ type PayloadProjectionRow = {
   articleCreatedAt: Date | string | null
   articleId: string
   fullTextPreview: string | null
-  payloadBytes: number
   sourceMetadata: ReviewServingIdentityValue | null
 }
 
@@ -544,15 +543,7 @@ const getPayloadRowsSql = (
         )
       END AS sourceMetadata,
       LEFT(article.article_summary, 2000) AS abstractText,
-      LEFT(COALESCE(article.full_text, regexp_replace(COALESCE(article.full_text_html, ''), '<[^>]+>', '', 'g')), 2000) AS fullTextPreview,
-      CAST(
-        length(COALESCE(article.article_summary, ''))
-        + length(COALESCE(article.full_text, ''))
-        + length(COALESCE(article.full_text_html, ''))
-        + length(COALESCE(CAST(article.source_metadata AS VARCHAR), ''))
-        + length(COALESCE(CAST(selected_source.import_metadata AS VARCHAR), ''))
-        AS BIGINT
-      ) AS payloadBytes
+      LEFT(COALESCE(article.full_text, regexp_replace(COALESCE(article.full_text_html, ''), '<[^>]+>', '', 'g')), 2000) AS fullTextPreview
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
     ${rangeJoinSql}
@@ -594,7 +585,6 @@ const getPayloadRecord = (
       article_id: row.articleId,
       display_identity: input.displayIdentity,
       full_text_preview: row.fullTextPreview,
-      payload_bytes: row.payloadBytes,
       payload_identity: input.payloadIdentity,
       payload_updated_at: new Date(),
       project_id: input.projectId,
@@ -616,7 +606,6 @@ const getPayloadRebuildRowsStatements = (
       article_id,
       display_identity,
       full_text_preview,
-      payload_bytes,
       payload_identity,
       payload_updated_at,
       project_id,
@@ -638,7 +627,6 @@ const getPayloadRebuildRowsStatements = (
         payload_source.articleId AS article_id,
         ${getSqlLiteral(input.displayIdentity)} AS display_identity,
         payload_source.fullTextPreview AS full_text_preview,
-        payload_source.payloadBytes AS payload_bytes,
         ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
         current_timestamp AS payload_updated_at,
         ${getSqlLiteral(input.projectId)} AS project_id,
@@ -652,7 +640,6 @@ const getPayloadRebuildRowsStatements = (
       article_id,
       display_identity,
       full_text_preview,
-      payload_bytes,
       payload_identity,
       payload_updated_at,
       project_id,
