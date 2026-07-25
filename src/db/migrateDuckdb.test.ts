@@ -111,6 +111,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0129_dropReviewFilterPostingStatsDerivedColumns.sql'),
     'utf8',
   ).trim()
+  const reviewFilterOptionPayloadJsonDropSql = readFileSync(
+    resolve(migrationsFolder, '0130_dropReviewFilterOptionPayloadJson.sql'),
+    'utf8',
+  ).trim()
   const reviewSelectedImportDisplayCopyColumnDropSql = readFileSync(
     resolve(migrationsFolder, '0124_dropReviewSelectedImportDisplayCopyColumns.sql'),
     'utf8',
@@ -156,6 +160,19 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('selectivity')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('posting_identity')
+  expect(reviewFilterOptionPayloadJsonDropSql).toContain('CREATE TABLE mart.review_filter_option_serving_v4_repair')
+  expect(reviewFilterOptionPayloadJsonDropSql).toContain('DROP TABLE mart.review_filter_option_serving_v4;')
+  expect(reviewFilterOptionPayloadJsonDropSql).toContain(
+    'ALTER TABLE mart.review_filter_option_serving_v4_repair RENAME TO review_filter_option_serving_v4;',
+  )
+  expect(reviewFilterOptionPayloadJsonDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_filter_option_serving_v4_repaired_pk',
+  )
+  expect(reviewFilterOptionPayloadJsonDropSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_filter_option_serving_v4_lookup',
+  )
+  expect(reviewFilterOptionPayloadJsonDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewFilterOptionPayloadJsonDropSql).not.toContain('option_payload_json')
   expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
     'CREATE TABLE app.review_selected_article_import_v4_repair',
   )

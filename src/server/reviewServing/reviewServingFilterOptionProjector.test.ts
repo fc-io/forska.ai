@@ -61,7 +61,6 @@ const sourceRow = (input?: Record<string, unknown>) => {
     filterKind: 'review',
     numericMax: null,
     numericMin: null,
-    optionPayloadJson: {filterType: 'enum', promptId: 'prompt-1', value: 'yes'},
     optionValueKey: 'review:promptAnswer:prompt-1:yes',
     promptId: 'prompt-1',
     ...input,
@@ -156,7 +155,7 @@ test('filter option refresh can insert rows idempotently without deleting existi
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('count_value = excluded.count_value')
-  expect(insertStatement).not.toContain('option_payload_json = excluded.option_payload_json')
+  expect(insertStatement).not.toContain('option_payload_json')
   expect(insertStatement).not.toContain('option_updated_at = excluded.option_updated_at')
   expect(insertStatement).toContain('WHERE NOT EXISTS')
 })
@@ -195,14 +194,12 @@ test('human option projection keeps prompt answers separate from summary-mode an
       sourceRow({
         facetKey: 'promptAnswer',
         filterKind: 'human',
-        optionPayloadJson: {filterType: 'enum', promptId: 'prompt-1', value: 'yes'},
         optionValueKey: 'human:promptAnswer:prompt-1:yes',
         promptId: 'prompt-1',
       }),
       sourceRow({
         facetKey: 'promptAnswer',
         filterKind: 'human',
-        optionPayloadJson: {filterType: 'enum', promptId: 'summary', summaryMode: true, value: 'include'},
         optionValueKey: 'human:promptAnswer:summary:include',
         promptId: 'summary',
       }),

@@ -756,7 +756,6 @@ CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4 (
   answer_id INTEGER,
   numeric_min DOUBLE,
   numeric_max DOUBLE,
-  option_payload_json JSON,
   count_value BIGINT,
   option_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, search_identity, filter_option_identity, filter_kind, facet_key, option_value_key)

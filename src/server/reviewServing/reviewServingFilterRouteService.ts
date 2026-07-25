@@ -55,7 +55,6 @@ type ReviewServingFilterOptionRow = {
   filter_kind?: string | null
   numeric_max?: number | null
   numeric_min?: number | null
-  option_payload_json?: Record<string, unknown> | string | null
   option_value_key?: string | null
   prompt_id?: string | null
 }
@@ -181,12 +180,14 @@ const getBaseReaderRequest = (
   }
 }
 
-const getOptionPayload = (row: ReviewServingFilterOptionRow) => {
-  if (typeof row.option_payload_json === 'string') {
-    return JSON.parse(row.option_payload_json) as Record<string, unknown>
-  }
+const getOptionPayload = (row: ReviewServingFilterOptionRow): Record<string, unknown> => {
+  const value = row.facet_value ?? ''
+  const isPromptAnswer = row.facet_key === 'promptAnswer'
+  const isHumanSummaryAnswer = row.filter_kind === 'human' && row.prompt_id === 'summary'
 
-  return row.option_payload_json ?? {}
+  return isPromptAnswer
+    ? {filterType: 'enum', promptId: row.prompt_id ?? '', ...(isHumanSummaryAnswer ? {summaryMode: true} : {}), value}
+    : {facetKey: row.facet_key ?? '', filterType: 'enum', value}
 }
 
 const getFacetSummaryIdentities = (mode: ReviewServingFilterMode) => {
