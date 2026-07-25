@@ -55,6 +55,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0152_dropReviewArticleServingFullTextCopies.sql',
   '../../db/duckdbMigrations/0153_dropReviewPayloadServingUpdatedAt.sql',
   '../../db/duckdbMigrations/0154_dropReviewImportHotFieldProvenanceDebugColumns.sql',
+  '../../db/duckdbMigrations/0155_dropReviewPayloadServingArticleCreatedAt.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -148,6 +149,8 @@ const reviewImportHotFieldProvenanceDebugColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0154_dropReviewImportHotFieldProvenanceDebugColumns.sql'
   ]
+const reviewPayloadArticleCreatedAtDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0155_dropReviewPayloadServingArticleCreatedAt.sql']
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -644,8 +647,9 @@ test('Phase 1 schema migration keeps raw payloads out of hot serving tables', ()
   expect(getTableSql('mart.review_article_serving_payload_v4')).toContain('source_metadata JSON')
 })
 
-test('Phase 1 payload serving schema preserves prompt preview article ordering', () => {
-  expect(getMissingColumns('mart.review_article_serving_payload_v4', ['article_created_at', 'article_id'])).toEqual([])
+test('Phase 1 payload serving schema drops prompt preview ordering copies', () => {
+  expect(getMissingColumns('mart.review_article_serving_payload_v4', ['article_id'])).toEqual([])
+  expect(getTableColumns('mart.review_article_serving_payload_v4').has('article_created_at')).toBe(false)
   expect(getTableColumns('mart.review_article_serving_payload_v4').has('payload_bytes')).toBe(false)
   expect(reviewPayloadBytesDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_serving_payload_v4_repair',
@@ -658,7 +662,6 @@ test('Phase 1 payload serving schema preserves prompt preview article ordering',
 test('Phase 1 payload serving schema drops display-copy hydration fields after detail routes read display rows', () => {
   expect(
     getMissingColumns('mart.review_article_serving_payload_v4', [
-      'article_created_at',
       'source_metadata',
       'abstract_text',
       'full_text_preview',
@@ -723,6 +726,16 @@ test('Phase 1 payload serving schema drops display-copy hydration fields after d
     'ALTER TABLE mart.review_article_serving_payload_v4_updated_at_repair RENAME TO review_article_serving_payload_v4;',
   )
   expect(reviewPayloadUpdatedAtDropForwardMigrationSql).not.toContain('payload_updated_at')
+  expect(reviewPayloadArticleCreatedAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_article_created_at_repair',
+  )
+  expect(reviewPayloadArticleCreatedAtDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_article_created_at_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadArticleCreatedAtDropForwardMigrationSql).not.toContain('article_created_at TIMESTAMPTZ')
+  expect(reviewPayloadArticleCreatedAtDropForwardMigrationSql).not.toContain(
+    'idx_review_article_serving_payload_v4_preview_order',
+  )
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {
@@ -913,15 +926,9 @@ test('Phase 1 schema migration keeps job contracts on job cursor and sort column
 })
 
 test('payload order forward migration upgrades already-applied review-serving schemas', () => {
-  expect(payloadOrderForwardMigrationSql).toContain(
-    'ALTER TABLE mart.review_article_serving_payload_v4\nADD COLUMN IF NOT EXISTS article_created_at TIMESTAMPTZ;',
-  )
-  expect(payloadOrderForwardMigrationSql).toContain(
-    'CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order',
-  )
-  expect(payloadOrderForwardMigrationSql).toContain(
-    'ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);',
-  )
+  expect(payloadOrderForwardMigrationSql).toContain('Retired by 0155_dropReviewPayloadServingArticleCreatedAt.sql')
+  expect(payloadOrderForwardMigrationSql).not.toContain('ALTER TABLE')
+  expect(payloadOrderForwardMigrationSql).not.toContain('CREATE INDEX')
 })
 
 test('Phase 1 schema migration keeps count rows list-mode scoped', () => {

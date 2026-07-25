@@ -6,7 +6,6 @@ CREATE TABLE mart.review_article_serving_payload_v4_repair (
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
-  article_created_at TIMESTAMPTZ,
   source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR
@@ -19,7 +18,6 @@ SELECT
   payload_identity,
   snapshot_id,
   article_id,
-  article_created_at,
   source_metadata,
   abstract_text,
   full_text_preview
@@ -34,6 +32,3 @@ ON mart.review_article_serving_payload_v4(project_id, display_identity, payload_
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_lookup
 ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order
-ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);

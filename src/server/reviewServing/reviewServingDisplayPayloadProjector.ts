@@ -112,7 +112,6 @@ type DisplayPatchRow = {
 
 type PayloadProjectionRow = {
   abstractText: string | null
-  articleCreatedAt: Date | string | null
   articleId: string
   fullTextPreview: string | null
   sourceMetadata: ReviewServingIdentityValue | null
@@ -512,7 +511,6 @@ const getPayloadRowsSql = (
     ${getDirtyArticleCteSql(articleIds)}
     SELECT
       scope.article_id AS articleId,
-      article.article_created_at AS articleCreatedAt,
       CASE
         WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
         ELSE json_merge_patch(
@@ -559,7 +557,6 @@ const getPayloadRecord = (
     table: 'mart.review_article_serving_payload_v4',
     values: {
       abstract_text: row.abstractText,
-      article_created_at: row.articleCreatedAt,
       article_id: row.articleId,
       display_identity: input.displayIdentity,
       full_text_preview: row.fullTextPreview,
@@ -579,7 +576,6 @@ const getPayloadRebuildRowsStatements = (
     `
     INSERT INTO mart.review_article_serving_payload_v4 (
       abstract_text,
-      article_created_at,
       article_id,
       display_identity,
       full_text_preview,
@@ -599,7 +595,6 @@ const getPayloadRebuildRowsStatements = (
     payload_rows AS (
       SELECT
         payload_source.abstractText AS abstract_text,
-        payload_source.articleCreatedAt AS article_created_at,
         payload_source.articleId AS article_id,
         ${getSqlLiteral(input.displayIdentity)} AS display_identity,
         payload_source.fullTextPreview AS full_text_preview,
@@ -611,7 +606,6 @@ const getPayloadRebuildRowsStatements = (
     )
     SELECT
       abstract_text,
-      article_created_at,
       article_id,
       display_identity,
       full_text_preview,
@@ -622,7 +616,7 @@ const getPayloadRebuildRowsStatements = (
     FROM payload_rows
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
-      ORDER BY article_created_at DESC NULLS LAST, article_id ASC
+      ORDER BY article_id ASC
     ) = 1
     ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO NOTHING
   `,

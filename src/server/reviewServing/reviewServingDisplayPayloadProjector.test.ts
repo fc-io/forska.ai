@@ -247,7 +247,7 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(getProjectorDiagnostics(result).phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(getProjectorDiagnostics(result).phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
   expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
-  expect(selectStatement).toContain('article.article_created_at AS articleCreatedAt')
+  expect(selectStatement).not.toContain('article.article_created_at AS articleCreatedAt')
   expect(selectStatement).toContain('json_merge_patch')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
@@ -263,7 +263,7 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(selectStatement).not.toContain("length(COALESCE(article.full_text, ''))")
   expect(selectStatement).not.toContain('length(COALESCE(article.full_text_html')
   expect(selectStatement).not.toContain('AS payloadBytes')
-  expect(insertStatement).toContain('article_created_at')
+  expect(insertStatement).not.toContain('article_created_at')
   expect(insertStatement).not.toContain('article_external_id')
   expect(insertStatement).not.toContain('article_title')
   expect(insertStatement).not.toContain('journal_title')
@@ -317,14 +317,9 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
   expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
   expect(joined).toContain(
-    [
-      'SELECT',
-      '      abstract_text,',
-      '      article_created_at,',
-      '      article_id,',
-      '      display_identity,',
-      '      full_text_preview,',
-    ].join('\n'),
+    ['SELECT', '      abstract_text,', '      article_id,', '      display_identity,', '      full_text_preview,'].join(
+      '\n',
+    ),
   )
   expect(joined).toContain('      payload_identity,\n      project_id,')
   expect(joined).not.toContain('payload_updated_at')

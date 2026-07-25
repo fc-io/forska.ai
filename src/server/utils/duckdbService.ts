@@ -2385,7 +2385,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       FROM fallback_row;
       BEGIN;
       UPDATE mart.review_article_serving_payload_v4
-      SET article_created_at = current_timestamp
+      SET abstract_text = COALESCE(abstract_text, '')
       WHERE EXISTS (
         SELECT 1
         FROM startup_probe_review_article_serving_payload_v4 probe
@@ -2398,8 +2398,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       BEGIN;
       UPDATE mart.review_article_serving_payload_v4
-      SET article_created_at = (
-        SELECT probe.article_created_at
+      SET abstract_text = (
+        SELECT probe.abstract_text
         FROM startup_probe_review_article_serving_payload_v4 probe
         WHERE mart.review_article_serving_payload_v4.project_id IS NOT DISTINCT FROM probe.project_id
           AND mart.review_article_serving_payload_v4.display_identity IS NOT DISTINCT FROM probe.display_identity
@@ -2427,6 +2427,16 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     ],
     postRepairSchemaRequirements: [
       {
+        columnNames: ['component_state_json', 'project_id', 'snapshot_id'],
+        schemaName: 'app',
+        tableName: 'review_serving_snapshot_manifest',
+      },
+      {
+        columnNames: ['article_id', 'project_id', 'snapshot_id'],
+        schemaName: 'mart',
+        tableName: 'review_article_serving_v4',
+      },
+      {
         columnNames: ['projection_component', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
         schemaName: 'app',
         tableName: 'review_rebuild_chunk_manifest',
@@ -2438,6 +2448,65 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       },
     ],
     postRepairSql: `
+      INSERT INTO mart.review_article_serving_payload_v4 (
+        project_id,
+        display_identity,
+        payload_identity,
+        snapshot_id,
+        article_id,
+        source_metadata,
+        abstract_text,
+        full_text_preview
+      )
+      WITH snapshot_component_state AS (
+        SELECT
+          manifest.project_id,
+          manifest.snapshot_id,
+          json_extract_string(component_state.value, '$.component') AS component,
+          json_extract_string(component_state.value, '$.projectionIdentity') AS projection_identity
+        FROM app.review_serving_snapshot_manifest manifest,
+          json_each(json_extract(manifest.component_state_json, '$.required')) AS component_state
+        UNION ALL
+        SELECT
+          manifest.project_id,
+          manifest.snapshot_id,
+          json_extract_string(component_state.value, '$.component') AS component,
+          json_extract_string(component_state.value, '$.projectionIdentity') AS projection_identity
+        FROM app.review_serving_snapshot_manifest manifest,
+          json_each(json_extract(manifest.component_state_json, '$.optional')) AS component_state
+      ),
+      snapshot_payload_identity AS (
+        SELECT
+          project_id,
+          snapshot_id,
+          max(CASE WHEN component = 'display' THEN projection_identity END) AS display_identity,
+          max(CASE WHEN component = 'payload' THEN projection_identity END) AS payload_identity
+        FROM snapshot_component_state
+        GROUP BY project_id, snapshot_id
+      )
+      SELECT
+        serving.project_id,
+        snapshot_payload_identity.display_identity,
+        snapshot_payload_identity.payload_identity,
+        serving.snapshot_id,
+        serving.article_id,
+        CAST(NULL AS JSON) AS source_metadata,
+        CAST(NULL AS VARCHAR) AS abstract_text,
+        CAST(NULL AS VARCHAR) AS full_text_preview
+      FROM mart.review_article_serving_v4 serving
+      INNER JOIN snapshot_payload_identity
+        ON snapshot_payload_identity.project_id = serving.project_id
+       AND snapshot_payload_identity.snapshot_id = serving.snapshot_id
+      WHERE snapshot_payload_identity.display_identity IS NOT NULL
+        AND snapshot_payload_identity.payload_identity IS NOT NULL
+      GROUP BY
+        serving.project_id,
+        snapshot_payload_identity.display_identity,
+        snapshot_payload_identity.payload_identity,
+        serving.snapshot_id,
+        serving.article_id
+      ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO NOTHING;
+
       UPDATE app.review_rebuild_chunk_manifest
       SET
         status = 'pending',
@@ -2472,6 +2541,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     repairStrategy: 'empty-derived',
     schemaName: 'mart',
     schemaRequirements: [
+      {columnNames: ['abstract_text'], schemaName: 'mart', tableName: 'review_article_serving_payload_v4'},
       {
         columnNames: ['chunk_end_key', 'chunk_start_key', 'last_error', 'projection_component', 'project_id', 'status'],
         schemaName: 'app',

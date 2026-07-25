@@ -6,7 +6,6 @@ CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair (
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
-  article_created_at TIMESTAMPTZ,
   source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR
@@ -20,7 +19,6 @@ WITH existing_payload AS (
     payload_identity,
     snapshot_id,
     article_id,
-    article_created_at,
     source_metadata,
     abstract_text,
     full_text_preview,
@@ -60,7 +58,6 @@ serving_payload_gaps AS (
     snapshot_payload_identity.payload_identity,
     serving.snapshot_id,
     serving.article_id,
-    any_value(serving.article_created_at) AS article_created_at,
     CAST(NULL AS JSON) AS source_metadata,
     CAST(NULL AS VARCHAR) AS abstract_text,
     CAST(NULL AS VARCHAR) AS full_text_preview,
@@ -89,14 +86,13 @@ SELECT
   payload_identity,
   snapshot_id,
   article_id,
-  article_created_at,
   source_metadata,
   abstract_text,
   full_text_preview
 FROM payload_union
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
-  ORDER BY row_precedence ASC, article_created_at DESC NULLS LAST
+  ORDER BY row_precedence ASC, article_id ASC
 ) = 1;
 
 DROP TABLE mart.review_article_serving_payload_v4;
@@ -108,6 +104,3 @@ ON mart.review_article_serving_payload_v4(project_id, display_identity, payload_
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_lookup
 ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order
-ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);
