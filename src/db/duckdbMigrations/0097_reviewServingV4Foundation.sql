@@ -650,12 +650,10 @@ CREATE TABLE IF NOT EXISTS mart.review_filter_posting_stats_v4 (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
-  posting_identity VARCHAR NOT NULL,
   filter_kind VARCHAR NOT NULL,
   filter_value VARCHAR NOT NULL,
   list_mode_key VARCHAR NOT NULL,
   cardinality BIGINT NOT NULL,
-  selectivity DOUBLE,
   stats_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key),
   CHECK (cardinality >= 0)

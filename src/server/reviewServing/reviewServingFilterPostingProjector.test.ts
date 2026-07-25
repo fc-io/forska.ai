@@ -194,14 +194,12 @@ test('answer changes update posting stats from old and new contribution diffs', 
     filterKind: 'promptAnswer',
     filterValue: 'review:promptAnswer:prompt-1:no',
     listModeKey: 'llm',
-    selectivity: 0.2,
   })
   expect(result.statsValues).toContainEqual({
     cardinality: 8,
     filterKind: 'promptAnswer',
     filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'llm',
-    selectivity: 0.8,
   })
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
@@ -417,7 +415,6 @@ test('deletes write tombstones, remove serving rows, and decrement stats in the 
     filterKind: 'llmStatus',
     filterValue: 'answered',
     listModeKey: 'llm',
-    selectivity: 0.3,
   })
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
@@ -468,14 +465,12 @@ test('selected-import rank changes move filter contribution between selected imp
     filterKind: 'importRoute',
     filterValue: 'route-old',
     listModeKey: 'llm',
-    selectivity: 0.4,
   })
   expect(result.statsValues).toContainEqual({
     cardinality: 2,
     filterKind: 'importRoute',
     filterValue: 'route-new',
     listModeKey: 'llm',
-    selectivity: 0.2,
   })
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(selectStatement).not.toContain('selected_patch')
@@ -652,13 +647,11 @@ test('list modes keep posting stats and serving rows separated', async () => {
     filterKind: 'promptAnswer',
     filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'llm',
-    selectivity: 0.1,
   })
   expect(result.statsValues).toContainEqual({
     cardinality: 1,
     filterKind: 'promptAnswer',
     filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'human',
-    selectivity: 0.2,
   })
 })

@@ -550,7 +550,6 @@ const getStatsRecord = (input: {
   projectId: string
   reviewConfigHash: string
   snapshotId: string
-  totalArticleCount: number
 }): ReviewServingProjectorRecord => {
   return {
     keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'filter_kind', 'filter_value', 'list_mode_key'],
@@ -560,10 +559,8 @@ const getStatsRecord = (input: {
       filter_kind: input.filterKind,
       filter_value: input.filterValue,
       list_mode_key: input.listModeKey,
-      posting_identity: getPostingIdentity(input),
       project_id: input.projectId,
       review_config_hash: input.reviewConfigHash,
-      selectivity: input.totalArticleCount === 0 ? null : input.cardinality / input.totalArticleCount,
       snapshot_id: input.snapshotId,
       stats_updated_at: new Date(),
     },
@@ -680,20 +677,13 @@ const getInsertFullRebuildStatsRowsStatement = (
       project_id,
       review_config_hash,
       snapshot_id,
-      posting_identity,
       filter_kind,
       filter_value,
       list_mode_key,
       cardinality,
-      selectivity,
       stats_updated_at
     )
-    WITH total_article AS (
-      SELECT COUNT(*) AS totalArticleCount
-      FROM mart.project_scope_article scope
-      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
-        AND (scope.in_curated_scope OR scope.in_route_scope)
-    ), stats_source AS (
+    WITH stats_source AS (
       SELECT
         serving.filter_kind,
         serving.filter_value,
@@ -709,18 +699,12 @@ const getInsertFullRebuildStatsRowsStatement = (
       ${getSqlLiteral(input.projectId)} AS project_id,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      ${getPostingIdentityFromStatsSql('stats')} AS posting_identity,
       stats.filter_kind,
       stats.filter_value,
       stats.list_mode_key,
       stats.cardinality,
-      CASE
-        WHEN total.totalArticleCount = 0 THEN NULL
-        ELSE CAST(stats.cardinality AS DOUBLE) / CAST(total.totalArticleCount AS DOUBLE)
-      END AS selectivity,
       current_timestamp AS stats_updated_at
-    FROM stats_source stats
-    CROSS JOIN total_article total`
+    FROM stats_source stats`
 }
 
 export const refreshReviewServingFilterPostingStats = async (
@@ -921,7 +905,6 @@ const getStatsRecords = async (input: {
             projectId: input.projectorInput.projectId,
             reviewConfigHash: input.projectorInput.reviewConfigHash,
             snapshotId: input.projectorInput.snapshotId,
-            totalArticleCount: totalRowsByListMode.get(row.listModeKey) ?? 0,
           }),
         ]
   })
@@ -1138,7 +1121,6 @@ export const projectReviewServingFilterPostings = async (
         filterKind: getRecordValue(record, 'filter_kind'),
         filterValue: getRecordValue(record, 'filter_value'),
         listModeKey: getRecordValue(record, 'list_mode_key'),
-        selectivity: getRecordValue(record, 'selectivity'),
       }
     }),
     validationResult: undefined,
