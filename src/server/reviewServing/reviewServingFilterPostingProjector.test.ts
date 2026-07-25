@@ -254,7 +254,10 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
-  expect(joined).toContain("'llmStatus' AS filterKind, serving.llm_status_key AS filterValue")
+  expect(joined).toContain('llm_status AS')
+  expect(joined).toContain("WHEN llm_status.enabled_prompt_count = llm_status.answered_prompt_count THEN 'answered'")
+  expect(joined).not.toContain('serving.llm_status_key')
+  expect(joined).not.toContain('serving.human_status_key')
   expect(joined).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
   expect(joined).toContain("concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original)")
   expectNoLegacyPostingSourcePatchTables(joined)
@@ -449,7 +452,7 @@ test('human postings read only the current status patch per logical prompt key',
   expect(selectStatement).toContain('human_detail AS')
 })
 
-test('status postings use article-level all-prompt status rows', async () => {
+test('status postings derive article-level status from judgment detail rows', async () => {
   const {database, statements} = createPostingDatabase({newRows: []})
 
   await projectReviewServingFilterPostings(projectInput([postingClaim()], ['llm', 'human']), database)
@@ -458,8 +461,24 @@ test('status postings use article-level all-prompt status rows', async () => {
   })
 
   expect(selectStatement).toContain('scoped_serving AS')
-  expect(selectStatement).toContain("'llmStatus' AS filterKind, serving.llm_status_key AS filterValue")
-  expect(selectStatement).toContain("'humanStatus' AS filterKind, serving.human_status_key AS filterValue")
+  expect(selectStatement).toContain('llm_status AS')
+  expect(selectStatement).toContain('human_status AS')
+  expect(selectStatement).toContain('COUNT(detail.prompt_id) AS enabled_prompt_count')
+  expect(selectStatement).toContain("AND detail.payload_kind = 'llm'")
+  expect(selectStatement).toContain("AND detail.list_mode_key = 'llm'")
+  expect(selectStatement).toContain("AND detail.payload_kind = 'human'")
+  expect(selectStatement).toContain("AND detail.list_mode_key = 'human'")
+  expect(selectStatement).toContain("'llmStatus' AS filterKind")
+  expect(selectStatement).toContain("'humanStatus' AS filterKind")
+  expect(selectStatement).toContain('WHEN llm_status.enabled_prompt_count = 0 THEN NULL')
+  expect(selectStatement).toContain(
+    "WHEN llm_status.enabled_prompt_count = llm_status.answered_prompt_count THEN 'answered'",
+  )
+  expect(selectStatement).toContain(
+    "WHEN enabled_prompt_count.prompt_count = human_status.answered_prompt_count THEN 'answered'",
+  )
+  expect(selectStatement).not.toContain('serving.llm_status_key')
+  expect(selectStatement).not.toContain('serving.human_status_key')
   expect(selectStatement).toContain('project_settings AS')
   expect(selectStatement).toContain("human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('human_detail AS')
