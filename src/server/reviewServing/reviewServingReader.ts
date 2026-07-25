@@ -359,6 +359,10 @@ const getFilterString = (value: ReviewServingFilterSignatureValue | undefined) =
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+const getFlagPostingFilterValue = (value: ReviewServingFilterSignatureValue | undefined) => {
+  return value ? 'true' : null
+}
+
 const getPromptAnswerValueGroups = (request: ReviewServingReaderRequest) => {
   const prefix = getPostingFilterPrefix(request.listMode)
 
@@ -411,8 +415,6 @@ const getColumnFilterPredicates = (input: {
         ? `${articleCreatedAtColumn} < TIMESTAMPTZ $articleCreatedAtTo`
         : `${articleCreatedAtColumn} <= TIMESTAMPTZ $articleCreatedAtTo`
       : '',
-    filters.duplicateFlag ? `duplicate_flag = TRUE` : '',
-    filters.conflictFlag ? `conflict_flag = TRUE` : '',
     filters.llmHasJudgment ? 'llm_judged_prompt_count > 0' : '',
     llmStatus ? 'llm_status_key = $llmStatusFilter' : '',
     typeof filters.humanStatus === 'string' ? 'human_status_key = $humanStatusFilter' : '',
@@ -437,7 +439,7 @@ const getPostingFilterPredicate = (input: {
         ` AND filter_${input.index}.review_config_hash = $reviewConfigHash`,
         ` AND filter_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
         ` AND filter_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
-        ` AND filter_${input.index}.filter_kind = $promptAnswerFilterKind`,
+        ` AND filter_${input.index}.filter_kind = ${getSqlLiteral(input.filterKind)}`,
         ` AND filter_${input.index}.filter_value IN (SELECT unnest(${getSqlLiteral(input.filterValues)})))`,
       ].join('')
 }
@@ -446,12 +448,21 @@ const getPostingFilterPredicates = (input: {
   contract: ReviewServingReadContract
   request: ReviewServingReaderRequest
 }) => {
-  return getPromptAnswerValueGroups(input.request)
+  const filters = input.request.filters ?? {}
+  const flagGroups = [
+    {filterKind: 'duplicateFlag', filterValues: getFlagPostingFilterValue(filters.duplicateFlag) ? ['true'] : []},
+    {filterKind: 'conflictFlag', filterValues: getFlagPostingFilterValue(filters.conflictFlag) ? ['true'] : []},
+  ]
+  const promptGroups = getPromptAnswerValueGroups(input.request).map((filterValues) => {
+    return {filterKind: 'promptAnswer', filterValues}
+  })
+
+  return [...flagGroups, ...promptGroups]
     .map((filterValues, index) => {
       return getPostingFilterPredicate({
         contract: input.contract,
-        filterKind: 'promptAnswer',
-        filterValues,
+        filterKind: filterValues.filterKind,
+        filterValues: filterValues.filterValues,
         index,
         request: input.request,
       })
@@ -744,8 +755,6 @@ const bindReviewServingRowsSql = (
     payloadIdentity: componentStates.payload?.projectionIdentity,
     projectId: request.projectId ?? null,
     projectScopeIdentity: componentStates.projectScope?.projectionIdentity,
-    promptAnswerFilterKind: 'promptAnswer',
-    promptAnswerFilterValues: [],
     queueKind: request.queueKind ?? null,
     reviewConfigHash: manifest.reviewConfigHash,
     searchIdentity: request.searchIdentity ?? componentStates.search?.projectionIdentity,

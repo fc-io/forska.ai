@@ -260,6 +260,11 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(sql).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
   expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4 prompt_anchor')
   expect(sql).toContain("prompt_anchor.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:yes']::VARCHAR[]))")
+  expect(sql).toContain("flag_filter_0.filter_kind = 'duplicateFlag'")
+  expect(sql).toContain("flag_filter_1.filter_kind = 'conflictFlag'")
+  expect(sql).toContain("flag_filter_0.filter_value = 'true'")
+  expect(sql).not.toContain('serving.duplicate_flag = TRUE')
+  expect(sql).not.toContain('serving.conflict_flag = TRUE')
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
@@ -329,7 +334,7 @@ test('human review route service retries transient filtered row read failures', 
     queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       if (
         statement.includes('FROM mart.review_article_serving_v4')
-        && statement.includes('duplicate_flag = TRUE')
+        && statement.includes("filter_0.filter_kind = 'duplicateFlag'")
         && !statement.includes('COUNT(DISTINCT serving.article_id)')
       ) {
         rowAttempts += 1
@@ -351,7 +356,8 @@ test('human review route service retries transient filtered row read failures', 
 
   expect(result.data).toHaveLength(1)
   expect(rowAttempts).toBe(2)
-  expect(rowStatements.join('\n')).toContain('duplicate_flag = TRUE')
+  expect(rowStatements.join('\n')).toContain("filter_0.filter_kind = 'duplicateFlag'")
+  expect(rowStatements.join('\n')).not.toContain('duplicate_flag = TRUE')
 })
 
 test('human review route service allows the 500-row page cursor probe within the reader contract', async () => {

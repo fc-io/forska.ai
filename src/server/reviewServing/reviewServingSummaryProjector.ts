@@ -230,7 +230,7 @@ const getFullRebuildSummaryContributionRows = async (
         selected_article AS (
           SELECT DISTINCT
             serving.article_id,
-            serving.selected_import_route_id AS import_route_id,
+            CASE WHEN selected_base.tombstone THEN NULL ELSE selected_base.import_route_id END AS import_route_id,
             selected_hot.publication_year,
             serving.duplicate_flag,
             serving.conflict_flag

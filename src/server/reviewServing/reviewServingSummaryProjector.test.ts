@@ -402,7 +402,8 @@ test('projects list-mode count replacements with summary identity and definition
     }),
   ).toBe(true)
   expect(joined).toContain('FROM scoped_serving serving')
-  expect(joined).toContain('serving.selected_import_route_id AS import_route_id')
+  expect(joined).toContain('selected_base.import_route_id END AS import_route_id')
+  expect(joined).not.toContain('serving.selected_import_route_id AS import_route_id')
   expect(joined).toContain('serving.duplicate_flag')
   expect(joined).toContain('serving.conflict_flag')
   expect(joined).toContain('mart.review_article_judgment_detail_serving_v4 detail')
