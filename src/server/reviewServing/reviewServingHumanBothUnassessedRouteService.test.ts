@@ -258,9 +258,12 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(sql).toContain("posting.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:yes']::VARCHAR[]))")
   expect(sql).toContain("posting.filter_kind = 'duplicateFlag'")
   expect(sql).toContain("posting.filter_kind = 'conflictFlag'")
+  expect(sql).toContain("posting.filter_kind = 'humanStatus'")
   expect(sql).toContain("posting.filter_value IN (SELECT unnest(['true']::VARCHAR[]))")
+  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).not.toContain('serving.duplicate_flag = TRUE')
   expect(sql).not.toContain('serving.conflict_flag = TRUE')
+  expect(sql).not.toContain('serving.human_status_key =')
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
@@ -288,7 +291,9 @@ test('human review prompt-filtered count intersects through one posting CTE with
   expect(countStatement).toContain(
     "posting.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:maybe', 'human:promptAnswer:prompt-1:yes']::VARCHAR[]))",
   )
-  expect(countStatement).toContain("serving.human_status_key = 'answered'")
+  expect(countStatement).toContain("posting.filter_kind = 'humanStatus'")
+  expect(countStatement).toContain("posting.filter_value IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(countStatement).not.toContain("serving.human_status_key = 'answered'")
 })
 
 test('human review route service retries transient filtered count read failures', async () => {
@@ -393,6 +398,11 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   expect(reader.statements).toHaveLength(5)
   expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
   expect(sql).toContain("list_mode_key = 'both'")
+  expect(sql).toContain("filter_kind = 'llmStatus'")
+  expect(sql).toContain("filter_kind = 'humanStatus'")
+  expect(sql).toContain("filter_value IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(sql).not.toContain('serving.llm_status_key =')
+  expect(sql).not.toContain('serving.human_status_key =')
   expect(sql).toContain("payload_kind = 'llm'")
   expect(sql).toContain("payload_kind = 'human'")
   forbiddenSqlFragments.forEach((fragment) => {

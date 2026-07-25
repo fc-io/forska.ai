@@ -418,8 +418,6 @@ const getColumnFilterPredicates = (input: {
 }) => {
   const articleCreatedAtColumn = `${input.contract.servingTable}.article_created_at`
   const filters = input.request.filters ?? {}
-  const llmStatus =
-    filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
   const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
   const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
 
@@ -431,8 +429,6 @@ const getColumnFilterPredicates = (input: {
         : `${articleCreatedAtColumn} <= TIMESTAMPTZ $articleCreatedAtTo`
       : '',
     filters.llmHasJudgment ? getLlmHasJudgmentPredicate(input.contract.servingTable) : '',
-    llmStatus ? 'llm_status_key = $llmStatusFilter' : '',
-    typeof filters.humanStatus === 'string' ? 'human_status_key = $humanStatusFilter' : '',
   ].filter((predicate) => {
     return predicate.length > 0
   })
@@ -464,16 +460,22 @@ const getPostingFilterPredicates = (input: {
   request: ReviewServingReaderRequest
 }) => {
   const filters = input.request.filters ?? {}
+  const llmStatusValue = getLlmStatusFilterValue(input.request)
+  const humanStatusValue = typeof filters.humanStatus === 'string' ? filters.humanStatus : null
   const flagGroups = [
     {filterKind: 'duplicateFlag', filterValues: getFlagPostingFilterValue(filters.duplicateFlag) ? ['true'] : []},
     {filterKind: 'conflictFlag', filterValues: getFlagPostingFilterValue(filters.conflictFlag) ? ['true'] : []},
+  ]
+  const statusGroups = [
+    {filterKind: 'llmStatus', filterValues: llmStatusValue ? [llmStatusValue] : []},
+    {filterKind: 'humanStatus', filterValues: humanStatusValue ? [humanStatusValue] : []},
   ]
   const importRouteGroup = {filterKind: 'importRoute', filterValues: getFilterValues(filters.importRoute)}
   const promptGroups = getPromptAnswerValueGroups(input.request).map((filterValues) => {
     return {filterKind: 'promptAnswer', filterValues}
   })
 
-  return [...flagGroups, importRouteGroup, ...promptGroups]
+  return [...flagGroups, ...statusGroups, importRouteGroup, ...promptGroups]
     .map((filterValues, index) => {
       return getPostingFilterPredicate({
         contract: input.contract,
