@@ -25,14 +25,7 @@ const components: readonly ReviewServingProjectionComponent[] = [
   'search',
   'judgmentInputContent',
 ]
-const forbiddenSqlFragments = [
-  'selected_scoped_article_import',
-  'FROM app.article',
-  'FROM app.judgment',
-  'OFFSET',
-  'json_extract',
-  'json_extract_string',
-]
+const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
 
 const getComponentState = () => {
   return {

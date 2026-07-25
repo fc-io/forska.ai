@@ -596,21 +596,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
-  article_title VARCHAR,
-  article_external_id VARCHAR,
-  article_updated_at TIMESTAMPTZ,
-  arxiv_id VARCHAR,
-  biorxiv_id VARCHAR,
-  medrxiv_id VARCHAR,
-  doi VARCHAR,
-  pmid VARCHAR,
-  journal_title VARCHAR,
-  url VARCHAR,
-  full_text_pdf VARCHAR,
-  full_text_fetched_at TIMESTAMPTZ,
-  full_text_conversion_status VARCHAR,
-  abstract_text VARCHAR,
-  full_text_preview VARCHAR,
   PRIMARY KEY(project_id, display_identity, payload_identity, snapshot_id, article_id)
 );
 

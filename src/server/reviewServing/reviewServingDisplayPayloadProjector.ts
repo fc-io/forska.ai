@@ -109,19 +109,7 @@ type DisplayPatchRow = {
   url: string | null
 }
 
-type PayloadProjectionRow = {
-  articleExternalId: string | null
-  articleId: string
-  articleTitle: string | null
-  articleUpdatedAt: Date | string | null
-  arxivId: string | null
-  biorxivId: string | null
-  doi: string | null
-  journalTitle: string | null
-  medrxivId: string | null
-  pmid: string | null
-  url: string | null
-}
+type PayloadProjectionRow = {articleId: string}
 
 type ReviewServingPayloadPatchManifestInput = {
   baseGeneration: number
@@ -473,65 +461,14 @@ const getPayloadRowsSql = (
         ON scope.article_id >= range.chunk_start_article_id
         AND scope.article_id <= range.chunk_end_article_id`
   const orderBy =
-    options.orderBy === false ? '' : 'ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC'
-  const selectedImportRouteIdSql = `CASE
-        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE selected_base.import_route_id
-      END`
-  const selectedSourceRecordKeySql = `CASE
-        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE selected_base.source_record_key
-      END`
-
+    options.orderBy === false ? '' : 'ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC'
   return `
     ${getDirtyArticleCteSql(articleIds)}
     SELECT
-      scope.article_id AS articleId,
-      COALESCE(
-        CASE
-          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-          ELSE selected_hot.article_title
-        END,
-        article.article_title
-      ) AS articleTitle,
-      COALESCE(
-        CASE
-          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-          ELSE selected_hot.external_id
-        END,
-        article.article_id
-      ) AS articleExternalId,
-      article.article_updated_at AS articleUpdatedAt,
-      article.arxiv_id AS arxivId,
-      article.biorxiv_id AS biorxivId,
-      article.medrxiv_id AS medrxivId,
-      article.doi,
-      article.pubmed_id AS pmid,
-      CASE
-        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE selected_hot.journal_title
-      END AS journalTitle,
-      COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-      LEFT(COALESCE(article.full_text, regexp_replace(COALESCE(article.full_text_html, ''), '<[^>]+>', '', 'g')), 2000) AS fullTextPreview
+      scope.article_id AS articleId
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
     ${rangeJoinSql}
-    INNER JOIN app."article" article
-      ON article.id = scope.article_id
-    LEFT JOIN app.review_selected_article_import_v4 selected_base
-      ON selected_base.project_id = scope.project_id
-      AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected_base.article_id = scope.article_id
-    LEFT JOIN app.review_import_article_hot_field selected_hot
-      ON selected_hot.import_route_id = ${selectedImportRouteIdSql}
-      AND selected_hot.article_id = scope.article_id
-      AND selected_hot.source_record_key = ${selectedSourceRecordKeySql}
-      AND NOT selected_hot.tombstone
-    LEFT JOIN app.article_import_route_source_record selected_source
-      ON selected_source.import_route_id = ${selectedImportRouteIdSql}
-      AND selected_source.article_id = scope.article_id
-      AND selected_source.source_record_key = ${selectedSourceRecordKeySql}
-      AND selected_source.quarantined_at IS NULL
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
       ${options.ranges === undefined ? getArticleRangePredicate(input) : ''}
@@ -554,21 +491,11 @@ const getPayloadRecord = (
     keyColumns: ['project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'],
     table: 'mart.review_article_serving_payload_v4',
     values: {
-      article_external_id: row.articleExternalId,
       article_id: row.articleId,
-      article_title: row.articleTitle,
-      article_updated_at: row.articleUpdatedAt,
-      arxiv_id: row.arxivId,
-      biorxiv_id: row.biorxivId,
-      doi: row.doi,
       display_identity: input.displayIdentity,
-      journal_title: row.journalTitle,
-      medrxiv_id: row.medrxivId,
       payload_identity: input.payloadIdentity,
-      pmid: row.pmid,
       project_id: input.projectId,
       snapshot_id: input.snapshotId,
-      url: row.url,
     },
   }
 }
@@ -580,21 +507,11 @@ const getPayloadRebuildRowsStatements = (
   return [
     `
     INSERT INTO mart.review_article_serving_payload_v4 (
-      article_external_id,
       article_id,
-      article_title,
-      article_updated_at,
-      arxiv_id,
-      biorxiv_id,
-      doi,
       display_identity,
-      journal_title,
-      medrxiv_id,
       payload_identity,
-      pmid,
       project_id,
-      snapshot_id,
-      url
+      snapshot_id
     )
     WITH ${
       ranges === undefined
@@ -606,39 +523,19 @@ const getPayloadRebuildRowsStatements = (
     ),
     payload_rows AS (
       SELECT
-        payload_source.articleExternalId AS article_external_id,
         payload_source.articleId AS article_id,
-        payload_source.articleTitle AS article_title,
-        payload_source.articleUpdatedAt AS article_updated_at,
-        payload_source.arxivId AS arxiv_id,
-        payload_source.biorxivId AS biorxiv_id,
-        payload_source.doi,
         ${getSqlLiteral(input.displayIdentity)} AS display_identity,
-        payload_source.journalTitle AS journal_title,
-        payload_source.medrxivId AS medrxiv_id,
         ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
-        payload_source.pmid,
         ${getSqlLiteral(input.projectId)} AS project_id,
-        ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        payload_source.url
+        ${getSqlLiteral(input.snapshotId)} AS snapshot_id
       FROM payload_source
     )
     SELECT
-      article_external_id,
       article_id,
-      article_title,
-      article_updated_at,
-      arxiv_id,
-      biorxiv_id,
-      doi,
       display_identity,
-      journal_title,
-      medrxiv_id,
       payload_identity,
-      pmid,
       project_id,
-      snapshot_id,
-      url
+      snapshot_id
     FROM payload_rows
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id

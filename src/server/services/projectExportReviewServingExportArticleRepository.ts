@@ -44,18 +44,18 @@ export const readReviewServingExportArticles = async (input: {
       ranked_export_article AS (
         SELECT
           s.article_id AS articleId,
-          payload.article_external_id AS articleExternalId,
-          payload.arxiv_id AS arxivId,
-          payload.biorxiv_id AS biorxivId,
-          payload.doi AS doi,
-          payload.medrxiv_id AS medrxivId,
-          payload.pmid AS pubmedId,
-          payload.url AS articleUrl,
-          payload.article_title AS articleTitle,
+          COALESCE(selected_hot.external_id, article.article_id) AS articleExternalId,
+          article.arxiv_id AS arxivId,
+          article.biorxiv_id AS biorxivId,
+          article.doi AS doi,
+          article.medrxiv_id AS medrxivId,
+          article.pubmed_id AS pubmedId,
+          COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS articleUrl,
+          COALESCE(selected_hot.article_title, article.article_title) AS articleTitle,
           LEFT(article.article_summary, 2000) AS articleSummary,
           TO_JSON(article.article_authors) AS articleAuthors,
           s.article_created_at AS articleCreatedAt,
-          payload.article_updated_at AS articleUpdatedAt,
+          article.article_updated_at AS articleUpdatedAt,
           selected_source.raw_payload AS articleOriginalData,
           CASE
             WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
@@ -87,16 +87,16 @@ export const readReviewServingExportArticles = async (input: {
          AND selected_base.project_scope_identity = json_extract_string(manifest.composed_identity_json, '$.projectScope.projectionIdentity')
          AND selected_base.selected_import_snapshot_id = manifest.selected_import_snapshot_id
          AND selected_base.article_id = s.article_id
+         AND NOT selected_base.tombstone
+        LEFT JOIN app.review_import_article_hot_field selected_hot
+          ON selected_hot.import_route_id = selected_base.import_route_id
+         AND selected_hot.article_id = s.article_id
+         AND selected_hot.source_record_key = selected_base.source_record_key
+         AND NOT selected_hot.tombstone
         LEFT JOIN app.article_import_route_source_record selected_source
-          ON selected_source.import_route_id = CASE
-            WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-            ELSE selected_base.import_route_id
-          END
+          ON selected_source.import_route_id = selected_base.import_route_id
          AND selected_source.article_id = s.article_id
-         AND selected_source.source_record_key = CASE
-           WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-           ELSE selected_base.source_record_key
-         END
+         AND selected_source.source_record_key = selected_base.source_record_key
          AND selected_source.quarantined_at IS NULL
         INNER JOIN mart.review_article_serving_payload_v4 payload
           ON payload.project_id = s.project_id
