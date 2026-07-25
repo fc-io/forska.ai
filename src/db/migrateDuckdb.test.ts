@@ -503,6 +503,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
   const targetMigrationFiles = new Set([
     '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql',
     '0135_reviewServingJudgmentDetailPromptScalars.sql',
+    '0137_reviewServingJudgmentDetailHumanScalars.sql',
   ])
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return !targetMigrationFiles.has(fileName)
@@ -683,7 +684,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           "SELECT admission_state AS admissionState, last_error AS lastError, retry_after AS retryAfter, retry_count AS retryCount, status FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
         )
         const rows = await database.queryJson(
-          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, judgment_payload_json AS judgmentPayloadJson, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
+          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, judgment_created_at AS judgmentCreatedAt, human_comment AS humanComment, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, judgment_payload_json AS judgmentPayloadJson, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
         )
         const requestRows = await database.queryJson(
           "SELECT admission_state AS admissionState, failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
@@ -765,6 +766,8 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       rows: Array<{
         judgmentId: string | null
         judgmentPayloadJson: unknown
+        humanComment: string | null
+        judgmentCreatedAt: string | null
         payloadKind: string
         placeholderKind: string | null
         projectId: string
@@ -802,6 +805,8 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       'prompt_heading',
       'prompt_type',
       'prompt_criteria_disposition',
+      'judgment_created_at',
+      'human_comment',
       'judgment_payload_json',
       'placeholder_kind',
       'detail_updated_at',
@@ -809,7 +814,9 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     expect(parsed.rows).toEqual([
       {
         judgmentId: 'judgment-a',
+        judgmentCreatedAt: null,
         judgmentPayloadJson: expect.anything() as unknown,
+        humanComment: null,
         payloadKind: 'llm',
         placeholderKind: null,
         projectId: 'project-a',
@@ -819,7 +826,9 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       },
       {
         judgmentId: null,
+        judgmentCreatedAt: null,
         judgmentPayloadJson: null,
+        humanComment: null,
         payloadKind: 'llm',
         placeholderKind: 'llm.unanswered',
         projectId: 'project-a',
@@ -842,6 +851,257 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       },
     ])
     expect(parsed.duplicatePayloadKindAccepted).toBe(true)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('DuckDB migrations drop summary partial serving key and collapse scalar-key duplicates', async () => {
+  const duckdbPath = `/tmp/forska-review-summary-partial-serving-key-${Date.now()}.duckdb`
+  const targetMigrationFiles = new Set(['0136_dropReviewSummaryPartialServingKey.sql'])
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return !targetMigrationFiles.has(fileName)
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_summary_rebuild_partial_v4 (
+            request_id VARCHAR NOT NULL,
+            chunk_id VARCHAR NOT NULL,
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            summary_kind VARCHAR NOT NULL,
+            summary_identity VARCHAR NOT NULL,
+            list_mode_key VARCHAR,
+            count_kind VARCHAR,
+            serving_key VARCHAR NOT NULL,
+            summary_definition_version VARCHAR NOT NULL,
+            filter_key VARCHAR,
+            facet_kind VARCHAR,
+            facet_key VARCHAR,
+            facet_value VARCHAR,
+            prompt_id VARCHAR,
+            answer_id INTEGER,
+            answer_value VARCHAR,
+            availability VARCHAR NOT NULL DEFAULT 'ready',
+            stale_reason VARCHAR,
+            count_value BIGINT,
+            partial_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            PRIMARY KEY(request_id, chunk_id, serving_key)
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+            request_id,
+            chunk_id,
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            summary_kind,
+            summary_identity,
+            list_mode_key,
+            count_kind,
+            serving_key,
+            summary_definition_version,
+            filter_key,
+            facet_kind,
+            facet_key,
+            facet_value,
+            prompt_id,
+            answer_id,
+            answer_value,
+            availability,
+            stale_reason,
+            count_value,
+            partial_updated_at
+          )
+          VALUES
+            (
+              'request-a',
+              'chunk-a',
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'prompt',
+              'summary-a',
+              NULL,
+              'articles',
+              'legacy-key-a',
+              'v1',
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              'prompt-a',
+              NULL,
+              'include',
+              'ready',
+              NULL,
+              2,
+              TIMESTAMPTZ '2026-07-25T07:00:00Z'
+            ),
+            (
+              'request-a',
+              'chunk-a',
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'prompt',
+              'summary-a',
+              NULL,
+              'articles',
+              'legacy-key-b',
+              'v1',
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              'prompt-a',
+              NULL,
+              'include',
+              'ready',
+              NULL,
+              3,
+              TIMESTAMPTZ '2026-07-25T07:01:00Z'
+            ),
+            (
+              'request-a',
+              'chunk-b',
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'prompt',
+              'summary-b',
+              'global',
+              'articles',
+              'legacy-key-c',
+              'v1',
+              'filter-a',
+              NULL,
+              NULL,
+              NULL,
+              'prompt-a',
+              NULL,
+              'exclude',
+              'stale',
+              'source changed',
+              NULL,
+              TIMESTAMPTZ '2026-07-25T07:02:00Z'
+            )
+        \`)
+
+        await migrateDuckdb()
+
+        const columns = await database.queryJson(
+          "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_summary_rebuild_partial_v4' ORDER BY ordinal_position"
+        )
+        const indexes = await database.queryJson(
+          "SELECT index_name AS indexName, sql FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_summary_rebuild_partial_v4' ORDER BY index_name"
+        )
+        const rows = await database.queryJson(
+          "SELECT chunk_id AS chunkId, summary_identity AS summaryIdentity, filter_key AS filterKey, availability, stale_reason AS staleReason, CAST(count_value AS INTEGER) AS countValue FROM mart.review_article_summary_rebuild_partial_v4 ORDER BY chunk_id, summary_identity"
+        )
+        console.log(JSON.stringify({columns, indexes, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: Array<{columnName: string}>
+      indexes: Array<{indexName: string; sql: string}>
+      rows: Array<{
+        availability: string
+        chunkId: string
+        countValue: number | null
+        filterKey: string | null
+        staleReason: string | null
+        summaryIdentity: string
+      }>
+    }
+    const columns = parsed.columns.map((row) => {
+      return row.columnName
+    })
+    const uniqueIndexSql = parsed.indexes.find((row) => {
+      return row.indexName === 'idx_review_article_summary_rebuild_partial_v4_unique'
+    })?.sql
+
+    expect(columns).not.toContain('serving_key')
+    expect(columns).toContain('summary_identity')
+    expect(uniqueIndexSql).toContain("COALESCE(list_mode_key, 'global')")
+    expect(uniqueIndexSql).toContain("COALESCE(filter_key, '')")
+    expect(parsed.rows).toEqual([
+      {
+        availability: 'ready',
+        chunkId: 'chunk-a',
+        countValue: 5,
+        filterKey: null,
+        staleReason: null,
+        summaryIdentity: 'summary-a',
+      },
+      {
+        availability: 'stale',
+        chunkId: 'chunk-b',
+        countValue: null,
+        filterKey: 'filter-a',
+        staleReason: 'source changed',
+        summaryIdentity: 'summary-b',
+      },
+    ])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)

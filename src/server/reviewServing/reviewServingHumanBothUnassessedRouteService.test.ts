@@ -138,7 +138,10 @@ const createReaderDatabase = () => {
             judgment_id: 'human-1',
             answered_original: 'yes',
             answered_original_as_array: ['yes'],
-            judgment_payload_json: {answer: 'yes', createdAt: '2026-01-03T00:00:00.000Z', isAnswered: true},
+            detail_updated_at: '2026-01-04T00:00:00.000Z',
+            human_comment: 'human note',
+            judgment_created_at: '2026-01-03T00:00:00.000Z',
+            judgment_payload_json: null,
           },
         ] as T[]
       }

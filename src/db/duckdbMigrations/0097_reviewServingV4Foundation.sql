@@ -687,6 +687,8 @@ CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   prompt_heading VARCHAR,
   prompt_type VARCHAR,
   prompt_criteria_disposition project_prompt_criteria_disposition_v2,
+  judgment_created_at TIMESTAMPTZ,
+  human_comment VARCHAR,
   judgment_payload_json JSON,
   placeholder_kind VARCHAR,
   detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,

@@ -262,19 +262,6 @@ const getSqlLlmJudgmentPayload = (alias: string) => {
   )`
 }
 
-const getSqlHumanJudgmentPayload = (alias: string) => {
-  return `json_object(
-    'answer', ${alias}.answer,
-    'comment', ${alias}.comment,
-    'createdAt', ${alias}.human_judgment_created_at,
-    'id', ${alias}.human_judgment_id,
-    'isAnswered', COALESCE(${alias}.is_answered, FALSE),
-    'payloadReference', json_object('humanJudgmentId', ${alias}.human_judgment_id, 'kind', ${alias}.payload_reference_kind),
-    'prompt', ${getSqlPromptDisplayPayload(alias)},
-    'updatedAt', ${alias}.human_judgment_updated_at
-  )`
-}
-
 const getReplacementDeleteStatements = (
   input: ProjectReviewServingJudgmentPayloadInput,
   payloadKinds: readonly JudgmentPayloadKind[],
@@ -354,6 +341,8 @@ const getLlmJudgmentDirectInsertStatement = (
         prompt_heading,
         prompt_type,
         prompt_criteria_disposition,
+        judgment_created_at,
+        human_comment,
         judgment_payload_json,
         placeholder_kind,
         detail_updated_at
@@ -463,6 +452,8 @@ const getLlmJudgmentDirectInsertStatement = (
         payload.prompt_heading,
         payload.prompt_type,
         payload.prompt_criteria_disposition,
+        payload.judgment_created_at,
+        NULL AS human_comment,
         CASE WHEN payload.placeholder_kind IS NOT NULL THEN NULL ELSE ${getSqlLlmJudgmentPayload('payload')} END AS judgment_payload_json,
         payload.placeholder_kind,
         COALESCE(payload.judgment_updated_at, current_timestamp) AS detail_updated_at
@@ -499,6 +490,8 @@ const getHumanJudgmentDirectInsertStatement = (
         prompt_heading,
         prompt_type,
         prompt_criteria_disposition,
+        judgment_created_at,
+        human_comment,
         judgment_payload_json,
         placeholder_kind,
         detail_updated_at
@@ -588,7 +581,9 @@ const getHumanJudgmentDirectInsertStatement = (
         payload.prompt_heading,
         payload.prompt_type,
         payload.prompt_criteria_disposition,
-        ${getSqlHumanJudgmentPayload('payload')} AS judgment_payload_json,
+        payload.human_judgment_created_at AS judgment_created_at,
+        payload.comment AS human_comment,
+        NULL AS judgment_payload_json,
         NULL AS placeholder_kind,
         COALESCE(payload.human_judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload

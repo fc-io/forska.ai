@@ -37,6 +37,8 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql',
   '../../db/duckdbMigrations/0134_dropReviewArticleServingReviewProgressCopy.sql',
   '../../db/duckdbMigrations/0135_reviewServingJudgmentDetailPromptScalars.sql',
+  '../../db/duckdbMigrations/0136_dropReviewSummaryPartialServingKey.sql',
+  '../../db/duckdbMigrations/0137_reviewServingJudgmentDetailHumanScalars.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -82,6 +84,10 @@ const reviewJudgmentDetailIsAnsweredForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql']
 const reviewJudgmentDetailPromptScalarsForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0135_reviewServingJudgmentDetailPromptScalars.sql']
+const reviewSummaryPartialServingKeyDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0136_dropReviewSummaryPartialServingKey.sql']
+const reviewJudgmentDetailHumanScalarsForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0137_reviewServingJudgmentDetailHumanScalars.sql']
 const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
@@ -351,6 +357,40 @@ test('projector watermark schema keeps lifecycle recovery fields nullable', () =
   expect(projectorWatermarkSql).not.toContain('lease_expires_at TIMESTAMPTZ NOT NULL')
   expect(projectorWatermarkSql).not.toContain('cursor_json JSON NOT NULL')
   expect(projectorWatermarkSql).not.toContain('last_error VARCHAR NOT NULL')
+})
+
+test('summary rebuild partial schema drops derived serving key identity', () => {
+  expect([...getTableColumns('mart.review_article_summary_rebuild_partial_v4')]).toEqual([
+    'request_id',
+    'chunk_id',
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'summary_kind',
+    'summary_identity',
+    'list_mode_key',
+    'count_kind',
+    'summary_definition_version',
+    'filter_key',
+    'facet_kind',
+    'facet_key',
+    'facet_value',
+    'prompt_id',
+    'answer_id',
+    'answer_value',
+    'availability',
+    'stale_reason',
+    'count_value',
+    'partial_updated_at',
+  ])
+  expect(reviewSummaryPartialServingKeyDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_summary_rebuild_partial_v4_without_serving_key',
+  )
+  expect(reviewSummaryPartialServingKeyDropForwardMigrationSql).toContain('SUM(COALESCE(count_value, 0))')
+  expect(reviewSummaryPartialServingKeyDropForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_summary_rebuild_partial_v4_unique',
+  )
+  expect(schemaMigrationSql).not.toContain('serving_key VARCHAR')
 })
 
 test('Phase 1 schema migration creates every read-contract physical table', () => {
@@ -661,6 +701,8 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'prompt_heading',
       'prompt_type',
       'prompt_criteria_disposition',
+      'judgment_created_at',
+      'human_comment',
       'judgment_payload_json',
       'placeholder_kind',
     ]),
@@ -701,6 +743,20 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
     'CASE WHEN placeholder_kind IS NOT NULL THEN NULL ELSE judgment_payload_json END AS judgment_payload_json',
   )
   expect(reviewJudgmentDetailPromptScalarsForwardMigrationSql).toContain(
+    'RENAME TO review_article_judgment_detail_serving_v4',
+  )
+  expect(reviewJudgmentDetailHumanScalarsForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_human_scalars_next',
+  )
+  expect(reviewJudgmentDetailHumanScalarsForwardMigrationSql).toContain('judgment_created_at TIMESTAMPTZ')
+  expect(reviewJudgmentDetailHumanScalarsForwardMigrationSql).toContain('human_comment VARCHAR')
+  expect(reviewJudgmentDetailHumanScalarsForwardMigrationSql).toContain(
+    "WHEN payload_kind = 'human' THEN json_extract_string(judgment_payload_json, '$.comment')",
+  )
+  expect(reviewJudgmentDetailHumanScalarsForwardMigrationSql).toContain(
+    "WHEN payload_kind = 'human' OR placeholder_kind IS NOT NULL THEN NULL",
+  )
+  expect(reviewJudgmentDetailHumanScalarsForwardMigrationSql).toContain(
     'RENAME TO review_article_judgment_detail_serving_v4',
   )
   expect(countScopeForwardMigrationSql).toContain(

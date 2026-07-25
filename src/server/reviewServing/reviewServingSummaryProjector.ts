@@ -14,7 +14,6 @@ import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjecto
 import {
   getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
-  type ReviewServingProjectorRecordValue,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
@@ -554,8 +553,37 @@ const getRequiredSummaryRebuildChunkId = (input: ProjectReviewServingSummariesIn
   return input.chunkId
 }
 
-const getNullableSummaryRecordString = (value: ReviewServingProjectorRecordValue | undefined) => {
-  return typeof value === 'string' ? value : null
+const summaryRebuildPartialKeyColumns = [
+  'request_id',
+  'chunk_id',
+  'project_id',
+  'review_config_hash',
+  'snapshot_id',
+  'summary_kind',
+  'summary_identity',
+  'list_mode_key',
+  'count_kind',
+  'filter_key',
+  'facet_kind',
+  'facet_key',
+  'facet_value',
+] as const
+
+const getSummaryRebuildPartialScalarKeyPredicate = (input: {leftAlias: string; rightAlias: string}) => {
+  return `
+        AND (${input.leftAlias}.request_id || '') = (${input.rightAlias}.request_id || '')
+        AND (${input.leftAlias}.chunk_id || '') = (${input.rightAlias}.chunk_id || '')
+        AND (${input.leftAlias}.project_id || '') = (${input.rightAlias}.project_id || '')
+        AND (${input.leftAlias}.review_config_hash || '') = (${input.rightAlias}.review_config_hash || '')
+        AND (${input.leftAlias}.snapshot_id || '') = (${input.rightAlias}.snapshot_id || '')
+        AND (${input.leftAlias}.summary_kind || '') = (${input.rightAlias}.summary_kind || '')
+        AND (${input.leftAlias}.summary_identity || '') = (${input.rightAlias}.summary_identity || '')
+        AND COALESCE(${input.leftAlias}.list_mode_key, 'global') = COALESCE(${input.rightAlias}.list_mode_key, 'global')
+        AND COALESCE(${input.leftAlias}.count_kind, '') = COALESCE(${input.rightAlias}.count_kind, '')
+        AND COALESCE(${input.leftAlias}.filter_key, '') = COALESCE(${input.rightAlias}.filter_key, '')
+        AND COALESCE(${input.leftAlias}.facet_kind, '') = COALESCE(${input.rightAlias}.facet_kind, '')
+        AND COALESCE(${input.leftAlias}.facet_key, '') = COALESCE(${input.rightAlias}.facet_key, '')
+        AND COALESCE(${input.leftAlias}.facet_value, '') = COALESCE(${input.rightAlias}.facet_value, '')`
 }
 
 const getDirectFullSummaryPartialRecord = (input: {
@@ -565,18 +593,9 @@ const getDirectFullSummaryPartialRecord = (input: {
 }) => {
   const values = input.record.values
   const summaryKind = input.record.table === 'mart.review_article_count_serving_v4' ? 'count' : 'facet'
-  const servingKey = getStableReviewServingJson({
-    countKind: getNullableSummaryRecordString(values.count_kind),
-    facetKey: getNullableSummaryRecordString(values.facet_key),
-    facetValue: getNullableSummaryRecordString(values.facet_value),
-    filterKey: getNullableSummaryRecordString(values.filter_key),
-    listModeKey: getNullableSummaryRecordString(values.list_mode_key),
-    summaryIdentity: getNullableSummaryRecordString(values.summary_identity),
-    summaryKind,
-  })
 
   return {
-    keyColumns: ['request_id', 'chunk_id', 'project_id', 'review_config_hash', 'snapshot_id', 'serving_key'],
+    keyColumns: summaryRebuildPartialKeyColumns,
     table: 'mart.review_article_summary_rebuild_partial_v4',
     values: {
       answer_id: values.answer_id ?? null,
@@ -595,7 +614,6 @@ const getDirectFullSummaryPartialRecord = (input: {
       prompt_id: values.prompt_id ?? null,
       request_id: input.requestId,
       review_config_hash: values.review_config_hash,
-      serving_key: servingKey,
       snapshot_id: values.snapshot_id,
       stale_reason: values.stale_reason ?? null,
       summary_definition_version: values.summary_definition_version,
@@ -915,7 +933,6 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         partial.project_id,
         partial.review_config_hash,
         partial.snapshot_id,
-        partial.serving_key,
         partial.summary_kind,
         partial.summary_identity,
         ANY_VALUE(partial.list_mode_key) AS list_mode_key,
@@ -936,7 +953,19 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
       ${getCompletedSummaryRebuildPartialChunkJoin('partial')}
       WHERE ${scopePredicate}
         AND partial.${chunkIdPredicate}
-      GROUP BY partial.request_id, partial.project_id, partial.review_config_hash, partial.snapshot_id, partial.serving_key, partial.summary_kind, partial.summary_identity
+      GROUP BY
+        partial.request_id,
+        partial.project_id,
+        partial.review_config_hash,
+        partial.snapshot_id,
+        partial.summary_kind,
+        partial.summary_identity,
+        COALESCE(partial.list_mode_key, 'global'),
+        COALESCE(partial.count_kind, ''),
+        COALESCE(partial.filter_key, ''),
+        COALESCE(partial.facet_kind, ''),
+        COALESCE(partial.facet_key, ''),
+        COALESCE(partial.facet_value, '')
     `)
     await tx.run(`
       UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator
@@ -948,12 +977,8 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         END,
         partial_updated_at = now()
       FROM temp_summary_rebuild_accumulator_batch batch
-      WHERE (accumulator.request_id || '') = (batch.request_id || '')
-        AND (accumulator.chunk_id || '') = (batch.chunk_id || '')
-        AND (accumulator.project_id || '') = (batch.project_id || '')
-        AND (accumulator.review_config_hash || '') = (batch.review_config_hash || '')
-        AND (accumulator.snapshot_id || '') = (batch.snapshot_id || '')
-        AND (accumulator.serving_key || '') = (batch.serving_key || '')
+      WHERE TRUE
+        ${getSummaryRebuildPartialScalarKeyPredicate({leftAlias: 'accumulator', rightAlias: 'batch'})}
     `)
     await tx.run(`
       INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
@@ -962,7 +987,6 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         project_id,
         review_config_hash,
         snapshot_id,
-        serving_key,
         summary_kind,
         summary_identity,
         list_mode_key,
@@ -986,7 +1010,6 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         batch.project_id,
         batch.review_config_hash,
         batch.snapshot_id,
-        batch.serving_key,
         batch.summary_kind,
         batch.summary_identity,
         batch.list_mode_key,
@@ -1007,12 +1030,8 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
       WHERE NOT EXISTS (
         SELECT 1
         FROM mart.review_article_summary_rebuild_partial_v4 existing
-        WHERE (existing.request_id || '') = (batch.request_id || '')
-          AND (existing.chunk_id || '') = (batch.chunk_id || '')
-          AND (existing.project_id || '') = (batch.project_id || '')
-          AND (existing.review_config_hash || '') = (batch.review_config_hash || '')
-          AND (existing.snapshot_id || '') = (batch.snapshot_id || '')
-          AND (existing.serving_key || '') = (batch.serving_key || '')
+        WHERE TRUE
+          ${getSummaryRebuildPartialScalarKeyPredicate({leftAlias: 'existing', rightAlias: 'batch'})}
       )
     `)
     await tx.run(`

@@ -198,6 +198,7 @@ const getServingJudgmentRow = () => {
       quotes: [],
       updatedAt: '2024-01-04T00:00:00.000Z',
     },
+    judgment_created_at: '2024-01-03T00:00:00.000Z',
     model_id: 'model-1',
     payload_kind: 'llm',
     placeholder_kind: null,
@@ -291,7 +292,7 @@ test('project review details keeps V4 judgment payload JSON keys on the serving 
   expect(detailJudgmentHydration).toContain('getPromptRowFromServingDetail(row)')
   expect(detailJudgmentHydration).toContain('getModelPayload(payload)')
   expect(detailJudgmentHydration).toContain('judgmentAssessments: payload.assessments ?? []')
-  expect(detailJudgmentHydration).toContain('judgmentCreatedAt: payload.createdAt ?? null')
+  expect(detailJudgmentHydration).toContain('judgmentCreatedAt: row.judgment_created_at ?? payload.createdAt ?? null')
   expect(detailJudgmentHydration).toContain('judgmentUpdatedAt: payload.updatedAt ?? row.detail_updated_at ?? null')
   expect(detailJudgmentHydration).toContain(
     'judgmentChunkingStrategy: (payload.chunkingStrategy as string | null | undefined) ?? null',
@@ -312,26 +313,25 @@ test('project review details keeps V4 judgment payload JSON keys on the serving 
   expect(detailJudgmentHydration).toContain('modelVersion: model.version ?? null')
 })
 
-test('project review details keeps human answer and comment payload fallbacks', () => {
+test('project review details reads human answer and comment from scalar detail columns', () => {
   const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
   const detailHumanHydration = routeText.slice(
     routeText.indexOf('const getProjectReviewDetailHumanRows'),
     routeText.indexOf('const getArticleJudgmentRows'),
   )
 
-  expect(detailHumanHydration).toContain('const payload = getJsonObjectValue(row.judgment_payload_json)')
   expect(detailHumanHydration).toContain('getPromptRowFromServingDetail(row)')
-  expect(detailHumanHydration).toContain(
-    'answer: row.answered_original ?? (payload.answer as string | null | undefined) ?? null',
-  )
-  expect(detailHumanHydration).toContain('comment: (payload.comment as string | null | undefined) ?? null')
+  expect(detailHumanHydration).toContain('answer: row.answered_original ?? null')
+  expect(detailHumanHydration).toContain('comment: row.human_comment ?? null')
   expect(detailHumanHydration).toContain(
     "promptOriginalText: prompt.originalText || 'Overall human screening decision'",
   )
   expect(detailHumanHydration).toContain(
     "promptOrder: promptId === 'summary' ? 0 : (row.prompt_order ?? prompt.order ?? null)",
   )
-  expect(detailHumanHydration).toContain('updatedAt: getServingDateValue(payload.updatedAt ?? row.detail_updated_at)')
+  expect(detailHumanHydration).toContain(
+    'updatedAt: getServingDateValue(row.detail_updated_at ?? row.judgment_created_at)',
+  )
 })
 
 test('project review details returns unavailable when V4 article detail is unavailable', async () => {

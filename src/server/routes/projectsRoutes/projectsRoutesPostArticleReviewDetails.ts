@@ -98,6 +98,8 @@ type ServingJudgmentDetailRow = {
   answered_original_as_array?: unknown
   article_id?: string
   detail_updated_at?: unknown
+  human_comment?: string | null
+  judgment_created_at?: unknown
   judgment_id?: string | null
   judgment_payload_json?: unknown
   model_id?: string | null
@@ -116,8 +118,9 @@ type ServingHumanJudgmentDetailRow = {
   answered_original?: string | null
   article_id?: string
   detail_updated_at?: unknown
+  human_comment?: string | null
+  judgment_created_at?: unknown
   judgment_id?: string | null
-  judgment_payload_json?: unknown
   payload_kind?: string
   prompt_criteria_disposition?: 'include' | 'exclude' | 'combined' | null
   prompt_heading?: string | null
@@ -345,7 +348,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       return {
         judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, `placeholder:${promptId}`),
         judgmentAssessments: payload.assessments ?? [],
-        judgmentCreatedAt: payload.createdAt ?? null,
+        judgmentCreatedAt: row.judgment_created_at ?? payload.createdAt ?? null,
         judgmentUpdatedAt: payload.updatedAt ?? row.detail_updated_at ?? null,
         judgmentArticleId: row.article_id ?? params.articleId,
         judgmentModelId: modelId,
@@ -398,18 +401,17 @@ const getProjectReviewDetailHumanRows = async (params: {
 
   return rows
     .map((row) => {
-      const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
       const prompt = getPromptRowFromServingDetail(row)
 
       return {
-        judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, ''),
+        judgmentId: row.judgment_id ?? '',
         promptId,
-        answer: row.answered_original ?? (payload.answer as string | null | undefined) ?? null,
-        comment: (payload.comment as string | null | undefined) ?? null,
+        answer: row.answered_original ?? null,
+        comment: row.human_comment ?? null,
         promptOriginalText: prompt.originalText || 'Overall human screening decision',
         promptOrder: promptId === 'summary' ? 0 : (row.prompt_order ?? prompt.order ?? null),
-        updatedAt: getServingDateValue(payload.updatedAt ?? row.detail_updated_at),
+        updatedAt: getServingDateValue(row.detail_updated_at ?? row.judgment_created_at),
       }
     })
     .filter((row) => {
