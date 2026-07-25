@@ -346,6 +346,7 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
       articleCreatedAtFrom: '2026-01-01',
       articleCreatedAtTo: '2026-01-31',
       duplicateFlag: 'true',
+      importRoute: 'import-route-1',
       llmStatus: 'complete',
       promptAnswer: ['prompt-1:yes', 'prompt-2:no'],
       searchTokenPrefix: 'heart',
@@ -390,11 +391,13 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   expect(sql).toContain("mart.review_article_serving_v4.article_created_at < TIMESTAMPTZ '2026-02-01'")
   expect(sql).toContain("filter_0.filter_kind = 'duplicateFlag'")
   expect(sql).toContain("filter_0.filter_value IN (SELECT unnest(['true']::VARCHAR[]))")
+  expect(sql).toContain("filter_2.filter_kind = 'importRoute'")
+  expect(sql).toContain("filter_2.filter_value IN (SELECT unnest(['import-route-1']::VARCHAR[]))")
   expect(sql).not.toContain('duplicate_flag = TRUE')
   expect(sql).toContain("llm_status_key = 'answered'")
   expect(sql).toContain('review:promptAnswer:prompt-1:yes')
   expect(sql).toContain('review:promptAnswer:prompt-2:no')
-  expect(sql.match(/FROM mart\.review_article_filter_posting_serving_v4 filter_/gu)?.length).toBe(3)
+  expect(sql.match(/FROM mart\.review_article_filter_posting_serving_v4 filter_/gu)?.length).toBe(4)
   expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
   expect(sql).toContain("search.project_id = 'project-1'")
   expect(sql).toContain("search.search_identity = 'search-identity'")

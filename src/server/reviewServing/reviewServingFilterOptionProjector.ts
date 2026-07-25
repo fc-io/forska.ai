@@ -156,35 +156,19 @@ const getFilterOptionSourceRows = async (
             AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             ${getSearchPredicate(input.searchTitle)}
         ),
-        review_facet_options AS (
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'duplicateFlag' AS facetKey, CAST(serving.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':duplicateFlag:', CAST(serving.duplicate_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_serving_v4 serving
-          INNER JOIN active_article active ON active.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${aggregateBySql} serving.duplicate_flag
-          UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'conflictFlag' AS facetKey, CAST(serving.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':conflictFlag:', CAST(serving.conflict_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_serving_v4 serving
-          INNER JOIN active_article active ON active.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${aggregateBySql} serving.conflict_flag
-          UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'importRoute' AS facetKey, selected_base.import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':importRoute:', selected_base.import_route_id) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_serving_v4 serving
-          INNER JOIN active_article active ON active.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          INNER JOIN app.review_selected_article_import_v4 selected_base
-            ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
-            AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-            AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-            AND selected_base.article_id = serving.article_id
-            AND NOT selected_base.tombstone
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND selected_base.import_route_id IS NOT NULL
-          ${aggregateBySql} selected_base.import_route_id
-          UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'publicationYear' AS facetKey, CAST(selected_hot.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':publicationYear:', CAST(selected_hot.publication_year AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+        selected_article AS (
+          SELECT DISTINCT
+            serving.article_id,
+            CASE WHEN selected_base.tombstone THEN NULL ELSE selected_base.import_route_id END AS import_route_id,
+            selected_hot.publication_year,
+            CASE
+              WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+              ELSE COALESCE(selected_hot.duplicate_flag, FALSE)
+            END AS duplicate_flag,
+            CASE
+              WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+              ELSE COALESCE(selected_hot.conflict_flag, FALSE)
+            END AS conflict_flag
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
@@ -198,8 +182,30 @@ const getFilterOptionSourceRows = async (
             AND selected_hot.article_id = selected_base.article_id
             AND selected_hot.source_record_key = selected_base.source_record_key
             AND NOT selected_hot.tombstone
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND selected_hot.publication_year IS NOT NULL
-          ${aggregateBySql} selected_hot.publication_year
+          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+            AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        ),
+        review_facet_options AS (
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'duplicateFlag' AS facetKey, CAST(selected.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':duplicateFlag:', CAST(selected.duplicate_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND selected.duplicate_flag IS NOT NULL
+          ${aggregateBySql} selected.duplicate_flag
+          UNION ALL
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'conflictFlag' AS facetKey, CAST(selected.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':conflictFlag:', CAST(selected.conflict_flag AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND selected.conflict_flag IS NOT NULL
+          ${aggregateBySql} selected.conflict_flag
+          UNION ALL
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'importRoute' AS facetKey, selected.import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':importRoute:', selected.import_route_id) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND selected.import_route_id IS NOT NULL
+          ${aggregateBySql} selected.import_route_id
+          UNION ALL
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'publicationYear' AS facetKey, CAST(selected.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':publicationYear:', CAST(selected.publication_year AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT selected.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM selected_article selected
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND selected.publication_year IS NOT NULL
+          ${aggregateBySql} selected.publication_year
           UNION ALL
           SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
