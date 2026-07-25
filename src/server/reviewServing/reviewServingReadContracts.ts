@@ -86,6 +86,10 @@ const jobServingSort = {direction: 'desc', fields: ['updated_at', 'job_id']} as 
 const reviewFilterFacetSort = {direction: 'asc', fields: ['facet_key', 'facet_value']} as const
 const detailRowListModePrioritySort =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
+const detailJudgmentListModePrioritySort =
+  "CASE mart.review_article_judgment_detail_serving_v4.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
+const detailJudgmentPromptOrderSort = 'mart.review_article_judgment_detail_serving_v4.prompt_order ASC NULLS LAST'
+const detailJudgmentPromptIdSort = 'mart.review_article_judgment_detail_serving_v4.prompt_id'
 const promptPreviewCreatedAtSort = `${reviewArticleServingTable}.article_created_at ASC NULLS LAST`
 const reviewedRowCursorFields = ['sort_key DESC', 'article_id ASC'] as const
 const reviewedRowSort = {direction: 'desc', fields: ['sort_key', 'article_id ASC']} as const
@@ -518,7 +522,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: ['articleId'],
-    cursorFields: [detailRowListModePrioritySort, 'prompt_order ASC NULLS LAST', 'prompt_id'],
+    cursorFields: [detailJudgmentListModePrioritySort, detailJudgmentPromptOrderSort, detailJudgmentPromptIdSort],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.detail.judgments',
     listMode: null,
@@ -531,12 +535,15 @@ export const reviewServingReadContractList = [
     requiredComponents: ['humanStatus', 'llmStatus', 'summary', 'payload'],
     searchMode: 'none',
     servingTable: reviewJudgmentDetailServingTable,
-    sort: {direction: 'asc', fields: [detailRowListModePrioritySort, 'prompt_order ASC NULLS LAST', 'prompt_id']},
+    sort: {
+      direction: 'asc',
+      fields: [detailJudgmentListModePrioritySort, detailJudgmentPromptOrderSort, detailJudgmentPromptIdSort],
+    },
     workloadClass: 'foregroundReviewRows',
   }),
   defineContract({
     allowedFilters: ['articleId', 'promptAnswer', 'promptId'],
-    cursorFields: [detailRowListModePrioritySort, 'prompt_order ASC NULLS LAST', 'prompt_id'],
+    cursorFields: [detailJudgmentListModePrioritySort, detailJudgmentPromptOrderSort, detailJudgmentPromptIdSort],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.detail.humanJudgments',
     listMode: null,
@@ -549,7 +556,10 @@ export const reviewServingReadContractList = [
     requiredComponents: ['humanStatus', 'summary', 'payload'],
     searchMode: 'none',
     servingTable: reviewJudgmentDetailServingTable,
-    sort: {direction: 'asc', fields: [detailRowListModePrioritySort, 'prompt_order ASC NULLS LAST', 'prompt_id']},
+    sort: {
+      direction: 'asc',
+      fields: [detailJudgmentListModePrioritySort, detailJudgmentPromptOrderSort, detailJudgmentPromptIdSort],
+    },
     workloadClass: 'foregroundReviewRows',
   }),
   defineContract({

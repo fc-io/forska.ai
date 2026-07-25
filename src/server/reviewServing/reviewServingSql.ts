@@ -41,11 +41,12 @@ const sqlClauseKeywords = new Set([
 type ReviewServingSqlTableReference = {alias: string | null; table: string}
 
 export const reviewServingRegisteredSqlTables = [
-  ...new Set(
-    reviewServingReadContractList.map((contract) => {
+  ...new Set([
+    ...reviewServingReadContractList.map((contract) => {
       return contract.servingTable
     }),
-  ),
+    'mart.review_article_judgment_detail_hydration_serving_v4',
+  ]),
 ].sort()
 
 const getDefaultReviewServingSqlShapeOptions = (): Required<ReviewServingSqlShapeOptions> => {
@@ -250,8 +251,10 @@ const reviewServingPayloadTable = 'mart.review_article_serving_payload_v4'
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
+const reviewServingJudgmentDetailHydrationTable = 'mart.review_article_judgment_detail_hydration_serving_v4'
 const reviewServingListModePrioritySql =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
+const reviewServingJudgmentDetailListModePrioritySql = `CASE ${reviewServingJudgmentDetailTable}.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END`
 const reviewServingListModePriorityAlias = 'list_mode_priority'
 const reviewServingArticlePhysicalSelectColumns = [
   'project_id',
@@ -295,47 +298,53 @@ const reviewServingArticlePayloadDisplayColumns = [
   return column
 })
 const reviewServingJudgmentDetailFullColumns = [
-  'project_id',
-  'review_config_hash',
-  'snapshot_id',
-  'list_mode_key',
-  'payload_kind',
-  'article_id',
-  'prompt_id',
-  'prompt_order',
-  'judgment_id',
-  'judgment_model_id',
-  'is_answered',
-  'answered_original',
-  'answered_original_as_array',
-  'prompt_original_text',
-  'prompt_heading',
-  'prompt_type',
-  'prompt_criteria_disposition',
-  'judgment_created_at',
-  'judgment_updated_at',
-  'human_comment',
-  'explanation',
-  'quotes',
-  'chunking_strategy',
-  'confidence_original',
-  'snapshot_project_id',
-  'snapshot_project_model_name',
-  'model_name',
-  'model_provider',
-  'model_thinking',
-  'model_version',
-  'assessment_id',
-  'assessment_judgment_id',
-  'assessment_is_correct',
-  'assessment_comment',
-  'assessment_created_at',
-  'assessment_updated_at',
-  'placeholder_kind',
-  'detail_updated_at',
-].map((column) => {
-  return `${reviewServingJudgmentDetailTable}.${column}`
-})
+  ...[
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'list_mode_key',
+    'payload_kind',
+    'article_id',
+    'prompt_id',
+    'prompt_order',
+    'judgment_id',
+    'judgment_model_id',
+    'is_answered',
+    'answered_original',
+    'answered_original_as_array',
+    'judgment_created_at',
+    'human_comment',
+    'explanation',
+    'quotes',
+    'placeholder_kind',
+    'detail_updated_at',
+  ].map((column) => {
+    return `${reviewServingJudgmentDetailTable}.${column}`
+  }),
+  ...[
+    'prompt_original_text',
+    'prompt_heading',
+    'prompt_type',
+    'prompt_criteria_disposition',
+    'judgment_updated_at',
+    'chunking_strategy',
+    'confidence_original',
+    'snapshot_project_id',
+    'snapshot_project_model_name',
+    'model_name',
+    'model_provider',
+    'model_thinking',
+    'model_version',
+    'assessment_id',
+    'assessment_judgment_id',
+    'assessment_is_correct',
+    'assessment_comment',
+    'assessment_created_at',
+    'assessment_updated_at',
+  ].map((column) => {
+    return `${reviewServingJudgmentDetailHydrationTable}.${column}`
+  }),
+]
 const reviewServingJudgmentDetailRouteListColumns = [
   'project_id',
   'review_config_hash',
@@ -367,6 +376,29 @@ const getReviewServingJudgmentDetailSelectColumns = (contract: ReviewServingRead
   return reviewServingJudgmentDetailFullColumnContractKeys.has(contract.key)
     ? reviewServingJudgmentDetailFullColumns
     : reviewServingJudgmentDetailRouteListColumns
+}
+
+const getReviewServingJudgmentDetailHydrationJoin = (params: {
+  contract: ReviewServingReadContract
+  projectIdParameter: string
+  reviewConfigHashParameter: string
+  snapshotIdParameter: string
+}) => {
+  return reviewServingJudgmentDetailFullColumnContractKeys.has(params.contract.key)
+    ? [
+        ` INNER JOIN ${reviewServingJudgmentDetailHydrationTable}`,
+        ` ON ${reviewServingJudgmentDetailHydrationTable}.project_id = ${params.projectIdParameter}`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.project_id = ${reviewServingJudgmentDetailTable}.project_id`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.review_config_hash = ${params.reviewConfigHashParameter}`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.review_config_hash = ${reviewServingJudgmentDetailTable}.review_config_hash`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.snapshot_id = ${params.snapshotIdParameter}`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.snapshot_id = ${reviewServingJudgmentDetailTable}.snapshot_id`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.list_mode_key = ${reviewServingJudgmentDetailTable}.list_mode_key`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.payload_kind = ${reviewServingJudgmentDetailTable}.payload_kind`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
+        ` AND ${reviewServingJudgmentDetailHydrationTable}.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+      ].join('')
+    : ''
 }
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
@@ -406,10 +438,14 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   }
 
   const snapshotIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'snapshot_id'})
+  const reviewConfigHashColumn =
+    params.contract.servingTable === reviewServingJudgmentDetailTable
+      ? `${reviewServingJudgmentDetailTable}.review_config_hash`
+      : 'review_config_hash'
 
   return params.contract.servingTable === 'mart.review_title_search_serving_v4'
     ? ` AND search_identity = ${params.searchIdentityParameter} AND project_scope_identity = ${params.projectScopeIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
-    : ` AND review_config_hash = ${params.reviewConfigHashParameter} AND ${snapshotIdColumn} = ${params.snapshotIdParameter}`
+    : ` AND ${reviewConfigHashColumn} = ${params.reviewConfigHashParameter} AND ${snapshotIdColumn} = ${params.snapshotIdParameter}`
 }
 
 const reviewServingListModePredicateTables = new Set([
@@ -435,12 +471,17 @@ const getReviewServingRowsSqlListModePredicate = (params: {
     return ''
   }
 
+  const listModeColumn =
+    params.contract.servingTable === reviewServingJudgmentDetailTable
+      ? `${reviewServingJudgmentDetailTable}.list_mode_key`
+      : 'list_mode_key'
+
   if (params.contract.listMode) {
-    return ` AND list_mode_key = ${getSqlStringLiteral(params.contract.listMode)}`
+    return ` AND ${listModeColumn} = ${getSqlStringLiteral(params.contract.listMode)}`
   }
 
   return reviewServingRuntimeListModeStrategies.has(params.contract.physicalAccessStrategy)
-    ? ` AND list_mode_key = ${params.listModeParameter}`
+    ? ` AND ${listModeColumn} = ${params.listModeParameter}`
     : ''
 }
 
@@ -449,11 +490,13 @@ const getReviewServingRowsSqlJudgmentPayloadKindPredicate = (contract: ReviewSer
     return ''
   }
 
+  const payloadKindColumn = `${reviewServingJudgmentDetailTable}.payload_kind`
+
   return contract.key === 'review.detail.humanJudgments'
     || contract.key === 'review.human.list.judgments'
     || contract.key === 'review.both.list.humanJudgments'
-    ? " AND payload_kind = 'human'"
-    : " AND payload_kind = 'llm'"
+    ? ` AND ${payloadKindColumn} = 'human'`
+    : ` AND ${payloadKindColumn} = 'llm'`
 }
 
 const getSqlStringLiteral = (value: string) => {
@@ -746,7 +789,7 @@ const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingR
   }
 
   return contract.servingTable === reviewServingJudgmentDetailTable
-    ? ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY article_id, prompt_id)`
+    ? ` QUALIFY ${reviewServingJudgmentDetailListModePrioritySql} = min(${reviewServingJudgmentDetailListModePrioritySql}) OVER (PARTITION BY ${reviewServingJudgmentDetailTable}.article_id, ${reviewServingJudgmentDetailTable}.prompt_id)`
     : ''
 }
 
@@ -759,7 +802,10 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
     ].join(', ')
 
     return contract.sort.fields.some((field) => {
-      return field.includes(reviewServingListModePrioritySql)
+      return (
+        field.includes(reviewServingListModePrioritySql)
+        || field.includes(reviewServingJudgmentDetailListModePrioritySql)
+      )
     })
       ? `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
       : `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata`
@@ -767,11 +813,17 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
 
   if (contract.servingTable === reviewServingJudgmentDetailTable) {
     const selectColumns = getReviewServingJudgmentDetailSelectColumns(contract).join(', ')
+    const listModePrioritySql = reviewServingJudgmentDetailFullColumnContractKeys.has(contract.key)
+      ? reviewServingJudgmentDetailListModePrioritySql
+      : reviewServingListModePrioritySql
 
     return contract.sort.fields.some((field) => {
-      return field.includes(reviewServingListModePrioritySql)
+      return (
+        field.includes(reviewServingListModePrioritySql)
+        || field.includes(reviewServingJudgmentDetailListModePrioritySql)
+      )
     })
-      ? `SELECT ${selectColumns}, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
+      ? `SELECT ${selectColumns}, ${listModePrioritySql} AS ${reviewServingListModePriorityAlias}`
       : `SELECT ${selectColumns}`
   }
 
@@ -853,6 +905,10 @@ export const buildReviewServingRowsSql = (params: {
           ` ON article.id = ${reviewServingArticleTable}.article_id`,
         ].join('')
       : ''
+  const judgmentDetailHydrationJoin =
+    params.contract.servingTable === reviewServingJudgmentDetailTable
+      ? getReviewServingJudgmentDetailHydrationJoin(params)
+      : ''
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
@@ -867,7 +923,7 @@ export const buildReviewServingRowsSql = (params: {
   const projectIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'project_id'})
 
   return [
-    `${selectSql} FROM ${params.contract.servingTable}${articlePayloadJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
+    `${selectSql} FROM ${params.contract.servingTable}${articlePayloadJoin}${judgmentDetailHydrationJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
     judgmentPayloadKindPredicate,

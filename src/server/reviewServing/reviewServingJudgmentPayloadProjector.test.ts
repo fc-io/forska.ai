@@ -127,17 +127,20 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(joined).toContain('payload.explanation')
   expect(joined).toContain('payload.quotes')
   expect(joined).toContain('payload.judgment_updated_at')
-  expect(joined).toContain('payload.chunking_strategy')
-  expect(joined).toContain('payload.confidence_original')
-  expect(joined).toContain('payload.snapshot_project_id')
-  expect(joined).toContain('payload.snapshot_project_model_name')
-  expect(joined).toContain('payload.model_display_name AS model_name')
-  expect(joined).toContain('payload.model_provider')
-  expect(joined).toContain('payload.model_thinking')
-  expect(joined).toContain('payload.model_version')
-  expect(joined).toContain('payload.assessment_id')
-  expect(joined).toContain('payload.assessment_judgment_id')
-  expect(joined).toContain('payload.assessment_updated_at')
+  expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_hydration_serving_v4')
+  expect(joined).toContain('judgment.chunking_strategy')
+  expect(joined).toContain('judgment.confidence_original')
+  expect(joined).toContain('judgment.snapshot_project_id')
+  expect(joined).toContain('judgment.snapshot_project_model_name')
+  expect(joined).toContain(
+    'COALESCE(model.display_name, model.name, judgment.snapshot_project_model_name) AS model_name',
+  )
+  expect(joined).toContain('provider_connection.provider_kind AS model_provider')
+  expect(joined).toContain("json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking")
+  expect(joined).toContain('model.variant AS model_version')
+  expect(joined).toContain('assessment.id AS assessment_id')
+  expect(joined).toContain('assessment.judgment_id AS assessment_judgment_id')
+  expect(joined).toContain('assessment.updated_at AS assessment_updated_at')
   expect(joined).toContain('human_summary')
 })
 
@@ -147,6 +150,12 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   await projectReviewServingJudgmentPayloadRows(projectInput([judgmentClaim()]), database)
   const llmInsert = statements.find((statement) => {
     return statement.includes('latest_judgment AS') && statement.includes("'llm' AS payload_kind")
+  })
+  const llmHydrationInsert = statements.find((statement) => {
+    return (
+      statement.includes('INSERT INTO mart.review_article_judgment_detail_hydration_serving_v4')
+      && statement.includes("detail.payload_kind = 'llm'")
+    )
   })
   const deleteStatements = statements.filter((statement) => {
     return statement.includes('DELETE FROM mart.review_article_judgment_detail_serving_v4')
@@ -167,11 +176,12 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(llmInsert).toContain('PARTITION BY assessment.judgment_id')
   expect(llmInsert).toContain('assessment.assessment_rank = 1')
   expect(llmInsert).toContain('prompt.original_text AS prompt_original_text')
-  expect(llmInsert).toContain('payload.prompt_original_text')
-  expect(llmInsert).toContain('payload.prompt_heading')
-  expect(llmInsert).toContain('payload.prompt_type')
-  expect(llmInsert).toContain('payload.prompt_criteria_disposition')
-  expect(llmInsert).toContain('payload.assessment_id')
+  expect(llmInsert).not.toContain('payload.prompt_original_text')
+  expect(llmHydrationInsert).toContain('prompt.original_text AS prompt_original_text')
+  expect(llmHydrationInsert).toContain('prompt.prompt_heading')
+  expect(llmHydrationInsert).toContain('prompt.type AS prompt_type')
+  expect(llmHydrationInsert).toContain('project_prompt.criteria_disposition AS prompt_criteria_disposition')
+  expect(llmHydrationInsert).toContain('assessment.id AS assessment_id')
   expect(llmInsert).not.toContain('json_object(')
   expect(llmInsert).toContain('provider_connection.provider_kind AS model_provider')
   expect(llmInsert).toContain("json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking")
@@ -190,13 +200,20 @@ test('human payload projection filters rows by active human judgment mode', asyn
   const humanSelect = statements.find((statement) => {
     return statement.includes('FROM active_article active') && statement.includes('judgment_human_summary')
   })
+  const humanHydrationSelect = statements.find((statement) => {
+    return (
+      statement.includes('INSERT INTO mart.review_article_judgment_detail_hydration_serving_v4')
+      && statement.includes("detail.payload_kind = 'human'")
+    )
+  })
 
   expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'prompt'")
   expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'summary'")
-  expect(humanSelect).toContain('payload.prompt_original_text')
-  expect(humanSelect).toContain('payload.prompt_heading')
-  expect(humanSelect).toContain('payload.prompt_type')
-  expect(humanSelect).toContain('payload.prompt_criteria_disposition')
+  expect(humanSelect).not.toContain('payload.prompt_original_text')
+  expect(humanHydrationSelect).toContain('prompt.original_text')
+  expect(humanHydrationSelect).toContain('prompt.prompt_heading')
+  expect(humanHydrationSelect).toContain('prompt.type')
+  expect(humanHydrationSelect).toContain('project_prompt.criteria_disposition')
   expect(humanSelect).toContain(
     "judgment_human_summary.answer IS NOT NULL OR judgment_human_summary.origin = 'covidence_import' AS is_answered",
   )
@@ -276,7 +293,7 @@ test('claimless article-range judgment payload rebuild writes detail rows with S
   expect(joined).toContain("article_id <= 'article-9'")
   expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm'), ('both')))")
   expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human'), ('both')))")
-  expect(joined).toContain('payload.assessment_id')
+  expect(joined).toContain('assessment.id AS assessment_id')
   expect(joined).not.toContain('json_object(')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).toContain(
@@ -342,8 +359,8 @@ test('article-set judgment hydration reads bounded payload rows with stable orde
 
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('article_id IN (SELECT unnest($articleIds))')
-  expect(sql).toContain("AND list_mode_key = 'both'")
-  expect(sql).toContain("AND payload_kind = 'human'")
+  expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.list_mode_key = 'both'")
+  expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
   expect(sql).toContain('ORDER BY article_id ASC, prompt_order ASC NULLS LAST, prompt_id ASC')
   expect(sql).toContain('LIMIT $limit')
 })
