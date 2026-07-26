@@ -1685,21 +1685,19 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           project_id,
           review_config_hash,
           snapshot_id,
-          list_mode_key,
           article_id
-        FROM mart.review_article_serving_v4
+        FROM mart.review_article_serving_base_v4
         GROUP BY
           project_id,
           review_config_hash,
           snapshot_id,
-          list_mode_key,
           article_id
         HAVING COUNT(*) > 1
       )
     `,
     mutationProbeSql: `
-      DROP TABLE IF EXISTS startup_probe_review_article_serving_v4;
-      CREATE TEMP TABLE startup_probe_review_article_serving_v4 AS
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_base_v4;
+      CREATE TEMP TABLE startup_probe_review_article_serving_base_v4 AS
       WITH failed_delete_ranges AS (
         SELECT
           project_id,
@@ -1713,7 +1711,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       ),
       failed_delete_rows AS (
         SELECT serving.*
-        FROM mart.review_article_serving_v4 serving
+        FROM mart.review_article_serving_base_v4 serving
         INNER JOIN failed_delete_ranges failed_range
           ON failed_range.project_id = serving.project_id
          AND (
@@ -1728,19 +1726,17 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           serving.project_id,
           serving.review_config_hash,
           serving.snapshot_id,
-          serving.list_mode_key,
           serving.article_id
         LIMIT 64
       ),
       fallback_row AS (
         SELECT serving.*
-        FROM mart.review_article_serving_v4 serving
+        FROM mart.review_article_serving_base_v4 serving
         WHERE NOT EXISTS (SELECT 1 FROM failed_delete_rows)
         ORDER BY
           serving.project_id,
           serving.review_config_hash,
           serving.snapshot_id,
-          serving.list_mode_key,
           serving.article_id
         LIMIT 1
       )
@@ -1750,24 +1746,110 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       SELECT *
       FROM fallback_row;
       BEGIN;
-      DELETE FROM mart.review_article_serving_v4
+      DELETE FROM mart.review_article_serving_base_v4
       WHERE EXISTS (
         SELECT 1
-        FROM startup_probe_review_article_serving_v4 probe
-        WHERE mart.review_article_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
-          AND mart.review_article_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
-          AND mart.review_article_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
-          AND mart.review_article_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
-          AND mart.review_article_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
+        FROM startup_probe_review_article_serving_base_v4 probe
+        WHERE mart.review_article_serving_base_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_serving_base_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
+          AND mart.review_article_serving_base_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_serving_base_v4.article_id IS NOT DISTINCT FROM probe.article_id
       );
-      INSERT INTO mart.review_article_serving_v4 BY NAME
+      INSERT INTO mart.review_article_serving_base_v4 BY NAME
       SELECT *
-      FROM startup_probe_review_article_serving_v4;
+      FROM startup_probe_review_article_serving_base_v4;
       COMMIT;
-      DROP TABLE IF EXISTS startup_probe_review_article_serving_v4;
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_base_v4;
     `,
     schemaName: 'mart',
-    tableName: 'review_article_serving_v4',
+    tableName: 'review_article_serving_base_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id
+        FROM mart.review_article_serving_list_mode_state_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_list_mode_state_v4;
+      CREATE TEMP TABLE startup_probe_review_article_serving_list_mode_state_v4 AS
+      WITH failed_delete_ranges AS (
+        SELECT
+          project_id,
+          chunk_start_key,
+          chunk_end_key
+        FROM app.review_rebuild_chunk_manifest
+        WHERE projection_component = 'display'
+          AND last_error LIKE '%Failed to delete all rows from index%'
+        ORDER BY updated_at DESC, chunk_id ASC
+        LIMIT 8
+      ),
+      failed_delete_rows AS (
+        SELECT state.*
+        FROM mart.review_article_serving_list_mode_state_v4 state
+        INNER JOIN failed_delete_ranges failed_range
+          ON failed_range.project_id = state.project_id
+         AND (
+              failed_range.chunk_start_key IS NULL
+              OR state.article_id >= failed_range.chunk_start_key
+            )
+         AND (
+              failed_range.chunk_end_key IS NULL
+              OR state.article_id <= failed_range.chunk_end_key
+            )
+        ORDER BY
+          state.project_id,
+          state.review_config_hash,
+          state.snapshot_id,
+          state.article_id
+        LIMIT 64
+      ),
+      fallback_row AS (
+        SELECT state.*
+        FROM mart.review_article_serving_list_mode_state_v4 state
+        WHERE NOT EXISTS (SELECT 1 FROM failed_delete_rows)
+        ORDER BY
+          state.project_id,
+          state.review_config_hash,
+          state.snapshot_id,
+          state.article_id
+        LIMIT 1
+      )
+      SELECT *
+      FROM failed_delete_rows
+      UNION ALL
+      SELECT *
+      FROM fallback_row;
+      BEGIN;
+      DELETE FROM mart.review_article_serving_list_mode_state_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_article_serving_list_mode_state_v4 probe
+        WHERE mart.review_article_serving_list_mode_state_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_serving_list_mode_state_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
+          AND mart.review_article_serving_list_mode_state_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_serving_list_mode_state_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 BY NAME
+      SELECT *
+      FROM startup_probe_review_article_serving_list_mode_state_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_list_mode_state_v4;
+    `,
+    schemaName: 'mart',
+    tableName: 'review_article_serving_list_mode_state_v4',
   },
   {
     duplicateKeySelectSql: `

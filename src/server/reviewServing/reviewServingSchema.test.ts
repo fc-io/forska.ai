@@ -82,6 +82,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0179_slimReviewTitleSearchTokenPostings.sql',
   '../../db/duckdbMigrations/0180_reviewFilterStateServing.sql',
   '../../db/duckdbMigrations/0181_compactReviewFilterPostingServing.sql',
+  '../../db/duckdbMigrations/0182_normalizeReviewArticleServingListModes.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -195,6 +196,8 @@ const reviewFilterStateServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0180_reviewFilterStateServing.sql']
 const reviewFilterPostingServingCompactForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0181_compactReviewFilterPostingServing.sql']
+const reviewArticleServingListModeNormalizationForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0182_normalizeReviewArticleServingListModes.sql']
 const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql'
@@ -238,7 +241,8 @@ const reviewArticleServingReviewProgressCopyDropForwardMigrationSql =
 const reviewFilteredCountServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0177_reviewFilteredCountServing.sql']
 const hotServingTables = [
-  'mart.review_article_serving_v4',
+  'mart.review_article_serving_base_v4',
+  'mart.review_article_serving_list_mode_state_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_filter_state_serving_v4',
   'mart.review_article_count_serving_v4',
@@ -269,7 +273,8 @@ const reviewServingPhase1Tables = [
   'app.review_search_job',
   'app.review_serving_retention_mark',
   'mart.review_title_search_serving_v4',
-  'mart.review_article_serving_v4',
+  'mart.review_article_serving_base_v4',
+  'mart.review_article_serving_list_mode_state_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_filter_state_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
@@ -1006,6 +1011,54 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_opened')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_sections_completed')
   expect(articleMetadataStatusForwardMigrationSql).not.toContain('ALTER TABLE mart.review_article_serving_v4')
+})
+
+test('article serving list-mode normalization keeps logical rows on a compatibility view', () => {
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_base_v4',
+  )
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_list_mode_state_v4',
+  )
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'DROP TABLE mart.review_article_serving_v4;',
+  )
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'CREATE VIEW mart.review_article_serving_v4 AS',
+  )
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'CROSS JOIN unnest(state.list_mode_keys) AS list_mode(list_mode_key)',
+  )
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_base_v4_pk',
+  )
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_list_mode_state_v4_pk',
+  )
+  expect([...getTableColumns('mart.review_article_serving_base_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'base_generation',
+    'patch_watermark',
+    'article_id',
+    'article_created_at',
+    'sort_key',
+    'activity_sort_at',
+  ])
+  expect([...getTableColumns('mart.review_article_serving_list_mode_state_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'article_id',
+    'list_mode_keys',
+    'llm_patch_watermark',
+    'human_patch_watermark',
+    'both_patch_watermark',
+    'unassessed_patch_watermark',
+  ])
+  expect(reviewServingFoundationSchemaSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4')
+  expect(reviewServingFoundationSchemaSql).not.toContain('CREATE VIEW mart.review_article_serving_v4')
 })
 
 test('selected import patch mart is retired from the review-serving schema', () => {

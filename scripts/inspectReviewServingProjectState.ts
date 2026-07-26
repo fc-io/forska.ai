@@ -295,12 +295,31 @@ const inspectProjectState = async (
   )
   sections.titleSearchDuplicateKeys = await querySection(
     runtime,
-    getDuplicateQuery({
-      keyColumns: ['project_id', 'search_identity', 'project_scope_identity', 'snapshot_id', 'token', 'article_id'],
-      limit,
-      projectId: options.projectId,
-      table: 'mart.review_title_search_serving_v4',
-    }),
+    `
+      SELECT
+        project_id,
+        search_identity,
+        project_scope_identity,
+        snapshot_id,
+        token,
+        article_id,
+        CAST(COUNT(*) AS INTEGER) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          search_identity,
+          project_scope_identity,
+          snapshot_id,
+          token,
+          unnest(article_ids) AS article_id
+        FROM mart.review_title_search_serving_v4
+        WHERE project_id = ${projectIdSql}
+      )
+      GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, token, article_id
+      HAVING COUNT(*) > 1
+      ORDER BY duplicateCount DESC
+      LIMIT ${limit}
+    `,
   )
   sections.selectedImportDuplicateKeys = await querySection(
     runtime,

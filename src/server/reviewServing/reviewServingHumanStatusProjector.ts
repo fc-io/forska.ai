@@ -624,20 +624,34 @@ const getApplyHumanStatusServingStatement = (input: {
             AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
         )
       )
-      UPDATE mart.review_article_serving_v4 serving
+      UPDATE mart.review_article_serving_list_mode_state_v4 state
       SET
-        patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)})
+        human_patch_watermark = CASE
+          WHEN changed_article.list_mode_key = 'human'
+            THEN GREATEST(COALESCE(state.human_patch_watermark, 0), ${getSqlLiteral(input.patchWatermark)})
+          ELSE state.human_patch_watermark
+        END,
+        both_patch_watermark = CASE
+          WHEN changed_article.list_mode_key = 'both'
+            THEN GREATEST(COALESCE(state.both_patch_watermark, 0), ${getSqlLiteral(input.patchWatermark)})
+          ELSE state.both_patch_watermark
+        END
       FROM changed_article
-      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-        AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND serving.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash
-        AND serving.list_mode_key = changed_article.list_mode_key
-        AND serving.article_id = changed_article.article_id
+      WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+        AND state.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash
+        AND state.article_id = changed_article.article_id
+        AND list_contains(state.list_mode_keys, changed_article.list_mode_key)
         AND EXISTS (
           SELECT 1
-          FROM app.review_serving_snapshot_manifest snapshot
-          WHERE snapshot.project_id = serving.project_id
-            AND snapshot.snapshot_id = serving.snapshot_id
+          FROM mart.review_article_serving_base_v4 serving
+          INNER JOIN app.review_serving_snapshot_manifest snapshot
+            ON snapshot.project_id = serving.project_id
+           AND snapshot.snapshot_id = serving.snapshot_id
+          WHERE serving.project_id = state.project_id
+            AND serving.review_config_hash IS NOT DISTINCT FROM state.review_config_hash
+            AND serving.snapshot_id = state.snapshot_id
+            AND serving.article_id = state.article_id
+            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
             AND snapshot.snapshot_status IN ('candidate', 'active')
       )`
@@ -680,49 +694,43 @@ const getApplyHumanStatusServingRangeReplacementStatements = (input: {
     return []
   }
 
-  const listModePredicate = `AND serving.list_mode_key IN (${firstRange.listModeKeys.map(getSqlLiteral).join(', ')})`
+  const setClauses = [
+    firstRange.listModeKeys.includes('human')
+      ? 'human_patch_watermark = GREATEST(COALESCE(state.human_patch_watermark, 0), 0)'
+      : null,
+    firstRange.listModeKeys.includes('both')
+      ? 'both_patch_watermark = GREATEST(COALESCE(state.both_patch_watermark, 0), 0)'
+      : null,
+  ].filter((clause): clause is string => {
+    return clause !== null
+  })
 
-  return [
-    `CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS
-     WITH ${getRangeValuesCte(input.ranges)},
-     scoped_serving AS (
-       SELECT DISTINCT serving.*
-       FROM mart.review_article_serving_v4 serving
-       INNER JOIN article_range_filter range
-         ON (range.chunk_start_article_id IS NULL OR serving.article_id >= range.chunk_start_article_id)
-         AND (range.chunk_end_article_id IS NULL OR serving.article_id <= range.chunk_end_article_id)
-       WHERE serving.project_id = ${getSqlLiteral(firstRange.projectId)}
-         AND serving.base_generation = ${getSqlLiteral(firstRange.baseGeneration)}
-         ${listModePredicate}
-         AND EXISTS (
-           SELECT 1
-           FROM app.review_serving_snapshot_manifest snapshot
-           WHERE snapshot.project_id = serving.project_id
-             AND snapshot.snapshot_id = serving.snapshot_id
-             AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-             AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(firstRange.projectionIdentity)}
-             AND snapshot.snapshot_status IN ('candidate', 'active')
-         )
-     )
-     SELECT scoped_serving.* REPLACE (
-       GREATEST(scoped_serving.patch_watermark, 0) AS patch_watermark
-     )
-     FROM scoped_serving`,
-    `DELETE FROM mart.review_article_serving_v4 serving
-     WHERE EXISTS (
-       SELECT 1
-       FROM review_human_status_serving_rebuild_v4 replacement
-       WHERE replacement.project_id = serving.project_id
-         AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-         AND replacement.base_generation = serving.base_generation
-         AND replacement.snapshot_id = serving.snapshot_id
-         AND replacement.list_mode_key = serving.list_mode_key
-         AND replacement.article_id = serving.article_id
-     )`,
-    `INSERT INTO mart.review_article_serving_v4 BY NAME
-     SELECT *
-     FROM review_human_status_serving_rebuild_v4`,
-  ]
+  return setClauses.length === 0
+    ? []
+    : [
+        `WITH ${getRangeValuesCte(input.ranges)}
+     UPDATE mart.review_article_serving_list_mode_state_v4 state
+     SET ${setClauses.join(', ')}
+     FROM mart.review_article_serving_base_v4 serving
+     INNER JOIN article_range_filter range
+       ON (range.chunk_start_article_id IS NULL OR serving.article_id >= range.chunk_start_article_id)
+      AND (range.chunk_end_article_id IS NULL OR serving.article_id <= range.chunk_end_article_id)
+     WHERE state.project_id = serving.project_id
+       AND state.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+       AND state.snapshot_id = serving.snapshot_id
+       AND state.article_id = serving.article_id
+       AND serving.project_id = ${getSqlLiteral(firstRange.projectId)}
+       AND serving.base_generation = ${getSqlLiteral(firstRange.baseGeneration)}
+       AND EXISTS (
+         SELECT 1
+         FROM app.review_serving_snapshot_manifest snapshot
+         WHERE snapshot.project_id = serving.project_id
+           AND snapshot.snapshot_id = serving.snapshot_id
+           AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+           AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(firstRange.projectionIdentity)}
+           AND snapshot.snapshot_status IN ('candidate', 'active')
+       )`,
+      ]
 }
 
 const projectReviewServingHumanStatusClaimlessRanges = async (

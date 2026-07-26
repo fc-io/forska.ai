@@ -316,9 +316,9 @@ export const getJudgmentJobUnassessedArticlesFromServing = async (params: {
         queue.article_id,
         queue.priority_bucket,
         queue.activity_sort_at,
-        article.article_title,
+        article_record.article_title,
         article.article_created_at,
-        article.article_updated_at
+        article_record.article_updated_at
       FROM mart.review_unassessed_queue_serving_v4 queue
       ${getCurrentPromptJoin()}
       INNER JOIN mart.review_article_serving_v4 article
@@ -327,6 +327,8 @@ export const getJudgmentJobUnassessedArticlesFromServing = async (params: {
         AND article.snapshot_id = queue.snapshot_id
         AND article.article_id = queue.article_id
         AND article.list_mode_key = 'unassessed'
+      LEFT JOIN app.article article_record
+        ON article_record.id = queue.article_id
       WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
         AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
         AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}

@@ -158,9 +158,9 @@ test('human prompt answer deltas update serving directly', async () => {
   expect(selectStatement).toContain('LEFT JOIN app."judgment_human_summary" judgment_human_summary')
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   expect(joined).toContain('review_config_hash')
-  expect(joined).toContain('serving.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash')
+  expect(joined).toContain('state.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash')
   expect(joined).toContain("prompt_id <> 'summary'")
   expect(joined).not.toContain('human_answered_prompt_count =')
   expect(joined).not.toContain('human_status_key = CASE')
@@ -317,22 +317,18 @@ test('human rebuild chunks copy-replace serving without scoped patch rows', asyn
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
-  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
-  expect(joined).toContain('SELECT scoped_serving.* REPLACE')
+  expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   expect(joined).toContain('WITH article_range_filter(chunk_start_article_id, chunk_end_article_id) AS')
   expect(joined).toContain("('article-3', 'article-3')")
   expect(joined).toContain('INNER JOIN article_range_filter range')
   expect(joined).toContain('serving.article_id >= range.chunk_start_article_id')
   expect(joined).toContain('serving.article_id <= range.chunk_end_article_id')
-  expect(joined).toContain("serving.list_mode_key IN ('human')")
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('SET human_patch_watermark')
   expect(joined).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = 'humanStatus:identity-1'",
   )
   expect(joined).not.toContain('replacement.human_status_identity = serving.human_status_identity')
-  expect(joined).toContain('replacement.base_generation = serving.base_generation')
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
+  expect(joined).toContain('serving.base_generation = 5')
 })
 
 test('human direct full rebuild chunks copy-replace serving without patch rows', async () => {
@@ -348,15 +344,12 @@ test('human direct full rebuild chunks copy-replace serving without patch rows',
   expect(joined).not.toContain('DELETE FROM mart.review_human_status_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_human_status_patch_v4')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4')
-  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   expect(joined).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = 'humanStatus:identity-1'",
   )
   expect(joined).not.toContain('replacement.human_status_identity = serving.human_status_identity')
-  expect(joined).toContain('replacement.base_generation = serving.base_generation')
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
+  expect(joined).toContain('serving.base_generation = 5')
 })
 
 test('human rebuild chunks avoid patch delete and insert batches', async () => {
@@ -387,7 +380,7 @@ test('human range rebuild batches write one SQL-native serving replacement state
     database,
   )
   const replacementStatements = statements.filter((statement) => {
-    return statement.includes('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
+    return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   })
   const joined = statements.join('\n')
   const diagnostics = result as typeof result & {

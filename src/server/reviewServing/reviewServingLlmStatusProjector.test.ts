@@ -118,7 +118,7 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
     baseGeneration: 5,
     claims,
     definitionVersion: 'llm-status-v4-test',
-    listModeKeys: ['global'],
+    listModeKeys: ['llm'],
     projectId: 'project-1',
     projectionIdentity: 'llmStatus:identity-1',
   }
@@ -151,7 +151,7 @@ test('LLM judgment deltas update serving directly from persisted benchmark confi
   expect(selectStatement).not.toContain('judgment.id = delta.judgment_id')
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(statements.join('\n')).not.toContain('mart.review_llm_status_patch_v4')
-  expect(statements.join('\n')).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(statements.join('\n')).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
 })
 
 test('LLM judgment deltas recompute all article prompts before updating article status', async () => {
@@ -171,7 +171,7 @@ test('LLM judgment deltas recompute all article prompts before updating article 
     )
   })
   const updateStatement = statements.find((statement) => {
-    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
+    return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   })
 
   expect(articleSelect).toContain("VALUES ('article-1')")
@@ -281,18 +281,18 @@ test('LLM full rebuild chunks copy serving rows without prompt fanout source sca
     return statement.includes('WITH prompt_id_filter(prompt_id) AS') && statement.includes('scoped_article AS')
   })
   const applyStatement = statements.find((statement) => {
-    return statement.includes('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
+    return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(projectSelect).toBeUndefined()
-  expect(applyStatement).toContain('FROM mart.review_article_serving_v4 serving')
+  expect(applyStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(applyStatement).toContain('WITH article_range_filter(chunk_start_article_id, chunk_end_article_id) AS')
   expect(applyStatement).toContain("('article-3', 'article-3')")
   expect(applyStatement).toContain('INNER JOIN article_range_filter range')
   expect(applyStatement).toContain('serving.article_id >= range.chunk_start_article_id')
   expect(applyStatement).toContain('serving.article_id <= range.chunk_end_article_id')
-  expect(applyStatement).toContain("serving.list_mode_key IN ('global')")
+  expect(applyStatement).toContain('SET llm_patch_watermark')
   expect(applyStatement).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(applyStatement).not.toContain('FROM app.project_prompt project_prompt')
 })
@@ -309,16 +309,12 @@ test('LLM direct full rebuild chunks copy-replace serving without patch rows', a
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('DELETE FROM mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_llm_status_patch_v4')
-  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
-  expect(joined).toContain('SELECT scoped_serving.* REPLACE')
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   expect(joined).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
   )
   expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
-  expect(joined).toContain('replacement.base_generation = serving.base_generation')
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
+  expect(joined).toContain('serving.base_generation = 5')
 })
 
 test('LLM full rebuild chunks reset serving status when the project has no enabled prompts', async () => {
@@ -329,7 +325,7 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
     database,
   )
   const resetStatement = statements.find((statement) => {
-    return statement.includes('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
+    return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   })
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
@@ -338,21 +334,18 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(insertStatement).toBeUndefined()
-  expect(resetStatement).toContain('SELECT scoped_serving.* REPLACE')
   expect(resetStatement).not.toContain('llm_judged_prompt_count')
   expect(resetStatement).not.toContain('llm_status_key')
-  expect(resetStatement).toContain("serving.list_mode_key IN ('global')")
+  expect(resetStatement).toContain('SET llm_patch_watermark')
   expect(resetStatement).toContain("('article-1', 'article-9')")
   expect(resetStatement).toContain('serving.article_id >= range.chunk_start_article_id')
   expect(resetStatement).toContain('serving.article_id <= range.chunk_end_article_id')
   expect(resetStatement).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
   )
   expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
-  expect(joined).toContain('replacement.base_generation = serving.base_generation')
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
+  expect(joined).toContain('serving.base_generation = 5')
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
 })
 
@@ -367,15 +360,12 @@ test('LLM rebuild chunks copy-replace serving without scoped patch rows', async 
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
-  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   expect(joined).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
   )
   expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
-  expect(joined).toContain('replacement.base_generation = serving.base_generation')
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
+  expect(joined).toContain('serving.base_generation = 5')
 })
 
 test('LLM rebuild chunks avoid patch delete and insert batches', async () => {
@@ -406,7 +396,7 @@ test('LLM range rebuild batches write one SQL-native serving replacement stateme
     database,
   )
   const replacementStatements = statements.filter((statement) => {
-    return statement.includes('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
+    return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   })
   const joined = statements.join('\n')
   const diagnostics = result as typeof result & {

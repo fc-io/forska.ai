@@ -327,22 +327,21 @@ const getDisplayBaseRows = async (
   return database.queryJson<DisplayProjectionRow>(getDisplayBaseRowsSql(input))
 }
 
-const getDisplayBaseListModeRowsSql = (listModeKeys: readonly string[]) => {
-  return listModeKeys
+const getListModeKeysArraySql = (listModeKeys: readonly string[]) => {
+  return `[${listModeKeys
     .map((listModeKey) => {
-      return `(${getSqlLiteral(listModeKey)})`
+      return getSqlLiteral(listModeKey)
     })
-    .join(', ')
+    .join(', ')}]::VARCHAR[]`
 }
 
-const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBaseInput) => {
+const getInsertDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBaseInput) => {
   return `
-    INSERT INTO mart.review_article_serving_v4 (
+    INSERT INTO mart.review_article_serving_base_v4 (
       activity_sort_at,
       article_created_at,
       article_id,
       base_generation,
-      list_mode_key,
       patch_watermark,
       project_id,
       review_config_hash,
@@ -351,26 +350,21 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
     )
     WITH display_base AS (
       ${getDisplayBaseRowsSql(input, {orderBy: false})}
-    ),
-    list_mode(list_mode_key) AS (
-      SELECT * FROM (VALUES ${getDisplayBaseListModeRowsSql(input.listModeKeys)})
     )
     SELECT
       display_base.activitySortAt AS activity_sort_at,
       display_base.articleCreatedAt AS article_created_at,
       display_base.articleId AS article_id,
       ${getSqlLiteral(input.baseGeneration)} AS base_generation,
-      list_mode.list_mode_key,
       0 AS patch_watermark,
       ${getSqlLiteral(input.projectId)} AS project_id,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
       display_base.sortKey AS sort_key
     FROM display_base
-    CROSS JOIN list_mode
-    ORDER BY display_base.articleId ASC, list_mode.list_mode_key ASC
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING
-  `
+    ORDER BY display_base.articleId ASC
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING
+  `.trim()
 }
 
 const getDisplayPatchRows = async (
@@ -462,21 +456,61 @@ const getPayloadRows = async (
   return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input))
 }
 
-const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
+const getInsertDisplayListModeStateRowsStatement = (input: ProjectReviewServingDisplayBaseInput) => {
+  return `
+    INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+      article_id,
+      both_patch_watermark,
+      human_patch_watermark,
+      list_mode_keys,
+      llm_patch_watermark,
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      unassessed_patch_watermark
+    )
+    WITH display_base AS (
+      ${getDisplayBaseRowsSql(input, {orderBy: false})}
+    )
+    SELECT
+      display_base.articleId AS article_id,
+      0 AS both_patch_watermark,
+      0 AS human_patch_watermark,
+      ${getListModeKeysArraySql(input.listModeKeys)} AS list_mode_keys,
+      0 AS llm_patch_watermark,
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      0 AS unassessed_patch_watermark
+    FROM display_base
+    ORDER BY display_base.articleId ASC
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING
+  `.trim()
+}
+
+const getApplyDisplayPatchServingStatements = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
   const rowPredicate = `project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           AND base_generation = ${getSqlLiteral(input.baseGeneration)}
           AND article_id = ${getSqlLiteral(row.articleId)}`
 
   return row.tombstone
-    ? `DELETE FROM mart.review_article_serving_v4
-        WHERE ${rowPredicate}`
-    : `UPDATE mart.review_article_serving_v4
+    ? [
+        `DELETE FROM mart.review_article_serving_base_v4
+        WHERE ${rowPredicate}`,
+        `DELETE FROM mart.review_article_serving_list_mode_state_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND article_id = ${getSqlLiteral(row.articleId)}`,
+      ]
+    : [
+        `UPDATE mart.review_article_serving_base_v4
         SET
           article_created_at = ${getSqlLiteral(row.articleCreatedAt)},
           activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
           sort_key = ${getSqlLiteral(row.sortKey)}
-        WHERE ${rowPredicate}`
+        WHERE ${rowPredicate}`,
+      ]
 }
 
 export const getReviewServingPayloadPatchManifest = (
@@ -558,9 +592,9 @@ export const projectReviewServingDisplayBaseRows = async (
 }
 
 const getDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBaseInput) => {
-  return [input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input)].flatMap((statement) => {
-    return statement === null ? [] : [statement]
-  })
+  return input.listModeKeys.length === 0
+    ? []
+    : [getInsertDisplayBaseRowsStatements(input), getInsertDisplayListModeStateRowsStatement(input)]
 }
 
 export const projectReviewServingDisplayBaseRanges = async (
@@ -612,8 +646,8 @@ export const projectReviewServingDisplayPatches = async (
   const patchWatermark = getPatchWatermark(input.claims)
   const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
   const statements = measureSync('recordTransformMs', () => {
-    return rows.map((row) => {
-      return getApplyDisplayPatchServingStatement(input, row)
+    return rows.flatMap((row) => {
+      return getApplyDisplayPatchServingStatements(input, row)
     })
   })
 
