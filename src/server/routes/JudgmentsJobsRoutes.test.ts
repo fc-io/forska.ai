@@ -502,52 +502,49 @@ const insertUnassessedServingFixture = async ({jobId, projectId}: {jobId: string
     )
   `)
   await runDatabase(`
-    INSERT INTO mart.review_article_serving_v4 (
+    INSERT INTO mart.review_article_serving_base_v4 (
       project_id,
       review_config_hash,
       snapshot_id,
       base_generation,
       patch_watermark,
-      display_identity,
-      project_scope_identity,
-      selected_import_identity,
-      llm_status_identity,
-      human_status_identity,
-      posting_identity,
-      summary_identity,
-      payload_identity,
-      list_mode_key,
       article_id,
       article_created_at,
-      article_updated_at,
       sort_key,
-      activity_sort_at,
-      article_title,
-      llm_judged_prompt_count,
-      enabled_prompt_count
+      activity_sort_at
     ) VALUES (
       '${projectId}',
       '${reviewConfigHash}',
       '${snapshotId}',
       1,
       0,
-      'display:${snapshotId}',
-      'projectScope:${snapshotId}',
-      'selectedImport:${snapshotId}',
-      'llmStatus:${snapshotId}',
-      'humanStatus:${snapshotId}',
-      'posting:${snapshotId}',
-      'summary:${snapshotId}',
-      'payload:${snapshotId}',
-      'llm',
       '${articleId}',
       TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      TIMESTAMPTZ '2025-09-10 00:00:00+00',
       TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      TIMESTAMPTZ '2025-09-10 00:00:00+00',
-      'Unassessed stale preview article',
-      1,
-      1
+      TIMESTAMPTZ '2025-09-10 00:00:00+00'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      article_id,
+      list_mode_keys,
+      llm_patch_watermark,
+      human_patch_watermark,
+      both_patch_watermark,
+      unassessed_patch_watermark
+    ) VALUES (
+      '${projectId}',
+      '${reviewConfigHash}',
+      '${snapshotId}',
+      '${articleId}',
+      ['llm']::VARCHAR[],
+      0,
+      0,
+      0,
+      0
     )
   `)
 }

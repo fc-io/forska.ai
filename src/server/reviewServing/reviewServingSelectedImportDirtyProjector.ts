@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {reviewServingListModes, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -55,12 +55,7 @@ export type ResetReviewServingSelectedImportDirtyArticleRangeInput = {
   selectedImportSnapshotId: string
 }
 
-type SelectedImportServingTemplateRow = {
-  baseGeneration: number
-  listModeKey: string
-  reviewConfigHash: string
-  snapshotId: string
-}
+type SelectedImportServingTemplateRow = {baseGeneration: number; reviewConfigHash: string; snapshotId: string}
 
 type SnapshotTemplateRow = {componentStateJson: unknown; reviewConfigHash: string | null; snapshotId: string}
 
@@ -236,9 +231,7 @@ const getTemplateRowsFromSnapshot = (row: SnapshotTemplateRow) => {
     return []
   }
 
-  return reviewServingListModes.map((listModeKey): SelectedImportServingTemplateRow => {
-    return {baseGeneration, listModeKey, reviewConfigHash, snapshotId: row.snapshotId}
-  })
+  return [{baseGeneration, reviewConfigHash, snapshotId: row.snapshotId}]
 }
 
 const getSelectedImportServingTemplates = async (
@@ -263,7 +256,7 @@ const getSelectedImportServingTemplates = async (
 const getTemplateValuesSql = (templates: readonly SelectedImportServingTemplateRow[]) => {
   return templates
     .map((template) => {
-      return `(${getSqlLiteral(template.reviewConfigHash)}, ${getSqlLiteral(template.snapshotId)}, ${getSqlLiteral(template.baseGeneration)}, ${getSqlLiteral(template.listModeKey)})`
+      return `(${getSqlLiteral(template.reviewConfigHash)}, ${getSqlLiteral(template.snapshotId)}, ${getSqlLiteral(template.baseGeneration)})`
     })
     .join(', ')
 }
@@ -280,9 +273,8 @@ const getFallbackTemplateCte = (input: {projectId: string; templates: readonly S
              ${getSqlLiteral(input.projectId)} AS project_id,
              fallback.review_config_hash,
              fallback.snapshot_id,
-             fallback.base_generation,
-             fallback.list_mode_key
-           FROM (VALUES ${values}) AS fallback(review_config_hash, snapshot_id, base_generation, list_mode_key)`
+             fallback.base_generation
+           FROM (VALUES ${values}) AS fallback(review_config_hash, snapshot_id, base_generation)`
 }
 
 const selectedImportChangedColumns = [
@@ -296,19 +288,6 @@ const selectedImportChangedColumns = [
   'selected_source_url',
   'tombstone',
   'scope_tombstone',
-].join(', ')
-
-const selectedImportServingColumns = [
-  'project_id',
-  'review_config_hash',
-  'snapshot_id',
-  'base_generation',
-  'patch_watermark',
-  'list_mode_key',
-  'article_id',
-  'sort_key',
-  'activity_sort_at',
-  'article_created_at',
 ].join(', ')
 
 const getSelectedImportChangedRowsCte = (values: string) => {
@@ -352,9 +331,8 @@ const getSelectedImportServingTemplateCte = (input: {
               serving.project_id,
               serving.review_config_hash,
               serving.snapshot_id,
-              serving.base_generation,
-              serving.list_mode_key
-            FROM mart.review_article_serving_v4 serving
+              serving.base_generation
+            FROM mart.review_article_serving_base_v4 serving
             WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
               AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
               AND EXISTS (
@@ -372,13 +350,12 @@ const getSelectedImportServingTemplateCte = (input: {
               project_id,
               review_config_hash,
               snapshot_id,
-              base_generation,
-              list_mode_key
+              base_generation
             FROM (
               SELECT
                 raw.*,
                 ROW_NUMBER() OVER (
-                  PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id, raw.list_mode_key
+                  PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id
                   ORDER BY
                     raw.template_priority ASC,
                     raw.base_generation DESC
@@ -517,7 +494,7 @@ const getApplySelectedImportServingStatements = (input: {
     ? []
     : [
         `WITH ${changedCte}
-         DELETE FROM mart.review_article_serving_v4 serving
+         DELETE FROM mart.review_article_serving_base_v4 serving
          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
            AND EXISTS (
@@ -531,23 +508,39 @@ const getApplySelectedImportServingStatements = (input: {
            )
            AND EXISTS (
              SELECT 1
-               FROM changed
+              FROM changed
               WHERE changed.article_id = serving.article_id
                AND changed.scope_tombstone = TRUE
             )`,
+        `WITH ${changedCte}
+         DELETE FROM mart.review_article_serving_list_mode_state_v4 state
+         WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+           AND EXISTS (
+             SELECT 1
+             FROM app.review_serving_snapshot_manifest snapshot
+             WHERE snapshot.project_id = state.project_id
+               AND snapshot.snapshot_id = state.snapshot_id
+               AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+               AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
+               AND snapshot.snapshot_status IN ('candidate', 'active')
+           )
+           AND EXISTS (
+             SELECT 1
+               FROM changed
+              WHERE changed.article_id = state.article_id
+               AND changed.scope_tombstone = TRUE
+            )`,
         `WITH ${changedCte}, ${servingTemplateCte}
-          INSERT INTO mart.review_article_serving_v4 (
+          INSERT INTO mart.review_article_serving_base_v4 (
             project_id,
             review_config_hash,
             snapshot_id,
             base_generation,
             patch_watermark,
-            list_mode_key,
             article_id,
             article_created_at,
             sort_key,
-            activity_sort_at,
-            selected_rank_key
+            activity_sort_at
           )
           SELECT
             template.project_id,
@@ -555,12 +548,10 @@ const getApplySelectedImportServingStatements = (input: {
             template.snapshot_id,
             template.base_generation,
             ${getSqlLiteral(input.patchWatermark)} AS patch_watermark,
-            template.list_mode_key,
             changed.article_id,
             article.article_created_at,
             COALESCE(article.article_created_at, current_timestamp) AS sort_key,
-            COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
-            changed.selected_rank_key
+            COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at
           FROM changed
           INNER JOIN app."article" article
             ON article.id = changed.article_id
@@ -572,55 +563,49 @@ const getApplySelectedImportServingStatements = (input: {
               WHERE existing.project_id = template.project_id
                 AND existing.review_config_hash = template.review_config_hash
                 AND existing.snapshot_id = template.snapshot_id
-                AND existing.list_mode_key = template.list_mode_key
                 AND existing.article_id = changed.article_id
             )
-          ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
-        `CREATE OR REPLACE TEMP TABLE review_selected_import_serving_update_v4 AS
-         WITH ${changedCte}
-         SELECT
-            serving.project_id,
-            serving.review_config_hash,
-            serving.snapshot_id,
-            serving.base_generation,
-            GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
-            serving.list_mode_key,
-            serving.article_id,
-            serving.sort_key,
-            serving.activity_sort_at,
-            serving.article_created_at
-         FROM mart.review_article_serving_v4 serving
-         INNER JOIN changed
-           ON changed.article_id = serving.article_id
-          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND changed.scope_tombstone = FALSE
-            AND EXISTS (
-              SELECT 1
-              FROM app.review_serving_snapshot_manifest snapshot
-              WHERE snapshot.project_id = serving.project_id
-                AND snapshot.snapshot_id = serving.snapshot_id
-                AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-                AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
-                AND snapshot.snapshot_status IN ('candidate', 'active')
-            )
-            AND (
-              serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}
-            )`,
-        `DELETE FROM mart.review_article_serving_v4 serving
-         WHERE EXISTS (
-           SELECT 1
-           FROM review_selected_import_serving_update_v4 updated
-           WHERE updated.project_id = serving.project_id
-             AND updated.review_config_hash = serving.review_config_hash
-             AND updated.snapshot_id = serving.snapshot_id
-             AND updated.list_mode_key = serving.list_mode_key
-             AND updated.article_id = serving.article_id
-         )`,
-        `INSERT INTO mart.review_article_serving_v4 (${selectedImportServingColumns})
-         SELECT ${selectedImportServingColumns}
-         FROM review_selected_import_serving_update_v4
-         ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
+          ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING`,
+        `WITH ${changedCte}, ${servingTemplateCte}
+          INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            article_id,
+            list_mode_keys,
+            llm_patch_watermark,
+            human_patch_watermark,
+            both_patch_watermark,
+            unassessed_patch_watermark
+          )
+          SELECT
+            template.project_id,
+            template.review_config_hash,
+            template.snapshot_id,
+            changed.article_id,
+            ['llm', 'human', 'both', 'unassessed']::VARCHAR[] AS list_mode_keys,
+            ${getSqlLiteral(input.patchWatermark)} AS llm_patch_watermark,
+            ${getSqlLiteral(input.patchWatermark)} AS human_patch_watermark,
+            ${getSqlLiteral(input.patchWatermark)} AS both_patch_watermark,
+            ${getSqlLiteral(input.patchWatermark)} AS unassessed_patch_watermark
+          FROM changed
+          CROSS JOIN serving_template template
+          WHERE changed.scope_tombstone = FALSE
+          ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO UPDATE SET
+            list_mode_keys = EXCLUDED.list_mode_keys,
+            llm_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.llm_patch_watermark, 0), COALESCE(EXCLUDED.llm_patch_watermark, 0)),
+            human_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.human_patch_watermark, 0), COALESCE(EXCLUDED.human_patch_watermark, 0)),
+            both_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.both_patch_watermark, 0), COALESCE(EXCLUDED.both_patch_watermark, 0)),
+            unassessed_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.unassessed_patch_watermark, 0), COALESCE(EXCLUDED.unassessed_patch_watermark, 0))`,
+        `WITH ${changedCte}
+         UPDATE mart.review_article_serving_base_v4 serving
+         SET patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)})
+         FROM changed
+         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+           AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+           AND serving.article_id = changed.article_id
+           AND changed.scope_tombstone = FALSE
+           AND serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}`,
       ]
 }
 

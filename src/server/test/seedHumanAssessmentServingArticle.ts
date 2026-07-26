@@ -61,32 +61,16 @@ export const seedHumanAssessmentServingArticle = async (params: {
       current_timestamp
     );
 
-    INSERT INTO mart.review_article_serving_v4 (
+    INSERT INTO mart.review_article_serving_base_v4 (
       project_id,
       review_config_hash,
       snapshot_id,
       base_generation,
       patch_watermark,
-      display_identity,
-      project_scope_identity,
-      selected_import_identity,
-      llm_status_identity,
-      human_status_identity,
-      posting_identity,
-      summary_identity,
-      payload_identity,
-      list_mode_key,
       article_id,
       sort_key,
       activity_sort_at,
-      article_title,
-      duplicate_flag,
-      conflict_flag,
-      llm_judged_prompt_count,
-      enabled_prompt_count,
-      human_answered_prompt_count,
-      review_opened,
-      review_sections_completed
+      article_created_at
     )
     VALUES (
       '${escapeSqlString(params.projectId)}',
@@ -94,25 +78,32 @@ export const seedHumanAssessmentServingArticle = async (params: {
       '${escapeSqlString(params.snapshotId)}',
       1,
       0,
-      '${escapeSqlString(params.snapshotId)}-display',
-      '${escapeSqlString(params.snapshotId)}-projectScope',
-      '${escapeSqlString(params.snapshotId)}-selectedImport',
-      '${escapeSqlString(params.snapshotId)}-llmStatus',
-      '${escapeSqlString(params.snapshotId)}-humanStatus',
-      '${escapeSqlString(params.snapshotId)}-posting',
-      '${escapeSqlString(params.snapshotId)}-summary',
-      '${escapeSqlString(params.snapshotId)}-payload',
-      'unassessed',
       '${escapeSqlString(params.articleId)}',
       current_timestamp,
       current_timestamp,
-      'Human Drift Article',
-      FALSE,
-      FALSE,
+      current_timestamp
+    );
+
+    INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      article_id,
+      list_mode_keys,
+      llm_patch_watermark,
+      human_patch_watermark,
+      both_patch_watermark,
+      unassessed_patch_watermark
+    )
+    VALUES (
+      '${escapeSqlString(params.projectId)}',
+      '${escapeSqlString(reviewConfigHash)}',
+      '${escapeSqlString(params.snapshotId)}',
+      '${escapeSqlString(params.articleId)}',
+      ['unassessed']::VARCHAR[],
       0,
-      1,
       0,
-      FALSE,
+      0,
       0
     );
 

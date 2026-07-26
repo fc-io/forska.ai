@@ -449,7 +449,6 @@ const selectedImportServingColumns = [
   'snapshot_id',
   'base_generation',
   'patch_watermark',
-  'list_mode_key',
   'article_id',
   'sort_key',
   'activity_sort_at',
@@ -474,9 +473,8 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
          serving.project_id,
          serving.review_config_hash,
          serving.snapshot_id,
-         serving.base_generation,
-         serving.list_mode_key
-       FROM mart.review_article_serving_v4 serving
+         serving.base_generation
+       FROM mart.review_article_serving_base_v4 serving
        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
          AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
          AND EXISTS (
@@ -505,7 +503,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        template.snapshot_id,
        template.base_generation,
        GREATEST(COALESCE(serving.patch_watermark, 0), ${getSqlLiteral(input.sourceDeltaHighWater)}) AS patch_watermark,
-       template.list_mode_key,
        scoped.article_id,
        COALESCE(serving.sort_key, scoped.sort_key) AS sort_key,
        COALESCE(serving.activity_sort_at, scoped.activity_sort_at) AS activity_sort_at,
@@ -519,13 +516,12 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
        AND selected.article_id = scoped.article_id
        AND NOT selected.tombstone
-     LEFT JOIN mart.review_article_serving_v4 serving
+     LEFT JOIN mart.review_article_serving_base_v4 serving
        ON serving.project_id = template.project_id
        AND serving.review_config_hash = template.review_config_hash
        AND serving.snapshot_id = template.snapshot_id
-       AND serving.list_mode_key = template.list_mode_key
        AND serving.article_id = scoped.article_id`,
-    `DELETE FROM mart.review_article_serving_v4 serving
+    `DELETE FROM mart.review_article_serving_base_v4 serving
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
         AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
         AND serving.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
@@ -539,10 +535,51 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
             AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.servingProjectionIdentity)}
             AND snapshot.snapshot_status IN ('candidate', 'active')
         )`,
-    `INSERT INTO mart.review_article_serving_v4 (${selectedImportServingColumns})
+    `DELETE FROM mart.review_article_serving_list_mode_state_v4 state
+      WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+        AND state.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+        AND state.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_serving_snapshot_manifest snapshot
+          WHERE snapshot.project_id = state.project_id
+            AND snapshot.snapshot_id = state.snapshot_id
+            AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.servingProjectionIdentity)}
+            AND snapshot.snapshot_status IN ('candidate', 'active')
+        )`,
+    `INSERT INTO mart.review_article_serving_base_v4 (${selectedImportServingColumns})
      SELECT ${selectedImportServingColumns}
      FROM review_selected_import_serving_rebuild_v4
-     ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
+     ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING`,
+    `INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+       project_id,
+       review_config_hash,
+       snapshot_id,
+       article_id,
+       list_mode_keys,
+       llm_patch_watermark,
+       human_patch_watermark,
+       both_patch_watermark,
+       unassessed_patch_watermark
+     )
+     SELECT
+       project_id,
+       review_config_hash,
+       snapshot_id,
+       article_id,
+       ['llm', 'human', 'both', 'unassessed']::VARCHAR[] AS list_mode_keys,
+       patch_watermark AS llm_patch_watermark,
+       patch_watermark AS human_patch_watermark,
+       patch_watermark AS both_patch_watermark,
+       patch_watermark AS unassessed_patch_watermark
+     FROM review_selected_import_serving_rebuild_v4
+     ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO UPDATE SET
+       list_mode_keys = EXCLUDED.list_mode_keys,
+       llm_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.llm_patch_watermark, 0), COALESCE(EXCLUDED.llm_patch_watermark, 0)),
+       human_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.human_patch_watermark, 0), COALESCE(EXCLUDED.human_patch_watermark, 0)),
+       both_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.both_patch_watermark, 0), COALESCE(EXCLUDED.both_patch_watermark, 0)),
+       unassessed_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.unassessed_patch_watermark, 0), COALESCE(EXCLUDED.unassessed_patch_watermark, 0))`,
   ]
 }
 

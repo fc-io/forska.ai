@@ -396,11 +396,13 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).not.toContain('selected.conflict_flag')
   expect(joined).not.toContain('COALESCE(selected.duplicate_flag, FALSE) AS duplicate_flag')
   expect(joined).not.toContain('COALESCE(selected.conflict_flag, FALSE) AS conflict_flag')
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_base_v4 serving')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_list_mode_state_v4 state')
   expect(joined).not.toContain('article.full_text_pdf')
   expect(joined).not.toContain('full_text_fetched_at')
   expect(joined).not.toContain('full_text_conversion_status')
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_base_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).not.toContain('LEFT JOIN mart.review_selected_import_patch_v4')
 })
 
@@ -425,8 +427,8 @@ test('selected-import article range rebuild can skip final serving row refresh',
 
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expect(joined).not.toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS')
-  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_v4 serving')
-  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_base_v4 serving')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_base_v4')
 })
 
 test('selected-import V4 projector does not use the runtime selected scoped import CTE', () => {

@@ -465,14 +465,15 @@ test('Phase 3 direct serving and selected-import guard coverage stays inventorie
       filePath: 'src/server/reviewServing/reviewServingDisplayPayloadProjector.test.ts',
       markers: [
         'display base rows flow through writer with display fields and selected import hot projection',
-        'mart.review_article_serving_v4',
+        'mart.review_article_serving_base_v4',
+        'mart.review_article_serving_list_mode_state_v4',
         "not.toContain('selected_scoped_article_import')",
       ],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingTitleSearchProjector.test.ts',
       markers: [
-        'title search projection writes token rows and search-only component state',
+        'title search projection writes compact token postings and search-only component state for dirty articles',
         'mart.review_title_search_serving_v4',
       ],
     },
@@ -487,12 +488,12 @@ test('Phase 3 direct serving and selected-import guard coverage stays inventorie
       filePath: 'src/server/reviewServing/reviewServingLlmStatusProjector.test.ts',
       markers: [
         'LLM judgment deltas update serving directly from persisted benchmark config',
-        'mart.review_article_serving_v4',
+        'mart.review_article_serving_list_mode_state_v4',
       ],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingHumanStatusProjector.test.ts',
-      markers: ['human prompt answer deltas update serving directly', 'mart.review_article_serving_v4'],
+      markers: ['human prompt answer deltas update serving directly', 'mart.review_article_serving_list_mode_state_v4'],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingSelectedImportProjector.test.ts',

@@ -47,7 +47,12 @@ const defaultRetentionCleanupBatchSize = 512
 const defaultRetentionCleanupTargetLimit = 16
 
 const cleanupTableSpecs: readonly CleanupTableSpec[] = [
-  {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_serving_v4'},
+  {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_serving_base_v4'},
+  {
+    keyColumn: 'snapshot_id',
+    protectedPredicate: 'snapshot_id',
+    table: 'mart.review_article_serving_list_mode_state_v4',
+  },
   {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_filter_posting_serving_v4'},
   {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_filter_state_serving_v4'},
   {

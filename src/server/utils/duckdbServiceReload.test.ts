@@ -1641,7 +1641,7 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
         const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-index-marker-test=' + Date.now())
         await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
         await duckdbService.recoverDuckdbServiceAfterFatalError(
-          new Error('FatalException: Invalid Input Error: Failed to delete all rows from index in mart.review_article_serving_v4. Only deleted 0 out of 1 rows.'),
+          new Error('FatalException: Invalid Input Error: Failed to delete all rows from index in mart.review_article_serving_base_v4. Only deleted 0 out of 1 rows.'),
         )
 
         const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
@@ -1678,9 +1678,9 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
-      repairSpecs: [{schemaName: 'mart', tableName: 'review_article_serving_v4'}],
+      repairSpecs: [{schemaName: 'mart', tableName: 'review_article_serving_base_v4'}],
       schemaName: 'mart',
-      tableName: 'review_article_serving_v4',
+      tableName: 'review_article_serving_base_v4',
     })
     expect(parsed.createCount).toBeGreaterThanOrEqual(0)
     expect(parsed.runCount).toBeGreaterThanOrEqual(0)
@@ -3387,13 +3387,24 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       tableName: 'comparison_project_serving_generation',
     })
     const articleServingProbe = parsed.firstPreflightSpecs.find((spec) => {
-      return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_v4'
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_base_v4'
     })
     expect(articleServingProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
     expect(articleServingProbe?.mutationProbeSql).toContain('app.review_rebuild_chunk_manifest')
-    expect(articleServingProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
-    expect(articleServingProbe?.mutationProbeSql).not.toContain('UPDATE mart.review_article_serving_v4')
+    expect(articleServingProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_base_v4 BY NAME')
+    expect(articleServingProbe?.mutationProbeSql).not.toContain('UPDATE mart.review_article_serving_base_v4')
     expect(articleServingProbe?.mutationProbeSql).not.toContain('serving_updated_at')
+    const articleServingModeStateProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_list_mode_state_v4'
+    })
+    expect(articleServingModeStateProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
+    expect(articleServingModeStateProbe?.mutationProbeSql).toContain('app.review_rebuild_chunk_manifest')
+    expect(articleServingModeStateProbe?.mutationProbeSql).toContain(
+      'INSERT INTO mart.review_article_serving_list_mode_state_v4 BY NAME',
+    )
+    expect(articleServingModeStateProbe?.mutationProbeSql).not.toContain(
+      'UPDATE mart.review_article_serving_list_mode_state_v4',
+    )
     const selectedImportProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_selected_article_import_v4'
     })

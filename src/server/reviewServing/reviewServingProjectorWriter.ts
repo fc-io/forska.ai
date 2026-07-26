@@ -45,6 +45,8 @@ export type ReviewServingProjectorWritableTable =
   | 'mart.review_article_filter_posting_serving_v4'
   | 'mart.review_article_filter_state_serving_v4'
   | 'mart.review_article_judgment_detail_serving_v4'
+  | 'mart.review_article_serving_base_v4'
+  | 'mart.review_article_serving_list_mode_state_v4'
   | 'mart.review_article_serving_v4'
   | 'mart.review_article_summary_rebuild_accumulator_v4'
   | 'mart.review_filter_facet_serving_v4'

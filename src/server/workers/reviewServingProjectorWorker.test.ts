@@ -1244,7 +1244,8 @@ test('worker writes compatible display rebuild chunks through one batch writer',
   expect(joined).toContain("scope.article_id <= 'article-050'")
   expect(joined).toContain("scope.article_id >= 'article-051'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_base_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).toContain('displayBatchWriter')
 })
 
@@ -4799,7 +4800,8 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
   const joined = statements.join('\n')
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_base_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).toContain("scope.article_id >= 'article-001'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain('FROM mart.review_article_serving_v4 serving')
