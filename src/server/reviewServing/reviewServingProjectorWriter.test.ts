@@ -1000,6 +1000,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
   ])
   const testSupportFixtureFiles = new Set(['src/server/test/seedHumanAssessmentServingArticle.ts'])
   const operationalRecoveryFiles = new Set(['src/server/utils/duckdbService.ts'])
+  const foregroundCacheWriterFiles = new Set(['src/server/reviewServing/reviewServingFilteredCountService.ts'])
   const offenders = getTypeScriptFiles(join(workspaceRoot, 'src/server'))
     .filter((filePath) => {
       const repoPath = relative(workspaceRoot, filePath)
@@ -1009,6 +1010,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
         && !projectorStatementBuilderFiles.has(repoPath)
         && !testSupportFixtureFiles.has(repoPath)
         && !operationalRecoveryFiles.has(repoPath)
+        && !foregroundCacheWriterFiles.has(repoPath)
         && !repoPath.endsWith('.test.ts')
       )
     })

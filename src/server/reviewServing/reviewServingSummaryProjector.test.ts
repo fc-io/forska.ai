@@ -178,9 +178,8 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
     )
   `)
   await database.run(`
-    CREATE TABLE mart.review_article_summary_rebuild_partial_v4 (
+    CREATE TABLE mart.review_article_summary_rebuild_accumulator_v4 (
       request_id VARCHAR NOT NULL,
-      chunk_id VARCHAR NOT NULL,
       project_id VARCHAR NOT NULL,
       review_config_hash VARCHAR NOT NULL,
       snapshot_id VARCHAR NOT NULL,
@@ -199,14 +198,14 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       availability VARCHAR NOT NULL DEFAULT 'ready',
       stale_reason VARCHAR,
       count_value BIGINT,
-      partial_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      source_chunk_ids_key VARCHAR NOT NULL,
+      accumulator_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
     )
   `)
   await database.run(`
-    CREATE UNIQUE INDEX idx_review_article_summary_rebuild_partial_v4_unique
-    ON mart.review_article_summary_rebuild_partial_v4(
+    CREATE UNIQUE INDEX idx_review_article_summary_rebuild_accumulator_v4_unique
+    ON mart.review_article_summary_rebuild_accumulator_v4(
       request_id,
-      chunk_id,
       project_id,
       review_config_hash,
       snapshot_id,
@@ -474,7 +473,7 @@ test('chunked full summary rebuild stages aggregate request partials without art
   const joined = statements.join('\n')
   const partialInsertStatements = statements.filter((statement) => {
     return (
-      statement.includes('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
+      statement.includes('INSERT INTO mart.review_article_summary_rebuild_accumulator_v4')
       || statement.includes('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
     )
   })
@@ -486,17 +485,15 @@ test('chunked full summary rebuild stages aggregate request partials without art
     partialFullSnapshot: true,
     partialRowCount: 2,
   })
-  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
-    'mart.review_article_summary_rebuild_partial_v4': 2,
-  })
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toEqual({})
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_rebuild_accumulator_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(partialInsertStatements.join('\n')).not.toContain('ON CONFLICT')
   expect(partialInsertStatements.join('\n')).toContain('WHERE NOT EXISTS')
   expect(partialInsertStatements.join('\n')).toContain("(existing.request_id || '') = (incoming.request_id || '')")
-  expect(partialInsertStatements.join('\n')).toContain("(existing.chunk_id || '') = (incoming.chunk_id || '')")
+  expect(partialInsertStatements.join('\n')).toContain('source_chunk_ids_key')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
@@ -522,16 +519,15 @@ test('chunked full summary rebuild aggregates duplicate scalar keys into summary
     database,
   )
   const summaryPartialInsertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
+    return statement.includes('INSERT INTO mart.review_article_summary_rebuild_accumulator_v4')
   })
 
   expect(result.contributionRowCount).toBe(2)
-  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
-    'mart.review_article_summary_rebuild_partial_v4': 1,
-  })
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toEqual({})
   expect(summaryPartialInsertStatement).toBeDefined()
   expect(summaryPartialInsertStatement).toContain('count_value')
-  expect(summaryPartialInsertStatement).toContain("'review.llm.assessedByPrompt',\n      2,")
+  expect(summaryPartialInsertStatement).toContain("'review.llm.assessedByPrompt', 'llm'")
+  expect(summaryPartialInsertStatement).toContain(", 2, '\nchunk-summary-1\n')")
   expect(summaryPartialInsertStatement).not.toContain('contribution_key')
   expect(statements.join('\n')).not.toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
 })
@@ -573,20 +569,16 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     database,
   )
   const joined = statements.join('\n')
-  const accumulatorWrites = statements.filter((statement) => {
-    return statement.includes('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_batch AS')
+  const accumulatorReads = statements.filter((statement) => {
+    return statement.includes('FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator')
   })
-  expect(accumulatorWrites).toHaveLength(2)
+  expect(accumulatorReads.length).toBeGreaterThanOrEqual(2)
   expect(joined).toContain('chunk.snapshot_id = ')
-  expect(joined).toContain("partial.chunk_id IN ('chunk-001', 'chunk-002'")
-  expect(joined).toContain("partial.chunk_id IN ('chunk-257')")
-  expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_batch AS')
-  expect(joined).toContain('UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator')
-  expect(joined).toContain('FROM temp_summary_rebuild_accumulator_batch batch')
-  expect(joined).toContain('WHERE NOT EXISTS')
-  expect(joined).toContain("(existing.request_id || '') = (batch.request_id || '')")
+  expect(joined).toContain("chunk.chunk_id IN ('chunk-001', 'chunk-002'")
+  expect(joined).toContain("chunk.chunk_id IN ('chunk-257')")
+  expect(joined).toContain('mart.review_article_summary_rebuild_accumulator_v4 accumulator')
+  expect(joined).toContain("contains(accumulator.source_chunk_ids_key, '\n' || chunk.chunk_id || '\n')")
   expect(joined).not.toContain('serving_key')
-  expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
   expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_count_publication AS')
   expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_facet_publication AS')
   expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4 serving')
@@ -615,9 +607,8 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
       await createSummaryReductionSchema(database)
       await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-001', 'chunk-002']})
       await database.run(`
-        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+        INSERT INTO mart.review_article_summary_rebuild_accumulator_v4 (
           request_id,
-          chunk_id,
           project_id,
           review_config_hash,
           snapshot_id,
@@ -627,10 +618,10 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
           count_kind,
           summary_definition_version,
           filter_key,
-          count_value
+          count_value,
+          source_chunk_ids_key
         ) VALUES
-          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2),
-          ('rebuild-summary-1', 'chunk-002', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 5, '\nchunk-001\nchunk-002\n')
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -653,11 +644,11 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
       `)
       const partialRows = await database.queryJson<{total: string}>(`
         SELECT CAST(COUNT(*) AS VARCHAR) AS total
-        FROM mart.review_article_summary_rebuild_partial_v4
+        FROM mart.review_article_summary_rebuild_accumulator_v4
       `)
 
       expect(countRows).toEqual([{countValue: '5'}])
-      expect(partialRows).toEqual([{total: '3'}])
+      expect(partialRows).toEqual([{total: '1'}])
     } finally {
       close()
     }
@@ -676,9 +667,8 @@ test('summary rebuild request finalization ignores stale partial chunks without 
       await createSummaryReductionSchema(database)
       await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-current']})
       await database.run(`
-        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+        INSERT INTO mart.review_article_summary_rebuild_accumulator_v4 (
           request_id,
-          chunk_id,
           project_id,
           review_config_hash,
           snapshot_id,
@@ -688,10 +678,11 @@ test('summary rebuild request finalization ignores stale partial chunks without 
           count_kind,
           summary_definition_version,
           filter_key,
-          count_value
+          count_value,
+          source_chunk_ids_key
         ) VALUES
-          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3),
-          ('rebuild-summary-1', 'chunk-stale', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99)
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3, '\nchunk-current\n'),
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.queue.unassessedReady', 'llm', 'review.queue.unassessedReady', 'review-queue-unassessed-ready:v1', 'queue:ready', 99, '\nchunk-stale\n')
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -725,9 +716,8 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
       await createSummaryReductionSchema(database)
       await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-current']})
       await database.run(`
-        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+        INSERT INTO mart.review_article_summary_rebuild_accumulator_v4 (
           request_id,
-          chunk_id,
           project_id,
           review_config_hash,
           snapshot_id,
@@ -737,10 +727,11 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
           count_kind,
           summary_definition_version,
           filter_key,
-          count_value
+          count_value,
+          source_chunk_ids_key
         ) VALUES
-          ('rebuild-summary-1', '__summary_rebuild_partial_accumulator__:stale', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99),
-          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.queue.unassessedReady', 'llm', 'review.queue.unassessedReady', 'review-queue-unassessed-ready:v1', 'queue:ready', 99, '\nchunk-stale\n'),
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3, '\nchunk-current\n')
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -756,11 +747,11 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
       `)
       const partialRows = await database.queryJson<{total: string}>(`
         SELECT CAST(COUNT(*) AS VARCHAR) AS total
-        FROM mart.review_article_summary_rebuild_partial_v4
+        FROM mart.review_article_summary_rebuild_accumulator_v4
       `)
 
       expect(countRows).toEqual([{countValue: '3'}])
-      expect(partialRows).toEqual([{total: '3'}])
+      expect(partialRows).toEqual([{total: '2'}])
     } finally {
       close()
     }
@@ -779,9 +770,8 @@ test('summary rebuild request finalization collapses count rows by scalar servin
       await createSummaryReductionSchema(database)
       await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-001']})
       await database.run(`
-        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+        INSERT INTO mart.review_article_summary_rebuild_accumulator_v4 (
           request_id,
-          chunk_id,
           project_id,
           review_config_hash,
           snapshot_id,
@@ -791,10 +781,10 @@ test('summary rebuild request finalization collapses count rows by scalar servin
           count_kind,
           summary_definition_version,
           filter_key,
-          count_value
+          count_value,
+          source_chunk_ids_key
         ) VALUES
-          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.list.total', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 2),
-          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.list.total.alias', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 3)
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.list.total', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 5, '\nchunk-001\n')
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -1021,9 +1011,8 @@ test('summary rebuild request finalization preserves stale facets when no replac
       await createSummaryReductionSchema(database)
       await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-001']})
       await database.run(`
-        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+        INSERT INTO mart.review_article_summary_rebuild_accumulator_v4 (
           request_id,
-          chunk_id,
           project_id,
           review_config_hash,
           snapshot_id,
@@ -1033,10 +1022,10 @@ test('summary rebuild request finalization preserves stale facets when no replac
           count_kind,
           summary_definition_version,
           filter_key,
-          count_value
+          count_value,
+          source_chunk_ids_key
         ) VALUES (
           'rebuild-summary-1',
-          'chunk-001',
           'project-1',
           'review-config-1',
           'snapshot-1',
@@ -1046,7 +1035,8 @@ test('summary rebuild request finalization preserves stale facets when no replac
           'review.llm.assessedByPrompt',
           'review-llm-assessed-by-prompt:v1',
           'prompt:prompt-1',
-          3
+          3,
+          '\nchunk-001\n'
         )
       `)
       await database.run(`

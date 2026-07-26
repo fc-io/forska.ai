@@ -132,31 +132,6 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/requestReviewServingAllProjectsRebuild.ts',
   },
-  'db:duck:authorize-review-serving-partial-cleanup': {
-    commandIncludes: [
-      'FORSKA_RUNTIME_PROFILE=primary',
-      'DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"',
-      'SERVER_ROLE=maintenance-worker',
-      'SERVER_DUCKDB_OWNER_URL=',
-    ],
-    description: 'V4 summary partial cleanup authorization',
-    mustContain: [
-      'withDuckdbMaintenanceAccess',
-      "getMaintenanceDuckdbWorkloadContext('authorizeReviewServingPartialCleanup')",
-      'authorizeReviewServingSummaryPartialCleanup',
-      'reviewServingSummaryPartialCleanupAuthorizationAck',
-      '--apply',
-      '--project-id',
-      '--review-config-hash',
-      '--request-id',
-      '--chunk-id',
-      '--snapshot-id',
-      '--partial-table',
-      '--expected-row-count',
-      "mode: 'stale_orphan_summary_partial'",
-    ],
-    path: 'scripts/authorizeReviewServingPartialCleanup.ts',
-  },
   'db:duck:release-failed-requestless-review-serving-rebuild-chunks': {
     commandIncludes: [
       'FORSKA_RUNTIME_PROFILE=primary',

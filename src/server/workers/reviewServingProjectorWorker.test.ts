@@ -5620,7 +5620,7 @@ test('worker refreshes summary filter options when an active-snapshot summary re
   expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'completed'})
   expect(harness.runChunkInputs).toEqual([summaryChunk])
   expect(filterOptionDeletes).toHaveLength(2)
-  expect(statements.join('\n')).toContain('FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(statements.join('\n')).toContain('FROM mart.review_article_summary_rebuild_accumulator_v4')
   expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
   expect(statements.join('\n')).toContain("status = 'completed'")
 })
@@ -6801,7 +6801,7 @@ test('claimed requestless summary chunks stage partials through an adopted reque
 
   expect(result).toEqual({status: 'completed'})
   expect(statements.join('\n')).toContain('INSERT INTO app.review_rebuild_request')
-  expect(statements.join('\n')).toContain('mart.review_article_summary_rebuild_partial_v4')
+  expect(statements.join('\n')).toContain('mart.review_article_summary_rebuild_accumulator_v4')
   expect(statements.join('\n')).toContain(`request_id = '${requestId}'`)
   expect(statements.join('\n')).not.toContain("status = 'quarantined'")
 })
@@ -6859,7 +6859,7 @@ test('request-associated summary chunks stage partials without refreshing filter
   )
 
   expect(result).toEqual({status: 'completed'})
-  expect(statements.join('\n')).toContain('mart.review_article_summary_rebuild_partial_v4')
+  expect(statements.join('\n')).toContain('mart.review_article_summary_rebuild_accumulator_v4')
   expect(statements.join('\n')).not.toContain('FROM app.review_projection_identity_manifest')
   expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_filter_option_serving_v4')
   expect(statements.join('\n')).not.toContain('INSERT INTO mart.review_filter_option_serving_v4')

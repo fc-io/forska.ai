@@ -421,7 +421,7 @@ const hotReviewServingTables = [
   'mart.review_filter_posting_stats_v4',
   'mart.review_title_search_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
-  'mart.review_article_summary_rebuild_partial_v4',
+  'mart.review_article_summary_rebuild_accumulator_v4',
 ] as const
 
 const preferredProfileColumns = [
@@ -441,9 +441,11 @@ const preferredProfileColumns = [
   'prompt_id',
   'request_id',
   'chunk_id',
+  'source_chunk_ids_key',
   'sort_key',
   'activity_sort_at',
   'updated_at',
+  'accumulator_updated_at',
 ] as const
 
 const timestampColumnCandidates = [
@@ -505,6 +507,20 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'contribution_key',
   ],
   'mart.review_article_serving_v4': ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
+  'mart.review_article_summary_rebuild_accumulator_v4': [
+    'request_id',
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'summary_kind',
+    'summary_identity',
+    'list_mode_key',
+    'count_kind',
+    'filter_key',
+    'facet_kind',
+    'facet_key',
+    'facet_value',
+  ],
   'mart.review_filter_facet_serving_v4': [
     'project_id',
     'review_config_hash',
@@ -552,10 +568,7 @@ const duplicateKeyCandidates: Record<string, string[]> = {
   ],
 }
 
-const retentionCleanupEligibilityTables = [
-  'mart.review_article_summary_rebuild_partial_v4',
-  'app.review_rebuild_chunk_manifest',
-] as const
+const retentionCleanupEligibilityTables = ['app.review_rebuild_chunk_manifest'] as const
 
 const selectedImportPayloadColumns = [
   'import_route_id',
@@ -1020,17 +1033,6 @@ const getManifestReviewConfigHashPredicate = () => {
           )`
 }
 
-const getChunkManifestPartialRowsGonePredicate = () => {
-  return `NOT EXISTS (
-            SELECT 1
-            FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
-            WHERE summary_partial.project_id = candidate.project_id
-              AND summary_partial.request_id = candidate.request_id
-              AND summary_partial.chunk_id = candidate.chunk_id
-              AND summary_partial.snapshot_id = candidate.snapshot_id
-          )`
-}
-
 const getRetentionCleanupBlockerCategorySql = (
   table: (typeof retentionCleanupEligibilityTables)[number],
   projectId: string,
@@ -1041,64 +1043,27 @@ const getRetentionCleanupBlockerCategorySql = (
   const protectedRequestPredicate = getProtectedRebuildRequestPredicate('request')
   const newestDiagnosticPredicate = getNewestDiagnosticRebuildRequestPredicate('request')
 
-  if (table === 'app.review_rebuild_chunk_manifest') {
-    const dependentPartialsGonePredicate = getChunkManifestPartialRowsGonePredicate()
-
-    return `
-      WITH classified AS (
-        SELECT
-          CASE
-            WHEN ${activeSnapshotPredicate} THEN 'active_or_last_known_good_snapshot_protected'
-            WHEN ${activePinPredicate} THEN 'pinned_snapshot_protected'
-            WHEN candidate.request_id IS NULL THEN 'missing_request_id'
-            WHEN candidate.snapshot_id IS NULL THEN 'missing_snapshot_id'
-            WHEN candidate.projection_component IS DISTINCT FROM 'summary' THEN 'not_summary_chunk'
-            WHEN NOT (${getManifestReviewConfigHashPredicate()}) THEN 'missing_snapshot_manifest'
-            WHEN request.request_id IS NULL THEN 'missing_rebuild_request'
-            WHEN ${protectedRequestPredicate} THEN 'protected_rebuild_request'
-            WHEN ${newestDiagnosticPredicate} THEN 'newest_diagnostic_request'
-            WHEN request.status IS DISTINCT FROM 'completed' OR request.admission_state IS DISTINCT FROM 'admitted' THEN 'request_not_completed_admitted'
-            WHEN candidate.status IS DISTINCT FROM 'completed' OR candidate.admission_state IS DISTINCT FROM 'admitted' THEN 'chunk_not_completed_admitted'
-            WHEN NOT (${dependentPartialsGonePredicate}) THEN 'dependent_partial_blocker'
-            ELSE 'eligible'
-          END AS category
-        FROM ${table} candidate
-        LEFT JOIN app.review_rebuild_request request
-          ON request.request_id = candidate.request_id
-          AND request.project_id = candidate.project_id
-        WHERE ${projectPredicate}
-      )
-      SELECT category, CAST(COUNT(*) AS BIGINT) AS rowCount
-      FROM classified
-      GROUP BY category
-      ORDER BY rowCount DESC, category
-    `
-  }
-
   return `
     WITH classified AS (
       SELECT
         CASE
           WHEN ${activeSnapshotPredicate} THEN 'active_or_last_known_good_snapshot_protected'
           WHEN ${activePinPredicate} THEN 'pinned_snapshot_protected'
+          WHEN candidate.request_id IS NULL THEN 'missing_request_id'
+          WHEN candidate.snapshot_id IS NULL THEN 'missing_snapshot_id'
+          WHEN candidate.projection_component IS DISTINCT FROM 'summary' THEN 'not_summary_chunk'
+          WHEN NOT (${getManifestReviewConfigHashPredicate()}) THEN 'missing_snapshot_manifest'
           WHEN request.request_id IS NULL THEN 'missing_rebuild_request'
           WHEN ${protectedRequestPredicate} THEN 'protected_rebuild_request'
           WHEN ${newestDiagnosticPredicate} THEN 'newest_diagnostic_request'
           WHEN request.status IS DISTINCT FROM 'completed' OR request.admission_state IS DISTINCT FROM 'admitted' THEN 'request_not_completed_admitted'
-          WHEN chunk.chunk_id IS NULL THEN 'missing_summary_chunk'
-          WHEN chunk.status IS DISTINCT FROM 'completed' OR chunk.admission_state IS DISTINCT FROM 'admitted' THEN 'summary_chunk_not_completed_admitted'
+          WHEN candidate.status IS DISTINCT FROM 'completed' OR candidate.admission_state IS DISTINCT FROM 'admitted' THEN 'chunk_not_completed_admitted'
           ELSE 'eligible'
         END AS category
       FROM ${table} candidate
       LEFT JOIN app.review_rebuild_request request
         ON request.request_id = candidate.request_id
         AND request.project_id = candidate.project_id
-      LEFT JOIN app.review_rebuild_chunk_manifest chunk
-        ON chunk.request_id = candidate.request_id
-        AND chunk.chunk_id = candidate.chunk_id
-        AND chunk.project_id = candidate.project_id
-        AND chunk.snapshot_id = candidate.snapshot_id
-        AND chunk.projection_component = 'summary'
       WHERE ${projectPredicate}
     )
     SELECT category, CAST(COUNT(*) AS BIGINT) AS rowCount
@@ -1118,44 +1083,13 @@ const getRetentionCleanupEligibilitySql = (
   const protectedRequestPredicate = getProtectedRebuildRequestPredicate('request')
   const newestDiagnosticPredicate = getNewestDiagnosticRebuildRequestPredicate('request')
 
-  if (table === 'app.review_rebuild_chunk_manifest') {
-    const terminalCandidatePredicate = `candidate.request_id IS NOT NULL
-          AND candidate.snapshot_id IS NOT NULL
-          AND candidate.projection_component = 'summary'
-          AND ${getManifestReviewConfigHashPredicate()}
-          AND request.status = 'completed'
-          AND request.admission_state = 'admitted'
-          AND ${getTerminalRebuildChunkPredicate('candidate')}`
-    const dependentPartialsGonePredicate = getChunkManifestPartialRowsGonePredicate()
-
-    return `
-      SELECT
-        CAST(COUNT(*) AS BIGINT) AS totalScopedRows,
-        CAST(COUNT(*) FILTER (WHERE ${activeSnapshotPredicate}) AS BIGINT) AS activeOrLastKnownGoodSnapshotProtectedRows,
-        CAST(COUNT(*) FILTER (WHERE ${activePinPredicate}) AS BIGINT) AS pinnedSnapshotProtectedRows,
-        CAST(COUNT(*) FILTER (WHERE ${terminalCandidatePredicate}) AS BIGINT) AS completedRequestAndSummaryChunkCandidateRows,
-        CAST(COUNT(*) FILTER (WHERE ${protectedRequestPredicate}) AS BIGINT) AS protectedRebuildRequestRows,
-        CAST(COUNT(*) FILTER (WHERE ${newestDiagnosticPredicate}) AS BIGINT) AS newestDiagnosticRequestProtectedRows,
-        CAST(COUNT(*) FILTER (WHERE ${terminalCandidatePredicate} AND NOT (${dependentPartialsGonePredicate})) AS BIGINT) AS dependentPartialBlockedRows,
-        CAST(COUNT(*) FILTER (
-          WHERE ${terminalCandidatePredicate}
-            AND NOT (${activeSnapshotPredicate})
-            AND NOT (${activePinPredicate})
-            AND NOT (${protectedRequestPredicate})
-            AND NOT (${newestDiagnosticPredicate})
-            AND ${dependentPartialsGonePredicate}
-        ) AS BIGINT) AS eligibleRows
-      FROM ${table} candidate
-      LEFT JOIN app.review_rebuild_request request
-        ON request.request_id = candidate.request_id
-        AND request.project_id = candidate.project_id
-      WHERE ${projectPredicate}
-    `
-  }
-
-  const terminalCandidatePredicate = `request.status = 'completed'
-          AND request.admission_state = 'admitted'
-          AND ${getTerminalRebuildChunkPredicate('chunk')}`
+  const terminalCandidatePredicate = `candidate.request_id IS NOT NULL
+        AND candidate.snapshot_id IS NOT NULL
+        AND candidate.projection_component = 'summary'
+        AND ${getManifestReviewConfigHashPredicate()}
+        AND request.status = 'completed'
+        AND request.admission_state = 'admitted'
+        AND ${getTerminalRebuildChunkPredicate('candidate')}`
 
   return `
     SELECT
@@ -1165,7 +1099,7 @@ const getRetentionCleanupEligibilitySql = (
       CAST(COUNT(*) FILTER (WHERE ${terminalCandidatePredicate}) AS BIGINT) AS completedRequestAndSummaryChunkCandidateRows,
       CAST(COUNT(*) FILTER (WHERE ${protectedRequestPredicate}) AS BIGINT) AS protectedRebuildRequestRows,
       CAST(COUNT(*) FILTER (WHERE ${newestDiagnosticPredicate}) AS BIGINT) AS newestDiagnosticRequestProtectedRows,
-      NULL::BIGINT AS dependentPartialBlockedRows,
+      0::BIGINT AS dependentPartialBlockedRows,
       CAST(COUNT(*) FILTER (
         WHERE ${terminalCandidatePredicate}
           AND NOT (${activeSnapshotPredicate})
@@ -1177,12 +1111,6 @@ const getRetentionCleanupEligibilitySql = (
     LEFT JOIN app.review_rebuild_request request
       ON request.request_id = candidate.request_id
       AND request.project_id = candidate.project_id
-    LEFT JOIN app.review_rebuild_chunk_manifest chunk
-      ON chunk.request_id = candidate.request_id
-      AND chunk.chunk_id = candidate.chunk_id
-      AND chunk.project_id = candidate.project_id
-      AND chunk.snapshot_id = candidate.snapshot_id
-      AND chunk.projection_component = 'summary'
     WHERE ${projectPredicate}
   `
 }
@@ -1374,13 +1302,7 @@ const getRebuildArtifactDispositionEvidenceReport = async (
             requestless_chunk.adoption_hint,
             requestless_chunk.chunk_id,
             requestless_chunk.projection_component,
-            CAST((
-              SELECT COUNT(*)
-              FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
-              WHERE summary_partial.project_id = requestless_chunk.project_id
-                AND summary_partial.chunk_id = requestless_chunk.chunk_id
-                AND summary_partial.snapshot_id IS NOT DISTINCT FROM requestless_chunk.snapshot_id
-            ) AS BIGINT) AS partial_dependency_rows
+            0::BIGINT AS partial_dependency_rows
           FROM requestless_chunk
         )
         SELECT
@@ -1414,11 +1336,11 @@ const getRebuildArtifactDispositionEvidenceReport = async (
           WHERE project_id = ${getSqlLiteral(projectId)}
           UNION ALL
           SELECT
-            'mart.review_article_summary_rebuild_partial_v4' AS artifact_table,
+            'mart.review_article_summary_rebuild_accumulator_v4' AS artifact_table,
             project_id,
             request_id,
-            chunk_id
-          FROM mart.review_article_summary_rebuild_partial_v4
+            NULL::VARCHAR AS chunk_id
+          FROM mart.review_article_summary_rebuild_accumulator_v4
           WHERE project_id = ${getSqlLiteral(projectId)}
         ),
         classified AS (
