@@ -1464,11 +1464,11 @@ const getSummaryRebuildChunkOutputCount = async (
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSnapshotIdPredicate(input.snapshotIds)}
       UNION ALL
-      SELECT 'partial'
-      FROM mart.review_article_summary_rebuild_partial_v4
+      SELECT 'summaryAccumulator'
+      FROM mart.review_article_summary_rebuild_accumulator_v4
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND request_id = ${getSqlLiteral(input.chunk.requestId)}
-        AND chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
+        AND contains(source_chunk_ids_key, ${getSqlLiteral(`\n${input.chunk.chunkId}\n`)})
         AND ${getSnapshotIdPredicate(input.snapshotIds)}
     )
     SELECT

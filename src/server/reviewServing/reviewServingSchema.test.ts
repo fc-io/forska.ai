@@ -78,6 +78,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0175_dropReviewArticleServingPayload.sql',
   '../../db/duckdbMigrations/0176_dropReviewSummaryContributionRebuildPartial.sql',
   '../../db/duckdbMigrations/0177_reviewFilteredCountServing.sql',
+  '../../db/duckdbMigrations/0178_reviewSummaryRebuildAccumulator.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -263,7 +264,7 @@ const reviewServingPhase1Tables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
-  'mart.review_article_summary_rebuild_partial_v4',
+  'mart.review_article_summary_rebuild_accumulator_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
@@ -282,6 +283,8 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_judgment_detail_hydration_serving_v4',
   'mart.review_article_serving_payload_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
+  'mart.review_article_summary_rebuild_partial_v4',
+  'app.review_rebuild_partial_cleanup_authorization',
 ])
 
 const deltaEnvelopeColumns = [
@@ -529,10 +532,10 @@ test('projector watermark schema drops unused lifecycle placeholders', () => {
   expect(reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql).not.toContain('last_error')
 })
 
-test('summary rebuild partial schema drops derived serving key identity', () => {
-  expect([...getTableColumns('mart.review_article_summary_rebuild_partial_v4')]).toEqual([
+test('summary rebuild accumulator schema replaces chunk partial fanout', () => {
+  expect(getTableSql('mart.review_article_summary_rebuild_partial_v4')).toBe('')
+  expect([...getTableColumns('mart.review_article_summary_rebuild_accumulator_v4')]).toEqual([
     'request_id',
-    'chunk_id',
     'project_id',
     'review_config_hash',
     'snapshot_id',
@@ -551,8 +554,11 @@ test('summary rebuild partial schema drops derived serving key identity', () => 
     'availability',
     'stale_reason',
     'count_value',
-    'partial_updated_at',
+    'source_chunk_ids_key',
+    'accumulator_updated_at',
   ])
+  expect(schemaMigrationSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_article_summary_rebuild_accumulator_v4')
+  expect(schemaMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_article_summary_rebuild_partial_v4;')
   expect(reviewSummaryPartialServingKeyDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_summary_rebuild_partial_v4_without_serving_key',
   )
@@ -675,29 +681,9 @@ test('Phase 5B schema migration adds rebuild request admission above chunk manif
   ).toEqual([])
 })
 
-test('review-serving schema includes audited summary partial cleanup authorization', () => {
-  expect(
-    getMissingColumns('app.review_rebuild_partial_cleanup_authorization', [
-      'authorization_id',
-      'project_id',
-      'review_config_hash',
-      'request_id',
-      'chunk_id',
-      'snapshot_id',
-      'partial_table',
-      'cleanup_mode',
-      'reason',
-      'evidence_json',
-      'expected_row_count',
-      'observed_row_count',
-      'operator_ack',
-      'authorized_at',
-      'expires_at',
-      'applied_at',
-      'applied_row_count',
-    ]),
-  ).toEqual([])
-  expect(schemaMigrationSql).toContain('idx_review_rebuild_partial_cleanup_authorization_lookup')
+test('review-serving schema retires audited summary partial cleanup authorization', () => {
+  expect(getTableSql('app.review_rebuild_partial_cleanup_authorization')).toBe('')
+  expect(schemaMigrationSql).toContain('DROP TABLE IF EXISTS app.review_rebuild_partial_cleanup_authorization;')
 })
 
 test('Phase 1 schema migration keeps raw payloads out of import hot fields', () => {

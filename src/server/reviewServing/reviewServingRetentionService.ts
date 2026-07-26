@@ -17,10 +17,7 @@ export type ReviewServingRetentionCleanupInput = {
   reviewConfigHash?: string | null
 }
 
-export type ReviewServingRetentionCleanupSpecKind =
-  | 'snapshot'
-  | 'terminalRebuildChunkManifest'
-  | 'terminalRebuildPartial'
+export type ReviewServingRetentionCleanupSpecKind = 'snapshot' | 'terminalRebuildChunkManifest'
 
 export type ReviewServingRetentionCleanupResult = {
   cleanupBatchSize: number
@@ -46,8 +43,6 @@ type CleanupTableSpec = {
   table: string
 }
 
-type SummaryPartialRebuildSql = {createIndexSql: string; tempTableName: string; uniqueIndexSql: string}
-
 const defaultRetentionCleanupBatchSize = 512
 const defaultRetentionCleanupTargetLimit = 16
 
@@ -71,13 +66,6 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
     table: 'app.review_selected_article_import_v4',
   },
   {
-    kind: 'terminalRebuildPartial',
-    keyColumn: 'request_id, chunk_id, snapshot_id',
-    orderBy: 'candidate.request_id, candidate.chunk_id, candidate.snapshot_id',
-    protectedPredicate: 'snapshot_id',
-    table: 'mart.review_article_summary_rebuild_partial_v4',
-  },
-  {
     kind: 'terminalRebuildChunkManifest',
     keyColumn: 'request_id, chunk_id',
     orderBy: 'candidate.request_id, candidate.chunk_id',
@@ -87,34 +75,6 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
 ]
 
 const retentionTableSpecCount = cleanupTableSpecs.length
-
-const summaryPartialRebuildSqlByTable: Record<string, SummaryPartialRebuildSql> = {
-  'mart.review_article_summary_rebuild_partial_v4': {
-    createIndexSql: `
-      CREATE INDEX IF NOT EXISTS idx_review_article_summary_rebuild_partial_v4_reduce
-      ON mart.review_article_summary_rebuild_partial_v4(request_id, project_id, review_config_hash, snapshot_id, summary_kind)
-    `,
-    tempTableName: 'review_serving_summary_partial_cleanup_rowids',
-    uniqueIndexSql: `
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_summary_rebuild_partial_v4_unique
-      ON mart.review_article_summary_rebuild_partial_v4(
-        request_id,
-        chunk_id,
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_kind,
-        summary_identity,
-        COALESCE(list_mode_key, 'global'),
-        COALESCE(count_kind, ''),
-        COALESCE(filter_key, ''),
-        COALESCE(facet_kind, ''),
-        COALESCE(facet_key, ''),
-        COALESCE(facet_value, '')
-      )
-    `,
-  },
-}
 
 const getReviewServingRetentionDatabase = () => {
   return getAppDatabaseService() as ReviewServingRetentionServiceDatabase
@@ -228,10 +188,6 @@ const getCleanupOrderBy = (spec: CleanupTableSpec) => {
   return spec.orderBy ?? `candidate.${spec.keyColumn}`
 }
 
-const getReviewConfigHashPredicate = (input: ReviewServingRetentionCleanupInput, source = 'candidate') => {
-  return `${source}.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}`
-}
-
 const getActiveSnapshotManifestGuardPredicate = (snapshotColumn: string) => {
   return `EXISTS (
             SELECT 1
@@ -324,242 +280,6 @@ const getTerminalRebuildChunkPredicate = (chunkSource: string) => {
           AND ${chunkSource}.admission_state = 'admitted'`
 }
 
-const getAuthorizedRebuildPartialCleanupPredicate = (
-  input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
-) => {
-  return `EXISTS (
-            SELECT 1
-            FROM app.review_rebuild_partial_cleanup_authorization cleanup_authorization
-            WHERE cleanup_authorization.project_id = candidate.project_id
-              AND cleanup_authorization.review_config_hash = candidate.review_config_hash
-              AND cleanup_authorization.request_id = candidate.request_id
-              AND cleanup_authorization.chunk_id = candidate.chunk_id
-              AND cleanup_authorization.snapshot_id = candidate.snapshot_id
-              AND cleanup_authorization.partial_table = ${getSqlLiteral(input.spec.table)}
-              AND cleanup_authorization.cleanup_mode = 'stale_orphan_summary_partial'
-              AND cleanup_authorization.operator_ack = 'authorize-stale-orphan-review-serving-summary-partial-cleanup'
-              AND cleanup_authorization.expires_at > ${getTimestampLiteral(input.now)}
-              AND cleanup_authorization.expected_row_count = (
-                SELECT CAST(COUNT(*) AS BIGINT)
-                FROM ${input.spec.table} row_count_partial
-                WHERE row_count_partial.project_id = candidate.project_id
-                  AND row_count_partial.review_config_hash = candidate.review_config_hash
-                  AND row_count_partial.request_id = candidate.request_id
-                  AND row_count_partial.chunk_id = candidate.chunk_id
-                  AND row_count_partial.snapshot_id = candidate.snapshot_id
-              )
-              AND NOT EXISTS (
-                SELECT 1
-                FROM app.review_rebuild_chunk_manifest matching_summary_chunk
-                WHERE matching_summary_chunk.project_id = candidate.project_id
-                  AND matching_summary_chunk.request_id = candidate.request_id
-                  AND matching_summary_chunk.chunk_id = candidate.chunk_id
-                  AND matching_summary_chunk.snapshot_id = candidate.snapshot_id
-                  AND matching_summary_chunk.projection_component = 'summary'
-              )
-          )`
-}
-
-const getTerminalRebuildPartialCleanupCandidateSql = (
-  input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
-) => {
-  return `
-    SELECT
-      candidate.rowid AS cleanup_rowid,
-      candidate.project_id,
-      candidate.review_config_hash,
-      candidate.request_id,
-      candidate.chunk_id,
-      candidate.snapshot_id
-    FROM ${input.spec.table} candidate
-    INNER JOIN app.review_rebuild_request request
-      ON request.request_id = candidate.request_id
-      AND request.project_id = candidate.project_id
-    LEFT JOIN app.review_rebuild_chunk_manifest chunk
-      ON chunk.request_id = candidate.request_id
-      AND chunk.chunk_id = candidate.chunk_id
-      AND chunk.project_id = candidate.project_id
-      AND chunk.snapshot_id = candidate.snapshot_id
-      AND chunk.projection_component = 'summary'
-    WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
-      AND ${getReviewConfigHashPredicate(input)}
-      AND request.lease_owner IS NULL
-      AND request.lease_expires_at IS NULL
-      AND (chunk.request_id IS NULL OR (chunk.lease_owner IS NULL AND chunk.lease_expires_at IS NULL))
-      AND (
-        (
-          request.status = 'completed'
-          AND request.admission_state = 'admitted'
-          AND ${getTerminalRebuildChunkPredicate('chunk')}
-        )
-        OR (${getAuthorizedRebuildPartialCleanupPredicate(input)})
-      )
-      AND NOT (${getActiveSnapshotManifestGuardPredicate(input.spec.protectedPredicate)})
-      AND NOT (${getActiveSnapshotPinGuardPredicate(input.spec.protectedPredicate, input.now)})
-      AND NOT (${getProtectedRebuildRequestPredicate('request', input.now)})
-      AND NOT (${getNewestDiagnosticRebuildRequestPredicate('request')})
-    ORDER BY ${getCleanupOrderBy(input.spec)}
-    LIMIT ${getSqlLiteral(input.batchSize)}
-  `
-}
-
-const markAppliedAuthorizedRebuildPartialCleanup = async (
-  input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
-  rebuildSql: SummaryPartialRebuildSql,
-  database: ReviewServingRetentionServiceTransaction,
-) => {
-  await database.run(`
-    DROP TABLE IF EXISTS review_serving_partial_cleanup_authorization_receipts;
-
-    CREATE OR REPLACE TEMP TABLE review_serving_partial_cleanup_authorization_receipts AS
-      SELECT
-        cleanup_authorization.authorization_id,
-        CAST(COUNT(*) AS BIGINT) AS applied_row_count
-      FROM app.review_rebuild_partial_cleanup_authorization cleanup_authorization
-      INNER JOIN ${rebuildSql.tempTableName} cleaned_row
-        ON cleaned_row.project_id = cleanup_authorization.project_id
-        AND cleaned_row.review_config_hash = cleanup_authorization.review_config_hash
-        AND cleaned_row.request_id = cleanup_authorization.request_id
-        AND cleaned_row.chunk_id = cleanup_authorization.chunk_id
-        AND cleaned_row.snapshot_id = cleanup_authorization.snapshot_id
-      WHERE cleanup_authorization.partial_table = ${getSqlLiteral(input.spec.table)}
-        AND cleanup_authorization.cleanup_mode = 'stale_orphan_summary_partial'
-        AND cleanup_authorization.operator_ack = 'authorize-stale-orphan-review-serving-summary-partial-cleanup'
-        AND cleanup_authorization.expires_at > ${getTimestampLiteral(input.now)}
-        AND cleanup_authorization.applied_at IS NULL
-      GROUP BY cleanup_authorization.authorization_id;
-
-    DROP TABLE IF EXISTS app.review_rebuild_partial_cleanup_authorization_repair;
-
-    CREATE TABLE app.review_rebuild_partial_cleanup_authorization_repair (
-      authorization_id VARCHAR PRIMARY KEY,
-      project_id VARCHAR NOT NULL,
-      review_config_hash VARCHAR NOT NULL,
-      request_id VARCHAR NOT NULL,
-      chunk_id VARCHAR NOT NULL,
-      snapshot_id VARCHAR NOT NULL,
-      partial_table VARCHAR NOT NULL,
-      cleanup_mode VARCHAR NOT NULL,
-      reason VARCHAR NOT NULL,
-      evidence_json JSON NOT NULL DEFAULT '{}',
-      expected_row_count BIGINT NOT NULL,
-      observed_row_count BIGINT NOT NULL,
-      operator_ack VARCHAR NOT NULL,
-      authorized_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      expires_at TIMESTAMPTZ NOT NULL,
-      applied_at TIMESTAMPTZ,
-      applied_row_count BIGINT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      CHECK (length(trim(authorization_id)) > 0),
-      CHECK (length(trim(project_id)) > 0),
-      CHECK (length(trim(review_config_hash)) > 0),
-      CHECK (length(trim(request_id)) > 0),
-      CHECK (length(trim(chunk_id)) > 0),
-      CHECK (length(trim(snapshot_id)) > 0),
-      CHECK (partial_table IN ('mart.review_article_summary_rebuild_partial_v4')),
-      CHECK (cleanup_mode IN ('stale_orphan_summary_partial')),
-      CHECK (length(trim(reason)) > 0),
-      CHECK (expected_row_count >= 0),
-      CHECK (observed_row_count >= 0),
-      CHECK (applied_row_count IS NULL OR applied_row_count >= 0),
-      CHECK (length(trim(operator_ack)) > 0),
-      CHECK (expires_at > authorized_at)
-    );
-
-    INSERT INTO app.review_rebuild_partial_cleanup_authorization_repair
-    SELECT
-      cleanup_authorization.authorization_id,
-      cleanup_authorization.project_id,
-      cleanup_authorization.review_config_hash,
-      cleanup_authorization.request_id,
-      cleanup_authorization.chunk_id,
-      cleanup_authorization.snapshot_id,
-      cleanup_authorization.partial_table,
-      cleanup_authorization.cleanup_mode,
-      cleanup_authorization.reason,
-      cleanup_authorization.evidence_json,
-      cleanup_authorization.expected_row_count,
-      cleanup_authorization.observed_row_count,
-      cleanup_authorization.operator_ack,
-      cleanup_authorization.authorized_at,
-      cleanup_authorization.expires_at,
-      CASE
-        WHEN receipt.authorization_id IS NULL THEN cleanup_authorization.applied_at
-        ELSE current_timestamp
-      END AS applied_at,
-      COALESCE(receipt.applied_row_count, cleanup_authorization.applied_row_count) AS applied_row_count,
-      cleanup_authorization.created_at,
-      CASE
-        WHEN receipt.authorization_id IS NULL THEN cleanup_authorization.updated_at
-        ELSE current_timestamp
-      END AS updated_at
-    FROM app.review_rebuild_partial_cleanup_authorization cleanup_authorization
-    LEFT JOIN review_serving_partial_cleanup_authorization_receipts receipt
-      ON receipt.authorization_id = cleanup_authorization.authorization_id;
-
-    DROP TABLE app.review_rebuild_partial_cleanup_authorization;
-
-    ALTER TABLE app.review_rebuild_partial_cleanup_authorization_repair
-    RENAME TO review_rebuild_partial_cleanup_authorization;
-
-    CREATE INDEX IF NOT EXISTS idx_review_rebuild_partial_cleanup_authorization_lookup
-    ON app.review_rebuild_partial_cleanup_authorization(
-      project_id,
-      review_config_hash,
-      request_id,
-      chunk_id,
-      snapshot_id,
-      partial_table,
-      expires_at
-    );
-
-    DROP TABLE IF EXISTS review_serving_partial_cleanup_authorization_receipts;
-  `)
-}
-
-const deleteTerminalRebuildPartialCleanupBatch = async (
-  input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
-  database: ReviewServingRetentionServiceTransaction,
-) => {
-  const rebuildSql = summaryPartialRebuildSqlByTable[input.spec.table]
-
-  if (rebuildSql === undefined) {
-    throw new Error(`missing summary partial cleanup rebuild SQL for ${input.spec.table}`)
-  }
-
-  await database.run(`
-    CREATE OR REPLACE TEMP TABLE ${rebuildSql.tempTableName} AS
-    ${getTerminalRebuildPartialCleanupCandidateSql(input)}
-  `)
-
-  const [row] = await database.queryJson<{cleanupRowCount: number | string}>(`
-    SELECT CAST(COUNT(*) AS BIGINT) AS cleanupRowCount
-    FROM ${rebuildSql.tempTableName}
-  `)
-  const cleanupRowCount = Number(row?.cleanupRowCount ?? 0)
-
-  if (cleanupRowCount === 0) {
-    await database.run(`DROP TABLE IF EXISTS ${rebuildSql.tempTableName}`)
-    return
-  }
-
-  await database.run(`
-    CREATE OR REPLACE TABLE ${input.spec.table} AS
-    SELECT partial.*
-    FROM ${input.spec.table} partial
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM ${rebuildSql.tempTableName} cleanup_row
-      WHERE cleanup_row.cleanup_rowid = partial.rowid
-    )
-  `)
-  await database.run(rebuildSql.uniqueIndexSql)
-  await database.run(rebuildSql.createIndexSql)
-  await markAppliedAuthorizedRebuildPartialCleanup(input, rebuildSql, database)
-  await database.run(`DROP TABLE IF EXISTS ${rebuildSql.tempTableName}`)
-}
-
 const getManifestReviewConfigHashPredicate = (input: ReviewServingRetentionCleanupInput) => {
   return `EXISTS (
             SELECT 1
@@ -567,17 +287,6 @@ const getManifestReviewConfigHashPredicate = (input: ReviewServingRetentionClean
             WHERE cleanup_snapshot.project_id = candidate.project_id
               AND cleanup_snapshot.snapshot_id = candidate.snapshot_id
               AND cleanup_snapshot.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}
-          )`
-}
-
-const getChunkManifestPartialRowsGonePredicate = () => {
-  return `NOT EXISTS (
-            SELECT 1
-            FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
-            WHERE summary_partial.project_id = candidate.project_id
-              AND summary_partial.request_id = candidate.request_id
-              AND summary_partial.chunk_id = candidate.chunk_id
-              AND summary_partial.snapshot_id = candidate.snapshot_id
           )`
 }
 
@@ -605,7 +314,6 @@ const deleteTerminalRebuildChunkManifestCleanupBatch = async (
           AND NOT (${getActiveSnapshotPinGuardPredicate(input.spec.protectedPredicate, input.now)})
           AND NOT (${getProtectedRebuildRequestPredicate('request', input.now)})
           AND NOT (${getNewestDiagnosticRebuildRequestPredicate('request')})
-          AND ${getChunkManifestPartialRowsGonePredicate()}
         ORDER BY ${getCleanupOrderBy(input.spec)}
         LIMIT ${getSqlLiteral(input.batchSize)}
       )
@@ -616,11 +324,6 @@ const deleteCleanupBatch = async (
   input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
   database: ReviewServingRetentionServiceTransaction,
 ) => {
-  if (input.spec.kind === 'terminalRebuildPartial') {
-    await deleteTerminalRebuildPartialCleanupBatch(input, database)
-    return
-  }
-
   if (input.spec.kind === 'terminalRebuildChunkManifest') {
     await deleteTerminalRebuildChunkManifestCleanupBatch(input, database)
     return
