@@ -2269,8 +2269,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           snapshot_id,
           filter_kind,
           filter_value,
-          list_mode_key,
-          article_id
+          list_mode_key
         FROM mart.review_article_filter_posting_serving_v4
         GROUP BY
           project_id,
@@ -2278,8 +2277,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           snapshot_id,
           filter_kind,
           filter_value,
-          list_mode_key,
-          article_id
+          list_mode_key
         HAVING COUNT(*) > 1
       )
     `,
@@ -2293,7 +2291,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         filter_kind,
         filter_value,
         list_mode_key,
-        article_id
+        article_ids
       FROM mart.review_article_filter_posting_serving_v4
       ORDER BY
         project_id,
@@ -2301,8 +2299,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         snapshot_id,
         filter_kind,
         filter_value,
-        list_mode_key,
-        article_id
+        list_mode_key
       LIMIT 1;
       BEGIN;
       DELETE FROM mart.review_article_filter_posting_serving_v4
@@ -2336,11 +2333,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           SELECT list_mode_key
           FROM startup_probe_review_article_filter_posting_serving_v4
           LIMIT 1
-        )
-        AND article_id = (
-          SELECT article_id
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
         );
       INSERT INTO mart.review_article_filter_posting_serving_v4 (
         project_id,
@@ -2349,7 +2341,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         filter_kind,
         filter_value,
         list_mode_key,
-        article_id
+        article_ids
       )
       SELECT
         project_id,
@@ -2358,7 +2350,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         filter_kind,
         filter_value,
         list_mode_key,
-        article_id
+        article_ids
       FROM startup_probe_review_article_filter_posting_serving_v4;
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_article_filter_posting_serving_v4;
@@ -2371,11 +2363,113 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'filter_kind',
       'filter_value',
       'list_mode_key',
-      'article_id',
     ],
     schemaName: 'mart',
+    schemaRequirements: [
+      {columnNames: ['article_ids'], schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},
+    ],
     skipGenericDeleteInsertProbe: true,
     tableName: 'review_article_filter_posting_serving_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          list_mode_key,
+          article_id
+        FROM mart.review_article_filter_state_serving_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          list_mode_key,
+          article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_filter_state_serving_v4;
+      CREATE TEMP TABLE startup_probe_review_article_filter_state_serving_v4 AS
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        list_mode_key,
+        article_id,
+        duplicate_flag,
+        conflict_flag,
+        llm_status,
+        human_status
+      FROM mart.review_article_filter_state_serving_v4
+      ORDER BY
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        list_mode_key,
+        article_id
+      LIMIT 1;
+      BEGIN;
+      DELETE FROM mart.review_article_filter_state_serving_v4
+      WHERE EXISTS (SELECT 1 FROM startup_probe_review_article_filter_state_serving_v4)
+        AND project_id = (
+          SELECT project_id
+          FROM startup_probe_review_article_filter_state_serving_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_article_filter_state_serving_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_article_filter_state_serving_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_article_filter_state_serving_v4
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_review_article_filter_state_serving_v4
+          LIMIT 1
+        );
+      INSERT INTO mart.review_article_filter_state_serving_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        list_mode_key,
+        article_id,
+        duplicate_flag,
+        conflict_flag,
+        llm_status,
+        human_status
+      )
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        list_mode_key,
+        article_id,
+        duplicate_flag,
+        conflict_flag,
+        llm_status,
+        human_status
+      FROM startup_probe_review_article_filter_state_serving_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_filter_state_serving_v4;
+    `,
+    lowMemoryStartupPreflight: true,
+    repairPrimaryKeyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
+    schemaName: 'mart',
+    skipGenericDeleteInsertProbe: true,
+    tableName: 'review_article_filter_state_serving_v4',
   },
 ] as const
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
@@ -3348,7 +3442,11 @@ const getDuckdbStartupPreflightScript = () => {
       const inlinePrimaryKeyRepairSpecs = []
 
       for (const spec of tableRepairSpecs) {
-        if (await tableExists(spec.schemaName, spec.tableName) && await needsInlinePrimaryKeyRepairBeforeMutation(spec)) {
+        if (
+          await tableExists(spec.schemaName, spec.tableName)
+          && await schemaRequirementsSatisfied(spec.schemaRequirements)
+          && await needsInlinePrimaryKeyRepairBeforeMutation(spec)
+        ) {
           inlinePrimaryKeyRepairSpecs.push(spec)
         }
       }
@@ -3810,6 +3908,10 @@ const getDuckdbIndexedTableRepairScript = () => {
 
       for (const spec of tableRepairSpecs) {
         if (!(await tableExists(spec.schemaName, spec.tableName))) {
+          continue
+        }
+
+        if (!(await schemaRequirementsSatisfied(spec.schemaRequirements))) {
           continue
         }
 

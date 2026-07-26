@@ -80,6 +80,8 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0177_reviewFilteredCountServing.sql',
   '../../db/duckdbMigrations/0178_reviewSummaryRebuildAccumulator.sql',
   '../../db/duckdbMigrations/0179_slimReviewTitleSearchTokenPostings.sql',
+  '../../db/duckdbMigrations/0180_reviewFilterStateServing.sql',
+  '../../db/duckdbMigrations/0181_compactReviewFilterPostingServing.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -141,8 +143,6 @@ const reviewJudgmentDetailHydrationSplitForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0160_reviewJudgmentDetailHydrationSplit.sql']
 const reviewJudgmentDetailHydrationPromptMetadataDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0161_dropReviewJudgmentHydrationPromptMetadata.sql']
-const reviewFilterPostingServingSortKeyDropForwardMigrationSql =
-  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0162_dropReviewFilterPostingServingSortKey.sql']
 const reviewArticleServingDisplayCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0163_dropReviewArticleServingDisplayCopies.sql']
 const reviewPayloadDisplayRehydrationForwardMigrationSql =
@@ -191,6 +191,10 @@ const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0127_dropReviewTitleSearchUnusedColumns.sql']
 const reviewTitleSearchTokenPostingSlimForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0179_slimReviewTitleSearchTokenPostings.sql']
+const reviewFilterStateServingForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0180_reviewFilterStateServing.sql']
+const reviewFilterPostingServingCompactForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0181_compactReviewFilterPostingServing.sql']
 const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql'
@@ -236,6 +240,7 @@ const reviewFilteredCountServingForwardMigrationSql =
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
+  'mart.review_article_filter_state_serving_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
@@ -266,6 +271,7 @@ const reviewServingPhase1Tables = [
   'mart.review_title_search_serving_v4',
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
+  'mart.review_article_filter_state_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_rebuild_accumulator_v4',
   'mart.review_article_count_serving_v4',
@@ -1090,7 +1096,7 @@ test('filter posting stats mart is retired from the review-serving schema', () =
   expect(getTableColumns('mart.review_article_filter_posting_serving_v4').has('posting_updated_at')).toBe(false)
 })
 
-test('filter posting serving schema stores membership keys without sort key', () => {
+test('filter posting serving schema stores compact article id postings without sort key', () => {
   expect([...getTableColumns('mart.review_article_filter_posting_serving_v4')]).toEqual([
     'project_id',
     'review_config_hash',
@@ -1098,23 +1104,50 @@ test('filter posting serving schema stores membership keys without sort key', ()
     'filter_kind',
     'filter_value',
     'list_mode_key',
-    'article_id',
+    'article_ids',
   ])
-  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
   )
-  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
   )
-  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_repaired_pk',
   )
-  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup',
   )
-  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).not.toContain('PRIMARY KEY')
-  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).not.toContain('sort_key TIMESTAMPTZ')
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain('article_ids VARCHAR[] NOT NULL')
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
+    'LIST(DISTINCT article_id ORDER BY article_id) AS article_ids',
+  )
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewFilterPostingServingCompactForwardMigrationSql).not.toContain('sort_key TIMESTAMPTZ')
   expect(getTableSql('mart.review_article_filter_posting_serving_v4')).not.toContain('sort_key')
+})
+
+test('filter state serving schema splits low-cardinality state from generic postings', () => {
+  expect([...getTableColumns('mart.review_article_filter_state_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'list_mode_key',
+    'article_id',
+    'duplicate_flag',
+    'conflict_flag',
+    'llm_status',
+    'human_status',
+  ])
+  expect(reviewFilterStateServingForwardMigrationSql).toContain(
+    "WHERE posting.filter_kind IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus')",
+  )
+  expect(reviewFilterStateServingForwardMigrationSql).toContain(
+    "DELETE FROM mart.review_article_filter_posting_serving_v4\nWHERE filter_kind IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus')",
+  )
+  expect(reviewFilterStateServingForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_state_serving_v4_pk',
+  )
 })
 
 test('filter option schema drops reconstructable payload JSON column', () => {
@@ -1154,7 +1187,10 @@ test('Phase 1 schema migration creates contract cursor and sort columns on non-j
 
       return getContractPhysicalColumns(contract)
         .filter((columnName) => {
-          if (contract.servingTable === 'mart.review_article_filter_posting_serving_v4' && columnName === 'sort_key') {
+          if (
+            contract.servingTable === 'mart.review_article_filter_posting_serving_v4'
+            && (columnName === 'sort_key' || columnName === 'article_id')
+          ) {
             return false
           }
 

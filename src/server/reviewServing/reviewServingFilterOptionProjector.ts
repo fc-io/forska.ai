@@ -145,19 +145,19 @@ const isSearchScopedFilterOptionProjection = (input: ProjectReviewServingFilterO
 
 const getStatusPostingOptionSql = (input: ProjectReviewServingFilterOptionsInput) => {
   return `
-          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, posting.filter_value AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', posting.filter_value) AS optionValueKey, COUNT(DISTINCT posting.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_filter_posting_serving_v4 posting
-          INNER JOIN active_article active ON active.article_id = posting.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = posting.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND posting.project_id = ${getSqlLiteral(input.projectId)} AND posting.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND posting.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND posting.filter_kind = 'llmStatus'
-          ${aggregateBySql} posting.filter_value
+          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, state.llm_status AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', state.llm_status) AS optionValueKey, COUNT(DISTINCT state.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_filter_state_serving_v4 state
+          INNER JOIN active_article active ON active.article_id = state.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = state.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND state.project_id = ${getSqlLiteral(input.projectId)} AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND state.llm_status IS NOT NULL
+          ${aggregateBySql} state.llm_status
           UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, posting.filter_value AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', posting.filter_value) AS optionValueKey, COUNT(DISTINCT posting.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_filter_posting_serving_v4 posting
-          INNER JOIN active_article active ON active.article_id = posting.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = posting.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND posting.project_id = ${getSqlLiteral(input.projectId)} AND posting.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND posting.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND posting.filter_kind = 'humanStatus'
-          ${aggregateBySql} posting.filter_value`
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, state.human_status AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', state.human_status) AS optionValueKey, COUNT(DISTINCT state.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_filter_state_serving_v4 state
+          INNER JOIN active_article active ON active.article_id = state.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = state.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND state.project_id = ${getSqlLiteral(input.projectId)} AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND state.human_status IS NOT NULL
+          ${aggregateBySql} state.human_status`
 }
 
 const getFinalizedFacetOptionSourceRows = async (

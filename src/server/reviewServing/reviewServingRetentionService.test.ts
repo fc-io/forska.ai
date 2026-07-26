@@ -85,7 +85,7 @@ const legacyRetentionTables = [
 
 test('retention cleanup cursor includes selected-import cleanup and wraps over current tables only', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 9}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 10}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -98,20 +98,20 @@ test('retention cleanup cursor includes selected-import cleanup and wraps over c
     cleanupBatchSize: 25,
     cleanupSpecKind: 'snapshot',
     cleanupTable: 'app.review_selected_article_import_v4',
-    cleanupTableIndex: 9,
-    nextCleanupTableIndex: 10,
+    cleanupTableIndex: 10,
+    nextCleanupTableIndex: 11,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).toContain("candidate.project_id = 'project-1'")
   expect(joined).toContain('ORDER BY candidate.selected_import_snapshot_id')
   expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":10')
+  expect(joined).toContain('"tableIndex":11')
 })
 
 test('retention cleanup includes dynamic filtered count serving rows', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 4}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 5}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -124,20 +124,20 @@ test('retention cleanup includes dynamic filtered count serving rows', async () 
     cleanupBatchSize: 25,
     cleanupSpecKind: 'snapshot',
     cleanupTable: 'mart.review_filtered_count_serving_v4',
-    cleanupTableIndex: 4,
-    nextCleanupTableIndex: 5,
+    cleanupTableIndex: 5,
+    nextCleanupTableIndex: 6,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
   expect(joined).toContain('DELETE FROM mart.review_filtered_count_serving_v4')
   expect(joined).toContain("candidate.project_id = 'project-1'")
   expect(joined).toContain('ORDER BY candidate.snapshot_id')
   expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":5')
+  expect(joined).toContain('"tableIndex":6')
 })
 
 test('retention cleanup no longer references legacy patch or contribution tables at runtime', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 12}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 1}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -168,7 +168,7 @@ test('retention cleanup no longer references legacy patch or contribution tables
 
 test('retention cleanup no longer includes terminal summary partial cleanup', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 10}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -181,7 +181,7 @@ test('retention cleanup no longer includes terminal summary partial cleanup', as
     cleanupBatchSize: 17,
     cleanupSpecKind: 'terminalRebuildChunkManifest',
     cleanupTable: 'app.review_rebuild_chunk_manifest',
-    cleanupTableIndex: 10,
+    cleanupTableIndex: 11,
     nextCleanupTableIndex: 0,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
@@ -199,7 +199,7 @@ test('retention cleanup no longer includes terminal summary partial cleanup', as
 
 test('retention cleanup allowlists chunk manifest cleanup after summary partial retirement', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 10}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -212,7 +212,7 @@ test('retention cleanup allowlists chunk manifest cleanup after summary partial 
     cleanupBatchSize: 9,
     cleanupSpecKind: 'terminalRebuildChunkManifest',
     cleanupTable: 'app.review_rebuild_chunk_manifest',
-    cleanupTableIndex: 10,
+    cleanupTableIndex: 11,
     nextCleanupTableIndex: 0,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })

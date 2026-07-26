@@ -228,22 +228,18 @@ const getRouteFilterSqlMatch = (
   return [
     articleCreatedAtFrom ? containsSql(statement, `article_created_at >= TIMESTAMPTZ '${articleCreatedAtFrom}'`) : true,
     filters.articleCreatedAtTo ? containsSql(statement, "article_created_at < TIMESTAMPTZ '2026-02-01'") : true,
-    filters.duplicateFlag && !queueOrdering
-      ? containsSql(statement, "filter_kind = 'duplicateFlag'") && containsSql(statement, "'true'")
-      : true,
-    filters.conflictFlag && !queueOrdering
-      ? containsSql(statement, "filter_kind = 'conflictFlag'") && containsSql(statement, "'true'")
-      : true,
+    filters.duplicateFlag && !queueOrdering ? containsSql(statement, 'duplicate_flag IS TRUE') : true,
+    filters.conflictFlag && !queueOrdering ? containsSql(statement, 'conflict_flag IS TRUE') : true,
     filters.llmHasJudgment && !queueOrdering
       ? containsSql(statement, 'FROM mart.review_article_judgment_detail_serving_v4')
         && containsSql(statement, "list_mode_key = 'llm'")
         && containsSql(statement, "payload_kind = 'llm'")
       : true,
     llmStatusValue && !queueOrdering
-      ? containsSql(statement, "filter_kind = 'llmStatus'") && containsSql(statement, `'${llmStatusValue}'`)
+      ? containsSql(statement, 'llm_status IN') && containsSql(statement, `'${llmStatusValue}'`)
       : true,
     humanStatus && !queueOrdering
-      ? containsSql(statement, "filter_kind = 'humanStatus'") && containsSql(statement, `'${humanStatus}'`)
+      ? containsSql(statement, 'human_status IN') && containsSql(statement, `'${humanStatus}'`)
       : true,
     promptAnswerValues.length > 0 && !queueOrdering ? containsSql(statement, "filter_kind = 'promptAnswer'") : true,
     queueOrdering
@@ -351,11 +347,9 @@ const getContractSqlMatch = (
     contract.servingTable === 'mart.review_article_serving_v4'
       ? containsSql(statement, `FROM ${contract.servingTable} LEFT JOIN app.review_selected_article_import_v4`)
       : contract.servingTable === 'mart.review_article_filter_posting_serving_v4'
-        ? containsSql(statement, `FROM ${contract.servingTable} INNER JOIN mart.review_article_serving_v4`)
-          && containsSql(
-            statement,
-            'mart.review_article_serving_v4.article_id = mart.review_article_filter_posting_serving_v4.article_id',
-          )
+        ? containsSql(statement, `FROM ${contract.servingTable}`)
+          && containsSql(statement, 'CROSS JOIN UNNEST(mart.review_article_filter_posting_serving_v4.article_ids)')
+          && containsSql(statement, 'mart.review_article_serving_v4.article_id = filter_posting_article.article_id')
         : contract.servingTable === 'mart.review_article_judgment_detail_serving_v4'
           ? containsSql(statement, `FROM ${contract.servingTable}`)
             && (judgmentDetailFullHydrationJoin

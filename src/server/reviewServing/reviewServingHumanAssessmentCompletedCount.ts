@@ -13,28 +13,26 @@ const getHumanAssessmentCompletedCountPredicate = (contractKey: 'review.both.cou
   const humanStatusPredicate = `
       AND EXISTS (
         SELECT 1
-        FROM mart.review_article_filter_posting_serving_v4 human_status_posting
-        WHERE human_status_posting.project_id = serving.project_id
-          AND human_status_posting.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-          AND human_status_posting.snapshot_id = serving.snapshot_id
-          AND human_status_posting.article_id = serving.article_id
-          AND human_status_posting.list_mode_key = serving.list_mode_key
-          AND human_status_posting.filter_kind = 'humanStatus'
-          AND human_status_posting.filter_value = 'answered'
+        FROM mart.review_article_filter_state_serving_v4 human_status_state
+        WHERE human_status_state.project_id = serving.project_id
+          AND human_status_state.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+          AND human_status_state.snapshot_id = serving.snapshot_id
+          AND human_status_state.article_id = serving.article_id
+          AND human_status_state.list_mode_key = serving.list_mode_key
+          AND human_status_state.human_status = 'answered'
       )`
   const llmStatusPredicate =
     contractKey === 'review.both.count'
       ? `
       AND EXISTS (
         SELECT 1
-        FROM mart.review_article_filter_posting_serving_v4 llm_status_posting
-        WHERE llm_status_posting.project_id = serving.project_id
-          AND llm_status_posting.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-          AND llm_status_posting.snapshot_id = serving.snapshot_id
-          AND llm_status_posting.article_id = serving.article_id
-          AND llm_status_posting.list_mode_key = serving.list_mode_key
-          AND llm_status_posting.filter_kind = 'llmStatus'
-          AND llm_status_posting.filter_value = 'answered'
+        FROM mart.review_article_filter_state_serving_v4 llm_status_state
+        WHERE llm_status_state.project_id = serving.project_id
+          AND llm_status_state.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+          AND llm_status_state.snapshot_id = serving.snapshot_id
+          AND llm_status_state.article_id = serving.article_id
+          AND llm_status_state.list_mode_key = serving.list_mode_key
+          AND llm_status_state.llm_status = 'answered'
       )`
       : ''
 

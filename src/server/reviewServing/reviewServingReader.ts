@@ -441,6 +441,38 @@ const getPostingFilterPredicate = (input: {
   index: number
   request: ReviewServingReaderRequest
 }) => {
+  if (input.filterKind === 'duplicateFlag' || input.filterKind === 'conflictFlag') {
+    const columnName = input.filterKind === 'duplicateFlag' ? 'duplicate_flag' : 'conflict_flag'
+
+    return input.filterValues.includes('true')
+      ? [
+          `EXISTS (SELECT 1 FROM mart.review_article_filter_state_serving_v4 filter_state_${input.index}`,
+          ` WHERE filter_state_${input.index}.project_id = $projectId`,
+          ` AND filter_state_${input.index}.snapshot_id = $snapshotId`,
+          ` AND filter_state_${input.index}.review_config_hash = $reviewConfigHash`,
+          ` AND filter_state_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
+          ` AND filter_state_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
+          ` AND filter_state_${input.index}.${columnName} IS TRUE)`,
+        ].join('')
+      : ''
+  }
+
+  if (input.filterKind === 'llmStatus' || input.filterKind === 'humanStatus') {
+    const columnName = input.filterKind === 'llmStatus' ? 'llm_status' : 'human_status'
+
+    return input.filterValues.length === 0
+      ? ''
+      : [
+          `EXISTS (SELECT 1 FROM mart.review_article_filter_state_serving_v4 filter_state_${input.index}`,
+          ` WHERE filter_state_${input.index}.project_id = $projectId`,
+          ` AND filter_state_${input.index}.snapshot_id = $snapshotId`,
+          ` AND filter_state_${input.index}.review_config_hash = $reviewConfigHash`,
+          ` AND filter_state_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
+          ` AND filter_state_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
+          ` AND filter_state_${input.index}.${columnName} IN (SELECT unnest(${getSqlLiteral(input.filterValues)})))`,
+        ].join('')
+  }
+
   return input.filterValues.length === 0
     ? ''
     : [
@@ -449,7 +481,7 @@ const getPostingFilterPredicate = (input: {
         ` AND filter_${input.index}.snapshot_id = $snapshotId`,
         ` AND filter_${input.index}.review_config_hash = $reviewConfigHash`,
         ` AND filter_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
-        ` AND filter_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
+        ` AND list_contains(filter_${input.index}.article_ids, ${input.contract.servingTable}.article_id)`,
         ` AND filter_${input.index}.filter_kind = ${getSqlLiteral(input.filterKind)}`,
         ` AND filter_${input.index}.filter_value IN (SELECT unnest(${getSqlLiteral(input.filterValues)})))`,
       ].join('')

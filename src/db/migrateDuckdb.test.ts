@@ -785,6 +785,147 @@ test('DuckDB migration drops review filter posting serving sort key while preser
   ])
 })
 
+test('DuckDB migration compacts review filter posting serving article memberships', async () => {
+  const duckdbPath = `/tmp/forska-review-filter-posting-compact-${Date.now()}.duckdb`
+  const targetMigrationFile = '0181_compactReviewFilterPostingServing.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {withDuckdbMaintenanceAccess}, {getMaintenanceDuckdbWorkloadContext, resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbScriptAccess.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        const workloadContext = getMaintenanceDuckdbWorkloadContext('migrateDuckdb.test.filterPostingCompact')
+        await withDuckdbMaintenanceAccess('filter posting compact migration test', async () => {
+          await database.run('CREATE SCHEMA IF NOT EXISTS mart', workloadContext)
+          await database.run(
+            "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            workloadContext
+          )
+          await database.run(
+            "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+              .map((fileName) => {
+                return `('${fileName.replaceAll("'", "''")}')`
+              })
+              .join(', ')}",
+            workloadContext
+          )
+          await database.run(\`
+            CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+              project_id VARCHAR NOT NULL,
+              review_config_hash VARCHAR NOT NULL,
+              snapshot_id VARCHAR NOT NULL,
+              filter_kind VARCHAR NOT NULL,
+              filter_value VARCHAR NOT NULL,
+              list_mode_key VARCHAR NOT NULL,
+              article_id VARCHAR NOT NULL
+            )
+          \`, workloadContext)
+          await database.run(\`
+            CREATE UNIQUE INDEX idx_review_article_filter_posting_serving_v4_repaired_pk
+            ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)
+          \`, workloadContext)
+          await database.run(\`
+            CREATE INDEX idx_review_article_filter_posting_serving_v4_lookup
+            ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)
+          \`, workloadContext)
+          await database.run(\`
+            INSERT INTO mart.review_article_filter_posting_serving_v4
+            VALUES
+              ('project-1', 'review-config-1', 'snapshot-1', 'promptAnswer', 'yes', 'llm', 'article-2'),
+              ('project-1', 'review-config-1', 'snapshot-1', 'promptAnswer', 'yes', 'llm', 'article-1'),
+              ('project-1', 'review-config-1', 'snapshot-1', 'importRoute', 'route-1', 'llm', 'article-1')
+          \`, workloadContext)
+
+          await migrateDuckdb()
+
+          const columns = await database.queryJson(
+            "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_filter_posting_serving_v4' ORDER BY ordinal_position",
+            workloadContext
+          )
+          const indexes = await database.queryJson(
+            "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_filter_posting_serving_v4' ORDER BY index_name",
+            workloadContext
+          )
+          const migrationRows = await database.queryJson(
+            "SELECT name FROM app_schema_migration WHERE name = '${targetMigrationFile}'",
+            workloadContext
+          )
+          const rows = await database.queryJson(
+            'SELECT filter_kind AS filterKind, filter_value AS filterValue, list_mode_key AS listModeKey, article_ids AS articleIds FROM mart.review_article_filter_posting_serving_v4 ORDER BY filter_kind, filter_value',
+            workloadContext
+          )
+
+          console.log(JSON.stringify({columns, indexes, migrationRows, rows}))
+        })
+      `,
+    ],
+    {
+      cwd: resolve(import.meta.dir, '../..'),
+      env: {...process.env, DUCKDB_PATH: duckdbPath, FORSKA_DB_PATH: duckdbPath, NODE_ENV: 'test'},
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  removeFileIfExists(duckdbPath)
+  removeFileIfExists(`${duckdbPath}.wal`)
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to compact filter postings')
+  }
+
+  const output = result.stdout.toString()
+  const parsedLine = output.split('\n').find((line) => {
+    return line.startsWith('{"columns"')
+  })
+
+  expect(parsedLine).toBeDefined()
+
+  const parsed = JSON.parse(parsedLine ?? '{}') as {
+    columns: {columnName: string}[]
+    indexes: {indexName: string}[]
+    migrationRows: {name: string}[]
+    rows: Array<{articleIds: string[]; filterKind: string; filterValue: string; listModeKey: string}>
+  }
+  const columns = parsed.columns.map((column) => {
+    return column.columnName
+  })
+  const indexes = parsed.indexes.map((index) => {
+    return index.indexName
+  })
+
+  expect(columns).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'filter_kind',
+    'filter_value',
+    'list_mode_key',
+    'article_ids',
+  ])
+  expect(indexes).toContain('idx_review_article_filter_posting_serving_v4_repaired_pk')
+  expect(indexes).toContain('idx_review_article_filter_posting_serving_v4_lookup')
+  expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  expect(parsed.rows).toEqual([
+    {articleIds: ['article-1'], filterKind: 'importRoute', filterValue: 'route-1', listModeKey: 'llm'},
+    {articleIds: ['article-1', 'article-2'], filterKind: 'promptAnswer', filterValue: 'yes', listModeKey: 'llm'},
+  ])
+})
+
 test('DuckDB migration marks retired payload display hydration as applied without rebuilding payload', async () => {
   const duckdbPath = `/tmp/forska-review-payload-display-fields-${Date.now()}.duckdb`
   const targetMigrationFile = '0146_reviewServingPayloadDisplayFields.sql'

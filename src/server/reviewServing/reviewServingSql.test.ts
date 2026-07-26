@@ -677,8 +677,9 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_v4')
   expect(sql).toContain(
-    'mart.review_article_serving_v4.article_id = mart.review_article_filter_posting_serving_v4.article_id',
+    'CROSS JOIN UNNEST(mart.review_article_filter_posting_serving_v4.article_ids) AS filter_posting_article(article_id)',
   )
+  expect(sql).toContain('mart.review_article_serving_v4.article_id = filter_posting_article.article_id')
   expect(sql).toContain(
     'ORDER BY mart.review_article_serving_v4.sort_key DESC, mart.review_article_serving_v4.article_id ASC',
   )
@@ -711,7 +712,7 @@ test('buildReviewServingRowsSql intersects posting filters with token-prefix sea
   expect(sql).toContain('search.search_identity = $searchIdentity')
   expect(sql).toContain('search.project_scope_identity = $projectScopeIdentity')
   expect(sql).toContain('search.snapshot_id = $snapshotId')
-  expect(sql).toContain('list_contains(search.article_ids, mart.review_article_filter_posting_serving_v4.article_id)')
+  expect(sql).toContain('list_contains(search.article_ids, filter_posting_article.article_id)')
   expect(sql).toContain('starts_with(search.token, $searchTokenPrefix)')
 })
 
@@ -1099,7 +1100,7 @@ test('assertReviewServingSqlShape reads table references from SQL', () => {
   const sql = `
     SELECT s.article_id
     FROM mart.review_article_serving_v4 s
-    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
     LIMIT ?
@@ -1205,7 +1206,7 @@ test('assertReviewServingSqlShape requires project and snapshot scope for every 
   const sql = `
     SELECT s.article_id
     FROM mart.review_article_serving_v4 s
-    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ? AND s.snapshot_id = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
     LIMIT ?
@@ -1222,7 +1223,7 @@ test('assertReviewServingSqlShape requires real bound scope predicates', () => {
   const sql = `
     SELECT s.article_id
     FROM mart.review_article_serving_v4 s
-    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ?
       AND s.snapshot_id = ?
       AND (p.project_id, p.snapshot_id, p.sort_key, p.article_id) < (?, ?, ?, ?)
@@ -1241,7 +1242,7 @@ test('assertReviewServingSqlShape does not accept scope predicates from qualify 
   const sql = `
     SELECT s.article_id
     FROM mart.review_article_serving_v4 s
-    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ? AND s.snapshot_id = ?
     QUALIFY p.project_id = ? AND p.snapshot_id = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
@@ -1264,7 +1265,7 @@ test('assertReviewServingSqlShape requires driving-table scope predicates in the
       AND s.snapshot_id = ?
       AND posting.project_id = ?
       AND posting.snapshot_id = ?
-      AND posting.article_id = s.article_id
+      AND list_contains(posting.article_ids, s.article_id)
     WHERE posting.filter_kind = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
     LIMIT ?

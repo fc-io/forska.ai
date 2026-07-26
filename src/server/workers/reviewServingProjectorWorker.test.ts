@@ -5064,8 +5064,11 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     expect(postingChunk.requestId).toBeNull()
     expect(joined).toContain('string_agg(')
     expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
-    expect(joined).not.toContain(
+    expect(joined).toContain(
       'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
+    )
+    expect(joined).toContain(
+      'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING',
     )
     expect(joined).toContain('"validationMode":"debug-strict-checksum"')
     expect(joined).not.toContain('"validationMode":"reused-source-posting-checksum"')
@@ -5475,7 +5478,10 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
+  )
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING',
   )
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
@@ -7060,7 +7066,10 @@ test('admission-presplit posting rebuild chunk executes directly above the old r
   expect(result).toEqual({status: 'completed'})
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
+  )
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING',
   )
   expect(joined).not.toContain('NTILE(')
   expect(childInserts).toHaveLength(0)

@@ -45,11 +45,27 @@ type PostingContributionRow = {
   tombstone: boolean
 }
 
+type FilterStateServingRow = {
+  articleId: string
+  conflictFlag: boolean
+  duplicateFlag: boolean
+  humanStatus: string | null
+  listModeKey: string
+  llmStatus: string | null
+  tombstone: boolean
+}
+
 type PostingValidationCountRow = {actualChecksum: string | null; actualCount: number | string | null}
+type CompactPostingRow = {articleIds: readonly string[]; filterKind: string; filterValue: string; listModeKey: string}
 
 const filterPostingProjectorName = 'filter-posting-projector'
+const stateFilterKinds = new Set(['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus'])
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
+}
+
+const isStateFilterKind = (filterKind: string) => {
+  return stateFilterKinds.has(filterKind)
 }
 
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -146,6 +162,37 @@ const getContributionKey = (
     filterValue: row.filterValue,
     listModeKey: row.listModeKey,
   })
+}
+
+const getCompactContributionKey = (row: Pick<PostingContributionRow, 'filterKind' | 'filterValue' | 'listModeKey'>) => {
+  return getStableReviewServingJson({
+    filterKind: row.filterKind,
+    filterValue: row.filterValue,
+    listModeKey: row.listModeKey,
+  })
+}
+
+const getCompactPostingRows = (rows: readonly PostingContributionRow[]) => {
+  const compactRows = new Map<string, CompactPostingRow>()
+
+  rows.forEach((row) => {
+    const key = getCompactContributionKey(row)
+    const existingRow = compactRows.get(key)
+    const articleIds = [...(existingRow?.articleIds ?? []), row.articleId]
+
+    compactRows.set(key, {
+      articleIds: [...new Set(articleIds)].sort(),
+      filterKind: row.filterKind,
+      filterValue: row.filterValue,
+      listModeKey: row.listModeKey,
+    })
+  })
+
+  return [...compactRows.values()]
+}
+
+const getStateContributionKey = (row: Pick<FilterStateServingRow, 'articleId' | 'listModeKey'>) => {
+  return getStableReviewServingJson({articleId: row.articleId, listModeKey: row.listModeKey})
 }
 
 const getRangeValuesCte = (ranges: readonly ProjectReviewServingFilterPostingsInput[]) => {
@@ -439,21 +486,18 @@ const getExistingPostingRows = async (
   const articleIds = getClaimArticleIds(input.claims)
   const articlePredicate =
     articleIds.length === 0
-      ? getArticleRangePredicate({alias: 'serving', ...input})
-      : `AND serving.article_id IN (${articleIds
-          .map((articleId) => {
-            return getSqlLiteral(articleId)
-          })
-          .join(', ')})`
+      ? getArticleRangePredicate({alias: 'serving_article', ...input})
+      : `AND list_contains(${getSqlLiteral(articleIds)}::VARCHAR[], serving_article.article_id)`
 
   return database.queryJson<PostingContributionRow>(`
         SELECT
-          serving.article_id AS articleId,
+          serving_article.article_id AS articleId,
           serving.filter_kind AS filterKind,
           serving.filter_value AS filterValue,
           serving.list_mode_key AS listModeKey,
           FALSE AS tombstone
         FROM mart.review_article_filter_posting_serving_v4 serving
+        CROSS JOIN UNNEST(serving.article_ids) AS serving_article(article_id)
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
@@ -461,28 +505,90 @@ const getExistingPostingRows = async (
       `)
 }
 
+const getExistingFilterStateRows = async (
+  input: ProjectReviewServingFilterPostingsInput,
+  database: ReviewServingFilterPostingProjectorDatabase,
+) => {
+  const articleIds = getClaimArticleIds(input.claims)
+  const articlePredicate =
+    articleIds.length === 0
+      ? getArticleRangePredicate({alias: 'state', ...input})
+      : `AND state.article_id IN (${articleIds
+          .map((articleId) => {
+            return getSqlLiteral(articleId)
+          })
+          .join(', ')})`
+
+  return database.queryJson<FilterStateServingRow>(`
+        SELECT
+          state.article_id AS articleId,
+          state.list_mode_key AS listModeKey,
+          state.duplicate_flag AS duplicateFlag,
+          state.conflict_flag AS conflictFlag,
+          state.llm_status AS llmStatus,
+          state.human_status AS humanStatus,
+          FALSE AS tombstone
+        FROM mart.review_article_filter_state_serving_v4 state
+        WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+          AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${articlePredicate}
+      `)
+}
+
 const getPostingServingRecord = (input: {
   projectId: string
   reviewConfigHash: string
-  row: PostingContributionRow
+  row: CompactPostingRow
   snapshotId: string
 }): ReviewServingProjectorRecord => {
   return {
-    keyColumns: [
-      'project_id',
-      'review_config_hash',
-      'snapshot_id',
-      'filter_kind',
-      'filter_value',
-      'list_mode_key',
-      'article_id',
-    ],
+    keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'filter_kind', 'filter_value', 'list_mode_key'],
     table: 'mart.review_article_filter_posting_serving_v4',
     values: {
-      article_id: input.row.articleId,
+      article_ids: input.row.articleIds,
       filter_kind: input.row.filterKind,
       filter_value: input.row.filterValue,
       list_mode_key: input.row.listModeKey,
+      project_id: input.projectId,
+      review_config_hash: input.reviewConfigHash,
+      snapshot_id: input.snapshotId,
+    },
+  }
+}
+
+const getArticleIdsArraySql = (articleIds: readonly string[]) => {
+  return `${getSqlLiteral(articleIds)}::VARCHAR[]`
+}
+
+const getCompactPostingValuesSql = (rows: readonly CompactPostingRow[]) => {
+  return rows
+    .map((row) => {
+      return `(${getSqlLiteral(row.filterKind)}, ${getSqlLiteral(row.filterValue)}, ${getSqlLiteral(row.listModeKey)}, ${getArticleIdsArraySql(row.articleIds)})`
+    })
+    .join(', ')
+}
+
+const getMergePostingArticleIdsSql = (incomingArticleIdsSql: string, existingArticleIdsSql: string) => {
+  return `(SELECT LIST(DISTINCT article_id ORDER BY article_id) FROM (SELECT UNNEST(COALESCE(${existingArticleIdsSql}, []::VARCHAR[])) AS article_id UNION ALL SELECT UNNEST(${incomingArticleIdsSql}) AS article_id))`
+}
+
+const getFilterStateServingRecord = (input: {
+  projectId: string
+  reviewConfigHash: string
+  row: FilterStateServingRow
+  snapshotId: string
+}): ReviewServingProjectorRecord => {
+  return {
+    keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
+    table: 'mart.review_article_filter_state_serving_v4',
+    values: {
+      article_id: input.row.articleId,
+      conflict_flag: input.row.conflictFlag,
+      duplicate_flag: input.row.duplicateFlag,
+      human_status: input.row.humanStatus,
+      list_mode_key: input.row.listModeKey,
+      llm_status: input.row.llmStatus,
       project_id: input.projectId,
       review_config_hash: input.reviewConfigHash,
       snapshot_id: input.snapshotId,
@@ -495,11 +601,68 @@ const getDeleteServingRowsStatement = (
   tombstoneRows: readonly PostingContributionRow[],
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
-  const tombstoneValues = tombstoneRows
+  const tombstoneValues = getCompactPostingRows(tombstoneRows)
     .map((row) => {
-      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.filterKind)}, ${getSqlLiteral(row.filterValue)}, ${getSqlLiteral(row.listModeKey)})`
+      return `(${getSqlLiteral(row.filterKind)}, ${getSqlLiteral(row.filterValue)}, ${getSqlLiteral(row.listModeKey)}, ${getArticleIdsArraySql(row.articleIds)})`
     })
     .join(', ')
+
+  return articleIds.length > 0
+    ? [
+        `UPDATE mart.review_article_filter_posting_serving_v4 serving
+        SET article_ids = list_filter(article_ids, article_id -> NOT list_contains(${getArticleIdsArraySql(articleIds)}, article_id))
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND list_has_any(serving.article_ids, ${getArticleIdsArraySql(articleIds)})`,
+        `DELETE FROM mart.review_article_filter_posting_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND length(article_ids) = 0`,
+      ]
+    : hasChunkArticleRange(input)
+      ? [
+          `UPDATE mart.review_article_filter_posting_serving_v4 serving
+        SET article_ids = list_filter(article_ids, article_id -> NOT (
+          ${input.chunkStartArticleId === undefined || input.chunkStartArticleId === null ? 'TRUE' : `article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`}
+          AND ${input.chunkEndArticleId === undefined || input.chunkEndArticleId === null ? 'TRUE' : `article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`}
+        ))
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}`,
+          `DELETE FROM mart.review_article_filter_posting_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND length(article_ids) = 0`,
+        ]
+      : tombstoneValues.length === 0
+        ? []
+        : [
+            `WITH deleted(filter_kind, filter_value, list_mode_key, article_ids) AS (
+          SELECT * FROM (VALUES ${tombstoneValues})
+        )
+        UPDATE mart.review_article_filter_posting_serving_v4 serving
+        SET article_ids = list_filter(serving.article_ids, article_id -> NOT list_contains(deleted.article_ids, article_id))
+        USING deleted
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND serving.filter_kind = deleted.filter_kind
+          AND serving.filter_value = deleted.filter_value
+          AND serving.list_mode_key = deleted.list_mode_key
+          AND list_has_any(serving.article_ids, deleted.article_ids)`,
+            `DELETE FROM mart.review_article_filter_posting_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND length(article_ids) = 0`,
+          ]
+}
+
+const getDeleteFilterStateRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  const articleIds = getClaimArticleIds(input.claims)
 
   return articleIds.length > 0
     ? getDeleteReviewServingProjectorRowsStatement({
@@ -509,33 +672,21 @@ const getDeleteServingRowsStatement = (
           review_config_hash: input.reviewConfigHash,
           snapshot_id: input.snapshotId,
         },
-        table: 'mart.review_article_filter_posting_serving_v4',
+        table: 'mart.review_article_filter_state_serving_v4',
       })
     : hasChunkArticleRange(input)
-      ? `DELETE FROM mart.review_article_filter_posting_serving_v4 serving
-        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${getArticleRangePredicate({alias: 'serving', ...input})}`
-      : tombstoneValues.length === 0
-        ? null
-        : `WITH deleted(article_id, filter_kind, filter_value, list_mode_key) AS (
-          SELECT * FROM (VALUES ${tombstoneValues})
-        )
-        DELETE FROM mart.review_article_filter_posting_serving_v4 serving
-        USING deleted
-        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND serving.article_id = deleted.article_id
-          AND serving.filter_kind = deleted.filter_kind
-          AND serving.filter_value = deleted.filter_value
-          AND serving.list_mode_key = deleted.list_mode_key`
+      ? `DELETE FROM mart.review_article_filter_state_serving_v4 state
+        WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+          AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${getArticleRangePredicate({alias: 'state', ...input})}`
+      : null
 }
 
 const getInsertFullRebuildServingRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   ranges?: readonly ProjectReviewServingFilterPostingsInput[],
+  postingSourceSql = getFullRebuildPostingContributionRowsStatement(input, ranges),
 ) => {
   return `INSERT INTO mart.review_article_filter_posting_serving_v4 (
       project_id,
@@ -544,22 +695,22 @@ const getInsertFullRebuildServingRowsStatement = (
       filter_kind,
       filter_value,
       list_mode_key,
-      article_id
+      article_ids
     )
-    WITH posting_source AS (${getFullRebuildPostingContributionRowsStatement(input, ranges)}),
+    WITH posting_source AS (${postingSourceSql}),
     serving_source AS (
       SELECT
         CAST(posting.filterKind AS VARCHAR) AS filterKind,
         CAST(posting.filterValue AS VARCHAR) AS filterValue,
         CAST(posting.listModeKey AS VARCHAR) AS listModeKey,
-        CAST(posting.articleId AS VARCHAR) AS articleId
+        LIST(DISTINCT CAST(posting.articleId AS VARCHAR) ORDER BY CAST(posting.articleId AS VARCHAR)) AS articleIds
       FROM posting_source posting
       WHERE NOT posting.tombstone
+        AND posting.filterKind NOT IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus')
       GROUP BY
         CAST(posting.filterKind AS VARCHAR),
         CAST(posting.filterValue AS VARCHAR),
-        CAST(posting.listModeKey AS VARCHAR),
-        CAST(posting.articleId AS VARCHAR)
+        CAST(posting.listModeKey AS VARCHAR)
     )
     SELECT
       ${getSqlLiteral(input.projectId)} AS project_id,
@@ -568,13 +719,114 @@ const getInsertFullRebuildServingRowsStatement = (
       posting.filterKind AS filter_kind,
       posting.filterValue AS filter_value,
       posting.listModeKey AS list_mode_key,
-      posting.articleId AS article_id
+      posting.articleIds AS article_ids
     FROM serving_source posting
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING`
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET
+      article_ids = ${getMergePostingArticleIdsSql('excluded.article_ids', 'mart.review_article_filter_posting_serving_v4.article_ids')}`
+}
+
+const getInsertCompactServingRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  rows: readonly CompactPostingRow[],
+) => {
+  if (rows.length === 0) {
+    return null
+  }
+
+  return `INSERT INTO mart.review_article_filter_posting_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      filter_kind,
+      filter_value,
+      list_mode_key,
+      article_ids
+    )
+    SELECT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      row.filter_kind,
+      row.filter_value,
+      row.list_mode_key,
+      row.article_ids
+    FROM (VALUES ${getCompactPostingValuesSql(rows)}) AS row(filter_kind, filter_value, list_mode_key, article_ids)
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET
+      article_ids = ${getMergePostingArticleIdsSql('excluded.article_ids', 'mart.review_article_filter_posting_serving_v4.article_ids')}`
+}
+
+const getInsertFullRebuildFilterStateRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  ranges?: readonly ProjectReviewServingFilterPostingsInput[],
+  postingSourceSql = getFullRebuildPostingContributionRowsStatement(input, ranges),
+) => {
+  return `INSERT INTO mart.review_article_filter_state_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      list_mode_key,
+      article_id,
+      duplicate_flag,
+      conflict_flag,
+      llm_status,
+      human_status
+    )
+    WITH posting_source AS (${postingSourceSql}),
+    state_source AS (
+      SELECT
+        CAST(posting.listModeKey AS VARCHAR) AS listModeKey,
+        CAST(posting.articleId AS VARCHAR) AS articleId,
+        COALESCE(BOOL_OR(posting.filterKind = 'duplicateFlag' AND posting.filterValue = 'true'), FALSE) AS duplicateFlag,
+        COALESCE(BOOL_OR(posting.filterKind = 'conflictFlag' AND posting.filterValue = 'true'), FALSE) AS conflictFlag,
+        MAX(CASE WHEN posting.filterKind = 'llmStatus' THEN posting.filterValue END) AS llmStatus,
+        MAX(CASE WHEN posting.filterKind = 'humanStatus' THEN posting.filterValue END) AS humanStatus
+      FROM posting_source posting
+      WHERE NOT posting.tombstone
+        AND posting.filterKind IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus')
+      GROUP BY
+        CAST(posting.listModeKey AS VARCHAR),
+        CAST(posting.articleId AS VARCHAR)
+    )
+    SELECT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      state.listModeKey AS list_mode_key,
+      state.articleId AS article_id,
+      state.duplicateFlag AS duplicate_flag,
+      state.conflictFlag AS conflict_flag,
+      state.llmStatus AS llm_status,
+      state.humanStatus AS human_status
+    FROM state_source state
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`
+}
+
+const fullRebuildPostingSourceTempTable = 'review_filter_posting_source_v4'
+const getCreateFullRebuildPostingSourceStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  ranges?: readonly ProjectReviewServingFilterPostingsInput[],
+) => {
+  return `CREATE OR REPLACE TEMP TABLE ${fullRebuildPostingSourceTempTable} AS
+    ${getFullRebuildPostingContributionRowsStatement(input, ranges)}`
+}
+
+const getDropFullRebuildPostingSourceStatement = () => {
+  return `DROP TABLE IF EXISTS ${fullRebuildPostingSourceTempTable}`
+}
+
+const getFullRebuildPostingSourceSelectSql = () => {
+  return `SELECT * FROM ${fullRebuildPostingSourceTempTable}`
 }
 
 const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
-  return input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(input)]
+  return input.listModeKeys.length === 0
+    ? []
+    : [
+        getCreateFullRebuildPostingSourceStatement(input),
+        getInsertFullRebuildServingRowsStatement(input, undefined, getFullRebuildPostingSourceSelectSql()),
+        getInsertFullRebuildFilterStateRowsStatement(input, undefined, getFullRebuildPostingSourceSelectSql()),
+        getDropFullRebuildPostingSourceStatement(),
+      ]
 }
 
 const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPostingRangesInput) => {
@@ -586,7 +838,12 @@ const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPos
 
   return firstRange.listModeKeys.length === 0
     ? []
-    : [getInsertFullRebuildServingRowsStatement(firstRange, input.ranges)]
+    : [
+        getCreateFullRebuildPostingSourceStatement(firstRange, input.ranges),
+        getInsertFullRebuildServingRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
+        getInsertFullRebuildFilterStateRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
+        getDropFullRebuildPostingSourceStatement(),
+      ]
 }
 
 const getPostingManifest = (
@@ -634,13 +891,24 @@ const getFullPostingRebuildOutputValidationResult = async (
       CAST(COUNT(*) AS INTEGER) AS actualCount,
       sha256('cheap-count:' || CAST(COUNT(*) AS VARCHAR)) AS actualChecksum
     FROM mart.review_article_filter_posting_serving_v4 serving
+    CROSS JOIN UNNEST(serving.article_ids) AS serving_article(article_id)
     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
       AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      ${getArticleRangePredicate({alias: 'serving', ...input})}
+      ${getArticleRangePredicate({alias: 'serving_article', ...input})}
   `)
-  const actualCount = getNonNegativeFiniteNumber(row?.actualCount)
-  const actualChecksum = row?.actualChecksum ?? getCheapCountChecksum(actualCount)
+  const [stateRow] = await database.queryJson<PostingValidationCountRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256('cheap-count:' || CAST(COUNT(*) AS VARCHAR)) AS actualChecksum
+    FROM mart.review_article_filter_state_serving_v4 state
+    WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+      AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      ${getArticleRangePredicate({alias: 'state', ...input})}
+  `)
+  const actualCount = getNonNegativeFiniteNumber(row?.actualCount) + getNonNegativeFiniteNumber(stateRow?.actualCount)
+  const actualChecksum = getCheapCountChecksum(actualCount)
 
   return {
     actualChecksum,
@@ -649,6 +917,43 @@ const getFullPostingRebuildOutputValidationResult = async (
     expectedChecksum: actualChecksum,
     expectedCount: actualCount,
   }
+}
+
+const getFilterStateRows = (rows: readonly PostingContributionRow[]) => {
+  const stateRows = new Map<string, FilterStateServingRow>()
+
+  for (const row of rows) {
+    if (!isStateFilterKind(row.filterKind)) {
+      continue
+    }
+
+    const key = getStateContributionKey(row)
+    const stateRow =
+      stateRows.get(key)
+      ?? ({
+        articleId: row.articleId,
+        conflictFlag: false,
+        duplicateFlag: false,
+        humanStatus: null,
+        listModeKey: row.listModeKey,
+        llmStatus: null,
+        tombstone: row.tombstone,
+      } satisfies FilterStateServingRow)
+
+    if (row.filterKind === 'duplicateFlag') {
+      stateRow.duplicateFlag = row.filterValue === 'true'
+    } else if (row.filterKind === 'conflictFlag') {
+      stateRow.conflictFlag = row.filterValue === 'true'
+    } else if (row.filterKind === 'llmStatus') {
+      stateRow.llmStatus = row.filterValue
+    } else if (row.filterKind === 'humanStatus') {
+      stateRow.humanStatus = row.filterValue
+    }
+
+    stateRows.set(key, stateRow)
+  }
+
+  return [...stateRows.values()]
 }
 
 const getTombstoneRows = (input: {
@@ -728,19 +1033,29 @@ export const projectReviewServingFilterPostings = async (
     }
   }
 
-  const [existingRows, newRows] = await measure('sourceQueryMs', async () => {
-    return Promise.all([getExistingPostingRows(input, database), getPostingContributionRows(input, database)])
+  const [existingRows, existingStateRows, newRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([
+      getExistingPostingRows(input, database),
+      getExistingFilterStateRows(input, database),
+      getPostingContributionRows(input, database),
+    ])
   })
   const {contributionRows, liveRows} = measureSync('diffInputTransformMs', () => {
-    const transformedContributionRows = [...newRows, ...getTombstoneRows({existingRows, newRows})]
+    const genericNewRows = newRows.filter((row) => {
+      return !isStateFilterKind(row.filterKind)
+    })
+    const transformedContributionRows = [
+      ...genericNewRows,
+      ...getTombstoneRows({existingRows, newRows: genericNewRows}),
+    ]
     const transformedLiveRows = transformedContributionRows.filter((row) => {
       return !row.tombstone
     })
 
     return {contributionRows: transformedContributionRows, liveRows: transformedLiveRows}
   })
-  const {servingRecords} = measureSync('recordTransformMs', () => {
-    const nextServingRecords = liveRows.map((row) => {
+  const {servingRecords, stateRecords} = measureSync('recordTransformMs', () => {
+    const nextServingRecords = getCompactPostingRows(liveRows).map((row) => {
       return getPostingServingRecord({
         projectId: input.projectId,
         reviewConfigHash: input.reviewConfigHash,
@@ -749,18 +1064,41 @@ export const projectReviewServingFilterPostings = async (
       })
     })
 
-    return {servingRecords: nextServingRecords}
+    const nextStateRecords = getFilterStateRows(newRows)
+      .filter((row) => {
+        return !row.tombstone
+      })
+      .map((row) => {
+        return getFilterStateServingRecord({
+          projectId: input.projectId,
+          reviewConfigHash: input.reviewConfigHash,
+          row,
+          snapshotId: input.snapshotId,
+        })
+      })
+
+    return {servingRecords: nextServingRecords, stateRecords: nextStateRecords}
   })
-  const servingRowCount = servingRecords.length
-  const {deleteServingRowsStatement} = measureSync('deleteStatementBuildMs', () => {
+  const servingRowCount = servingRecords.length + stateRecords.length
+  const {writeStatements} = measureSync('deleteStatementBuildMs', () => {
     const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(
       input,
       contributionRows.filter((row) => {
         return row.tombstone
       }),
     )
+    const nextInsertServingRowsStatement = getInsertCompactServingRowsStatement(input, getCompactPostingRows(liveRows))
+    const nextDeleteStateRowsStatement = getDeleteFilterStateRowsStatement(input)
 
-    return {deleteServingRowsStatement: nextDeleteServingRowsStatement}
+    return {
+      writeStatements: [
+        ...nextDeleteServingRowsStatement,
+        nextInsertServingRowsStatement,
+        nextDeleteStateRowsStatement,
+      ].flatMap((statement) => {
+        return statement === null ? [] : [statement]
+      }),
+    }
   })
   const writerResult = await measure('writerMs', async () => {
     const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
@@ -770,11 +1108,9 @@ export const projectReviewServingFilterPostings = async (
         acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'posting',
         projectionManifests: shouldAcknowledgeClaims ? [getPostingManifest(input)] : [],
-        records: servingRecords,
+        records: stateRecords,
         repairDirtyWork: [],
-        statements: [deleteServingRowsStatement].flatMap((statement) => {
-          return statement === null ? [] : [statement]
-        }),
+        statements: writeStatements,
         watermark: !shouldAcknowledgeClaims
           ? undefined
           : {
@@ -796,8 +1132,10 @@ export const projectReviewServingFilterPostings = async (
         contributionRecordCount: 0,
         contributionRowCount: contributionRows.length,
         existingRowCount: existingRows.length,
+        existingStateRowCount: existingStateRows.length,
         liveRowCount: liveRows.length,
         newRowCount: newRows.length,
+        stateRowCount: stateRecords.length,
         writer: writerResult.diagnostics,
       },
     },
