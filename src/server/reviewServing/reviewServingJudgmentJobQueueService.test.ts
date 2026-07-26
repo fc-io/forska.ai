@@ -88,6 +88,15 @@ const resetDatabases = () => {
   judgeWorkerDatabase.statements = []
 }
 
+const expectUnassessedDirectServingJoin = (statement: string) => {
+  expect(statement).toContain('INNER JOIN mart.review_article_serving_base_v4 article')
+  expect(statement).toContain("queue.queue_kind = 'unassessed'")
+  expect(statement).not.toContain('review_article_serving_list_mode_state_v4')
+  expect(statement).not.toContain("list_contains(list_mode_state.list_mode_keys, 'unassessed')")
+  expect(statement).not.toContain('INNER JOIN mart.review_article_serving_v4 article')
+  expect(statement).not.toContain('article.list_mode_key')
+}
+
 const service = (await import(
   `${serviceModulePath}?judgment-job-queue-scope=${Date.now()}`
 )) as JudgmentJobQueueServiceModule
@@ -115,6 +124,7 @@ test('judgment job count and preview scope keeps route matches plus curated arti
   expect(count).toBe(1)
   expect(articles).toHaveLength(1)
   expect(queueStatements).toHaveLength(2)
+  queueStatements.forEach(expectUnassessedDirectServingJoin)
   expect(
     queueStatements.map((statement) => {
       return statement.includes('FROM app.article_import_route article_route_scope')
@@ -155,6 +165,7 @@ test('judgment job count scope without import routes uses curated project articl
     return statement.includes('SELECT COUNT(DISTINCT queue.article_id) AS count')
   })
 
+  expectUnassessedDirectServingJoin(countStatement ?? '')
   expect(countStatement ?? '').toContain('FROM app.project_article project_article_scope')
   expect(countStatement ?? '').not.toContain('FROM app.article_import_route article_route_scope')
 })
@@ -173,13 +184,16 @@ test('judgment job refill scope rechecks current project dates routes and curate
   })
 
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
+  expectUnassessedDirectServingJoin(refillStatement ?? '')
   expect(refillStatement ?? '').toContain('INNER JOIN app.project current_project')
   expect(refillStatement ?? '').toContain('INNER JOIN app.article current_article')
-  expect(refillStatement ?? '').toContain('current_article.article_created_at >= current_project.date_from')
-  expect(refillStatement ?? '').toContain(
-    'current_article.article_created_at < current_project.date_to + INTERVAL 1 DAY',
-  )
+  expect(refillStatement ?? '').toContain('article.article_created_at >= current_project.date_from')
+  expect(refillStatement ?? '').toContain('article.article_created_at < current_project.date_to + INTERVAL 1 DAY')
   expect(refillStatement ?? '').toContain('FROM app.project_import_route current_project_route_scope')
   expect(refillStatement ?? '').toContain('INNER JOIN app.article_import_route current_article_route_scope')
   expect(refillStatement ?? '').toContain('FROM app.project_article current_project_article_scope')
+  expect(refillStatement ?? '').toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
+  expect(refillStatement ?? '').toContain(
+    'ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC',
+  )
 })

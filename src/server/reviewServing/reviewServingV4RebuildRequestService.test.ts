@@ -523,6 +523,35 @@ test('V4 rebuild request service keeps selected-import bootstrap chunks on impor
   expect(projectScopeChunk).toMatch(
     /'projectScope',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*10,\s*'article-000-a'/u,
   )
+  expect(statements.join('\n')).toContain('FROM app.review_serving_project_dirty_source_watermark')
+  expect(statements.join('\n')).toContain("AND status <> 'completed'")
+})
+
+test('V4 rebuild request service preserves selected-import bootstrap watermarks from aggregate alone', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, snapshotCount: 0, snapshotUpdatedAt: null},
+    {
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 7, sourcePartition: 'importRunArticle:project-v4'},
+        {latestSourceHighWaterMark: 11, sourcePartition: 'reviewChange:project-v4'},
+      ],
+    },
+  )
+
+  await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+
+  const selectedImportChunk = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'selectedImport'")
+  })
+
+  expect(selectedImportChunk).toMatch(
+    /'selectedImport',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*7,\s*'article-000-a'/u,
+  )
+  expect(statements.join('\n')).toContain('FROM app.review_serving_project_dirty_source_watermark')
+  expect(statements.join('\n')).toContain('UNION ALL')
+  expect(statements.join('\n')).toContain("AND status <> 'completed'")
 })
 
 test('V4 missing snapshot rebuild requests reuse active admitted work', async () => {
@@ -744,7 +773,7 @@ test('V4 rebuild request service budgets split missing snapshot bootstraps by th
   )
 
   expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('input rows: estimated 300034 > max 250000')
+  expect(request.overBudgetReason).toBe('input rows: estimated 300033 > max 250000')
   expect(statements.join('\n')).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
@@ -885,7 +914,7 @@ test('V4 missing snapshot bootstrap bounds large project-scope request estimates
 
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
-  expect(statements.join('\n')).toContain('"bootstrapChunkCount":109')
+  expect(statements.join('\n')).toContain('"bootstrapChunkCount":107')
   expect(projectScopeChunkInserts.length).toBeGreaterThan(100)
 })
 
@@ -999,7 +1028,7 @@ test('V4 rebuild request service includes placeholder detail rows in payload byt
   )
 
   expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('payload bytes: estimated 76800000 > max 67108864')
+  expect(request.overBudgetReason).toBe('payload bytes: estimated 71680000 > max 67108864')
 })
 
 test('V4 rebuild request service scales admission estimates by queued snapshots', async () => {

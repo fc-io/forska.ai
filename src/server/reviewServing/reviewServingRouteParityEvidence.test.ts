@@ -191,7 +191,9 @@ const getSearchTokenPrefixSqlMatch = (
   if (contract.physicalAccessStrategy === 'orderedPrefix') {
     return (
       prefixes.length > 1
-      && containsSql(statement, 'NOT EXISTS (SELECT 1 FROM (SELECT unnest')
+      && containsSql(statement, 'search_prefixes AS (SELECT DISTINCT token_prefix')
+      && containsSql(statement, 'expanded_search_article_ids AS')
+      && containsSql(statement, 'search_filtered_article_ids AS')
       && containsSql(statement, 'starts_with(search.token, search_prefix.token_prefix)')
       && prefixes.every((prefix) => {
         return containsSql(statement, `'${prefix}'`)
@@ -231,9 +233,7 @@ const getRouteFilterSqlMatch = (
     filters.duplicateFlag && !queueOrdering ? containsSql(statement, 'duplicate_flag IS TRUE') : true,
     filters.conflictFlag && !queueOrdering ? containsSql(statement, 'conflict_flag IS TRUE') : true,
     filters.llmHasJudgment && !queueOrdering
-      ? containsSql(statement, 'FROM mart.review_article_judgment_detail_serving_v4')
-        && containsSql(statement, "list_mode_key = 'llm'")
-        && containsSql(statement, "payload_kind = 'llm'")
+      ? containsSql(statement, 'list_mode_state.llm_has_judgment IS TRUE')
       : true,
     llmStatusValue && !queueOrdering
       ? containsSql(statement, 'llm_status IN') && containsSql(statement, `'${llmStatusValue}'`)
@@ -336,6 +336,10 @@ const getSelectedListModeSqlMatch = (statement: string, contract: ReviewServingR
     : !containsSql(statement, "'both' AS list_mode_key")
 }
 
+const usesDirectArticleServingSource = (contract: ReviewServingReadContract) => {
+  return contract.servingTable === 'mart.review_article_serving_base_v4'
+}
+
 const getContractSqlMatch = (
   statement: string,
   contract: ReviewServingReadContract,
@@ -343,21 +347,44 @@ const getContractSqlMatch = (
 ) => {
   const judgmentDetailFullHydrationJoin =
     contract.key === 'review.detail.judgments' || contract.key === 'review.detail.humanJudgments'
-  const tableMatch =
-    contract.servingTable === 'mart.review_article_serving_v4'
-      ? containsSql(statement, `FROM ${contract.servingTable} LEFT JOIN app.review_selected_article_import_v4`)
-      : contract.servingTable === 'mart.review_article_filter_posting_serving_v4'
+  const tableMatch = usesDirectArticleServingSource(contract)
+    ? contract.key === 'review.unassessed.rows'
+      ? containsSql(statement, 'unassessed_queue_page AS')
+        && containsSql(statement, 'FROM mart.review_unassessed_queue_serving_v4 queue')
+        && containsSql(statement, 'MAX(queue.activity_sort_at) AS activity_sort_at')
+        && containsSql(
+          statement,
+          'GROUP BY queue.project_id, queue.review_config_hash, queue.snapshot_id, queue.article_id',
+        )
+        && containsSql(
+          statement,
+          'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT',
+        )
+        && containsSql(statement, 'FROM unassessed_queue_page')
+        && containsSql(statement, 'INNER JOIN mart.review_article_serving_base_v4 serving')
+        && containsSql(statement, 'INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+        && containsSql(statement, 'LEFT JOIN app.review_selected_article_import_v4')
+      : containsSql(statement, 'FROM mart.review_article_serving_base_v4 serving')
+        && containsSql(statement, 'INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+        && containsSql(statement, 'LEFT JOIN app.review_selected_article_import_v4')
+    : contract.servingTable === 'mart.review_article_filter_posting_serving_v4'
+      ? containsSql(statement, `FROM ${contract.servingTable}`)
+        && containsSql(statement, 'CROSS JOIN UNNEST(mart.review_article_filter_posting_serving_v4.article_ids)')
+        && containsSql(statement, 'INNER JOIN mart.review_article_serving_base_v4 serving_order')
+        && containsSql(statement, 'serving_order.article_id = filter_posting_article.article_id')
+        && !containsSql(statement, 'INNER JOIN mart.review_article_serving_list_mode_state_v4 serving_order_state')
+        && !containsSql(statement, 'list_contains(serving_order_state.list_mode_keys')
+      : contract.servingTable === 'mart.review_article_judgment_detail_serving_v4'
         ? containsSql(statement, `FROM ${contract.servingTable}`)
-          && containsSql(statement, 'CROSS JOIN UNNEST(mart.review_article_filter_posting_serving_v4.article_ids)')
-          && containsSql(statement, 'mart.review_article_serving_v4.article_id = filter_posting_article.article_id')
-        : contract.servingTable === 'mart.review_article_judgment_detail_serving_v4'
+          && (judgmentDetailFullHydrationJoin
+            ? containsSql(statement, 'LEFT JOIN app."judgment" llm_judgment')
+              && containsSql(statement, 'LEFT JOIN app."judgment_human" human_judgment')
+              && !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4')
+            : !containsSql(statement, 'LEFT JOIN app."judgment" llm_judgment')
+              && !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4'))
+        : contract.physicalAccessStrategy === 'queueOrdering'
           ? containsSql(statement, `FROM ${contract.servingTable}`)
-            && (judgmentDetailFullHydrationJoin
-              ? containsSql(statement, 'LEFT JOIN app."judgment" llm_judgment')
-                && containsSql(statement, 'LEFT JOIN app."judgment_human" human_judgment')
-                && !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4')
-              : !containsSql(statement, 'LEFT JOIN app."judgment" llm_judgment')
-                && !containsSql(statement, 'mart.review_article_judgment_detail_hydration_serving_v4'))
+            && containsSql(statement, 'INNER JOIN mart.review_article_serving_base_v4 queue_article')
           : containsSql(statement, `FROM ${contract.servingTable} WHERE`)
   const checks = [
     tableMatch,
@@ -382,8 +409,12 @@ const getContractSqlMatch = (
       : true,
     contract.physicalAccessStrategy !== 'keyedLookup' ? !containsSql(statement, "article_id = 'article-1'") : true,
     contract.physicalAccessStrategy === 'queueOrdering' ? containsSql(statement, "queue_kind = 'unassessed'") : true,
-    getPhysicalListMode(contract) && contract.physicalAccessStrategy !== 'queueOrdering'
-      ? containsSql(statement, `list_mode_key = '${getPhysicalListMode(contract)}'`)
+    getPhysicalListMode(contract)
+    && contract.physicalAccessStrategy !== 'queueOrdering'
+    && contract.servingTable !== 'mart.review_article_judgment_detail_serving_v4'
+      ? usesDirectArticleServingSource(contract)
+        ? containsSql(statement, `list_contains(list_mode_state.list_mode_keys, '${getPhysicalListMode(contract)}')`)
+        : containsSql(statement, `list_mode_key = '${getPhysicalListMode(contract)}'`)
       : true,
     contract.physicalAccessStrategy === 'postingIntersection' && request.listMode
       ? containsSql(statement, `list_mode_key = '${request.listMode}'`)
@@ -468,8 +499,37 @@ const createDatabase = async () => {
 
         return contract ? getContractSqlMatch(statement, contract, caseInput.request) : false
       })
+      const matchedUnassessedRowsCase =
+        matchedCase
+        ?? evidenceCases.find((caseInput) => {
+          return (
+            caseInput.request.contractKey === 'review.unassessed.rows'
+            && containsSql(statement, 'unassessed_queue_page AS')
+            && containsSql(statement, 'FROM mart.review_unassessed_queue_serving_v4 queue')
+            && containsSql(
+              statement,
+              'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT',
+            )
+            && containsSql(statement, 'FROM unassessed_queue_page')
+          )
+        })
+      const matchedPostingCase =
+        matchedUnassessedRowsCase
+        ?? evidenceCases.find((caseInput) => {
+          return (
+            caseInput.request.contractKey === 'review.filters.postings'
+            && containsSql(statement, 'FROM mart.review_article_filter_posting_serving_v4')
+            && containsSql(statement, 'INNER JOIN mart.review_article_serving_base_v4 serving_order')
+            && !containsSql(statement, 'INNER JOIN mart.review_article_serving_list_mode_state_v4 serving_order_state')
+            && statement.includes(`'${caseInput.request.listMode}'`)
+            && statement.includes(`'${caseInput.request.filterKind}'`)
+            && statement.includes(`'${caseInput.request.filterValue}'`)
+          )
+        })
       return (
-        matchedCase ? rowByContractKey.get(getSqlFixtureKey(matchedCase.routeKey, matchedCase.request)) : []
+        matchedPostingCase
+          ? rowByContractKey.get(getSqlFixtureKey(matchedPostingCase.routeKey, matchedPostingCase.request))
+          : []
       ) as T[]
     },
     run: async () => {},

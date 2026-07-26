@@ -55,6 +55,16 @@ const getQueueActivitySortAtExpression = () => {
   return "date_trunc('millisecond', queue.activity_sort_at)"
 }
 
+const getUnassessedServingArticleJoin = (articleAlias = 'article') => {
+  return `
+    INNER JOIN mart.review_article_serving_base_v4 ${articleAlias}
+      ON ${articleAlias}.project_id = queue.project_id
+      AND ${articleAlias}.review_config_hash = queue.review_config_hash
+      AND ${articleAlias}.snapshot_id = queue.snapshot_id
+      AND ${articleAlias}.article_id = queue.article_id
+  `
+}
+
 const getIsUtcMidnight = (value: Date) => {
   return (
     value.getUTCHours() === 0
@@ -97,7 +107,7 @@ const getActiveServingScope = async (
   return scope ?? null
 }
 
-const getCursorPredicate = (cursor: UnassessedPairsCursor | null) => {
+const getCursorPredicate = (cursor: UnassessedPairsCursor | null, promptIdExpression = 'queue.prompt_id') => {
   const priorityBucket = Number(cursor?.priorityBucket ?? 0)
   const activitySortAtExpression = getQueueActivitySortAtExpression()
   const lastDateLiteral = cursor ? `TIMESTAMPTZ ${getSqlLiteral(cursor.lastDate.toISOString())}` : 'NULL'
@@ -106,7 +116,7 @@ const getCursorPredicate = (cursor: UnassessedPairsCursor | null) => {
           queue.priority_bucket = ${priorityBucket}
           AND ${activitySortAtExpression} = ${lastDateLiteral}
           AND queue.article_id = ${getSqlLiteral(cursor.lastArticleId)}
-          AND queue.prompt_id < ${getSqlLiteral(cursor.lastPromptId)}
+          AND ${promptIdExpression} < ${getSqlLiteral(cursor.lastPromptId)}
         )`
     : `OR (
           queue.priority_bucket = ${priorityBucket}
@@ -140,11 +150,11 @@ const getDatePredicate = (column: string, from: Date | null | undefined, to: Dat
   return `${fromPredicate}\n${toPredicate}`
 }
 
-const getCurrentPromptJoin = () => {
+const getCurrentPromptJoin = (promptIdExpression = 'queue.prompt_id') => {
   return `
     INNER JOIN app.project_prompt current_prompt
       ON current_prompt.project_id = queue.project_id
-      AND current_prompt.prompt_id = queue.prompt_id
+      AND current_prompt.prompt_id = ${promptIdExpression}
       AND current_prompt.enabled = TRUE
       AND NOT current_prompt.archived
     INNER JOIN app.prompt current_prompt_record
@@ -231,11 +241,11 @@ const getCurrentProjectDateScopePredicate = () => {
   const dateToHasTimeExpression = "current_project.date_to != date_trunc('day', current_project.date_to)"
 
   return `
-      AND (current_project.date_from IS NULL OR current_article.article_created_at >= current_project.date_from)
+      AND (current_project.date_from IS NULL OR article.article_created_at >= current_project.date_from)
       AND (
         current_project.date_to IS NULL
-        OR (${dateToIsDateOnlyExpression} AND current_article.article_created_at < current_project.date_to + INTERVAL 1 DAY)
-        OR (${dateToHasTimeExpression} AND current_article.article_created_at <= current_project.date_to)
+        OR (${dateToIsDateOnlyExpression} AND article.article_created_at < current_project.date_to + INTERVAL 1 DAY)
+        OR (${dateToHasTimeExpression} AND article.article_created_at <= current_project.date_to)
       )
   `
 }
@@ -273,18 +283,13 @@ export const getJudgmentJobUnassessedCountFromServing = async (params: {
     `
     SELECT COUNT(DISTINCT queue.article_id) AS count
     FROM mart.review_unassessed_queue_serving_v4 queue
-    ${getCurrentPromptJoin()}
-    INNER JOIN mart.review_article_serving_v4 article
-      ON article.project_id = queue.project_id
-      AND article.review_config_hash = queue.review_config_hash
-      AND article.snapshot_id = queue.snapshot_id
-      AND article.article_id = queue.article_id
-      AND article.list_mode_key = 'unassessed'
+    CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)
+    ${getCurrentPromptJoin('expanded_prompt.prompt_id')}
+    ${getUnassessedServingArticleJoin()}
     WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
       AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
       AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
       AND queue.queue_kind = 'unassessed'
-      AND queue.prompt_id IS NOT NULL
       ${getDatePredicate('article.article_created_at', params.projectDateFrom, params.projectDateTo)}
       ${getConfiguredArticleScopePredicate(params.importRouteIds)}
   `,
@@ -320,20 +325,15 @@ export const getJudgmentJobUnassessedArticlesFromServing = async (params: {
         article.article_created_at,
         article_record.article_updated_at
       FROM mart.review_unassessed_queue_serving_v4 queue
-      ${getCurrentPromptJoin()}
-      INNER JOIN mart.review_article_serving_v4 article
-        ON article.project_id = queue.project_id
-        AND article.review_config_hash = queue.review_config_hash
-        AND article.snapshot_id = queue.snapshot_id
-        AND article.article_id = queue.article_id
-        AND article.list_mode_key = 'unassessed'
+      CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)
+      ${getCurrentPromptJoin('expanded_prompt.prompt_id')}
+      ${getUnassessedServingArticleJoin()}
       LEFT JOIN app.article article_record
         ON article_record.id = queue.article_id
       WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
         AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
         AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
         AND queue.queue_kind = 'unassessed'
-        AND queue.prompt_id IS NOT NULL
         ${getDatePredicate('article.article_created_at', params.projectDateFrom, params.projectDateTo)}
         ${getConfiguredArticleScopePredicate(params.importRouteIds)}
     ), article_queue AS (
@@ -402,26 +402,47 @@ export const getJudgmentJobUnassessedPairsFromServing = async (params: {
 
   const rows = await database.queryJson<JudgmentJobServingPromptRow>(
     `
+    WITH filtered_queue AS (
+      SELECT
+        queue.project_id,
+        queue.review_config_hash,
+        queue.snapshot_id,
+        queue.article_id,
+        queue.prompt_ids,
+        queue.priority_bucket,
+        queue.activity_sort_at
+      FROM mart.review_unassessed_queue_serving_v4 queue
+      ${getUnassessedServingArticleJoin()}
+      INNER JOIN app.judgment_job job
+        ON job.id = ${getSqlLiteral(params.jobId)}
+        AND job.project_id = queue.project_id
+      ${getCurrentProjectScopeJoin()}
+      WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
+        AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
+        AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
+        AND queue.queue_kind = 'unassessed'
+        ${getCurrentProjectDateScopePredicate()}
+        ${getCurrentProjectArticleScopePredicate()}
+    ), expanded_queue AS (
+      SELECT
+        queue.project_id,
+        queue.article_id,
+        expanded_prompt.prompt_id,
+        queue.priority_bucket,
+        date_trunc('millisecond', queue.activity_sort_at) AS activity_sort_at
+      FROM filtered_queue queue
+      CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)
+      ${getCurrentPromptJoin('expanded_prompt.prompt_id')}
+    )
     SELECT
       queue.article_id AS articleId,
       queue.prompt_id AS promptId,
       queue.priority_bucket AS priorityBucket,
-      ${getQueueActivitySortAtExpression()} AS activitySortAt
-    FROM mart.review_unassessed_queue_serving_v4 queue
-    ${getCurrentPromptJoin()}
-    INNER JOIN app.judgment_job job
-      ON job.id = ${getSqlLiteral(params.jobId)}
-      AND job.project_id = queue.project_id
-    ${getCurrentProjectScopeJoin()}
-    WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
-      AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
-      AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
-      AND queue.queue_kind = 'unassessed'
-      AND queue.prompt_id IS NOT NULL
-      ${getCurrentProjectDateScopePredicate()}
-      ${getCurrentProjectArticleScopePredicate()}
+      queue.activity_sort_at AS activitySortAt
+    FROM expanded_queue queue
+    WHERE TRUE
       ${getCursorPredicate(params.cursor)}
-    ORDER BY queue.priority_bucket DESC, ${getQueueActivitySortAtExpression()} DESC, queue.article_id DESC, queue.prompt_id DESC
+    ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC
     LIMIT ${limit + 1}
   `,
     getJudgmentJobQueueWorkloadContext(`judgmentQueue.${params.jobId}.unassessedPairs`, params.projectId, limit + 1),

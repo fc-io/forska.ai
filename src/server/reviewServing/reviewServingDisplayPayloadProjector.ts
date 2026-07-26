@@ -49,24 +49,6 @@ export type ProjectReviewServingDisplayPatchInput = {
   status?: ReviewServingProjectionManifestStatus
 }
 
-export type ProjectReviewServingPayloadInput = {
-  acknowledgeClaims?: boolean
-  baseGeneration: number
-  chunkEndArticleId?: string | null
-  chunkStartArticleId?: string | null
-  claims?: readonly ReviewServingDirtyWorkClaim[]
-  definitionVersion?: string
-  displayIdentity: string
-  payloadIdentity: string
-  projectId: string
-  projectionIdentity?: string
-  selectedImportSnapshotId: string
-  snapshotId: string
-  status?: ReviewServingProjectionManifestStatus
-}
-
-export type ProjectReviewServingPayloadRangesInput = {ranges: readonly ProjectReviewServingPayloadInput[]}
-
 type DisplayProjectionRow = {
   activitySortAt: Date | string
   articleCreatedAt: Date | string | null
@@ -108,8 +90,6 @@ type DisplayPatchRow = {
   url: string | null
 }
 
-type PayloadProjectionRow = {articleId: string}
-
 type ReviewServingPayloadPatchManifestInput = {
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
@@ -120,7 +100,6 @@ type ReviewServingPayloadPatchManifestInput = {
 }
 
 const displayProjectorName = 'display-projector'
-const payloadProjectorName = 'payload-projector'
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -420,42 +399,6 @@ const getDisplayPatchRows = async (
       `)
 }
 
-const getPayloadRowsSql = (
-  input: ProjectReviewServingPayloadInput,
-  options: {orderBy?: boolean; ranges?: readonly ProjectReviewServingPayloadInput[]} = {},
-) => {
-  const articleIds = getClaimArticleIds(input.claims)
-  const dirtyJoinSql =
-    articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
-  const rangeJoinSql =
-    options.ranges === undefined
-      ? ''
-      : `INNER JOIN article_range_filter range
-        ON scope.article_id >= range.chunk_start_article_id
-        AND scope.article_id <= range.chunk_end_article_id`
-  const orderBy =
-    options.orderBy === false ? '' : 'ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC'
-  return `
-    ${getDirtyArticleCteSql(articleIds)}
-    SELECT
-      scope.article_id AS articleId
-    FROM mart.project_scope_article scope
-    ${dirtyJoinSql}
-    ${rangeJoinSql}
-    WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
-      AND (scope.in_curated_scope OR scope.in_route_scope)
-      ${options.ranges === undefined ? getArticleRangePredicate(input) : ''}
-    ${orderBy}
-  `
-}
-
-const getPayloadRows = async (
-  input: ProjectReviewServingPayloadInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase,
-) => {
-  return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input))
-}
-
 const getInsertDisplayListModeStateRowsStatement = (input: ProjectReviewServingDisplayBaseInput) => {
   return `
     INSERT INTO mart.review_article_serving_list_mode_state_v4 (
@@ -537,30 +480,6 @@ export const getReviewServingPayloadPatchManifest = (
   }
 }
 
-const getPayloadProjectionManifests = (
-  input: ProjectReviewServingPayloadInput,
-  claims: readonly ReviewServingDirtyWorkClaim[],
-) => {
-  return claims.length === 0
-    || input.acknowledgeClaims === false
-    || input.definitionVersion === undefined
-    || input.projectionIdentity === undefined
-    ? []
-    : [
-        getReviewServingPayloadPatchManifest(
-          {
-            baseGeneration: input.baseGeneration,
-            claims,
-            definitionVersion: input.definitionVersion,
-            projectId: input.projectId,
-            projectionIdentity: input.projectionIdentity,
-            status: input.status,
-          },
-          'payload',
-        ),
-      ]
-}
-
 export const projectReviewServingDisplayBaseRows = async (
   input: ProjectReviewServingDisplayBaseInput,
   database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
@@ -620,21 +539,6 @@ export const projectReviewServingDisplayBaseRanges = async (
   )
 }
 
-export const projectReviewServingPayloadRanges = async (
-  input: ProjectReviewServingPayloadRangesInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
-) => {
-  const {measure, phaseTimings} = getTimedProjector()
-  const writer = await measure('writerMs', async () => {
-    return writeReviewServingProjectorComponent({component: 'payload', statements: []}, database)
-  })
-
-  return withDiagnosticsJson(
-    {rangeCount: input.ranges.length},
-    getProjectorDiagnosticsJson({phaseTimings, projectorName: 'payloadProjector', writer: writer.diagnostics}),
-  )
-}
-
 export const projectReviewServingDisplayPatches = async (
   input: ProjectReviewServingDisplayPatchInput,
   database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
@@ -678,57 +582,6 @@ export const projectReviewServingDisplayPatches = async (
     getProjectorDiagnosticsJson({
       phaseTimings,
       projectorName: 'displayProjector',
-      sourceRowCount: rows.length,
-      writer: writer.diagnostics,
-    }),
-  )
-}
-
-export const projectReviewServingPayloadRows = async (
-  input: ProjectReviewServingPayloadInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
-) => {
-  const {measure, measureSync, phaseTimings} = getTimedProjector()
-  const claims = input.claims ?? []
-  const rows = await measure('sourceQueryMs', async () => {
-    return getPayloadRows(input, database)
-  })
-  const hasClaimedWork =
-    claims.length > 0 && input.definitionVersion !== undefined && input.projectionIdentity !== undefined
-  const shouldAcknowledgeClaims = hasClaimedWork && input.acknowledgeClaims !== false
-  const projectionManifests = getPayloadProjectionManifests(input, claims)
-  const patchWatermark = getPatchWatermark(claims)
-  measureSync('recordTransformMs', () => {
-    return rows.length
-  })
-
-  const writer = await measure('writerMs', async () => {
-    return writeReviewServingProjectorComponent(
-      {
-        acknowledgements: shouldAcknowledgeClaims ? claims : [],
-        component: 'payload',
-        projectionManifests,
-        records: [],
-        statements: [],
-        watermark: shouldAcknowledgeClaims
-          ? {
-              projectId: input.projectId,
-              projectionComponent: 'payload',
-              projectorName: payloadProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(claims),
-            }
-          : undefined,
-      },
-      database,
-    )
-  })
-
-  return withDiagnosticsJson(
-    {patchWatermark, payloadRowCount: rows.length},
-    getProjectorDiagnosticsJson({
-      phaseTimings,
-      projectorName: 'payloadProjector',
       sourceRowCount: rows.length,
       writer: writer.diagnostics,
     }),

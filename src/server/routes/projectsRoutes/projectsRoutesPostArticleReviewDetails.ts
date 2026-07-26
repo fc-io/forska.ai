@@ -276,6 +276,21 @@ const upsertPromptRow = (promptRowsById: Map<string, ProjectPromptRow>, promptRo
     : promptRowsById.set(promptRow.id, promptRow)
 }
 
+const mergePromptRows = (
+  appPromptRows: readonly ProjectPromptRow[],
+  servingPromptRows: readonly ProjectPromptRow[],
+) => {
+  const promptRowsById = servingPromptRows.reduce((promptMap, promptRow) => {
+    return upsertPromptRow(promptMap, promptRow)
+  }, new Map<string, ProjectPromptRow>())
+
+  appPromptRows.forEach((promptRow) => {
+    upsertPromptRow(promptRowsById, promptRow)
+  })
+
+  return [...promptRowsById.values()]
+}
+
 const detailReaderPageSize = 512
 const covidenceRelatedRecordsLimit = 500
 const covidenceRelatedRecordsQueryLimit = covidenceRelatedRecordsLimit + 1
@@ -317,6 +332,31 @@ const readAllReviewServingRows = async <T>(
 
 const getPromptValue = (row: {promptOriginalText: string; promptHeading: string | null}) => {
   return {originalText: row.promptOriginalText, promptHeading: row.promptHeading}
+}
+
+const getProjectPromptRows = async (projectId: string): Promise<ProjectPromptRow[]> => {
+  return getAppDatabaseService().queryJson<ProjectPromptRow>(
+    `
+    SELECT
+      prompt.id AS id,
+      prompt.original_text AS originalText,
+      prompt.prompt_heading AS promptHeading,
+      project_prompt.prompt_order AS "order",
+      prompt.type AS type,
+      project_prompt.enabled AS enabled,
+      project_prompt.criteria_disposition AS criteriaDisposition,
+      project_prompt.origin_project_id AS originProjectId
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+    ORDER BY project_prompt.prompt_order ASC NULLS LAST, prompt.id ASC
+  `,
+    getProjectReviewDetailsWorkloadContext({operation: 'projectPrompts', projectId}),
+  )
 }
 
 const getProjectReviewDetailJudgmentRows = async (params: {
@@ -826,21 +866,21 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const covidenceRelatedRecordsResult = await getCovidenceRelatedRecords({article, projectId})
       const covidenceRelatedRecords = covidenceRelatedRecordsResult.records
 
-      const projectReviewDetailJudgmentResult = await getProjectReviewDetailJudgmentRows({
-        projectId,
-        articleId,
-        projectReviewConfig,
-        reviewConfigHash,
-      })
+      const [projectReviewDetailJudgmentResult, appPromptRows] = await Promise.all([
+        getProjectReviewDetailJudgmentRows({projectId, articleId, projectReviewConfig, reviewConfigHash}),
+        getProjectPromptRows(projectId),
+      ])
 
       if (projectReviewDetailJudgmentResult === null) {
         return getUnavailableReviewDetail({articleId, reason: 'detail judgments unavailable'})
       }
 
       const projectReviewDetailJudgmentRows = projectReviewDetailJudgmentResult.judgmentRows
-      const projectPromptRows = projectReviewDetailJudgmentResult.promptRows.sort((a, b) => {
-        return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)
-      })
+      const projectPromptRows = mergePromptRows(appPromptRows, projectReviewDetailJudgmentResult.promptRows).sort(
+        (a, b) => {
+          return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)
+        },
+      )
 
       const promptIds = projectPromptRows.map((p) => {
         return p.id

@@ -140,7 +140,7 @@ test('human assessment overview reads V4 human count contracts instead of raw ju
       ]
     }
 
-    if (statement.includes('mart.review_article_serving_v4 serving')) {
+    if (statement.includes('mart.review_article_serving_base_v4 serving')) {
       return [
         {projectId: 'project-low', totalCount: 1},
         {projectId: 'project-high', totalCount: 3},
@@ -179,11 +179,13 @@ test('human assessment overview reads V4 human count contracts instead of raw ju
   expect(joinedStatements).toContain('WITH overview_manifest(project_id, review_config_hash, snapshot_id) AS')
   expect(joinedStatements).toContain("'project-low'")
   expect(joinedStatements).toContain("'project-high'")
-  expect(joinedStatements).toContain('COUNT(DISTINCT serving.article_id) AS totalCount')
-  expect(joinedStatements).toContain("serving.list_mode_key = 'human'")
-  expect(joinedStatements).toContain('FROM mart.review_article_filter_state_serving_v4 human_status_state')
-  expect(joinedStatements).toContain("human_status_state.human_status = 'answered'")
-  expect(joinedStatements).not.toContain('FROM mart.review_article_filter_state_serving_v4 llm_status_state')
+  expect(joinedStatements).toContain('COUNT(DISTINCT list_mode_state.article_id) AS totalCount')
+  expect(joinedStatements).toContain("list_contains(list_mode_state.list_mode_keys, 'human')")
+  expect(joinedStatements).toContain("list_mode_state.human_status = 'answered'")
+  expect(joinedStatements).toContain('LEFT JOIN mart.review_article_serving_base_v4 serving')
+  expect(joinedStatements).toContain('LEFT JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(joinedStatements).not.toContain('mart.review_article_serving_v4 serving')
+  expect(joinedStatements).not.toContain('review_article_filter_state_serving_v4')
   expect(joinedStatements).not.toContain('serving.human_status_key =')
   expect(joinedStatements).not.toContain('serving.llm_status_key =')
   expect(statements.join('\n')).not.toContain('FROM app.judgment_human')
@@ -214,7 +216,7 @@ test('human assessment both-project overview reads V4 both count contracts', asy
       return [{id: 'project-both', name: 'Project Both'}]
     }
 
-    if (statement.includes('mart.review_article_serving_v4 serving')) {
+    if (statement.includes('mart.review_article_serving_base_v4 serving')) {
       return [{projectId: 'project-both', totalCount: 2}]
     }
 
@@ -234,14 +236,17 @@ test('human assessment both-project overview reads V4 both count contracts', asy
 
   expect(response).toEqual({data: [{count: 2, projectId: 'project-both', projectName: 'Project Both'}]})
   expect(readerRequests).toEqual([])
-  expect(statements.join('\n')).toContain("serving.list_mode_key = 'both'")
-  expect(statements.join('\n')).toContain('FROM mart.review_article_filter_state_serving_v4 human_status_state')
-  expect(statements.join('\n')).toContain('FROM mart.review_article_filter_state_serving_v4 llm_status_state')
-  expect(statements.join('\n')).toContain("human_status_state.human_status = 'answered'")
-  expect(statements.join('\n')).toContain("llm_status_state.llm_status = 'answered'")
-  expect(statements.join('\n')).not.toContain('serving.human_status_key =')
-  expect(statements.join('\n')).not.toContain('serving.llm_status_key =')
-  expect(statements.join('\n')).not.toContain('FROM app.judgment_human')
-  expect(statements.join('\n')).not.toContain('FROM app.judgment')
-  expect(statements.join('\n')).not.toContain('FROM app.project_prompt')
+  const joinedStatements = statements.join('\n')
+  expect(joinedStatements).toContain("list_contains(list_mode_state.list_mode_keys, 'both')")
+  expect(joinedStatements).toContain("list_mode_state.human_status = 'answered'")
+  expect(joinedStatements).toContain("list_mode_state.llm_status = 'answered'")
+  expect(joinedStatements).toContain('LEFT JOIN mart.review_article_serving_base_v4 serving')
+  expect(joinedStatements).toContain('LEFT JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(joinedStatements).not.toContain('mart.review_article_serving_v4 serving')
+  expect(joinedStatements).not.toContain('review_article_filter_state_serving_v4')
+  expect(joinedStatements).not.toContain('serving.human_status_key =')
+  expect(joinedStatements).not.toContain('serving.llm_status_key =')
+  expect(joinedStatements).not.toContain('FROM app.judgment_human')
+  expect(joinedStatements).not.toContain('FROM app.judgment')
+  expect(joinedStatements).not.toContain('FROM app.project_prompt')
 })

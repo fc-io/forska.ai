@@ -78,6 +78,19 @@ test('DuckDB migrations keep projector watermark unindexed after primary-key rep
   expect(dropSql).toContain('DROP INDEX IF EXISTS idx_review_serving_projector_watermark_lookup;')
 })
 
+test('DuckDB migration creates dirty source watermark aggregate with dirty-work backfill', () => {
+  const migrationSql = readFileSync(resolve(migrationsFolder, '0186_reviewServingDirtySourceWatermark.sql'), 'utf8')
+
+  expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS app.review_serving_project_dirty_source_watermark')
+  expect(migrationSql).toContain('PRIMARY KEY(project_id, source_partition)')
+  expect(migrationSql).toContain('MAX(latest_source_high_water_mark) AS source_high_water_mark')
+  expect(migrationSql).toContain('FROM app.review_serving_dirty_work')
+  expect(migrationSql).toContain('WHERE project_id IS NOT NULL')
+  expect(migrationSql).toContain('GROUP BY project_id, source_partition')
+  expect(migrationSql).toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
+  expect(migrationSql).toContain('source_high_water_mark = GREATEST')
+})
+
 test('DuckDB migrations retire bounded review-serving storage with forward drops', () => {
   const reviewQueuePatchDropSql = readFileSync(
     resolve(migrationsFolder, '0118_dropReviewQueuePatchV4.sql'),
@@ -111,6 +124,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0179_slimReviewTitleSearchTokenPostings.sql'),
     'utf8',
   ).trim()
+  const reviewTitleSearchTokenLookupIndexDropSql = readFileSync(
+    resolve(migrationsFolder, '0188_dropReviewTitleSearchTokenLookupIndex.sql'),
+    'utf8',
+  ).trim()
   const reviewFilterPostingStatsDerivedColumnDropSql = readFileSync(
     resolve(migrationsFolder, '0129_dropReviewFilterPostingStatsDerivedColumns.sql'),
     'utf8',
@@ -121,6 +138,18 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   ).trim()
   const reviewFilterOptionPayloadJsonDropSql = readFileSync(
     resolve(migrationsFolder, '0130_dropReviewFilterOptionPayloadJson.sql'),
+    'utf8',
+  ).trim()
+  const reviewFilterOptionLookupIndexDropSql = readFileSync(
+    resolve(migrationsFolder, '0189_dropReviewFilterOptionLookupIndex.sql'),
+    'utf8',
+  ).trim()
+  const reviewFilteredCountLookupIndexDropSql = readFileSync(
+    resolve(migrationsFolder, '0190_dropReviewFilteredCountLookupIndex.sql'),
+    'utf8',
+  ).trim()
+  const reviewFilteredCountComponentBreakoutDropSql = readFileSync(
+    resolve(migrationsFolder, '0194_dropReviewFilteredCountComponentBreakoutColumns.sql'),
     'utf8',
   ).trim()
   const reviewArticleServingSelectedRankCopyDropSql = readFileSync(
@@ -141,6 +170,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   ).trim()
   const reviewFilterPostingServingSortKeyDropSql = readFileSync(
     resolve(migrationsFolder, '0162_dropReviewFilterPostingServingSortKey.sql'),
+    'utf8',
+  ).trim()
+  const reviewFilterPostingServingLookupIndexDropSql = readFileSync(
+    resolve(migrationsFolder, '0185_dropReviewFilterPostingLookupIndex.sql'),
     'utf8',
   ).trim()
   const reviewArticleServingDisplayCopyDropSql = readFileSync(
@@ -243,6 +276,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0126_dropReviewSelectedImportPatchV4.sql'),
     'utf8',
   ).trim()
+  const reviewSummaryOptionUpdatedAtDropSql = readFileSync(
+    resolve(migrationsFolder, '0192_dropReviewSummaryOptionUpdatedAt.sql'),
+    'utf8',
+  ).trim()
 
   expect(reviewQueuePatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
   expect(reviewHumanStatusPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_human_status_patch_v4;')
@@ -273,6 +310,12 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewTitleSearchTokenPostingSlimSql).not.toContain('PRIMARY KEY')
   expect(reviewTitleSearchTokenPostingSlimSql).not.toContain('token, article_id)')
+  expect(reviewTitleSearchTokenLookupIndexDropSql).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_title_search_serving_v4_token;',
+      'DROP INDEX IF EXISTS idx_review_title_search_serving_v4_token;',
+    ].join('\n'),
+  )
   expect(reviewFilterPostingStatsDerivedColumnDropSql).toBe(
     [
       '-- Retired by 0147_dropReviewFilterPostingStats.sql.',
@@ -305,6 +348,36 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewFilterOptionPayloadJsonDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterOptionPayloadJsonDropSql).not.toContain('option_payload_json')
+  expect(reviewSummaryOptionUpdatedAtDropSql).toContain('CREATE TABLE mart.review_article_count_serving_v4_repair')
+  expect(reviewSummaryOptionUpdatedAtDropSql).toContain('CREATE TABLE mart.review_filter_facet_serving_v4_repair')
+  expect(reviewSummaryOptionUpdatedAtDropSql).toContain('CREATE TABLE mart.review_filter_option_serving_v4_repair')
+  expect(reviewSummaryOptionUpdatedAtDropSql).toContain("column_name != 'count_updated_at'")
+  expect(reviewSummaryOptionUpdatedAtDropSql).toContain("column_name != 'facet_updated_at'")
+  expect(reviewSummaryOptionUpdatedAtDropSql).toContain("column_name != 'option_updated_at'")
+  expect(reviewSummaryOptionUpdatedAtDropSql).not.toContain('count_updated_at TIMESTAMPTZ')
+  expect(reviewSummaryOptionUpdatedAtDropSql).not.toContain('facet_updated_at TIMESTAMPTZ')
+  expect(reviewSummaryOptionUpdatedAtDropSql).not.toContain('option_updated_at TIMESTAMPTZ')
+  expect(reviewFilterOptionLookupIndexDropSql).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_filter_option_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_filter_option_serving_v4_lookup;',
+    ].join('\n'),
+  )
+  expect(reviewFilteredCountLookupIndexDropSql).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_filtered_count_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_filtered_count_serving_v4_lookup;',
+    ].join('\n'),
+  )
+  expect(reviewFilteredCountComponentBreakoutDropSql).toContain(
+    'CREATE TABLE mart.review_filtered_count_serving_v4_repair',
+  )
+  expect(reviewFilteredCountComponentBreakoutDropSql).toContain('count_updated_at TIMESTAMPTZ')
+  expect(reviewFilteredCountComponentBreakoutDropSql).not.toContain('project_scope_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropSql).not.toContain('search_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropSql).not.toContain('posting_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropSql).not.toContain('queue_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropSql).not.toContain('payload_identity VARCHAR')
   expect(reviewArticleServingSelectedRankCopyDropSql).toContain('CREATE TABLE mart.review_article_serving_v4_repair')
   expect(reviewArticleServingSelectedRankCopyDropSql).toContain('DROP TABLE mart.review_article_serving_v4;')
   expect(reviewArticleServingSelectedRankCopyDropSql).toContain(
@@ -386,6 +459,12 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewFilterPostingServingSortKeyDropSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup',
+  )
+  expect(reviewFilterPostingServingLookupIndexDropSql).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_article_filter_posting_serving_v4_lookup;',
+    ].join('\n'),
   )
   expect(reviewFilterPostingServingSortKeyDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterPostingServingSortKeyDropSql).not.toContain('sort_key TIMESTAMPTZ')
@@ -641,6 +720,196 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).not.toContain('lease_owner')
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).not.toContain('cursor_json')
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).not.toContain('last_error')
+})
+
+test('DuckDB migration drops filtered count component breakout columns while preserving legacy rows', async () => {
+  const duckdbPath = `/tmp/forska-review-filtered-count-breakout-${Date.now()}.duckdb`
+  const targetMigrationFile = '0194_dropReviewFilteredCountComponentBreakoutColumns.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {withDuckdbMaintenanceAccess}, {resetDuckdbServiceForTests, getMaintenanceDuckdbWorkloadContext}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbScriptAccess.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const workloadContext = getMaintenanceDuckdbWorkloadContext('filtered-count-breakout-test')
+        const database = getAppDatabaseService()
+        await withDuckdbMaintenanceAccess('filtered count breakout migration test', async () => {
+          await database.run('CREATE SCHEMA IF NOT EXISTS app', workloadContext)
+          await database.run('CREATE SCHEMA IF NOT EXISTS mart', workloadContext)
+          await database.run(
+            'CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)',
+            workloadContext
+          )
+          await database.run(
+            "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+              .map((fileName) => {
+                return `('${fileName.replaceAll("'", "''")}')`
+              })
+              .join(', ')}",
+            workloadContext
+          )
+          await database.run(\`
+            CREATE TABLE mart.review_filtered_count_serving_v4 (
+              project_id VARCHAR NOT NULL,
+              review_config_hash VARCHAR NOT NULL,
+              snapshot_id VARCHAR NOT NULL,
+              list_mode_key VARCHAR NOT NULL,
+              filter_signature VARCHAR NOT NULL,
+              component_identity VARCHAR NOT NULL,
+              project_scope_identity VARCHAR NOT NULL DEFAULT '',
+              search_identity VARCHAR NOT NULL DEFAULT '',
+              posting_identity VARCHAR NOT NULL DEFAULT '',
+              queue_identity VARCHAR NOT NULL DEFAULT '',
+              payload_identity VARCHAR NOT NULL DEFAULT '',
+              count_value BIGINT NOT NULL,
+              count_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+            )
+          \`, workloadContext)
+          await database.run(\`
+            CREATE UNIQUE INDEX idx_review_filtered_count_serving_v4_repaired_pk
+            ON mart.review_filtered_count_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, filter_signature, component_identity)
+          \`, workloadContext)
+          await database.run(\`
+            CREATE INDEX idx_review_filtered_count_serving_v4_lookup
+            ON mart.review_filtered_count_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, filter_signature)
+          \`, workloadContext)
+          await database.run(\`
+            INSERT INTO mart.review_filtered_count_serving_v4 (
+              project_id,
+              review_config_hash,
+              snapshot_id,
+              list_mode_key,
+              filter_signature,
+              component_identity,
+              project_scope_identity,
+              search_identity,
+              posting_identity,
+              queue_identity,
+              payload_identity,
+              count_value,
+              count_updated_at
+            )
+            VALUES (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'llm',
+              'filter-a',
+              'component-a',
+              'project-scope-a',
+              'search-a',
+              'posting-a',
+              'queue-a',
+              'payload-a',
+              42,
+              TIMESTAMPTZ '2026-07-25T07:01:00Z'
+            )
+          \`, workloadContext)
+
+          await migrateDuckdb()
+
+          const columns = await database.queryJson(
+            "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_filtered_count_serving_v4' ORDER BY ordinal_position",
+            workloadContext
+          )
+          const indexes = await database.queryJson(
+            "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_filtered_count_serving_v4' ORDER BY index_name",
+            workloadContext
+          )
+          const migrationRows = await database.queryJson(
+            "SELECT name FROM app_schema_migration WHERE name = '${targetMigrationFile}'",
+            workloadContext
+          )
+          const rows = await database.queryJson(
+            "SELECT project_id AS projectId, review_config_hash AS reviewConfigHash, snapshot_id AS snapshotId, list_mode_key AS listModeKey, filter_signature AS filterSignature, component_identity AS componentIdentity, CAST(count_value AS INTEGER) AS countValue, CAST(epoch(count_updated_at) AS INTEGER) AS countUpdatedAtEpoch FROM mart.review_filtered_count_serving_v4",
+            workloadContext
+          )
+
+          console.log(JSON.stringify({columns, indexes, migrationRows, rows}))
+        })
+      `,
+    ],
+    {
+      cwd: resolve(import.meta.dir, '../..'),
+      env: {...process.env, DUCKDB_PATH: duckdbPath, FORSKA_DB_PATH: duckdbPath, NODE_ENV: 'test'},
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  removeFileIfExists(duckdbPath)
+  removeFileIfExists(`${duckdbPath}.wal`)
+  removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+  removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.toString() || result.stdout.toString() || 'Failed to migrate filtered count breakout columns',
+    )
+  }
+
+  const output = result.stdout.toString()
+  const parsedLine = output.split('\n').find((line) => {
+    return line.startsWith('{"columns"')
+  })
+
+  expect(parsedLine).toBeDefined()
+
+  const parsed = JSON.parse(parsedLine ?? '{}') as {
+    columns: {columnName: string}[]
+    indexes: {indexName: string}[]
+    migrationRows: {name: string}[]
+    rows: Array<Record<string, unknown>>
+  }
+  const columns = parsed.columns.map((column) => {
+    return column.columnName
+  })
+  const indexes = parsed.indexes.map((index) => {
+    return index.indexName
+  })
+
+  expect(columns).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'list_mode_key',
+    'filter_signature',
+    'component_identity',
+    'count_value',
+    'count_updated_at',
+  ])
+  expect(columns).not.toContain('project_scope_identity')
+  expect(columns).not.toContain('search_identity')
+  expect(columns).not.toContain('posting_identity')
+  expect(columns).not.toContain('queue_identity')
+  expect(columns).not.toContain('payload_identity')
+  expect(indexes).toEqual(['idx_review_filtered_count_serving_v4_repaired_pk'])
+  expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  expect(parsed.rows).toEqual([
+    {
+      componentIdentity: 'component-a',
+      countUpdatedAtEpoch: 1784962860,
+      countValue: 42,
+      filterSignature: 'filter-a',
+      listModeKey: 'llm',
+      projectId: 'project-a',
+      reviewConfigHash: 'config-a',
+      snapshotId: 'snapshot-a',
+    },
+  ])
 })
 
 test('DuckDB migration drops review filter posting serving sort key while preserving rows', async () => {
@@ -923,6 +1192,135 @@ test('DuckDB migration compacts review filter posting serving article membership
   expect(parsed.rows).toEqual([
     {articleIds: ['article-1'], filterKind: 'importRoute', filterValue: 'route-1', listModeKey: 'llm'},
     {articleIds: ['article-1', 'article-2'], filterKind: 'promptAnswer', filterValue: 'yes', listModeKey: 'llm'},
+  ])
+})
+
+test('DuckDB migration drops redundant review filter posting lookup index', async () => {
+  const duckdbPath = `/tmp/forska-review-filter-posting-lookup-index-${Date.now()}.duckdb`
+  const targetMigrationFile = '0185_dropReviewFilterPostingLookupIndex.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {withDuckdbMaintenanceAccess}, {getMaintenanceDuckdbWorkloadContext, resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbScriptAccess.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        const workloadContext = getMaintenanceDuckdbWorkloadContext('migrateDuckdb.test.filterPostingLookupIndex')
+        await withDuckdbMaintenanceAccess('filter posting lookup index migration test', async () => {
+          await database.run('CREATE SCHEMA IF NOT EXISTS mart', workloadContext)
+          await database.run(
+            "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            workloadContext
+          )
+          await database.run(
+            "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+              .map((fileName) => {
+                return `('${fileName.replaceAll("'", "''")}')`
+              })
+              .join(', ')}",
+            workloadContext
+          )
+          await database.run(\`
+            CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+              project_id VARCHAR NOT NULL,
+              review_config_hash VARCHAR NOT NULL,
+              snapshot_id VARCHAR NOT NULL,
+              filter_kind VARCHAR NOT NULL,
+              filter_value VARCHAR NOT NULL,
+              list_mode_key VARCHAR NOT NULL,
+              article_ids VARCHAR[] NOT NULL
+            )
+          \`, workloadContext)
+          await database.run(\`
+            CREATE UNIQUE INDEX idx_review_article_filter_posting_serving_v4_repaired_pk
+            ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)
+          \`, workloadContext)
+          await database.run(\`
+            CREATE INDEX idx_review_article_filter_posting_serving_v4_lookup
+            ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)
+          \`, workloadContext)
+          await database.run(\`
+            INSERT INTO mart.review_article_filter_posting_serving_v4
+            VALUES ('project-1', 'review-config-1', 'snapshot-1', 'promptAnswer', 'yes', 'llm', ['article-1'])
+          \`, workloadContext)
+
+          await migrateDuckdb()
+
+          const indexes = await database.queryJson(
+            "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_filter_posting_serving_v4' ORDER BY index_name",
+            workloadContext
+          )
+          const migrationRows = await database.queryJson(
+            "SELECT name FROM app_schema_migration WHERE name = '${targetMigrationFile}'",
+            workloadContext
+          )
+          const rows = await database.queryJson(
+            'SELECT * FROM mart.review_article_filter_posting_serving_v4',
+            workloadContext
+          )
+
+          console.log(JSON.stringify({indexes, migrationRows, rows}))
+        })
+      `,
+    ],
+    {
+      cwd: resolve(import.meta.dir, '../..'),
+      env: {...process.env, DUCKDB_PATH: duckdbPath, FORSKA_DB_PATH: duckdbPath, NODE_ENV: 'test'},
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  removeFileIfExists(duckdbPath)
+  removeFileIfExists(`${duckdbPath}.wal`)
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.toString() || result.stdout.toString() || 'Failed to drop filter posting lookup index',
+    )
+  }
+
+  const output = result.stdout.toString()
+  const parsedLine = output.split('\n').find((line) => {
+    return line.startsWith('{"indexes"')
+  })
+
+  expect(parsedLine).toBeDefined()
+
+  const parsed = JSON.parse(parsedLine ?? '{}') as {
+    indexes: {indexName: string}[]
+    migrationRows: {name: string}[]
+    rows: Array<Record<string, unknown>>
+  }
+  const indexes = parsed.indexes.map((index) => {
+    return index.indexName
+  })
+
+  expect(indexes).toEqual(['idx_review_article_filter_posting_serving_v4_repaired_pk'])
+  expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  expect(parsed.rows).toEqual([
+    {
+      article_ids: ['article-1'],
+      filter_kind: 'promptAnswer',
+      filter_value: 'yes',
+      list_mode_key: 'llm',
+      project_id: 'project-1',
+      review_config_hash: 'review-config-1',
+      snapshot_id: 'snapshot-1',
+    },
   ])
 })
 
@@ -4565,6 +4963,830 @@ test('DuckDB migration drops retired filter posting stats mart and lookup indexe
   }
 })
 
+test('DuckDB migration preserves legacy filter state when backfilling list-mode state filters', async () => {
+  const duckdbPath = `/tmp/forska-review-filter-state-list-mode-backfill-${Date.now()}.duckdb`
+  const targetMigrationFile = '0183_backfillReviewArticleServingListModeStateFilters.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.project (
+            id VARCHAR PRIMARY KEY,
+            human_judgment_mode VARCHAR
+          )
+        \`)
+        await database.run("INSERT INTO app.project VALUES ('project-1', 'prompt')")
+        await database.run(\`
+          CREATE TABLE app.project_prompt (
+            project_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            enabled BOOLEAN NOT NULL,
+            archived BOOLEAN NOT NULL
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.prompt (
+            id VARCHAR PRIMARY KEY,
+            archived BOOLEAN
+          )
+        \`)
+        await database.run("INSERT INTO app.prompt VALUES ('prompt-1', FALSE)")
+        await database.run("INSERT INTO app.project_prompt VALUES ('project-1', 'prompt-1', TRUE, FALSE)")
+        await database.run(\`
+          CREATE TABLE app.review_serving_snapshot_manifest (
+            project_id VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            snapshot_status VARCHAR NOT NULL DEFAULT 'candidate',
+            review_config_hash VARCHAR,
+            composed_identity_json JSON NOT NULL,
+            component_state_json JSON NOT NULL,
+            required_components_json JSON NOT NULL,
+            optional_components_json JSON NOT NULL,
+            source_watermarks_json JSON NOT NULL,
+            validation_result_json JSON,
+            selected_import_snapshot_id VARCHAR,
+            last_known_good_snapshot_id VARCHAR,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            activated_at TIMESTAMPTZ,
+            failed_at TIMESTAMPTZ,
+            last_error VARCHAR
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_selected_import_snapshot (
+            selected_import_snapshot_id VARCHAR PRIMARY KEY,
+            project_id VARCHAR NOT NULL,
+            project_scope_identity VARCHAR NOT NULL,
+            source_delta_high_water BIGINT NOT NULL DEFAULT 0,
+            cursor_json JSON,
+            status VARCHAR NOT NULL DEFAULT 'candidate',
+            owner VARCHAR,
+            lease_owner VARCHAR,
+            lease_expires_at TIMESTAMPTZ,
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            last_error VARCHAR,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_selected_article_import_v4 (
+            project_id VARCHAR NOT NULL,
+            project_scope_identity VARCHAR NOT NULL,
+            selected_import_snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            import_route_id VARCHAR,
+            source_record_key VARCHAR,
+            selected_rank_key VARCHAR,
+            selected_rank_numeric DOUBLE,
+            publication_year INTEGER,
+            article_title VARCHAR,
+            journal_title VARCHAR,
+            external_id VARCHAR,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_import_article_hot_field (
+            import_route_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            source_record_key VARCHAR NOT NULL,
+            publication_year INTEGER,
+            duplicate_flag BOOLEAN,
+            conflict_flag BOOLEAN,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL,
+            is_answered BOOLEAN,
+            placeholder_kind VARCHAR
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_base_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            base_generation BIGINT NOT NULL,
+            patch_watermark BIGINT NOT NULL,
+            article_id VARCHAR NOT NULL,
+            article_created_at TIMESTAMPTZ,
+            sort_key TIMESTAMPTZ NOT NULL,
+            activity_sort_at TIMESTAMPTZ NOT NULL
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            list_mode_keys VARCHAR[] NOT NULL,
+            llm_patch_watermark BIGINT,
+            human_patch_watermark BIGINT,
+            both_patch_watermark BIGINT,
+            unassessed_patch_watermark BIGINT
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE mart.review_article_filter_state_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            llm_status VARCHAR,
+            human_status VARCHAR
+          )
+        \`)
+        await database.run(\`
+          CREATE INDEX idx_review_article_filter_state_serving_v4_lookup
+          ON mart.review_article_filter_state_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, duplicate_flag, conflict_flag, llm_status, human_status, article_id)
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_base_v4
+          VALUES
+            (
+              'project-1',
+              'review-config-1',
+              'snapshot-1',
+              3,
+              7,
+              'article-1',
+              TIMESTAMPTZ '2026-01-01 00:00:00+00',
+              TIMESTAMPTZ '2026-01-02 00:00:00+00',
+              TIMESTAMPTZ '2026-01-03 00:00:00+00'
+            ),
+            (
+              'project-1',
+              'review-config-1',
+              'snapshot-1',
+              3,
+              7,
+              'article-2',
+              TIMESTAMPTZ '2026-01-04 00:00:00+00',
+              TIMESTAMPTZ '2026-01-05 00:00:00+00',
+              TIMESTAMPTZ '2026-01-06 00:00:00+00'
+            )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_list_mode_state_v4
+          VALUES
+            ('project-1', 'review-config-1', 'snapshot-1', 'article-1', ['llm', 'human'], 8, 9, NULL, NULL),
+            ('project-1', 'review-config-1', 'snapshot-1', 'article-2', ['llm', 'human'], 8, 9, NULL, NULL)
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_filter_state_serving_v4
+          VALUES
+            ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'article-1', TRUE, FALSE, 'answered', NULL),
+            ('project-1', 'review-config-1', 'snapshot-1', 'human', 'article-1', FALSE, TRUE, NULL, 'unanswered'),
+            ('project-1', 'review-config-1', 'snapshot-1', 'human', 'article-2', FALSE, FALSE, NULL, 'unanswered')
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4
+          VALUES
+            ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'article-1', 'prompt-1', 'llm', TRUE, 'placeholder'),
+            ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'article-2', 'prompt-1', 'llm', TRUE, NULL),
+            ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'article-2', 'prompt-2', 'llm', FALSE, NULL),
+            ('project-1', 'review-config-1', 'snapshot-1', 'human', 'article-2', 'prompt-1', 'human', TRUE, NULL),
+            ('project-1', 'review-config-1', 'snapshot-1', 'both', 'article-2', 'prompt-1', 'human', TRUE, NULL)
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_serving_snapshot_manifest (
+            project_id,
+            snapshot_id,
+            snapshot_status,
+            review_config_hash,
+            composed_identity_json,
+            component_state_json,
+            required_components_json,
+            optional_components_json,
+            source_watermarks_json,
+            selected_import_snapshot_id
+          )
+          VALUES (
+            'project-1',
+            'snapshot-1',
+            'active',
+            'review-config-1',
+            CAST('{}' AS JSON),
+            CAST('{}' AS JSON),
+            CAST('[]' AS JSON),
+            CAST('[]' AS JSON),
+            CAST('{}' AS JSON),
+            'selected-snapshot-1'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_selected_import_snapshot (
+            selected_import_snapshot_id,
+            project_id,
+            project_scope_identity,
+            source_delta_high_water
+          )
+          VALUES ('selected-snapshot-1', 'project-1', 'project-scope-1', 0)
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_selected_article_import_v4 (
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id,
+            import_route_id,
+            source_record_key,
+            selected_rank_key,
+            selected_rank_numeric
+          )
+          VALUES ('project-1', 'project-scope-1', 'selected-snapshot-1', 'article-2', 'route-1', 'source-2', 'rank-2', 2)
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_import_article_hot_field (
+            import_route_id,
+            article_id,
+            source_record_key,
+            duplicate_flag,
+            conflict_flag
+          )
+          VALUES ('route-1', 'article-2', 'source-2', TRUE, TRUE)
+        \`)
+
+        await migrateDuckdb()
+
+        const stateRows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            duplicate_flag AS duplicateFlag,
+            conflict_flag AS conflictFlag,
+            llm_status AS llmStatus,
+            human_status AS humanStatus,
+            llm_has_judgment AS llmHasJudgment
+          FROM mart.review_article_serving_list_mode_state_v4
+          ORDER BY article_id
+        \`)
+        const viewRows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            list_mode_key AS listModeKey,
+            duplicate_flag AS duplicateFlag,
+            conflict_flag AS conflictFlag,
+            llm_status AS llmStatus,
+            human_status AS humanStatus
+          FROM mart.review_article_serving_v4
+          ORDER BY article_id, list_mode_key
+        \`)
+        const tableRows = await database.queryJson(
+          "SELECT table_name AS tableName FROM information_schema.tables WHERE table_schema = 'mart' AND table_name = 'review_article_filter_state_serving_v4'"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE index_name IN ('idx_review_article_filter_state_serving_v4_lookup', 'idx_review_article_filter_state_serving_v4_pk') ORDER BY index_name"
+        )
+        const lookupRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE index_name = 'idx_review_article_serving_list_mode_state_v4_lookup'"
+        )
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0183_backfillReviewArticleServingListModeStateFilters.sql'"
+        )
+
+        console.log(JSON.stringify({indexRows, lookupRows, migrationRows, stateRows, tableRows, viewRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify filter state backfill migration',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      indexRows: unknown[]
+      lookupRows: Array<{indexName: string}>
+      migrationRows: Array<{name: string}>
+      stateRows: Array<{
+        articleId: string
+        conflictFlag: boolean
+        duplicateFlag: boolean
+        humanStatus: string | null
+        llmStatus: string | null
+        llmHasJudgment: boolean
+      }>
+      tableRows: unknown[]
+      viewRows: Array<{
+        conflictFlag: boolean
+        duplicateFlag: boolean
+        humanStatus: string | null
+        articleId: string
+        listModeKey: string
+        llmStatus: string | null
+      }>
+    }
+
+    expect(parsed.stateRows).toEqual([
+      {
+        articleId: 'article-1',
+        conflictFlag: true,
+        duplicateFlag: true,
+        humanStatus: 'unanswered',
+        llmHasJudgment: false,
+        llmStatus: 'answered',
+      },
+      {
+        articleId: 'article-2',
+        conflictFlag: true,
+        duplicateFlag: true,
+        humanStatus: 'answered',
+        llmHasJudgment: true,
+        llmStatus: 'unanswered',
+      },
+    ])
+    expect(parsed.viewRows).toEqual([
+      {
+        articleId: 'article-1',
+        conflictFlag: true,
+        duplicateFlag: true,
+        humanStatus: 'unanswered',
+        listModeKey: 'human',
+        llmStatus: 'answered',
+      },
+      {
+        articleId: 'article-1',
+        conflictFlag: true,
+        duplicateFlag: true,
+        humanStatus: 'unanswered',
+        listModeKey: 'llm',
+        llmStatus: 'answered',
+      },
+      {
+        articleId: 'article-2',
+        conflictFlag: true,
+        duplicateFlag: true,
+        humanStatus: 'answered',
+        listModeKey: 'human',
+        llmStatus: 'unanswered',
+      },
+      {
+        articleId: 'article-2',
+        conflictFlag: true,
+        duplicateFlag: true,
+        humanStatus: 'answered',
+        listModeKey: 'llm',
+        llmStatus: 'unanswered',
+      },
+    ])
+    expect(parsed.tableRows).toEqual([])
+    expect(parsed.indexRows).toEqual([])
+    expect(parsed.lookupRows).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops judgment detail physical list-mode key and preserves canonical payload rows', async () => {
+  const duckdbPath = `/tmp/forska-review-judgment-detail-drop-list-mode-${Date.now()}.duckdb`
+  const targetMigrationFile = '0184_dropReviewJudgmentDetailListModeKey.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL DEFAULT 'llm',
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            prompt_order INTEGER,
+            judgment_id VARCHAR,
+            is_answered BOOLEAN,
+            answered_original VARCHAR,
+            answered_original_as_array VARCHAR[],
+            judgment_created_at TIMESTAMPTZ,
+            human_comment VARCHAR,
+            placeholder_kind VARCHAR,
+            detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            list_mode_key,
+            payload_kind,
+            article_id,
+            prompt_id,
+            prompt_order,
+            judgment_id,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            judgment_created_at,
+            human_comment,
+            placeholder_kind,
+            detail_updated_at
+          )
+	          VALUES
+	            ('project-1', 'config-1', 'snapshot-1', 'both', 'llm', 'article-1', 'prompt-1', 1, 'llm-both', TRUE, 'yes', ['yes'], TIMESTAMPTZ '2026-01-02 00:00:00+00', NULL, NULL, TIMESTAMPTZ '2026-01-03 00:00:00+00'),
+	            ('project-1', 'config-1', 'snapshot-1', 'llm', 'llm', 'article-1', 'prompt-1', 1, 'llm-canonical', TRUE, 'no', ['no'], TIMESTAMPTZ '2026-01-01 00:00:00+00', NULL, NULL, TIMESTAMPTZ '2026-01-01 00:00:00+00'),
+	            ('project-1', 'config-1', 'snapshot-1', 'both', 'human', 'article-1', 'prompt-1', 1, 'human-both', TRUE, 'maybe', ['maybe'], TIMESTAMPTZ '2026-01-02 00:00:00+00', 'both comment', NULL, TIMESTAMPTZ '2026-01-03 00:00:00+00'),
+	            ('project-1', 'config-1', 'snapshot-1', 'human', 'human', 'article-1', 'prompt-1', 1, 'human-canonical', TRUE, 'yes', ['yes'], TIMESTAMPTZ '2026-01-01 00:00:00+00', 'canonical comment', NULL, TIMESTAMPTZ '2026-01-01 00:00:00+00'),
+	            ('project-1', 'config-1', 'snapshot-1', 'both', 'llm', 'article-1', 'prompt-2', 2, 'llm-both-answered', TRUE, 'new', ['new'], TIMESTAMPTZ '2026-01-05 00:00:00+00', NULL, NULL, TIMESTAMPTZ '2026-01-05 00:00:00+00'),
+	            ('project-1', 'config-1', 'snapshot-1', 'llm', 'llm', 'article-1', 'prompt-2', 2, 'llm-canonical-placeholder', FALSE, NULL, [], TIMESTAMPTZ '2026-01-06 00:00:00+00', NULL, 'missing_judgment', TIMESTAMPTZ '2026-01-06 00:00:00+00'),
+	            ('project-1', 'config-1', 'snapshot-1', 'both', 'llm', 'article-2', 'prompt-1', 1, 'llm-only-both', TRUE, 'yes', ['yes'], TIMESTAMPTZ '2026-01-04 00:00:00+00', NULL, NULL, TIMESTAMPTZ '2026-01-04 00:00:00+00')
+	        \`)
+
+        await migrateDuckdb()
+
+        const columns = await database.queryJson(
+          "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' ORDER BY ordinal_position"
+        )
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            prompt_id AS promptId,
+            payload_kind AS payloadKind,
+            judgment_id AS judgmentId,
+            answered_original AS answeredOriginal,
+            human_comment AS humanComment
+          FROM mart.review_article_judgment_detail_serving_v4
+          ORDER BY article_id, payload_kind
+        \`)
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName, sql FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' ORDER BY index_name"
+        )
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0184_dropReviewJudgmentDetailListModeKey.sql'"
+        )
+
+        console.log(JSON.stringify({columns, indexRows, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39997',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39998',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify judgment detail list-mode drop',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      columns: Array<{columnName: string}>
+      indexRows: Array<{indexName: string; sql: string}>
+      migrationRows: Array<{name: string}>
+      rows: Array<{
+        articleId: string
+        answeredOriginal: string | null
+        humanComment: string | null
+        judgmentId: string | null
+        payloadKind: string
+        promptId: string
+      }>
+    }
+
+    expect(
+      parsed.columns.map((row) => {
+        return row.columnName
+      }),
+    ).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'payload_kind',
+      'article_id',
+      'prompt_id',
+      'prompt_order',
+      'judgment_id',
+      'is_answered',
+      'answered_original',
+      'answered_original_as_array',
+      'judgment_created_at',
+      'human_comment',
+      'placeholder_kind',
+      'detail_updated_at',
+    ])
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        answeredOriginal: 'maybe',
+        humanComment: 'both comment',
+        judgmentId: 'human-both',
+        payloadKind: 'human',
+        promptId: 'prompt-1',
+      },
+      {
+        articleId: 'article-1',
+        answeredOriginal: 'yes',
+        humanComment: null,
+        judgmentId: 'llm-both',
+        payloadKind: 'llm',
+        promptId: 'prompt-1',
+      },
+      {
+        articleId: 'article-1',
+        answeredOriginal: 'new',
+        humanComment: null,
+        judgmentId: 'llm-both-answered',
+        payloadKind: 'llm',
+        promptId: 'prompt-2',
+      },
+      {
+        articleId: 'article-2',
+        answeredOriginal: 'yes',
+        humanComment: null,
+        judgmentId: 'llm-only-both',
+        payloadKind: 'llm',
+        promptId: 'prompt-1',
+      },
+    ])
+    expect(parsed.indexRows).toEqual([
+      {
+        indexName: 'idx_review_article_judgment_detail_serving_v4_article',
+        sql: expect.stringContaining(
+          'ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order)',
+        ) as string,
+      },
+      {
+        indexName: 'idx_review_article_judgment_detail_serving_v4_repaired_pk',
+        sql: expect.stringContaining(
+          'ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id)',
+        ) as string,
+      },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops LLM unanswered judgment-detail placeholders without changing retained rows', async () => {
+  const duckdbPath = `/tmp/forska-review-judgment-detail-llm-placeholder-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0193_dropReviewJudgmentDetailLlmPlaceholders.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL DEFAULT 'llm',
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            prompt_order INTEGER,
+            judgment_id VARCHAR,
+            is_answered BOOLEAN,
+            answered_original VARCHAR,
+            answered_original_as_array VARCHAR[],
+            judgment_created_at TIMESTAMPTZ,
+            human_comment VARCHAR,
+            placeholder_kind VARCHAR,
+            detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            payload_kind,
+            article_id,
+            prompt_id,
+            prompt_order,
+            judgment_id,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            judgment_created_at,
+            human_comment,
+            placeholder_kind,
+            detail_updated_at
+          )
+          VALUES
+            ('project-1', 'config-1', 'snapshot-1', 'llm', 'article-1', 'prompt-1', 1, 'judgment-1', TRUE, 'yes', ['yes'], TIMESTAMPTZ '2026-01-01 00:00:00+00', NULL, NULL, TIMESTAMPTZ '2026-01-01 01:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'llm', 'article-1', 'prompt-2', 2, NULL, NULL, NULL, NULL, NULL, NULL, 'llm.unanswered', TIMESTAMPTZ '2026-01-01 02:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'human', 'article-1', 'prompt-2', 2, 'human-1', TRUE, 'no', ['no'], TIMESTAMPTZ '2026-01-01 03:00:00+00', 'comment', NULL, TIMESTAMPTZ '2026-01-01 04:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'human', 'article-1', 'prompt-3', 3, NULL, FALSE, NULL, NULL, NULL, NULL, 'human.unanswered', TIMESTAMPTZ '2026-01-01 05:00:00+00')
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            payload_kind AS payloadKind,
+            prompt_id AS promptId,
+            judgment_id AS judgmentId,
+            placeholder_kind AS placeholderKind,
+            detail_updated_at AS detailUpdatedAt
+          FROM mart.review_article_judgment_detail_serving_v4
+          ORDER BY payload_kind, prompt_id
+        \`)
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName, sql FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' ORDER BY index_name"
+        )
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0193_dropReviewJudgmentDetailLlmPlaceholders.sql'"
+        )
+
+        console.log(JSON.stringify({indexRows, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39997',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39998',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify LLM placeholder drop')
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      indexRows: Array<{indexName: string; sql: string}>
+      migrationRows: Array<{name: string}>
+      rows: Array<{
+        detailUpdatedAt: string
+        judgmentId: string | null
+        payloadKind: string
+        placeholderKind: string | null
+        promptId: string
+      }>
+    }
+
+    expect(parsed.rows).toEqual([
+      {
+        detailUpdatedAt: expect.any(String) as string,
+        judgmentId: 'human-1',
+        payloadKind: 'human',
+        placeholderKind: null,
+        promptId: 'prompt-2',
+      },
+      {
+        detailUpdatedAt: expect.any(String) as string,
+        judgmentId: null,
+        payloadKind: 'human',
+        placeholderKind: 'human.unanswered',
+        promptId: 'prompt-3',
+      },
+      {
+        detailUpdatedAt: expect.any(String) as string,
+        judgmentId: 'judgment-1',
+        payloadKind: 'llm',
+        placeholderKind: null,
+        promptId: 'prompt-1',
+      },
+    ])
+    expect(parsed.indexRows).toEqual([
+      {
+        indexName: 'idx_review_article_judgment_detail_serving_v4_article',
+        sql: expect.stringContaining(
+          'ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order)',
+        ) as string,
+      },
+      {
+        indexName: 'idx_review_article_judgment_detail_serving_v4_repaired_pk',
+        sql: expect.stringContaining(
+          'ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id)',
+        ) as string,
+      },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
 test('DuckDB migration drops selected-import display-copy columns while preserving retained rows and upserts', async () => {
   const duckdbPath = `/tmp/forska-selected-import-display-copy-drop-${Date.now()}.duckdb`
   const targetMigrationFile = '0124_dropReviewSelectedImportDisplayCopyColumns.sql'
@@ -5491,9 +6713,12 @@ test('DuckDB migrations drop summary partial serving key and collapse scalar-key
   }
 })
 
-test('DuckDB migrations drop queue serving identity and collapse scalar-key duplicates', async () => {
+test('DuckDB migrations drop queue serving identity and compact prompt rows into article queue rows', async () => {
   const duckdbPath = `/tmp/forska-review-queue-serving-identity-${Date.now()}.duckdb`
-  const targetMigrationFiles = new Set(['0139_dropReviewQueueServingIdentity.sql'])
+  const targetMigrationFiles = new Set([
+    '0139_dropReviewQueueServingIdentity.sql',
+    '0187_compactReviewUnassessedQueueServing.sql',
+  ])
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return !targetMigrationFiles.has(fileName)
   })
@@ -5536,8 +6761,7 @@ test('DuckDB migrations drop queue serving identity and collapse scalar-key dupl
             activity_sort_at TIMESTAMPTZ NOT NULL,
             article_id VARCHAR NOT NULL,
             prompt_id VARCHAR,
-            queue_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-            PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity)
+            queue_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
           )
         \`)
         await database.run(\`
@@ -5577,6 +6801,18 @@ test('DuckDB migrations drop queue serving identity and collapse scalar-key dupl
               'article-a',
               'prompt-a',
               TIMESTAMPTZ '2026-07-25T07:02:00Z'
+            ),
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'legacy-queue-c',
+              'unassessed',
+              10,
+              TIMESTAMPTZ '2026-07-25T07:00:00Z',
+              'article-a',
+              'prompt-b',
+              TIMESTAMPTZ '2026-07-25T07:03:00Z'
             )
         \`)
 
@@ -5586,7 +6822,7 @@ test('DuckDB migrations drop queue serving identity and collapse scalar-key dupl
           "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'mart' AND table_name = 'review_unassessed_queue_serving_v4' ORDER BY ordinal_position"
         )
         const rows = await database.queryJson(
-          "SELECT article_id AS articleId, prompt_id AS promptId, queue_kind AS queueKind, queue_updated_at AS queueUpdatedAt FROM mart.review_unassessed_queue_serving_v4 ORDER BY article_id, prompt_id"
+          "SELECT article_id AS articleId, prompt_ids AS promptIds, queue_kind AS queueKind, queue_updated_at AS queueUpdatedAt FROM mart.review_unassessed_queue_serving_v4 ORDER BY article_id"
         )
         console.log(JSON.stringify({columns, rows}))
         await database.close()
@@ -5620,7 +6856,7 @@ test('DuckDB migrations drop queue serving identity and collapse scalar-key dupl
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: Array<{columnName: string}>
-      rows: Array<{articleId: string; promptId: string; queueKind: string; queueUpdatedAt: string}>
+      rows: Array<{articleId: string; promptIds: string[]; queueKind: string; queueUpdatedAt: string}>
     }
     const columns = parsed.columns.map((row) => {
       return row.columnName
@@ -5634,18 +6870,151 @@ test('DuckDB migrations drop queue serving identity and collapse scalar-key dupl
       'priority_bucket',
       'activity_sort_at',
       'article_id',
-      'prompt_id',
+      'prompt_ids',
       'queue_updated_at',
     ])
     expect(parsed.rows).toEqual([
       {
         articleId: 'article-a',
-        promptId: 'prompt-a',
+        promptIds: ['prompt-a', 'prompt-b'],
         queueKind: 'unassessed',
         queueUpdatedAt: expect.stringContaining('2026-07-25') as string,
       },
     ])
-    expect(parsed.rows[0]?.queueUpdatedAt).toContain('09:02')
+    expect(parsed.rows[0]?.queueUpdatedAt).toContain('09:03')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('DuckDB migration preserves legacy nullable queue prompt rows during compaction', async () => {
+  const duckdbPath = `/tmp/forska-review-queue-null-prompt-${Date.now()}.duckdb`
+  const targetMigrationFile = '0187_compactReviewUnassessedQueueServing.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_unassessed_queue_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            queue_kind VARCHAR NOT NULL,
+            priority_bucket INTEGER NOT NULL,
+            activity_sort_at TIMESTAMPTZ NOT NULL,
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR,
+            queue_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_unassessed_queue_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            queue_kind,
+            priority_bucket,
+            activity_sort_at,
+            article_id,
+            prompt_id,
+            queue_updated_at
+          )
+          VALUES
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'unassessed',
+              5,
+              TIMESTAMPTZ '2026-07-25T06:00:00Z',
+              'article-null-prompt',
+              NULL,
+              TIMESTAMPTZ '2026-07-25T06:01:00Z'
+            ),
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'unassessed',
+              10,
+              TIMESTAMPTZ '2026-07-25T07:00:00Z',
+              'article-a',
+              'prompt-a',
+              TIMESTAMPTZ '2026-07-25T07:01:00Z'
+            )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(
+          "SELECT article_id AS articleId, prompt_ids AS promptIds FROM mart.review_unassessed_queue_serving_v4 ORDER BY article_id"
+        )
+        console.log(JSON.stringify({rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {rows: Array<{articleId: string; promptIds: string[]}>}
+
+    expect(parsed.rows).toEqual([
+      {articleId: 'article-a', promptIds: ['prompt-a']},
+      {articleId: 'article-null-prompt', promptIds: []},
+    ])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)

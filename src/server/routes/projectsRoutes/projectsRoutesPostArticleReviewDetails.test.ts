@@ -127,6 +127,21 @@ beforeEach(() => {
     }
   }
   queryJsonRef.current = async (_statement) => {
+    if (_statement.includes('FROM app.project_prompt')) {
+      return [
+        {
+          criteriaDisposition: 'include',
+          enabled: true,
+          id: 'prompt-1',
+          order: 0,
+          originalText: 'Prompt 1',
+          originProjectId: null,
+          promptHeading: 'Prompt 1',
+          type: 'string',
+        },
+      ]
+    }
+
     return _statement.includes('FROM app.article')
       ? [
           {
@@ -264,11 +279,37 @@ test('project review details hydrates article, judgments, and assessments from V
   expect(body.judgments[0]?.modelVersion).toBe('v1')
   expect(body.judgments[0]?.assessments[0]?.id).toBe('assessment-1')
   expect(body.martFreshness).toBeNull()
+  expect(body).toMatchObject({prompts: [{id: 'prompt-1', originalText: 'Prompt 1'}]})
   expect(
     servingRequests.map((request) => {
       return request.contractKey
     }),
   ).toEqual(['review.detail.row', 'review.detail.judgments', 'review.detail.humanJudgments'])
+})
+
+test('project review details builds prompt placeholders from project prompt metadata when serving detail has no judgment rows', async () => {
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {rows: [getServingArticleRow()], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    judgments: Array<{answeredOriginal: string; id: string; prompt: {originalText: string}; promptId: string}>
+    prompts: Array<{id: string; originalText: string}>
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.prompts).toMatchObject([{id: 'prompt-1', originalText: 'Prompt 1'}])
+  expect(body.judgments).toMatchObject([
+    {
+      answeredOriginal: 'not answered',
+      id: 'placeholder:prompt-1',
+      prompt: {originalText: 'Prompt 1'},
+      promptId: 'prompt-1',
+    },
+  ])
 })
 
 test('project review details reads migrated V4 judgment fields from scalar columns', () => {

@@ -23,7 +23,7 @@ import {parseArktypeOptions} from './projectsRoutes/articlesReviewsFiltersUtils.
 import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
 
 type PromptDetails = {id: string; promptHeading: string | null; originalText: string | null; type: string | null}
-type PromptDetailsRow = PromptDetails & {sourceProjectOrder: number}
+type PromptDetailsRow = PromptDetails & {promptOrder: number | null; sourceProjectOrder: number}
 type PromptInfoRow = {prompt: string; title: string; type: string}
 type ExportJobRow = {
   criteriaJson: unknown
@@ -261,12 +261,15 @@ const getPromptDetails = async (projectId: string, promptIds: string[]) => {
 }
 
 const getExportPromptDetails = async (input: {
-  articleIds: string[]
   promptIds: string[]
   projectId: string
   snapshotScopes: ExportServingSnapshotScope[]
 }) => {
-  if (input.articleIds.length === 0 || input.promptIds.length === 0 || input.snapshotScopes.length === 0) {
+  if (input.promptIds.length === 0) {
+    return []
+  }
+
+  if (input.snapshotScopes.length === 0) {
     return input.promptIds.map((promptId) => {
       return {id: promptId, originalText: null, promptHeading: promptId, type: null}
     })
@@ -277,43 +280,35 @@ const getExportPromptDetails = async (input: {
       return `(${getSqlLiteral(scope.projectId)}, ${getSqlLiteral(scope.reviewConfigHash)}, ${getSqlLiteral(scope.snapshotId)}, ${index})`
     })
     .join(', ')
-  const articleRows = input.articleIds
-    .map((articleId) => {
-      return `(${getSqlLiteral(articleId)})`
-    })
-    .join(', ')
   const promptRows = input.promptIds
     .map((promptId) => {
       return `(${getSqlLiteral(promptId)})`
     })
     .join(', ')
-  const maxResultRows = input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1)
+  const maxResultRows = input.promptIds.length * Math.max(input.snapshotScopes.length, 1)
   const rows = await appDatabaseService.queryJson<PromptDetailsRow>(
     `
     WITH
       export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
-      export_article(article_id) AS (VALUES ${articleRows}),
       export_prompt(prompt_id) AS (VALUES ${promptRows})
     SELECT
-      detail.prompt_id AS id,
+      prompt.id AS id,
       prompt.prompt_heading AS promptHeading,
       prompt.original_text AS originalText,
       prompt.type,
+      project_prompt.prompt_order AS promptOrder,
       export_scope.source_project_order AS sourceProjectOrder
     FROM export_scope
-    INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
-      ON detail.project_id = export_scope.project_id
-     AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
-     AND detail.snapshot_id = export_scope.snapshot_id
-     AND detail.list_mode_key = 'llm'
-     AND detail.payload_kind = 'llm'
-    INNER JOIN export_article
-      ON export_article.article_id = detail.article_id
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = export_scope.project_id
+     AND project_prompt.enabled
+     AND NOT project_prompt.archived
     INNER JOIN export_prompt
-      ON export_prompt.prompt_id = detail.prompt_id
+      ON export_prompt.prompt_id = project_prompt.prompt_id
     INNER JOIN app.prompt prompt
-      ON prompt.id = detail.prompt_id
-    ORDER BY detail.prompt_order ASC NULLS LAST, detail.prompt_id ASC, export_scope.source_project_order ASC
+      ON prompt.id = project_prompt.prompt_id
+     AND COALESCE(prompt.archived, FALSE) = FALSE
+    ORDER BY project_prompt.prompt_order ASC NULLS LAST, prompt.id ASC, export_scope.source_project_order ASC
     LIMIT ${getSqlLiteral(maxResultRows)}
   `,
     getProjectExportWorkloadContext({maxResultRows, operation: 'servingPromptDetails', projectId: input.projectId}),
@@ -414,7 +409,6 @@ const getExportJudgments = async (input: {
          ON detail.project_id = export_scope.project_id
          AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
          AND detail.snapshot_id = export_scope.snapshot_id
-         AND detail.list_mode_key = 'llm'
          AND detail.payload_kind = 'llm'
         INNER JOIN export_article
           ON export_article.article_id = detail.article_id
@@ -566,7 +560,6 @@ const buildExportCsvStream = (input: {
         const selectedMetadata = input.contract.selectedMetadata ?? {}
         const promptIds = promptOutput.promptIds ?? []
         const promptDetails = await getExportPromptDetails({
-          articleIds: input.articleIdBatches[0] ?? [],
           promptIds,
           projectId: input.projectId,
           snapshotScopes: input.snapshotScopes,

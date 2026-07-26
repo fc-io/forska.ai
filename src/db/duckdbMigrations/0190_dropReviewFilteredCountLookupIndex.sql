@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS mart.idx_review_filtered_count_serving_v4_lookup;
+DROP INDEX IF EXISTS idx_review_filtered_count_serving_v4_lookup;

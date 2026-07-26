@@ -133,10 +133,16 @@ const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportDirtyInput,
             ${getDirtyArticleRangePredicateSql(input, 'scope')}
           UNION
           SELECT serving.article_id
-          FROM mart.review_article_serving_v4 serving
+          FROM mart.review_article_serving_base_v4 serving
+          INNER JOIN mart.review_article_serving_list_mode_state_v4 state
+            ON state.project_id = serving.project_id
+            AND state.review_config_hash = serving.review_config_hash
+            AND state.snapshot_id = serving.snapshot_id
+            AND state.article_id = serving.article_id
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
             ${getDirtyArticleRangePredicateSql(input, 'serving')}
+            AND COALESCE(array_length(state.list_mode_keys), 0) > 0
             AND EXISTS (
               SELECT 1
               FROM app.review_serving_snapshot_manifest snapshot
@@ -559,11 +565,17 @@ const getApplySelectedImportServingStatements = (input: {
           WHERE changed.scope_tombstone = FALSE
             AND NOT EXISTS (
               SELECT 1
-              FROM mart.review_article_serving_v4 existing
+              FROM mart.review_article_serving_base_v4 existing
+              INNER JOIN mart.review_article_serving_list_mode_state_v4 existing_state
+                ON existing_state.project_id = existing.project_id
+                AND existing_state.review_config_hash = existing.review_config_hash
+                AND existing_state.snapshot_id = existing.snapshot_id
+                AND existing_state.article_id = existing.article_id
               WHERE existing.project_id = template.project_id
                 AND existing.review_config_hash = template.review_config_hash
                 AND existing.snapshot_id = template.snapshot_id
                 AND existing.article_id = changed.article_id
+                AND COALESCE(array_length(existing_state.list_mode_keys), 0) > 0
             )
           ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING`,
         `WITH ${changedCte}, ${servingTemplateCte}

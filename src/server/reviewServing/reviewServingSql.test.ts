@@ -1,6 +1,7 @@
 import {readdirSync, readFileSync} from 'node:fs'
 import {join, relative} from 'node:path'
 
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {reviewServingAdjacentRouteClassifications} from './reviewServingAdjacentRouteSurfaces.ts'
@@ -11,6 +12,7 @@ import {
 } from './reviewServingResidualReadAllowlist.ts'
 import {
   assertReviewServingSqlShape,
+  buildReviewServingPostingFilterIntersectionArticleCte,
   buildReviewServingRowsSql,
   getReviewServingSqlShapeViolations,
   getReviewServingSqlTableReferences,
@@ -27,6 +29,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingRetentionService.ts'),
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
+  join(reviewServingSourceRoot, 'reviewServingDirtyWorkService.ts'),
   join(reviewServingSourceRoot, 'reviewServingDynamicCountSql.ts'),
   join(reviewServingSourceRoot, 'reviewServingFilteredCountService.ts'),
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
@@ -38,6 +41,7 @@ const sqlGuardExcludedFiles = new Set([
 ])
 const reviewServingMaintenanceAdmissionFiles = [
   'reviewServingChunkManifestRepository.ts',
+  'reviewServingDirtyWorkService.ts',
   'reviewServingJudgmentJobQueueService.ts',
   'reviewServingProjectorWriter.ts',
   'reviewServingRebuildRequestRepository.ts',
@@ -112,12 +116,17 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).not.toContain('serving_updated_at')
   expect(sql).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
   expect(sql).toContain('selected_import.project_id = $projectId')
-  expect(sql).toContain('selected_import.project_id = mart.review_article_serving_v4.project_id')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain("list_contains(list_mode_state.list_mode_keys, 'llm')")
+  expect(sql).toContain('list_mode_state.llm_patch_watermark AS patch_watermark')
+  expect(sql).not.toContain('FROM mart.review_article_serving_v4')
+  expect(sql).toContain('selected_import.project_id = serving.project_id')
   expect(sql).toContain('selected_import.project_scope_identity = $projectScopeIdentity')
   expect(sql).toContain('selected_import.selected_import_snapshot_id = $selectedImportSnapshotId')
-  expect(sql).toContain('selected_import.article_id = mart.review_article_serving_v4.article_id')
+  expect(sql).toContain('selected_import.article_id = serving.article_id')
   expect(sql).toContain('AND NOT selected_import.tombstone')
-  expect(sql).toContain('LEFT JOIN app.article article ON article.id = mart.review_article_serving_v4.article_id')
+  expect(sql).toContain('LEFT JOIN app.article article ON article.id = serving.article_id')
   expect(sql).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(sql).toContain('selected_hot.import_route_id = selected_import.import_route_id')
   expect(sql).toContain('selected_hot.source_record_key = selected_import.source_record_key')
@@ -128,9 +137,8 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).not.toContain('mart.review_article_serving_v4.selected_import_route_id')
   expect(sql).not.toContain('payload.display_identity = mart.review_article_serving_v4.display_identity')
   expect(sql).not.toContain('payload.payload_identity = mart.review_article_serving_v4.payload_identity')
-  expect(sql).toContain(
-    "WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId AND list_mode_key = 'llm'",
-  )
+  expect(sql).toContain('WHERE serving.project_id = $projectId AND serving.review_config_hash = $reviewConfigHash')
+  expect(sql).toContain('AND serving.snapshot_id = $snapshotId')
 })
 
 test('article serving read and projector SQL do not reference serving updated-at', () => {
@@ -191,19 +199,23 @@ test('buildReviewServingRowsSql uses article ordering and payload hydration for 
   expect(sql).toContain('article.source_metadata')
   expect(sql).toContain('selected_source.import_metadata')
   expect(sql).toContain('json_merge_patch')
-  expect(sql).toContain('LEFT JOIN app.article article ON article.id = mart.review_article_serving_v4.article_id')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain('CROSS JOIN UNNEST(list_mode_state.list_mode_keys) AS list_mode(list_mode_key)')
+  expect(sql).toContain('LEFT JOIN app.article article ON article.id = serving.article_id')
   expect(sql).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(sql).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
   expect(sql).not.toContain('payload.full_text_preview')
+  expect(sql).toContain('WHERE serving.project_id = $projectId AND serving.review_config_hash = $reviewConfigHash')
+  expect(sql).toContain('AND serving.snapshot_id = $snapshotId')
   expect(sql).toContain(
-    'WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId',
+    "QUALIFY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END = min(CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END) OVER (PARTITION BY serving.article_id)",
   )
   expect(sql).toContain(
-    "QUALIFY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END = min(CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END) OVER (PARTITION BY mart.review_article_serving_v4.article_id)",
+    "ORDER BY serving.article_created_at ASC NULLS LAST, article_id ASC, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC",
   )
-  expect(sql).toContain(
-    "ORDER BY mart.review_article_serving_v4.article_created_at ASC NULLS LAST, article_id ASC, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC",
-  )
+  expect(sql).not.toContain('FROM mart.review_article_serving_v4')
+  expect(sql).not.toContain('JOIN mart.review_article_serving_v4')
   expect(sql).not.toContain('ASC NULLS LAST ASC')
 })
 
@@ -392,8 +404,34 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
   )
   expect(sql).not.toContain('list_mode_key')
   expect(sql).toContain('AND queue_kind = $queueKind')
-  expect(sql).toContain('ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC, prompt_id DESC')
+  expect(sql).toContain('ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC')
+  expect(sql).not.toContain('prompt_id DESC')
   expect(sql).not.toContain('sort_key')
+})
+
+test('buildReviewServingRowsSql applies queue article date filters through article serving base', () => {
+  const contract = getRequiredReviewServingReadContract('review.queue.unassessed')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    filterPredicatesSql:
+      ' AND queue_article.article_created_at >= TIMESTAMPTZ $articleCreatedAtFrom AND queue_article.article_created_at <= TIMESTAMPTZ $articleCreatedAtTo',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    queueKindParameter: '$queueKind',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 queue_article')
+  expect(sql).toContain('queue_article.article_created_at >= TIMESTAMPTZ $articleCreatedAtFrom')
+  expect(sql).toContain('queue_article.article_created_at <= TIMESTAMPTZ $articleCreatedAtTo')
+  expect(sql).not.toContain('mart.review_unassessed_queue_serving_v4.article_created_at')
 })
 
 test('buildReviewServingRowsSql requires all token prefixes for queue search', () => {
@@ -416,9 +454,22 @@ test('buildReviewServingRowsSql requires all token prefixes for queue search', (
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND queue_kind = $queueKind')
-  expect(sql).toContain('NOT EXISTS (SELECT 1 FROM (SELECT unnest($searchTokenPrefixes) AS token_prefix) search_prefix')
-  expect(sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
+  expect(sql).toContain('search_prefixes AS')
+  expect(sql).toContain('search_candidate_article_ids AS')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_serving_v4 search_candidate_queue')
+  expect(sql).toContain('search_candidate_queue.queue_kind = $queueKind')
+  expect(sql).toContain('expanded_search_article_ids AS')
+  expect(sql).toContain('search_filtered_article_ids AS')
+  expect(sql).toContain('SELECT unnest($searchTokenPrefixes) AS token_prefix')
+  expect(sql.indexOf('search_candidate_article_ids AS')).toBeLessThan(sql.indexOf('expanded_search_article_ids AS'))
+  expect(sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM search_prefixes required_search_prefix')
+  expect(sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM expanded_search_article_ids matched_search_article')
+  expect(sql).toContain('(NOT EXISTS (SELECT 1 FROM search_prefixes) OR EXISTS')
   expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
+  expect(sql).toContain(
+    'FROM search_candidate_article_ids search_candidate_article JOIN mart.review_title_search_serving_v4 search ON list_contains(search.article_ids, search_candidate_article.article_id)',
+  )
+  expect(sql).not.toContain('CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)')
   expect(sql).not.toContain('starts_with(search.token, $searchTokenPrefix)')
 })
 
@@ -439,7 +490,10 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain('AND mart.review_article_serving_v4.article_id = $articleId')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain('CROSS JOIN UNNEST(list_mode_state.list_mode_keys) AS list_mode(list_mode_key)')
+  expect(sql).toContain('AND serving.article_id = $articleId')
   expect(sql).toContain('article.source_metadata')
   expect(sql).toContain('selected_source.import_metadata')
   expect(sql).toContain('json_merge_patch')
@@ -449,11 +503,13 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   )
   expect(sql).not.toContain('payload.source_metadata')
   expect(sql).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
-  expect(sql).toContain('SELECT mart.review_article_serving_v4.project_id')
+  expect(sql).toContain('SELECT serving.project_id')
   expect(sql).not.toContain('mart.review_article_serving_v4.*')
   expect(sql).toContain(
     "ORDER BY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC, article_id ASC",
   )
+  expect(sql).not.toContain('FROM mart.review_article_serving_v4')
+  expect(sql).not.toContain('JOIN mart.review_article_serving_v4')
   expect(sql).not.toContain('AND list_mode_key =')
 })
 
@@ -513,17 +569,14 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.judgment_updated_at')
   expect(sql).not.toContain('judgment_payload_json')
   expect(sql).toContain(
-    "CASE mart.review_article_judgment_detail_serving_v4.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
+    "CASE mart.review_article_judgment_detail_serving_v4.payload_kind WHEN 'llm' THEN 1 WHEN 'human' THEN 2 ELSE 4 END AS list_mode_priority",
   )
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.review_config_hash = $reviewConfigHash')
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id = $articleId')
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'llm'")
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.placeholder_kind IS NULL')
-  expect(sql).toContain('QUALIFY CASE mart.review_article_judgment_detail_serving_v4.list_mode_key')
-  expect(sql).toContain(
-    'OVER (PARTITION BY mart.review_article_judgment_detail_serving_v4.article_id, mart.review_article_judgment_detail_serving_v4.prompt_id)',
-  )
-  expect(sql).toContain('ORDER BY CASE mart.review_article_judgment_detail_serving_v4.list_mode_key')
+  expect(sql).not.toContain('QUALIFY CASE mart.review_article_judgment_detail_serving_v4')
+  expect(sql).toContain('ORDER BY CASE mart.review_article_judgment_detail_serving_v4.payload_kind')
   expect(sql).toContain(
     'mart.review_article_judgment_detail_serving_v4.prompt_order ASC NULLS LAST, mart.review_article_judgment_detail_serving_v4.prompt_id ASC',
   )
@@ -622,8 +675,8 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
   expect(bothListSql).toContain(
     'AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))',
   )
-  expect(humanListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.list_mode_key = 'human'")
-  expect(bothListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.list_mode_key = 'human'")
+  expect(humanListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.list_mode_key')
+  expect(bothListSql).not.toContain('mart.review_article_judgment_detail_serving_v4.list_mode_key')
   expect(bothListSql).toContain("'both' AS list_mode_key")
   expect(humanListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
   expect(bothListSql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
@@ -675,14 +728,245 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND mart.review_article_filter_posting_serving_v4.list_mode_key = $listMode')
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
-  expect(sql).toContain('INNER JOIN mart.review_article_serving_v4')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 serving_order')
+  expect(sql).not.toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 serving_order_state')
+  expect(sql).not.toContain('list_contains(serving_order_state.list_mode_keys')
+  expect(sql).not.toContain('INNER JOIN mart.review_article_serving_v4')
   expect(sql).toContain(
     'CROSS JOIN UNNEST(mart.review_article_filter_posting_serving_v4.article_ids) AS filter_posting_article(article_id)',
   )
-  expect(sql).toContain('mart.review_article_serving_v4.article_id = filter_posting_article.article_id')
-  expect(sql).toContain(
-    'ORDER BY mart.review_article_serving_v4.sort_key DESC, mart.review_article_serving_v4.article_id ASC',
+  expect(sql).toContain('serving_order.article_id = filter_posting_article.article_id')
+  expect(sql).toContain('ORDER BY serving_order.sort_key DESC, serving_order.article_id ASC')
+})
+
+test('buildReviewServingRowsSql uses one anchored posting CTE for ordered-prefix multi-filter rows', () => {
+  const contract = getRequiredReviewServingReadContract('review.llm.rows')
+  const postingFilterCte = buildReviewServingPostingFilterIntersectionArticleCte({
+    groups: [
+      {filterKind: 'importRoute', filterValues: ['import-route-1']},
+      {filterKind: 'promptAnswer', filterValues: ['review:promptAnswer:prompt-1:yes']},
+    ],
+    listModeSql: "'llm'",
+    projectIdSql: '$projectId',
+    reviewConfigHashSql: '$reviewConfigHash',
+    snapshotIdSql: '$snapshotId',
+  })
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    filterPredicatesSql:
+      ' AND EXISTS (SELECT 1 FROM posting_filtered_article_ids WHERE posting_filtered_article_ids.article_id = serving.article_id)',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    selectedImportSnapshotIdParameter: '$selectedImportSnapshotId',
+    snapshotIdParameter: '$snapshotId',
+    withCtesSql: postingFilterCte,
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('WITH matched_posting_rows AS')
+  expect(sql).toContain('posting_anchor_rows AS')
+  expect(sql).toContain('posting_filtered_article_ids AS')
+  expect(sql).toContain('SELECT posting.article_ids, posting.filter_kind, posting.filter_value')
+  expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4 posting')
+  expect(sql.indexOf('WHERE posting.project_id = $projectId')).toBeLessThan(
+    sql.indexOf('CROSS JOIN UNNEST(anchor.article_ids) AS anchor_article(article_id)'),
   )
+  expect(sql).toContain("posting.filter_kind = 'importRoute'")
+  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['import-route-1']::VARCHAR[]))")
+  expect(sql).toContain("posting.filter_kind = 'promptAnswer'")
+  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['review:promptAnswer:prompt-1:yes']::VARCHAR[]))")
+  expect(sql).toContain('SUM(array_length(posting.article_ids)) OVER (PARTITION BY CASE')
+  expect(sql).toContain('matched_group_article_id_count')
+  expect(sql).toContain('FROM matched_posting_rows smaller_anchor_group')
+  expect(sql).toContain('posting_anchor_group AS')
+  expect(sql).toContain('posting_candidate_article_groups AS')
+  expect(sql).toContain('CROSS JOIN posting_anchor_group anchor_group')
+  expect(sql).toContain('CROSS JOIN UNNEST(candidate.article_ids) AS candidate_article(article_id)')
+  expect(sql).toContain('CROSS JOIN UNNEST(anchor.article_ids) AS anchor_article(article_id)')
+  expect(sql).toContain('candidate.article_id = anchor_article.article_id')
+  expect(sql).toContain('FROM (VALUES (0), (1)) AS required_posting_group(required_group_index)')
+  expect(sql).toContain('SELECT DISTINCT anchor_article.article_id')
+  expect(sql).not.toContain('list_contains(candidate.article_ids, anchor_article.article_id)')
+  expect(sql).not.toContain('CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)')
+  expect(sql).not.toContain('GROUP BY posting_article.article_id')
+  expect(sql).not.toContain('HAVING COUNT(DISTINCT CASE')
+  expect(sql).not.toContain('ORDER BY array_length(anchor.article_ids)')
+  expect(sql).toContain(
+    'EXISTS (SELECT 1 FROM posting_filtered_article_ids WHERE posting_filtered_article_ids.article_id = serving.article_id)',
+  )
+  expect(sql).not.toContain('filter_4_articles AS')
+  expect(sql).not.toContain('filter_5_articles AS')
+  expect(sql.match(/CROSS JOIN UNNEST\(filter_\d+\.article_ids\)/gu)?.length ?? 0).toBe(0)
+})
+
+test('posting filter intersection CTE keeps single posting group on the direct posting expansion path', () => {
+  const cte = buildReviewServingPostingFilterIntersectionArticleCte({
+    groups: [{filterKind: 'importRoute', filterValues: ['import-route-1', 'import-route-2']}],
+    listModeSql: "'llm'",
+    projectIdSql: '$projectId',
+    reviewConfigHashSql: '$reviewConfigHash',
+    snapshotIdSql: '$snapshotId',
+  })
+
+  expect(cte).toContain('SELECT DISTINCT posting_article.article_id')
+  expect(cte).toContain('CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)')
+  expect(cte).toContain("posting.filter_value IN (SELECT unnest(['import-route-1', 'import-route-2']::VARCHAR[]))")
+  expect(cte).not.toContain('matched_posting_rows AS')
+  expect(cte).not.toContain('posting_candidate_article_groups AS')
+  expect(cte).not.toContain('CROSS JOIN UNNEST(candidate.article_ids)')
+})
+
+test('posting filter intersection CTE matches legacy group-by semantics in DuckDB', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA mart;
+      CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        list_mode_key VARCHAR,
+        filter_kind VARCHAR,
+        filter_value VARCHAR,
+        article_ids VARCHAR[]
+      );
+      INSERT INTO mart.review_article_filter_posting_serving_v4 VALUES
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-1', 'article-2', 'article-3', 'article-4']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'population', 'adult', ['article-2', 'article-3']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'population', 'pediatric', ['article-3', 'article-4', 'article-5']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'promptAnswer', 'yes', ['article-3', 'article-4']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'human', 'importRoute', 'import-route-1', ['article-3']),
+        ('project-1', 'review-config-1', 'snapshot-other', 'llm', 'importRoute', 'import-route-1', ['article-5']);
+    `)
+
+    const groups = [
+      {filterKind: 'importRoute', filterValues: ['import-route-1']},
+      {filterKind: 'population', filterValues: ['adult', 'adult', 'pediatric']},
+      {filterKind: 'promptAnswer', filterValues: ['yes']},
+    ]
+    const optimizedCte = buildReviewServingPostingFilterIntersectionArticleCte({
+      groups,
+      listModeSql: "'llm'",
+      projectIdSql: "'project-1'",
+      reviewConfigHashSql: "'review-config-1'",
+      snapshotIdSql: "'snapshot-1'",
+    })
+    const legacyCte = `
+      posting_filtered_article_ids AS (
+        SELECT posting_article.article_id
+        FROM (
+          SELECT posting.article_ids, posting.filter_kind, posting.filter_value
+          FROM mart.review_article_filter_posting_serving_v4 posting
+          WHERE posting.project_id = 'project-1'
+            AND posting.snapshot_id = 'snapshot-1'
+            AND posting.review_config_hash = 'review-config-1'
+            AND posting.list_mode_key = 'llm'
+            AND (
+              (posting.filter_kind = 'importRoute' AND posting.filter_value IN (SELECT unnest(['import-route-1']::VARCHAR[])))
+              OR (posting.filter_kind = 'population' AND posting.filter_value IN (SELECT unnest(['adult', 'adult', 'pediatric']::VARCHAR[])))
+              OR (posting.filter_kind = 'promptAnswer' AND posting.filter_value IN (SELECT unnest(['yes']::VARCHAR[])))
+            )
+        ) posting
+        CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)
+        GROUP BY posting_article.article_id
+        HAVING COUNT(DISTINCT CASE
+          WHEN posting.filter_kind = 'importRoute' AND posting.filter_value IN (SELECT unnest(['import-route-1']::VARCHAR[])) THEN 0
+          WHEN posting.filter_kind = 'population' AND posting.filter_value IN (SELECT unnest(['adult', 'adult', 'pediatric']::VARCHAR[])) THEN 1
+          WHEN posting.filter_kind = 'promptAnswer' AND posting.filter_value IN (SELECT unnest(['yes']::VARCHAR[])) THEN 2
+        END) = 3
+      )
+    `
+    const optimizedReader = await connection.runAndReadAll(
+      `WITH ${optimizedCte} SELECT article_id FROM posting_filtered_article_ids ORDER BY article_id`,
+    )
+    const legacyReader = await connection.runAndReadAll(
+      `WITH ${legacyCte} SELECT article_id FROM posting_filtered_article_ids ORDER BY article_id`,
+    )
+
+    expect(optimizedReader.getRowObjectsJson()).toEqual(legacyReader.getRowObjectsJson())
+    expect(optimizedReader.getRowObjectsJson()).toEqual([{article_id: 'article-3'}, {article_id: 'article-4'}])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('posting filter intersection CTE matches legacy semantics when anchor groups tie', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA mart;
+      CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        list_mode_key VARCHAR,
+        filter_kind VARCHAR,
+        filter_value VARCHAR,
+        article_ids VARCHAR[]
+      );
+      INSERT INTO mart.review_article_filter_posting_serving_v4 VALUES
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-1', 'article-2']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'population', 'adult', ['article-2', 'article-3']);
+    `)
+
+    const groups = [
+      {filterKind: 'importRoute', filterValues: ['import-route-1']},
+      {filterKind: 'population', filterValues: ['adult']},
+    ]
+    const optimizedCte = buildReviewServingPostingFilterIntersectionArticleCte({
+      groups,
+      listModeSql: "'llm'",
+      projectIdSql: "'project-1'",
+      reviewConfigHashSql: "'review-config-1'",
+      snapshotIdSql: "'snapshot-1'",
+    })
+    const legacyCte = `
+      posting_filtered_article_ids AS (
+        SELECT posting_article.article_id
+        FROM (
+          SELECT posting.article_ids, posting.filter_kind, posting.filter_value
+          FROM mart.review_article_filter_posting_serving_v4 posting
+          WHERE posting.project_id = 'project-1'
+            AND posting.snapshot_id = 'snapshot-1'
+            AND posting.review_config_hash = 'review-config-1'
+            AND posting.list_mode_key = 'llm'
+            AND (
+              (posting.filter_kind = 'importRoute' AND posting.filter_value IN (SELECT unnest(['import-route-1']::VARCHAR[])))
+              OR (posting.filter_kind = 'population' AND posting.filter_value IN (SELECT unnest(['adult']::VARCHAR[])))
+            )
+        ) posting
+        CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)
+        GROUP BY posting_article.article_id
+        HAVING COUNT(DISTINCT CASE
+          WHEN posting.filter_kind = 'importRoute' AND posting.filter_value IN (SELECT unnest(['import-route-1']::VARCHAR[])) THEN 0
+          WHEN posting.filter_kind = 'population' AND posting.filter_value IN (SELECT unnest(['adult']::VARCHAR[])) THEN 1
+        END) = 2
+      )
+    `
+    const optimizedReader = await connection.runAndReadAll(
+      `WITH ${optimizedCte} SELECT article_id FROM posting_filtered_article_ids ORDER BY article_id`,
+    )
+    const legacyReader = await connection.runAndReadAll(
+      `WITH ${legacyCte} SELECT article_id FROM posting_filtered_article_ids ORDER BY article_id`,
+    )
+
+    expect(optimizedReader.getRowObjectsJson()).toEqual(legacyReader.getRowObjectsJson())
+    expect(optimizedReader.getRowObjectsJson()).toEqual([{article_id: 'article-2'}])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('buildReviewServingRowsSql intersects posting filters with token-prefix search when requested', () => {
@@ -707,13 +991,63 @@ test('buildReviewServingRowsSql intersects posting filters with token-prefix sea
   expect(sql).toContain('WHERE mart.review_article_filter_posting_serving_v4.project_id = $projectId')
   expect(sql).toContain('AND mart.review_article_filter_posting_serving_v4.snapshot_id = $snapshotId')
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
-  expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
+  expect(sql).toContain('search_prefixes AS (SELECT $searchTokenPrefix AS token_prefix)')
+  expect(sql).toContain('search_candidate_article_ids AS')
+  expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4 search_candidate_posting')
+  expect(sql).toContain(
+    'CROSS JOIN UNNEST(search_candidate_posting.article_ids) AS search_candidate_article(article_id)',
+  )
+  expect(sql).toContain('search_candidate_posting.filter_kind = $filterKind')
+  expect(sql).toContain('search_candidate_posting.filter_value = $filterValue')
+  expect(sql).toContain('expanded_search_article_ids AS')
+  expect(sql).toContain('search_filtered_article_ids AS')
+  expect(sql.indexOf('search_candidate_article_ids AS')).toBeLessThan(sql.indexOf('expanded_search_article_ids AS'))
   expect(sql).toContain('search.project_id = $projectId')
   expect(sql).toContain('search.search_identity = $searchIdentity')
   expect(sql).toContain('search.project_scope_identity = $projectScopeIdentity')
   expect(sql).toContain('search.snapshot_id = $snapshotId')
-  expect(sql).toContain('list_contains(search.article_ids, filter_posting_article.article_id)')
-  expect(sql).toContain('starts_with(search.token, $searchTokenPrefix)')
+  expect(sql).toContain(
+    'FROM search_candidate_article_ids search_candidate_article JOIN mart.review_title_search_serving_v4 search ON list_contains(search.article_ids, search_candidate_article.article_id)',
+  )
+  expect(sql).not.toContain('CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)')
+  expect(sql).toContain('EXISTS (SELECT 1 FROM search_filtered_article_ids')
+  expect(sql).toContain('search_filtered_article_ids.article_id = filter_posting_article.article_id')
+})
+
+test('buildReviewServingRowsSql intersects posting filters with all token-prefix search prefixes', () => {
+  const contract = getRequiredReviewServingReadContract('review.filters.postings')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    filterKindParameter: '$filterKind',
+    filterValueParameter: '$filterValue',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    searchTokenPrefixesParameter: '$searchTokenPrefixes',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('search_prefixes AS')
+  expect(sql).toContain('SELECT DISTINCT token_prefix')
+  expect(sql).toContain('search_candidate_article_ids AS')
+  expect(sql).toContain('expanded_search_article_ids AS')
+  expect(sql).toContain('search_filtered_article_ids AS')
+  expect(sql.indexOf('search_candidate_article_ids AS')).toBeLessThan(sql.indexOf('expanded_search_article_ids AS'))
+  expect(sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM search_prefixes required_search_prefix')
+  expect(sql).toContain('(NOT EXISTS (SELECT 1 FROM search_prefixes) OR EXISTS')
+  expect(sql).toContain('EXISTS (SELECT 1 FROM search_filtered_article_ids')
+  expect(sql).toContain('search_filtered_article_ids.article_id = filter_posting_article.article_id')
+  expect(sql).not.toContain('starts_with(search.token, $searchTokenPrefix)')
+  expect(sql).toContain(
+    'FROM search_candidate_article_ids search_candidate_article JOIN mart.review_title_search_serving_v4 search ON list_contains(search.article_ids, search_candidate_article.article_id)',
+  )
+  expect(sql).not.toContain('CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)')
 })
 
 test('buildReviewServingRowsSql rejects foreground multi-filter posting intersections', () => {
@@ -754,7 +1088,9 @@ test('buildReviewServingRowsSql uses contract list-mode literals for fixed row c
     snapshotIdParameter: '$snapshotId',
   })
 
-  expect(sql).toContain("AND list_mode_key = 'both'")
+  expect(sql).toContain("list_contains(list_mode_state.list_mode_keys, 'both')")
+  expect(sql).toContain("'both' AS list_mode_key")
+  expect(sql).not.toContain('FROM mart.review_article_serving_v4')
   expect(sql).not.toContain('$wrongRuntimeMode')
   expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC')
 })
@@ -774,13 +1110,28 @@ test('buildReviewServingRowsSql uses activity ordering for unassessed row contra
     snapshotIdParameter: '$snapshotId',
   })
 
-  expect(sql).toContain("AND list_mode_key = 'unassessed'")
-  expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).toContain('unassessed_queue_page AS (SELECT')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain("list_contains(list_mode_state.list_mode_keys, 'unassessed')")
+  expect(sql).toContain('list_mode_state.unassessed_patch_watermark AS patch_watermark')
   expect(sql).toContain('queue.review_config_hash = $reviewConfigHash')
   expect(sql).toContain('queue.snapshot_id = $snapshotId')
   expect(sql).toContain("queue.queue_kind = 'unassessed'")
-  expect(sql).toContain('queue.article_id = mart.review_article_serving_v4.article_id')
-  expect(sql).toContain('ORDER BY activity_sort_at DESC, article_id DESC')
+  expect(sql).toContain('serving.article_id = queue.article_id')
+  expect(sql).toContain('unassessed_queue_candidate AS (SELECT')
+  expect(sql).toContain('MAX(queue.activity_sort_at) AS activity_sort_at')
+  expect(sql).toContain('GROUP BY queue.project_id, queue.review_config_hash, queue.snapshot_id, queue.article_id')
+  expect(sql).toContain(
+    'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT $limit',
+  )
+  expect(sql).toContain('FROM unassessed_queue_page')
+  expect(sql).toContain('unassessed_queue_page.activity_sort_at AS activity_sort_at')
+  expect(sql).toContain('ORDER BY unassessed_queue_page.activity_sort_at DESC, unassessed_queue_page.article_id DESC')
+  expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).not.toContain('FROM mart.review_article_serving_v4')
+  expect(sql).not.toContain('JOIN mart.review_article_serving_v4')
   expect(sql).not.toContain('ORDER BY sort_key')
 })
 
@@ -799,9 +1150,11 @@ test('buildReviewServingRowsSql keeps unassessed article-set hydration bounded t
     snapshotIdParameter: '$snapshotId',
   })
 
-  expect(sql).toContain('AND mart.review_article_serving_v4.article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain('AND serving.article_id IN (SELECT unnest($articleIds))')
   expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
   expect(sql).not.toContain('queue.article_id = mart.review_article_serving_v4.article_id')
+  expect(sql).not.toContain('FROM mart.review_article_serving_v4')
+  expect(sql).not.toContain('JOIN mart.review_article_serving_v4')
 })
 
 test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {
@@ -1011,7 +1364,7 @@ test('buildReviewServingRowsSql supports article-set list judgment lookups', () 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.review_config_hash = $reviewConfigHash')
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.snapshot_id = $snapshotId')
-  expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.list_mode_key = 'llm'")
+  expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.list_mode_key')
   expect(sql).toContain("'both' AS list_mode_key")
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'llm'")
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))')
@@ -1047,8 +1400,10 @@ test('buildReviewServingRowsSql supports article-set row hydration lookups', () 
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain("AND list_mode_key = 'human'")
-  expect(sql).toContain('AND mart.review_article_serving_v4.article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain("list_contains(list_mode_state.list_mode_keys, 'human')")
+  expect(sql).toContain("'human' AS list_mode_key")
+  expect(sql).toContain('AND serving.article_id IN (SELECT unnest($articleIds))')
+  expect(sql).not.toContain('FROM mart.review_article_serving_v4')
 })
 
 test('buildReviewServingRowsSql sources article-row selected import route ids from selected-import snapshots', () => {
@@ -1087,10 +1442,12 @@ test('buildReviewServingRowsSql sources article-row selected import route ids fr
     expect(sql).toContain('selected_import.import_route_id AS selected_import_route_id')
     expect(sql).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
     expect(sql).toContain('selected_import.project_id = $projectId')
-    expect(sql).toContain('selected_import.project_id = mart.review_article_serving_v4.project_id')
+    const articleSqlAlias = 'serving'
+
+    expect(sql).toContain(`selected_import.project_id = ${articleSqlAlias}.project_id`)
     expect(sql).toContain('selected_import.project_scope_identity = $projectScopeIdentity')
     expect(sql).toContain('selected_import.selected_import_snapshot_id = $selectedImportSnapshotId')
-    expect(sql).toContain('selected_import.article_id = mart.review_article_serving_v4.article_id')
+    expect(sql).toContain(`selected_import.article_id = ${articleSqlAlias}.article_id`)
     expect(sql).toContain('AND NOT selected_import.tombstone')
     expect(sql).not.toContain('mart.review_article_serving_v4.selected_import_route_id')
   }
@@ -1205,7 +1562,7 @@ test('assertReviewServingSqlShape requires snapshot scope by default', () => {
 test('assertReviewServingSqlShape requires project and snapshot scope for every joined alias', () => {
   const sql = `
     SELECT s.article_id
-    FROM mart.review_article_serving_v4 s
+    FROM mart.review_article_serving_base_v4 s
     JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ? AND s.snapshot_id = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
@@ -1217,6 +1574,35 @@ test('assertReviewServingSqlShape requires project and snapshot scope for every 
 
   expect(violations).toContain('project scoped read: p')
   expect(violations).toContain('snapshot scoped read: p')
+})
+
+test('assertReviewServingSqlShape allows scoped query-local posting article CTEs', () => {
+  const sql = `
+    WITH filter_4_articles AS (
+      SELECT filter_4_article.article_id
+      FROM mart.review_article_filter_posting_serving_v4 filter_4
+      CROSS JOIN UNNEST(filter_4.article_ids) AS filter_4_article(article_id)
+      WHERE filter_4.project_id = ?
+        AND filter_4.snapshot_id = ?
+        AND filter_4.review_config_hash = ?
+        AND filter_4.list_mode_key = ?
+        AND filter_4.filter_kind = ?
+        AND filter_4.filter_value IN (SELECT unnest(?))
+    )
+    SELECT s.article_id
+    FROM mart.review_article_serving_base_v4 s
+    WHERE s.project_id = ?
+      AND s.snapshot_id = ?
+      AND EXISTS (
+        SELECT 1
+        FROM filter_4_articles
+        WHERE filter_4_articles.article_id = s.article_id
+      )
+    ORDER BY s.sort_key DESC, s.article_id DESC
+    LIMIT ?
+  `
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
 })
 
 test('assertReviewServingSqlShape requires real bound scope predicates', () => {
@@ -1373,11 +1759,12 @@ test('judgment job serving queue SQL keeps current config and stable keyset sema
   expect(serviceText).toContain("articleRouteAlias: 'article_route_scope'")
   expect(serviceText).toContain("projectRouteAlias: 'current_project_route_scope'")
   expect(serviceText).toContain("projectArticleAlias: 'current_project_article_scope'")
-  expect(serviceText).toContain('current_article.article_created_at >= current_project.date_from')
-  expect(serviceText).toContain('current_article.article_created_at < current_project.date_to + INTERVAL 1 DAY')
+  expect(serviceText).toContain('article.article_created_at >= current_project.date_from')
+  expect(serviceText).toContain('article.article_created_at < current_project.date_to + INTERVAL 1 DAY')
   expect(serviceText).toContain("date_trunc('millisecond', queue.activity_sort_at)")
   expect(serviceText).toContain('queue.priority_bucket < ${priorityBucket}')
-  expect(serviceText).toContain('AND queue.prompt_id < ${getSqlLiteral(cursor.lastPromptId)}')
+  expect(serviceText).toContain('AND ${promptIdExpression} < ${getSqlLiteral(cursor.lastPromptId)}')
+  expect(serviceText).toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
   expect(serviceText).toContain('ORDER BY queue.priority_bucket DESC')
   expect(serviceText).toContain('queue.prompt_id DESC')
   expect(serviceText).not.toContain('AND article.selected_import_route_id IN')

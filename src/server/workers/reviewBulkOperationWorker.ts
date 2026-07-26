@@ -198,12 +198,16 @@ const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBul
   return criteria.sourceProjectIds && criteria.sourceProjectIds.length > 0 ? criteria.sourceProjectIds : [job.projectId]
 }
 
-const getServingReviewConfigHashSql = (job: ReviewBulkOperationJobRow, criteria: ReviewBulkOperationCriteria) => {
+const getServingReviewConfigHashSql = (
+  job: ReviewBulkOperationJobRow,
+  criteria: ReviewBulkOperationCriteria,
+  tableAlias = 's',
+) => {
   const hashEntries = Object.entries(criteria.sourceProjectReviewConfigHashes ?? {})
 
   return hashEntries.length === 0
     ? getSqlLiteral(job.reviewConfigHash)
-    : `CASE s.project_id ${hashEntries
+    : `CASE ${tableAlias}.project_id ${hashEntries
         .map(([projectId, reviewConfigHash]) => {
           return `WHEN ${getSqlLiteral(projectId)} THEN ${getSqlLiteral(reviewConfigHash)}`
         })
@@ -217,22 +221,11 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
 
   const listMode = getListModeKey(criteria)
   const getStatusStatePredicate = (filterKind: 'humanStatus' | 'llmStatus', filterValue: string) => {
-    const alias = `${filterKind}Filter`
     const columnName = filterKind === 'humanStatus' ? 'human_status' : 'llm_status'
 
-    return `AND EXISTS (
-        SELECT 1
-        FROM mart.review_article_filter_state_serving_v4 ${alias}
-        WHERE ${alias}.project_id = s.project_id
-          AND ${alias}.snapshot_id = s.snapshot_id
-          AND ${alias}.review_config_hash = s.review_config_hash
-          AND ${alias}.list_mode_key = s.list_mode_key
-          AND list_contains(${alias}.article_ids, s.article_id)
-          AND ${alias}.${columnName} = ${getSqlLiteral(filterValue)}
-      )`
+    return `AND list_mode_state.${columnName} = ${getSqlLiteral(filterValue)}`
   }
-  const shouldRequireLlmJudgment =
-    listMode === 'llm' && (!criteria.llmStatus || criteria.llmStatus === 'both' || criteria.llmStatus === 'partial')
+  const shouldRequireLlmJudgment = shouldRequireTabLlmJudgment(criteria)
   const humanStatusPredicate =
     listMode === 'human' || listMode === 'both'
       ? getStatusStatePredicate('humanStatus', criteria.humanStatus ?? 'answered')
@@ -245,20 +238,7 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
         : criteria.llmStatus === 'partial'
           ? getStatusStatePredicate('llmStatus', 'unanswered')
           : ''
-  const llmHasJudgmentPredicate = shouldRequireLlmJudgment
-    ? `AND EXISTS (
-        SELECT 1
-        FROM mart.review_article_judgment_detail_serving_v4 llm_judgment_detail
-        WHERE llm_judgment_detail.project_id = s.project_id
-          AND llm_judgment_detail.review_config_hash = s.review_config_hash
-          AND llm_judgment_detail.snapshot_id = s.snapshot_id
-          AND llm_judgment_detail.list_mode_key = ${getSqlLiteral('llm')}
-          AND llm_judgment_detail.payload_kind = ${getSqlLiteral('llm')}
-          AND llm_judgment_detail.article_id = s.article_id
-          AND llm_judgment_detail.placeholder_kind IS NULL
-          AND llm_judgment_detail.is_answered IS TRUE
-      )`
-    : ''
+  const llmHasJudgmentPredicate = shouldRequireLlmJudgment ? 'AND list_mode_state.llm_has_judgment IS TRUE' : ''
   const queuePredicate =
     listMode === 'unassessed'
       ? `AND EXISTS (
@@ -273,6 +253,18 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
       : ''
 
   return [humanStatusPredicate, llmStatusPredicate, llmHasJudgmentPredicate, queuePredicate].filter(Boolean).join('\n')
+}
+
+const shouldRequireTabLlmJudgment = (criteria: ReviewBulkOperationCriteria) => {
+  if (criteria.selectionScope === 'project') {
+    return false
+  }
+
+  const listMode = getListModeKey(criteria)
+
+  return (
+    listMode === 'llm' && (!criteria.llmStatus || criteria.llmStatus === 'both' || criteria.llmStatus === 'partial')
+  )
 }
 
 const getExclusiveDateToFilter = (value: string) => {
@@ -296,7 +288,7 @@ const getDateToPredicate = (column: string, value: string | undefined) => {
     : ''
 }
 
-const getPromptAnswerPredicates = (criteria: ReviewBulkOperationCriteria) => {
+const getPromptAnswerFilterEntries = (criteria: ReviewBulkOperationCriteria) => {
   const promptPrefix = getListModeKey(criteria) === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
 
   return Object.entries(criteria.prompts ?? {})
@@ -304,22 +296,64 @@ const getPromptAnswerPredicates = (criteria: ReviewBulkOperationCriteria) => {
       return values.length > 0
     })
     .map(([promptId, values], index) => {
-      const filterValues = values.map((value) => {
-        return `${promptPrefix}${promptId}:${value}`
-      })
-
-      return `AND EXISTS (
-        SELECT 1
-        FROM mart.review_article_filter_posting_serving_v4 prompt_filter_${index}
-        WHERE prompt_filter_${index}.project_id = s.project_id
-          AND prompt_filter_${index}.snapshot_id = s.snapshot_id
-          AND prompt_filter_${index}.review_config_hash = s.review_config_hash
-          AND prompt_filter_${index}.list_mode_key = s.list_mode_key
-          AND list_contains(prompt_filter_${index}.article_ids, s.article_id)
-          AND prompt_filter_${index}.filter_kind = 'promptAnswer'
-          AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
-      )`
+      return {
+        filterValues: values.map((value) => {
+          return `${promptPrefix}${promptId}:${value}`
+        }),
+        index,
+      }
     })
+}
+
+const getPromptFilteredArticleIdsCteSql = (input: {
+  criteria: ReviewBulkOperationCriteria
+  sourceProjectIds: readonly string[]
+}) => {
+  const promptFilters = getPromptAnswerFilterEntries(input.criteria)
+
+  if (promptFilters.length === 0) {
+    return ''
+  }
+
+  const promptFilterValues = promptFilters
+    .map((promptFilter) => {
+      return `SELECT ${getSqlLiteral(promptFilter.index)} AS prompt_filter_index, prompt_filter_value AS filter_value
+      FROM (SELECT unnest(${getSqlLiteral(promptFilter.filterValues)}::VARCHAR[]) AS prompt_filter_value)`
+    })
+    .join('\n      UNION ALL\n      ')
+
+  return `prompt_filter_values(prompt_filter_index, filter_value) AS (
+      ${promptFilterValues}
+    ),
+    prompt_filter_article_ids AS (
+      SELECT
+        prompt_filter.project_id,
+        prompt_filter.review_config_hash,
+        prompt_filter.snapshot_id,
+        prompt_filter_value.prompt_filter_index,
+        prompt_filter_article.article_id
+      FROM mart.review_article_filter_posting_serving_v4 prompt_filter
+      INNER JOIN prompt_filter_values prompt_filter_value
+        ON prompt_filter_value.filter_value = prompt_filter.filter_value
+      INNER JOIN snapshot_scope
+        ON snapshot_scope.project_id = prompt_filter.project_id
+       AND snapshot_scope.review_config_hash IS NOT DISTINCT FROM prompt_filter.review_config_hash
+       AND snapshot_scope.snapshot_id = prompt_filter.snapshot_id
+      CROSS JOIN UNNEST(prompt_filter.article_ids) AS prompt_filter_article(article_id)
+      WHERE prompt_filter.project_id IN (SELECT unnest(${getSqlLiteral(input.sourceProjectIds)}::VARCHAR[]))
+        AND prompt_filter.list_mode_key = ${getSqlLiteral(getListModeKey(input.criteria))}
+        AND prompt_filter.filter_kind = 'promptAnswer'
+    ),
+    prompt_filtered_article_ids AS (
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id
+      FROM prompt_filter_article_ids
+      GROUP BY project_id, review_config_hash, snapshot_id, article_id
+      HAVING COUNT(DISTINCT prompt_filter_index) = ${getSqlLiteral(promptFilters.length)}
+    )`
 }
 
 const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
@@ -329,19 +363,10 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
   ].filter((filter): filter is {kind: string; value: string} => {
     return filter !== null
   })
-  const simplePredicates = simpleFilters.map((filter, index) => {
+  const simplePredicates = simpleFilters.map((filter) => {
     const columnName = filter.kind === 'duplicateFlag' ? 'duplicate_flag' : 'conflict_flag'
 
-    return `AND EXISTS (
-      SELECT 1
-      FROM mart.review_article_filter_state_serving_v4 filter_${index}
-      WHERE filter_${index}.project_id = s.project_id
-        AND filter_${index}.snapshot_id = s.snapshot_id
-        AND filter_${index}.review_config_hash = s.review_config_hash
-        AND filter_${index}.list_mode_key = s.list_mode_key
-        AND filter_${index}.article_id = s.article_id
-        AND filter_${index}.${columnName} IS TRUE
-    )`
+    return `AND list_mode_state.${columnName} IS TRUE`
   })
   const datePredicate =
     criteria.from || criteria.to
@@ -349,49 +374,258 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
          ${getDateToPredicate('s.article_created_at', criteria.to)}`
       : ''
 
-  return [...simplePredicates, datePredicate, ...getPromptAnswerPredicates(criteria)].join('\n')
+  return [...simplePredicates, datePredicate].join('\n')
+}
+
+const getServingSnapshotScopeCteSql = (
+  job: ReviewBulkOperationJobRow,
+  criteria: ReviewBulkOperationCriteria,
+  sourceProjectIds: readonly string[],
+) => {
+  const reviewConfigHashSql = getServingReviewConfigHashSql(job, criteria, 'source_project')
+  const manifestPredicate = job.latestSnapshotSemantics
+    ? `manifest.review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql}
+       AND manifest.snapshot_status = 'active'`
+    : `manifest.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
+  const latestSnapshotQualifier = job.latestSnapshotSemantics
+    ? `QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY source_project.project_id, ${reviewConfigHashSql}
+        ORDER BY manifest.updated_at DESC, manifest.snapshot_id DESC
+      ) = 1`
+    : ''
+
+  return `snapshot_scope AS (
+      SELECT
+        source_project.project_id,
+        ${reviewConfigHashSql} AS review_config_hash,
+        manifest.snapshot_id,
+        json_extract_string(search_component.value, '$.projectionIdentity') AS search_identity,
+        json_extract_string(manifest.composed_identity_json, '$.projectScope.projectionIdentity') AS project_scope_identity
+      FROM (SELECT unnest(${getSqlLiteral(sourceProjectIds)}::VARCHAR[]) AS project_id) source_project
+      INNER JOIN app.review_serving_snapshot_manifest manifest
+        ON manifest.project_id = source_project.project_id
+       AND ${manifestPredicate}
+      LEFT JOIN json_each(json_extract(manifest.component_state_json, '$.optional')) search_component
+        ON json_extract_string(search_component.value, '$.component') = 'search'
+      ${latestSnapshotQualifier}
+    )`
+}
+
+const shouldUseSearchCandidateArticleIds = (input: {
+  criteria: ReviewBulkOperationCriteria
+  cursor: string | null
+  searchTokens: readonly string[]
+}) => {
+  if (input.searchTokens.length === 0) {
+    return false
+  }
+
+  const tabStatusPredicates = getTabStatusPredicates(input.criteria).trim()
+
+  return (
+    getPromptAnswerFilterEntries(input.criteria).length > 0
+    || tabStatusPredicates.length > 0
+    || Boolean(input.criteria.from)
+    || Boolean(input.criteria.to)
+    || Boolean(input.criteria.hasDuplicateStudyRecords)
+    || Boolean(input.criteria.hasStudyDecisionConflict)
+    || Boolean(input.cursor)
+  )
+}
+
+const getSearchCandidateArticleIdsCteSql = (input: {
+  criteria: ReviewBulkOperationCriteria
+  cursor: string | null
+  sourceProjectIds: readonly string[]
+}) => {
+  const promptFilterJoinSql =
+    getPromptAnswerFilterEntries(input.criteria).length === 0
+      ? ''
+      : `INNER JOIN prompt_filtered_article_ids prompt_filter_ids
+      ON prompt_filter_ids.project_id = s.project_id
+     AND prompt_filter_ids.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+     AND prompt_filter_ids.snapshot_id = s.snapshot_id
+     AND prompt_filter_ids.article_id = s.article_id`
+
+  return `search_candidate_article_ids AS (
+      SELECT DISTINCT
+        s.project_id,
+        s.review_config_hash,
+        s.snapshot_id,
+        s.article_id
+      FROM mart.review_article_serving_base_v4 s
+      INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state
+        ON list_mode_state.project_id = s.project_id
+       AND list_mode_state.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+       AND list_mode_state.snapshot_id = s.snapshot_id
+       AND list_mode_state.article_id = s.article_id
+       AND list_contains(list_mode_state.list_mode_keys, ${getSqlLiteral(getListModeKey(input.criteria))})
+      INNER JOIN snapshot_scope
+        ON snapshot_scope.project_id = s.project_id
+       AND snapshot_scope.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+       AND snapshot_scope.snapshot_id = s.snapshot_id
+      ${promptFilterJoinSql}
+      WHERE s.project_id IN (SELECT unnest(${getSqlLiteral(input.sourceProjectIds)}::VARCHAR[]))
+        ${getTabStatusPredicates(input.criteria)}
+        ${input.cursor ? `AND s.article_id > ${getSqlLiteral(input.cursor)}` : ''}
+        ${getPostingFilterPredicates(input.criteria)}
+    )`
+}
+
+const getSearchFilteredArticleIdsCteSql = (input: {
+  searchTokens: readonly string[]
+  useCandidateArticleIds: boolean
+}) => {
+  if (input.searchTokens.length === 0) {
+    return ''
+  }
+
+  const searchScopeSql = input.useCandidateArticleIds
+    ? `SELECT DISTINCT
+        c.project_id,
+        c.review_config_hash,
+        c.snapshot_id,
+        snapshot_scope.search_identity,
+        snapshot_scope.project_scope_identity
+      FROM search_candidate_article_ids c
+      INNER JOIN snapshot_scope
+        ON snapshot_scope.project_id = c.project_id
+       AND snapshot_scope.review_config_hash IS NOT DISTINCT FROM c.review_config_hash
+       AND snapshot_scope.snapshot_id = c.snapshot_id`
+    : `SELECT DISTINCT
+        snapshot_scope.project_id,
+        snapshot_scope.review_config_hash,
+        snapshot_scope.snapshot_id,
+        snapshot_scope.search_identity,
+        snapshot_scope.project_scope_identity
+      FROM snapshot_scope`
+  if (!input.useCandidateArticleIds) {
+    return `search_prefixes AS (
+      SELECT DISTINCT token_prefix
+      FROM (SELECT unnest(${getSqlLiteral(input.searchTokens)}::VARCHAR[]) AS token_prefix)
+      WHERE token_prefix IS NOT NULL AND token_prefix <> ''
+    ),
+    search_scope AS (
+      ${searchScopeSql}
+    ),
+    search_filtered_article_ids AS (
+      SELECT
+        search.project_id,
+        search_scope.review_config_hash,
+        search.snapshot_id,
+        search_article.article_id AS article_id
+      FROM search_scope
+      INNER JOIN mart.review_title_search_serving_v4 search
+        ON search.project_id = search_scope.project_id
+       AND search.search_identity = search_scope.search_identity
+       AND search.project_scope_identity = search_scope.project_scope_identity
+       AND search.snapshot_id = search_scope.snapshot_id
+      INNER JOIN search_prefixes search_prefix
+        ON starts_with(search.token, search_prefix.token_prefix)
+      CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)
+      GROUP BY search.project_id, search_scope.review_config_hash, search.snapshot_id, search_article.article_id
+      HAVING COUNT(DISTINCT search_prefix.token_prefix) = ${getSqlLiteral(input.searchTokens.length)}
+    )`
+  }
+
+  return `search_prefixes AS (
+      SELECT DISTINCT token_prefix
+      FROM (SELECT unnest(${getSqlLiteral(input.searchTokens)}::VARCHAR[]) AS token_prefix)
+      WHERE token_prefix IS NOT NULL AND token_prefix <> ''
+    ),
+    search_scope AS (
+      ${searchScopeSql}
+    ),
+    expanded_search_article_ids AS (
+      SELECT
+        search.project_id,
+        search_scope.review_config_hash,
+        search.snapshot_id,
+        search_prefix.token_prefix,
+        search_article.article_id AS article_id
+      FROM search_scope
+      INNER JOIN mart.review_title_search_serving_v4 search
+        ON search.project_id = search_scope.project_id
+       AND search.search_identity = search_scope.search_identity
+       AND search.project_scope_identity = search_scope.project_scope_identity
+       AND search.snapshot_id = search_scope.snapshot_id
+      INNER JOIN search_prefixes search_prefix
+        ON starts_with(search.token, search_prefix.token_prefix)
+      CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)
+      INNER JOIN search_candidate_article_ids search_candidate
+        ON search_candidate.project_id = search.project_id
+       AND search_candidate.review_config_hash IS NOT DISTINCT FROM search_scope.review_config_hash
+       AND search_candidate.snapshot_id = search.snapshot_id
+       AND search_candidate.article_id = search_article.article_id
+    ),
+    search_filtered_article_ids AS (
+      SELECT
+        expanded_search_article_ids.project_id,
+        expanded_search_article_ids.review_config_hash,
+        expanded_search_article_ids.snapshot_id,
+        expanded_search_article_ids.article_id AS article_id
+      FROM expanded_search_article_ids
+      GROUP BY expanded_search_article_ids.project_id, expanded_search_article_ids.review_config_hash, expanded_search_article_ids.snapshot_id, expanded_search_article_ids.article_id
+      HAVING COUNT(DISTINCT expanded_search_article_ids.token_prefix) = ${getSqlLiteral(input.searchTokens.length)}
+    )`
 }
 
 const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: string | null, limit: number) => {
   const criteria = getCriteria(job)
   const sourceProjectIds = getSourceProjectIds(job, criteria)
-  const reviewConfigHashSql = getServingReviewConfigHashSql(job, criteria)
   const searchTokens = getReviewServingTitleSearchTokens(criteria.search ?? null)
-  const searchIdentitySql = job.latestSnapshotSemantics
-    ? `(SELECT json_extract_string(component.value, '$.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest, json_each(json_extract(manifest.component_state_json, '$.optional')) component WHERE manifest.project_id = s.project_id AND manifest.review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql} AND manifest.snapshot_status = 'active' AND json_extract_string(component.value, '$.component') = 'search' ORDER BY manifest.updated_at DESC, manifest.snapshot_id DESC LIMIT 1)`
-    : `(SELECT json_extract_string(component.value, '$.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest, json_each(json_extract(manifest.component_state_json, '$.optional')) component WHERE manifest.project_id = s.project_id AND manifest.snapshot_id = ${getSqlLiteral(job.snapshotId)} AND json_extract_string(component.value, '$.component') = 'search' LIMIT 1)`
-  const projectScopeIdentitySql = job.latestSnapshotSemantics
-    ? `(SELECT json_extract_string(manifest.composed_identity_json, '$.projectScope.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest WHERE manifest.project_id = s.project_id AND manifest.review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql} AND manifest.snapshot_status = 'active' ORDER BY manifest.updated_at DESC, manifest.snapshot_id DESC LIMIT 1)`
-    : `(SELECT json_extract_string(manifest.composed_identity_json, '$.projectScope.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest WHERE manifest.project_id = s.project_id AND manifest.snapshot_id = ${getSqlLiteral(job.snapshotId)} LIMIT 1)`
-  const snapshotPredicate = job.latestSnapshotSemantics
-    ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
-    : `s.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
-  const searchPredicate = searchTokens
-    .map((token, index) => {
-      return `AND EXISTS (
-        SELECT 1
-        FROM mart.review_title_search_serving_v4 search_${index}
-        WHERE search_${index}.project_id = s.project_id
-          AND search_${index}.search_identity = ${searchIdentitySql}
-          AND search_${index}.project_scope_identity = ${projectScopeIdentitySql}
-          AND search_${index}.snapshot_id = s.snapshot_id
-          AND list_contains(search_${index}.article_ids, s.article_id)
-          AND starts_with(search_${index}.token, ${getSqlLiteral(token)})
-      )`
-    })
-    .join('\n')
+  const useSearchCandidateArticleIds = shouldUseSearchCandidateArticleIds({criteria, cursor, searchTokens})
+  const searchCandidateArticleIdsCteSql = useSearchCandidateArticleIds
+    ? getSearchCandidateArticleIdsCteSql({criteria, cursor, sourceProjectIds})
+    : ''
+  const searchCteSql = getSearchFilteredArticleIdsCteSql({
+    searchTokens,
+    useCandidateArticleIds: useSearchCandidateArticleIds,
+  })
+  const promptFilterCteSql = getPromptFilteredArticleIdsCteSql({criteria, sourceProjectIds})
+  const servingCteSqls = [
+    getServingSnapshotScopeCteSql(job, criteria, sourceProjectIds),
+    promptFilterCteSql,
+    searchCandidateArticleIdsCteSql,
+    searchCteSql,
+  ].filter(Boolean)
+  const searchJoinSql =
+    searchTokens.length === 0
+      ? ''
+      : `INNER JOIN search_filtered_article_ids search_filter_ids
+      ON search_filter_ids.project_id = s.project_id
+     AND search_filter_ids.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+     AND search_filter_ids.snapshot_id = s.snapshot_id
+     AND search_filter_ids.article_id = s.article_id`
+  const promptFilterJoinSql =
+    getPromptAnswerFilterEntries(criteria).length === 0
+      ? ''
+      : `INNER JOIN prompt_filtered_article_ids prompt_filter_ids
+      ON prompt_filter_ids.project_id = s.project_id
+     AND prompt_filter_ids.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+     AND prompt_filter_ids.snapshot_id = s.snapshot_id
+     AND prompt_filter_ids.article_id = s.article_id`
 
   return `
+    WITH ${servingCteSqls.join(',\n    ')}
     SELECT DISTINCT s.article_id AS articleId
-    FROM mart.review_article_serving_v4 s
+    FROM mart.review_article_serving_base_v4 s
+    INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state
+      ON list_mode_state.project_id = s.project_id
+     AND list_mode_state.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+     AND list_mode_state.snapshot_id = s.snapshot_id
+     AND list_mode_state.article_id = s.article_id
+     AND list_contains(list_mode_state.list_mode_keys, ${getSqlLiteral(getListModeKey(criteria))})
+    INNER JOIN snapshot_scope
+      ON snapshot_scope.project_id = s.project_id
+     AND snapshot_scope.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+     AND snapshot_scope.snapshot_id = s.snapshot_id
+    ${searchJoinSql}
+    ${promptFilterJoinSql}
     WHERE s.project_id IN (SELECT unnest(${getSqlLiteral(sourceProjectIds)}::VARCHAR[]))
-      AND ${snapshotPredicate}
-      AND s.review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql}
-      AND s.list_mode_key = ${getSqlLiteral(getListModeKey(criteria))}
       ${getTabStatusPredicates(criteria)}
       ${cursor ? `AND s.article_id > ${getSqlLiteral(cursor)}` : ''}
       ${getPostingFilterPredicates(criteria)}
-      ${searchPredicate}
     ORDER BY s.article_id ASC
     LIMIT ${getSqlLiteral(limit)}
   `

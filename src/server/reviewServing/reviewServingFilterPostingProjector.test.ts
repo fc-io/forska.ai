@@ -257,7 +257,10 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('CAST(posting.filterValue AS VARCHAR) AS filterValue')
   expect(joined).toContain('CAST(posting.listModeKey AS VARCHAR) AS listModeKey')
   expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
-  expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(joined).toContain('list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)')
+  expect(joined).not.toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(countOccurrences(joined, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
   expect(joined).toContain('judgment_detail_source AS')
   expect(joined).toContain('article_judgment_status AS')
@@ -468,17 +471,27 @@ test('status postings derive article-level status from judgment detail rows', as
   })
 
   expect(selectStatement).toContain('scoped_serving AS')
+  expect(selectStatement).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
+  expect(selectStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(selectStatement).toContain('list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)')
+  expect(selectStatement).not.toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(selectStatement).toContain('judgment_detail_source AS')
   expect(selectStatement).toContain('article_judgment_status AS')
   expect(selectStatement).not.toContain('llm_status AS')
   expect(selectStatement).not.toContain('human_status AS')
   expect(countOccurrences(selectStatement, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
   expect(selectStatement).toContain('COUNT(detail.prompt_id) FILTER')
-  expect(selectStatement).toContain("(detail.payload_kind = 'llm' AND detail.list_mode_key = 'llm')")
-  expect(selectStatement).toContain("(detail.payload_kind = 'human' AND detail.list_mode_key = 'human')")
+  expect(selectStatement).toContain('llm_answered_non_placeholder_prompt_count')
+  expect(selectStatement).toContain('AND detail.placeholder_kind IS NULL')
+  expect(selectStatement).toContain("detail.payload_kind IN ('llm', 'human')")
+  expect(selectStatement).not.toContain('detail.list_mode_key')
   expect(selectStatement).toContain("WHERE detail.payload_kind = 'llm'")
   expect(selectStatement).toContain("WHERE detail.payload_kind = 'human'")
   expect(selectStatement).toContain("'llmStatus' AS filterKind")
+  expect(selectStatement).toContain("'llmHasJudgment' AS filterKind")
+  expect(selectStatement).toContain(
+    'CAST(article_judgment_status.llm_answered_non_placeholder_prompt_count > 0 AS VARCHAR) AS filterValue',
+  )
   expect(selectStatement).toContain("'humanStatus' AS filterKind")
   expect(selectStatement).toContain('WHEN article_judgment_status.llm_enabled_prompt_count = 0 THEN NULL')
   expect(selectStatement).toContain(
@@ -492,6 +505,59 @@ test('status postings derive article-level status from judgment detail rows', as
   expect(selectStatement).toContain('project_settings AS')
   expect(selectStatement).toContain("human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('human_detail AS')
+})
+
+test('embedded filter state patches aggregate state rows per article', async () => {
+  const {database, statements} = createPostingDatabase({
+    newRows: [
+      postingRow({filterKind: 'duplicateFlag', filterValue: 'false', listModeKey: 'llm'}),
+      postingRow({filterKind: 'duplicateFlag', filterValue: 'true', listModeKey: 'human'}),
+      postingRow({filterKind: 'conflictFlag', filterValue: 'true', listModeKey: 'both'}),
+      postingRow({filterKind: 'llmStatus', filterValue: 'answered', listModeKey: 'llm'}),
+      postingRow({filterKind: 'llmStatus', filterValue: 'unanswered', listModeKey: 'both'}),
+      postingRow({filterKind: 'humanStatus', filterValue: 'answered', listModeKey: 'human'}),
+    ],
+  })
+
+  const result = await projectReviewServingFilterPostings(
+    projectInput([postingClaim()], ['llm', 'human', 'both']),
+    database,
+  )
+  const updateStatement = statements.find((statement) => {
+    return (
+      statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+      && statement.includes('FROM (VALUES')
+    )
+  })
+  const joined = statements.join('\n')
+
+  expect(result.servingRowCount).toBe(1)
+  expect(updateStatement).toContain("('article-1', TRUE, TRUE, 'unanswered', 'answered', FALSE)")
+  expect(joined).not.toContain('FROM mart.review_article_filter_state_serving_v4')
+  expect(joined).not.toContain('SELECT\n          state.article_id AS articleId')
+})
+
+test('embedded filter state patches keep partial LLM judgment presence independent from status', async () => {
+  const {database, statements} = createPostingDatabase({
+    newRows: [
+      postingRow({filterKind: 'llmStatus', filterValue: 'unanswered', listModeKey: 'llm'}),
+      postingRow({filterKind: 'llmHasJudgment', filterValue: 'true', listModeKey: 'llm'}),
+    ],
+  })
+
+  await projectReviewServingFilterPostings(projectInput([postingClaim()], ['llm']), database)
+  const updateStatement = statements.find((statement) => {
+    return (
+      statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+      && statement.includes('FROM (VALUES')
+    )
+  })
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  })
+
+  expect(updateStatement).toContain("('article-1', FALSE, FALSE, 'unanswered', NULL, TRUE)")
+  expect(insertStatement).toBeUndefined()
 })
 
 test('human status postings honor summary-mode status rows separately from prompt rows', async () => {

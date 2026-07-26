@@ -85,6 +85,10 @@ const sourceFacetRow = (input?: Record<string, unknown>) => {
   }
 }
 
+const countOccurrences = (value: string, search: string) => {
+  return value.split(search).length - 1
+}
+
 const createSummaryDatabase = (input?: {
   countRows?: readonly Record<string, unknown>[]
   facetRows?: readonly Record<string, unknown>[]
@@ -232,7 +236,6 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       count_value BIGINT,
       availability VARCHAR NOT NULL DEFAULT 'ready',
       stale_reason VARCHAR,
-      count_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
       PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key)
     )
   `)
@@ -251,7 +254,6 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       summary_definition_version VARCHAR NOT NULL,
       count_value BIGINT,
       availability VARCHAR NOT NULL DEFAULT 'ready',
-      facet_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
       PRIMARY KEY(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version)
     )
   `)
@@ -289,6 +291,16 @@ const hasSummaryValue = (rows: readonly Record<string, unknown>[], expected: Rec
   })
 }
 
+const expectDirectServingStateSourceRead = (statement: string | undefined) => {
+  expect(statement).toBeDefined()
+  expect(statement).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
+  expect(statement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(statement).toContain(
+    'INNER JOIN list_mode_key_filter list_mode_key\n            ON list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)',
+  )
+  expect(statement).not.toContain('mart.review_article_serving_v4')
+}
+
 test('projects list-mode count replacements with summary identity and definition version', async () => {
   const newRow = sourceCountRow({listModeKey: 'llm'})
   const {database, statements} = createSummaryDatabase({sourceRows: [newRow]})
@@ -315,13 +327,18 @@ test('projects list-mode count replacements with summary identity and definition
       summary_identity: 'review.llm.assessedByPrompt',
     }),
   ).toBe(true)
+  expectDirectServingStateSourceRead(
+    statements.find((statement) => {
+      return statement.includes('FROM summary_union')
+    }),
+  )
   expect(joined).toContain('FROM scoped_serving serving')
   expect(joined).toContain('selected_base.import_route_id END AS import_route_id')
   expect(joined).not.toContain('serving.selected_import_route_id AS import_route_id')
-  expect(joined).toContain('COALESCE(selected_hot.duplicate_flag, FALSE)')
-  expect(joined).toContain('COALESCE(selected_hot.conflict_flag, FALSE)')
-  expect(joined).not.toContain('serving.duplicate_flag')
-  expect(joined).not.toContain('serving.conflict_flag')
+  expect(joined).toContain('COALESCE(serving.duplicate_flag, FALSE)')
+  expect(joined).toContain('COALESCE(serving.conflict_flag, FALSE)')
+  expect(joined).not.toContain('COALESCE(selected_hot.duplicate_flag, FALSE)')
+  expect(joined).not.toContain('COALESCE(selected_hot.conflict_flag, FALSE)')
   expect(joined).toContain('mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4')
@@ -347,7 +364,34 @@ test('dirty summary recompute scopes source reads to claimed articles', async ()
   expect(sourceStatement).toContain(
     "article_id_filter(article_id) AS (SELECT * FROM (VALUES ('article-1'), ('article-2')))",
   )
+  expectDirectServingStateSourceRead(sourceStatement)
   expect(sourceStatement).not.toContain('FROM mart.project_scope_article scope')
+})
+
+test('summary source SQL shares bounded detail and queue scans across derived branches', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: []})
+
+  await projectReviewServingSummaries(projectInput([summaryClaim()], ['llm', 'human', 'both']), database)
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM summary_union')
+  })
+
+  expect(selectStatement).toBeDefined()
+  expect(countOccurrences(selectStatement ?? '', 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
+  expect(countOccurrences(selectStatement ?? '', 'mart.review_unassessed_queue_serving_v4 queue')).toBe(1)
+  expect(selectStatement).toContain('judgment_detail_source AS')
+  expect(selectStatement).toContain("detail.payload_kind IN ('llm', 'human')")
+  expect(selectStatement).toContain('llm_detail AS')
+  expect(selectStatement).toContain('human_detail AS')
+  expect(countOccurrences(selectStatement ?? '', 'FROM judgment_detail_source detail')).toBe(2)
+  expect(selectStatement).toContain("WHERE detail.payload_kind = 'llm'")
+  expect(selectStatement).toContain("WHERE detail.payload_kind = 'human'")
+  expect(selectStatement).toContain('queue_source AS')
+  expect(selectStatement).toContain('queue_prompt_source AS')
+  expect(selectStatement).toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
+  expect(countOccurrences(selectStatement ?? '', 'FROM queue_source queue')).toBe(2)
+  expect(countOccurrences(selectStatement ?? '', 'FROM queue_prompt_source queue')).toBe(1)
+  expect(selectStatement).toContain('WHERE queue.prompt_id IS NOT NULL')
 })
 
 test('projects human summary-answer facets independently from prompt answers', async () => {
@@ -384,6 +428,7 @@ test('projects human summary-answer facets independently from prompt answers', a
     }),
   ).toBe(true)
   expect(selectStatement).not.toContain('mart.review_human_status_patch_v4')
+  expectDirectServingStateSourceRead(selectStatement)
   expect(selectStatement).toContain('mart.review_article_judgment_detail_serving_v4 detail')
   expect(selectStatement).toContain(
     "COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = 'project-1'), 'prompt') AS human_judgment_mode",
@@ -450,8 +495,12 @@ test('unchunked full summary rebuild writes final serving rows without contribut
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_facet_serving_v4')
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
-  expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
-  expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(joined).toContain('list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)')
+  expect(joined).not.toContain('mart.review_article_serving_v4')
+  expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
+  expect(joined).toContain('INNER JOIN scoped_serving serving')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
   expect(joined).not.toContain('SELECT DISTINCT contribution.article_id AS articleId')
@@ -494,8 +543,12 @@ test('chunked full summary rebuild stages aggregate request partials without art
   expect(partialInsertStatements.join('\n')).toContain('WHERE NOT EXISTS')
   expect(partialInsertStatements.join('\n')).toContain("(existing.request_id || '') = (incoming.request_id || '')")
   expect(partialInsertStatements.join('\n')).toContain('source_chunk_ids_key')
-  expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
-  expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(joined).toContain('list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)')
+  expect(joined).not.toContain('mart.review_article_serving_v4')
+  expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
+  expect(joined).toContain('INNER JOIN scoped_serving serving')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')

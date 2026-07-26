@@ -102,6 +102,10 @@ const hasOptionValue = (rows: readonly Record<string, unknown>[], expected: Reco
   })
 }
 
+const countOccurrences = (value: string, search: string) => {
+  return value.split(search).length - 1
+}
+
 test('projects supported enum option payloads into scoped option rows', async () => {
   const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
 
@@ -178,15 +182,27 @@ test('no-search option projection reuses finalized facet rows for migrated facet
   expect(fallbackStatement).toContain("'conflictFlag' AS facetKey")
   expect(fallbackStatement).toContain("'llmStatus' AS facetKey")
   expect(fallbackStatement).toContain("'humanStatus' AS facetKey")
-  expect(fallbackStatement).toContain('FROM mart.review_article_filter_state_serving_v4 state')
-  expect(fallbackStatement).toContain('state.llm_status IS NOT NULL')
-  expect(fallbackStatement).toContain('state.human_status IS NOT NULL')
-  expect(fallbackStatement).toContain("concat('review:llmStatus:', state.llm_status)")
-  expect(fallbackStatement).toContain("concat('review', ':humanStatus:', state.human_status)")
-  expect(fallbackStatement).toContain('COUNT(DISTINCT state.article_id) AS countValue')
-  expect(fallbackStatement).toContain("WHERE 'review' = 'human' AND selected.duplicate_flag IS NOT NULL")
-  expect(fallbackStatement).toContain("WHERE 'review' = 'human' AND selected.import_route_id IS NOT NULL")
-  expect(fallbackStatement).toContain("WHERE 'review' = 'human' AND selected.publication_year IS NOT NULL")
+  expect(fallbackStatement).toContain('scoped_selected_article AS')
+  expect(fallbackStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(fallbackStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(fallbackStatement).toContain(
+    'INNER JOIN list_mode_key_filter list_mode_key ON list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)',
+  )
+  expect(countOccurrences(fallbackStatement ?? '', 'FROM mart.review_article_serving_base_v4 serving')).toBe(1)
+  expect(countOccurrences(fallbackStatement ?? '', 'INNER JOIN mart.review_article_serving_list_mode_state_v4')).toBe(1)
+  expect(fallbackStatement).not.toContain('FROM mart.review_article_serving_v4 serving')
+  expect(fallbackStatement).toContain('selected.llm_status IS NOT NULL')
+  expect(fallbackStatement).toContain('selected.human_status IS NOT NULL')
+  expect(fallbackStatement).toContain("concat('review:llmStatus:', selected.llm_status)")
+  expect(fallbackStatement).toContain("concat('review', ':humanStatus:', selected.human_status)")
+  expect(fallbackStatement).toContain('COUNT(DISTINCT selected.article_id) AS countValue')
+  expect(fallbackStatement).toContain('COALESCE(list_mode_state.conflict_flag, FALSE) AS conflict_flag')
+  expect(fallbackStatement).not.toContain('selected.import_route_id')
+  expect(fallbackStatement).not.toContain('selected.publication_year')
+  expect(fallbackStatement).not.toContain('LEFT JOIN app.review_selected_article_import_v4')
+  expect(fallbackStatement).not.toContain('LEFT JOIN app.review_import_article_hot_field')
+  expect(fallbackStatement).not.toContain('active_article AS')
+  expect(fallbackStatement).not.toContain('\n        selected_article AS')
   expect(fallbackStatement).not.toContain('serving.llm_status_key')
   expect(fallbackStatement).not.toContain('serving.human_status_key')
   expect(fallbackStatement).not.toContain('answered_original')
@@ -219,7 +235,7 @@ test('filter option refresh can insert rows idempotently without deleting existi
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('count_value = excluded.count_value')
   expect(insertStatement).not.toContain('option_payload_json')
-  expect(insertStatement).not.toContain('option_updated_at = excluded.option_updated_at')
+  expect(insertStatement).not.toContain('option_updated_at')
   expect(insertStatement).toContain('WHERE NOT EXISTS')
 })
 
@@ -236,47 +252,85 @@ test('source query preserves active search and filter scope without using postin
     database,
   )
   const sourceStatement = statements.find((statement) => {
-    return statement.includes('active_article')
+    return statement.includes('scoped_selected_article')
   })
   const joined = statements.join('\n')
 
-  expect(sourceStatement).toContain('mart.review_article_serving_v4 serving')
+  expect(sourceStatement).toContain('scoped_selected_article AS')
+  expect(sourceStatement).toContain('mart.review_article_serving_base_v4 serving')
+  expect(sourceStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sourceStatement).toContain(
+    'INNER JOIN list_mode_key_filter list_mode_key ON list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)',
+  )
+  expect(countOccurrences(sourceStatement ?? '', 'FROM mart.review_article_serving_base_v4 serving')).toBe(1)
+  expect(countOccurrences(sourceStatement ?? '', 'INNER JOIN mart.review_article_serving_list_mode_state_v4')).toBe(1)
+  expect(sourceStatement).not.toContain('FROM mart.review_article_serving_v4 serving')
   expect(sourceStatement).not.toContain('INNER JOIN mart.review_article_serving_payload_v4 payload')
   expect(sourceStatement).not.toContain("payload.display_identity = 'display:identity-1'")
   expect(sourceStatement).not.toContain("payload.payload_identity = 'payload:identity-1'")
   expect(sourceStatement).toContain('LEFT JOIN app.article article')
-  expect(sourceStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
+  expect(sourceStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(sourceStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
-  expect(sourceStatement).toContain("COALESCE(COALESCE(selected_hot.article_title, article.article_title), '')")
+  expect(sourceStatement).toContain(
+    "COALESCE(COALESCE(CASE WHEN NOT COALESCE(selected_base.tombstone, FALSE) THEN selected_hot.article_title ELSE NULL END, article.article_title), '')",
+  )
   expect(sourceStatement).toContain("LIKE LOWER('%heart%')")
   expect(sourceStatement).toContain("('llm'), ('human')")
   expect(sourceStatement).toContain('mart.review_article_judgment_detail_serving_v4 detail')
-  expect(sourceStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
-  expect(sourceStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(sourceStatement).toContain(
     "'duplicateFlag' AS facetKey, CAST(selected.duplicate_flag AS VARCHAR) AS facetValue",
   )
   expect(sourceStatement).toContain("'conflictFlag' AS facetKey, CAST(selected.conflict_flag AS VARCHAR) AS facetValue")
-  expect(sourceStatement).toContain('COALESCE(selected_hot.duplicate_flag, FALSE)')
-  expect(sourceStatement).toContain('COALESCE(selected_hot.conflict_flag, FALSE)')
+  expect(sourceStatement).toContain('COALESCE(list_mode_state.duplicate_flag, FALSE)')
+  expect(sourceStatement).toContain('COALESCE(list_mode_state.conflict_flag, FALSE)')
+  expect(sourceStatement).toContain(
+    'CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_hot.publication_year END AS publication_year',
+  )
   expect(sourceStatement).toContain("'importRoute' AS facetKey, selected.import_route_id AS facetValue")
   expect(sourceStatement).toContain('selected.import_route_id IS NOT NULL')
   expect(sourceStatement).toContain('selected.publication_year IS NOT NULL')
-  expect(sourceStatement).toContain('FROM mart.review_article_filter_state_serving_v4 state')
-  expect(sourceStatement).toContain('state.llm_status IS NOT NULL')
-  expect(sourceStatement).toContain('state.human_status IS NOT NULL')
-  expect(sourceStatement).toContain('state.llm_status AS facetValue')
-  expect(sourceStatement).toContain('COUNT(DISTINCT state.article_id) AS countValue')
+  expect(sourceStatement).toContain('selected.llm_status IS NOT NULL')
+  expect(sourceStatement).toContain('selected.human_status IS NOT NULL')
+  expect(sourceStatement).toContain('selected.llm_status AS facetValue')
+  expect(sourceStatement).toContain('COUNT(DISTINCT selected.article_id) AS countValue')
   expect(sourceStatement).not.toContain('serving.selected_import_route_id')
   expect(sourceStatement).not.toContain('serving.publication_year')
-  expect(sourceStatement).not.toContain('serving.duplicate_flag')
-  expect(sourceStatement).not.toContain('serving.conflict_flag')
   expect(sourceStatement).not.toContain('serving.llm_status_key')
   expect(sourceStatement).not.toContain('serving.human_status_key')
+  expect(sourceStatement).not.toContain('active_article AS')
+  expect(sourceStatement).not.toContain('\n        selected_article AS')
   expect(sourceStatement).toContain('detail.answered_original AS answerValue')
   expect(sourceStatement).toContain('unnest(detail.answered_original_as_array) AS answerValue')
   expect(joined).toContain("search_identity IS NOT DISTINCT FROM 'search:title'")
   expect(joined).toContain("filter_option_identity IS NOT DISTINCT FROM 'identity:search'")
+})
+
+test('search-scoped human option reconstruction follows project human judgment mode', async () => {
+  const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow({filterKind: 'human'})]})
+
+  await projectReviewServingFilterOptions(
+    projectInput({
+      filterOptionIdentity: 'identity:human-search',
+      listModeKeys: ['human'],
+      optionMode: 'human',
+      searchIdentity: 'search:title',
+      searchTitle: 'heart',
+    }),
+    database,
+  )
+  const sourceStatement = statements.find((statement) => {
+    return statement.includes('review_facet_options')
+  })
+
+  expect(sourceStatement).toContain('project_settings AS')
+  expect(sourceStatement).toContain(
+    "SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = 'project-1'), 'prompt') AS human_judgment_mode",
+  )
+  expect(sourceStatement).toContain('CROSS JOIN project_settings')
+  expect(sourceStatement).toContain("project_settings.human_judgment_mode <> 'summary'")
+  expect(sourceStatement).toContain("project_settings.human_judgment_mode = 'summary'")
+  expect(sourceStatement).toContain("answer.prompt_id <> 'summary'")
+  expect(sourceStatement).toContain("answer.prompt_id = 'summary'")
 })
 
 test('human option projection keeps prompt answers separate from summary-mode answers', async () => {

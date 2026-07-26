@@ -36,8 +36,6 @@ import {
   projectReviewServingDisplayBaseRanges,
   projectReviewServingDisplayBaseRows,
   projectReviewServingDisplayPatches,
-  projectReviewServingPayloadRanges,
-  projectReviewServingPayloadRows,
 } from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
 import {
   getReviewServingFilterOptionIdentity,
@@ -990,6 +988,70 @@ const shouldUseStrictRebuildValidationWithoutExpectedChecksum = () => {
   return process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION === 'true'
 }
 
+const getReviewArticleServingDirectReadSql = (input: {
+  alias: string
+  baseGeneration?: number
+  chunk: ReviewServingRebuildChunkManifest
+  projectId: string
+  snapshotIds: readonly string[]
+}) => {
+  return `(
+      SELECT
+        scoped.project_id,
+        scoped.review_config_hash,
+        scoped.snapshot_id,
+        scoped.base_generation,
+        CASE list_mode.list_mode_key
+          WHEN 'llm' THEN scoped.llm_patch_watermark
+          WHEN 'human' THEN scoped.human_patch_watermark
+          WHEN 'both' THEN scoped.both_patch_watermark
+          WHEN 'unassessed' THEN scoped.unassessed_patch_watermark
+          ELSE NULL
+        END AS patch_watermark,
+        list_mode.list_mode_key,
+        scoped.article_id,
+        scoped.article_created_at,
+        scoped.sort_key,
+        scoped.activity_sort_at,
+        scoped.duplicate_flag,
+        scoped.conflict_flag,
+        scoped.llm_status,
+        scoped.human_status
+      FROM (
+        SELECT
+          base.project_id,
+          base.review_config_hash,
+          base.snapshot_id,
+          base.base_generation,
+          base.article_id,
+          base.article_created_at,
+          base.sort_key,
+          base.activity_sort_at,
+          state.list_mode_keys,
+          state.llm_patch_watermark,
+          state.human_patch_watermark,
+          state.both_patch_watermark,
+          state.unassessed_patch_watermark,
+          state.duplicate_flag,
+          state.conflict_flag,
+          state.llm_status,
+          state.human_status
+        FROM mart.review_article_serving_base_v4 base
+        INNER JOIN mart.review_article_serving_list_mode_state_v4 state
+          ON state.project_id = base.project_id
+         AND state.project_id = ${getSqlLiteral(input.projectId)}
+         AND state.review_config_hash = base.review_config_hash
+         AND state.snapshot_id = base.snapshot_id
+         AND state.article_id = base.article_id
+        WHERE base.project_id = ${getSqlLiteral(input.projectId)}
+          ${input.baseGeneration === undefined ? '' : `AND base.base_generation = ${getSqlLiteral(input.baseGeneration)}`}
+          AND ${getAliasedSnapshotIdPredicate('base', input.snapshotIds)}
+          AND ${getChunkArticleRangePredicate({alias: 'base', chunk: input.chunk})}
+      ) scoped
+      CROSS JOIN unnest(scoped.list_mode_keys) AS list_mode(list_mode_key)
+    ) ${input.alias}`
+}
+
 const getRebuildChunkOutputValidation = async (
   input: RebuildChunkOutputValidationInput,
 ): Promise<ReviewServingRebuildChunkValidationResult> => {
@@ -1046,11 +1108,8 @@ const getDisplayRebuildChunkOutputChecksum = async (
         COALESCE(CAST(sort_key AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, list_mode_key, article_id
       ), '')) AS actualChecksum
-    FROM mart.review_article_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+    FROM ${getReviewArticleServingDirectReadSql({alias: 'serving', baseGeneration: input.chunk.outputBaseGeneration, chunk: input.chunk, projectId, snapshotIds: input.snapshotIds})}
+    WHERE TRUE
       AND EXISTS (
         SELECT 1
         FROM app.review_serving_snapshot_manifest snapshot
@@ -1071,11 +1130,8 @@ const getDisplayRebuildChunkOutputCount = async (
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM mart.review_article_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+    FROM ${getReviewArticleServingDirectReadSql({alias: 'serving', baseGeneration: input.chunk.outputBaseGeneration, chunk: input.chunk, projectId, snapshotIds: input.snapshotIds})}
+    WHERE TRUE
       AND EXISTS (
         SELECT 1
         FROM app.review_serving_snapshot_manifest snapshot
@@ -1092,71 +1148,14 @@ const getPayloadRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const projectId = requireRebuildChunkProjectId(input.chunk)
-  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
-    WITH payload_article AS (
-      SELECT
-        serving.snapshot_id,
-        json_extract_string(snapshot.composed_identity_json, '$.display.projectionIdentity') AS display_identity,
-        serving.article_id,
-        MIN(serving.article_created_at) AS article_created_at
-      FROM mart.review_article_serving_v4 serving
-      INNER JOIN app.review_serving_snapshot_manifest snapshot
-        ON snapshot.project_id = serving.project_id
-       AND snapshot.snapshot_id = serving.snapshot_id
-      WHERE serving.project_id = ${getSqlLiteral(projectId)}
-        AND json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
-        AND ${getAliasedSnapshotIdPredicate('serving', input.snapshotIds)}
-        AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
-      GROUP BY
-        serving.snapshot_id,
-        display_identity,
-        serving.article_id
-    )
-    SELECT
-      CAST(COUNT(*) AS INTEGER) AS actualCount,
-      sha256(COALESCE(string_agg(
-        CAST(snapshot_id AS VARCHAR) || ':' ||
-        CAST(display_identity AS VARCHAR) || ':' ||
-        CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(article_created_at AS VARCHAR), ''),
-        '|' ORDER BY snapshot_id, display_identity, article_id
-      ), '')) AS actualChecksum
-    FROM payload_article
-  `)
-
-  return row ?? {actualChecksum: '', actualCount: 0}
+  return getJudgmentInputContentRebuildChunkOutputChecksum(input, database)
 }
 
 const getPayloadRebuildChunkOutputCount = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const projectId = requireRebuildChunkProjectId(input.chunk)
-  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
-    WITH payload_article AS (
-      SELECT
-        serving.snapshot_id,
-        serving.article_id
-      FROM mart.review_article_serving_v4 serving
-      INNER JOIN app.review_serving_snapshot_manifest snapshot
-        ON snapshot.project_id = serving.project_id
-       AND snapshot.snapshot_id = serving.snapshot_id
-      WHERE serving.project_id = ${getSqlLiteral(projectId)}
-        AND json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
-        AND ${getAliasedSnapshotIdPredicate('serving', input.snapshotIds)}
-        AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
-      GROUP BY
-        serving.snapshot_id,
-        serving.article_id
-    )
-    SELECT
-      ${getCheapRebuildChunkOutputChecksumSelect()},
-      NULL::INTEGER AS actualPayloadBytes
-    FROM payload_article
-  `)
-
-  return row ?? {actualChecksum: '', actualCount: 0}
+  return getJudgmentInputContentRebuildChunkOutputCount(input, database)
 }
 
 const getSearchRebuildChunkOutputChecksum = async (
@@ -1234,11 +1233,8 @@ const getLlmStatusRebuildChunkOutputChecksum = async (
         COALESCE(CAST(patch_watermark AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
       ), '')) AS actualChecksum
-    FROM mart.review_article_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+    FROM ${getReviewArticleServingDirectReadSql({alias: 'serving', baseGeneration: input.chunk.outputBaseGeneration, chunk: input.chunk, projectId, snapshotIds: input.snapshotIds})}
+    WHERE TRUE
       AND EXISTS (
         SELECT 1
         FROM app.review_serving_snapshot_manifest snapshot
@@ -1259,11 +1255,8 @@ const getLlmStatusRebuildChunkOutputCount = async (
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM mart.review_article_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+    FROM ${getReviewArticleServingDirectReadSql({alias: 'serving', baseGeneration: input.chunk.outputBaseGeneration, chunk: input.chunk, projectId, snapshotIds: input.snapshotIds})}
+    WHERE TRUE
       AND EXISTS (
         SELECT 1
         FROM app.review_serving_snapshot_manifest snapshot
@@ -1292,11 +1285,8 @@ const getHumanStatusRebuildChunkOutputChecksum = async (
         COALESCE(CAST(patch_watermark AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
       ), '')) AS actualChecksum
-    FROM mart.review_article_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+    FROM ${getReviewArticleServingDirectReadSql({alias: 'serving', baseGeneration: input.chunk.outputBaseGeneration, chunk: input.chunk, projectId, snapshotIds: input.snapshotIds})}
+    WHERE TRUE
       AND EXISTS (
         SELECT 1
         FROM app.review_serving_snapshot_manifest snapshot
@@ -1317,11 +1307,8 @@ const getHumanStatusRebuildChunkOutputCount = async (
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM mart.review_article_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+    FROM ${getReviewArticleServingDirectReadSql({alias: 'serving', baseGeneration: input.chunk.outputBaseGeneration, chunk: input.chunk, projectId, snapshotIds: input.snapshotIds})}
+    WHERE TRUE
       AND EXISTS (
         SELECT 1
         FROM app.review_serving_snapshot_manifest snapshot
@@ -1348,9 +1335,8 @@ const getQueueRebuildChunkOutputChecksum = async (
         CAST(queue_kind AS VARCHAR) || ':' ||
         CAST(priority_bucket AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(prompt_id AS VARCHAR), '') || ':' ||
-        CAST(queue_identity AS VARCHAR),
-        '|' ORDER BY snapshot_id, review_config_hash, queue_kind, priority_bucket, article_id, prompt_id
+        COALESCE(CAST(prompt_ids AS VARCHAR), '[]'),
+        '|' ORDER BY snapshot_id, review_config_hash, queue_kind, priority_bucket, article_id, CAST(prompt_ids AS VARCHAR)
       ), '')) AS actualChecksum
     FROM mart.review_unassessed_queue_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
@@ -1401,13 +1387,13 @@ const getPostingRebuildChunkOutputChecksum = async (
       SELECT
         CAST(snapshot_id AS VARCHAR) || ':' ||
         CAST(review_config_hash AS VARCHAR) || ':' ||
-        CAST(list_mode_key AS VARCHAR) || ':state:' ||
+        'list-mode-state:' ||
         CAST(article_id AS VARCHAR) || ':' ||
         CAST(duplicate_flag AS VARCHAR) || ':' ||
         CAST(conflict_flag AS VARCHAR) || ':' ||
         COALESCE(CAST(llm_status AS VARCHAR), '') || ':' ||
         COALESCE(CAST(human_status AS VARCHAR), '') AS row_key
-      FROM mart.review_article_filter_state_serving_v4 state
+      FROM mart.review_article_serving_list_mode_state_v4 state
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSnapshotIdPredicate(input.snapshotIds)}
         AND ${getChunkArticleRangePredicate({alias: 'state', chunk: input.chunk})}
@@ -1436,7 +1422,7 @@ const getPostingRebuildChunkOutputCount = async (
         AND ${getChunkArticleRangePredicate({alias: 'serving_article', chunk: input.chunk})}
       UNION ALL
       SELECT article_id
-      FROM mart.review_article_filter_state_serving_v4 state
+      FROM mart.review_article_serving_list_mode_state_v4 state
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSnapshotIdPredicate(input.snapshotIds)}
         AND ${getChunkArticleRangePredicate({alias: 'state', chunk: input.chunk})}
@@ -1534,7 +1520,6 @@ const getJudgmentInputContentRebuildChunkOutputChecksum = async (
       sha256(COALESCE(string_agg(
         CAST(detail.snapshot_id AS VARCHAR) || ':' ||
         CAST(detail.review_config_hash AS VARCHAR) || ':' ||
-        CAST(detail.list_mode_key AS VARCHAR) || ':' ||
         CAST(detail.payload_kind AS VARCHAR) || ':' ||
         CAST(detail.article_id AS VARCHAR) || ':' ||
         CAST(detail.prompt_id AS VARCHAR) || ':' ||
@@ -1562,7 +1547,7 @@ const getJudgmentInputContentRebuildChunkOutputChecksum = async (
         COALESCE(CAST(assessment.updated_at AS VARCHAR), '') || ':' ||
         COALESCE(CAST(llm_judgment.explanation AS VARCHAR), '') || ':' ||
         COALESCE(CAST(llm_judgment.quotes AS VARCHAR), ''),
-        '|' ORDER BY detail.snapshot_id, detail.review_config_hash, detail.list_mode_key, detail.payload_kind, detail.article_id, detail.prompt_id
+        '|' ORDER BY detail.snapshot_id, detail.review_config_hash, detail.payload_kind, detail.article_id, detail.prompt_id
       ), '')) AS actualChecksum
     FROM mart.review_article_judgment_detail_serving_v4 detail
     LEFT JOIN app."judgment" llm_judgment
@@ -1718,9 +1703,14 @@ const runPayloadRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = snapshots.map((snapshot) => {
     return snapshot.snapshotId
+  })
+  const currentSettings = await getCurrentProjectReviewSnapshotSettings(projectId, database)
+  const payloadSnapshots = snapshots.filter((snapshot) => {
+    return getSnapshotReviewSettings(snapshot, currentSettings) !== null
   })
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
@@ -1741,20 +1731,34 @@ const runPayloadRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+        const snapshotDiagnostics = await payloadSnapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
           const diagnostics = await previous
-          const result = await projectReviewServingPayloadRanges(
+          const project = getSnapshotReviewSettings(snapshot, currentSettings)
+
+          if (project === null) {
+            return diagnostics
+          }
+
+          const result = await projectReviewServingJudgmentPayloadArticleRanges(
             {
               ranges: [
                 {
+                  acknowledgeClaims: false,
                   baseGeneration: input.chunk.outputBaseGeneration,
                   chunkEndArticleId: input.chunk.chunkEndKey,
                   chunkStartArticleId: input.chunk.chunkStartKey,
-                  displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
-                  payloadIdentity: input.chunk.projectionIdentity,
+                  claims: [],
+                  definitionVersion: manifest.definitionVersion,
+                  listModeKeys: reviewServingListModes,
+                  modelId: project.modelId,
                   projectId,
-                  selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+                  projectionIdentity: input.chunk.projectionIdentity,
+                  reviewConfigHash: requireReviewConfigHash(snapshot),
                   snapshotId: snapshot.snapshotId,
+                  useAbstract: project.useAbstract,
+                  useFulltext: project.useFulltext,
+                  useFulltextNoImages: project.useFulltextNoImages,
+                  useTitle: project.useTitle,
                 },
               ],
             },
@@ -3431,8 +3435,10 @@ const runPayloadRebuildChunkBatch = async (
   }
 
   const projectId = requireRebuildChunkProjectId(firstChunk)
+  const manifest = await requireRebuildChunkProjectionManifest(firstChunk, database)
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
+  const currentSettings = await getCurrentProjectReviewSnapshotSettings(projectId, database)
 
   const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
@@ -3445,18 +3451,32 @@ const runPayloadRebuildChunkBatch = async (
 
     await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
       await previous
-      await projectReviewServingPayloadRanges(
+      const project = getSnapshotReviewSettings(snapshot, currentSettings)
+
+      if (project === null) {
+        return
+      }
+
+      await projectReviewServingJudgmentPayloadArticleRanges(
         {
           ranges: input.chunks.map((chunk) => {
             return {
+              acknowledgeClaims: false,
               baseGeneration: chunk.outputBaseGeneration,
               chunkEndArticleId: chunk.chunkEndKey,
               chunkStartArticleId: chunk.chunkStartKey,
-              displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
-              payloadIdentity: chunk.projectionIdentity,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              listModeKeys: reviewServingListModes,
+              modelId: project.modelId,
               projectId,
-              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              projectionIdentity: chunk.projectionIdentity,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
               snapshotId: snapshot.snapshotId,
+              useAbstract: project.useAbstract,
+              useFulltext: project.useFulltext,
+              useFulltextNoImages: project.useFulltextNoImages,
+              useTitle: project.useTitle,
             }
           }),
         },
@@ -4673,21 +4693,6 @@ export const getDefaultReviewServingProjectorRunners = (
           return 0
         }
 
-        const articlePayloadResult = await projectReviewServingPayloadRows(
-          {
-            acknowledgeClaims: false,
-            baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
-            definitionVersion: manifest.definitionVersion,
-            displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
-            payloadIdentity: manifest.projectionIdentity,
-            projectId,
-            projectionIdentity: manifest.projectionIdentity,
-            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-            snapshotId: snapshot.snapshotId,
-          },
-          database,
-        )
         const judgmentPayloadResult = await projectReviewServingJudgmentPayloadRows(
           {
             acknowledgeClaims,
@@ -4708,9 +4713,7 @@ export const getDefaultReviewServingProjectorRunners = (
           database,
         )
 
-        return (
-          articlePayloadResult.payloadRowCount + judgmentPayloadResult.humanRowCount + judgmentPayloadResult.llmRowCount
-        )
+        return judgmentPayloadResult.humanRowCount + judgmentPayloadResult.llmRowCount
       })
 
       return {
@@ -5676,115 +5679,118 @@ const getRebuildRequestSnapshotTargets = async (
     .join(', ')})`
 
   return database.queryJson<RebuildRequestSnapshotPromotionRow>(`
-    WITH chunk_snapshot AS (
+    WITH request_chunk AS (
+      SELECT
+        project_id,
+        projection_component,
+        projection_identity,
+        output_base_generation,
+        snapshot_id
+      FROM app.review_rebuild_chunk_manifest
+      WHERE request_id = ${getSqlLiteral(input.requestId)}
+        AND project_id IS NOT NULL
+    ), scoped_snapshot AS (
+      SELECT
+        snapshot.project_id,
+        snapshot.snapshot_id,
+        snapshot.review_config_hash,
+        snapshot.component_state_json
+      FROM app.review_serving_snapshot_manifest snapshot
+      WHERE ${snapshotStatusPredicate}
+        AND EXISTS (
+          SELECT 1
+          FROM request_chunk chunk
+          WHERE chunk.project_id = snapshot.project_id
+            AND (
+              chunk.snapshot_id = snapshot.snapshot_id
+              OR chunk.snapshot_id IS NULL
+            )
+        )
+    ), scoped_component_state AS (
+      SELECT
+        snapshot.project_id,
+        snapshot.snapshot_id,
+        json_extract_string(state.value, '$.component') AS projection_component,
+        json_extract_string(state.value, '$.projectionIdentity') AS projection_identity,
+        CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) AS output_base_generation
+      FROM scoped_snapshot snapshot
+      CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.required')) state
+      UNION ALL
+      SELECT
+        snapshot.project_id,
+        snapshot.snapshot_id,
+        json_extract_string(state.value, '$.component') AS projection_component,
+        json_extract_string(state.value, '$.projectionIdentity') AS projection_identity,
+        CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) AS output_base_generation
+      FROM scoped_snapshot snapshot
+      CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.optional')) state
+    ), chunk_snapshot AS (
       SELECT
         chunk.project_id,
         chunk.snapshot_id
-      FROM app.review_rebuild_chunk_manifest chunk
-      INNER JOIN app.review_serving_snapshot_manifest snapshot
+      FROM request_chunk chunk
+      INNER JOIN scoped_snapshot snapshot
         ON snapshot.project_id = chunk.project_id
         AND snapshot.snapshot_id = chunk.snapshot_id
-        AND ${snapshotStatusPredicate}
-      WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
-        AND chunk.project_id IS NOT NULL
-        AND chunk.snapshot_id IS NOT NULL
+      WHERE chunk.snapshot_id IS NOT NULL
       UNION
       SELECT
         chunk.project_id,
-        snapshot.snapshot_id
-      FROM app.review_rebuild_chunk_manifest chunk
-      INNER JOIN app.review_serving_snapshot_manifest snapshot
-        ON snapshot.project_id = chunk.project_id
-        AND ${snapshotStatusPredicate}
-      CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.required')) state
-      WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
-        AND chunk.project_id IS NOT NULL
-        AND chunk.snapshot_id IS NULL
-        AND json_extract_string(state.value, '$.component') = chunk.projection_component
-        AND json_extract_string(state.value, '$.projectionIdentity') = chunk.projection_identity
-        AND CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) = chunk.output_base_generation
+        state.snapshot_id
+      FROM request_chunk chunk
+      INNER JOIN scoped_component_state state
+        ON state.project_id = chunk.project_id
+        AND state.projection_component = chunk.projection_component
+        AND state.projection_identity = chunk.projection_identity
+        AND state.output_base_generation = chunk.output_base_generation
+      WHERE chunk.snapshot_id IS NULL
+    ), chunk_snapshot_component AS (
+      SELECT
+        chunk.project_id,
+        chunk.snapshot_id,
+        chunk.projection_component
+      FROM request_chunk chunk
+      INNER JOIN chunk_snapshot
+        ON chunk_snapshot.project_id = chunk.project_id
+        AND chunk_snapshot.snapshot_id = chunk.snapshot_id
+      WHERE chunk.snapshot_id IS NOT NULL
       UNION
       SELECT
         chunk.project_id,
-        snapshot.snapshot_id
-      FROM app.review_rebuild_chunk_manifest chunk
-      INNER JOIN app.review_serving_snapshot_manifest snapshot
-        ON snapshot.project_id = chunk.project_id
-        AND ${snapshotStatusPredicate}
-      CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.optional')) state
-      WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
-        AND chunk.project_id IS NOT NULL
-        AND chunk.snapshot_id IS NULL
-        AND json_extract_string(state.value, '$.component') = chunk.projection_component
-        AND json_extract_string(state.value, '$.projectionIdentity') = chunk.projection_identity
-        AND CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) = chunk.output_base_generation
+        state.snapshot_id,
+        chunk.projection_component
+      FROM request_chunk chunk
+      INNER JOIN scoped_component_state state
+        ON state.project_id = chunk.project_id
+        AND state.projection_component = chunk.projection_component
+        AND state.projection_identity = chunk.projection_identity
+        AND state.output_base_generation = chunk.output_base_generation
+      INNER JOIN chunk_snapshot
+        ON chunk_snapshot.project_id = state.project_id
+        AND chunk_snapshot.snapshot_id = state.snapshot_id
+      WHERE chunk.snapshot_id IS NULL
+    ), chunk_snapshot_flags AS (
+      SELECT
+        project_id,
+        snapshot_id,
+        MAX(CASE WHEN projection_component = 'summary' THEN 1 ELSE 0 END) > 0 AS has_summary_rebuild_chunks,
+        MAX(CASE WHEN projection_component = 'posting' THEN 1 ELSE 0 END) > 0 AS has_posting_rebuild_chunks
+      FROM chunk_snapshot_component
+      GROUP BY project_id, snapshot_id
     )
     SELECT DISTINCT
-      EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_chunk_manifest summary_chunk
-        WHERE summary_chunk.request_id = ${getSqlLiteral(input.requestId)}
-          AND summary_chunk.project_id = chunk_snapshot.project_id
-          AND summary_chunk.projection_component = 'summary'
-          AND (
-            summary_chunk.snapshot_id = chunk_snapshot.snapshot_id
-            OR (
-              summary_chunk.snapshot_id IS NULL
-              AND (
-                EXISTS (
-                  SELECT 1
-                  FROM json_each(json_extract(snapshot.component_state_json, '$.required')) summary_state
-                  WHERE json_extract_string(summary_state.value, '$.component') = summary_chunk.projection_component
-                    AND json_extract_string(summary_state.value, '$.projectionIdentity') = summary_chunk.projection_identity
-                    AND CAST(json_extract_string(summary_state.value, '$.baseGeneration') AS BIGINT) = summary_chunk.output_base_generation
-                )
-                OR EXISTS (
-                  SELECT 1
-                  FROM json_each(json_extract(snapshot.component_state_json, '$.optional')) summary_state
-                  WHERE json_extract_string(summary_state.value, '$.component') = summary_chunk.projection_component
-                    AND json_extract_string(summary_state.value, '$.projectionIdentity') = summary_chunk.projection_identity
-                    AND CAST(json_extract_string(summary_state.value, '$.baseGeneration') AS BIGINT) = summary_chunk.output_base_generation
-                )
-              )
-            )
-          )
-      ) AS hasSummaryRebuildChunks,
-      EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_chunk_manifest posting_chunk
-        WHERE posting_chunk.request_id = ${getSqlLiteral(input.requestId)}
-          AND posting_chunk.project_id = chunk_snapshot.project_id
-          AND posting_chunk.projection_component = 'posting'
-          AND (
-            posting_chunk.snapshot_id = chunk_snapshot.snapshot_id
-            OR (
-              posting_chunk.snapshot_id IS NULL
-              AND (
-                EXISTS (
-                  SELECT 1
-                  FROM json_each(json_extract(snapshot.component_state_json, '$.required')) posting_state
-                  WHERE json_extract_string(posting_state.value, '$.component') = posting_chunk.projection_component
-                    AND json_extract_string(posting_state.value, '$.projectionIdentity') = posting_chunk.projection_identity
-                    AND CAST(json_extract_string(posting_state.value, '$.baseGeneration') AS BIGINT) = posting_chunk.output_base_generation
-                )
-                OR EXISTS (
-                  SELECT 1
-                  FROM json_each(json_extract(snapshot.component_state_json, '$.optional')) posting_state
-                  WHERE json_extract_string(posting_state.value, '$.component') = posting_chunk.projection_component
-                    AND json_extract_string(posting_state.value, '$.projectionIdentity') = posting_chunk.projection_identity
-                    AND CAST(json_extract_string(posting_state.value, '$.baseGeneration') AS BIGINT) = posting_chunk.output_base_generation
-                )
-              )
-            )
-          )
-      ) AS hasPostingRebuildChunks,
+      COALESCE(chunk_snapshot_flags.has_summary_rebuild_chunks, FALSE) AS hasSummaryRebuildChunks,
+      COALESCE(chunk_snapshot_flags.has_posting_rebuild_chunks, FALSE) AS hasPostingRebuildChunks,
       chunk_snapshot.project_id AS projectId,
       chunk_snapshot.snapshot_id AS snapshotId,
       snapshot.review_config_hash AS reviewConfigHash
     FROM chunk_snapshot
-    INNER JOIN app.review_serving_snapshot_manifest snapshot
+    INNER JOIN scoped_snapshot snapshot
       ON snapshot.project_id = chunk_snapshot.project_id
       AND snapshot.snapshot_id = chunk_snapshot.snapshot_id
+    LEFT JOIN chunk_snapshot_flags
+      ON chunk_snapshot_flags.project_id = chunk_snapshot.project_id
+      AND chunk_snapshot_flags.snapshot_id = chunk_snapshot.snapshot_id
     ORDER BY chunk_snapshot.project_id ASC, chunk_snapshot.snapshot_id ASC
   `)
 }

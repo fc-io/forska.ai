@@ -481,12 +481,22 @@ const getReviewServingV4BootstrapSourceWatermarks = async (
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
   const rows = await database.queryJson<ReviewServingV4BootstrapDirtyWatermarkRow>(`
-    SELECT
-      source_partition AS sourcePartition,
-      MAX(latest_source_high_water_mark) AS latestSourceHighWaterMark
-    FROM app.review_serving_dirty_work
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-    GROUP BY source_partition
+    SELECT sourcePartition, MAX(latestSourceHighWaterMark) AS latestSourceHighWaterMark
+    FROM (
+      SELECT
+        source_partition AS sourcePartition,
+        source_high_water_mark AS latestSourceHighWaterMark
+      FROM app.review_serving_project_dirty_source_watermark
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+      UNION ALL
+      SELECT
+        source_partition AS sourcePartition,
+        latest_source_high_water_mark AS latestSourceHighWaterMark
+      FROM app.review_serving_dirty_work
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND status <> 'completed'
+    ) AS bootstrap_source_watermark
+    GROUP BY sourcePartition
   `)
   const normalizedRows = rows.flatMap((row) => {
     const latestSourceHighWaterMark = Number(row.latestSourceHighWaterMark)

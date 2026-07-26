@@ -168,15 +168,18 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
             component,
             records: [
               {
-                keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
-                table: 'mart.review_article_serving_v4',
+                keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'article_id'],
+                table: 'mart.review_article_serving_base_v4',
                 values: {
+                  activity_sort_at: new Date('2026-01-01T00:00:00.000Z'),
+                  article_created_at: new Date('2026-01-01T00:00:00.000Z'),
                   article_id: 'article-1',
-                  article_title: 'Display title',
-                  list_mode_key: 'llm',
+                  base_generation: 1,
+                  patch_watermark: 12,
                   project_id: 'project-1',
                   review_config_hash: 'review-config-1',
                   snapshot_id: 'snapshot-1',
+                  sort_key: 'sort-key-1',
                 },
               },
             ],
@@ -193,12 +196,12 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
             component,
             records: [
               {
-                keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
-                table: 'mart.review_article_serving_v4',
+                keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'article_id'],
+                table: 'mart.review_article_serving_list_mode_state_v4',
                 values: {
                   article_id: 'article-1',
-                  is_answered: true,
-                  list_mode_key: 'llm',
+                  list_mode_keys: ['llm'],
+                  llm_status: 'answered',
                   project_id: 'project-1',
                   review_config_hash: 'review-config-1',
                   snapshot_id: 'snapshot-1',
@@ -367,7 +370,9 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   ])
   expect(joined).toContain('BEGIN review-serving-writer')
   expect(joined).toContain('COMMIT review-serving-writer')
-  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_base_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
+  expect(joined).not.toContain('mart.review_article_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expect(joined).not.toContain('_patch_v4')

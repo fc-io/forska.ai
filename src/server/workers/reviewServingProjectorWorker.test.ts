@@ -66,6 +66,13 @@ const chunkManifest = {
   updatedAt: '2026-06-16T10:00:00.000Z',
 } satisfies ReviewServingRebuildChunkManifest
 
+const reviewArticleServingDirectReadTable = 'FROM mart.review_article_serving_base_v4 base'
+const reviewArticleServingDirectReadStateJoin = 'INNER JOIN mart.review_article_serving_list_mode_state_v4 state'
+const reviewArticleServingDirectReadScopedProject = "WHERE base.project_id = 'project-1'"
+const reviewArticleServingDirectReadScopedRangeStart = "AND base.article_id >= 'article-001'"
+const reviewArticleServingDirectReadScopedRangeEnd = "AND base.article_id <= 'article-099'"
+const reviewArticleServingCompatibilityViewRead = 'FROM mart.review_article_serving_v4 serving'
+
 const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
   const digest = createHash('sha256')
     .update(
@@ -1197,7 +1204,7 @@ test('worker writes compatible display rebuild chunks through one batch writer',
       ] as T[]
     }
 
-    if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+    if (statement.includes(reviewArticleServingDirectReadTable)) {
       return [{actualChecksum: 'checksum-display-batch', actualCount: 2}] as T[]
     }
 
@@ -1283,6 +1290,38 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
     [firstChunk.chunkId, firstChunk],
     [secondChunk.chunkId, secondChunk],
   ])
+  const projectSettings = {
+    humanJudgmentMode: 'prompt' as const,
+    modelExecutionOptions: null,
+    modelId: 'model-1',
+    modelProviderBaseUrl: null,
+    modelProviderConnectionId: null,
+    modelProviderKind: null,
+    modelRemoteModelId: null,
+    modelVariant: null,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+  const reviewConfigHash = buildReviewConfigHash({
+    humanJudgmentMode: projectSettings.humanJudgmentMode,
+    modelExecutionIdentity: {
+      modelExecutionOptions: null,
+      modelId: projectSettings.modelId,
+      providerBaseUrl: projectSettings.modelProviderBaseUrl,
+      providerConnectionId: projectSettings.modelProviderConnectionId,
+      providerKind: projectSettings.modelProviderKind,
+      remoteModelId: projectSettings.modelRemoteModelId,
+      variant: projectSettings.modelVariant,
+    },
+    modelId: projectSettings.modelId,
+    promptConfigs: [],
+    useAbstract: projectSettings.useAbstract,
+    useFulltext: projectSettings.useFulltext,
+    useFulltextNoImages: projectSettings.useFulltextNoImages,
+    useTitle: projectSettings.useTitle,
+  })
   const componentState = {
     optional: [],
     required: [
@@ -1309,18 +1348,46 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
       return [
         {
           componentStateJson: componentState,
-          reviewConfigHash: 'review-config-1',
+          reviewConfigHash,
           selectedImportSnapshotId: 'selected-import-snapshot-1',
           snapshotId: 'snapshot-payload-batch-1',
         },
       ] as T[]
     }
 
-    if (
-      statement.includes("json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity')")
-      && statement.includes('FROM payload_article')
-    ) {
+    if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4 detail')) {
       return [{actualChecksum: 'checksum-payload-batch', actualCount: 2, actualPayloadBytes: 12}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      return [
+        {
+          baseGeneration: 2,
+          definitionVersion: 'payload:v1',
+          inputDigest: firstChunk.inputDigest,
+          inputWatermark: firstChunk.inputWatermark,
+          inputWatermarksJson: {reviewChange: 9},
+          invalidationReason: firstChunk.inputDigest,
+          manifestId: 'manifest-payload',
+          patchRangeEnd: firstChunk.inputWatermark,
+          patchRangeStart: firstChunk.inputWatermark,
+          patchWatermark: firstChunk.inputWatermark,
+          projectId: firstChunk.projectId,
+          projectionComponent: firstChunk.projectionComponent,
+          projectionIdentity: firstChunk.projectionIdentity,
+          promptConfigHash: null,
+          reviewConfigHash,
+          status: 'candidate',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.project project') && statement.includes('LIMIT 1')) {
+      return [
+        {
+          ...projectSettings,
+        },
+      ] as T[]
     }
 
     return [] as T[]
@@ -1362,9 +1429,10 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
   expect(result.chunkBatchCount).toBe(2)
   expect(harness.claimInputs).toHaveLength(2)
   expect(harness.runChunkInputs).toEqual([])
-  expect(joined).not.toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
-  expect(joined).not.toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
   expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('payloadBatchWriter')
 })
 
@@ -2007,13 +2075,13 @@ test('worker writes compatible status and posting rebuild chunks through compone
     {
       component: 'llmStatus',
       identity: 'llmStatus:project-1',
-      validationTable: 'FROM mart.review_article_serving_v4 serving',
+      validationTable: reviewArticleServingDirectReadTable,
       writerName: 'llmStatusBatchWriter',
     },
     {
       component: 'humanStatus',
       identity: 'humanStatus:project-1',
-      validationTable: 'FROM mart.review_article_serving_v4 serving',
+      validationTable: reviewArticleServingDirectReadTable,
       writerName: 'humanStatusBatchWriter',
     },
     {
@@ -2173,6 +2241,11 @@ test('worker writes compatible status and posting rebuild chunks through compone
     } else {
       expect(joined).toContain(batchCase.writerName)
     }
+    if (batchCase.component === 'llmStatus' || batchCase.component === 'humanStatus') {
+      expect(joined).toContain(reviewArticleServingDirectReadTable)
+      expect(joined).toContain(reviewArticleServingDirectReadStateJoin)
+      expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
+    }
   }
 })
 
@@ -2184,7 +2257,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       identity: 'llmStatus:project-1',
       preclaimTailLimit: 7,
       startKeys: ['article-001', 'article-033', 'article-066'],
-      validationTable: 'FROM mart.review_article_serving_v4 serving',
+      validationTable: reviewArticleServingDirectReadTable,
       writerName: 'llmStatusBatchWriter',
     },
     {
@@ -2193,7 +2266,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       identity: 'humanStatus:project-1',
       preclaimTailLimit: 3,
       startKeys: ['article-001', 'article-033', 'article-066'],
-      validationTable: 'FROM mart.review_article_serving_v4 serving',
+      validationTable: reviewArticleServingDirectReadTable,
       writerName: 'humanStatusBatchWriter',
     },
     {
@@ -2202,7 +2275,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       identity: 'queue:project-1',
       preclaimTailLimit: 31,
       startKeys: ['article-001', 'article-034', 'article-067'],
-      validationTable: 'FROM mart.review_article_serving_v4 serving',
+      validationTable: reviewArticleServingCompatibilityViewRead,
       writerName: 'queueBatchWriter',
     },
     {
@@ -2435,6 +2508,11 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       expect(joined).toContain(`article_id >= '${batchCase.startKeys[expectedBatchSize - 1]}'`)
       expect(joined).toContain(`article_id <= '${batchCase.endKeys[expectedBatchSize - 1]}'`)
       expect(joined).toContain(batchCase.writerName)
+    }
+    if (batchCase.component === 'llmStatus' || batchCase.component === 'humanStatus') {
+      expect(joined).toContain(reviewArticleServingDirectReadTable)
+      expect(joined).toContain(reviewArticleServingDirectReadStateJoin)
+      expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
     }
   }
 })
@@ -4381,8 +4459,7 @@ test('worker default dependencies wire real projector runners instead of an empt
   expect(source).toContain('projectReviewServingFilterPostingRanges')
   expect(source).toContain('projectReviewServingFilterPostings')
   expect(source).toContain('projectReviewServingSummaries')
-  expect(source).toContain('projectReviewServingPayloadRanges')
-  expect(source).toContain('projectReviewServingPayloadRows')
+  expect(source).toContain('projectReviewServingJudgmentPayloadArticleRanges')
   expect(source).toContain('projectReviewServingJudgmentPayloadRows')
   expect(source).toContain('projectReviewServingDisplayPatches')
   expect(source).toContain('projectReviewServingTitleSearchRows')
@@ -4701,20 +4778,25 @@ test('request snapshot targets match null-snapshot chunks by component generatio
   const start = source.indexOf('const getRebuildRequestSnapshotTargets = async')
   const end = source.indexOf('\nconst getRebuildRequestSnapshotReductionTargets', start)
   const targetSource = source.slice(start, end)
+  const snapshotComponentStateJsonScans =
+    targetSource.match(/json_each\(json_extract\(snapshot\.component_state_json/g) ?? []
 
-  expect(targetSource).toContain(
-    "CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) = chunk.output_base_generation",
-  )
+  expect(targetSource).toContain('scoped_component_state AS (')
+  expect(snapshotComponentStateJsonScans).toHaveLength(2)
+  expect(targetSource).toContain("json_each(json_extract(snapshot.component_state_json, '$.required'))")
+  expect(targetSource).toContain("json_each(json_extract(snapshot.component_state_json, '$.optional'))")
+  expect(targetSource).toContain('state.output_base_generation = chunk.output_base_generation')
   expect(targetSource).toContain('AS hasSummaryRebuildChunks')
   expect(targetSource).toContain('AS hasPostingRebuildChunks')
-  expect(targetSource).toContain("summary_chunk.projection_component = 'summary'")
-  expect(targetSource).toContain("posting_chunk.projection_component = 'posting'")
-  expect(targetSource).toContain(
-    "CAST(json_extract_string(summary_state.value, '$.baseGeneration') AS BIGINT) = summary_chunk.output_base_generation",
-  )
-  expect(targetSource).toContain(
-    "CAST(json_extract_string(posting_state.value, '$.baseGeneration') AS BIGINT) = posting_chunk.output_base_generation",
-  )
+  expect(targetSource).toContain('chunk_snapshot_component AS (')
+  expect(targetSource).toContain('chunk_snapshot_flags AS (')
+  expect(targetSource).toContain("projection_component = 'summary'")
+  expect(targetSource).toContain("projection_component = 'posting'")
+  expect(targetSource).toContain('COALESCE(chunk_snapshot_flags.has_summary_rebuild_chunks, FALSE)')
+  expect(targetSource).toContain('COALESCE(chunk_snapshot_flags.has_posting_rebuild_chunks, FALSE)')
+  expect(targetSource).not.toContain('json_extract_string(summary_state.value')
+  expect(targetSource).not.toContain('LEFT JOIN scoped_component_state summary_state')
+  expect(targetSource).not.toContain('json_extract_string(posting_state.value')
 })
 
 test('display rebuild chunk executor writes bounded base rows and completes the chunk', async () => {
@@ -4779,7 +4861,7 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
         ] as T[]
       }
 
-      if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+      if (statement.includes(reviewArticleServingDirectReadTable)) {
         return [{actualChecksum: 'checksum-display-1', actualCount: 4}] as T[]
       }
 
@@ -4804,7 +4886,12 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
   expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).toContain("scope.article_id >= 'article-001'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
-  expect(joined).toContain('FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain(reviewArticleServingDirectReadTable)
+  expect(joined).toContain(reviewArticleServingDirectReadStateJoin)
+  expect(joined).toContain(reviewArticleServingDirectReadScopedProject)
+  expect(joined).toContain(reviewArticleServingDirectReadScopedRangeStart)
+  expect(joined).toContain(reviewArticleServingDirectReadScopedRangeEnd)
+  expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
   expect(joined).toContain("checksum = 'checksum-display-1'")
   expect(joined).not.toContain('string_agg(')
   expect(joined).toContain('actual_output_rows = 4')
@@ -4859,7 +4946,7 @@ test('debug rebuild validation mode forces full checksum for chunks without expe
         return [] as T[]
       }
 
-      if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+      if (statement.includes(reviewArticleServingDirectReadTable)) {
         expect(statement).toContain('string_agg(')
 
         return [{actualChecksum: 'checksum-display-debug', actualCount: 4}] as T[]
@@ -4886,6 +4973,9 @@ test('debug rebuild validation mode forces full checksum for chunks without expe
 
     expect(result).toEqual({status: 'completed'})
     expect(joined).toContain('string_agg(')
+    expect(joined).toContain(reviewArticleServingDirectReadTable)
+    expect(joined).toContain(reviewArticleServingDirectReadStateJoin)
+    expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
     expect(joined).not.toContain("sha256('cheap-count:'")
     expect(joined).toContain("checksum = 'checksum-display-debug'")
     expect(joined).toContain('"validationMode":"debug-strict-checksum"')
@@ -4943,7 +5033,7 @@ test('expected-checksum rebuild chunk keeps strict checksum validation', async (
         return [] as T[]
       }
 
-      if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+      if (statement.includes(reviewArticleServingDirectReadTable)) {
         expect(statement).toContain('string_agg(')
 
         return [{actualChecksum: 'expected-display-checksum', actualCount: 4}] as T[]
@@ -4967,6 +5057,9 @@ test('expected-checksum rebuild chunk keeps strict checksum validation', async (
 
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('string_agg(')
+  expect(joined).toContain(reviewArticleServingDirectReadTable)
+  expect(joined).toContain(reviewArticleServingDirectReadStateJoin)
+  expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
   expect(joined).not.toContain("sha256('cheap-count:'")
   expect(joined).toContain('"validationMode":"strict-checksum"')
 })
@@ -5069,9 +5162,8 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     expect(joined).toContain(
       'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
     )
-    expect(joined).toContain(
-      'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING',
-    )
+    expect(joined).toContain('state_source AS (')
+    expect(joined).toContain('SET duplicate_flag = COALESCE(source.duplicateFlag, FALSE)')
     expect(joined).toContain('"validationMode":"debug-strict-checksum"')
     expect(joined).not.toContain('"validationMode":"reused-source-posting-checksum"')
   } finally {
@@ -5103,6 +5195,38 @@ test('payload and search rebuild chunk executors write bounded base rows and com
     projectionComponent: 'search',
     projectionIdentity: 'search:project-1',
   }
+  const projectSettings = {
+    humanJudgmentMode: 'prompt' as const,
+    modelExecutionOptions: null,
+    modelId: 'model-1',
+    modelProviderBaseUrl: null,
+    modelProviderConnectionId: null,
+    modelProviderKind: null,
+    modelRemoteModelId: null,
+    modelVariant: null,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+  const reviewConfigHash = buildReviewConfigHash({
+    humanJudgmentMode: projectSettings.humanJudgmentMode,
+    modelExecutionIdentity: {
+      modelExecutionOptions: null,
+      modelId: projectSettings.modelId,
+      providerBaseUrl: projectSettings.modelProviderBaseUrl,
+      providerConnectionId: projectSettings.modelProviderConnectionId,
+      providerKind: projectSettings.modelProviderKind,
+      remoteModelId: projectSettings.modelRemoteModelId,
+      variant: projectSettings.modelVariant,
+    },
+    modelId: projectSettings.modelId,
+    promptConfigs: [],
+    useAbstract: projectSettings.useAbstract,
+    useFulltext: projectSettings.useFulltext,
+    useFulltextNoImages: projectSettings.useFulltextNoImages,
+    useTitle: projectSettings.useTitle,
+  })
   const componentState = {
     optional: [{baseGeneration: '7', component: 'search', projectionIdentity: 'search:project-1'}],
     required: [
@@ -5130,21 +5254,9 @@ test('payload and search rebuild chunk executors write bounded base rows and com
         return [
           {
             componentStateJson: componentState,
-            reviewConfigHash: 'review-config-1',
+            reviewConfigHash,
             selectedImportSnapshotId: 'selected-import-snapshot-1',
             snapshotId: 'snapshot-rebuild-1',
-          },
-        ] as T[]
-      }
-
-      if (statement.includes('LEFT(article.article_summary')) {
-        return [
-          {
-            abstractText: 'Abstract',
-            articleCreatedAt: '2026-06-16T10:00:00.000Z',
-            articleId: 'article-050',
-            fullTextPreview: 'Full text',
-            sourceMetadata: null,
           },
         ] as T[]
       }
@@ -5160,10 +5272,38 @@ test('payload and search rebuild chunk executors write bounded base rows and com
         ] as T[]
       }
 
-      if (
-        statement.includes("json_extract_string(snapshot.composed_identity_json, '$.payload.projectionIdentity')")
-        && statement.includes('FROM payload_article')
-      ) {
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: activeChunk.outputBaseGeneration,
+            definitionVersion: `${activeChunk.projectionComponent}-v1`,
+            inputDigest: activeChunk.inputDigest,
+            inputWatermark: activeChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: 9},
+            invalidationReason: activeChunk.inputDigest,
+            manifestId: `manifest-${activeChunk.projectionComponent}`,
+            patchRangeEnd: activeChunk.inputWatermark,
+            patchRangeStart: activeChunk.inputWatermark,
+            patchWatermark: activeChunk.inputWatermark,
+            projectId: activeChunk.projectId,
+            projectionComponent: activeChunk.projectionComponent,
+            projectionIdentity: activeChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash,
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.project project') && statement.includes('LIMIT 1')) {
+        return [
+          {
+            ...projectSettings,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4 detail')) {
         return [{actualChecksum: 'checksum-payload-1', actualCount: 1}] as T[]
       }
 
@@ -5198,6 +5338,7 @@ test('payload and search rebuild chunk executors write bounded base rows and com
   expect(payloadResult).toEqual({status: 'completed'})
   expect(searchResult).toEqual({status: 'completed'})
   expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
   expect(joined).toContain("scope.article_id >= 'article-001'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
@@ -5482,15 +5623,14 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING',
-  )
+  expect(joined).toContain('state_source AS (')
+  expect(joined).toContain('SET duplicate_flag = COALESCE(source.duplicateFlag, FALSE)')
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING',
   )
   expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
@@ -5610,7 +5750,7 @@ test('worker refreshes summary filter options when an active-snapshot summary re
       ] as T[]
     }
 
-    if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+    if (statement.includes(reviewArticleServingDirectReadTable)) {
       return [] as T[]
     }
 
@@ -6735,6 +6875,352 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
   }
 })
 
+test('request snapshot finalization resolves mixed direct and component-state chunks in DuckDB', () => {
+  const duckdbPath = `/tmp/forska-request-snapshot-component-state-targets-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const script = `
+    const [
+      {migrateDuckdb},
+      {getAppDatabaseService},
+      {resetDuckdbServiceForTests},
+      {resetServerRuntimeRoleForTests},
+      {runReviewServingProjectorWorkerOnce},
+    ] = await Promise.all([
+      import('./src/db/migrateDuckdb.ts'),
+      import('./src/server/services/appDatabaseService.ts'),
+      import('./src/server/utils/duckdbService.ts'),
+      import('./src/server/utils/serverRuntimeRole.ts'),
+      import('./src/server/workers/reviewServingProjectorWorker.ts'),
+    ])
+
+    resetDuckdbServiceForTests()
+    resetServerRuntimeRoleForTests()
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const requestId = 'request-component-state-targets'
+    const projectId = 'project-component-state-targets'
+    const selectedImportSnapshotId = 'selected-import-component-state-targets'
+    const directSnapshotId = 'snapshot-direct-display'
+    const optionalSnapshotId = 'snapshot-optional-posting'
+    const requiredSnapshotId = 'snapshot-required-posting'
+    const displayIdentity = 'display:' + projectId
+    const postingIdentity = 'posting:' + projectId
+    const state = (component, projectionIdentity) => ({
+      baseGeneration: '7',
+      component,
+      patchWatermark: '42',
+      projectionIdentity,
+      requirement: component === 'posting' ? 'optional' : 'required',
+    })
+    const directChunk = {
+      actualInputRows: null,
+      actualOutputBytes: null,
+      actualOutputRows: null,
+      actualPayloadBytes: null,
+      actualPromptCount: null,
+      actualTempBytes: null,
+      admissionState: 'admitted',
+      budgetJson: {},
+      checksum: null,
+      chunkEndKey: 'article-099',
+      chunkId: 'chunk-direct-display',
+      chunkStartKey: 'article-001',
+      completedAt: null,
+      createdAt: '2026-06-16T10:00:00.000Z',
+      diagnosticsJson: {},
+      durationMs: null,
+      estimatedInputRows: null,
+      estimatedOutputBytes: null,
+      estimatedOutputRows: null,
+      estimatedPayloadBytes: null,
+      estimatedPromptCount: null,
+      estimatedTempBytes: null,
+      inputDigest: 'digest-component-state-targets',
+      inputWatermark: 42,
+      lastError: null,
+      leaseExpiresAt: '2026-06-16T10:01:00.000Z',
+      leaseOwner: 'worker-1',
+      maxInputRows: null,
+      maxOutputBytes: null,
+      maxOutputRows: null,
+      maxPayloadBytes: null,
+      maxPromptCount: null,
+      maxTempBytes: null,
+      oomCategory: null,
+      outputBaseGeneration: 7,
+      overBudgetReason: null,
+      parentChunkId: null,
+      projectId,
+      projectionComponent: 'display',
+      projectionIdentity: displayIdentity,
+      requestId,
+      retryAfter: null,
+      retryCount: 0,
+      snapshotCount: 1,
+      snapshotId: directSnapshotId,
+      splitDepth: 0,
+      startedAt: '2026-06-16T10:00:00.000Z',
+      status: 'running',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+      workloadClass: null,
+    }
+    const postingChunk = {
+      ...directChunk,
+      chunkId: 'chunk-null-posting',
+      projectionComponent: 'posting',
+      projectionIdentity: postingIdentity,
+      snapshotId: null,
+    }
+    const insertJson = (value) => "'" + JSON.stringify(value).replaceAll("'", "''") + "'::JSON"
+    const insertProjectionManifest = async (component, projectionIdentity) => {
+      await database.run(\`
+        INSERT INTO app.review_projection_identity_manifest (
+          manifest_id,
+          project_id,
+          projection_component,
+          projection_identity,
+          base_generation,
+          patch_watermark,
+          input_watermark,
+          input_watermarks_json,
+          definition_version,
+          status
+        )
+        VALUES (
+          '\${component}-manifest',
+          '\${projectId}',
+          '\${component}',
+          '\${projectionIdentity}',
+          7,
+          42,
+          42,
+          '{"reviewChange":42}'::JSON,
+          '\${component}-v1',
+          'candidate'
+        )
+      \`)
+    }
+    const insertSnapshot = async ({optional, required, reviewConfigHash, snapshotId}) => {
+      await database.run(\`
+        INSERT INTO app.review_serving_snapshot_manifest (
+          project_id,
+          snapshot_id,
+          snapshot_status,
+          review_config_hash,
+          composed_identity_json,
+          component_state_json,
+          required_components_json,
+          optional_components_json,
+          source_watermarks_json,
+          selected_import_snapshot_id
+        )
+        VALUES (
+          '\${projectId}',
+          '\${snapshotId}',
+          'active',
+          '\${reviewConfigHash}',
+          '{}'::JSON,
+          \${insertJson({optional, required})},
+          \${insertJson(required.map((componentState) => componentState.component))},
+          \${insertJson(optional.map((componentState) => componentState.component))},
+          '{"reviewChange":42}'::JSON,
+          '\${selectedImportSnapshotId}'
+        )
+      \`)
+    }
+    const insertChunk = async (chunk) => {
+      await database.run(\`
+        INSERT INTO app.review_rebuild_chunk_manifest (
+          chunk_id,
+          project_id,
+          projection_component,
+          projection_identity,
+          input_digest,
+          input_watermark,
+          chunk_start_key,
+          chunk_end_key,
+          output_base_generation,
+          status,
+          lease_owner,
+          lease_expires_at,
+          started_at,
+          request_id,
+          snapshot_id
+        )
+        VALUES (
+          '\${chunk.chunkId}',
+          '\${chunk.projectId}',
+          '\${chunk.projectionComponent}',
+          '\${chunk.projectionIdentity}',
+          '\${chunk.inputDigest}',
+          \${chunk.inputWatermark},
+          '\${chunk.chunkStartKey}',
+          '\${chunk.chunkEndKey}',
+          \${chunk.outputBaseGeneration},
+          'running',
+          'worker-1',
+          TIMESTAMPTZ '\${chunk.leaseExpiresAt}',
+          TIMESTAMPTZ '\${chunk.startedAt}',
+          '\${requestId}',
+          \${chunk.snapshotId === null ? 'NULL' : "'" + chunk.snapshotId + "'"}
+        )
+      \`)
+    }
+
+    await insertProjectionManifest('display', displayIdentity)
+    await insertProjectionManifest('posting', postingIdentity)
+    await database.run(\`
+      INSERT INTO app.review_selected_import_snapshot (
+        selected_import_snapshot_id,
+        project_id,
+        project_scope_identity,
+        source_delta_high_water,
+        status
+      )
+      VALUES ('\${selectedImportSnapshotId}', '\${projectId}', 'projectScope:\${projectId}', 42, 'completed')
+    \`)
+    await database.run(\`
+      INSERT INTO app.review_rebuild_request (
+        request_id,
+        project_id,
+        reason,
+        requested_components_json,
+        source_watermarks_json,
+        identity_json,
+        priority,
+        status,
+        admission_state,
+        retry_policy_json,
+        diagnostics_json,
+        admitted_at
+      )
+      VALUES (
+        '\${requestId}',
+        '\${projectId}',
+        'semantic_component_state_scan',
+        '["display","posting"]'::JSON,
+        '{"reviewChange":42}'::JSON,
+        '{}'::JSON,
+        100,
+        'running',
+        'admitted',
+        '{}'::JSON,
+        '{}'::JSON,
+        current_timestamp
+      )
+    \`)
+    await insertSnapshot({
+      optional: [],
+      required: [state('display', displayIdentity)],
+      reviewConfigHash: 'review-config-direct',
+      snapshotId: directSnapshotId,
+    })
+    await insertSnapshot({
+      optional: [{...state('posting', postingIdentity), requirement: 'optional'}],
+      required: [],
+      reviewConfigHash: 'review-config-optional',
+      snapshotId: optionalSnapshotId,
+    })
+    await insertSnapshot({
+      optional: [],
+      required: [{...state('posting', postingIdentity), requirement: 'required'}],
+      reviewConfigHash: 'review-config-required',
+      snapshotId: requiredSnapshotId,
+    })
+    await insertChunk(directChunk)
+    await insertChunk(postingChunk)
+
+    let nextReturned = false
+    const result = await runReviewServingProjectorWorkerOnce(
+      {workerId: 'worker-1'},
+      {
+        getDatabase: () => database,
+        nowMs: () => 1_000,
+        rebuildChunkService: {
+          claimChunk: async () => directChunk,
+          failChunk: async (failure) => {
+            throw new Error('unexpected failure: ' + failure.error)
+          },
+          getNextChunk: async () => {
+            if (nextReturned) {
+              return null
+            }
+            nextReturned = true
+
+            return directChunk
+          },
+          heartbeatChunk: async () => directChunk,
+          isChunkComplete: async () => false,
+          runClaimedChunk: async () => {
+            await database.run(\`
+              UPDATE app.review_rebuild_chunk_manifest
+              SET status = 'completed', completed_at = current_timestamp, updated_at = current_timestamp
+              WHERE request_id = '\${requestId}'
+            \`)
+
+            return {status: 'completed'}
+          },
+        },
+        sleep: async () => {},
+        wakeProjectors: async () => {
+          return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+        },
+      },
+    )
+
+    const requestRows = await database.queryJson(\`
+      SELECT status, last_error AS lastError
+      FROM app.review_rebuild_request
+      WHERE request_id = '\${requestId}'
+    \`)
+    const snapshotRows = await database.queryJson(\`
+      SELECT snapshot_id AS snapshotId, snapshot_status AS snapshotStatus
+      FROM app.review_serving_snapshot_manifest
+      WHERE project_id = '\${projectId}'
+      ORDER BY snapshot_id
+    \`)
+    const statusBySnapshot = Object.fromEntries(snapshotRows.map((row) => [row.snapshotId, row.snapshotStatus]))
+
+    if (result.chunk.status !== 'completed' || result.chunk.requestId !== requestId) {
+      throw new Error(
+        'worker did not complete the mixed request chunk: '
+        + JSON.stringify({requestRows, result: result.chunk, snapshotRows}),
+      )
+    }
+    if (requestRows.length !== 1 || requestRows[0].status !== 'completed') {
+      throw new Error(
+        'mixed request was not finalized as completed: '
+        + JSON.stringify({requestRows, snapshotRows}),
+      )
+    }
+    for (const snapshotId of [directSnapshotId, optionalSnapshotId, requiredSnapshotId]) {
+      if (statusBySnapshot[snapshotId] === 'candidate') {
+        throw new Error('snapshot target was not reached by finalization: ' + snapshotId)
+      }
+    }
+  `
+  const run = globalThis.Bun.spawnSync(['bun', '-e', script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DUCKDB_MEMORY_LIMIT: '6400MiB',
+      DUCKDB_PATH: duckdbPath,
+      SERVER_DUCKDB_OWNER_URL: '',
+      SERVER_ROLE: 'maintenance-worker',
+    },
+  })
+
+  try {
+    expect(run.stderr.toString()).toBe('')
+    expect(run.exitCode).toBe(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('claimed requestless summary chunks stage partials through an adopted request', async () => {
   const statements: string[] = []
   const summaryChunk = {
@@ -7070,9 +7556,8 @@ test('admission-presplit posting rebuild chunk executes directly above the old r
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING',
-  )
+  expect(joined).toContain('state_source AS (')
+  expect(joined).toContain('SET duplicate_flag = COALESCE(source.duplicateFlag, FALSE)')
   expect(joined).not.toContain('NTILE(')
   expect(childInserts).toHaveLength(0)
   expect(joined).toContain('"admissionPresplit":true')
@@ -7230,7 +7715,7 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING',
   )
   expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain('lease_expires_at > current_timestamp')
@@ -7250,7 +7735,7 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
   const statements: string[] = []
   const queueChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
-    checksum: null,
+    checksum: 'checksum-queue-range',
     chunkEndKey: 'article-099',
     chunkId: 'chunk-queue-range',
     chunkStartKey: 'article-050',
@@ -7320,6 +7805,8 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain("article_id >= 'article-050'")
   expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).toContain("COALESCE(CAST(prompt_ids AS VARCHAR), '[]')")
+  expect(joined).not.toContain('queue_identity')
   expect(joined).toContain("checksum = 'checksum-queue-range'")
   expect(joined).not.toContain('INSERT INTO mart.review_queue_patch_v4')
   expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')

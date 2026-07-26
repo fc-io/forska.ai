@@ -99,6 +99,11 @@ const expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns = (statement: s
   expect(insertTargetSql).not.toContain('conflict_flag')
 }
 
+const expectNoCompatibilityServingViewRead = (statement: string) => {
+  expect(statement).not.toContain('FROM mart.review_article_serving_v4')
+  expect(statement).not.toContain('JOIN mart.review_article_serving_v4')
+}
+
 test('selected-import dirty routine updates only claimed articles', async () => {
   const {database, statements} = createSelectedImportDirtyDatabase({
     dirtyRows: [
@@ -159,8 +164,11 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain('serving_template_raw AS')
   expect(joined).toContain('serving_template AS')
   expect(joined).toContain('PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id')
-  expect(joined).toContain('FROM mart.review_article_serving_v4 existing')
+  expect(joined).toContain('FROM mart.review_article_serving_base_v4 existing')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 existing_state')
+  expect(joined).toContain('COALESCE(array_length(existing_state.list_mode_keys), 0) > 0')
   expect(joined).toContain('existing.article_id = changed.article_id')
+  expectNoCompatibilityServingViewRead(joined)
   expect(joined).not.toContain('changed.import_route_id AS selected_import_route_id')
   expect(joined).not.toContain('serving.selected_import_route_id')
   expect(joined).not.toContain('serving.duplicate_flag')
@@ -348,12 +356,15 @@ test('project-scoped selected-import rebuilds include previous serving articles 
 
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(selectStatement).toContain('UNION')
-  expect(selectStatement).toContain('FROM mart.review_article_serving_v4 serving')
+  expect(selectStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(selectStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 state')
+  expect(selectStatement).toContain('COALESCE(array_length(state.list_mode_keys), 0) > 0')
   expect(selectStatement).toContain(
     "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = 'selectedImport:identity-1'",
   )
   expect(selectStatement).not.toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
   expect(selectStatement).toContain("snapshot.selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expectNoCompatibilityServingViewRead(selectStatement ?? '')
 })
 
 test('selected-import dirty projection promotes manifest and watermark atomically without unrelated component base generations', async () => {

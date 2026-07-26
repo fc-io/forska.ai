@@ -172,17 +172,17 @@ test('prompt config changes rebuild prompt-scoped and summary queue rows', async
     ]),
     database,
   )
-  const servingDelete = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  const servingUpdate = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_unassessed_queue_serving_v4')
   })
   const queueSelect = statements.find((statement) => {
     return statement.includes('FROM queue_union queue')
   })
 
-  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 2})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 1})
   expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
-  expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
-  expect(servingDelete).toContain("OR prompt_id = 'summary'")
+  expect(servingUpdate).toContain('SET prompt_ids = list_filter(prompt_ids')
+  expect(servingUpdate).toContain("['prompt-1', 'summary']::VARCHAR[]")
   expect(queueSelect).toContain("OR queue.prompt_id = 'summary'")
   expect(queueSelect?.match(/queue_union AS/g) ?? []).toHaveLength(1)
 })
@@ -303,7 +303,7 @@ test('project review config changes rebuild queue rows for all scoped project ar
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
   expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
   expect(servingDelete).not.toContain('article_id IN')
-  expect(servingDelete).not.toContain('prompt_id IN')
+  expect(servingDelete).not.toContain('prompt_ids')
 })
 
 test('queue rebuild rows read selected-import base rows without patch overlay', async () => {
@@ -370,7 +370,7 @@ test('missing article-scoped queue inputs clear optional unassessed state withou
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
   expect(joined).not.toContain('mart.judgment_fact')
   expect(joined).not.toContain('app."judgment"')
-  expect(joined).not.toContain('GROUP BY')
+  expect(joined).not.toContain('GROUP BY judgment')
   expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).toContain("article_id IN ('article-1')")
   expect(joined).not.toContain('review_config_hash IN')
@@ -393,8 +393,9 @@ test('missing prompt-scoped queue inputs clear stale prompt serving rows', async
   const joined = statements.join('\n')
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(joined).toContain('UPDATE mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain("['prompt-1', 'summary']::VARCHAR[]")
   expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
-  expect(joined).toContain("prompt_id IN ('prompt-1')")
   expect(joined).not.toContain('review_config_hash IN')
 })
 
@@ -421,5 +422,5 @@ test('project-scoped empty queue rebuild clears snapshot serving rows', async ()
   expect(servingDelete).toContain("snapshot_id = 'snapshot-1'")
   expect(servingDelete).not.toContain('review_config_hash IN')
   expect(servingDelete).not.toContain('article_id IN')
-  expect(servingDelete).not.toContain('prompt_id IN')
+  expect(servingDelete).not.toContain('prompt_ids')
 })

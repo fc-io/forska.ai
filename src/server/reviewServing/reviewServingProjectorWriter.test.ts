@@ -178,13 +178,13 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   })
 
   expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id) DO NOTHING',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id) DO UPDATE SET',
   )
-  expect(insertStatement).not.toContain('DO UPDATE SET')
-  expect(insertStatement).not.toContain('queue_updated_at = excluded.queue_updated_at')
+  expect(insertStatement).toContain('prompt_ids = list_sort(list_distinct(list_concat(')
+  expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
 })
 
-test('title search rebuild ranges merge rows without conflict updates or scoped indexed deletes', async () => {
+test('title search rebuild ranges merge rows with one bounded conflict upsert and no scoped indexed deletes', async () => {
   const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
   const baseRange = {
     articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
@@ -220,11 +220,14 @@ test('title search rebuild ranges merge rows without conflict updates or scoped 
     statements.filter((statement) => {
       return statement.includes('UPDATE mart.review_title_search_serving_v4')
     }),
-  ).toHaveLength(1)
+  ).toHaveLength(0)
   expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_title_search_serving_v4')
-  expect(statements.join('\n')).toContain('WHERE NOT EXISTS')
-  expect(statements.join('\n')).not.toContain('DO UPDATE SET')
-  expect(statements.join('\n')).toContain('SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
+  expect(statements.join('\n')).not.toContain('WHERE NOT EXISTS')
+  expect(statements.join('\n')).toContain(
+    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET',
+  )
+  expect(statements.join('\n')).toContain('article_ids = list_sort(list_distinct(list_concat(')
+  expect(statements.join('\n')).toContain('COALESCE(excluded.article_ids, []::VARCHAR[])')
   expect(statements.join('\n')).toContain(
     'LIST(DISTINCT tokenized.article_id ORDER BY tokenized.article_id) AS article_ids',
   )
@@ -268,9 +271,10 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
   })
 
   expect(insertStatements).toHaveLength(2)
-  expect(updateStatements).toHaveLength(2)
-  expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
-  expect(updateStatements.join('\n')).not.toContain('ON CONFLICT')
+  expect(updateStatements).toHaveLength(0)
+  expect(insertStatements.join('\n')).toContain(
+    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET',
+  )
   expect(insertStatements.join('\n')).not.toContain("OR (scope.article_id >= 'article-3'")
 })
 
@@ -313,19 +317,18 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
       ],
       records: [
         {
-          keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
-          table: 'mart.review_article_serving_v4',
+          keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'article_id'],
+          table: 'mart.review_article_serving_base_v4',
           values: {
             article_id: 'article-1',
-            article_title: 'Title',
+            article_created_at: new Date('2026-01-01T00:00:00.000Z'),
             base_generation: 1,
-            display_identity: 'display:identity-1',
-            list_mode_key: 'llm',
+            activity_sort_at: new Date('2026-01-01T00:00:00.000Z'),
             patch_watermark: 2,
             project_id: 'project-1',
-            project_scope_identity: 'scope:identity-1',
             review_config_hash: 'review-config-1',
             snapshot_id: 'snapshot-1',
+            sort_key: 'sort-key-1',
           },
         },
       ],
@@ -398,9 +401,10 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
   ).toBe(true)
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO mart.review_article_serving_v4')
+      return statement.includes('INSERT INTO mart.review_article_serving_base_v4')
     }),
   ).toBe(true)
+  expect(statements.join('\n')).not.toContain('mart.review_article_serving_v4')
   const snapshotManifestStatements = statements.filter((statement) => {
     return statement.includes('app.review_serving_snapshot_manifest')
   })
@@ -552,7 +556,6 @@ test('projector writer batches same-shape record replacements into update and in
           values: {
             availability: 'ready',
             count_kind: 'review.list.total',
-            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
             count_value: 1,
             filter_key: 'list:all',
             list_mode_key: 'llm',
@@ -570,7 +573,6 @@ test('projector writer batches same-shape record replacements into update and in
           values: {
             availability: 'ready',
             count_kind: 'review.list.total',
-            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
             count_value: 2,
             filter_key: 'list:all',
             list_mode_key: 'human',
@@ -627,7 +629,6 @@ test('projector writer collapses duplicate primary-key records before a DuckDB c
           values: {
             availability: 'ready',
             count_kind: 'review.list.total',
-            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
             count_value: 1,
             filter_key: 'list:all',
             list_mode_key: 'llm',
@@ -645,7 +646,6 @@ test('projector writer collapses duplicate primary-key records before a DuckDB c
           values: {
             availability: 'ready',
             count_kind: 'review.list.total',
-            count_updated_at: new Date('2026-04-02T12:01:00.000Z'),
             count_value: 2,
             filter_key: 'list:all',
             list_mode_key: 'llm',
@@ -669,7 +669,6 @@ test('projector writer collapses duplicate primary-key records before a DuckDB c
   expect(insertStatement).toBeDefined()
   expect(insertStatement?.match(/'llm'/gu)).toHaveLength(1)
   expect(insertStatement).toContain('2')
-  expect(insertStatement).toContain('2026-04-02T12:01:00.000Z')
 })
 
 test('projector writer uses insert-only count serving replacement writes after scoped deletes', async () => {
@@ -693,7 +692,6 @@ test('projector writer uses insert-only count serving replacement writes after s
           values: {
             availability: 'ready',
             count_kind: 'review.list.total',
-            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
             count_value: 1,
             filter_key: 'list:all',
             list_mode_key: 'llm',
@@ -835,7 +833,6 @@ test('projector writer uses insert-only filter facet replacement rows after scop
             count_value: 4,
             facet_key: 'promptAnswer',
             facet_kind: 'review',
-            facet_updated_at: new Date('2026-04-02T12:00:00.000Z'),
             facet_value: 'yes',
             project_id: 'project-1',
             prompt_id: 'prompt-1',
@@ -899,7 +896,6 @@ test('projector writer uses scan-guarded insert-missing for summary filter optio
             filter_option_identity: 'filter-option:identity-1',
             numeric_max: null,
             numeric_min: null,
-            option_updated_at: new Date('2026-04-02T12:00:00.000Z'),
             option_value_key: 'review:promptAnswer:prompt-1:yes',
             project_id: 'project-1',
             prompt_id: 'prompt-1',
@@ -954,7 +950,6 @@ test('projector writer uses insert-only rows for delete-scoped summary filter op
             filter_option_identity: 'filter-option:identity-1',
             numeric_max: null,
             numeric_min: null,
-            option_updated_at: new Date('2026-04-02T12:00:00.000Z'),
             option_value_key: 'review:promptAnswer:prompt-1:yes',
             project_id: 'project-1',
             prompt_id: 'prompt-1',

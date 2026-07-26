@@ -127,7 +127,7 @@ test('normal foreground row contracts require ready snapshots and serving tables
 
   expect(llmRows?.freshnessBehavior).toBe('requireReadySnapshot')
   expect(llmRows?.maxPageSize).toBe(501)
-  expect(humanRows?.servingTable).toBe('mart.review_article_serving_v4')
+  expect(humanRows?.servingTable).toBe('mart.review_article_serving_base_v4')
   expect(humanRows?.maxPageSize).toBe(501)
   expect(bothRows?.requiredComponents).toContain('humanStatus')
   expect(bothRows?.requiredComponents).toContain('llmStatus')
@@ -137,7 +137,8 @@ test('normal foreground row contracts require ready snapshots and serving tables
 test('direct ordered row contracts advertise only migrated route filters', () => {
   const orderedRowContracts = reviewServingReadContractList.filter((contract) => {
     return (
-      contract.physicalAccessStrategy === 'orderedPrefix' && contract.servingTable === 'mart.review_article_serving_v4'
+      contract.physicalAccessStrategy === 'orderedPrefix'
+      && contract.servingTable === 'mart.review_article_serving_base_v4'
     )
   })
 
@@ -232,12 +233,12 @@ test('direct ordered row contracts advertise only migrated route filters', () =>
       [],
       'none',
       [
-        'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+        'mart.review_article_serving_base_v4.article_created_at ASC NULLS LAST',
         'article_id',
         "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
       ],
       [
-        'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+        'mart.review_article_serving_base_v4.article_created_at ASC NULLS LAST',
         'article_id',
         "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
       ],
@@ -267,28 +268,28 @@ test('title-search row contracts keep ordering and cursors on primary article se
   ).toEqual([
     [
       'review.llm.rows',
-      'mart.review_article_serving_v4',
+      'mart.review_article_serving_base_v4',
       ['search'],
       ['sort_key DESC', 'article_id ASC'],
       ['sort_key', 'article_id ASC'],
     ],
     [
       'review.human.rows',
-      'mart.review_article_serving_v4',
+      'mart.review_article_serving_base_v4',
       ['search'],
       ['sort_key DESC', 'article_id ASC'],
       ['sort_key', 'article_id ASC'],
     ],
     [
       'review.both.rows',
-      'mart.review_article_serving_v4',
+      'mart.review_article_serving_base_v4',
       ['search'],
       ['sort_key DESC', 'article_id ASC'],
       ['sort_key', 'article_id ASC'],
     ],
     [
       'review.unassessed.rows',
-      'mart.review_article_serving_v4',
+      'mart.review_article_serving_base_v4',
       ['search'],
       ['activity_sort_at DESC', 'article_id DESC'],
       ['activity_sort_at', 'article_id'],
@@ -296,35 +297,34 @@ test('title-search row contracts keep ordering and cursors on primary article se
   ])
 })
 
-test('prompt preview contract orders article serving rows while requiring payload hydration', () => {
+test('prompt preview contract orders article serving rows without judgment detail payload readiness', () => {
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 
   expect(promptPreview?.allowedFilters).toEqual([])
   expect(promptPreview?.cursorFields).toEqual([
-    'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+    'mart.review_article_serving_base_v4.article_created_at ASC NULLS LAST',
     'article_id',
     "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
   ])
-  expect(promptPreview?.requiredComponents).toContain('payload')
-  expect(promptPreview?.servingTable).toBe('mart.review_article_serving_v4')
+  expect(promptPreview?.requiredComponents).toEqual(['judgmentInputContent', 'projectScope', 'selectedImport'])
+  expect(promptPreview?.servingTable).toBe('mart.review_article_serving_base_v4')
   expect(promptPreview?.sort).toEqual({
     direction: 'asc',
     fields: [
-      'mart.review_article_serving_v4.article_created_at ASC NULLS LAST',
+      'mart.review_article_serving_base_v4.article_created_at ASC NULLS LAST',
       'article_id',
       "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
     ],
   })
 })
 
-test('unassessed row contract requires display and payload dependencies', () => {
+test('unassessed row contract requires only base list-mode dependencies', () => {
   const unassessedRows = getReviewServingReadContract('review.unassessed.rows')
 
   expect(unassessedRows?.requiredComponents).toEqual([
     'display',
     'projectScope',
     'selectedImport',
-    'payload',
     'judgmentInputContent',
     'llmStatus',
     'queue',
@@ -337,14 +337,14 @@ test('detail row contract does not pin article lookups to a list mode', () => {
   const detailJudgments = getReviewServingReadContract('review.detail.judgments')
 
   expect(detailRow?.listMode).toBeNull()
-  expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
-  expect(detailRow?.requiredComponents).toContain('payload')
+  expect(detailRow?.servingTable).toBe('mart.review_article_serving_base_v4')
+  expect(detailRow?.requiredComponents).not.toContain('payload')
   expect(detailRow?.sort.fields[0]).toContain('CASE list_mode_key')
   expect(detailJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(detailJudgments?.allowedFilters).toEqual(['articleId'])
   expect(detailJudgments?.requiredComponents).toContain('payload')
   expect(detailJudgments?.sort.fields).toEqual([
-    "CASE mart.review_article_judgment_detail_serving_v4.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
+    "CASE mart.review_article_judgment_detail_serving_v4.payload_kind WHEN 'llm' THEN 1 WHEN 'human' THEN 2 ELSE 4 END",
     'mart.review_article_judgment_detail_serving_v4.prompt_order ASC NULLS LAST',
     'mart.review_article_judgment_detail_serving_v4.prompt_id',
   ])
@@ -393,8 +393,8 @@ test('queue and count contracts use physical serving-table sort columns', () => 
   const count = getReviewServingReadContract('review.llm.count')
   const badges = getReviewServingReadContract('review.prompt.badges')
 
-  expect(queue?.cursorFields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id'])
-  expect(queue?.sort.fields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id'])
+  expect(queue?.cursorFields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
+  expect(queue?.sort.fields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
   expect(queue?.sort.direction).toBe('desc')
   expect(count?.sort.fields).toEqual(['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'])
   expect(badges?.sort.fields).toEqual(['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'])
@@ -803,7 +803,7 @@ test('review serving read contracts use planned Phase 1 physical table names', (
     'mart.review_article_filter_posting_serving_v4',
     'mart.review_article_count_serving_v4',
     'mart.review_article_judgment_detail_serving_v4',
-    'mart.review_article_serving_v4',
+    'mart.review_article_serving_base_v4',
     'mart.review_filter_facet_serving_v4',
     'mart.review_filter_option_serving_v4',
     'mart.review_title_search_serving_v4',

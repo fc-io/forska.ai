@@ -17,13 +17,8 @@ const lookup: ReviewServingFilteredCountLookup = {
     searchTokenPrefixes: ['heart', 'failure'],
   }),
   listModeKey: 'llm',
-  payloadIdentity: 'payload-identity',
-  postingIdentity: 'posting-identity',
   projectId: 'project-1',
-  projectScopeIdentity: 'project-scope-identity',
-  queueIdentity: '',
   reviewConfigHash: 'config-1',
-  searchIdentity: 'search-identity',
   snapshotId: 'snapshot-1',
 }
 
@@ -39,15 +34,17 @@ test('filtered count serving read SQL only touches the memoized count table', ()
   expect(sql).not.toContain('review_article_judgment_detail_serving_v4')
 })
 
-test('filtered count serving upsert records route component identities and prunes bounded scope', () => {
+test('filtered count serving upsert records composed component identity and prunes bounded scope', () => {
   const upsertSql = getReviewServingFilteredCountUpsertSql({...lookup, countValue: 42})
   const pruneSql = getReviewServingFilteredCountPruneSql({...lookup, maxRowsPerScope: 17})
 
   expect(upsertSql).toContain('INSERT INTO mart.review_filtered_count_serving_v4')
-  expect(upsertSql).toContain('project_scope_identity')
-  expect(upsertSql).toContain('search_identity')
-  expect(upsertSql).toContain('posting_identity')
-  expect(upsertSql).toContain('payload_identity')
+  expect(upsertSql).toContain('component_identity')
+  expect(upsertSql).not.toContain('project_scope_identity')
+  expect(upsertSql).not.toContain('search_identity')
+  expect(upsertSql).not.toContain('posting_identity')
+  expect(upsertSql).not.toContain('queue_identity')
+  expect(upsertSql).not.toContain('payload_identity')
   expect(upsertSql).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, filter_signature, component_identity)',
   )

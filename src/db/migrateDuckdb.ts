@@ -19,6 +19,7 @@ const nonTransactionalDuckdbMigrationFiles = new Set([
   '0077_comparisonServingHumanLlmOverlapFilter.sql',
   '0090_comparisonServingAnswerFilterBooleans.sql',
   '0095_comparisonServingLlmTrueDifferenceFilter.sql',
+  '0183_backfillReviewArticleServingListModeStateFilters.sql',
 ])
 
 const getDuckdbMigrationFiles = (folder: string) => {
@@ -60,6 +61,36 @@ const getDuckdbMigrationRollbackError = async () => {
     return null
   } catch (error) {
     return getNormalizedDuckdbMigrationError(error)
+  }
+}
+
+const recoverReviewArticleListModeStateMigration = async () => {
+  const rows = await getAppDatabaseService().queryJson<{tableName: string}>(
+    `
+    SELECT table_name AS tableName
+    FROM information_schema.tables
+    WHERE table_schema = 'mart'
+      AND table_name IN (
+        'review_article_serving_list_mode_state_v4',
+        'review_article_serving_list_mode_state_v4_repair'
+      )
+  `,
+    workloadContext,
+  )
+  const tableNames = new Set(
+    rows.map((row) => {
+      return row.tableName
+    }),
+  )
+
+  if (
+    !tableNames.has('review_article_serving_list_mode_state_v4')
+    && tableNames.has('review_article_serving_list_mode_state_v4_repair')
+  ) {
+    await getAppDatabaseService().run(
+      'ALTER TABLE mart.review_article_serving_list_mode_state_v4_repair RENAME TO review_article_serving_list_mode_state_v4',
+      workloadContext,
+    )
   }
 }
 
@@ -111,6 +142,10 @@ const applyDuckdbMigrationFile = async (fileName: string) => {
   }
 
   if (nonTransactionalDuckdbMigrationFiles.has(fileName)) {
+    if (fileName === '0183_backfillReviewArticleServingListModeStateFilters.sql') {
+      await recoverReviewArticleListModeStateMigration()
+    }
+
     await getAppDatabaseService().run(sqlText, workloadContext)
     return insertDuckdbMigrationName(fileName)
   }
