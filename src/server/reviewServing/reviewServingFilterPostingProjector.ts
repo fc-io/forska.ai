@@ -267,40 +267,49 @@ const getFullRebuildPostingContributionRowsStatement = (
             AND NOT project_prompt.archived
             AND COALESCE(prompt.archived, FALSE) = FALSE
         ),
-        llm_status AS (
+        judgment_detail_source AS (
           SELECT
-            scoped.article_id,
-            COUNT(detail.prompt_id) AS enabled_prompt_count,
-            COUNT(detail.prompt_id) FILTER (WHERE detail.is_answered IS TRUE) AS answered_prompt_count
+            detail.article_id,
+            detail.payload_kind,
+            detail.prompt_id,
+            detail.list_mode_key AS source_list_mode_key,
+            detail.is_answered,
+            detail.answered_original,
+            detail.answered_original_as_array
           FROM scoped_article scoped
-          LEFT JOIN mart.review_article_judgment_detail_serving_v4 detail
+          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
             ON detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND detail.payload_kind = 'llm'
-            AND detail.list_mode_key = 'llm'
+            AND (
+              (detail.payload_kind = 'llm' AND detail.list_mode_key = 'llm')
+              OR (detail.payload_kind = 'human' AND detail.list_mode_key = 'human')
+            )
             AND detail.article_id = scoped.article_id
-          GROUP BY scoped.article_id
         ),
-        human_status AS (
+        article_judgment_status AS (
           SELECT
             scoped.article_id,
             COUNT(detail.prompt_id) FILTER (
-              WHERE detail.prompt_id <> 'summary'
-                AND detail.is_answered IS TRUE
-            ) AS answered_prompt_count,
+              WHERE detail.payload_kind = 'llm'
+            ) AS llm_enabled_prompt_count,
             COUNT(detail.prompt_id) FILTER (
-              WHERE detail.prompt_id = 'summary'
+              WHERE detail.payload_kind = 'llm'
                 AND detail.is_answered IS TRUE
-            ) AS answered_summary_count
+            ) AS llm_answered_prompt_count,
+            COUNT(detail.prompt_id) FILTER (
+              WHERE detail.payload_kind = 'human'
+                AND detail.prompt_id <> 'summary'
+                AND detail.is_answered IS TRUE
+            ) AS human_answered_prompt_count,
+            COUNT(detail.prompt_id) FILTER (
+              WHERE detail.payload_kind = 'human'
+                AND detail.prompt_id = 'summary'
+                AND detail.is_answered IS TRUE
+            ) AS human_answered_summary_count
           FROM scoped_article scoped
-          LEFT JOIN mart.review_article_judgment_detail_serving_v4 detail
-            ON detail.project_id = ${getSqlLiteral(input.projectId)}
-            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND detail.payload_kind = 'human'
-            AND detail.list_mode_key = 'human'
-            AND detail.article_id = scoped.article_id
+          LEFT JOIN judgment_detail_source detail
+            ON detail.article_id = scoped.article_id
           GROUP BY scoped.article_id
         ),
         serving_status_postings AS (
@@ -310,13 +319,13 @@ const getFullRebuildPostingContributionRowsStatement = (
             FALSE AS tombstone,
             'llmStatus' AS filterKind,
             CASE
-              WHEN llm_status.enabled_prompt_count = 0 THEN NULL
-              WHEN llm_status.enabled_prompt_count = llm_status.answered_prompt_count THEN 'answered'
+              WHEN article_judgment_status.llm_enabled_prompt_count = 0 THEN NULL
+              WHEN article_judgment_status.llm_enabled_prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'
               ELSE 'unanswered'
             END AS filterValue
           FROM scoped_serving serving
-          INNER JOIN llm_status
-            ON llm_status.article_id = serving.article_id
+          INNER JOIN article_judgment_status
+            ON article_judgment_status.article_id = serving.article_id
           UNION ALL
           SELECT
             serving.article_id AS articleId,
@@ -324,15 +333,15 @@ const getFullRebuildPostingContributionRowsStatement = (
             FALSE AS tombstone,
             'humanStatus' AS filterKind,
             CASE
-              WHEN project_settings.human_judgment_mode = 'summary' AND human_status.answered_summary_count > 0 THEN 'answered'
+              WHEN project_settings.human_judgment_mode = 'summary' AND article_judgment_status.human_answered_summary_count > 0 THEN 'answered'
               WHEN project_settings.human_judgment_mode = 'summary' THEN 'unanswered'
               WHEN enabled_prompt_count.prompt_count = 0 THEN NULL
-              WHEN enabled_prompt_count.prompt_count = human_status.answered_prompt_count THEN 'answered'
+              WHEN enabled_prompt_count.prompt_count = article_judgment_status.human_answered_prompt_count THEN 'answered'
               ELSE 'unanswered'
             END AS filterValue
           FROM scoped_serving serving
-          INNER JOIN human_status
-            ON human_status.article_id = serving.article_id
+          INNER JOIN article_judgment_status
+            ON article_judgment_status.article_id = serving.article_id
           CROSS JOIN enabled_prompt_count
           CROSS JOIN project_settings
         ),
@@ -343,16 +352,11 @@ const getFullRebuildPostingContributionRowsStatement = (
             list_mode_key.list_mode_key,
             detail.answered_original,
             detail.answered_original_as_array
-          FROM scoped_article scoped
-          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
-            ON detail.project_id = ${getSqlLiteral(input.projectId)}
-            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND detail.payload_kind = 'llm'
-            AND detail.list_mode_key = 'llm'
-            AND detail.article_id = scoped.article_id
+          FROM judgment_detail_source detail
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key IN ('llm', 'both')
+          WHERE detail.payload_kind = 'llm'
+            AND detail.source_list_mode_key = 'llm'
         ),
         human_detail AS (
           SELECT
@@ -360,16 +364,11 @@ const getFullRebuildPostingContributionRowsStatement = (
             detail.prompt_id,
             list_mode_key.list_mode_key,
             detail.answered_original
-          FROM scoped_article scoped
-          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
-            ON detail.project_id = ${getSqlLiteral(input.projectId)}
-            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND detail.payload_kind = 'human'
-            AND detail.list_mode_key = 'human'
-            AND detail.article_id = scoped.article_id
+          FROM judgment_detail_source detail
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key IN ('human', 'both')
+          WHERE detail.payload_kind = 'human'
+            AND detail.source_list_mode_key = 'human'
         ),
         llm_postings AS (
           SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue

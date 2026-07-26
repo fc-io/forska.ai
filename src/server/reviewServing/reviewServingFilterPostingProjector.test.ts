@@ -55,6 +55,10 @@ const expectNoLegacyPostingSourcePatchTables = (statement: string) => {
   }
 }
 
+const countOccurrences = (value: string, search: string) => {
+  return value.split(search).length - 1
+}
+
 const createPostingDatabase = (input?: {
   contributionTotalRows?: readonly Record<string, unknown>[]
   contributionRows?: readonly Record<string, unknown>[]
@@ -253,9 +257,12 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('CAST(posting.listModeKey AS VARCHAR) AS listModeKey')
   expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
-  expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
-  expect(joined).toContain('llm_status AS')
-  expect(joined).toContain("WHEN llm_status.enabled_prompt_count = llm_status.answered_prompt_count THEN 'answered'")
+  expect(countOccurrences(joined, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
+  expect(joined).toContain('judgment_detail_source AS')
+  expect(joined).toContain('article_judgment_status AS')
+  expect(joined).toContain(
+    "WHEN article_judgment_status.llm_enabled_prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'",
+  )
   expect(joined).not.toContain('serving.llm_status_key')
   expect(joined).not.toContain('serving.human_status_key')
   expect(joined).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
@@ -334,6 +341,9 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
   expect(servingInserts[0]).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(servingInserts[0]).toContain("('article-1', 'article-3'), ('article-4', 'article-9')")
   expect(servingInserts[0]).toContain('SELECT DISTINCT scope.article_id')
+  expect(countOccurrences(servingInserts[0], 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
+  expect(servingInserts[0]).toContain('judgment_detail_source AS')
+  expect(servingInserts[0]).toContain('article_judgment_status AS')
   expect(servingInserts[0]).toContain(
     'range.chunk_start_article_id IS NULL OR scope.article_id >= range.chunk_start_article_id',
   )
@@ -461,21 +471,24 @@ test('status postings derive article-level status from judgment detail rows', as
   })
 
   expect(selectStatement).toContain('scoped_serving AS')
-  expect(selectStatement).toContain('llm_status AS')
-  expect(selectStatement).toContain('human_status AS')
-  expect(selectStatement).toContain('COUNT(detail.prompt_id) AS enabled_prompt_count')
-  expect(selectStatement).toContain("AND detail.payload_kind = 'llm'")
-  expect(selectStatement).toContain("AND detail.list_mode_key = 'llm'")
-  expect(selectStatement).toContain("AND detail.payload_kind = 'human'")
-  expect(selectStatement).toContain("AND detail.list_mode_key = 'human'")
+  expect(selectStatement).toContain('judgment_detail_source AS')
+  expect(selectStatement).toContain('article_judgment_status AS')
+  expect(selectStatement).not.toContain('llm_status AS')
+  expect(selectStatement).not.toContain('human_status AS')
+  expect(countOccurrences(selectStatement, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
+  expect(selectStatement).toContain('COUNT(detail.prompt_id) FILTER')
+  expect(selectStatement).toContain("(detail.payload_kind = 'llm' AND detail.list_mode_key = 'llm')")
+  expect(selectStatement).toContain("(detail.payload_kind = 'human' AND detail.list_mode_key = 'human')")
+  expect(selectStatement).toContain("WHERE detail.payload_kind = 'llm'")
+  expect(selectStatement).toContain("WHERE detail.payload_kind = 'human'")
   expect(selectStatement).toContain("'llmStatus' AS filterKind")
   expect(selectStatement).toContain("'humanStatus' AS filterKind")
-  expect(selectStatement).toContain('WHEN llm_status.enabled_prompt_count = 0 THEN NULL')
+  expect(selectStatement).toContain('WHEN article_judgment_status.llm_enabled_prompt_count = 0 THEN NULL')
   expect(selectStatement).toContain(
-    "WHEN llm_status.enabled_prompt_count = llm_status.answered_prompt_count THEN 'answered'",
+    "WHEN article_judgment_status.llm_enabled_prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'",
   )
   expect(selectStatement).toContain(
-    "WHEN enabled_prompt_count.prompt_count = human_status.answered_prompt_count THEN 'answered'",
+    "WHEN enabled_prompt_count.prompt_count = article_judgment_status.human_answered_prompt_count THEN 'answered'",
   )
   expect(selectStatement).not.toContain('serving.llm_status_key')
   expect(selectStatement).not.toContain('serving.human_status_key')
