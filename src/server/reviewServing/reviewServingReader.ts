@@ -507,7 +507,7 @@ const getSearchFilterPredicate = (input: {
         ' AND search.search_identity = $searchIdentity',
         ' AND search.project_scope_identity = $projectScopeIdentity',
         ' AND search.snapshot_id = $snapshotId',
-        ` AND search.article_id = ${input.contract.servingTable}.article_id`,
+        ` AND list_contains(search.article_ids, ${input.contract.servingTable}.article_id)`,
         ' AND starts_with(search.token, search_prefix.token_prefix)))',
       ].join('')
     : ''

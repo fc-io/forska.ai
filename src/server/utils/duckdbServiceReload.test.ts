@@ -3395,7 +3395,6 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'project_scope_identity',
       'snapshot_id',
       'token',
-      'article_id',
     ])
     expect(titleSearchProbe?.mutationProbeSql).toContain('UPDATE mart.review_title_search_serving_v4')
     expect(titleSearchProbe?.repairStrategy).toBe('empty-derived')

@@ -79,6 +79,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0176_dropReviewSummaryContributionRebuildPartial.sql',
   '../../db/duckdbMigrations/0177_reviewFilteredCountServing.sql',
   '../../db/duckdbMigrations/0178_reviewSummaryRebuildAccumulator.sql',
+  '../../db/duckdbMigrations/0179_slimReviewTitleSearchTokenPostings.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -188,6 +189,8 @@ const reviewSelectedImportPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0127_dropReviewTitleSearchUnusedColumns.sql']
+const reviewTitleSearchTokenPostingSlimForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0179_slimReviewTitleSearchTokenPostings.sql']
 const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql'
@@ -439,11 +442,15 @@ test('retired patch tables are absent from the active review-serving schema', ()
   )
 })
 
-test('title search serving schema drops repeated unused metadata', () => {
+test('title search serving schema drops repeated unused metadata and stores compact token postings', () => {
   expect(reviewTitleSearchActivitySortAtDropForwardMigrationSql).toContain('Retired by 0127')
   expect(reviewTitleSearchUnusedColumnDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_title_search_serving_v4_repair',
   )
+  expect(reviewTitleSearchTokenPostingSlimForwardMigrationSql).toContain(
+    'LIST(DISTINCT article_id ORDER BY article_id) AS article_ids',
+  )
+  expect(reviewTitleSearchTokenPostingSlimForwardMigrationSql).not.toContain('PRIMARY KEY')
   expect(reviewTitleSearchUnusedColumnDropForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_title_search_serving_v4_repair RENAME TO review_title_search_serving_v4;',
   )
@@ -453,7 +460,7 @@ test('title search serving schema drops repeated unused metadata', () => {
     'project_scope_identity',
     'snapshot_id',
     'token',
-    'article_id',
+    'article_ids',
   ])
   expect(schemaMigrationSql).not.toContain('title_prefix')
   expect(schemaMigrationSql).not.toContain('search_updated_at')
@@ -1148,6 +1155,10 @@ test('Phase 1 schema migration creates contract cursor and sort columns on non-j
       return getContractPhysicalColumns(contract)
         .filter((columnName) => {
           if (contract.servingTable === 'mart.review_article_filter_posting_serving_v4' && columnName === 'sort_key') {
+            return false
+          }
+
+          if (contract.servingTable === 'mart.review_title_search_serving_v4' && columnName === 'article_id') {
             return false
           }
 

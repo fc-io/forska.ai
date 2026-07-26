@@ -28,6 +28,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingDynamicCountSql.ts'),
+  join(reviewServingSourceRoot, 'reviewServingFilteredCountService.ts'),
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
@@ -44,6 +45,7 @@ const reviewServingMaintenanceAdmissionFiles = [
 ] as const
 const reviewServingBoundedForegroundAggregationFiles = [
   'reviewServingDynamicCountSql.ts',
+  'reviewServingFilteredCountService.ts',
   'reviewServingHumanAssessmentCompletedCount.ts',
   'reviewServingSql.ts',
 ] as const
@@ -709,7 +711,7 @@ test('buildReviewServingRowsSql intersects posting filters with token-prefix sea
   expect(sql).toContain('search.search_identity = $searchIdentity')
   expect(sql).toContain('search.project_scope_identity = $projectScopeIdentity')
   expect(sql).toContain('search.snapshot_id = $snapshotId')
-  expect(sql).toContain('search.article_id = mart.review_article_filter_posting_serving_v4.article_id')
+  expect(sql).toContain('list_contains(search.article_ids, mart.review_article_filter_posting_serving_v4.article_id)')
   expect(sql).toContain('starts_with(search.token, $searchTokenPrefix)')
 })
 

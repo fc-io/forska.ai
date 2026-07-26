@@ -1165,6 +1165,19 @@ const getSearchRebuildChunkOutputChecksum = async (
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH search_posting AS (
+      SELECT
+        search.snapshot_id,
+        search.project_scope_identity,
+        search.token,
+        search_article.article_id
+      FROM mart.review_title_search_serving_v4 search
+      CROSS JOIN unnest(search.article_ids) AS search_article(article_id)
+      WHERE search.project_id = ${getSqlLiteral(projectId)}
+        AND search.search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+        AND ${getAliasedSnapshotIdPredicate('search', input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'search_article', chunk: input.chunk})}
+    )
     SELECT
       CAST(COUNT(*) AS INTEGER) AS actualCount,
       sha256(COALESCE(string_agg(
@@ -1174,11 +1187,7 @@ const getSearchRebuildChunkOutputChecksum = async (
         CAST(token AS VARCHAR),
         '|' ORDER BY snapshot_id, project_scope_identity, article_id, token
       ), '')) AS actualChecksum
-    FROM mart.review_title_search_serving_v4 search
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'search', chunk: input.chunk})}
+    FROM search_posting
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1190,13 +1199,20 @@ const getSearchRebuildChunkOutputCount = async (
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH search_posting AS (
+      SELECT
+        search.snapshot_id,
+        search_article.article_id
+      FROM mart.review_title_search_serving_v4 search
+      CROSS JOIN unnest(search.article_ids) AS search_article(article_id)
+      WHERE search.project_id = ${getSqlLiteral(projectId)}
+        AND search.search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+        AND ${getAliasedSnapshotIdPredicate('search', input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'search_article', chunk: input.chunk})}
+    )
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM mart.review_title_search_serving_v4 search
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'search', chunk: input.chunk})}
+    FROM search_posting
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}

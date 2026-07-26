@@ -424,7 +424,7 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   expect(sql).toContain("search.search_identity = 'search-identity'")
   expect(sql).toContain("search.project_scope_identity = 'projectScope-identity'")
   expect(sql).toContain("search.snapshot_id = 'active-snapshot'")
-  expect(sql).toContain('search.article_id = mart.review_article_serving_v4.article_id')
+  expect(sql).toContain('list_contains(search.article_ids, mart.review_article_serving_v4.article_id)')
   expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
   expect(sql).toContain(
     "(mart.review_article_serving_v4.sort_key < '2026-01-01') OR (mart.review_article_serving_v4.sort_key IS NOT DISTINCT FROM '2026-01-01' AND mart.review_article_serving_v4.article_id > 'article-1')",

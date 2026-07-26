@@ -374,7 +374,7 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
           AND search_${index}.search_identity = ${searchIdentitySql}
           AND search_${index}.project_scope_identity = ${projectScopeIdentitySql}
           AND search_${index}.snapshot_id = s.snapshot_id
-          AND search_${index}.article_id = s.article_id
+          AND list_contains(search_${index}.article_ids, s.article_id)
           AND starts_with(search_${index}.token, ${getSqlLiteral(token)})
       )`
     })
