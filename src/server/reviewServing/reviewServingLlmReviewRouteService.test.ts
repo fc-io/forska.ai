@@ -297,7 +297,7 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
-  expect(reader.statements).toHaveLength(5)
+  expect(reader.statements).toHaveLength(8)
   expect(sql).toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('FROM app.project_prompt')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
@@ -339,6 +339,38 @@ test('LLM review route tokenizes title search like the title search projector an
   expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
   expect(sql).not.toContain('prompt_anchor')
   expect(sql).toContain('search_filtered_article_ids AS')
+})
+
+test('LLM review filtered count route serves a cached signature without dynamic foreground scans', async () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.review_filtered_count_serving_v4')) {
+        return [{countFound: true, countValue: 7}] as T[]
+      }
+
+      if (statement.includes('FROM app.project')) {
+        return [{dateFrom: '2026-01-10T00:00:00.000Z', dateTo: '2026-01-20T00:00:00.000Z'}] as T[]
+      }
+
+      return [] as T[]
+    },
+  }
+  const result = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', limit: 5, prompts: {'prompt-1': ['yes']}, search: 'heart failure'},
+    {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({totalCount: 7, totalPages: 2})
+  expect(joined).toContain('FROM mart.review_filtered_count_serving_v4')
+  expect(joined).not.toContain('review_article_filter_posting_serving_v4')
+  expect(joined).not.toContain('review_title_search_serving_v4')
+  expect(joined).not.toContain('review_unassessed_queue_serving_v4')
+  expect(joined).not.toContain('review_article_judgment_detail_serving_v4')
+  expect(joined).not.toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
 })
 
 test('LLM review prompt-filtered count intersects through one posting CTE', async () => {
@@ -410,12 +442,15 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
       manifestDatabase: createManifestDatabase('active'),
     },
   )
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  })
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
-  expect(reader.statements).toHaveLength(2)
-  expect(reader.statements[1]).toContain('FROM mart.review_article_serving_v4')
-  expect(reader.statements[1]).toContain('llm_judged_article_ids AS')
-  expect(reader.statements[1]).not.toContain('serving.llm_judged_prompt_count > 0')
+  expect(reader.statements).toHaveLength(5)
+  expect(countStatement).toContain('FROM mart.review_article_serving_v4')
+  expect(countStatement).toContain('llm_judged_article_ids AS')
+  expect(countStatement).not.toContain('serving.llm_judged_prompt_count > 0')
 })
 
 test('LLM review list route rejects when no serving snapshot is readable', async () => {

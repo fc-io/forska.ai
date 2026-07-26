@@ -77,6 +77,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0174_dropReviewArticleServingStatusCountCopies.sql',
   '../../db/duckdbMigrations/0175_dropReviewArticleServingPayload.sql',
   '../../db/duckdbMigrations/0176_dropReviewSummaryContributionRebuildPartial.sql',
+  '../../db/duckdbMigrations/0177_reviewFilteredCountServing.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -226,10 +227,13 @@ const reviewFilterPostingServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql']
 const reviewArticleServingReviewProgressCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0134_dropReviewArticleServingReviewProgressCopy.sql']
+const reviewFilteredCountServingForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0177_reviewFilteredCountServing.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_count_serving_v4',
+  'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
@@ -261,6 +265,7 @@ const reviewServingPhase1Tables = [
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_count_serving_v4',
+  'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
@@ -1197,6 +1202,28 @@ test('Phase 1 schema migration keeps count rows list-mode scoped', () => {
   expect(getMissingColumns('mart.review_article_count_serving_v4', ['list_mode_key'])).toEqual([])
   expect(countScopeForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_article_count_serving_v4')
   expect(countScopeForwardMigrationSql).toContain("list_mode_key VARCHAR NOT NULL DEFAULT 'global'")
+})
+
+test('dynamic filtered count serving schema keys signatures by snapshot and component identities', () => {
+  expect([...getTableColumns('mart.review_filtered_count_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'list_mode_key',
+    'filter_signature',
+    'component_identity',
+    'project_scope_identity',
+    'search_identity',
+    'posting_identity',
+    'queue_identity',
+    'payload_identity',
+    'count_value',
+    'count_updated_at',
+  ])
+  expect(reviewFilteredCountServingForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_filtered_count_serving_v4_repaired_pk',
+  )
+  expect(reviewFilteredCountServingForwardMigrationSql).toContain('idx_review_filtered_count_serving_v4_lookup')
 })
 
 test('Phase 1 schema migration includes dedicated judgment detail and filter option tables', () => {

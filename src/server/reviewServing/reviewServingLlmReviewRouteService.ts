@@ -11,6 +11,12 @@ import {
   type ReviewServingDynamicCountPostingFilterGroup,
 } from './reviewServingDynamicCountSql.ts'
 import {
+  getReviewServingFilteredCountComponentIdentities,
+  getReviewServingFilteredCountSignature,
+  getReviewServingFilteredCountValue,
+  type ReviewServingFilteredCountDatabase,
+} from './reviewServingFilteredCountService.ts'
+import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
   type ReviewServingManifestRepositoryDatabase,
@@ -344,34 +350,54 @@ const getFilteredCountValue = async (
   manifest: ReviewServingSnapshotManifest,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<number> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingFilteredCountDatabase)
   const filters = getRouteFilters(params)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
-  const [row] = await database.queryJson<{totalCount: number}>(`
-    ${getReviewServingDynamicFilteredCountSql({
-      listModeKey: 'llm',
-      postingFilterGroups: [
-        ...getPromptAnswerPostingFilterGroups(params.prompts),
-        ...getFlagPostingFilterGroups(filters),
-        ...getStatusPostingFilterGroups(filters),
-      ],
-      projectId: params.projectId,
-      projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
-      reviewConfigHash: manifest.reviewConfigHash,
-      requireLlmJudgment: filters.llmHasJudgment,
-      searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
-      searchTokenPrefixes,
-      servingPredicates: [
-        filters.articleCreatedAtFrom
-          ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
-          : '',
-        getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
-      ],
-      snapshotId: manifest.snapshotId,
-    })}
-  `)
 
-  return Number(row?.totalCount ?? 0)
+  return getReviewServingFilteredCountValue({
+    ...getReviewServingFilteredCountComponentIdentities(manifest, [
+      'display',
+      'projectScope',
+      'selectedImport',
+      'llmStatus',
+      'posting',
+      'search',
+      'payload',
+    ]),
+    computeCount: async () => {
+      const [row] = await database.queryJson<{totalCount: number}>(`
+        ${getReviewServingDynamicFilteredCountSql({
+          listModeKey: 'llm',
+          postingFilterGroups: [
+            ...getPromptAnswerPostingFilterGroups(params.prompts),
+            ...getFlagPostingFilterGroups(filters),
+            ...getStatusPostingFilterGroups(filters),
+          ],
+          projectId: params.projectId,
+          projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
+          reviewConfigHash: manifest.reviewConfigHash,
+          requireLlmJudgment: filters.llmHasJudgment,
+          searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
+          searchTokenPrefixes,
+          servingPredicates: [
+            filters.articleCreatedAtFrom
+              ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
+              : '',
+            getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
+          ],
+          snapshotId: manifest.snapshotId,
+        })}
+      `)
+
+      return Number(row?.totalCount ?? 0)
+    },
+    database,
+    filterSignature: getReviewServingFilteredCountSignature({filters, searchTokenPrefixes}),
+    listModeKey: 'llm',
+    projectId: params.projectId,
+    reviewConfigHash: manifest.reviewConfigHash,
+    snapshotId: manifest.snapshotId,
+  })
 }
 
 const getArticleId = (row: ReviewServingArticleRow) => {

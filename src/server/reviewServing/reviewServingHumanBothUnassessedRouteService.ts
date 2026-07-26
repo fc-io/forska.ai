@@ -13,6 +13,12 @@ import {
   type ReviewServingDynamicCountPostingFilterGroup,
 } from './reviewServingDynamicCountSql.ts'
 import {
+  getReviewServingFilteredCountComponentIdentities,
+  getReviewServingFilteredCountSignature,
+  getReviewServingFilteredCountValue,
+  type ReviewServingFilteredCountDatabase,
+} from './reviewServingFilteredCountService.ts'
+import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
   type ReviewServingManifestRepositoryDatabase,
@@ -469,37 +475,56 @@ const getFilteredCountValue = async (
   mode: ReviewServingReviewMode,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<number> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingFilteredCountDatabase)
   const filters = getRouteFilters(params, mode)
   const searchTokenPrefixes = filters.searchTokenPrefix ? getSearchTokenPrefixes(params.search) : []
-  const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
-    database,
-    `
-    ${getReviewServingDynamicFilteredCountSql({
-      includeUnassessedQueue: mode === 'unassessed',
-      listModeKey: mode,
-      postingFilterGroups: [
-        ...getPromptAnswerPostingFilterGroups(params, mode),
-        ...getFlagPostingFilterGroups(filters),
-        ...getStatusPostingFilterGroups(filters),
-      ],
-      projectId: params.projectId,
-      projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
-      reviewConfigHash: manifest.reviewConfigHash,
-      searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
-      searchTokenPrefixes,
-      servingPredicates: [
-        filters.articleCreatedAtFrom
-          ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
-          : '',
-        getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
-      ],
-      snapshotId: manifest.snapshotId,
-    })}
-  `,
-  )
 
-  return Number(row?.totalCount ?? 0)
+  return getReviewServingFilteredCountValue({
+    ...getReviewServingFilteredCountComponentIdentities(
+      manifest,
+      mode === 'both'
+        ? ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'posting', 'search', 'payload']
+        : mode === 'human'
+          ? ['display', 'projectScope', 'selectedImport', 'humanStatus', 'posting', 'search', 'payload']
+          : ['display', 'projectScope', 'selectedImport', 'queue', 'posting', 'search'],
+    ),
+    computeCount: async () => {
+      const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
+        database,
+        `
+        ${getReviewServingDynamicFilteredCountSql({
+          includeUnassessedQueue: mode === 'unassessed',
+          listModeKey: mode,
+          postingFilterGroups: [
+            ...getPromptAnswerPostingFilterGroups(params, mode),
+            ...getFlagPostingFilterGroups(filters),
+            ...getStatusPostingFilterGroups(filters),
+          ],
+          projectId: params.projectId,
+          projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
+          reviewConfigHash: manifest.reviewConfigHash,
+          searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
+          searchTokenPrefixes,
+          servingPredicates: [
+            filters.articleCreatedAtFrom
+              ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
+              : '',
+            getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
+          ],
+          snapshotId: manifest.snapshotId,
+        })}
+      `,
+      )
+
+      return Number(row?.totalCount ?? 0)
+    },
+    database,
+    filterSignature: getReviewServingFilteredCountSignature({filters, searchTokenPrefixes}),
+    listModeKey: mode,
+    projectId: params.projectId,
+    reviewConfigHash: manifest.reviewConfigHash,
+    snapshotId: manifest.snapshotId,
+  })
 }
 
 const getArticleId = (row: ReviewServingArticleRow) => {

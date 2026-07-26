@@ -608,6 +608,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       'app.comparison_project_serving_generation',
       'app.review_rebuild_chunk_manifest',
       'mart.review_article_count_serving_v4',
+      'mart.review_filtered_count_serving_v4',
       'mart.review_filter_facet_serving_v4',
       'mart.review_filter_option_serving_v4',
       'mart.review_article_judgment_detail_serving_v4',
@@ -3431,6 +3432,19 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'filter_key',
     ])
     expect(countServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_article_count_serving_v4')
+    const filteredCountServingProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_filtered_count_serving_v4'
+    })
+    expect(filteredCountServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(filteredCountServingProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'list_mode_key',
+      'filter_signature',
+      'component_identity',
+    ])
+    expect(filteredCountServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_filtered_count_serving_v4')
     const facetServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_facet_serving_v4'
     })

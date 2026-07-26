@@ -1241,6 +1241,134 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           project_id,
           review_config_hash,
           snapshot_id,
+          list_mode_key,
+          filter_signature,
+          component_identity
+        FROM mart.review_filtered_count_serving_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          list_mode_key,
+          filter_signature,
+          component_identity
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_filtered_count_serving_v4;
+      CREATE TEMP TABLE startup_probe_review_filtered_count_serving_v4 AS
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        list_mode_key,
+        filter_signature,
+        component_identity,
+        count_updated_at
+      FROM mart.review_filtered_count_serving_v4
+      ORDER BY
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        list_mode_key,
+        filter_signature,
+        component_identity
+      LIMIT 1;
+      BEGIN;
+      UPDATE mart.review_filtered_count_serving_v4
+      SET count_updated_at = current_timestamp
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND filter_signature = (
+          SELECT filter_signature
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND component_identity = (
+          SELECT component_identity
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        );
+      COMMIT;
+      BEGIN;
+      UPDATE mart.review_filtered_count_serving_v4
+      SET count_updated_at = (
+        SELECT count_updated_at
+        FROM startup_probe_review_filtered_count_serving_v4
+        LIMIT 1
+      )
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND filter_signature = (
+          SELECT filter_signature
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        )
+        AND component_identity = (
+          SELECT component_identity
+          FROM startup_probe_review_filtered_count_serving_v4
+          LIMIT 1
+        );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_filtered_count_serving_v4;
+    `,
+    lowMemoryStartupPreflight: true,
+    repairPrimaryKeyColumns: [
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'list_mode_key',
+      'filter_signature',
+      'component_identity',
+    ],
+    schemaName: 'mart',
+    tableName: 'review_filtered_count_serving_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
           summary_identity,
           facet_kind,
           facet_key,
