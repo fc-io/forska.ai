@@ -418,7 +418,6 @@ const hotReviewServingTables = [
   'mart.review_article_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
-  'mart.review_filter_posting_stats_v4',
   'mart.review_title_search_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
   'mart.review_article_summary_rebuild_accumulator_v4',
@@ -539,21 +538,12 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'facet_key',
     'option_value_key',
   ],
-  'mart.review_filter_posting_stats_v4': [
-    'project_id',
-    'review_config_hash',
-    'snapshot_id',
-    'filter_kind',
-    'filter_value',
-    'list_mode_key',
-  ],
   'mart.review_title_search_serving_v4': [
     'project_id',
     'search_identity',
     'project_scope_identity',
     'snapshot_id',
     'token',
-    'article_id',
   ],
   'mart.review_unassessed_queue_serving_v4': [
     'project_id',
@@ -564,7 +554,6 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'activity_sort_at',
     'article_id',
     'prompt_id',
-    'queue_identity',
   ],
 }
 
@@ -1702,6 +1691,8 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         return getGlobalDisplayCopyExpressions(column, selectedBaseColumnNames)
       })
       .join(',\n        ')
+    const selectedBaseDuplicateFlagSql = selectedBaseColumnNames.has('duplicate_flag') ? 'duplicate_flag' : 'FALSE'
+    const selectedBaseConflictFlagSql = selectedBaseColumnNames.has('conflict_flag') ? 'conflict_flag' : 'FALSE'
     const selectedBaseRows = await runReadonlyQuery<Record<string, number | string | null>>(
       runtime,
       `
@@ -1898,16 +1889,16 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
           CAST(COUNT(*) FILTER (WHERE NOT active_or_last_known_good_protected AND snapshot_status <> 'candidate') AS BIGINT) AS otherRows,
           CAST(COUNT(*) FILTER (WHERE hot_resolved) AS BIGINT) AS hotResolvedRows,
           CAST(COUNT(*) FILTER (WHERE NOT hot_resolved) AS BIGINT) AS missingHotRows,
-          CAST(COUNT(*) FILTER (WHERE duplicate_flag = TRUE) AS BIGINT) AS selectedBaseDuplicateTrueRows,
-          CAST(COUNT(*) FILTER (WHERE conflict_flag = TRUE) AS BIGINT) AS selectedBaseConflictTrueRows,
+          CAST(COUNT(*) FILTER (WHERE ${selectedBaseDuplicateFlagSql} = TRUE) AS BIGINT) AS selectedBaseDuplicateTrueRows,
+          CAST(COUNT(*) FILTER (WHERE ${selectedBaseConflictFlagSql} = TRUE) AS BIGINT) AS selectedBaseConflictTrueRows,
           CAST(COUNT(*) FILTER (WHERE hot_duplicate_flag = TRUE) AS BIGINT) AS hotDuplicateTrueRows,
           CAST(COUNT(*) FILTER (WHERE hot_conflict_flag = TRUE) AS BIGINT) AS hotConflictTrueRows,
-          CAST(COUNT(*) FILTER (WHERE duplicate_flag IS DISTINCT FROM hot_duplicate_flag) AS BIGINT) AS duplicateMismatchRows,
-          CAST(COUNT(*) FILTER (WHERE conflict_flag IS DISTINCT FROM hot_conflict_flag) AS BIGINT) AS conflictMismatchRows,
-          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND duplicate_flag = TRUE) AS BIGINT) AS selectedBaseTrueDuplicateRowsWithoutHot,
-          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND conflict_flag = TRUE) AS BIGINT) AS selectedBaseTrueConflictRowsWithoutHot,
-          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND COALESCE(duplicate_flag, FALSE) = FALSE) AS BIGINT) AS selectedBaseFalseOrDefaultDuplicateRowsWithoutHot,
-          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND COALESCE(conflict_flag, FALSE) = FALSE) AS BIGINT) AS selectedBaseFalseOrDefaultConflictRowsWithoutHot
+          CAST(COUNT(*) FILTER (WHERE ${selectedBaseDuplicateFlagSql} IS DISTINCT FROM hot_duplicate_flag) AS BIGINT) AS duplicateMismatchRows,
+          CAST(COUNT(*) FILTER (WHERE ${selectedBaseConflictFlagSql} IS DISTINCT FROM hot_conflict_flag) AS BIGINT) AS conflictMismatchRows,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND ${selectedBaseDuplicateFlagSql} = TRUE) AS BIGINT) AS selectedBaseTrueDuplicateRowsWithoutHot,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND ${selectedBaseConflictFlagSql} = TRUE) AS BIGINT) AS selectedBaseTrueConflictRowsWithoutHot,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND COALESCE(${selectedBaseDuplicateFlagSql}, FALSE) = FALSE) AS BIGINT) AS selectedBaseFalseOrDefaultDuplicateRowsWithoutHot,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND COALESCE(${selectedBaseConflictFlagSql}, FALSE) = FALSE) AS BIGINT) AS selectedBaseFalseOrDefaultConflictRowsWithoutHot
         FROM selected_with_hot
         GROUP BY 1, 2
         ORDER BY COUNT(*) DESC, snapshot_status, active_or_last_known_good_protected DESC
@@ -2668,7 +2659,6 @@ const getUnassessedQueueServingReadinessReport = async (
     'activity_sort_at',
     'article_id',
     'prompt_id',
-    'queue_identity',
   ]
   const orderKeyWithoutQueueIdentityColumns = [
     'project_id',
@@ -2860,7 +2850,7 @@ const getUnassessedQueueServingReadinessReport = async (
         {
           duplicateCount: await getDuplicateCountForColumns(runtime, table, orderKeyWithoutQueueIdentityColumns, null),
           keyColumns: orderKeyWithoutQueueIdentityColumns,
-          label: 'consumer order key without queue_identity',
+          label: 'consumer order key',
         },
       ],
       error: null,
@@ -3091,8 +3081,8 @@ const getJudgmentDetailPayloadReadinessReport = async (
         SELECT
           CAST(COUNT(*) AS BIGINT) AS globalRowCount,
           CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
-          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NULL AND judgment_updated_at IS NULL AND model_name IS NULL AND assessment_id IS NULL) AS BIGINT) AS detailScalarNullRows,
-          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL OR judgment_updated_at IS NOT NULL OR model_name IS NOT NULL OR assessment_id IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_id IS NULL AND detail_updated_at IS NULL) AS BIGINT) AS detailScalarNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL OR detail_updated_at IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
         FROM ${table}
@@ -3113,10 +3103,10 @@ const getJudgmentDetailPayloadReadinessReport = async (
         SELECT
           COALESCE(payload_kind, 'NULL') AS payloadKind,
           CAST(COUNT(*) AS BIGINT) AS rows,
-          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL OR judgment_updated_at IS NOT NULL OR model_name IS NOT NULL OR assessment_id IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL OR detail_updated_at IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows,
           CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL) AS BIGINT) AS judgmentIdNonNullRows,
           CAST(COUNT(*) FILTER (WHERE placeholder_kind IS NOT NULL) AS BIGINT) AS placeholderRows,
-          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL) AS BIGINT) AS payloadModelIdNonNullRows,
+          CAST(0 AS BIGINT) AS payloadModelIdNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
         FROM ${table}
@@ -3158,7 +3148,7 @@ const getJudgmentDetailPayloadReadinessReport = async (
         SELECT
           COALESCE(list_mode_key, 'NULL') AS listModeKey,
           CAST(COUNT(*) AS BIGINT) AS rows,
-          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL OR judgment_updated_at IS NOT NULL OR model_name IS NOT NULL OR assessment_id IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows
+          CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL OR detail_updated_at IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows
         FROM ${table}
         GROUP BY list_mode_key
         HAVING COUNT(*) > 0
@@ -4114,7 +4104,7 @@ const renderMarkdown = (report: EvidenceReport) => {
             'Detail scalar non-nulls',
             'Judgment ID non-nulls',
             'Placeholder rows',
-            'judgment_model_id non-nulls',
+            'model id non-nulls (retired)',
             'answered_original non-nulls',
             'answered_original_as_array non-nulls',
           ],
