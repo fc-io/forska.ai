@@ -9,6 +9,7 @@ import {
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   getDeleteReviewServingProjectorRowsStatement,
+  getRemoveReviewServingTitleSearchArticleIdsStatements,
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   type ReviewServingProjectorWriterDiagnostics,
@@ -256,14 +257,14 @@ const getTitleSearchRows = async (
 
 const getTitleSearchRecord = (
   input: ProjectReviewServingTitleSearchInput,
-  row: TitleSearchSourceRow,
   token: string,
+  articleIds: readonly string[],
 ): ReviewServingProjectorRecord => {
   return {
-    keyColumns: ['project_id', 'search_identity', 'project_scope_identity', 'snapshot_id', 'token', 'article_id'],
+    keyColumns: ['project_id', 'search_identity', 'project_scope_identity', 'snapshot_id', 'token'],
     table: 'mart.review_title_search_serving_v4',
     values: {
-      article_id: row.articleId,
+      article_ids: articleIds,
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,
       search_identity: input.searchIdentity,
@@ -271,6 +272,33 @@ const getTitleSearchRecord = (
       token,
     },
   }
+}
+
+const getTitleSearchRecords = (
+  input: ProjectReviewServingTitleSearchInput,
+  rows: readonly TitleSearchSourceRow[],
+): ReviewServingProjectorRecord[] => {
+  const articleIdsByToken = new Map<string, string[]>()
+
+  for (const row of rows) {
+    if (row.tombstone) {
+      continue
+    }
+
+    for (const token of getReviewServingTitleSearchTokens(row.articleTitle)) {
+      const articleIds = articleIdsByToken.get(token) ?? []
+      articleIds.push(row.articleId)
+      articleIdsByToken.set(token, articleIds)
+    }
+  }
+
+  return [...articleIdsByToken.entries()]
+    .sort(([leftToken], [rightToken]) => {
+      return leftToken.localeCompare(rightToken)
+    })
+    .map(([token, articleIds]) => {
+      return getTitleSearchRecord(input, token, [...new Set(articleIds)].sort())
+    })
 }
 
 const getTitleSearchManifest = (
@@ -303,20 +331,31 @@ const getDeleteDirtyTitleSearchRowsStatements = (input: ProjectReviewServingTitl
   const articleIds = getClaimArticleIds(input.claims)
   const hasClaimedWork = (input.claims?.length ?? 0) > 0
 
-  return !hasClaimedWork
-    ? []
-    : [
-        getDeleteReviewServingProjectorRowsStatement({
-          predicates: {
-            ...(articleIds.length > 0 ? {article_id: articleIds} : {}),
-            project_id: input.projectId,
-            project_scope_identity: input.projectScopeIdentity,
-            search_identity: input.searchIdentity,
-            snapshot_id: input.snapshotId,
-          },
-          table: 'mart.review_title_search_serving_v4',
-        }),
-      ]
+  if (!hasClaimedWork) {
+    return []
+  }
+
+  if (articleIds.length === 0) {
+    return [
+      getDeleteReviewServingProjectorRowsStatement({
+        predicates: {
+          project_id: input.projectId,
+          project_scope_identity: input.projectScopeIdentity,
+          search_identity: input.searchIdentity,
+          snapshot_id: input.snapshotId,
+        },
+        table: 'mart.review_title_search_serving_v4',
+      }),
+    ]
+  }
+
+  return getRemoveReviewServingTitleSearchArticleIdsStatements({
+    articleIds,
+    projectId: input.projectId,
+    projectScopeIdentity: input.projectScopeIdentity,
+    searchIdentity: input.searchIdentity,
+    snapshotId: input.snapshotId,
+  })
 }
 
 export const getReviewServingSearchAvailabilityFromManifest = (input: {
@@ -344,13 +383,7 @@ export const projectReviewServingTitleSearchRows = async (
   const definitionVersion = input.definitionVersion
   const projectionIdentity = input.projectionIdentity
   const records = measureSync('recordTransformMs', () => {
-    return rows.flatMap((row) => {
-      return row.tombstone
-        ? []
-        : getReviewServingTitleSearchTokens(row.articleTitle).map((token) => {
-            return getTitleSearchRecord(input, row, token)
-          })
-    })
+    return getTitleSearchRecords(input, rows)
   })
   const patchWatermark = getPatchWatermark(claims)
   const hasClaimedWork = claims.length > 0 && definitionVersion !== undefined && projectionIdentity !== undefined
@@ -407,7 +440,6 @@ const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServi
     searchIdentity: input.searchIdentity,
     selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
     snapshotId: input.snapshotId,
-    targetArticleRangePredicateSql: getArticleRangePredicate(input, 'search'),
   }
 }
 

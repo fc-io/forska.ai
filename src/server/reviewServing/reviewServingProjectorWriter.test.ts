@@ -184,7 +184,7 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   expect(insertStatement).not.toContain('queue_updated_at = excluded.queue_updated_at')
 })
 
-test('title search rebuild ranges insert rows with conflict-ignore and no scoped indexed deletes', async () => {
+test('title search rebuild ranges merge rows without conflict updates or scoped indexed deletes', async () => {
   const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
   const baseRange = {
     articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
@@ -194,7 +194,6 @@ test('title search rebuild ranges insert rows with conflict-ignore and no scoped
     searchIdentity: 'search:identity-1',
     selectedImportJoinSql: '',
     snapshotId: 'snapshot-1',
-    targetArticleRangePredicateSql: "AND search.article_id >= 'article-1' AND search.article_id <= 'article-2'",
   }
 
   await writeReviewServingTitleSearchRebuildRanges(
@@ -204,7 +203,6 @@ test('title search rebuild ranges insert rows with conflict-ignore and no scoped
         {
           ...baseRange,
           articleRangePredicateSql: "AND scope.article_id >= 'article-3' AND scope.article_id <= 'article-4'",
-          targetArticleRangePredicateSql: "AND search.article_id >= 'article-3' AND search.article_id <= 'article-4'",
         },
       ],
     },
@@ -218,10 +216,17 @@ test('title search rebuild ranges insert rows with conflict-ignore and no scoped
       return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
     }),
   ).toHaveLength(1)
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('UPDATE mart.review_title_search_serving_v4')
+    }),
+  ).toHaveLength(1)
   expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_title_search_serving_v4')
-  expect(statements.join('\n')).not.toContain('WHERE NOT EXISTS')
+  expect(statements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(statements.join('\n')).not.toContain('DO UPDATE SET')
+  expect(statements.join('\n')).toContain('SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
   expect(statements.join('\n')).toContain(
-    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING',
+    'LIST(DISTINCT tokenized.article_id ORDER BY tokenized.article_id) AS article_ids',
   )
   expect(statements.join('\n')).toContain("scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'")
   expect(statements.join('\n')).toContain("OR (scope.article_id >= 'article-3' AND scope.article_id <= 'article-4')")
@@ -239,7 +244,6 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
     searchIdentity: 'search:identity-1',
     selectedImportJoinSql: '',
     snapshotId: 'snapshot-1',
-    targetArticleRangePredicateSql: "AND search.article_id >= 'article-1' AND search.article_id <= 'article-2'",
   }
 
   await writeReviewServingTitleSearchRebuildRanges(
@@ -250,7 +254,6 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
           ...baseRange,
           articleRangePredicateSql: "AND scope.article_id >= 'article-3' AND scope.article_id <= 'article-4'",
           articleTitleSql: 'COALESCE(article.title, article.abstract)',
-          targetArticleRangePredicateSql: "AND search.article_id >= 'article-3' AND search.article_id <= 'article-4'",
         },
       ],
     },
@@ -260,11 +263,14 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
   const insertStatements = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
   })
+  const updateStatements = statements.filter((statement) => {
+    return statement.includes('UPDATE mart.review_title_search_serving_v4')
+  })
 
   expect(insertStatements).toHaveLength(2)
-  expect(insertStatements.join('\n')).toContain(
-    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING',
-  )
+  expect(updateStatements).toHaveLength(2)
+  expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
+  expect(updateStatements.join('\n')).not.toContain('ON CONFLICT')
   expect(insertStatements.join('\n')).not.toContain("OR (scope.article_id >= 'article-3'")
 })
 

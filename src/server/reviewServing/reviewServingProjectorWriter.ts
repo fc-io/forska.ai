@@ -64,6 +64,14 @@ export type DeleteReviewServingProjectorRowsInput = {
   table: ReviewServingProjectorWritableTable
 }
 
+export type RemoveReviewServingTitleSearchArticleIdsInput = {
+  articleIds: readonly string[]
+  projectId: string
+  projectScopeIdentity: string
+  searchIdentity: string
+  snapshotId: string
+}
+
 export type PromoteReviewServingProjectorSnapshotInput = {
   projectId: string
   reviewConfigHash?: string | null
@@ -91,7 +99,6 @@ export type WriteReviewServingTitleSearchRebuildRowsInput = {
   searchIdentity: string
   selectedImportJoinSql: string
   snapshotId: string
-  targetArticleRangePredicateSql: string
 }
 
 export type WriteReviewServingTitleSearchRebuildRangesInput = {
@@ -106,7 +113,6 @@ const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
-  'mart.review_title_search_serving_v4',
 ])
 const reviewServingProjectorScanGuardedInsertMissingTables = new Set<string>([])
 const reviewServingDeleteFreeSummaryScanGuardedInsertMissingTables = new Set<string>([
@@ -179,6 +185,10 @@ const getReviewServingProjectorHash = (label: string, value: ReviewServingIdenti
     .digest('hex')
 }
 
+const mergeReviewServingTitleSearchArticleIdsSql = (incomingArticleIdsSql: string, existingArticleIdsSql: string) => {
+  return `(SELECT LIST(DISTINCT article_id ORDER BY article_id) FROM (SELECT unnest(COALESCE(${existingArticleIdsSql}, []::VARCHAR[])) AS article_id UNION ALL SELECT unnest(${incomingArticleIdsSql}) AS article_id))`
+}
+
 const getSqlRecordValue = (value: ReviewServingProjectorRecordValue) => {
   if (value instanceof Date) {
     return getSqlLiteral(value.toISOString())
@@ -214,6 +224,32 @@ export const getDeleteReviewServingProjectorRowsStatement = (input: DeleteReview
   })
 
   return `DELETE FROM ${input.table} WHERE ${predicates.join(' AND ')}`
+}
+
+export const getRemoveReviewServingTitleSearchArticleIdsStatements = (
+  input: RemoveReviewServingTitleSearchArticleIdsInput,
+) => {
+  if (input.articleIds.length === 0) {
+    return []
+  }
+
+  const scopedPredicate = [
+    `project_id = ${getSqlLiteral(input.projectId)}`,
+    `project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}`,
+    `search_identity = ${getSqlLiteral(input.searchIdentity)}`,
+    `snapshot_id = ${getSqlLiteral(input.snapshotId)}`,
+  ].join(' AND ')
+  const articleIdsSql = `${getSqlLiteral(input.articleIds)}::VARCHAR[]`
+
+  return [
+    `UPDATE mart.review_title_search_serving_v4
+      SET article_ids = list_filter(article_ids, article_id -> NOT list_contains(${articleIdsSql}, article_id))
+      WHERE ${scopedPredicate}
+        AND list_has_any(article_ids, ${articleIdsSql})`,
+    `DELETE FROM mart.review_title_search_serving_v4
+      WHERE ${scopedPredicate}
+        AND length(article_ids) = 0`,
+  ]
 }
 
 export const deleteReviewServingProjectorRows = async (
@@ -304,7 +340,9 @@ const writeReviewServingProjectorRecordBatch = async (
         return !keyColumns.includes(column)
       })
       .map((column) => {
-        return `${column} = ${incomingAlias}.${column}`
+        return table === 'mart.review_title_search_serving_v4' && column === 'article_ids'
+          ? `${column} = ${mergeReviewServingTitleSearchArticleIdsSql(`${incomingAlias}.${column}`, `${existingAlias}.${column}`)}`
+          : `${column} = ${incomingAlias}.${column}`
       })
 
     if (updateAssignments.length > 0) {
@@ -656,17 +694,8 @@ export const promoteReviewServingProjectorSnapshot = async (
   }, getReviewServingProjectorWriterWorkloadContext('snapshotPromotion'))
 }
 
-const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
-  return [
-    `
-    INSERT INTO mart.review_title_search_serving_v4 (
-      project_id,
-      search_identity,
-      project_scope_identity,
-      snapshot_id,
-      token,
-      article_id
-    )
+const getReviewServingTitleSearchRebuildRowsCteSql = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
+  return `
     WITH source_rows AS (
       SELECT
         scope.article_id,
@@ -705,19 +734,55 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
         ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
         tokenized.token,
-        tokenized.article_id
+        LIST(DISTINCT tokenized.article_id ORDER BY tokenized.article_id) AS article_ids
       FROM tokenized
-      GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id
+      GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token
     )
+  `
+}
+
+const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
+  const finalRowsCteSql = getReviewServingTitleSearchRebuildRowsCteSql(input)
+
+  return [
+    `
+    ${finalRowsCteSql}
+    UPDATE mart.review_title_search_serving_v4
+    SET article_ids = ${mergeReviewServingTitleSearchArticleIdsSql('final_rows.article_ids', 'review_title_search_serving_v4.article_ids')}
+    FROM final_rows
+    WHERE review_title_search_serving_v4.project_id = final_rows.project_id
+      AND review_title_search_serving_v4.search_identity = final_rows.search_identity
+      AND review_title_search_serving_v4.project_scope_identity = final_rows.project_scope_identity
+      AND review_title_search_serving_v4.snapshot_id = final_rows.snapshot_id
+      AND review_title_search_serving_v4.token = final_rows.token
+  `,
+    `
+    INSERT INTO mart.review_title_search_serving_v4 (
+      project_id,
+      search_identity,
+      project_scope_identity,
+      snapshot_id,
+      token,
+      article_ids
+    )
+    ${finalRowsCteSql}
     SELECT
       final_rows.project_id,
       final_rows.search_identity,
       final_rows.project_scope_identity,
       final_rows.snapshot_id,
       final_rows.token,
-      final_rows.article_id
+      final_rows.article_ids
     FROM final_rows
-    ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_title_search_serving_v4 existing
+      WHERE existing.project_id = final_rows.project_id
+        AND existing.search_identity = final_rows.search_identity
+        AND existing.project_scope_identity = final_rows.project_scope_identity
+        AND existing.snapshot_id = final_rows.snapshot_id
+        AND existing.token = final_rows.token
+    )
   `,
   ]
 }

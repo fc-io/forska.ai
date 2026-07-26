@@ -52,7 +52,7 @@ const searchClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): ReviewServin
   }
 }
 
-test('title search projection writes token rows and search-only component state for dirty articles', async () => {
+test('title search projection writes compact token postings and search-only component state for dirty articles', async () => {
   const {database, statements} = createTitleSearchDatabase({
     rows: [{articleId: 'article-1', articleTitle: 'Alpha Beta alpha', tombstone: false}],
   })
@@ -77,6 +77,9 @@ test('title search projection writes token rows and search-only component state 
   const deleteStatement = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_title_search_serving_v4')
   })
+  const updateStatement = statements.find((statement) => {
+    return statement.includes('list_filter(article_ids')
+  })
   const inserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
   })
@@ -90,10 +93,15 @@ test('title search projection writes token rows and search-only component state 
   expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('ELSE COALESCE(selected_hot.article_title, article.article_title)')
   expect(selectStatement).not.toContain('selected_base.article_title')
-  expect(deleteStatement).toContain('search_identity')
+  expect(updateStatement).toContain('list_filter(article_ids')
+  expect(updateStatement).toContain("list_contains(['article-1']::VARCHAR[], article_id)")
+  expect(updateStatement).toContain('list_has_any(article_ids')
+  expect(deleteStatement).toContain('length(article_ids) = 0')
   expect(inserts).toHaveLength(1)
   expect(inserts.join('\n')).toContain("'alpha'")
   expect(inserts.join('\n')).toContain("'beta'")
+  expect(inserts.join('\n')).toContain("['article-1']")
+  expect(inserts.join('\n')).toContain('article_ids')
   expect(inserts.join('\n')).not.toContain('regexp_split_to_array')
   expect(joined).toContain("'search'")
   expect(joined).toContain('title-token-v1:article.searchText.updated')
@@ -221,8 +229,12 @@ test('sql-native title search rebuild inserts chunk tokens with conflict-ignore 
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
   })
+  const updateStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_title_search_serving_v4')
+  })
 
   expect(deleteStatement).toBeUndefined()
+  expect(updateStatement).toContain('SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
   expect(insertStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(insertStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(insertStatement).toContain('COALESCE(selected_hot.article_title, article.article_title)')
@@ -235,14 +247,14 @@ test('sql-native title search rebuild inserts chunk tokens with conflict-ignore 
   expect(insertStatement).toContain('tokenized_source AS')
   expect(insertStatement).toContain('GROUP BY article_id, token')
   expect(insertStatement).toContain('final_rows AS')
+  expect(insertStatement).toContain('LIST(DISTINCT tokenized.article_id ORDER BY tokenized.article_id) AS article_ids')
   expect(insertStatement).toContain(
-    'GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id',
+    'GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token',
   )
   expect(insertStatement).not.toContain('activity_sort_at')
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING',
-  )
-  expect(insertStatement).not.toContain('WHERE NOT EXISTS')
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE SET')
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
   expect(insertStatement).not.toContain("existing.project_id || ''")
 })
 

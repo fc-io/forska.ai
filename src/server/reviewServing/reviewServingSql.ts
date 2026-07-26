@@ -426,6 +426,7 @@ const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serv
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
+const reviewServingTitleSearchTable = 'mart.review_title_search_serving_v4'
 const reviewServingListModePrioritySql =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 const reviewServingJudgmentDetailListModePrioritySql = `CASE ${reviewServingJudgmentDetailTable}.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END`
@@ -645,9 +646,13 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
         ? `${reviewServingFilterPostingTable}.review_config_hash`
         : 'review_config_hash'
 
-  return params.contract.servingTable === 'mart.review_title_search_serving_v4'
+  return params.contract.servingTable === reviewServingTitleSearchTable
     ? ` AND search_identity = ${params.searchIdentityParameter} AND project_scope_identity = ${params.projectScopeIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
     : ` AND ${reviewConfigHashColumn} = ${params.reviewConfigHashParameter} AND ${snapshotIdColumn} = ${params.snapshotIdParameter}`
+}
+
+const getReviewServingTitleSearchArticleMembershipPredicate = (articleIdSql: string, searchAlias = 'search') => {
+  return `list_contains(${searchAlias}.article_ids, ${articleIdSql})`
 }
 
 const reviewServingListModePredicateTables = new Set([
@@ -881,7 +886,7 @@ const getReviewServingRowsSqlPostingPredicate = (params: {
         ` AND search.search_identity = ${params.searchIdentityParameter}`,
         ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
         ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
-        ` AND search.article_id = ${params.contract.servingTable}.article_id`,
+        ` AND ${getReviewServingTitleSearchArticleMembershipPredicate(`${params.contract.servingTable}.article_id`)}`,
         ` AND starts_with(search.token, ${params.searchTokenPrefixParameter}))`,
       ].join('')
     : ''
@@ -938,7 +943,7 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
         ` AND search.search_identity = ${params.searchIdentityParameter}`,
         ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
         ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
-        ` AND search.article_id = ${params.contract.servingTable}.article_id`,
+        ` AND ${getReviewServingTitleSearchArticleMembershipPredicate(`${params.contract.servingTable}.article_id`)}`,
         ' AND starts_with(search.token, search_prefix.token_prefix)))',
       ].join('')
     : ''
@@ -1055,6 +1060,10 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
 
   if (contract.servingTable === reviewServingFilterPostingTable) {
     return `SELECT ${reviewServingFilterPostingTable}.*, ${reviewServingArticleTable}.sort_key AS sort_key`
+  }
+
+  if (contract.servingTable === reviewServingTitleSearchTable) {
+    return `SELECT ${reviewServingTitleSearchTable}.project_id, ${reviewServingTitleSearchTable}.search_identity, ${reviewServingTitleSearchTable}.project_scope_identity, ${reviewServingTitleSearchTable}.snapshot_id, ${reviewServingTitleSearchTable}.token, unnest(${reviewServingTitleSearchTable}.article_ids) AS article_id`
   }
 
   return contract.sort.fields.some((field) => {

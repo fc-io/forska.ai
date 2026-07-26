@@ -57,8 +57,9 @@ const getSearchFilteredArticleIdsCte = (input: ReviewServingDynamicCountSqlInput
 
   return `,
 search_filtered_article_ids AS (
-  SELECT search.article_id
+  SELECT search_article.article_id
   FROM mart.review_title_search_serving_v4 search
+  CROSS JOIN unnest(search.article_ids) AS search_article(article_id)
   CROSS JOIN scoped
   JOIN (SELECT unnest(${getSqlLiteral(tokenPrefixes)}::VARCHAR[]) AS token_prefix) search_prefix
     ON starts_with(search.token, search_prefix.token_prefix)
@@ -66,7 +67,7 @@ search_filtered_article_ids AS (
     AND search.search_identity = ${getSqlLiteral(input.searchIdentity ?? '')}
     AND search.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity ?? '')}
     AND search.snapshot_id = scoped.snapshot_id
-  GROUP BY search.article_id
+  GROUP BY search_article.article_id
   HAVING COUNT(DISTINCT search_prefix.token_prefix) = ${tokenPrefixes.length}
 )`
 }

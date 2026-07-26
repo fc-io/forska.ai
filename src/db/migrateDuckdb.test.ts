@@ -107,6 +107,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0127_dropReviewTitleSearchUnusedColumns.sql'),
     'utf8',
   ).trim()
+  const reviewTitleSearchTokenPostingSlimSql = readFileSync(
+    resolve(migrationsFolder, '0179_slimReviewTitleSearchTokenPostings.sql'),
+    'utf8',
+  ).trim()
   const reviewFilterPostingStatsDerivedColumnDropSql = readFileSync(
     resolve(migrationsFolder, '0129_dropReviewFilterPostingStatsDerivedColumns.sql'),
     'utf8',
@@ -263,6 +267,12 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewTitleSearchUnusedColumnDropSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_token',
   )
+  expect(reviewTitleSearchTokenPostingSlimSql).toContain('LIST(DISTINCT article_id ORDER BY article_id) AS article_ids')
+  expect(reviewTitleSearchTokenPostingSlimSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_repaired_pk',
+  )
+  expect(reviewTitleSearchTokenPostingSlimSql).not.toContain('PRIMARY KEY')
+  expect(reviewTitleSearchTokenPostingSlimSql).not.toContain('token, article_id)')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).toBe(
     [
       '-- Retired by 0147_dropReviewFilterPostingStats.sql.',

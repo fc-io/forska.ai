@@ -1960,16 +1960,14 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           search_identity,
           project_scope_identity,
           snapshot_id,
-          token,
-          article_id
+          token
         FROM mart.review_title_search_serving_v4
         GROUP BY
           project_id,
           search_identity,
           project_scope_identity,
           snapshot_id,
-          token,
-          article_id
+          token
         HAVING COUNT(*) > 1
       )
     `,
@@ -1982,16 +1980,14 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         search_identity,
         project_scope_identity,
         snapshot_id,
-        token,
-        article_id
+        token
       FROM mart.review_title_search_serving_v4
       ORDER BY
         project_id,
         search_identity,
         project_scope_identity,
         snapshot_id,
-        token,
-        article_id
+        token
       LIMIT 1;
       BEGIN;
       UPDATE mart.review_title_search_serving_v4
@@ -2018,11 +2014,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         )
         AND token = (
           SELECT token
-          FROM startup_probe_review_title_search_serving_v4
-          LIMIT 1
-        )
-        AND article_id = (
-          SELECT article_id
           FROM startup_probe_review_title_search_serving_v4
           LIMIT 1
         );
@@ -2052,11 +2043,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         )
         AND token = (
           SELECT token
-          FROM startup_probe_review_title_search_serving_v4
-          LIMIT 1
-        )
-        AND article_id = (
-          SELECT article_id
           FROM startup_probe_review_title_search_serving_v4
           LIMIT 1
         );
@@ -2110,14 +2096,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
             AND chunk.status = 'pending'
         )
     `,
-    repairPrimaryKeyColumns: [
-      'project_id',
-      'search_identity',
-      'project_scope_identity',
-      'snapshot_id',
-      'token',
-      'article_id',
-    ],
+    repairPrimaryKeyColumns: ['project_id', 'search_identity', 'project_scope_identity', 'snapshot_id', 'token'],
     repairStrategy: 'empty-derived',
     schemaName: 'mart',
     tableName: 'review_title_search_serving_v4',
