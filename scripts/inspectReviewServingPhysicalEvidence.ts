@@ -438,6 +438,7 @@ const preferredProfileColumns = [
   'payload_kind',
   'article_id',
   'prompt_id',
+  'prompt_ids',
   'request_id',
   'chunk_id',
   'source_chunk_ids_key',
@@ -485,13 +486,11 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'filter_kind',
     'filter_value',
     'list_mode_key',
-    'article_id',
   ],
   'mart.review_article_judgment_detail_serving_v4': [
     'project_id',
     'review_config_hash',
     'snapshot_id',
-    'list_mode_key',
     'article_id',
     'payload_kind',
     'prompt_id',
@@ -553,7 +552,6 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'priority_bucket',
     'activity_sort_at',
     'article_id',
-    'prompt_id',
   ],
 }
 
@@ -2658,7 +2656,6 @@ const getUnassessedQueueServingReadinessReport = async (
     'priority_bucket',
     'activity_sort_at',
     'article_id',
-    'prompt_id',
   ]
   const orderKeyWithoutQueueIdentityColumns = [
     'project_id',
@@ -2668,12 +2665,34 @@ const getUnassessedQueueServingReadinessReport = async (
     'priority_bucket',
     'activity_sort_at',
     'article_id',
-    'prompt_id',
   ]
   const currentProjectWhereClause = `project_id = ${getSqlLiteral(projectId)}`
 
   try {
     const columns = await getTableColumns(runtime, table)
+    const hasPromptIds = hasColumn(columns, 'prompt_ids')
+    const hasPromptId = hasColumn(columns, 'prompt_id')
+    const promptMembershipExpression = hasPromptIds
+      ? 'COALESCE(array_length(prompt_ids), 0)'
+      : hasPromptId
+        ? 'CASE WHEN prompt_id IS NULL THEN 0 ELSE 1 END'
+        : '0'
+    const promptNullExpression = hasPromptIds
+      ? 'COALESCE(array_length(prompt_ids), 0) = 0'
+      : hasPromptId
+        ? 'prompt_id IS NULL'
+        : 'TRUE'
+    const distinctPromptPairsSql = hasPromptIds
+      ? `
+          SELECT CAST(COUNT(DISTINCT article_id || ':' || prompt_id) AS BIGINT)
+          FROM (
+            SELECT article_id, unnest(prompt_ids) AS prompt_id
+            FROM ${table}
+          ) expanded_prompt_pairs
+        `
+      : hasPromptId
+        ? `SELECT CAST(COUNT(DISTINCT article_id || ':' || COALESCE(prompt_id, '<NULL>')) AS BIGINT) FROM ${table}`
+        : 'SELECT CAST(0 AS BIGINT)'
     const manifestColumns = await getTableColumns(runtime, 'app.review_serving_snapshot_manifest')
     const hasSnapshotStatus = hasColumn(manifestColumns, 'snapshot_status')
     const countRows = await runReadonlyQuery<{
@@ -2710,10 +2729,10 @@ const getUnassessedQueueServingReadinessReport = async (
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS BIGINT) AS candidateRows,
           CAST(COUNT(*) FILTER (WHERE NOT active_or_last_known_good_protected AND snapshot_status <> 'candidate') AS BIGINT) AS otherRows,
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'missing-manifest') AS BIGINT) AS missingSnapshotManifestRows,
-          CAST(COUNT(*) FILTER (WHERE prompt_id IS NULL) AS BIGINT) AS globalNullPromptRows,
-          CAST(COUNT(*) FILTER (WHERE prompt_id IS NOT NULL) AS BIGINT) AS globalNonNullPromptRows,
+          CAST(COUNT(*) FILTER (WHERE ${promptNullExpression}) AS BIGINT) AS globalNullPromptRows,
+          CAST(COALESCE(SUM(${promptMembershipExpression}), 0) AS BIGINT) AS globalNonNullPromptRows,
           CAST(COUNT(DISTINCT article_id) AS BIGINT) AS distinctArticles,
-          CAST(COUNT(DISTINCT article_id || ':' || COALESCE(prompt_id, '<NULL>')) AS BIGINT) AS distinctPromptPairs
+          (${distinctPromptPairsSql}) AS distinctPromptPairs
         FROM classified
       `,
     )
@@ -2724,8 +2743,8 @@ const getUnassessedQueueServingReadinessReport = async (
       runtime,
       `
         SELECT
-          CAST(COUNT(*) FILTER (WHERE prompt_id IS NULL) AS BIGINT) AS currentProjectNullPromptRows,
-          CAST(COUNT(*) FILTER (WHERE prompt_id IS NOT NULL) AS BIGINT) AS currentProjectNonNullPromptRows
+          CAST(COUNT(*) FILTER (WHERE ${promptNullExpression}) AS BIGINT) AS currentProjectNullPromptRows,
+          CAST(COALESCE(SUM(${promptMembershipExpression}), 0) AS BIGINT) AS currentProjectNonNullPromptRows
         FROM ${table}
         WHERE ${currentProjectWhereClause}
       `,
@@ -2771,9 +2790,9 @@ const getUnassessedQueueServingReadinessReport = async (
       `
         SELECT
           CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS routeRows,
-          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS judgmentJobPromptRows,
+          CAST(COALESCE(SUM(CASE WHEN queue_kind = 'unassessed' THEN ${promptMembershipExpression} ELSE 0 END), 0) AS BIGINT) AS judgmentJobPromptRows,
           CAST(COUNT(DISTINCT article_id) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS bulkDistinctArticleRows,
-          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS summaryPromptRows
+          CAST(COALESCE(SUM(CASE WHEN queue_kind = 'unassessed' THEN ${promptMembershipExpression} ELSE 0 END), 0) AS BIGINT) AS summaryPromptRows
         FROM ${table}
       `,
     )
@@ -2782,9 +2801,9 @@ const getUnassessedQueueServingReadinessReport = async (
       `
         SELECT
           CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS routeRows,
-          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS judgmentJobPromptRows,
+          CAST(COALESCE(SUM(CASE WHEN queue_kind = 'unassessed' THEN ${promptMembershipExpression} ELSE 0 END), 0) AS BIGINT) AS judgmentJobPromptRows,
           CAST(COUNT(DISTINCT article_id) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS bulkDistinctArticleRows,
-          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS summaryPromptRows
+          CAST(COALESCE(SUM(CASE WHEN queue_kind = 'unassessed' THEN ${promptMembershipExpression} ELSE 0 END), 0) AS BIGINT) AS summaryPromptRows
         FROM ${table}
         WHERE ${currentProjectWhereClause}
       `,
@@ -3068,6 +3087,8 @@ const getJudgmentDetailPayloadReadinessReport = async (
   const table = 'mart.review_article_judgment_detail_serving_v4' as const
 
   try {
+    const columns = await getTableColumns(runtime, table)
+    const hasListModeKey = hasColumn(columns, 'list_mode_key')
     const totals = await runReadonlyQuery<{
       answeredArrayNonNullRows: number | string
       answeredOriginalNonNullRows: number | string
@@ -3138,24 +3159,26 @@ const getJudgmentDetailPayloadReadinessReport = async (
         WHERE judgment.deleted_at IS NULL
       `,
     )
-    const rowsByListMode = await runReadonlyQuery<{
-      detailScalarNonNullRows: number | string
-      listModeKey: string | null
-      rows: number | string
-    }>(
-      runtime,
-      `
-        SELECT
-          COALESCE(list_mode_key, 'NULL') AS listModeKey,
-          CAST(COUNT(*) AS BIGINT) AS rows,
-          CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL OR detail_updated_at IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows
-        FROM ${table}
-        GROUP BY list_mode_key
-        HAVING COUNT(*) > 0
-        ORDER BY COUNT(*) DESC, list_mode_key
-        LIMIT ${Math.max(1, limit)}
-      `,
-    )
+    const rowsByListMode = hasListModeKey
+      ? await runReadonlyQuery<{
+          detailScalarNonNullRows: number | string
+          listModeKey: string | null
+          rows: number | string
+        }>(
+          runtime,
+          `
+            SELECT
+              COALESCE(list_mode_key, 'NULL') AS listModeKey,
+              CAST(COUNT(*) AS BIGINT) AS rows,
+              CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL OR detail_updated_at IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows
+            FROM ${table}
+            GROUP BY list_mode_key
+            HAVING COUNT(*) > 0
+            ORDER BY COUNT(*) DESC, list_mode_key
+            LIMIT ${Math.max(1, limit)}
+          `,
+        )
+      : []
     const row = totals[0]
 
     return {

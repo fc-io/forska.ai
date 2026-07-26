@@ -26,6 +26,9 @@ const components: readonly ReviewServingProjectionComponent[] = [
   'judgmentInputContent',
 ]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
+const hasArticleServingRowSource = (statement: string) => {
+  return statement.includes('FROM mart.review_article_serving_base_v4 serving')
+}
 
 const getComponentState = () => {
   return {
@@ -108,7 +111,7 @@ const createReaderDatabase = () => {
         return [{promptCount: 1}] as T[]
       }
 
-      if (statement.includes('FROM mart.review_article_serving_v4')) {
+      if (hasArticleServingRowSource(statement)) {
         return [
           {
             activity_sort_at: '2026-01-02T00:00:00.000Z',
@@ -201,7 +204,7 @@ const createChunkedHydrationReaderDatabase = (articleCount: number, enabledPromp
         return [{promptCount: enabledPromptCount ?? 1}] as T[]
       }
 
-      if (statement.includes('FROM mart.review_article_serving_v4')) {
+      if (hasArticleServingRowSource(statement)) {
         return articleIds.map((articleId) => {
           return {article_id: articleId, article_title: articleId, sort_key: '2026-01-01T00:00:00.000Z'}
         }) as T[]
@@ -250,7 +253,9 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(firstRow?.articleCreatedAt).toBeNull()
   expect(firstRow?.sourceMetadata).toEqual({covidence: {studyId: 'study-1'}})
   expect(reader.statements).toHaveLength(8)
-  expect(sql).toContain('FROM mart.review_article_serving_v4')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain("list_contains(list_mode_state.list_mode_keys, 'human')")
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('LEFT JOIN app.article article')
   expect(sql).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
@@ -259,11 +264,10 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(sql).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   expect(sql).toContain('posting_filtered_article_ids AS')
   expect(sql).toContain("posting.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:yes']::VARCHAR[]))")
-  expect(sql).toContain('state_filtered_article_ids AS')
-  expect(sql).toContain('FROM mart.review_article_filter_state_serving_v4 state')
-  expect(sql).toContain('state.duplicate_flag IS TRUE')
-  expect(sql).toContain('state.conflict_flag IS TRUE')
-  expect(sql).toContain("state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(sql).not.toContain('state_filtered_article_ids AS')
+  expect(sql).toContain('list_mode_state.duplicate_flag IS TRUE')
+  expect(sql).toContain('list_mode_state.conflict_flag IS TRUE')
+  expect(sql).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).not.toContain('serving.duplicate_flag = TRUE')
   expect(sql).not.toContain('serving.conflict_flag = TRUE')
   expect(sql).not.toContain('serving.human_status_key =')
@@ -294,9 +298,11 @@ test('human review prompt-filtered count intersects through one posting CTE with
   expect(countStatement).toContain(
     "posting.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:maybe', 'human:promptAnswer:prompt-1:yes']::VARCHAR[]))",
   )
-  expect(countStatement).toContain('state_filtered_article_ids AS')
-  expect(countStatement).toContain('FROM mart.review_article_filter_state_serving_v4 state')
-  expect(countStatement).toContain("state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(countStatement).not.toContain('state_filtered_article_ids AS')
+  expect(countStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(countStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(countStatement).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  expect(countStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(countStatement).not.toContain("serving.human_status_key = 'answered'")
 })
 
@@ -306,7 +312,7 @@ test('human review route service retries transient filtered count read failures'
   const countStatements: string[] = []
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
-      if (statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')) {
+      if (statement.includes(' AS totalCount')) {
         countAttempts += 1
         countStatements.push(statement)
 
@@ -328,7 +334,7 @@ test('human review route service retries transient filtered count read failures'
 
   expect(result.totalCount).toBe(1)
   expect(countAttempts).toBe(2)
-  expect(countStatements.join('\n')).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  expect(countStatements.join('\n')).toContain(' AS totalCount')
 })
 
 test('human review route service retries transient filtered row read failures', async () => {
@@ -338,8 +344,8 @@ test('human review route service retries transient filtered row read failures', 
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       if (
-        statement.includes('FROM mart.review_article_serving_v4')
-        && statement.includes('filter_state_0.duplicate_flag IS TRUE')
+        statement.includes('FROM mart.review_article_serving_base_v4 serving')
+        && statement.includes('list_mode_state.duplicate_flag IS TRUE')
         && !statement.includes('COUNT(DISTINCT filtered_article_ids.article_id)')
       ) {
         rowAttempts += 1
@@ -361,7 +367,7 @@ test('human review route service retries transient filtered row read failures', 
 
   expect(result.data).toHaveLength(1)
   expect(rowAttempts).toBe(2)
-  expect(rowStatements.join('\n')).toContain('filter_state_0.duplicate_flag IS TRUE')
+  expect(rowStatements.join('\n')).toContain('list_mode_state.duplicate_flag IS TRUE')
   expect(rowStatements.join('\n')).not.toContain("filter_0.filter_kind = 'duplicateFlag'")
 })
 
@@ -379,7 +385,7 @@ test('human review route service allows the 500-row page cursor probe within the
 
   expect(
     reader.statements.find((statement) => {
-      return statement.includes('FROM mart.review_article_serving_v4')
+      return statement.includes('FROM mart.review_article_serving_base_v4 serving')
     }),
   ).toContain('LIMIT 501')
 })
@@ -401,7 +407,7 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   expect(result.data[0]?.humanAnswersByPrompt?.['prompt-1']).toEqual(['yes'])
   expect(reader.statements).toHaveLength(9)
   expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
-  expect(sql).toContain("list_mode_key = 'both'")
+  expect(sql).toContain("list_contains(list_mode_state.list_mode_keys, 'both')")
   expect(sql).toContain("llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).toContain("human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).not.toContain('serving.llm_status_key =')
@@ -475,20 +481,28 @@ test('unassessed review route service pages filtered distinct article rows and q
 
   expect(result.data).toHaveLength(1)
   const servingStatement = reader.statements.find((statement) => {
-    return statement.includes('FROM mart.review_article_serving_v4')
+    return statement.includes('unassessed_queue_page AS')
   })
   const countStatement = reader.statements.find((statement) => {
     return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   })
 
   expect(reader.statements).toHaveLength(6)
-  expect(servingStatement).toContain('FROM mart.review_article_serving_v4')
-  expect(servingStatement).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(servingStatement).toContain('unassessed_queue_page AS')
+  expect(servingStatement).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(servingStatement).toContain('FROM unassessed_queue_page')
+  expect(servingStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(servingStatement).toContain("list_contains(list_mode_state.list_mode_keys, 'unassessed')")
+  expect(servingStatement).toContain('unassessed_queue_candidate AS (SELECT')
+  expect(servingStatement).toContain('MAX(queue.activity_sort_at) AS activity_sort_at')
+  expect(servingStatement).toContain(
+    'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT 26',
+  )
   expect(servingStatement).toContain("unnest(['heart']::VARCHAR[])")
   expect(servingStatement).toContain('starts_with(search.token, search_prefix.token_prefix)')
   expect(countStatement).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   expect(countStatement).toContain("'unassessed' AS list_mode_key")
-  expect(countStatement).toContain('serving.list_mode_key = scoped.list_mode_key')
+  expect(countStatement).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
   expect(countStatement).toContain('unassessed_queue_article_ids AS')
   expect(countStatement).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
   expect(countStatement).toContain("queue.queue_kind = 'unassessed'")

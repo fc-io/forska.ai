@@ -27,9 +27,9 @@ const rule = (input: ReviewServingInvalidationRule) => {
 
 export const reviewServingInvalidationRegistry: Record<ReviewServingChangeKind, ReviewServingInvalidationRule> = {
   'article.display.updated': rule({
-    affectedComponents: ['display', 'payload', 'posting', 'summary'],
+    affectedComponents: ['display', 'posting', 'summary'],
     changeKind: 'article.display.updated',
-    downstreamDependents: ['payload', 'posting', 'summary'],
+    downstreamDependents: ['posting', 'summary'],
     firstAffectedComponent: 'display',
     requiredKeys: ['articleId', 'changedDisplayFieldNames', 'sourceHighWaterMark'],
     updateMode: 'componentPatch',
@@ -78,9 +78,9 @@ export const reviewServingInvalidationRegistry: Record<ReviewServingChangeKind, 
     updateMode: 'appendPatch',
   }),
   'importRoute.article.rankFields.updated': rule({
-    affectedComponents: ['selectedImport', 'posting', 'search', 'summary', 'payload'],
+    affectedComponents: ['selectedImport', 'posting', 'search', 'summary'],
     changeKind: 'importRoute.article.rankFields.updated',
-    downstreamDependents: ['posting', 'search', 'summary', 'payload'],
+    downstreamDependents: ['posting', 'search', 'summary'],
     firstAffectedComponent: 'selectedImport',
     requiredKeys: ['importRouteId', 'articleId', 'changedRankFilterFields', 'sourceHighWaterMark'],
     updateMode: 'componentPatch',

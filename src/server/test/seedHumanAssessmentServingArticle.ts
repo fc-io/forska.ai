@@ -111,23 +111,23 @@ export const seedHumanAssessmentServingArticle = async (params: {
       project_id,
       review_config_hash,
       snapshot_id,
-      queue_identity,
       queue_kind,
       priority_bucket,
       activity_sort_at,
       article_id,
-      prompt_id
+      prompt_ids,
+      queue_updated_at
     )
     VALUES (
       '${escapeSqlString(params.projectId)}',
       '${escapeSqlString(reviewConfigHash)}',
       '${escapeSqlString(params.snapshotId)}',
-      '${escapeSqlString(params.snapshotId)}-queue',
       'human-unreviewed',
       0,
       current_timestamp,
       '${escapeSqlString(params.articleId)}',
-      '${escapeSqlString(params.promptId)}'
+      ['${escapeSqlString(params.promptId)}']::VARCHAR[],
+      current_timestamp
     );
   `)
 }

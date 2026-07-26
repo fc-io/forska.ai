@@ -46,7 +46,7 @@ type ContractInput = Omit<
   'allowsTempSpill' | 'maxEstimatedResultBytes' | 'maxResultRows' | 'timeoutMs'
 > & {allowsTempSpill?: boolean; maxEstimatedResultBytes?: number; maxResultRows?: number; timeoutMs?: number}
 
-const baseComponents = ['display', 'projectScope', 'selectedImport', 'payload'] as const
+const baseComponents = ['display', 'projectScope', 'selectedImport'] as const
 const llmComponents = [...baseComponents, 'llmStatus', 'posting', 'summary'] as const
 const humanComponents = [...baseComponents, 'humanStatus', 'posting', 'summary'] as const
 const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting', 'summary'] as const
@@ -67,7 +67,7 @@ const defaultCountFilters = [
   ...articleDateRangeFilters,
 ] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
-const reviewArticleServingTable = 'mart.review_article_serving_v4'
+const reviewArticleServingTable = 'mart.review_article_serving_base_v4'
 const reviewCountServingTable = 'mart.review_article_count_serving_v4'
 const reviewFacetServingTable = 'mart.review_filter_facet_serving_v4'
 const reviewFilterOptionServingTable = 'mart.review_filter_option_serving_v4'
@@ -86,7 +86,7 @@ const reviewFilterFacetSort = {direction: 'asc', fields: ['facet_key', 'facet_va
 const detailRowListModePrioritySort =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 const detailJudgmentListModePrioritySort =
-  "CASE mart.review_article_judgment_detail_serving_v4.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
+  "CASE mart.review_article_judgment_detail_serving_v4.payload_kind WHEN 'llm' THEN 1 WHEN 'human' THEN 2 ELSE 4 END"
 const detailJudgmentPromptOrderSort = 'mart.review_article_judgment_detail_serving_v4.prompt_order ASC NULLS LAST'
 const detailJudgmentPromptIdSort = 'mart.review_article_judgment_detail_serving_v4.prompt_id'
 const promptPreviewCreatedAtSort = `${reviewArticleServingTable}.article_created_at ASC NULLS LAST`
@@ -473,7 +473,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [...defaultRowFilters, 'conflictFlag', 'queueKind'],
-    cursorFields: ['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id'],
+    cursorFields: ['priority_bucket', 'activity_sort_at', 'article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.queue.unassessed',
     listMode: 'unassessed',
@@ -484,7 +484,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['queue', 'summary'],
     searchMode: 'tokenPrefix',
     servingTable: reviewQueueServingTable,
-    sort: {direction: 'desc', fields: ['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id']},
+    sort: {direction: 'desc', fields: ['priority_bucket', 'activity_sort_at', 'article_id']},
     workloadClass: 'foregroundReviewQueue',
   }),
   defineContract({
@@ -498,7 +498,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'keyedLookup',
-    requiredComponents: ['display', 'llmStatus', 'humanStatus', 'projectScope', 'selectedImport', 'summary', 'payload'],
+    requiredComponents: ['display', 'llmStatus', 'humanStatus', 'projectScope', 'selectedImport', 'summary'],
     searchMode: 'none',
     servingTable: reviewArticleServingTable,
     sort: {direction: 'asc', fields: [detailRowListModePrioritySort, 'article_id']},
@@ -663,7 +663,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'orderedPrefix',
-    requiredComponents: ['judgmentInputContent', 'projectScope', 'selectedImport', 'payload'],
+    requiredComponents: ['judgmentInputContent', 'projectScope', 'selectedImport'],
     searchMode: 'none',
     servingTable: reviewArticleServingTable,
     sort: {direction: 'asc', fields: [promptPreviewCreatedAtSort, 'article_id', detailRowListModePrioritySort]},

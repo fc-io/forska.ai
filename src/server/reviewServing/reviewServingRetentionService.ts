@@ -54,7 +54,6 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
     table: 'mart.review_article_serving_list_mode_state_v4',
   },
   {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_filter_posting_serving_v4'},
-  {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_filter_state_serving_v4'},
   {
     keyColumn: 'snapshot_id',
     protectedPredicate: 'snapshot_id',

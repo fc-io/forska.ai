@@ -35,6 +35,8 @@ type FakeAckRow = {
   status: string
 }
 
+type FakeDirtySourceWatermarkRow = {projectId: string; sourceHighWaterMark: number; sourcePartition: string}
+
 type FakeOutboxBarrier = {outboxId: string; sourceHighWaterMark: number; status: string} | null
 
 const getSqlStrings = (statement: string) => {
@@ -100,6 +102,7 @@ const getBaseScope = (sourceHighWaterMark: number, dirtyRangeStart = '1', dirtyR
 const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; beforeClaimUpdate?: () => void} = {}) => {
   const dirtyWork = new Map<string, FakeDirtyWorkRow>()
   const acks = new Map<string, FakeAckRow>()
+  const dirtySourceWatermarks = new Map<string, FakeDirtySourceWatermarkRow>()
   const watermarks = new Map<string, number>()
   const statements: string[] = []
   const getQueryRow = (row: FakeDirtyWorkRow) => {
@@ -260,6 +263,23 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     watermarks.set(watermarkId, Math.max(watermarks.get(watermarkId) ?? 0, numbers[0] ?? 0))
   }
+  const upsertDirtySourceWatermarks = (statement: string) => {
+    const valueTuples = [...statement.matchAll(/\('((?:''|[^'])*)',\s*'((?:''|[^'])*)',\s*(\d+)\)/gu)]
+
+    valueTuples.forEach((match) => {
+      const projectId = match[1]?.replaceAll("''", "'") ?? ''
+      const sourcePartition = match[2]?.replaceAll("''", "'") ?? ''
+      const sourceHighWaterMark = Number(match[3] ?? 0)
+      const key = `${projectId}:${sourcePartition}`
+      const existing = dirtySourceWatermarks.get(key)
+
+      dirtySourceWatermarks.set(key, {
+        projectId,
+        sourceHighWaterMark: Math.max(existing?.sourceHighWaterMark ?? 0, sourceHighWaterMark),
+        sourcePartition,
+      })
+    })
+  }
   const isAckRangeCoveringStatement = (ack: FakeAckRow, statement: string) => {
     const strings = getSqlStrings(statement)
     const dirtyRangeStart = strings[4] ?? null
@@ -316,8 +336,11 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
           )
         })
 
-      const sourcePartition = statement.includes('source_partition = (') ? eligibleRows[0]?.sourcePartition : null
-      const projectionKey = statement.includes('projection_key = (') ? eligibleRows[0]?.projectionKey : null
+      const usesBoundedLane = statement.includes('eligible_lane')
+      const sourcePartition =
+        usesBoundedLane || statement.includes('source_partition = (') ? eligibleRows[0]?.sourcePartition : null
+      const projectionKey =
+        usesBoundedLane || statement.includes('projection_key = (') ? eligibleRows[0]?.projectionKey : null
 
       const rows = eligibleRows
         .filter((row) => {
@@ -386,6 +409,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       upsertWatermark(statement)
     }
 
+    if (statement.includes('INSERT INTO app.review_serving_project_dirty_source_watermark')) {
+      upsertDirtySourceWatermarks(statement)
+    }
+
     if (statement.includes("SET status = 'completed'")) {
       updateStatus(statement, 'completed', 'running')
     }
@@ -398,7 +425,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     },
   }
 
-  return {acks, database, dirtyWork, statements, watermarks}
+  return {acks, database, dirtySourceWatermarks, dirtyWork, statements, watermarks}
 }
 
 const upsertDisplayWork = (
@@ -554,8 +581,12 @@ test('claims dirty work with one atomic update returning statement', async () =>
 
   expect(claims).toHaveLength(2)
   expect(claimUpdates).toHaveLength(1)
-  expect(claimUpdates[0]).toContain('AND source_partition = (')
-  expect(claimUpdates[0]).toContain('AND projection_key = (')
+  expect(claimUpdates[0]).toContain('WITH eligible_lane AS (')
+  expect(claimUpdates[0]).toContain('claim_candidates AS (')
+  expect(claimUpdates[0]).toContain('eligible_lane.source_partition = app.review_serving_dirty_work.source_partition')
+  expect(claimUpdates[0]).toContain('eligible_lane.projection_key = app.review_serving_dirty_work.projection_key')
+  expect(claimUpdates[0]).not.toContain('AND source_partition = (')
+  expect(claimUpdates[0]).not.toContain('AND projection_key = (')
 })
 
 test('claims only return rows whose atomic update succeeded', async () => {
@@ -644,6 +675,31 @@ test('completion and failure move running claims into retention-ready terminal s
   expect(completed?.status).toBe('completed')
   expect(failed?.status).toBe('failed')
   expect(acks.size).toBe(1)
+})
+
+test('completion advances dirty source watermarks by project and source partition without dropping acknowledgements', async () => {
+  const {acks, database, dirtySourceWatermarks, statements} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(5, '1', '1'), 'delta-1')
+  await upsertDisplayWork(database, {...getBaseScope(9, '2', '2'), scopeId: 'project-1:article-2'}, 'delta-2')
+  const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const aggregateUpsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_project_dirty_source_watermark')
+  })
+
+  expect(acks.size).toBe(2)
+  expect(dirtySourceWatermarks.get('project-1:article:display')).toMatchObject({
+    projectId: 'project-1',
+    sourceHighWaterMark: 9,
+    sourcePartition: 'article:display',
+  })
+  expect(aggregateUpsert).toContain('GROUP BY project_id, source_partition')
+  expect(aggregateUpsert).toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
+  expect(aggregateUpsert).toContain('source_high_water_mark = GREATEST')
+  expect(aggregateUpsert).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
 })
 
 test('component acknowledgements skip already completed dirty keys', async () => {

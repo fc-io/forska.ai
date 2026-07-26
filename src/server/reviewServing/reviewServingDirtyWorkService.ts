@@ -127,17 +127,21 @@ const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams
     AND starts_with(projection_key, ${getSqlLiteral(getProjectionKeyPrefix(params.projectionComponent))})`
 }
 
-const getLowerWatermarkLaneBlockerPredicate = (params: ClaimReviewServingDirtyWorkParams, claimNowSql: string) => {
+const getLowerWatermarkLaneBlockerPredicate = (
+  params: ClaimReviewServingDirtyWorkParams,
+  claimNowSql: string,
+  dirtyWorkSql = 'app.review_serving_dirty_work',
+) => {
   const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
 
   return `NOT EXISTS (
       SELECT 1
       FROM app.review_serving_dirty_work blocker
-      WHERE blocker.projection_key = app.review_serving_dirty_work.projection_key
-        AND blocker.source_partition = app.review_serving_dirty_work.source_partition
+      WHERE blocker.projection_key = ${dirtyWorkSql}.projection_key
+        AND blocker.source_partition = ${dirtyWorkSql}.source_partition
         AND blocker.status IN ('running', 'failed')
         AND blocker.updated_at > ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
-        AND blocker.latest_source_high_water_mark < app.review_serving_dirty_work.latest_source_high_water_mark
+        AND blocker.latest_source_high_water_mark < ${dirtyWorkSql}.latest_source_high_water_mark
     )`
 }
 
@@ -321,6 +325,56 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
   `)
 }
 
+const advanceReviewServingDirtySourceWatermark = async (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  const projectClaims = claims.filter((claim) => {
+    return claim.projectId !== null
+  })
+
+  if (projectClaims.length === 0) {
+    return
+  }
+
+  const valuesSql = projectClaims
+    .map((claim) => {
+      return `(${getSqlLiteral(claim.projectId)}, ${getSqlLiteral(claim.sourcePartition)}, ${getSqlLiteral(
+        claim.latestSourceHighWaterMark,
+      )})`
+    })
+    .join(',\n      ')
+
+  await database.run(`
+    INSERT INTO app.review_serving_project_dirty_source_watermark (
+      project_id,
+      source_partition,
+      source_high_water_mark,
+      updated_at
+    )
+    SELECT
+      project_id,
+      source_partition,
+      MAX(source_high_water_mark) AS source_high_water_mark,
+      current_timestamp AS updated_at
+    FROM (
+      VALUES
+      ${valuesSql}
+    ) AS completed(project_id, source_partition, source_high_water_mark)
+    GROUP BY project_id, source_partition
+    ON CONFLICT(project_id, source_partition) DO UPDATE SET
+      source_high_water_mark = GREATEST(
+        app.review_serving_project_dirty_source_watermark.source_high_water_mark,
+        excluded.source_high_water_mark
+      ),
+      updated_at = CASE
+        WHEN excluded.source_high_water_mark > app.review_serving_project_dirty_source_watermark.source_high_water_mark
+          THEN excluded.updated_at
+        ELSE app.review_serving_project_dirty_source_watermark.updated_at
+      END
+  `)
+}
+
 export const upsertReviewServingDirtyWork = async (
   input: ReviewServingDirtyWorkInput,
   database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
@@ -435,29 +489,33 @@ export const claimReviewServingDirtyWork = async (
   }
 
   const rows = await database.queryJson<DirtyWorkRow>(`
-    UPDATE app.review_serving_dirty_work
-    SET status = 'running', updated_at = current_timestamp
-    WHERE dirty_work_id IN (
+    WITH eligible_lane AS (
+      SELECT source_partition, projection_key
+      FROM app.review_serving_dirty_work oldest
+      WHERE ${eligiblePredicate}
+        AND ${getLowerWatermarkLaneBlockerPredicate(params, claimNowSql, 'oldest')}
+      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+      LIMIT 1
+    ),
+    claim_candidates AS (
       SELECT dirty_work_id
       FROM app.review_serving_dirty_work
       WHERE ${eligiblePredicate}
         AND ${laneBlockerPredicate}
-        AND source_partition = (
-          SELECT source_partition
-          FROM app.review_serving_dirty_work oldest
-          WHERE ${eligiblePredicate}
-          ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-          LIMIT 1
-        )
-        AND projection_key = (
-          SELECT projection_key
-          FROM app.review_serving_dirty_work oldest
-          WHERE ${eligiblePredicate}
-          ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-          LIMIT 1
+        AND EXISTS (
+          SELECT 1
+          FROM eligible_lane
+          WHERE eligible_lane.source_partition = app.review_serving_dirty_work.source_partition
+            AND eligible_lane.projection_key = app.review_serving_dirty_work.projection_key
         )
       ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
       LIMIT ${limit}
+    )
+    UPDATE app.review_serving_dirty_work
+    SET status = 'running', updated_at = current_timestamp
+    WHERE dirty_work_id IN (
+      SELECT dirty_work_id
+      FROM claim_candidates
     )
       AND ${eligiblePredicate}
     RETURNING
@@ -540,6 +598,8 @@ export const completeReviewServingDirtyWorkClaims = async (
   }, Promise.resolve())
 
   if (uniqueClaims.length > 0) {
+    await advanceReviewServingDirtySourceWatermark(uniqueClaims, database)
+
     await database.run(`
       UPDATE app.review_serving_dirty_work
       SET status = 'completed', updated_at = current_timestamp

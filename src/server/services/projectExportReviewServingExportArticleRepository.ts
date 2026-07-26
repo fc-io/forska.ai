@@ -1,3 +1,4 @@
+import {reviewServingListModes} from '../reviewServing/reviewServingContracts.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 
 export type ReviewServingExportArticleRow = {
@@ -37,10 +38,33 @@ export const readReviewServingExportArticles = async (input: {
       return `(${getSqlLiteral(articleId)})`
     })
     .join(', ')
+  const listModeRows = reviewServingListModes
+    .map((listModeKey) => {
+      return `(${getSqlLiteral(listModeKey)})`
+    })
+    .join(', ')
   const rows = await input.database.queryJson<ReviewServingExportArticleRow & {sourceProjectOrder: number}>(`
     WITH
       export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
       export_article(article_id) AS (VALUES ${articleRows}),
+      supported_list_mode(list_mode_key) AS (VALUES ${listModeRows}),
+      snapshot_scope AS (
+        SELECT
+          export_scope.project_id,
+          export_scope.review_config_hash,
+          export_scope.snapshot_id,
+          export_scope.source_project_order,
+          selected_snapshot.project_scope_identity,
+          manifest.selected_import_snapshot_id
+        FROM export_scope
+        LEFT JOIN app.review_serving_snapshot_manifest manifest
+          ON manifest.project_id = export_scope.project_id
+         AND manifest.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
+         AND manifest.snapshot_id = export_scope.snapshot_id
+        LEFT JOIN app.review_selected_import_snapshot selected_snapshot
+          ON selected_snapshot.project_id = manifest.project_id
+         AND selected_snapshot.selected_import_snapshot_id = manifest.selected_import_snapshot_id
+      ),
       ranked_export_article AS (
         SELECT
           s.article_id AS articleId,
@@ -64,28 +88,31 @@ export const readReviewServingExportArticles = async (input: {
               COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
             )
           END AS articleSourceMetadata,
-          export_scope.source_project_order AS sourceProjectOrder,
+          snapshot_scope.source_project_order AS sourceProjectOrder,
           ROW_NUMBER() OVER (
             PARTITION BY s.article_id
-            ORDER BY export_scope.source_project_order ASC, s.list_mode_key ASC
+            ORDER BY snapshot_scope.source_project_order ASC, list_mode.list_mode_key ASC
           ) AS exportArticleRank
-        FROM export_scope
-        INNER JOIN mart.review_article_serving_v4 s
-          ON s.project_id = export_scope.project_id
-         AND s.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
-         AND s.snapshot_id = export_scope.snapshot_id
+        FROM snapshot_scope
+        INNER JOIN mart.review_article_serving_base_v4 s
+          ON s.project_id = snapshot_scope.project_id
+         AND s.review_config_hash IS NOT DISTINCT FROM snapshot_scope.review_config_hash
+         AND s.snapshot_id = snapshot_scope.snapshot_id
         INNER JOIN export_article
           ON export_article.article_id = s.article_id
+        INNER JOIN mart.review_article_serving_list_mode_state_v4 state
+          ON state.project_id = s.project_id
+         AND state.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+         AND state.snapshot_id = s.snapshot_id
+         AND state.article_id = s.article_id
+        INNER JOIN supported_list_mode list_mode
+          ON list_contains(state.list_mode_keys, list_mode.list_mode_key)
         LEFT JOIN app.article article
           ON article.id = s.article_id
-        LEFT JOIN app.review_serving_snapshot_manifest manifest
-          ON manifest.project_id = s.project_id
-         AND manifest.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
-         AND manifest.snapshot_id = s.snapshot_id
         LEFT JOIN app.review_selected_article_import_v4 selected_base
           ON selected_base.project_id = s.project_id
-         AND selected_base.project_scope_identity = json_extract_string(manifest.composed_identity_json, '$.projectScope.projectionIdentity')
-         AND selected_base.selected_import_snapshot_id = manifest.selected_import_snapshot_id
+         AND selected_base.project_scope_identity = snapshot_scope.project_scope_identity
+         AND selected_base.selected_import_snapshot_id = snapshot_scope.selected_import_snapshot_id
          AND selected_base.article_id = s.article_id
          AND NOT selected_base.tombstone
         LEFT JOIN app.review_import_article_hot_field selected_hot

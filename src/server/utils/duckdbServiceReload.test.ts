@@ -615,7 +615,6 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       'mart.review_title_search_serving_v4',
       'mart.review_unassessed_queue_serving_v4',
       'mart.review_article_filter_posting_serving_v4',
-      'mart.review_article_filter_state_serving_v4',
     ])
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
@@ -699,6 +698,94 @@ test('duckdb service skips compact filter posting startup repair before compact 
     if (result.exitCode !== 0) {
       throw new Error(
         result.stderr.toString() || result.stdout.toString() || 'DuckDB precompact posting preflight failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.rows).toEqual([{total: '2'}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service skips compact unassessed queue startup repair before compact migration is applied', async () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-precompact-queue-preflight-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath)
+  const connection = await duckdbInstance.connect()
+  await connection.run('CREATE SCHEMA mart')
+  await connection.run(`
+    CREATE TABLE mart.review_unassessed_queue_serving_v4 (
+      project_id VARCHAR,
+      review_config_hash VARCHAR,
+      snapshot_id VARCHAR,
+      queue_kind VARCHAR,
+      priority_bucket INTEGER,
+      activity_sort_at TIMESTAMPTZ,
+      article_id VARCHAR,
+      prompt_id VARCHAR,
+      queue_updated_at TIMESTAMPTZ,
+      PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id)
+    )
+  `)
+  await connection.run(`
+    INSERT INTO mart.review_unassessed_queue_serving_v4 VALUES
+      ('project-1', 'review-config-1', 'snapshot-1', 'unassessed', 1, TIMESTAMPTZ '2026-01-01T00:00:00Z', 'article-1', 'prompt-1', TIMESTAMPTZ '2026-01-01T00:00:00Z'),
+      ('project-1', 'review-config-1', 'snapshot-1', 'unassessed', 1, TIMESTAMPTZ '2026-01-01T00:00:00Z', 'article-1', 'prompt-2', TIMESTAMPTZ '2026-01-01T00:00:00Z')
+  `)
+  await connection.run('CHECKPOINT')
+  connection.closeSync()
+  duckdbInstance.closeSync()
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?precompact-queue-preflight-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT COUNT(*) AS total FROM mart.review_unassessed_queue_serving_v4')
+        console.log(JSON.stringify({rows}))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB precompact queue preflight failed',
       )
     }
 
@@ -3461,7 +3548,6 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'project_id',
       'review_config_hash',
       'snapshot_id',
-      'list_mode_key',
       'payload_kind',
       'article_id',
       'prompt_id',
@@ -3511,9 +3597,9 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'priority_bucket',
       'activity_sort_at',
       'article_id',
-      'prompt_id',
     ])
     expect(queueServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_unassessed_queue_serving_v4')
+    expect(queueServingProbe?.mutationProbeSql).toContain('prompt_ids')
     expect(queueServingProbe?.mutationProbeSql).not.toContain('queue_identity')
     const countServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_count_serving_v4'
@@ -3529,6 +3615,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'filter_key',
     ])
     expect(countServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_article_count_serving_v4')
+    expect(countServingProbe?.mutationProbeSql).toContain('SET stale_reason = stale_reason')
+    expect(countServingProbe?.mutationProbeSql).not.toContain('count_updated_at')
     const filteredCountServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filtered_count_serving_v4'
     })
@@ -3557,6 +3645,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'summary_definition_version',
     ])
     expect(facetServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_filter_facet_serving_v4')
+    expect(facetServingProbe?.mutationProbeSql).toContain('SET availability = availability')
+    expect(facetServingProbe?.mutationProbeSql).not.toContain('facet_updated_at')
     const filterOptionServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_option_serving_v4'
     })
@@ -3572,6 +3662,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'option_value_key',
     ])
     expect(filterOptionServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_filter_option_serving_v4')
+    expect(filterOptionServingProbe?.mutationProbeSql).toContain('SET count_value = count_value')
+    expect(filterOptionServingProbe?.mutationProbeSql).not.toContain('option_updated_at')
     const articleFilterPostingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_filter_posting_serving_v4'
     })

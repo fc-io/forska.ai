@@ -1124,8 +1124,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         list_mode_key,
         count_kind,
         summary_definition_version,
-        filter_key,
-        count_updated_at
+        filter_key
       FROM mart.review_article_count_serving_v4
       ORDER BY
         project_id,
@@ -1138,50 +1137,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       LIMIT 1;
       BEGIN;
       UPDATE mart.review_article_count_serving_v4
-      SET count_updated_at = current_timestamp
-      WHERE project_id = (
-          SELECT project_id
-          FROM startup_probe_review_article_count_serving_v4
-          LIMIT 1
-        )
-        AND review_config_hash = (
-          SELECT review_config_hash
-          FROM startup_probe_review_article_count_serving_v4
-          LIMIT 1
-        )
-        AND snapshot_id = (
-          SELECT snapshot_id
-          FROM startup_probe_review_article_count_serving_v4
-          LIMIT 1
-        )
-        AND list_mode_key = (
-          SELECT list_mode_key
-          FROM startup_probe_review_article_count_serving_v4
-          LIMIT 1
-        )
-        AND count_kind = (
-          SELECT count_kind
-          FROM startup_probe_review_article_count_serving_v4
-          LIMIT 1
-        )
-        AND summary_definition_version = (
-          SELECT summary_definition_version
-          FROM startup_probe_review_article_count_serving_v4
-          LIMIT 1
-        )
-        AND filter_key = (
-          SELECT filter_key
-          FROM startup_probe_review_article_count_serving_v4
-          LIMIT 1
-        );
-      COMMIT;
-      BEGIN;
-      UPDATE mart.review_article_count_serving_v4
-      SET count_updated_at = (
-        SELECT count_updated_at
-        FROM startup_probe_review_article_count_serving_v4
-        LIMIT 1
-      )
+      SET stale_reason = stale_reason
       WHERE project_id = (
           SELECT project_id
           FROM startup_probe_review_article_count_serving_v4
@@ -1398,8 +1354,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         facet_kind,
         facet_key,
         facet_value,
-        summary_definition_version,
-        facet_updated_at
+        summary_definition_version
       FROM mart.review_filter_facet_serving_v4
       ORDER BY
         project_id,
@@ -1413,55 +1368,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       LIMIT 1;
       BEGIN;
       UPDATE mart.review_filter_facet_serving_v4
-      SET facet_updated_at = current_timestamp
-      WHERE project_id = (
-          SELECT project_id
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        )
-        AND review_config_hash = (
-          SELECT review_config_hash
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        )
-        AND snapshot_id = (
-          SELECT snapshot_id
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        )
-        AND summary_identity = (
-          SELECT summary_identity
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        )
-        AND facet_kind = (
-          SELECT facet_kind
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        )
-        AND facet_key = (
-          SELECT facet_key
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        )
-        AND facet_value = (
-          SELECT facet_value
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        )
-        AND summary_definition_version = (
-          SELECT summary_definition_version
-          FROM startup_probe_review_filter_facet_serving_v4
-          LIMIT 1
-        );
-      COMMIT;
-      BEGIN;
-      UPDATE mart.review_filter_facet_serving_v4
-      SET facet_updated_at = (
-        SELECT facet_updated_at
-        FROM startup_probe_review_filter_facet_serving_v4
-        LIMIT 1
-      )
+      SET availability = availability
       WHERE project_id = (
           SELECT project_id
           FROM startup_probe_review_filter_facet_serving_v4
@@ -1557,8 +1464,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         filter_option_identity,
         filter_kind,
         facet_key,
-        option_value_key,
-        option_updated_at
+        option_value_key
       FROM mart.review_filter_option_serving_v4
       ORDER BY
         project_id,
@@ -1572,55 +1478,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       LIMIT 1;
       BEGIN;
       UPDATE mart.review_filter_option_serving_v4
-      SET option_updated_at = current_timestamp
-      WHERE project_id = (
-          SELECT project_id
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        )
-        AND review_config_hash = (
-          SELECT review_config_hash
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        )
-        AND snapshot_id = (
-          SELECT snapshot_id
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        )
-        AND search_identity = (
-          SELECT search_identity
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        )
-        AND filter_option_identity = (
-          SELECT filter_option_identity
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        )
-        AND filter_kind = (
-          SELECT filter_kind
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        )
-        AND facet_key = (
-          SELECT facet_key
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        )
-        AND option_value_key = (
-          SELECT option_value_key
-          FROM startup_probe_review_filter_option_serving_v4
-          LIMIT 1
-        );
-      COMMIT;
-      BEGIN;
-      UPDATE mart.review_filter_option_serving_v4
-      SET option_updated_at = (
-        SELECT option_updated_at
-        FROM startup_probe_review_filter_option_serving_v4
-        LIMIT 1
-      )
+      SET count_value = count_value
       WHERE project_id = (
           SELECT project_id
           FROM startup_probe_review_filter_option_serving_v4
@@ -1859,7 +1717,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           project_id,
           review_config_hash,
           snapshot_id,
-          list_mode_key,
           payload_kind,
           article_id,
           prompt_id
@@ -1868,7 +1725,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           project_id,
           review_config_hash,
           snapshot_id,
-          list_mode_key,
           payload_kind,
           article_id,
           prompt_id
@@ -1910,7 +1766,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           detail.project_id,
           detail.review_config_hash,
           detail.snapshot_id,
-          detail.list_mode_key,
           detail.payload_kind,
           detail.article_id,
           detail.prompt_id
@@ -1924,7 +1779,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           detail.project_id,
           detail.review_config_hash,
           detail.snapshot_id,
-          detail.list_mode_key,
           detail.payload_kind,
           detail.article_id,
           detail.prompt_id
@@ -1944,7 +1798,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         WHERE mart.review_article_judgment_detail_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
           AND mart.review_article_judgment_detail_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
           AND mart.review_article_judgment_detail_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
-          AND mart.review_article_judgment_detail_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
           AND mart.review_article_judgment_detail_serving_v4.payload_kind IS NOT DISTINCT FROM probe.payload_kind
           AND mart.review_article_judgment_detail_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
           AND mart.review_article_judgment_detail_serving_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
@@ -1963,7 +1816,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         WHERE mart.review_article_judgment_detail_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
           AND mart.review_article_judgment_detail_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
           AND mart.review_article_judgment_detail_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
-          AND mart.review_article_judgment_detail_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
           AND mart.review_article_judgment_detail_serving_v4.payload_kind IS NOT DISTINCT FROM probe.payload_kind
           AND mart.review_article_judgment_detail_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
           AND mart.review_article_judgment_detail_serving_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
@@ -2023,7 +1875,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'project_id',
       'review_config_hash',
       'snapshot_id',
-      'list_mode_key',
       'payload_kind',
       'article_id',
       'prompt_id',
@@ -2194,8 +2045,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           queue_kind,
           priority_bucket,
           activity_sort_at,
-          article_id,
-          prompt_id
+          article_id
         FROM mart.review_unassessed_queue_serving_v4
         GROUP BY
           project_id,
@@ -2204,8 +2054,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           queue_kind,
           priority_bucket,
           activity_sort_at,
-          article_id,
-          prompt_id
+          article_id
         HAVING COUNT(*) > 1
       )
     `,
@@ -2221,7 +2070,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         priority_bucket,
         activity_sort_at,
         article_id,
-        prompt_id,
+        prompt_ids,
         queue_updated_at
       FROM mart.review_unassessed_queue_serving_v4
       ORDER BY
@@ -2231,8 +2080,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         queue_kind,
         priority_bucket,
         activity_sort_at,
-        article_id,
-        prompt_id
+        article_id
       LIMIT 1;
       BEGIN;
       UPDATE mart.review_unassessed_queue_serving_v4
@@ -2269,11 +2117,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         )
         AND article_id = (
           SELECT article_id
-          FROM startup_probe_review_unassessed_queue_serving_v4
-          LIMIT 1
-        )
-        AND prompt_id IS NOT DISTINCT FROM (
-          SELECT prompt_id
           FROM startup_probe_review_unassessed_queue_serving_v4
           LIMIT 1
         );
@@ -2319,11 +2162,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           SELECT article_id
           FROM startup_probe_review_unassessed_queue_serving_v4
           LIMIT 1
-        )
-        AND prompt_id IS NOT DISTINCT FROM (
-          SELECT prompt_id
-          FROM startup_probe_review_unassessed_queue_serving_v4
-          LIMIT 1
         );
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_unassessed_queue_serving_v4;
@@ -2336,9 +2174,15 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'priority_bucket',
       'activity_sort_at',
       'article_id',
-      'prompt_id',
     ],
     schemaName: 'mart',
+    schemaRequirements: [
+      {
+        columnNames: ['prompt_ids', 'queue_updated_at'],
+        schemaName: 'mart',
+        tableName: 'review_unassessed_queue_serving_v4',
+      },
+    ],
     tableName: 'review_unassessed_queue_serving_v4',
   },
   {
@@ -2452,106 +2296,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     ],
     skipGenericDeleteInsertProbe: true,
     tableName: 'review_article_filter_posting_serving_v4',
-  },
-  {
-    duplicateKeySelectSql: `
-      SELECT COUNT(*) AS duplicateCount
-      FROM (
-        SELECT
-          project_id,
-          review_config_hash,
-          snapshot_id,
-          list_mode_key,
-          article_id
-        FROM mart.review_article_filter_state_serving_v4
-        GROUP BY
-          project_id,
-          review_config_hash,
-          snapshot_id,
-          list_mode_key,
-          article_id
-        HAVING COUNT(*) > 1
-      )
-    `,
-    mutationProbeSql: `
-      DROP TABLE IF EXISTS startup_probe_review_article_filter_state_serving_v4;
-      CREATE TEMP TABLE startup_probe_review_article_filter_state_serving_v4 AS
-      SELECT
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        list_mode_key,
-        article_id,
-        duplicate_flag,
-        conflict_flag,
-        llm_status,
-        human_status
-      FROM mart.review_article_filter_state_serving_v4
-      ORDER BY
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        list_mode_key,
-        article_id
-      LIMIT 1;
-      BEGIN;
-      DELETE FROM mart.review_article_filter_state_serving_v4
-      WHERE EXISTS (SELECT 1 FROM startup_probe_review_article_filter_state_serving_v4)
-        AND project_id = (
-          SELECT project_id
-          FROM startup_probe_review_article_filter_state_serving_v4
-          LIMIT 1
-        )
-        AND review_config_hash = (
-          SELECT review_config_hash
-          FROM startup_probe_review_article_filter_state_serving_v4
-          LIMIT 1
-        )
-        AND snapshot_id = (
-          SELECT snapshot_id
-          FROM startup_probe_review_article_filter_state_serving_v4
-          LIMIT 1
-        )
-        AND list_mode_key = (
-          SELECT list_mode_key
-          FROM startup_probe_review_article_filter_state_serving_v4
-          LIMIT 1
-        )
-        AND article_id = (
-          SELECT article_id
-          FROM startup_probe_review_article_filter_state_serving_v4
-          LIMIT 1
-        );
-      INSERT INTO mart.review_article_filter_state_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        list_mode_key,
-        article_id,
-        duplicate_flag,
-        conflict_flag,
-        llm_status,
-        human_status
-      )
-      SELECT
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        list_mode_key,
-        article_id,
-        duplicate_flag,
-        conflict_flag,
-        llm_status,
-        human_status
-      FROM startup_probe_review_article_filter_state_serving_v4;
-      COMMIT;
-      DROP TABLE IF EXISTS startup_probe_review_article_filter_state_serving_v4;
-    `,
-    lowMemoryStartupPreflight: true,
-    repairPrimaryKeyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
-    schemaName: 'mart',
-    skipGenericDeleteInsertProbe: true,
-    tableName: 'review_article_filter_state_serving_v4',
   },
 ] as const
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([

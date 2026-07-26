@@ -215,15 +215,26 @@ const getFullRebuildSummaryContributionRows = async (
           SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
         ),
         scoped_serving AS (
-          SELECT serving.*
+          SELECT
+            serving.article_id,
+            list_mode_key.list_mode_key,
+            list_mode_state.duplicate_flag,
+            list_mode_state.conflict_flag,
+            list_mode_state.human_status,
+            list_mode_state.llm_status
           FROM article_id_filter dirty
-          INNER JOIN mart.review_article_serving_v4 serving
+          INNER JOIN mart.review_article_serving_base_v4 serving
             ON serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND serving.article_id = dirty.article_id
+          INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state
+            ON list_mode_state.project_id = serving.project_id
+            AND list_mode_state.review_config_hash = serving.review_config_hash
+            AND list_mode_state.snapshot_id = serving.snapshot_id
+            AND list_mode_state.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = serving.list_mode_key
+            ON list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)
         ),
         selected_article AS (
           SELECT DISTINCT
@@ -232,11 +243,11 @@ const getFullRebuildSummaryContributionRows = async (
             selected_hot.publication_year,
             CASE
               WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-              ELSE COALESCE(selected_hot.duplicate_flag, FALSE)
+              ELSE COALESCE(serving.duplicate_flag, FALSE)
             END AS duplicate_flag,
             CASE
               WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-              ELSE COALESCE(selected_hot.conflict_flag, FALSE)
+              ELSE COALESCE(serving.conflict_flag, FALSE)
             END AS conflict_flag
           FROM scoped_serving serving
           LEFT JOIN app.review_selected_article_import_v4 selected_base
@@ -250,41 +261,66 @@ const getFullRebuildSummaryContributionRows = async (
             AND selected_hot.source_record_key = selected_base.source_record_key
             AND NOT selected_hot.tombstone
         ),
+        judgment_detail_source AS (
+          SELECT
+            detail.article_id,
+            detail.payload_kind,
+            detail.prompt_id,
+            detail.is_answered,
+            detail.answered_original,
+            detail.answered_original_as_array
+          FROM mart.review_article_judgment_detail_serving_v4 detail
+          INNER JOIN article_id_filter dirty
+            ON dirty.article_id = detail.article_id
+          WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
+            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND detail.payload_kind IN ('llm', 'human')
+        ),
         llm_detail AS (
           SELECT
             detail.article_id,
             detail.prompt_id,
-            list_mode_key.list_mode_key,
+            serving.list_mode_key,
             detail.answered_original,
             detail.answered_original_as_array
-          FROM article_id_filter dirty
-          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
-            ON detail.project_id = ${getSqlLiteral(input.projectId)}
-            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND detail.payload_kind = 'llm'
-            AND detail.list_mode_key = 'llm'
-            AND detail.article_id = dirty.article_id
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key IN ('llm', 'both')
+          FROM judgment_detail_source detail
+          INNER JOIN scoped_serving serving
+            ON serving.article_id = detail.article_id
+            AND serving.list_mode_key IN ('llm', 'both')
+          WHERE detail.payload_kind = 'llm'
         ),
         human_detail AS (
           SELECT
             detail.article_id,
             detail.prompt_id,
-            list_mode_key.list_mode_key,
+            serving.list_mode_key,
             detail.is_answered,
             detail.answered_original
-          FROM article_id_filter dirty
-          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
-            ON detail.project_id = ${getSqlLiteral(input.projectId)}
-            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND detail.payload_kind = 'human'
-            AND detail.list_mode_key = 'human'
-            AND detail.article_id = dirty.article_id
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key IN ('human', 'both')
+          FROM judgment_detail_source detail
+          INNER JOIN scoped_serving serving
+            ON serving.article_id = detail.article_id
+            AND serving.list_mode_key IN ('human', 'both')
+          WHERE detail.payload_kind = 'human'
+        ),
+        queue_source AS (
+          SELECT
+            queue.article_id,
+            queue.prompt_ids
+          FROM mart.review_unassessed_queue_serving_v4 queue
+          INNER JOIN article_id_filter dirty
+            ON dirty.article_id = queue.article_id
+          WHERE queue.project_id = ${getSqlLiteral(input.projectId)}
+            AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND queue.queue_kind = 'unassessed'
+        ),
+        queue_prompt_source AS (
+          SELECT
+            queue.article_id,
+            expanded_prompt.prompt_id
+          FROM queue_source queue
+          CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)
         ),
         base_counts AS (
           SELECT serving.article_id AS articleId, 'count' AS summaryKind, 'review.list.total' AS countKind, 'list:all' AS filterKey, serving.list_mode_key AS listModeKey, 'review.list.total' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
@@ -310,18 +346,15 @@ const getFullRebuildSummaryContributionRows = async (
           WHERE llm.list_mode_key IN ('llm', 'both') AND (llm.answered_original IS NOT NULL OR COALESCE(LENGTH(llm.answered_original_as_array), 0) > 0)
           UNION ALL
           SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.llm.unassessedByPrompt' AS countKind, concat('prompt:', queue.prompt_id) AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.llm.unassessedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
-          FROM mart.review_unassessed_queue_serving_v4 queue
-          INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          FROM queue_prompt_source queue
           INNER JOIN selected_article selected ON selected.article_id = queue.article_id
-          CROSS JOIN list_mode_key_filter list_mode_key
-          WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed' AND queue.prompt_id IS NOT NULL
+          INNER JOIN scoped_serving list_mode_key ON list_mode_key.article_id = queue.article_id
+          WHERE queue.prompt_id IS NOT NULL
           UNION ALL
-          SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.queue.unassessedReady' AS countKind, 'queue:ready' AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.queue.unassessedReady' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
-          FROM mart.review_unassessed_queue_serving_v4 queue
-          INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.queue.unassessedReady' AS countKind, 'queue:ready' AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.queue.unassessedReady' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM queue_source queue
           INNER JOIN selected_article selected ON selected.article_id = queue.article_id
-          CROSS JOIN list_mode_key_filter list_mode_key
-          WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed'
+          INNER JOIN scoped_serving list_mode_key ON list_mode_key.article_id = queue.article_id
         ),
         human_counts AS (
           SELECT human.article_id AS articleId, 'count' AS summaryKind, 'review.human.reviewedByPrompt' AS countKind, concat('prompt:', human.prompt_id) AS filterKey, human.list_mode_key AS listModeKey, 'review.human.reviewedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, human.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
@@ -433,7 +466,6 @@ const getCountRecord = (input: {
         values: {
           availability: input.identity.availability,
           count_kind: input.identity.countKind,
-          count_updated_at: new Date(),
           count_value: input.identity.availability === 'ready' ? input.countValue : null,
           filter_key: input.identity.filterKey,
           list_mode_key: input.identity.listModeKey ?? 'global',
@@ -481,7 +513,6 @@ const getFacetRecord = (input: {
           count_value: input.identity.availability === 'ready' ? input.countValue : null,
           facet_key: input.identity.facetKey,
           facet_kind: input.identity.facetKind,
-          facet_updated_at: new Date(),
           facet_value: input.identity.facetValue,
           project_id: input.projectId,
           prompt_id: input.identity.promptId,
@@ -935,8 +966,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         filter_key,
         CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
         ANY_VALUE(availability) AS availability,
-        ANY_VALUE(stale_reason) AS stale_reason,
-        current_timestamp AS count_updated_at
+        ANY_VALUE(stale_reason) AS stale_reason
       FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator
       WHERE ${scopePredicate}
         AND ${getCompletedSummaryRebuildAccumulatorExistsPredicate('accumulator')}
@@ -966,8 +996,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         filter_key,
         count_value,
         availability,
-        stale_reason,
-        count_updated_at
+        stale_reason
       )
       SELECT
         project_id,
@@ -980,8 +1009,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         filter_key,
         count_value,
         availability,
-        stale_reason,
-        count_updated_at
+        stale_reason
       FROM temp_summary_rebuild_count_publication
     `)
     await tx.run(`
@@ -1002,8 +1030,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         ANY_VALUE(answer_value) AS answer_value,
         summary_definition_version,
         CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
-        ANY_VALUE(availability) AS availability,
-        current_timestamp AS facet_updated_at
+        ANY_VALUE(availability) AS availability
       FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator
       WHERE ${scopePredicate}
         AND ${getCompletedSummaryRebuildAccumulatorExistsPredicate('accumulator')}
@@ -1036,8 +1063,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         answer_value,
         summary_definition_version,
         count_value,
-        availability,
-        facet_updated_at
+        availability
       )
       SELECT
         project_id,
@@ -1052,8 +1078,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         answer_value,
         summary_definition_version,
         count_value,
-        availability,
-        facet_updated_at
+        availability
       FROM temp_summary_rebuild_facet_publication
     `)
     await tx.run(`

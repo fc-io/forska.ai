@@ -83,6 +83,18 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0180_reviewFilterStateServing.sql',
   '../../db/duckdbMigrations/0181_compactReviewFilterPostingServing.sql',
   '../../db/duckdbMigrations/0182_normalizeReviewArticleServingListModes.sql',
+  '../../db/duckdbMigrations/0183_backfillReviewArticleServingListModeStateFilters.sql',
+  '../../db/duckdbMigrations/0184_dropReviewJudgmentDetailListModeKey.sql',
+  '../../db/duckdbMigrations/0185_dropReviewFilterPostingLookupIndex.sql',
+  '../../db/duckdbMigrations/0186_reviewServingDirtySourceWatermark.sql',
+  '../../db/duckdbMigrations/0187_compactReviewUnassessedQueueServing.sql',
+  '../../db/duckdbMigrations/0188_dropReviewTitleSearchTokenLookupIndex.sql',
+  '../../db/duckdbMigrations/0189_dropReviewFilterOptionLookupIndex.sql',
+  '../../db/duckdbMigrations/0190_dropReviewFilteredCountLookupIndex.sql',
+  '../../db/duckdbMigrations/0191_dropReviewArticleServingListModeStateLookupIndex.sql',
+  '../../db/duckdbMigrations/0192_dropReviewSummaryOptionUpdatedAt.sql',
+  '../../db/duckdbMigrations/0193_dropReviewJudgmentDetailLlmPlaceholders.sql',
+  '../../db/duckdbMigrations/0194_dropReviewFilteredCountComponentBreakoutColumns.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -176,6 +188,8 @@ const reviewPayloadServingDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0175_dropReviewArticleServingPayload.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
+const reviewQueueServingCompactForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0187_compactReviewUnassessedQueueServing.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0140_dropReviewFilterPostingServingUpdatedAt.sql']
 const reviewSummaryContributionServingDropForwardMigrationSql =
@@ -192,10 +206,22 @@ const reviewTitleSearchUnusedColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0127_dropReviewTitleSearchUnusedColumns.sql']
 const reviewTitleSearchTokenPostingSlimForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0179_slimReviewTitleSearchTokenPostings.sql']
+const reviewTitleSearchTokenLookupIndexDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0188_dropReviewTitleSearchTokenLookupIndex.sql']
+const reviewFilterOptionLookupIndexDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0189_dropReviewFilterOptionLookupIndex.sql']
+const reviewFilteredCountLookupIndexDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0190_dropReviewFilteredCountLookupIndex.sql']
+const reviewSummaryOptionUpdatedAtDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0192_dropReviewSummaryOptionUpdatedAt.sql']
+const reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0193_dropReviewJudgmentDetailLlmPlaceholders.sql']
 const reviewFilterStateServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0180_reviewFilterStateServing.sql']
 const reviewFilterPostingServingCompactForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0181_compactReviewFilterPostingServing.sql']
+const reviewFilterPostingServingLookupIndexDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0185_dropReviewFilterPostingLookupIndex.sql']
 const reviewArticleServingListModeNormalizationForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0182_normalizeReviewArticleServingListModes.sql']
 const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
@@ -240,11 +266,14 @@ const reviewArticleServingReviewProgressCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0134_dropReviewArticleServingReviewProgressCopy.sql']
 const reviewFilteredCountServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0177_reviewFilteredCountServing.sql']
+const reviewFilteredCountComponentBreakoutDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0194_dropReviewFilteredCountComponentBreakoutColumns.sql'
+  ]
 const hotServingTables = [
   'mart.review_article_serving_base_v4',
   'mart.review_article_serving_list_mode_state_v4',
   'mart.review_article_filter_posting_serving_v4',
-  'mart.review_article_filter_state_serving_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
@@ -260,6 +289,7 @@ const reviewServingPhase1Tables = [
   'app.review_import_article_hot_field',
   'app.review_serving_dirty_work',
   'app.review_serving_dirty_work_ack',
+  'app.review_serving_project_dirty_source_watermark',
   'app.review_serving_projector_watermark',
   'app.review_projection_identity_manifest',
   'app.review_rebuild_request',
@@ -276,7 +306,6 @@ const reviewServingPhase1Tables = [
   'mart.review_article_serving_base_v4',
   'mart.review_article_serving_list_mode_state_v4',
   'mart.review_article_filter_posting_serving_v4',
-  'mart.review_article_filter_state_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_rebuild_accumulator_v4',
   'mart.review_article_count_serving_v4',
@@ -298,6 +327,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_serving_payload_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
+  'mart.review_article_filter_state_serving_v4',
   'app.review_rebuild_partial_cleanup_authorization',
 ])
 
@@ -329,13 +359,51 @@ const getLastDropTableIndex = (tableName: string) => {
   return dropMatches.at(-1)?.index ?? -1
 }
 
+const hasActiveIndex = (indexName: string) => {
+  const createMatches = [
+    ...schemaMigrationSql.matchAll(
+      new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${escapeRegex(indexName)}\\b`, 'g'),
+    ),
+  ]
+  const lastCreateIndex = createMatches.at(-1)?.index ?? -1
+  const dropMatches = [
+    ...schemaMigrationSql.matchAll(
+      new RegExp(`DROP INDEX IF EXISTS (?:[a-z_][\\w]*\\.)?${escapeRegex(indexName)};`, 'g'),
+    ),
+  ]
+  const lastDropIndex = dropMatches.at(-1)?.index ?? -1
+
+  return lastCreateIndex > lastDropIndex
+}
+
 const getTableSql = (tableName: string) => {
-  const matches = [
+  const directMatches = [
     ...schemaMigrationSql.matchAll(
       new RegExp(`CREATE TABLE(?: IF NOT EXISTS)? ${escapeRegex(tableName)} \\([\\s\\S]*?\\n\\);`, 'g'),
     ),
   ]
-  const lastMatch = matches.at(-1)
+  const renameMatches = [
+    ...schemaMigrationSql.matchAll(
+      new RegExp(
+        `ALTER TABLE ([a-z_][\\w]*\\.[a-zA-Z_]\\w*)\\nRENAME TO ${escapeRegex(tableName.split('.').at(-1) ?? tableName)};`,
+        'g',
+      ),
+    ),
+  ]
+  const lastRenameMatch = renameMatches.at(-1)
+  const renamedTableName = lastRenameMatch?.[1]
+  const renamedCreateMatches =
+    renamedTableName === undefined
+      ? []
+      : [
+          ...schemaMigrationSql.matchAll(
+            new RegExp(`CREATE TABLE(?: IF NOT EXISTS)? ${escapeRegex(renamedTableName)} \\([\\s\\S]*?\\n\\);`, 'g'),
+          ),
+        ]
+  const lastDirectMatch = directMatches.at(-1)
+  const lastRenamedCreateMatch = renamedCreateMatches.at(-1)
+  const lastMatch =
+    (lastRenameMatch?.index ?? -1) > (lastDirectMatch?.index ?? -1) ? lastRenamedCreateMatch : lastDirectMatch
 
   if (lastMatch === undefined) {
     return ''
@@ -462,6 +530,12 @@ test('title search serving schema drops repeated unused metadata and stores comp
     'LIST(DISTINCT article_id ORDER BY article_id) AS article_ids',
   )
   expect(reviewTitleSearchTokenPostingSlimForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewTitleSearchTokenLookupIndexDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_title_search_serving_v4_token;',
+      'DROP INDEX IF EXISTS idx_review_title_search_serving_v4_token;',
+    ].join('\n'),
+  )
   expect(reviewTitleSearchUnusedColumnDropForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_title_search_serving_v4_repair RENAME TO review_title_search_serving_v4;',
   )
@@ -475,6 +549,8 @@ test('title search serving schema drops repeated unused metadata and stores comp
   ])
   expect(schemaMigrationSql).not.toContain('title_prefix')
   expect(schemaMigrationSql).not.toContain('search_updated_at')
+  expect(hasActiveIndex('idx_review_title_search_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_title_search_serving_v4_token')).toBe(false)
 })
 
 test('selected import schema drops retired display-copy and selected-base flag columns', () => {
@@ -518,7 +594,7 @@ test('unassessed queue serving schema drops derived queue identity', () => {
     'priority_bucket',
     'activity_sort_at',
     'article_id',
-    'prompt_id',
+    'prompt_ids',
     'queue_updated_at',
   ])
   expect(reviewQueueServingIdentityDropForwardMigrationSql).toContain(
@@ -526,6 +602,14 @@ test('unassessed queue serving schema drops derived queue identity', () => {
   )
   expect(reviewQueueServingIdentityDropForwardMigrationSql).toContain('MAX(queue_updated_at) AS queue_updated_at')
   expect(reviewQueueServingIdentityDropForwardMigrationSql).not.toContain('queue_identity VARCHAR')
+  expect(reviewQueueServingCompactForwardMigrationSql).toContain('prompt_ids VARCHAR[] NOT NULL')
+  expect(reviewQueueServingCompactForwardMigrationSql).toContain(
+    'LIST(DISTINCT prompt_id ORDER BY prompt_id) FILTER (WHERE prompt_id IS NOT NULL)',
+  )
+  expect(reviewQueueServingCompactForwardMigrationSql).toContain('[]::VARCHAR[]')
+  expect(reviewQueueServingCompactForwardMigrationSql).toContain(
+    'PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id)',
+  )
 })
 
 test('projector watermark schema drops unused lifecycle placeholders', () => {
@@ -1056,7 +1140,15 @@ test('article serving list-mode normalization keeps logical rows on a compatibil
     'human_patch_watermark',
     'both_patch_watermark',
     'unassessed_patch_watermark',
+    'duplicate_flag',
+    'conflict_flag',
+    'llm_status',
+    'human_status',
+    'llm_has_judgment',
   ])
+  expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
+    'DROP TABLE IF EXISTS mart.review_article_filter_state_serving_v4;',
+  )
   expect(reviewServingFoundationSchemaSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4')
   expect(reviewServingFoundationSchemaSql).not.toContain('CREATE VIEW mart.review_article_serving_v4')
 })
@@ -1171,6 +1263,14 @@ test('filter posting serving schema stores compact article id postings without s
   expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup',
   )
+  expect(reviewFilterPostingServingLookupIndexDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_article_filter_posting_serving_v4_lookup;',
+    ].join('\n'),
+  )
+  expect(hasActiveIndex('idx_review_article_filter_posting_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_article_filter_posting_serving_v4_lookup')).toBe(false)
   expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain('article_ids VARCHAR[] NOT NULL')
   expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
     'LIST(DISTINCT article_id ORDER BY article_id) AS article_ids',
@@ -1180,18 +1280,8 @@ test('filter posting serving schema stores compact article id postings without s
   expect(getTableSql('mart.review_article_filter_posting_serving_v4')).not.toContain('sort_key')
 })
 
-test('filter state serving schema splits low-cardinality state from generic postings', () => {
-  expect([...getTableColumns('mart.review_article_filter_state_serving_v4')]).toEqual([
-    'project_id',
-    'review_config_hash',
-    'snapshot_id',
-    'list_mode_key',
-    'article_id',
-    'duplicate_flag',
-    'conflict_flag',
-    'llm_status',
-    'human_status',
-  ])
+test('filter state serving table is retired into list-mode state', () => {
+  expect([...getTableColumns('mart.review_article_filter_state_serving_v4')]).toEqual([])
   expect(reviewFilterStateServingForwardMigrationSql).toContain(
     "WHERE posting.filter_kind IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus')",
   )
@@ -1201,11 +1291,18 @@ test('filter state serving schema splits low-cardinality state from generic post
   expect(reviewFilterStateServingForwardMigrationSql).toContain(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_state_serving_v4_pk',
   )
+  expect(retiredReviewServingTables.has('mart.review_article_filter_state_serving_v4')).toBe(true)
 })
 
 test('filter option schema drops reconstructable payload JSON column', () => {
   expect(reviewFilterOptionPayloadJsonDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_filter_option_serving_v4_repair',
+  )
+  expect(reviewFilterOptionLookupIndexDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_filter_option_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_filter_option_serving_v4_lookup;',
+    ].join('\n'),
   )
   expect(reviewFilterOptionPayloadJsonDropForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_filter_option_serving_v4_repair RENAME TO review_filter_option_serving_v4;',
@@ -1225,9 +1322,58 @@ test('filter option schema drops reconstructable payload JSON column', () => {
     'numeric_min',
     'numeric_max',
     'count_value',
-    'option_updated_at',
   ])
   expect(getTableColumns('mart.review_filter_option_serving_v4').has('option_payload_json')).toBe(false)
+  expect(getTableColumns('mart.review_filter_option_serving_v4').has('option_updated_at')).toBe(false)
+  expect(hasActiveIndex('idx_review_filter_option_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_filter_option_serving_v4_lookup')).toBe(false)
+})
+
+test('summary and option mart schemas drop unused projection timestamps', () => {
+  expect([...getTableColumns('mart.review_article_count_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'summary_identity',
+    'list_mode_key',
+    'count_kind',
+    'summary_definition_version',
+    'filter_key',
+    'count_value',
+    'availability',
+    'stale_reason',
+  ])
+  expect([...getTableColumns('mart.review_filter_facet_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'summary_identity',
+    'facet_kind',
+    'facet_key',
+    'facet_value',
+    'prompt_id',
+    'answer_id',
+    'answer_value',
+    'summary_definition_version',
+    'count_value',
+    'availability',
+  ])
+  expect(reviewSummaryOptionUpdatedAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_count_serving_v4_repair',
+  )
+  expect(reviewSummaryOptionUpdatedAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_filter_facet_serving_v4_repair',
+  )
+  expect(reviewSummaryOptionUpdatedAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_filter_option_serving_v4_repair',
+  )
+  expect(reviewSummaryOptionUpdatedAtDropForwardMigrationSql).not.toContain('count_updated_at TIMESTAMPTZ')
+  expect(reviewSummaryOptionUpdatedAtDropForwardMigrationSql).not.toContain('facet_updated_at TIMESTAMPTZ')
+  expect(reviewSummaryOptionUpdatedAtDropForwardMigrationSql).not.toContain('option_updated_at TIMESTAMPTZ')
+  expect(getTableColumns('mart.review_article_count_serving_v4').has('count_updated_at')).toBe(false)
+  expect(getTableColumns('mart.review_filter_facet_serving_v4').has('facet_updated_at')).toBe(false)
+  expect(getTableColumns('mart.review_filtered_count_serving_v4').has('count_updated_at')).toBe(true)
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('detail_updated_at')).toBe(true)
 })
 
 test('Phase 1 schema migration creates contract cursor and sort columns on non-job serving tables', () => {
@@ -1298,11 +1444,6 @@ test('dynamic filtered count serving schema keys signatures by snapshot and comp
     'list_mode_key',
     'filter_signature',
     'component_identity',
-    'project_scope_identity',
-    'search_identity',
-    'posting_identity',
-    'queue_identity',
-    'payload_identity',
     'count_value',
     'count_updated_at',
   ])
@@ -1310,6 +1451,23 @@ test('dynamic filtered count serving schema keys signatures by snapshot and comp
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_filtered_count_serving_v4_repaired_pk',
   )
   expect(reviewFilteredCountServingForwardMigrationSql).toContain('idx_review_filtered_count_serving_v4_lookup')
+  expect(reviewFilteredCountLookupIndexDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_filtered_count_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_filtered_count_serving_v4_lookup;',
+    ].join('\n'),
+  )
+  expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_filtered_count_serving_v4_repair',
+  )
+  expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).toContain('count_updated_at TIMESTAMPTZ')
+  expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('project_scope_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('search_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('posting_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('queue_identity VARCHAR')
+  expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('payload_identity VARCHAR')
+  expect(hasActiveIndex('idx_review_filtered_count_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_filtered_count_serving_v4_lookup')).toBe(false)
 })
 
 test('Phase 1 schema migration includes dedicated judgment detail and filter option tables', () => {
@@ -1331,6 +1489,7 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('judgment_model_id')).toBe(false)
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('explanation')).toBe(false)
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('quotes')).toBe(false)
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('list_mode_key')).toBe(false)
   expect(getTableSql('mart.review_article_judgment_detail_hydration_serving_v4')).toBe('')
   expect(
     getMissingColumns('mart.review_filter_option_serving_v4', [
@@ -1467,6 +1626,16 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).not.toContain('judgment_model_id VARCHAR')
   expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).not.toContain('explanation VARCHAR')
   expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).not.toContain('quotes JSON')
+  expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).toContain(
+    "WHERE payload_kind = 'llm'\n  AND placeholder_kind = 'llm.unanswered'",
+  )
+  expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_repaired_pk',
+  )
+  expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article',
+  )
+  expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).not.toContain('detail_updated_at')
   expect(countScopeForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
   )

@@ -43,11 +43,9 @@ export type ReviewServingProjectorWritableTable =
   | 'app.review_selected_article_import_v4'
   | 'mart.review_article_count_serving_v4'
   | 'mart.review_article_filter_posting_serving_v4'
-  | 'mart.review_article_filter_state_serving_v4'
   | 'mart.review_article_judgment_detail_serving_v4'
   | 'mart.review_article_serving_base_v4'
   | 'mart.review_article_serving_list_mode_state_v4'
-  | 'mart.review_article_serving_v4'
   | 'mart.review_article_summary_rebuild_accumulator_v4'
   | 'mart.review_filter_facet_serving_v4'
   | 'mart.review_filter_option_serving_v4'
@@ -189,7 +187,11 @@ const getReviewServingProjectorHash = (label: string, value: ReviewServingIdenti
 }
 
 const mergeReviewServingTitleSearchArticleIdsSql = (incomingArticleIdsSql: string, existingArticleIdsSql: string) => {
-  return `(SELECT LIST(DISTINCT article_id ORDER BY article_id) FROM (SELECT unnest(COALESCE(${existingArticleIdsSql}, []::VARCHAR[])) AS article_id UNION ALL SELECT unnest(${incomingArticleIdsSql}) AS article_id))`
+  return `list_sort(list_distinct(list_concat(COALESCE(${existingArticleIdsSql}, []::VARCHAR[]), COALESCE(${incomingArticleIdsSql}, []::VARCHAR[]))))`
+}
+
+const mergeReviewServingQueuePromptIdsSql = (incomingPromptIdsSql: string, existingPromptIdsSql: string) => {
+  return `list_sort(list_distinct(list_concat(COALESCE(${existingPromptIdsSql}, []::VARCHAR[]), COALESCE(${incomingPromptIdsSql}, []::VARCHAR[]))))`
 }
 
 const getSqlRecordValue = (value: ReviewServingProjectorRecordValue) => {
@@ -345,7 +347,9 @@ const writeReviewServingProjectorRecordBatch = async (
       .map((column) => {
         return table === 'mart.review_title_search_serving_v4' && column === 'article_ids'
           ? `${column} = ${mergeReviewServingTitleSearchArticleIdsSql(`${incomingAlias}.${column}`, `${existingAlias}.${column}`)}`
-          : `${column} = ${incomingAlias}.${column}`
+          : table === 'mart.review_unassessed_queue_serving_v4' && column === 'prompt_ids'
+            ? `${column} = ${mergeReviewServingQueuePromptIdsSql(`${incomingAlias}.${column}`, `${existingAlias}.${column}`)}`
+            : `${column} = ${incomingAlias}.${column}`
       })
 
     if (updateAssignments.length > 0) {
@@ -749,17 +753,6 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
 
   return [
     `
-    ${finalRowsCteSql}
-    UPDATE mart.review_title_search_serving_v4
-    SET article_ids = ${mergeReviewServingTitleSearchArticleIdsSql('final_rows.article_ids', 'review_title_search_serving_v4.article_ids')}
-    FROM final_rows
-    WHERE review_title_search_serving_v4.project_id = final_rows.project_id
-      AND review_title_search_serving_v4.search_identity = final_rows.search_identity
-      AND review_title_search_serving_v4.project_scope_identity = final_rows.project_scope_identity
-      AND review_title_search_serving_v4.snapshot_id = final_rows.snapshot_id
-      AND review_title_search_serving_v4.token = final_rows.token
-  `,
-    `
     INSERT INTO mart.review_title_search_serving_v4 (
       project_id,
       search_identity,
@@ -777,15 +770,8 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       final_rows.token,
       final_rows.article_ids
     FROM final_rows
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM mart.review_title_search_serving_v4 existing
-      WHERE existing.project_id = final_rows.project_id
-        AND existing.search_identity = final_rows.search_identity
-        AND existing.project_scope_identity = final_rows.project_scope_identity
-        AND existing.snapshot_id = final_rows.snapshot_id
-        AND existing.token = final_rows.token
-    )
+    ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET
+      article_ids = ${mergeReviewServingTitleSearchArticleIdsSql('excluded.article_ids', 'mart.review_title_search_serving_v4.article_ids')}
   `,
   ]
 }
@@ -908,7 +894,7 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       priority_bucket,
       activity_sort_at,
       article_id,
-      prompt_id,
+      prompt_ids,
       queue_updated_at
     )
     WITH ${input.rebuildSourceCtesSql},
@@ -921,10 +907,19 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
         queue.priority_bucket,
         queue.activity_sort_at,
         queue.article_id,
-        queue.prompt_id,
+        LIST(DISTINCT queue.prompt_id ORDER BY queue.prompt_id) AS prompt_ids,
         current_timestamp AS queue_updated_at
       FROM queue_union queue
       WHERE NOT queue.tombstone
+        AND queue.prompt_id IS NOT NULL
+      GROUP BY
+        project_id,
+        queue.review_config_hash,
+        snapshot_id,
+        queue.queue_kind,
+        queue.priority_bucket,
+        queue.activity_sort_at,
+        queue.article_id
     )
     SELECT
       project_id,
@@ -934,7 +929,7 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       priority_bucket,
       activity_sort_at,
       article_id,
-      prompt_id,
+      prompt_ids,
       queue_updated_at
     FROM queue_rows
     QUALIFY ROW_NUMBER() OVER (
@@ -945,11 +940,12 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
         queue_kind,
         priority_bucket,
         activity_sort_at,
-        article_id,
-        prompt_id
+        article_id
       ORDER BY queue_updated_at DESC
     ) = 1
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id) DO NOTHING
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id) DO UPDATE SET
+      prompt_ids = ${mergeReviewServingQueuePromptIdsSql('excluded.prompt_ids', 'mart.review_unassessed_queue_serving_v4.prompt_ids')},
+      queue_updated_at = excluded.queue_updated_at
   `,
   ]
 }

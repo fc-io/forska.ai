@@ -32,7 +32,13 @@ import {
   type ReviewServingSnapshotManifest,
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingReadContract} from './reviewServingReadContracts.ts'
-import {assertReviewServingSqlShape, buildReviewServingRowsSql} from './reviewServingSql.ts'
+import {
+  assertReviewServingSqlShape,
+  buildReviewServingPostingFilterIntersectionArticleCte,
+  buildReviewServingRowsSql,
+  getReviewServingArticleFilterStateSqlAlias,
+  getReviewServingArticleReadSqlAlias,
+} from './reviewServingSql.ts'
 
 export type ReviewServingReaderDatabase = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
@@ -127,7 +133,9 @@ export type ReviewServingReaderResult<T> =
 const snapshotScopedTables = new Set(['app.review_serving_snapshot_manifest'])
 const maxArticleSetHydrationArticleIds = 100
 const maxArticleSetHydrationPayloadBytes = 2_000_000
-const reviewServingArticleTable = 'mart.review_article_serving_v4'
+const reviewServingArticleBaseTable = 'mart.review_article_serving_base_v4'
+const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
+const reviewServingPostingArticleSortAlias = 'serving_order'
 
 const getReaderDatabase = () => {
   return getApiReadOnlyAppDatabaseService()
@@ -248,8 +256,22 @@ const getCursorFieldName = (field: string) => {
 const getCursorPredicateFieldName = (contract: ReviewServingReadContract, field: string) => {
   const fieldName = getCursorFieldName(field)
 
-  return contract.servingTable === reviewServingArticleTable && /^[a-z_][a-z0-9_]*$/iu.test(fieldName)
-    ? `${reviewServingArticleTable}.${fieldName}`
+  if (
+    contract.servingTable === reviewServingFilterPostingTable
+    && fieldName.startsWith(`${reviewServingArticleBaseTable}.`)
+  ) {
+    return fieldName.replace(reviewServingArticleBaseTable, reviewServingPostingArticleSortAlias)
+  }
+
+  if (
+    contract.servingTable === reviewServingArticleBaseTable
+    && fieldName.startsWith(`${reviewServingArticleBaseTable}.`)
+  ) {
+    return fieldName.replace(reviewServingArticleBaseTable, getReviewServingArticleReadSqlAlias(contract))
+  }
+
+  return contract.servingTable === reviewServingArticleBaseTable && /^[a-z_][a-z0-9_]*$/iu.test(fieldName)
+    ? `${getReviewServingArticleReadSqlAlias(contract)}.${fieldName}`
     : fieldName
 }
 
@@ -258,7 +280,7 @@ const getCursorRowFieldName = (field: string) => {
 
   if (
     fieldName.startsWith('CASE list_mode_key ')
-    || fieldName.startsWith('CASE mart.review_article_judgment_detail_serving_v4.list_mode_key ')
+    || fieldName.startsWith('CASE mart.review_article_judgment_detail_serving_v4.payload_kind ')
   ) {
     return 'list_mode_priority'
   }
@@ -363,6 +385,10 @@ const getFlagPostingFilterValue = (value: ReviewServingFilterSignatureValue | un
   return value ? 'true' : null
 }
 
+const isPostingArticleFilterKind = (filterKind: string) => {
+  return !['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus'].includes(filterKind)
+}
+
 const getPromptAnswerValueGroups = (request: ReviewServingReaderRequest) => {
   const prefix = getPostingFilterPrefix(request.listMode)
 
@@ -397,26 +423,13 @@ const isDateOnlyFilter = (value: string) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(value)
 }
 
-const getLlmHasJudgmentPredicate = (articleAlias: string) => {
-  return [
-    'EXISTS (SELECT 1',
-    ' FROM mart.review_article_judgment_detail_serving_v4 llm_judgment_detail',
-    ' WHERE llm_judgment_detail.project_id = $projectId',
-    ' AND llm_judgment_detail.review_config_hash = $reviewConfigHash',
-    ' AND llm_judgment_detail.snapshot_id = $snapshotId',
-    " AND llm_judgment_detail.list_mode_key = 'llm'",
-    " AND llm_judgment_detail.payload_kind = 'llm'",
-    ` AND llm_judgment_detail.article_id = ${articleAlias}.article_id`,
-    ' AND llm_judgment_detail.placeholder_kind IS NULL',
-    ' AND llm_judgment_detail.is_answered IS TRUE)',
-  ].join('')
-}
-
 const getColumnFilterPredicates = (input: {
   contract: ReviewServingReadContract
   request: ReviewServingReaderRequest
 }) => {
-  const articleCreatedAtColumn = `${input.contract.servingTable}.article_created_at`
+  const articleSqlAlias = getReviewServingArticleReadSqlAlias(input.contract)
+  const articleStateSqlAlias = getReviewServingArticleFilterStateSqlAlias(input.contract)
+  const articleCreatedAtColumn = `${articleSqlAlias}.article_created_at`
   const filters = input.request.filters ?? {}
   const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
   const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
@@ -428,7 +441,7 @@ const getColumnFilterPredicates = (input: {
         ? `${articleCreatedAtColumn} < TIMESTAMPTZ $articleCreatedAtTo`
         : `${articleCreatedAtColumn} <= TIMESTAMPTZ $articleCreatedAtTo`
       : '',
-    filters.llmHasJudgment ? getLlmHasJudgmentPredicate(input.contract.servingTable) : '',
+    filters.llmHasJudgment ? `${articleStateSqlAlias}.llm_has_judgment IS TRUE` : '',
   ].filter((predicate) => {
     return predicate.length > 0
   })
@@ -443,83 +456,210 @@ const getPostingFilterPredicate = (input: {
 }) => {
   if (input.filterKind === 'duplicateFlag' || input.filterKind === 'conflictFlag') {
     const columnName = input.filterKind === 'duplicateFlag' ? 'duplicate_flag' : 'conflict_flag'
+    const articleStateSqlAlias = getReviewServingArticleFilterStateSqlAlias(input.contract)
 
-    return input.filterValues.includes('true')
-      ? [
-          `EXISTS (SELECT 1 FROM mart.review_article_filter_state_serving_v4 filter_state_${input.index}`,
-          ` WHERE filter_state_${input.index}.project_id = $projectId`,
-          ` AND filter_state_${input.index}.snapshot_id = $snapshotId`,
-          ` AND filter_state_${input.index}.review_config_hash = $reviewConfigHash`,
-          ` AND filter_state_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
-          ` AND filter_state_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
-          ` AND filter_state_${input.index}.${columnName} IS TRUE)`,
-        ].join('')
-      : ''
+    return input.filterValues.includes('true') ? `${articleStateSqlAlias}.${columnName} IS TRUE` : ''
   }
 
   if (input.filterKind === 'llmStatus' || input.filterKind === 'humanStatus') {
     const columnName = input.filterKind === 'llmStatus' ? 'llm_status' : 'human_status'
+    const articleStateSqlAlias = getReviewServingArticleFilterStateSqlAlias(input.contract)
 
     return input.filterValues.length === 0
       ? ''
-      : [
-          `EXISTS (SELECT 1 FROM mart.review_article_filter_state_serving_v4 filter_state_${input.index}`,
-          ` WHERE filter_state_${input.index}.project_id = $projectId`,
-          ` AND filter_state_${input.index}.snapshot_id = $snapshotId`,
-          ` AND filter_state_${input.index}.review_config_hash = $reviewConfigHash`,
-          ` AND filter_state_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
-          ` AND filter_state_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
-          ` AND filter_state_${input.index}.${columnName} IN (SELECT unnest(${getSqlLiteral(input.filterValues)})))`,
-        ].join('')
+      : `${articleStateSqlAlias}.${columnName} IN (SELECT unnest(${getSqlLiteral(input.filterValues)}))`
   }
 
   return input.filterValues.length === 0
     ? ''
     : [
-        `EXISTS (SELECT 1 FROM mart.review_article_filter_posting_serving_v4 filter_${input.index}`,
-        ` WHERE filter_${input.index}.project_id = $projectId`,
-        ` AND filter_${input.index}.snapshot_id = $snapshotId`,
-        ` AND filter_${input.index}.review_config_hash = $reviewConfigHash`,
-        ` AND filter_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
-        ` AND list_contains(filter_${input.index}.article_ids, ${input.contract.servingTable}.article_id)`,
-        ` AND filter_${input.index}.filter_kind = ${getSqlLiteral(input.filterKind)}`,
-        ` AND filter_${input.index}.filter_value IN (SELECT unnest(${getSqlLiteral(input.filterValues)})))`,
+        `EXISTS (SELECT 1 FROM filter_${input.index}_articles`,
+        ` WHERE filter_${input.index}_articles.article_id = ${getReviewServingArticleReadSqlAlias(
+          input.contract,
+        )}.article_id)`,
       ].join('')
+}
+
+const getPostingFilterGroups = (request: ReviewServingReaderRequest) => {
+  const filters = request.filters ?? {}
+  const llmStatusValue = getLlmStatusFilterValue(request)
+  const humanStatusValue = typeof filters.humanStatus === 'string' ? filters.humanStatus : null
+
+  return [
+    {filterKind: 'duplicateFlag', filterValues: getFlagPostingFilterValue(filters.duplicateFlag) ? ['true'] : []},
+    {filterKind: 'conflictFlag', filterValues: getFlagPostingFilterValue(filters.conflictFlag) ? ['true'] : []},
+    {filterKind: 'llmStatus', filterValues: llmStatusValue ? [llmStatusValue] : []},
+    {filterKind: 'humanStatus', filterValues: humanStatusValue ? [humanStatusValue] : []},
+    {filterKind: 'importRoute', filterValues: getFilterValues(filters.importRoute)},
+    ...getPromptAnswerValueGroups(request).map((filterValues) => {
+      return {filterKind: 'promptAnswer', filterValues}
+    }),
+  ]
+}
+
+const getPostingArticleFilterGroups = (request: ReviewServingReaderRequest) => {
+  return getPostingFilterGroups(request)
+    .map((filterGroup, index) => {
+      return {...filterGroup, index}
+    })
+    .filter((filterGroup) => {
+      return filterGroup.filterValues.length > 0 && isPostingArticleFilterKind(filterGroup.filterKind)
+    })
+}
+
+const getPostingFilterArticleCtes = (input: {
+  contract: ReviewServingReadContract
+  request: ReviewServingReaderRequest
+}) => {
+  if (input.contract.physicalAccessStrategy !== 'orderedPrefix') {
+    return []
+  }
+
+  const postingArticleFilterGroups = getPostingArticleFilterGroups(input.request)
+
+  if (postingArticleFilterGroups.length > 1) {
+    return [
+      buildReviewServingPostingFilterIntersectionArticleCte({
+        groups: postingArticleFilterGroups,
+        listModeSql: getSqlLiteral(input.request.listMode ?? input.contract.listMode),
+        projectIdSql: '$projectId',
+        reviewConfigHashSql: '$reviewConfigHash',
+        snapshotIdSql: '$snapshotId',
+      }),
+    ].filter((cte) => {
+      return cte.length > 0
+    })
+  }
+
+  return postingArticleFilterGroups.map((filterValues) => {
+    const filterAlias = `filter_${filterValues.index}`
+    const articleAlias = `${filterAlias}_article`
+
+    return [
+      `filter_${filterValues.index}_articles AS (SELECT ${articleAlias}.article_id`,
+      ` FROM mart.review_article_filter_posting_serving_v4 ${filterAlias}`,
+      ` CROSS JOIN UNNEST(${filterAlias}.article_ids) AS ${articleAlias}(article_id)`,
+      ` WHERE ${filterAlias}.project_id = $projectId`,
+      ` AND ${filterAlias}.snapshot_id = $snapshotId`,
+      ` AND ${filterAlias}.review_config_hash = $reviewConfigHash`,
+      ` AND ${filterAlias}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
+      ` AND ${filterAlias}.filter_kind = ${getSqlLiteral(filterValues.filterKind)}`,
+      ` AND ${filterAlias}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues.filterValues)})))`,
+    ].join('')
+  })
+}
+
+const getSearchCandidateArticleIdsCte = (postingFilterArticleCtes: readonly string[]) => {
+  const articleCteNames = postingFilterArticleCtes
+    .map((cte) => {
+      return cte.match(/^(?:filter_\d+_articles|posting_filtered_article_ids)\b/u)?.[0] ?? ''
+    })
+    .filter((cteName) => {
+      return cteName.length > 0
+    })
+
+  if (articleCteNames.length === 0) {
+    return ''
+  }
+
+  const [anchorCteName = ''] = articleCteNames
+  const joins = articleCteNames.slice(1).map((cteName, index) => {
+    const filterIndex = index + 1
+
+    return ` INNER JOIN ${cteName} search_candidate_filter_${filterIndex} ON search_candidate_filter_${filterIndex}.article_id = search_candidate_filter_0.article_id`
+  })
+
+  return [
+    'search_candidate_article_ids AS (SELECT DISTINCT search_candidate_filter_0.article_id',
+    ` FROM ${anchorCteName} search_candidate_filter_0`,
+    ...joins,
+    ')',
+  ].join('')
 }
 
 const getPostingFilterPredicates = (input: {
   contract: ReviewServingReadContract
   request: ReviewServingReaderRequest
 }) => {
-  const filters = input.request.filters ?? {}
-  const llmStatusValue = getLlmStatusFilterValue(input.request)
-  const humanStatusValue = typeof filters.humanStatus === 'string' ? filters.humanStatus : null
-  const flagGroups = [
-    {filterKind: 'duplicateFlag', filterValues: getFlagPostingFilterValue(filters.duplicateFlag) ? ['true'] : []},
-    {filterKind: 'conflictFlag', filterValues: getFlagPostingFilterValue(filters.conflictFlag) ? ['true'] : []},
-  ]
-  const statusGroups = [
-    {filterKind: 'llmStatus', filterValues: llmStatusValue ? [llmStatusValue] : []},
-    {filterKind: 'humanStatus', filterValues: humanStatusValue ? [humanStatusValue] : []},
-  ]
-  const importRouteGroup = {filterKind: 'importRoute', filterValues: getFilterValues(filters.importRoute)}
-  const promptGroups = getPromptAnswerValueGroups(input.request).map((filterValues) => {
-    return {filterKind: 'promptAnswer', filterValues}
-  })
-
-  return [...flagGroups, ...statusGroups, importRouteGroup, ...promptGroups]
+  const postingArticleFilterGroups = getPostingArticleFilterGroups(input.request)
+  const useGroupedPostingFilter =
+    input.contract.physicalAccessStrategy === 'orderedPrefix' && postingArticleFilterGroups.length > 1
+  const predicates = getPostingFilterGroups(input.request)
     .map((filterValues, index) => {
-      return getPostingFilterPredicate({
-        contract: input.contract,
-        filterKind: filterValues.filterKind,
-        filterValues: filterValues.filterValues,
-        index,
-        request: input.request,
-      })
+      return useGroupedPostingFilter && isPostingArticleFilterKind(filterValues.filterKind)
+        ? ''
+        : getPostingFilterPredicate({
+            contract: input.contract,
+            filterKind: filterValues.filterKind,
+            filterValues: filterValues.filterValues,
+            index,
+            request: input.request,
+          })
     })
     .filter((predicate) => {
       return predicate.length > 0
     })
+
+  return useGroupedPostingFilter
+    ? [
+        ...predicates,
+        [
+          'EXISTS (SELECT 1 FROM posting_filtered_article_ids',
+          ` WHERE posting_filtered_article_ids.article_id = ${getReviewServingArticleReadSqlAlias(
+            input.contract,
+          )}.article_id)`,
+        ].join(''),
+      ]
+    : predicates
+}
+
+const getOrderedPrefixFilterCtesSql = (input: {
+  contract: ReviewServingReadContract
+  manifest: ReviewServingSnapshotManifest
+  request: ReviewServingReaderRequest
+}) => {
+  const componentStates = getComponentCursorStates(input.manifest)
+  const searchTokenPrefixes =
+    input.request.searchTokenPrefixes ?? (input.request.searchTokenPrefix ? [input.request.searchTokenPrefix] : [])
+  const postingFilterArticleCtes = getPostingFilterArticleCtes(input)
+  const searchCandidateArticleIdsCte = getSearchCandidateArticleIdsCte(postingFilterArticleCtes)
+  const searchCtes =
+    input.contract.physicalAccessStrategy === 'orderedPrefix'
+    && searchTokenPrefixes.length > 0
+    && componentStates.search?.projectionIdentity
+      ? [
+          "search_prefixes AS (SELECT DISTINCT token_prefix FROM (SELECT unnest($searchTokenPrefixes) AS token_prefix) WHERE token_prefix IS NOT NULL AND token_prefix <> '')",
+          searchCandidateArticleIdsCte,
+          [
+            'expanded_search_article_ids AS (SELECT DISTINCT search_prefix.token_prefix, search_article.article_id AS article_id',
+            ' FROM mart.review_title_search_serving_v4 search',
+            ' JOIN search_prefixes search_prefix',
+            ' ON starts_with(search.token, search_prefix.token_prefix)',
+            ' CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)',
+            searchCandidateArticleIdsCte
+              ? ' INNER JOIN search_candidate_article_ids search_candidate_article ON search_candidate_article.article_id = search_article.article_id'
+              : '',
+            ' WHERE search.project_id = $projectId',
+            ' AND search.search_identity = $searchIdentity',
+            ' AND search.project_scope_identity = $projectScopeIdentity',
+            ' AND search.snapshot_id = $snapshotId',
+            ')',
+          ].join(''),
+          [
+            'search_filtered_article_ids AS (SELECT DISTINCT expanded_search_article_ids.article_id',
+            ' FROM expanded_search_article_ids',
+            ' WHERE NOT EXISTS (SELECT 1 FROM search_prefixes required_search_prefix',
+            ' WHERE NOT EXISTS (SELECT 1 FROM expanded_search_article_ids matched_search_article',
+            ' WHERE matched_search_article.article_id = expanded_search_article_ids.article_id',
+            ' AND matched_search_article.token_prefix = required_search_prefix.token_prefix)))',
+          ].join(''),
+        ].filter((cte) => {
+          return cte.length > 0
+        })
+      : []
+  const ctes = [...postingFilterArticleCtes, ...searchCtes]
+
+  return ctes.length > 0 ? ctes.join(', ') : null
 }
 
 const getSearchFilterPredicate = (input: {
@@ -533,14 +673,8 @@ const getSearchFilterPredicate = (input: {
 
   return searchTokenPrefixes.length > 0 && componentStates.search?.projectionIdentity
     ? [
-        'NOT EXISTS (SELECT 1 FROM (SELECT unnest($searchTokenPrefixes) AS token_prefix) search_prefix',
-        ' WHERE NOT EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
-        ' WHERE search.project_id = $projectId',
-        ' AND search.search_identity = $searchIdentity',
-        ' AND search.project_scope_identity = $projectScopeIdentity',
-        ' AND search.snapshot_id = $snapshotId',
-        ` AND list_contains(search.article_ids, ${input.contract.servingTable}.article_id)`,
-        ' AND starts_with(search.token, search_prefix.token_prefix)))',
+        '(NOT EXISTS (SELECT 1 FROM search_prefixes) OR EXISTS (SELECT 1 FROM search_filtered_article_ids',
+        ` WHERE search_filtered_article_ids.article_id = ${getReviewServingArticleReadSqlAlias(input.contract)}.article_id))`,
       ].join('')
     : ''
 }
@@ -584,7 +718,7 @@ const getQueueOrderingFilterPredicatesSql = (input: {
   const filters = input.request.filters ?? {}
   const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
   const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
-  const articleCreatedAtColumn = `${input.contract.servingTable}.article_created_at`
+  const articleCreatedAtColumn = 'queue_article.article_created_at'
   const predicates = [
     articleCreatedAtFrom ? `${articleCreatedAtColumn} >= TIMESTAMPTZ $articleCreatedAtFrom` : '',
     articleCreatedAtTo
@@ -724,7 +858,8 @@ const getSql = (input: {
   request: ReviewServingReaderRequest
   manifest: ReviewServingSnapshotManifest
 }) => {
-  return buildReviewServingRowsSql({
+  const filterCtesSql = getOrderedPrefixFilterCtesSql(input)
+  const rowsSql = buildReviewServingRowsSql({
     articleIdParameter: input.request.articleId ? '$articleId' : null,
     articleIdsParameter: input.request.articleIds ? '$articleIds' : null,
     contract: input.contract,
@@ -751,9 +886,15 @@ const getSql = (input: {
     selectedImportSnapshotIdParameter: '$selectedImportSnapshotId',
     searchTextParameter: input.request.searchText ? '$searchText' : null,
     searchTokenPrefixParameter: input.request.searchTokenPrefix ? '$searchTokenPrefix' : null,
-    searchTokenPrefixesParameter: input.request.searchTokenPrefix ? '$searchTokenPrefixes' : null,
+    searchTokenPrefixesParameter:
+      input.request.searchTokenPrefixes?.length || input.request.searchTokenPrefix ? '$searchTokenPrefixes' : null,
     snapshotIdParameter: '$snapshotId',
+    useSearchCandidateArticleIds:
+      typeof filterCtesSql === 'string' && filterCtesSql.includes('search_candidate_article_ids AS'),
+    withCtesSql: filterCtesSql,
   })
+
+  return rowsSql
 }
 
 const getSqlLiteral = (value: null | number | readonly string[] | string | undefined) => {

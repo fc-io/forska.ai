@@ -330,7 +330,7 @@ const rebuildChunkPrerequisitesByComponent = {
   humanStatus: ['projectScope', 'display'],
   judgmentInputContent: ['projectScope'],
   llmStatus: ['projectScope', 'display', 'judgmentInputContent'],
-  payload: ['projectScope', 'display'],
+  payload: ['projectScope'],
   posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
   projectScope: [],
   queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],

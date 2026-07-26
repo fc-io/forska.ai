@@ -443,41 +443,72 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
 }
 
 const getQueuePromptDeletePredicate = (promptIds: readonly string[]) => {
-  return `AND (prompt_id IN (${promptIds.map(getSqlLiteral).join(', ')}) OR prompt_id = 'summary')`
+  return `${getSqlLiteral([...promptIds, 'summary'])}::VARCHAR[]`
 }
 
-const getUnassessedQueueServingRecord = (
+const getUnassessedQueueServingRecords = (
   input: ProjectReviewServingQueueInput,
-  row: QueueSourceRow,
-): ReviewServingProjectorRecord | null => {
-  const activitySortAt = row.activitySortAt ?? staleQueueSortAt
+  rows: readonly QueueSourceRow[],
+): ReviewServingProjectorRecord[] => {
+  const groupedRows = new Map<string, {promptIds: Set<string>; row: QueueSourceRow}>()
 
-  return input.snapshotId === null || input.snapshotId === undefined || row.reviewConfigHash === null || row.tombstone
-    ? null
-    : {
-        keyColumns: [
-          'project_id',
-          'review_config_hash',
-          'snapshot_id',
-          'queue_kind',
-          'priority_bucket',
-          'activity_sort_at',
-          'article_id',
-          'prompt_id',
-        ],
-        table: 'mart.review_unassessed_queue_serving_v4',
-        values: {
-          activity_sort_at: activitySortAt,
-          article_id: row.articleId,
-          priority_bucket: row.priorityBucket ?? 0,
-          project_id: input.projectId,
-          prompt_id: row.promptId,
-          queue_kind: row.queueKind,
-          queue_updated_at: new Date(),
-          review_config_hash: row.reviewConfigHash,
-          snapshot_id: input.snapshotId,
-        },
-      }
+  rows.forEach((row) => {
+    const activitySortAt = row.activitySortAt ?? staleQueueSortAt
+
+    if (input.snapshotId === null || input.snapshotId === undefined || row.reviewConfigHash === null || row.tombstone) {
+      return
+    }
+
+    if (row.promptId === null) {
+      return
+    }
+
+    const key = [
+      input.projectId,
+      row.reviewConfigHash,
+      input.snapshotId,
+      row.queueKind,
+      row.priorityBucket ?? 0,
+      activitySortAt instanceof Date ? activitySortAt.toISOString() : activitySortAt,
+      row.articleId,
+    ].join('\t')
+    const group = groupedRows.get(key)
+
+    if (group === undefined) {
+      groupedRows.set(key, {promptIds: new Set([row.promptId]), row: {...row, activitySortAt}})
+      return
+    }
+
+    group.promptIds.add(row.promptId)
+  })
+
+  return [...groupedRows.values()].map(({promptIds, row}) => {
+    const activitySortAt = row.activitySortAt ?? staleQueueSortAt
+
+    return {
+      keyColumns: [
+        'project_id',
+        'review_config_hash',
+        'snapshot_id',
+        'queue_kind',
+        'priority_bucket',
+        'activity_sort_at',
+        'article_id',
+      ],
+      table: 'mart.review_unassessed_queue_serving_v4',
+      values: {
+        activity_sort_at: activitySortAt,
+        article_id: row.articleId,
+        priority_bucket: row.priorityBucket ?? 0,
+        project_id: input.projectId,
+        prompt_ids: [...promptIds].sort(),
+        queue_kind: row.queueKind,
+        queue_updated_at: new Date(),
+        review_config_hash: row.reviewConfigHash,
+        snapshot_id: input.snapshotId,
+      },
+    }
+  })
 }
 
 const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewServingProjectionIdentityManifestInput => {
@@ -521,24 +552,38 @@ const getDeleteReplacedQueueServingStatement = (
       && articleIds.length === 0
       && promptIds.length === 0
       && reviewConfigHashes.length === 0)
-    ? null
+    ? []
     : articleIds.length > 0
-      ? `DELETE FROM mart.review_unassessed_queue_serving_v4
+      ? [
+          `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${reviewConfigPredicate}
-          AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})`
+          AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})`,
+        ]
       : promptIds.length > 0
-        ? `DELETE FROM mart.review_unassessed_queue_serving_v4
+        ? [
+            `UPDATE mart.review_unassessed_queue_serving_v4
+        SET prompt_ids = list_filter(prompt_ids, prompt_id -> NOT list_contains(${getQueuePromptDeletePredicate(
+          promptIds,
+        )}, prompt_id))
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${reviewConfigPredicate}
-          ${getQueuePromptDeletePredicate(promptIds)}`
-        : `DELETE FROM mart.review_unassessed_queue_serving_v4
+          AND list_has_any(prompt_ids, ${getQueuePromptDeletePredicate(promptIds)})`,
+            `DELETE FROM mart.review_unassessed_queue_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${reviewConfigPredicate}
+          AND length(prompt_ids) = 0`,
+          ]
+        : [
+            `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${rangePredicate}
-          ${reviewConfigPredicate}`
+          ${reviewConfigPredicate}`,
+          ]
 }
 
 export const projectReviewServingQueuePatches = async (
@@ -550,17 +595,11 @@ export const projectReviewServingQueuePatches = async (
     return getQueueRows(input, database)
   })
   const servingRecords = measureSync('recordTransformMs', () => {
-    return rows
-      .map((row) => {
-        return getUnassessedQueueServingRecord(input, row)
-      })
-      .filter((record) => {
-        return record !== null
-      })
+    return getUnassessedQueueServingRecords(input, rows)
   })
   const patchWatermark = getPatchWatermark(input.claims)
   const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
-  const deleteReplacedQueueServingStatement = measureSync('deleteStatementBuildMs', () => {
+  const deleteReplacedQueueServingStatements = measureSync('deleteStatementBuildMs', () => {
     return getDeleteReplacedQueueServingStatement(input, rows)
   })
 
@@ -571,7 +610,7 @@ export const projectReviewServingQueuePatches = async (
         component: 'queue',
         projectionManifests: shouldAcknowledgeClaims ? [getQueuePatchManifest(input)] : [],
         records: servingRecords,
-        statements: deleteReplacedQueueServingStatement === null ? [] : [deleteReplacedQueueServingStatement],
+        statements: deleteReplacedQueueServingStatements,
         watermark: !shouldAcknowledgeClaims
           ? undefined
           : {

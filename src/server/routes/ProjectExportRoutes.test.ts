@@ -16,7 +16,9 @@ const reviewServingProjectConfigIdentityModulePath = new URL(
   '../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
 ).pathname
-const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
+const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')
+const articleServingListModeStateFixtureTable = ['mart', 'review_article_serving_list_mode_state_v4'].join('.')
+const articleServingCompatibilityViewFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
 const judgmentDetailServingFixtureTable = ['mart', 'review_article_judgment_detail_serving_v4'].join('.')
 
 type ExportJobRequest = {criteria: Record<string, unknown>} & Record<string, unknown>
@@ -524,7 +526,7 @@ test('project export download hydrates completed durable job selection as CSV', 
       return [{modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}]
     }
 
-    if (statement.includes(articleServingFixtureTable)) {
+    if (statement.includes(articleServingBaseFixtureTable)) {
       return [
         {
           articleCreatedAt: '2026-01-01T00:00:00.000Z',
@@ -546,19 +548,20 @@ test('project export download hydrates completed durable job selection as CSV', 
       ]
     }
 
-    if (statement.includes(judgmentDetailServingFixtureTable)) {
-      if (statement.includes('prompt.prompt_heading AS promptHeading')) {
-        return [
-          {
-            id: 'prompt-1',
-            originalText: 'V4 prompt content',
-            promptHeading: 'V4 Prompt Heading',
-            sourceProjectOrder: 0,
-            type: 'V4 prompt type',
-          },
-        ]
-      }
+    if (statement.includes('FROM export_scope') && statement.includes('INNER JOIN app.project_prompt project_prompt')) {
+      return [
+        {
+          id: 'prompt-1',
+          originalText: 'V4 prompt content',
+          promptHeading: 'V4 Prompt Heading',
+          promptOrder: 0,
+          sourceProjectOrder: 0,
+          type: 'V4 prompt type',
+        },
+      ]
+    }
 
+    if (statement.includes(judgmentDetailServingFixtureTable)) {
       return [
         {
           answeredOriginal: 'yes',
@@ -584,25 +587,51 @@ test('project export download hydrates completed durable job selection as CSV', 
     'Title,Article ID,Article Link,Article Authors,Abstract/Summary,Journal,"V4 Prompt Heading\nType: V4 prompt type\nContent: V4 prompt content",V4 Prompt Heading - Explanation,V4 Prompt Heading - Quotes',
   )
   expect(text).toContain('Article 1,article-1,,Alice Example; Bob Example,Summary 1,,yes,Because,Quote 1')
-  expect(queryStatements.join('\n')).toContain(`JOIN ${articleServingFixtureTable}`)
+  expect(queryStatements.join('\n')).toContain(`JOIN ${articleServingBaseFixtureTable}`)
+  expect(queryStatements.join('\n')).toContain(`JOIN ${articleServingListModeStateFixtureTable}`)
+  expect(queryStatements.join('\n')).toContain(
+    "supported_list_mode(list_mode_key) AS (VALUES ('llm'), ('human'), ('both'), ('unassessed'))",
+  )
+  expect(queryStatements.join('\n')).toContain('INNER JOIN supported_list_mode list_mode')
+  expect(queryStatements.join('\n')).toContain('list_contains(state.list_mode_keys, list_mode.list_mode_key)')
+  expect(queryStatements.join('\n')).not.toContain('CROSS JOIN unnest(state.list_mode_keys)')
+  expect(queryStatements.join('\n')).not.toContain(`JOIN ${articleServingCompatibilityViewFixtureTable}`)
+  expect(queryStatements.join('\n')).not.toContain(`FROM ${articleServingCompatibilityViewFixtureTable}`)
   expect(queryStatements.join('\n')).toContain(`JOIN ${judgmentDetailServingFixtureTable}`)
   expect(queryStatements.join('\n')).toContain('ranked_export_article AS')
   expect(queryStatements.join('\n')).toContain('article.source_metadata')
   expect(queryStatements.join('\n')).toContain('selected_source.import_metadata')
   expect(queryStatements.join('\n')).toContain('json_merge_patch')
   expect(queryStatements.join('\n')).not.toContain('payload.source_metadata')
+  expect(queryStatements.join('\n')).toContain('snapshot_scope AS')
+  expect(queryStatements.join('\n')).toContain('LEFT JOIN app.review_selected_import_snapshot selected_snapshot')
+  expect(queryStatements.join('\n')).toContain(
+    'selected_snapshot.selected_import_snapshot_id = manifest.selected_import_snapshot_id',
+  )
+  expect(queryStatements.join('\n')).toContain(
+    'selected_base.project_scope_identity = snapshot_scope.project_scope_identity',
+  )
+  expect(queryStatements.join('\n')).toContain(
+    'selected_base.selected_import_snapshot_id = snapshot_scope.selected_import_snapshot_id',
+  )
+  expect(queryStatements.join('\n')).not.toContain(
+    "json_extract_string(manifest.composed_identity_json, '$.projectScope.projectionIdentity')",
+  )
   expect(queryStatements.join('\n')).toContain('WHERE exportArticleRank = 1')
   expect(queryStatements.join('\n')).toContain('ranked_export_judgment AS')
   expect(queryStatements.join('\n')).toContain('WHERE exportJudgmentRank = 1')
   expect(queryStatements.join('\n')).not.toContain('FROM app.article')
   expect(queryStatements.join('\n')).not.toContain('FROM app.judgment')
   expect(queryStatements.join('\n')).toContain('JOIN app.prompt prompt')
+  expect(queryStatements.join('\n')).toContain('INNER JOIN app.project_prompt project_prompt')
+  expect(queryStatements.join('\n')).toContain('project_prompt.enabled')
   expect(queryStatements.join('\n')).not.toContain('OFFSET')
   expect(queryStatements.join('\n')).not.toContain('model_id AS modelId')
   expect(queryStatements.join('\n')).toContain(
     'detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash',
   )
-  expect(queryStatements.join('\n')).toContain("AND detail.list_mode_key = 'llm'")
+  expect(queryStatements.join('\n')).toContain("AND detail.payload_kind = 'llm'")
+  expect(queryStatements.join('\n')).not.toContain("AND detail.list_mode_key = 'llm'")
 })
 
 test('project export serving queries read prompt and judgment scalars', () => {
@@ -620,6 +649,9 @@ test('project export serving queries read prompt and judgment scalars', () => {
   expect(promptMetadataQuery).toContain('prompt.original_text AS originalText')
   expect(promptMetadataQuery).toContain('prompt.type')
   expect(promptMetadataQuery).toContain('INNER JOIN app.prompt prompt')
+  expect(promptMetadataQuery).toContain('INNER JOIN app.project_prompt project_prompt')
+  expect(promptMetadataQuery).toContain('project_prompt.enabled')
+  expect(promptMetadataQuery).not.toContain('mart.review_article_judgment_detail_serving_v4 detail')
   expect(promptMetadataQuery).not.toContain("'$.prompt.promptHeading'")
   expect(promptMetadataQuery).not.toContain("'$.prompt.originalText'")
   expect(promptMetadataQuery).not.toContain("'$.prompt.type'")
@@ -631,8 +663,10 @@ test('project export serving queries read prompt and judgment scalars', () => {
   expect(judgmentExportQuery).toContain('judgment.article_id = detail.article_id')
   expect(judgmentExportQuery).toContain('judgment.prompt_id = detail.prompt_id')
   expect(judgmentExportQuery).toContain('judgment.deleted_at IS NULL')
-  expect(promptMetadataQuery).toContain("AND detail.list_mode_key = 'llm'")
-  expect(judgmentExportQuery).toContain("AND detail.list_mode_key = 'llm'")
+  expect(promptMetadataQuery).not.toContain("AND detail.payload_kind = 'llm'")
+  expect(judgmentExportQuery).toContain("AND detail.payload_kind = 'llm'")
+  expect(promptMetadataQuery).not.toContain('detail.list_mode_key')
+  expect(judgmentExportQuery).not.toContain('detail.list_mode_key')
   expect(judgmentExportQuery).not.toContain('detail.judgment_payload_json')
   expect(judgmentExportQuery).not.toContain('json_extract')
   expect(judgmentExportQuery).toContain('TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray')
@@ -668,5 +702,5 @@ test('project export download rejects partially unavailable source snapshots', a
 
   expect(response.status).toBe(409)
   expect(body).toEqual({error: 'Export serving snapshot is unavailable', success: false})
-  expect(queryStatements.join('\n')).not.toContain(`JOIN ${articleServingFixtureTable}`)
+  expect(queryStatements.join('\n')).not.toContain(`JOIN ${articleServingCompatibilityViewFixtureTable}`)
 })

@@ -24,6 +24,9 @@ const components: readonly ReviewServingProjectionComponent[] = [
   'search',
 ]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
+const hasArticleServingRowSource = (statement: string) => {
+  return statement.includes('FROM mart.review_article_serving_base_v4 serving')
+}
 
 const getComponentState = () => {
   return {
@@ -142,7 +145,7 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
         return [{promptCount: enabledPromptCount ?? 1}] as T[]
       }
 
-      if (statement.includes('FROM mart.review_article_serving_v4')) {
+      if (hasArticleServingRowSource(statement)) {
         return createArticleRows(articleCount) as T[]
       }
 
@@ -298,7 +301,9 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
   expect(reader.statements).toHaveLength(8)
-  expect(sql).toContain('FROM mart.review_article_serving_v4')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain("list_contains(list_mode_state.list_mode_keys, 'llm')")
   expect(sql).toContain('FROM app.project_prompt')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('LEFT JOIN app.article article')
@@ -308,11 +313,13 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   expect(sql).toContain("article_created_at >= TIMESTAMPTZ '2026-01-10T00:00:00.000Z'")
   expect(sql).toContain("article_created_at <= TIMESTAMPTZ '2026-01-20T00:00:00.000Z'")
-  expect(sql).toContain('state_filtered_article_ids AS')
-  expect(sql).toContain('FROM mart.review_article_filter_state_serving_v4 state')
-  expect(sql).toContain('state.duplicate_flag IS TRUE')
-  expect(sql).toContain('state.conflict_flag IS TRUE')
-  expect(sql).toContain("state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(sql).not.toContain('state_filtered_article_ids AS')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain('list_mode_state.duplicate_flag IS TRUE')
+  expect(sql).toContain('list_mode_state.conflict_flag IS TRUE')
+  expect(sql).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(sql).not.toContain('review_article_filter_state_serving_v4')
   expect(sql).not.toContain('serving.duplicate_flag = TRUE')
   expect(sql).not.toContain('serving.conflict_flag = TRUE')
   expect(sql).not.toContain('serving.llm_status_key =')
@@ -394,15 +401,9 @@ test('LLM review prompt-filtered count intersects through one posting CTE', asyn
   expect(countStatement).toContain(
     "unnest(['review:promptAnswer:prompt-1:maybe', 'review:promptAnswer:prompt-1:yes']::VARCHAR[])",
   )
-  expect(countStatement).toContain('llm_judged_article_ids AS')
-  expect(countStatement).toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
-  expect(countStatement).toContain("detail.list_mode_key = 'llm'")
-  expect(countStatement).toContain("detail.payload_kind = 'llm'")
-  expect(countStatement).toContain('detail.placeholder_kind IS NULL')
-  expect(countStatement).toContain('detail.is_answered IS TRUE')
-  expect(countStatement).toContain(
-    'JOIN llm_judged_article_ids llm_judgment_ids ON llm_judgment_ids.article_id = filtered_article_ids.article_id',
-  )
+  expect(countStatement).toContain('list_mode_state.llm_has_judgment IS TRUE')
+  expect(countStatement).not.toContain('llm_judged_article_ids AS')
+  expect(countStatement).not.toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
   expect(countStatement).not.toContain('serving.llm_judged_prompt_count > 0')
 })
 
@@ -422,6 +423,8 @@ test('LLM review multi-prompt count groups posting filters without repeated post
   })
 
   expect(countStatement).toContain('posting_filtered_article_ids AS')
+  expect(countStatement).toContain('matched_posting_rows AS')
+  expect(countStatement).toContain('posting_anchor_rows AS')
   expect(countStatement?.match(/FROM mart\.review_article_filter_posting_serving_v4/gu)).toHaveLength(1)
   expect(countStatement).toContain(
     "posting.filter_value IN (SELECT unnest(['review:promptAnswer:prompt-1:maybe', 'review:promptAnswer:prompt-1:yes']::VARCHAR[]))",
@@ -429,7 +432,11 @@ test('LLM review multi-prompt count groups posting filters without repeated post
   expect(countStatement).toContain(
     "posting.filter_value IN (SELECT unnest(['review:promptAnswer:prompt-2:no']::VARCHAR[]))",
   )
-  expect(countStatement).toContain('HAVING COUNT(DISTINCT CASE')
+  expect(countStatement).toContain('SUM(array_length(posting.article_ids)) OVER (')
+  expect(countStatement).toContain('posting_candidate_article_groups AS')
+  expect(countStatement).toContain('candidate.article_id = anchor_article.article_id')
+  expect(countStatement).not.toContain('list_contains(candidate.article_ids, anchor_article.article_id)')
+  expect(countStatement).not.toContain('HAVING COUNT(DISTINCT CASE')
 })
 
 test('LLM review count route service requires reviewed LLM rows without row hydration', async () => {
@@ -448,8 +455,13 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
   expect(reader.statements).toHaveLength(5)
-  expect(countStatement).toContain('FROM mart.review_article_serving_v4')
-  expect(countStatement).toContain('llm_judged_article_ids AS')
+  expect(countStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(countStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(countStatement).toContain('list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  expect(countStatement).not.toContain('FROM mart.review_article_serving_v4')
+  expect(countStatement).toContain('list_mode_state.llm_has_judgment IS TRUE')
+  expect(countStatement).not.toContain('llm_judged_article_ids AS')
+  expect(countStatement).not.toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
   expect(countStatement).not.toContain('serving.llm_judged_prompt_count > 0')
 })
 
@@ -481,7 +493,8 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
   )
 
   expect(staleResult.totalCount).toBe(1)
-  expect(staleReader.statements.join('\n')).toContain('llm_judged_article_ids AS')
+  expect(staleReader.statements.join('\n')).toContain('list_mode_state.llm_has_judgment IS TRUE')
+  expect(staleReader.statements.join('\n')).not.toContain('llm_judged_article_ids AS')
   expect(staleReader.statements.join('\n')).not.toContain('serving.llm_judged_prompt_count > 0')
   const indexingReader = createReaderDatabase()
   const missingReader = createReaderDatabase()

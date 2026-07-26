@@ -25,6 +25,11 @@ CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
   human_patch_watermark BIGINT,
   both_patch_watermark BIGINT,
   unassessed_patch_watermark BIGINT,
+  duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
+  conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
+  llm_status VARCHAR,
+  human_status VARCHAR,
+  llm_has_judgment BOOLEAN NOT NULL DEFAULT FALSE,
   CHECK (llm_patch_watermark IS NULL OR llm_patch_watermark >= 0),
   CHECK (human_patch_watermark IS NULL OR human_patch_watermark >= 0),
   CHECK (both_patch_watermark IS NULL OR both_patch_watermark >= 0),
@@ -51,21 +56,38 @@ GROUP BY
 
 INSERT INTO mart.review_article_serving_list_mode_state_v4
 SELECT
-  project_id,
-  review_config_hash,
-  snapshot_id,
-  article_id,
-  list_sort(list_distinct(list(list_mode_key))) AS list_mode_keys,
-  MAX(CASE WHEN list_mode_key = 'llm' THEN patch_watermark ELSE NULL END) AS llm_patch_watermark,
-  MAX(CASE WHEN list_mode_key = 'human' THEN patch_watermark ELSE NULL END) AS human_patch_watermark,
-  MAX(CASE WHEN list_mode_key = 'both' THEN patch_watermark ELSE NULL END) AS both_patch_watermark,
-  MAX(CASE WHEN list_mode_key = 'unassessed' THEN patch_watermark ELSE NULL END) AS unassessed_patch_watermark
-FROM mart.review_article_serving_v4
+  serving.project_id,
+  serving.review_config_hash,
+  serving.snapshot_id,
+  serving.article_id,
+  list_sort(list_distinct(list(serving.list_mode_key))) AS list_mode_keys,
+  MAX(CASE WHEN serving.list_mode_key = 'llm' THEN serving.patch_watermark ELSE NULL END) AS llm_patch_watermark,
+  MAX(CASE WHEN serving.list_mode_key = 'human' THEN serving.patch_watermark ELSE NULL END) AS human_patch_watermark,
+  MAX(CASE WHEN serving.list_mode_key = 'both' THEN serving.patch_watermark ELSE NULL END) AS both_patch_watermark,
+  MAX(CASE WHEN serving.list_mode_key = 'unassessed' THEN serving.patch_watermark ELSE NULL END) AS unassessed_patch_watermark,
+  COALESCE(BOOL_OR(COALESCE(filter_state.duplicate_flag, FALSE)), FALSE) AS duplicate_flag,
+  COALESCE(BOOL_OR(COALESCE(filter_state.conflict_flag, FALSE)), FALSE) AS conflict_flag,
+  MAX(filter_state.llm_status) AS llm_status,
+  MAX(filter_state.human_status) AS human_status,
+  COALESCE(BOOL_OR(detail.payload_kind = 'llm' AND detail.is_answered IS TRUE AND detail.placeholder_kind IS NULL), FALSE) AS llm_has_judgment
+FROM mart.review_article_serving_v4 serving
+LEFT JOIN mart.review_article_filter_state_serving_v4 filter_state
+  ON filter_state.project_id = serving.project_id
+ AND filter_state.review_config_hash = serving.review_config_hash
+ AND filter_state.snapshot_id = serving.snapshot_id
+ AND filter_state.list_mode_key = serving.list_mode_key
+ AND filter_state.article_id = serving.article_id
+LEFT JOIN mart.review_article_judgment_detail_serving_v4 detail
+  ON detail.project_id = serving.project_id
+ AND detail.review_config_hash = serving.review_config_hash
+ AND detail.snapshot_id = serving.snapshot_id
+ AND detail.article_id = serving.article_id
+ AND detail.payload_kind = 'llm'
 GROUP BY
-  project_id,
-  review_config_hash,
-  snapshot_id,
-  article_id;
+  serving.project_id,
+  serving.review_config_hash,
+  serving.snapshot_id,
+  serving.article_id;
 
 DROP INDEX IF EXISTS mart.idx_review_article_serving_v4_order;
 DROP INDEX IF EXISTS idx_review_article_serving_v4_order;
@@ -99,7 +121,11 @@ SELECT
   base.article_id,
   base.article_created_at,
   base.sort_key,
-  base.activity_sort_at
+  base.activity_sort_at,
+  state.duplicate_flag,
+  state.conflict_flag,
+  state.llm_status,
+  state.human_status
 FROM mart.review_article_serving_base_v4 base
 INNER JOIN mart.review_article_serving_list_mode_state_v4 state
   ON state.project_id = base.project_id
@@ -107,3 +133,9 @@ INNER JOIN mart.review_article_serving_list_mode_state_v4 state
  AND state.snapshot_id = base.snapshot_id
  AND state.article_id = base.article_id
 CROSS JOIN unnest(state.list_mode_keys) AS list_mode(list_mode_key);
+
+DROP INDEX IF EXISTS mart.idx_review_article_filter_state_serving_v4_lookup;
+DROP INDEX IF EXISTS idx_review_article_filter_state_serving_v4_lookup;
+DROP INDEX IF EXISTS mart.idx_review_article_filter_state_serving_v4_pk;
+DROP INDEX IF EXISTS idx_review_article_filter_state_serving_v4_pk;
+DROP TABLE IF EXISTS mart.review_article_filter_state_serving_v4;

@@ -5,8 +5,6 @@ import {
   projectReviewServingDisplayBaseRanges,
   projectReviewServingDisplayBaseRows,
   projectReviewServingDisplayPatches,
-  projectReviewServingPayloadRanges,
-  projectReviewServingPayloadRows,
   type ReviewServingDisplayPayloadProjectorDatabase,
 } from './reviewServingDisplayPayloadProjector.ts'
 
@@ -19,7 +17,6 @@ const getProjectorDiagnostics = (result: object) => {
 const createDisplayPayloadDatabase = (input?: {
   displayBaseRows?: readonly Record<string, unknown>[]
   displayPatchRows?: readonly Record<string, unknown>[]
-  payloadRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
   const database: ReviewServingDisplayPayloadProjectorDatabase = {
@@ -32,10 +29,6 @@ const createDisplayPayloadDatabase = (input?: {
 
       if (statement.includes('LEFT JOIN app."article" article')) {
         return (input?.displayPatchRows ?? []) as T[]
-      }
-
-      if (statement.includes('ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC')) {
-        return (input?.payloadRows ?? []) as T[]
       }
 
       if (statement.includes('LEFT JOIN app.review_selected_article_import_v4 selected')) {
@@ -199,216 +192,6 @@ test('display no-ack snapshot passes do not publish shared manifests or watermar
       projectId: 'project-1',
       projectScopeIdentity: 'projectScope:identity-1',
       projectionIdentity: 'display:identity-1',
-      selectedImportSnapshotId: 'selected-import-snapshot-1',
-      snapshotId: 'snapshot-1',
-    },
-    database,
-  )
-  const joined = statements.join('\n')
-
-  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
-})
-
-test('payload projection preserves prompt-preview ordering inputs and avoids import JSON paths', async () => {
-  const {database, statements} = createDisplayPayloadDatabase({
-    payloadRows: [
-      {
-        articleCreatedAt: '2026-01-01T00:00:00.000Z',
-        articleId: 'article-1',
-        fullTextPreview: 'Full text preview',
-        sourceMetadata: {source: 'fixture'},
-      },
-    ],
-  })
-
-  const result = await projectReviewServingPayloadRows(
-    {
-      displayIdentity: 'display:identity-1',
-      payloadIdentity: 'payload:identity-1',
-      projectId: 'project-1',
-      selectedImportSnapshotId: 'selected-import-snapshot-1',
-      snapshotId: 'snapshot-1',
-      baseGeneration: 1,
-    },
-    database,
-  )
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC')
-  })
-  const joined = statements.join('\n')
-
-  expect(result).toEqual({payloadRowCount: 1, patchWatermark: 0})
-  expect(getProjectorDiagnostics(result).phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
-  expect(getProjectorDiagnostics(result).phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
-  expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
-  expect(selectStatement).not.toContain('article.article_created_at AS articleCreatedAt')
-  expect(selectStatement).not.toContain('json_merge_patch')
-  expect(selectStatement).not.toContain('sourceMetadata')
-  expect(selectStatement).not.toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
-  expect(selectStatement).not.toContain('LEFT JOIN app.article_import_route_source_record selected_source')
-  expect(selectStatement).not.toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
-  expect(selectStatement).not.toContain("selected_base.selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
-  expect(selectStatement).not.toContain('selected_patch')
-  expect(selectStatement).not.toContain('LEFT(article.article_summary, 2000) AS abstractText')
-  expect(selectStatement).not.toContain('article.article_summary')
-  expect(selectStatement).not.toContain('article.article_updated_at AS articleUpdatedAt')
-  expect(selectStatement).not.toContain('AS articleTitle')
-  expect(selectStatement).not.toContain('AS articleExternalId')
-  expect(selectStatement).not.toContain('article.full_text_pdf AS fullTextPdf')
-  expect(selectStatement).not.toContain("length(COALESCE(article.full_text, ''))")
-  expect(selectStatement).not.toContain('length(COALESCE(article.full_text_html')
-  expect(selectStatement).not.toContain('AS payloadBytes')
-  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
-  expect(joined).not.toContain('selected_scoped_article_import')
-  expect(joined).not.toContain('payload_json')
-})
-
-test('payload rebuild ranges no longer write article payload serving rows', async () => {
-  const {database, statements} = createDisplayPayloadDatabase()
-
-  const result = await projectReviewServingPayloadRanges(
-    {
-      ranges: [
-        {
-          baseGeneration: 1,
-          chunkEndArticleId: 'article-050',
-          chunkStartArticleId: 'article-001',
-          displayIdentity: 'display:identity-1',
-          payloadIdentity: 'payload:identity-1',
-          projectId: 'project-1',
-          selectedImportSnapshotId: 'selected-import-snapshot-1',
-          snapshotId: 'snapshot-1',
-        },
-        {
-          baseGeneration: 1,
-          chunkEndArticleId: 'article-099',
-          chunkStartArticleId: 'article-051',
-          displayIdentity: 'display:identity-1',
-          payloadIdentity: 'payload:identity-1',
-          projectId: 'project-1',
-          selectedImportSnapshotId: 'selected-import-snapshot-1',
-          snapshotId: 'snapshot-1',
-        },
-      ],
-    },
-    database,
-  )
-  const joined = statements.join('\n')
-  const insertStatements = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_article_serving_payload_v4')
-  })
-
-  expect(result).toEqual({rangeCount: 2})
-  expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
-  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
-  expect(insertStatements).toHaveLength(0)
-  expect(joined).not.toContain('INSERT INTO mart.review_article_serving_payload_v4')
-  expect(joined).not.toContain('payload_source AS')
-  expect(joined).not.toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
-  expect(joined).not.toContain('abstract_text')
-  expect(joined).not.toContain('full_text_preview')
-  expect(joined).not.toContain('payload_updated_at')
-  expect(joined).not.toContain('source_metadata')
-  expect(joined).not.toContain('article_external_id')
-  expect(joined).not.toContain('journal_title')
-  expect(joined).not.toContain('full_text_pdf')
-  expect(joined).not.toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
-  expect(joined).not.toContain('DO UPDATE SET')
-  expect(joined).not.toContain('payload_bytes = excluded.payload_bytes')
-  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
-  expect(joined).not.toContain('selected_patch')
-})
-
-test('payload claimed updates avoid indexed deletes for removed article cleanup', async () => {
-  const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
-
-  const result = await projectReviewServingPayloadRows(
-    {
-      baseGeneration: 1,
-      claims: [displayClaim({dirtyKind: 'projectScope.article.removed'})],
-      definitionVersion: 'payload-v4-test',
-      displayIdentity: 'display:identity-1',
-      payloadIdentity: 'payload:identity-1',
-      projectId: 'project-1',
-      projectionIdentity: 'payload:identity-1',
-      selectedImportSnapshotId: 'selected-import-snapshot-1',
-      snapshotId: 'snapshot-1',
-    },
-    database,
-  )
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC')
-  })
-  const joined = statements.join('\n')
-
-  expect(result).toEqual({payloadRowCount: 0, patchWatermark: 6})
-  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
-  expect(selectStatement).not.toContain('selected_patch')
-  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
-})
-
-test('project-scoped payload rebuilds read scoped articles and avoid indexed payload deletes', async () => {
-  const {database, statements} = createDisplayPayloadDatabase({
-    payloadRows: [
-      {
-        articleCreatedAt: '2026-01-01T00:00:00.000Z',
-        articleId: 'article-2',
-        fullTextPreview: 'Full text preview',
-        sourceMetadata: {source: 'fixture'},
-      },
-    ],
-  })
-
-  const result = await projectReviewServingPayloadRows(
-    {
-      baseGeneration: 1,
-      claims: [
-        displayClaim({
-          articleId: null,
-          dirtyKind: 'project.reviewConfig.updated',
-          projectionComponent: 'payload',
-          scopeId: 'project-1',
-          scopeKind: 'project',
-        }),
-      ],
-      definitionVersion: 'payload-v4-test',
-      displayIdentity: 'display:identity-1',
-      payloadIdentity: 'payload:identity-1',
-      projectId: 'project-1',
-      projectionIdentity: 'payload:identity-1',
-      selectedImportSnapshotId: 'selected-import-snapshot-1',
-      snapshotId: 'snapshot-1',
-    },
-    database,
-  )
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC')
-  })
-  const joined = statements.join('\n')
-
-  expect(result).toEqual({payloadRowCount: 1, patchWatermark: 6})
-  expect(selectStatement).toContain('FROM mart.project_scope_article scope')
-  expect(selectStatement).not.toContain('WITH dirty_article(article_id)')
-  expect(selectStatement).not.toContain('INNER JOIN dirty_article dirty')
-  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
-})
-
-test('payload projection defers manifest and watermark when claims are not acknowledged', async () => {
-  const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
-
-  await projectReviewServingPayloadRows(
-    {
-      acknowledgeClaims: false,
-      baseGeneration: 1,
-      claims: [displayClaim({projectionComponent: 'payload'})],
-      definitionVersion: 'payload-v4-test',
-      displayIdentity: 'display:identity-1',
-      payloadIdentity: 'payload:identity-1',
-      projectId: 'project-1',
-      projectionIdentity: 'payload:identity-1',
       selectedImportSnapshotId: 'selected-import-snapshot-1',
       snapshotId: 'snapshot-1',
     },

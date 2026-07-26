@@ -124,37 +124,25 @@ const getActiveArticleCte = (
     )`
 }
 
-const getLlmListModeKeys = (listModeKeys: readonly ReviewServingListMode[]) => {
+const shouldProjectLlmPayload = (listModeKeys: readonly ReviewServingListMode[]) => {
   return listModeKeys.some((listModeKey) => {
     return listModeKey === 'llm' || listModeKey === 'both'
   })
-    ? (['llm'] as const)
-    : []
 }
 
-const getHumanListModeKeys = (listModeKeys: readonly ReviewServingListMode[]) => {
+const shouldProjectHumanPayload = (listModeKeys: readonly ReviewServingListMode[]) => {
   return listModeKeys.some((listModeKey) => {
     return listModeKey === 'human' || listModeKey === 'both'
   })
-    ? (['human'] as const)
-    : []
 }
 
 const getRequestedPayloadKinds = (listModeKeys: readonly ReviewServingListMode[]) => {
   return [
-    getLlmListModeKeys(listModeKeys).length > 0 ? 'llm' : null,
-    getHumanListModeKeys(listModeKeys).length > 0 ? 'human' : null,
+    shouldProjectLlmPayload(listModeKeys) ? 'llm' : null,
+    shouldProjectHumanPayload(listModeKeys) ? 'human' : null,
   ].filter((payloadKind): payloadKind is JudgmentPayloadKind => {
     return payloadKind !== null
   })
-}
-
-const getListModeValuesSql = (listModeKeys: readonly ReviewServingListMode[]) => {
-  return listModeKeys
-    .map((listModeKey) => {
-      return `(${getSqlLiteral(listModeKey)})`
-    })
-    .join(', ')
 }
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
@@ -239,41 +227,29 @@ const getReplacementDeleteStatements = (
 
   return articleIds.length === 0 && !shouldReplaceBroadScope
     ? payloadKinds.flatMap((payloadKind) => {
-        const listModeKeys =
-          payloadKind === 'llm' ? getLlmListModeKeys(input.listModeKeys) : getHumanListModeKeys(input.listModeKeys)
-
-        return listModeKeys.flatMap((listModeKey) => {
-          return tables.map((table) => {
-            return `
+        return tables.map((table) => {
+          return `
               DELETE FROM ${table} detail
               WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
                 AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
                 AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-                AND detail.list_mode_key = ${getSqlLiteral(listModeKey)}
                 AND detail.payload_kind = ${getSqlLiteral(payloadKind)}
             `
-          })
         })
       })
     : payloadKinds.flatMap((payloadKind) => {
-        const listModeKeys =
-          payloadKind === 'llm' ? getLlmListModeKeys(input.listModeKeys) : getHumanListModeKeys(input.listModeKeys)
+        const articlePredicate = articleIds.length === 0 ? {} : {article_id: articleIds}
 
-        return listModeKeys.flatMap((listModeKey) => {
-          const articlePredicate = articleIds.length === 0 ? {} : {article_id: articleIds}
-
-          return tables.map((table) => {
-            return getDeleteReviewServingProjectorRowsStatement({
-              predicates: {
-                ...articlePredicate,
-                list_mode_key: listModeKey,
-                payload_kind: payloadKind,
-                project_id: input.projectId,
-                review_config_hash: input.reviewConfigHash,
-                snapshot_id: input.snapshotId,
-              },
-              table,
-            })
+        return tables.map((table) => {
+          return getDeleteReviewServingProjectorRowsStatement({
+            predicates: {
+              ...articlePredicate,
+              payload_kind: payloadKind,
+              project_id: input.projectId,
+              review_config_hash: input.reviewConfigHash,
+              snapshot_id: input.snapshotId,
+            },
+            table,
           })
         })
       })
@@ -283,16 +259,13 @@ const getLlmJudgmentDirectInsertStatement = (
   input: ProjectReviewServingJudgmentPayloadInput,
   options: {ranges?: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]} = {},
 ) => {
-  const listModeKeys = getLlmListModeKeys(input.listModeKeys)
-
-  return listModeKeys.length === 0
+  return !shouldProjectLlmPayload(input.listModeKeys)
     ? null
     : `
       INSERT INTO mart.review_article_judgment_detail_serving_v4 (
         project_id,
         review_config_hash,
         snapshot_id,
-        list_mode_key,
         payload_kind,
         article_id,
         prompt_id,
@@ -307,15 +280,10 @@ const getLlmJudgmentDirectInsertStatement = (
         detail_updated_at
       )
       WITH ${getActiveArticleCte(input, options)},
-      list_mode(list_mode_key) AS (SELECT * FROM (VALUES ${getListModeValuesSql(listModeKeys)})),
       enabled_prompt AS (
         SELECT
           prompt.id AS prompt_id,
-          project_prompt.prompt_order,
-          prompt.original_text AS prompt_original_text,
-          prompt.prompt_heading,
-          prompt.type AS prompt_type,
-          project_prompt.criteria_disposition AS prompt_criteria_disposition
+          project_prompt.prompt_order
         FROM app.project_prompt project_prompt
         INNER JOIN app.prompt prompt
           ON prompt.id = project_prompt.prompt_id
@@ -340,7 +308,7 @@ const getLlmJudgmentDirectInsertStatement = (
       ),
       payload AS (
         SELECT
-          active.article_id,
+          judgment.article_id,
           prompt.prompt_id,
           prompt.prompt_order,
           judgment.id AS judgment_id,
@@ -349,23 +317,16 @@ const getLlmJudgmentDirectInsertStatement = (
           judgment.is_answered,
           judgment.answered_original,
           judgment.answered_original_as_array,
-          prompt.prompt_original_text,
-          prompt.prompt_heading,
-          prompt.prompt_type,
-          prompt.prompt_criteria_disposition,
-          CASE WHEN judgment.id IS NULL THEN 'llm.unanswered' ELSE NULL END AS placeholder_kind
-        FROM active_article active
-        CROSS JOIN enabled_prompt prompt
-        LEFT JOIN latest_judgment judgment
-          ON judgment.article_id = active.article_id
-          AND judgment.prompt_id = prompt.prompt_id
-          AND judgment.judgment_rank = 1
+          NULL AS placeholder_kind
+        FROM latest_judgment judgment
+        INNER JOIN enabled_prompt prompt
+          ON prompt.prompt_id = judgment.prompt_id
+        WHERE judgment.judgment_rank = 1
       )
       SELECT
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        list_mode.list_mode_key,
         'llm' AS payload_kind,
         payload.article_id,
         payload.prompt_id,
@@ -379,8 +340,7 @@ const getLlmJudgmentDirectInsertStatement = (
         payload.placeholder_kind,
         COALESCE(payload.judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
-      CROSS JOIN list_mode
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING
+      ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING
     `
 }
 
@@ -388,16 +348,13 @@ const getHumanJudgmentDirectInsertStatement = (
   input: ProjectReviewServingJudgmentPayloadInput,
   options: {ranges?: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]} = {},
 ) => {
-  const listModeKeys = getHumanListModeKeys(input.listModeKeys)
-
-  return listModeKeys.length === 0
+  return !shouldProjectHumanPayload(input.listModeKeys)
     ? null
     : `
       INSERT INTO mart.review_article_judgment_detail_serving_v4 (
         project_id,
         review_config_hash,
         snapshot_id,
-        list_mode_key,
         payload_kind,
         article_id,
         prompt_id,
@@ -412,7 +369,6 @@ const getHumanJudgmentDirectInsertStatement = (
         detail_updated_at
       )
       WITH ${getActiveArticleCte(input, options)},
-      list_mode(list_mode_key) AS (SELECT * FROM (VALUES ${getListModeValuesSql(listModeKeys)})),
       enabled_prompt AS (
         SELECT
           prompt.id AS prompt_id,
@@ -482,7 +438,6 @@ const getHumanJudgmentDirectInsertStatement = (
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        list_mode.list_mode_key,
         'human' AS payload_kind,
         payload.article_id,
         payload.prompt_id,
@@ -496,8 +451,7 @@ const getHumanJudgmentDirectInsertStatement = (
         NULL AS placeholder_kind,
         COALESCE(payload.human_judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
-      CROSS JOIN list_mode
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING
+      ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING
     `
 }
 
@@ -525,8 +479,6 @@ const getDirectJudgmentPayloadCount = async (
   input: ProjectReviewServingJudgmentPayloadInput & {payloadKind: JudgmentPayloadKind},
   database: ReviewServingJudgmentPayloadProjectorDatabase,
 ) => {
-  const listModeKeys =
-    input.payloadKind === 'llm' ? getLlmListModeKeys(input.listModeKeys) : getHumanListModeKeys(input.listModeKeys)
   const articleIds = getClaimArticleIds(input.claims)
   const articlePredicate =
     articleIds.length === 0
@@ -543,11 +495,6 @@ const getDirectJudgmentPayloadCount = async (
       AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
       AND detail.payload_kind = ${getSqlLiteral(input.payloadKind)}
-      AND detail.list_mode_key IN (${listModeKeys
-        .map((listModeKey) => {
-          return getSqlLiteral(listModeKey)
-        })
-        .join(', ')})
       ${articlePredicate}
       ${getArticleRangePredicate({alias: 'detail', ...input})}
   `)
@@ -594,10 +541,10 @@ const projectReviewServingJudgmentPayloadRowsDirect = async (
   })
   const [llmRowCount, humanRowCount] = await measure('postWriteCountMs', async () => {
     return Promise.all([
-      getLlmListModeKeys(input.listModeKeys).length === 0
+      !shouldProjectLlmPayload(input.listModeKeys)
         ? 0
         : getDirectJudgmentPayloadCount({...input, payloadKind: 'llm'}, database),
-      getHumanListModeKeys(input.listModeKeys).length === 0
+      !shouldProjectHumanPayload(input.listModeKeys)
         ? 0
         : getDirectJudgmentPayloadCount({...input, payloadKind: 'human'}, database),
     ])

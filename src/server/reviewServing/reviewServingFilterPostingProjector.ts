@@ -10,8 +10,6 @@ import {
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
-  getDeleteReviewServingProjectorRowsStatement,
-  type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
@@ -50,6 +48,7 @@ type FilterStateServingRow = {
   conflictFlag: boolean
   duplicateFlag: boolean
   humanStatus: string | null
+  llmHasJudgment: boolean
   listModeKey: string
   llmStatus: string | null
   tombstone: boolean
@@ -59,7 +58,7 @@ type PostingValidationCountRow = {actualChecksum: string | null; actualCount: nu
 type CompactPostingRow = {articleIds: readonly string[]; filterKind: string; filterValue: string; listModeKey: string}
 
 const filterPostingProjectorName = 'filter-posting-projector'
-const stateFilterKinds = new Set(['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus'])
+const stateFilterKinds = new Set(['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus', 'llmHasJudgment'])
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
 }
@@ -191,8 +190,8 @@ const getCompactPostingRows = (rows: readonly PostingContributionRow[]) => {
   return [...compactRows.values()]
 }
 
-const getStateContributionKey = (row: Pick<FilterStateServingRow, 'articleId' | 'listModeKey'>) => {
-  return getStableReviewServingJson({articleId: row.articleId, listModeKey: row.listModeKey})
+const getStateContributionKey = (row: Pick<FilterStateServingRow, 'articleId'>) => {
+  return getStableReviewServingJson({articleId: row.articleId})
 }
 
 const getRangeValuesCte = (ranges: readonly ProjectReviewServingFilterPostingsInput[]) => {
@@ -291,15 +290,20 @@ const getFullRebuildPostingContributionRowsStatement = (
         scoped_serving AS (
           SELECT
             serving.article_id,
-            serving.list_mode_key
+            list_mode_key.list_mode_key
           FROM scoped_article scoped
-          INNER JOIN mart.review_article_serving_v4 serving
+          INNER JOIN mart.review_article_serving_base_v4 serving
             ON serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND serving.article_id = scoped.article_id
+          INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state
+            ON list_mode_state.project_id = serving.project_id
+            AND list_mode_state.review_config_hash = serving.review_config_hash
+            AND list_mode_state.snapshot_id = serving.snapshot_id
+            AND list_mode_state.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = serving.list_mode_key
+            ON list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)
         ),
         project_settings AS (
           SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
@@ -319,19 +323,16 @@ const getFullRebuildPostingContributionRowsStatement = (
             detail.article_id,
             detail.payload_kind,
             detail.prompt_id,
-            detail.list_mode_key AS source_list_mode_key,
             detail.is_answered,
             detail.answered_original,
-            detail.answered_original_as_array
+            detail.answered_original_as_array,
+            detail.placeholder_kind
           FROM scoped_article scoped
           INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
             ON detail.project_id = ${getSqlLiteral(input.projectId)}
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND (
-              (detail.payload_kind = 'llm' AND detail.list_mode_key = 'llm')
-              OR (detail.payload_kind = 'human' AND detail.list_mode_key = 'human')
-            )
+            AND detail.payload_kind IN ('llm', 'human')
             AND detail.article_id = scoped.article_id
         ),
         article_judgment_status AS (
@@ -344,6 +345,11 @@ const getFullRebuildPostingContributionRowsStatement = (
               WHERE detail.payload_kind = 'llm'
                 AND detail.is_answered IS TRUE
             ) AS llm_answered_prompt_count,
+            COUNT(detail.prompt_id) FILTER (
+              WHERE detail.payload_kind = 'llm'
+                AND detail.is_answered IS TRUE
+                AND detail.placeholder_kind IS NULL
+            ) AS llm_answered_non_placeholder_prompt_count,
             COUNT(detail.prompt_id) FILTER (
               WHERE detail.payload_kind = 'human'
                 AND detail.prompt_id <> 'summary'
@@ -378,6 +384,16 @@ const getFullRebuildPostingContributionRowsStatement = (
             serving.article_id AS articleId,
             serving.list_mode_key AS listModeKey,
             FALSE AS tombstone,
+            'llmHasJudgment' AS filterKind,
+            CAST(article_judgment_status.llm_answered_non_placeholder_prompt_count > 0 AS VARCHAR) AS filterValue
+          FROM scoped_serving serving
+          INNER JOIN article_judgment_status
+            ON article_judgment_status.article_id = serving.article_id
+          UNION ALL
+          SELECT
+            serving.article_id AS articleId,
+            serving.list_mode_key AS listModeKey,
+            FALSE AS tombstone,
             'humanStatus' AS filterKind,
             CASE
               WHEN project_settings.human_judgment_mode = 'summary' AND article_judgment_status.human_answered_summary_count > 0 THEN 'answered'
@@ -403,7 +419,6 @@ const getFullRebuildPostingContributionRowsStatement = (
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key IN ('llm', 'both')
           WHERE detail.payload_kind = 'llm'
-            AND detail.source_list_mode_key = 'llm'
         ),
         human_detail AS (
           SELECT
@@ -415,7 +430,6 @@ const getFullRebuildPostingContributionRowsStatement = (
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key IN ('human', 'both')
           WHERE detail.payload_kind = 'human'
-            AND detail.source_list_mode_key = 'human'
         ),
         llm_postings AS (
           SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue
@@ -505,58 +519,6 @@ const getExistingPostingRows = async (
       `)
 }
 
-const getExistingFilterStateRows = async (
-  input: ProjectReviewServingFilterPostingsInput,
-  database: ReviewServingFilterPostingProjectorDatabase,
-) => {
-  const articleIds = getClaimArticleIds(input.claims)
-  const articlePredicate =
-    articleIds.length === 0
-      ? getArticleRangePredicate({alias: 'state', ...input})
-      : `AND state.article_id IN (${articleIds
-          .map((articleId) => {
-            return getSqlLiteral(articleId)
-          })
-          .join(', ')})`
-
-  return database.queryJson<FilterStateServingRow>(`
-        SELECT
-          state.article_id AS articleId,
-          state.list_mode_key AS listModeKey,
-          state.duplicate_flag AS duplicateFlag,
-          state.conflict_flag AS conflictFlag,
-          state.llm_status AS llmStatus,
-          state.human_status AS humanStatus,
-          FALSE AS tombstone
-        FROM mart.review_article_filter_state_serving_v4 state
-        WHERE state.project_id = ${getSqlLiteral(input.projectId)}
-          AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${articlePredicate}
-      `)
-}
-
-const getPostingServingRecord = (input: {
-  projectId: string
-  reviewConfigHash: string
-  row: CompactPostingRow
-  snapshotId: string
-}): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'filter_kind', 'filter_value', 'list_mode_key'],
-    table: 'mart.review_article_filter_posting_serving_v4',
-    values: {
-      article_ids: input.row.articleIds,
-      filter_kind: input.row.filterKind,
-      filter_value: input.row.filterValue,
-      list_mode_key: input.row.listModeKey,
-      project_id: input.projectId,
-      review_config_hash: input.reviewConfigHash,
-      snapshot_id: input.snapshotId,
-    },
-  }
-}
-
 const getArticleIdsArraySql = (articleIds: readonly string[]) => {
   return `${getSqlLiteral(articleIds)}::VARCHAR[]`
 }
@@ -571,29 +533,6 @@ const getCompactPostingValuesSql = (rows: readonly CompactPostingRow[]) => {
 
 const getMergePostingArticleIdsSql = (incomingArticleIdsSql: string, existingArticleIdsSql: string) => {
   return `(SELECT LIST(DISTINCT article_id ORDER BY article_id) FROM (SELECT UNNEST(COALESCE(${existingArticleIdsSql}, []::VARCHAR[])) AS article_id UNION ALL SELECT UNNEST(${incomingArticleIdsSql}) AS article_id))`
-}
-
-const getFilterStateServingRecord = (input: {
-  projectId: string
-  reviewConfigHash: string
-  row: FilterStateServingRow
-  snapshotId: string
-}): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
-    table: 'mart.review_article_filter_state_serving_v4',
-    values: {
-      article_id: input.row.articleId,
-      conflict_flag: input.row.conflictFlag,
-      duplicate_flag: input.row.duplicateFlag,
-      human_status: input.row.humanStatus,
-      list_mode_key: input.row.listModeKey,
-      llm_status: input.row.llmStatus,
-      project_id: input.projectId,
-      review_config_hash: input.reviewConfigHash,
-      snapshot_id: input.snapshotId,
-    },
-  }
 }
 
 const getDeleteServingRowsStatement = (
@@ -661,26 +600,72 @@ const getDeleteServingRowsStatement = (
           ]
 }
 
-const getDeleteFilterStateRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+const getResetListModeStateRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  options: {resetAllWhenUnscoped?: boolean} = {},
+) => {
   const articleIds = getClaimArticleIds(input.claims)
 
   return articleIds.length > 0
-    ? getDeleteReviewServingProjectorRowsStatement({
-        predicates: {
-          article_id: articleIds,
-          project_id: input.projectId,
-          review_config_hash: input.reviewConfigHash,
-          snapshot_id: input.snapshotId,
-        },
-        table: 'mart.review_article_filter_state_serving_v4',
-      })
+    ? `UPDATE mart.review_article_serving_list_mode_state_v4 state
+        SET duplicate_flag = FALSE,
+            conflict_flag = FALSE,
+            llm_status = NULL,
+            human_status = NULL,
+            llm_has_judgment = FALSE
+        WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+          AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND state.article_id IN (${articleIds
+            .map((articleId) => {
+              return getSqlLiteral(articleId)
+            })
+            .join(', ')})`
     : hasChunkArticleRange(input)
-      ? `DELETE FROM mart.review_article_filter_state_serving_v4 state
+      ? `UPDATE mart.review_article_serving_list_mode_state_v4 state
+        SET duplicate_flag = FALSE,
+            conflict_flag = FALSE,
+            llm_status = NULL,
+            human_status = NULL,
+            llm_has_judgment = FALSE
         WHERE state.project_id = ${getSqlLiteral(input.projectId)}
           AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${getArticleRangePredicate({alias: 'state', ...input})}`
-      : null
+      : options.resetAllWhenUnscoped === true
+        ? `UPDATE mart.review_article_serving_list_mode_state_v4 state
+        SET duplicate_flag = FALSE,
+            conflict_flag = FALSE,
+            llm_status = NULL,
+            human_status = NULL,
+            llm_has_judgment = FALSE
+        WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+          AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
+        : null
+}
+
+const getResetListModeStateRangeRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  ranges: readonly ProjectReviewServingFilterPostingsInput[],
+) => {
+  if (ranges.length === 0) {
+    return getResetListModeStateRowsStatement(input)
+  }
+
+  return `WITH ${getRangeValuesCte(ranges)}
+    UPDATE mart.review_article_serving_list_mode_state_v4 state
+    SET duplicate_flag = FALSE,
+        conflict_flag = FALSE,
+        llm_status = NULL,
+        human_status = NULL,
+        llm_has_judgment = FALSE
+    FROM article_range_filter range_filter
+    WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+      AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND (range_filter.chunk_start_article_id IS NULL OR state.article_id >= range_filter.chunk_start_article_id)
+      AND (range_filter.chunk_end_article_id IS NULL OR state.article_id <= range_filter.chunk_end_article_id)`
 }
 
 const getInsertFullRebuildServingRowsStatement = (
@@ -706,7 +691,7 @@ const getInsertFullRebuildServingRowsStatement = (
         LIST(DISTINCT CAST(posting.articleId AS VARCHAR) ORDER BY CAST(posting.articleId AS VARCHAR)) AS articleIds
       FROM posting_source posting
       WHERE NOT posting.tombstone
-        AND posting.filterKind NOT IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus')
+        AND posting.filterKind NOT IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus', 'llmHasJudgment')
       GROUP BY
         CAST(posting.filterKind AS VARCHAR),
         CAST(posting.filterValue AS VARCHAR),
@@ -755,50 +740,66 @@ const getInsertCompactServingRowsStatement = (
       article_ids = ${getMergePostingArticleIdsSql('excluded.article_ids', 'mart.review_article_filter_posting_serving_v4.article_ids')}`
 }
 
-const getInsertFullRebuildFilterStateRowsStatement = (
+const getFilterStateValuesSql = (rows: readonly FilterStateServingRow[]) => {
+  return rows
+    .map((row) => {
+      return `(${getSqlLiteral(row.articleId)}, ${row.duplicateFlag ? 'TRUE' : 'FALSE'}, ${row.conflictFlag ? 'TRUE' : 'FALSE'}, ${getSqlLiteral(row.llmStatus)}, ${getSqlLiteral(row.humanStatus)}, ${row.llmHasJudgment ? 'TRUE' : 'FALSE'})`
+    })
+    .join(', ')
+}
+
+const getUpdateCompactListModeStateRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  rows: readonly FilterStateServingRow[],
+) => {
+  if (rows.length === 0) {
+    return null
+  }
+
+  return `UPDATE mart.review_article_serving_list_mode_state_v4 state
+    SET duplicate_flag = incoming.duplicate_flag,
+        conflict_flag = incoming.conflict_flag,
+        llm_status = incoming.llm_status,
+        human_status = incoming.human_status,
+        llm_has_judgment = incoming.llm_has_judgment
+    FROM (VALUES ${getFilterStateValuesSql(rows)}) AS incoming(article_id, duplicate_flag, conflict_flag, llm_status, human_status, llm_has_judgment)
+    WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+      AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND state.article_id = incoming.article_id`
+}
+
+const getUpdateFullRebuildListModeStateRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   ranges?: readonly ProjectReviewServingFilterPostingsInput[],
   postingSourceSql = getFullRebuildPostingContributionRowsStatement(input, ranges),
 ) => {
-  return `INSERT INTO mart.review_article_filter_state_serving_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      list_mode_key,
-      article_id,
-      duplicate_flag,
-      conflict_flag,
-      llm_status,
-      human_status
-    )
-    WITH posting_source AS (${postingSourceSql}),
+  return `WITH posting_source AS (${postingSourceSql}),
     state_source AS (
       SELECT
-        CAST(posting.listModeKey AS VARCHAR) AS listModeKey,
         CAST(posting.articleId AS VARCHAR) AS articleId,
         COALESCE(BOOL_OR(posting.filterKind = 'duplicateFlag' AND posting.filterValue = 'true'), FALSE) AS duplicateFlag,
         COALESCE(BOOL_OR(posting.filterKind = 'conflictFlag' AND posting.filterValue = 'true'), FALSE) AS conflictFlag,
         MAX(CASE WHEN posting.filterKind = 'llmStatus' THEN posting.filterValue END) AS llmStatus,
-        MAX(CASE WHEN posting.filterKind = 'humanStatus' THEN posting.filterValue END) AS humanStatus
+        MAX(CASE WHEN posting.filterKind = 'humanStatus' THEN posting.filterValue END) AS humanStatus,
+        COALESCE(BOOL_OR(posting.filterKind = 'llmHasJudgment' AND posting.filterValue = 'true'), FALSE) AS llmHasJudgment
       FROM posting_source posting
       WHERE NOT posting.tombstone
-        AND posting.filterKind IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus')
+        AND posting.filterKind IN ('duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus', 'llmHasJudgment')
       GROUP BY
-        CAST(posting.listModeKey AS VARCHAR),
         CAST(posting.articleId AS VARCHAR)
     )
-    SELECT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      state.listModeKey AS list_mode_key,
-      state.articleId AS article_id,
-      state.duplicateFlag AS duplicate_flag,
-      state.conflictFlag AS conflict_flag,
-      state.llmStatus AS llm_status,
-      state.humanStatus AS human_status
-    FROM state_source state
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`
+    UPDATE mart.review_article_serving_list_mode_state_v4 state
+    SET duplicate_flag = COALESCE(source.duplicateFlag, FALSE),
+        conflict_flag = COALESCE(source.conflictFlag, FALSE),
+        llm_status = source.llmStatus,
+        human_status = source.humanStatus,
+        llm_has_judgment = COALESCE(source.llmHasJudgment, FALSE)
+    FROM state_source source
+    WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+      AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND state.article_id = source.articleId`
 }
 
 const fullRebuildPostingSourceTempTable = 'review_filter_posting_source_v4'
@@ -824,7 +825,8 @@ const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostings
     : [
         getCreateFullRebuildPostingSourceStatement(input),
         getInsertFullRebuildServingRowsStatement(input, undefined, getFullRebuildPostingSourceSelectSql()),
-        getInsertFullRebuildFilterStateRowsStatement(input, undefined, getFullRebuildPostingSourceSelectSql()),
+        getResetListModeStateRowsStatement(input, {resetAllWhenUnscoped: true}),
+        getUpdateFullRebuildListModeStateRowsStatement(input, undefined, getFullRebuildPostingSourceSelectSql()),
         getDropFullRebuildPostingSourceStatement(),
       ]
 }
@@ -841,7 +843,8 @@ const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPos
     : [
         getCreateFullRebuildPostingSourceStatement(firstRange, input.ranges),
         getInsertFullRebuildServingRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
-        getInsertFullRebuildFilterStateRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
+        getResetListModeStateRangeRowsStatement(firstRange, input.ranges),
+        getUpdateFullRebuildListModeStateRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
         getDropFullRebuildPostingSourceStatement(),
       ]
 }
@@ -901,7 +904,7 @@ const getFullPostingRebuildOutputValidationResult = async (
     SELECT
       CAST(COUNT(*) AS INTEGER) AS actualCount,
       sha256('cheap-count:' || CAST(COUNT(*) AS VARCHAR)) AS actualChecksum
-    FROM mart.review_article_filter_state_serving_v4 state
+    FROM mart.review_article_serving_list_mode_state_v4 state
     WHERE state.project_id = ${getSqlLiteral(input.projectId)}
       AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
@@ -922,6 +925,18 @@ const getFullPostingRebuildOutputValidationResult = async (
 const getFilterStateRows = (rows: readonly PostingContributionRow[]) => {
   const stateRows = new Map<string, FilterStateServingRow>()
 
+  const maxStatus = (left: string | null, right: string | null) => {
+    if (left === null) {
+      return right
+    }
+
+    if (right === null) {
+      return left
+    }
+
+    return left > right ? left : right
+  }
+
   for (const row of rows) {
     if (!isStateFilterKind(row.filterKind)) {
       continue
@@ -935,21 +950,25 @@ const getFilterStateRows = (rows: readonly PostingContributionRow[]) => {
         conflictFlag: false,
         duplicateFlag: false,
         humanStatus: null,
-        listModeKey: row.listModeKey,
+        llmHasJudgment: false,
+        listModeKey: 'all',
         llmStatus: null,
         tombstone: row.tombstone,
       } satisfies FilterStateServingRow)
 
     if (row.filterKind === 'duplicateFlag') {
-      stateRow.duplicateFlag = row.filterValue === 'true'
+      stateRow.duplicateFlag = stateRow.duplicateFlag || row.filterValue === 'true'
     } else if (row.filterKind === 'conflictFlag') {
-      stateRow.conflictFlag = row.filterValue === 'true'
+      stateRow.conflictFlag = stateRow.conflictFlag || row.filterValue === 'true'
     } else if (row.filterKind === 'llmStatus') {
-      stateRow.llmStatus = row.filterValue
+      stateRow.llmStatus = maxStatus(stateRow.llmStatus, row.filterValue)
     } else if (row.filterKind === 'humanStatus') {
-      stateRow.humanStatus = row.filterValue
+      stateRow.humanStatus = maxStatus(stateRow.humanStatus, row.filterValue)
+    } else if (row.filterKind === 'llmHasJudgment') {
+      stateRow.llmHasJudgment = stateRow.llmHasJudgment || row.filterValue === 'true'
     }
 
+    stateRow.tombstone = stateRow.tombstone && row.tombstone
     stateRows.set(key, stateRow)
   }
 
@@ -1033,12 +1052,8 @@ export const projectReviewServingFilterPostings = async (
     }
   }
 
-  const [existingRows, existingStateRows, newRows] = await measure('sourceQueryMs', async () => {
-    return Promise.all([
-      getExistingPostingRows(input, database),
-      getExistingFilterStateRows(input, database),
-      getPostingContributionRows(input, database),
-    ])
+  const [existingRows, newRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([getExistingPostingRows(input, database), getPostingContributionRows(input, database)])
   })
   const {contributionRows, liveRows} = measureSync('diffInputTransformMs', () => {
     const genericNewRows = newRows.filter((row) => {
@@ -1054,32 +1069,15 @@ export const projectReviewServingFilterPostings = async (
 
     return {contributionRows: transformedContributionRows, liveRows: transformedLiveRows}
   })
-  const {servingRecords, stateRecords} = measureSync('recordTransformMs', () => {
-    const nextServingRecords = getCompactPostingRows(liveRows).map((row) => {
-      return getPostingServingRecord({
-        projectId: input.projectId,
-        reviewConfigHash: input.reviewConfigHash,
-        row,
-        snapshotId: input.snapshotId,
-      })
+  const {compactServingRows, stateRows} = measureSync('recordTransformMs', () => {
+    const nextCompactServingRows = getCompactPostingRows(liveRows)
+    const nextStateRows = getFilterStateRows(newRows).filter((row) => {
+      return !row.tombstone
     })
 
-    const nextStateRecords = getFilterStateRows(newRows)
-      .filter((row) => {
-        return !row.tombstone
-      })
-      .map((row) => {
-        return getFilterStateServingRecord({
-          projectId: input.projectId,
-          reviewConfigHash: input.reviewConfigHash,
-          row,
-          snapshotId: input.snapshotId,
-        })
-      })
-
-    return {servingRecords: nextServingRecords, stateRecords: nextStateRecords}
+    return {compactServingRows: nextCompactServingRows, stateRows: nextStateRows}
   })
-  const servingRowCount = servingRecords.length + stateRecords.length
+  const servingRowCount = compactServingRows.length + stateRows.length
   const {writeStatements} = measureSync('deleteStatementBuildMs', () => {
     const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(
       input,
@@ -1087,14 +1085,16 @@ export const projectReviewServingFilterPostings = async (
         return row.tombstone
       }),
     )
-    const nextInsertServingRowsStatement = getInsertCompactServingRowsStatement(input, getCompactPostingRows(liveRows))
-    const nextDeleteStateRowsStatement = getDeleteFilterStateRowsStatement(input)
+    const nextInsertServingRowsStatement = getInsertCompactServingRowsStatement(input, compactServingRows)
+    const nextResetStateRowsStatement = getResetListModeStateRowsStatement(input)
+    const nextUpdateStateRowsStatement = getUpdateCompactListModeStateRowsStatement(input, stateRows)
 
     return {
       writeStatements: [
         ...nextDeleteServingRowsStatement,
         nextInsertServingRowsStatement,
-        nextDeleteStateRowsStatement,
+        nextResetStateRowsStatement,
+        nextUpdateStateRowsStatement,
       ].flatMap((statement) => {
         return statement === null ? [] : [statement]
       }),
@@ -1108,7 +1108,7 @@ export const projectReviewServingFilterPostings = async (
         acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'posting',
         projectionManifests: shouldAcknowledgeClaims ? [getPostingManifest(input)] : [],
-        records: stateRecords,
+        records: [],
         repairDirtyWork: [],
         statements: writeStatements,
         watermark: !shouldAcknowledgeClaims
@@ -1132,10 +1132,9 @@ export const projectReviewServingFilterPostings = async (
         contributionRecordCount: 0,
         contributionRowCount: contributionRows.length,
         existingRowCount: existingRows.length,
-        existingStateRowCount: existingStateRows.length,
         liveRowCount: liveRows.length,
         newRowCount: newRows.length,
-        stateRowCount: stateRecords.length,
+        stateRowCount: stateRows.length,
         writer: writerResult.diagnostics,
       },
     },

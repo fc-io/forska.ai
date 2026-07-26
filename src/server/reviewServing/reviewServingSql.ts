@@ -19,6 +19,8 @@ export type ReviewServingSqlShapeOptions = {
   requireSnapshotScope?: boolean
 }
 
+export type ReviewServingPostingFilterIntersectionGroup = {filterKind: string; filterValues: readonly string[]}
+
 const tableReferencePattern = /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)/giu
 const tableReferenceWithAliasPattern =
   /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)(?:\s+(?:as\s+)?((?!where\b|on\b|join\b|order\b|limit\b|group\b|having\b|qualify\b|using\b|inner\b|left\b|right\b|full\b|cross\b)(?:"[^"]+"|[a-z_][\w]*)))?/giu
@@ -45,7 +47,8 @@ export const reviewServingRegisteredSqlTables = [
     ...reviewServingReadContractList.map((contract) => {
       return contract.servingTable
     }),
-    'mart.review_article_filter_state_serving_v4',
+    'mart.review_article_serving_base_v4',
+    'mart.review_article_serving_list_mode_state_v4',
   ]),
 ].sort()
 
@@ -97,6 +100,14 @@ export const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
         return false
       }
 
+      if (
+        forbiddenPattern.label === 'foreground aggregation'
+        && (hasOnlyBoundedPostingFilterIntersectionAggregation(sql)
+          || hasOnlyBoundedUnassessedQueueArticleAnchorAggregation(sql))
+      ) {
+        return false
+      }
+
       return forbiddenPattern.pattern.test(sql)
     })
     .map((forbiddenPattern) => {
@@ -126,11 +137,22 @@ const getReviewServingSqlTableReferenceDetails = (sql: string): ReviewServingSql
     })
 }
 
+const getReviewServingSqlCteNames = (sql: string) => {
+  const matches = /^\s*with\b/iu.test(sql) ? [...sql.matchAll(/(?:\bwith|,)\s+([a-z_][\w]*)\s+as\s*\(/giu)] : []
+
+  return new Set(
+    matches.map((match) => {
+      return normalizeSqlIdentifier(match[1] ?? '')
+    }),
+  )
+}
+
 const hasBoundedArticleLookupJoin = (sql: string) => {
   return (
-    /\bleft\s+join\s+app\.article\s+article\s+on\s+article\.id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(
+    /\bleft\s+join\s+app\.article\s+article\s+on\s+article\.id\s*=\s*mart\.review_article_serving_base_v4\.article_id\b/iu.test(
       sql,
     )
+    || /\bleft\s+join\s+app\.article\s+article\s+on\s+article\.id\s*=\s*serving\.article_id\b/iu.test(sql)
     || /\bleft\s+join\s+app\.article\s+article[`',\s]*\n\s*`?\s*on\s+article\.id\s*=\s*\$\{reviewServingArticleTable\}\.article_id\b/iu.test(
       sql,
     )
@@ -179,6 +201,43 @@ const hasOnlyBoundedJsonExtraction = (sql: string) => {
   )
 }
 
+const hasOnlyBoundedPostingFilterIntersectionAggregation = (sql: string) => {
+  const groupByClauses = [...sql.matchAll(/\bgroup\s+by\b/giu)]
+
+  return (
+    groupByClauses.length === 1
+    && /\bposting_filtered_article_ids\s+as\s*\(/iu.test(sql)
+    && /\bfrom\s+mart\.review_article_filter_posting_serving_v4\s+posting\b/iu.test(sql)
+    && /\bwhere\s+posting\.project_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bposting\.snapshot_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bposting\.review_config_hash\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bposting\.list_mode_key\s*=/iu.test(sql)
+    && /\bcross\s+join\s+unnest\s*\(\s*posting\.article_ids\s*\)\s+as\s+posting_article\s*\(\s*article_id\s*\)/iu.test(
+      sql,
+    )
+    && /\bgroup\s+by\s+posting_article\.article_id\b/iu.test(sql)
+    && /\bhaving\s+count\s*\(\s*distinct\s+case\b/iu.test(sql)
+  )
+}
+
+const hasOnlyBoundedUnassessedQueueArticleAnchorAggregation = (sql: string) => {
+  const groupByClauses = [...sql.matchAll(/\bgroup\s+by\b/giu)]
+
+  return (
+    groupByClauses.length === 1
+    && /\bunassessed_queue_candidate\s+as\s*\(/iu.test(sql)
+    && /\bfrom\s+mart\.review_unassessed_queue_serving_v4\s+queue\b/iu.test(sql)
+    && /\bmax\s*\(\s*queue\.activity_sort_at\s*\)\s+as\s+activity_sort_at/iu.test(sql)
+    && /\bwhere\s+queue\.project_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bqueue\.snapshot_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bqueue\.review_config_hash\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bqueue\.queue_kind\s*=\s*'unassessed'/iu.test(sql)
+    && /\bgroup\s+by\s+queue\.project_id\s*,\s*queue\.review_config_hash\s*,\s*queue\.snapshot_id\s*,\s*queue\.article_id/iu.test(
+      sql,
+    )
+  )
+}
+
 const isBoundedArticleLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
   return (
     tableReference.table === 'app.article' && tableReference.alias === 'article' && hasBoundedArticleLookupJoin(sql)
@@ -189,10 +248,10 @@ const hasBoundedSelectedImportLookupJoin = (sql: string) => {
   return (
     /\bleft\s+join\s+app\.review_selected_article_import_v4\s+selected_import\b/iu.test(sql)
     && /\bselected_import\.project_id\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
-    && /\bselected_import\.project_id\s*=\s*mart\.review_article_serving_v4\.project_id\b/iu.test(sql)
+    && /\bselected_import\.project_id\s*=\s*(?:mart\.review_article_serving_base_v4|serving)\.project_id\b/iu.test(sql)
     && /\bselected_import\.project_scope_identity\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
     && /\bselected_import\.selected_import_snapshot_id\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
-    && /\bselected_import\.article_id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(sql)
+    && /\bselected_import\.article_id\s*=\s*(?:mart\.review_article_serving_base_v4|serving)\.article_id\b/iu.test(sql)
     && /\bnot\s+selected_import\.tombstone\b/iu.test(sql)
   )
 }
@@ -209,7 +268,7 @@ const hasBoundedSelectedSourceRecordLookupJoin = (sql: string) => {
   return (
     /\bleft\s+join\s+app\.article_import_route_source_record\s+selected_source\b/iu.test(sql)
     && /\bselected_source\.import_route_id\s*=\s*selected_import\.import_route_id\b/iu.test(sql)
-    && /\bselected_source\.article_id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(sql)
+    && /\bselected_source\.article_id\s*=\s*(?:mart\.review_article_serving_base_v4|serving)\.article_id\b/iu.test(sql)
     && /\bselected_source\.source_record_key\s*=\s*selected_import\.source_record_key\b/iu.test(sql)
     && /\bselected_source\.quarantined_at\s+is\s+null\b/iu.test(sql)
     && hasBoundedSelectedImportLookupJoin(sql)
@@ -228,7 +287,7 @@ const hasBoundedSelectedHotFieldLookupJoin = (sql: string) => {
   return (
     /\bleft\s+join\s+app\.review_import_article_hot_field\s+selected_hot\b/iu.test(sql)
     && /\bselected_hot\.import_route_id\s*=\s*selected_import\.import_route_id\b/iu.test(sql)
-    && /\bselected_hot\.article_id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(sql)
+    && /\bselected_hot\.article_id\s*=\s*(?:mart\.review_article_serving_base_v4|serving)\.article_id\b/iu.test(sql)
     && /\bselected_hot\.source_record_key\s*=\s*selected_import\.source_record_key\b/iu.test(sql)
     && /\bnot\s+selected_hot\.tombstone\b/iu.test(sql)
     && hasBoundedSelectedImportLookupJoin(sql)
@@ -284,12 +343,16 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
       return normalizeSqlIdentifier(table)
     }),
   )
+  const cteNames = getReviewServingSqlCteNames(sql)
   const tableReferences = getReviewServingSqlTableReferences(sql)
   const missingTableViolations =
     tableReferences.length === 0
       ? [{label: 'registered serving table', pattern: 'FROM <registered review-serving table>'}]
       : []
   const unregisteredTableViolations = tableReferences
+    .filter((tableReference) => {
+      return !cteNames.has(tableReference)
+    })
     .filter((tableReference) => {
       return tableReference !== 'app.article' || !hasBoundedArticleLookupJoin(sql)
     })
@@ -335,10 +398,14 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
 }
 
 const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
-  const tableReferences = getReviewServingSqlTableReferenceDetails(sql)
+  const cteNames = getReviewServingSqlCteNames(sql)
+  const tableReferences = getReviewServingSqlTableReferenceDetails(sql).filter((tableReference) => {
+    return !cteNames.has(tableReference.table)
+  })
   const hasMultipleReferences = tableReferences.length > 1
   const scopedPredicateClause =
     sql.match(/\bfrom\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
+  const joinedPredicateClause = sql.match(/\bfrom\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|$)/iu)?.[1] ?? ''
   const wherePredicateClause = [
     ...sql.matchAll(/\bwhere\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/giu),
   ]
@@ -382,8 +449,10 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
             }
 
             const predicateClause = tableReferenceIndex === 0 ? wherePredicateClause : scopedPredicateClause
+            const joinedAliasPredicateClause =
+              tableReferenceIndex === 0 ? predicateClause : `${predicateClause}\n${joinedPredicateClause}`
 
-            return !getScopePredicatePattern(tableReference, field).test(predicateClause)
+            return !getScopePredicatePattern(tableReference, field).test(joinedAliasPredicateClause)
           })
           .map((tableReference) => {
             const scopedLabel = tableReference.alias ?? tableReference.table
@@ -429,7 +498,16 @@ export const assertReviewServingSqlShape = (
 const reviewServingSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
 const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
-const reviewServingArticleTable = 'mart.review_article_serving_v4'
+const reviewServingArticleBaseTable = 'mart.review_article_serving_base_v4'
+const reviewServingArticleListModeStateTable = 'mart.review_article_serving_list_mode_state_v4'
+const reviewServingArticleDirectBaseAlias = 'serving'
+const reviewServingArticleDirectStateAlias = 'list_mode_state'
+const reviewServingArticlePostingSortAlias = 'serving_order'
+const reviewServingUnassessedQueueTable = 'mart.review_unassessed_queue_serving_v4'
+const reviewServingUnassessedQueueAlias = 'queue'
+const reviewServingUnassessedQueueCandidateAlias = 'unassessed_queue_candidate'
+const reviewServingUnassessedQueuePageAlias = 'unassessed_queue_page'
+const reviewServingQueueArticleFilterAlias = 'queue_article'
 const reviewServingSelectedImportTable = 'app.review_selected_article_import_v4'
 const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewServingFilterPostingArticleAlias = 'filter_posting_article'
@@ -439,22 +517,8 @@ const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_se
 const reviewServingTitleSearchTable = 'mart.review_title_search_serving_v4'
 const reviewServingListModePrioritySql =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
-const reviewServingJudgmentDetailListModePrioritySql = `CASE ${reviewServingJudgmentDetailTable}.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END`
+const reviewServingJudgmentDetailListModePrioritySql = `CASE ${reviewServingJudgmentDetailTable}.payload_kind WHEN 'llm' THEN 1 WHEN 'human' THEN 2 ELSE 4 END`
 const reviewServingListModePriorityAlias = 'list_mode_priority'
-const reviewServingArticlePhysicalSelectColumns = [
-  'project_id',
-  'review_config_hash',
-  'snapshot_id',
-  'base_generation',
-  'patch_watermark',
-  'list_mode_key',
-  'article_id',
-  'article_created_at',
-  'sort_key',
-  'activity_sort_at',
-].map((column) => {
-  return `${reviewServingArticleTable}.${column}`
-})
 const reviewServingArticleSelectedImportColumns = ['selected_import.import_route_id AS selected_import_route_id']
 const reviewServingArticleSourceMetadataSql = `CASE
     WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
@@ -554,7 +618,9 @@ const reviewServingJudgmentDetailFullColumnContractKeys = new Set<ReviewServingR
 
 const getReviewServingJudgmentDetailSelectColumns = (contract: ReviewServingReadContract) => {
   const listModeColumn =
-    contract.listMode === 'both' ? "'both' AS list_mode_key" : `${reviewServingJudgmentDetailTable}.list_mode_key`
+    contract.listMode === 'both'
+      ? "'both' AS list_mode_key"
+      : `CASE ${reviewServingJudgmentDetailTable}.payload_kind WHEN 'llm' THEN 'llm' WHEN 'human' THEN 'human' ELSE ${reviewServingJudgmentDetailTable}.payload_kind END AS list_mode_key`
   const columns = reviewServingJudgmentDetailFullColumnContractKeys.has(contract.key)
     ? reviewServingJudgmentDetailFullColumns
     : reviewServingJudgmentDetailRouteListColumns
@@ -649,8 +715,9 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   }
 
   const snapshotIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'snapshot_id'})
-  const reviewConfigHashColumn =
-    params.contract.servingTable === reviewServingJudgmentDetailTable
+  const reviewConfigHashColumn = shouldUseDirectReviewArticleServingRead(params.contract)
+    ? `${reviewServingArticleDirectBaseAlias}.review_config_hash`
+    : params.contract.servingTable === reviewServingJudgmentDetailTable
       ? `${reviewServingJudgmentDetailTable}.review_config_hash`
       : params.contract.servingTable === reviewServingFilterPostingTable
         ? `${reviewServingFilterPostingTable}.review_config_hash`
@@ -661,8 +728,131 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
     : ` AND ${reviewConfigHashColumn} = ${params.reviewConfigHashParameter} AND ${snapshotIdColumn} = ${params.snapshotIdParameter}`
 }
 
-const getReviewServingTitleSearchArticleMembershipPredicate = (articleIdSql: string, searchAlias = 'search') => {
-  return `list_contains(${searchAlias}.article_ids, ${articleIdSql})`
+const getReviewServingSearchFilteredArticleIdsPredicate = (articleIdSql: string) => {
+  return `(NOT EXISTS (SELECT 1 FROM search_prefixes) OR EXISTS (SELECT 1 FROM search_filtered_article_ids WHERE search_filtered_article_ids.article_id = ${articleIdSql}))`
+}
+
+const getReviewServingRowsSqlSearchArticleCtes = (params: {
+  contract: ReviewServingReadContract
+  filterKindParameter?: string | null
+  filterValueParameter?: string | null
+  listModeParameter: string
+  projectIdParameter: string
+  projectScopeIdentityParameter: string
+  queueKindParameter?: string | null
+  reviewConfigHashParameter: string
+  searchIdentityParameter: string
+  searchTokenPrefixParameter?: string | null
+  searchTokenPrefixesParameter?: string | null
+  useSearchCandidateArticleIds?: boolean
+  snapshotIdParameter: string
+}) => {
+  const searchPrefixesSql = params.searchTokenPrefixesParameter
+    ? `search_prefixes AS (SELECT DISTINCT token_prefix FROM (SELECT unnest(${params.searchTokenPrefixesParameter}) AS token_prefix) WHERE token_prefix IS NOT NULL AND token_prefix <> '')`
+    : params.searchTokenPrefixParameter
+      ? `search_prefixes AS (SELECT ${params.searchTokenPrefixParameter} AS token_prefix)`
+      : ''
+
+  if (
+    !searchPrefixesSql
+    || !['postingIntersection', 'queueOrdering'].includes(params.contract.physicalAccessStrategy)
+  ) {
+    return []
+  }
+
+  const getSearchCandidateArticleIdsCte = () => {
+    if (params.useSearchCandidateArticleIds) {
+      return ''
+    }
+
+    if (params.contract.physicalAccessStrategy === 'postingIntersection') {
+      const filterKindParameter = getRequiredReviewServingRowsSqlParameter(
+        params.filterKindParameter,
+        'filter kind',
+        params.contract,
+      )
+      const filterValueParameter = getRequiredReviewServingRowsSqlParameter(
+        params.filterValueParameter,
+        'filter value',
+        params.contract,
+      )
+
+      return [
+        'search_candidate_article_ids AS (SELECT DISTINCT search_candidate_article.article_id',
+        ` FROM ${reviewServingFilterPostingTable} search_candidate_posting`,
+        ' CROSS JOIN UNNEST(search_candidate_posting.article_ids) AS search_candidate_article(article_id)',
+        ` WHERE search_candidate_posting.project_id = ${params.projectIdParameter}`,
+        ` AND search_candidate_posting.review_config_hash = ${params.reviewConfigHashParameter}`,
+        ` AND search_candidate_posting.snapshot_id = ${params.snapshotIdParameter}`,
+        ` AND search_candidate_posting.list_mode_key = ${params.listModeParameter}`,
+        ` AND search_candidate_posting.filter_kind = ${filterKindParameter}`,
+        ` AND search_candidate_posting.filter_value = ${filterValueParameter})`,
+      ].join('')
+    }
+
+    if (params.contract.physicalAccessStrategy === 'queueOrdering') {
+      const queueKindParameter = getRequiredReviewServingRowsSqlParameter(
+        params.queueKindParameter,
+        'queue kind',
+        params.contract,
+      )
+
+      return [
+        'search_candidate_article_ids AS (SELECT DISTINCT search_candidate_queue.article_id',
+        ` FROM ${params.contract.servingTable} search_candidate_queue`,
+        ` WHERE search_candidate_queue.project_id = ${params.projectIdParameter}`,
+        ` AND search_candidate_queue.review_config_hash = ${params.reviewConfigHashParameter}`,
+        ` AND search_candidate_queue.snapshot_id = ${params.snapshotIdParameter}`,
+        ` AND search_candidate_queue.queue_kind = ${queueKindParameter})`,
+      ].join('')
+    }
+
+    return ''
+  }
+  const searchCandidateArticleIdsCte = getSearchCandidateArticleIdsCte()
+  const hasSearchCandidateArticleIds = Boolean(params.useSearchCandidateArticleIds || searchCandidateArticleIdsCte)
+  const expandedSearchArticleIdsCte = hasSearchCandidateArticleIds
+    ? [
+        'expanded_search_article_ids AS (SELECT DISTINCT search_prefix.token_prefix, search_candidate_article.article_id AS article_id',
+        ' FROM search_candidate_article_ids search_candidate_article',
+        ` JOIN ${reviewServingTitleSearchTable} search`,
+        ' ON list_contains(search.article_ids, search_candidate_article.article_id)',
+        ' JOIN search_prefixes search_prefix',
+        ' ON starts_with(search.token, search_prefix.token_prefix)',
+        ` WHERE search.project_id = ${params.projectIdParameter}`,
+        ` AND search.search_identity = ${params.searchIdentityParameter}`,
+        ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
+        ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
+        ')',
+      ].join('')
+    : [
+        'expanded_search_article_ids AS (SELECT DISTINCT search_prefix.token_prefix, search_article.article_id AS article_id',
+        ` FROM ${reviewServingTitleSearchTable} search`,
+        ' JOIN search_prefixes search_prefix',
+        ' ON starts_with(search.token, search_prefix.token_prefix)',
+        ' CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)',
+        ` WHERE search.project_id = ${params.projectIdParameter}`,
+        ` AND search.search_identity = ${params.searchIdentityParameter}`,
+        ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
+        ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
+        ')',
+      ].join('')
+
+  return [
+    searchPrefixesSql,
+    searchCandidateArticleIdsCte,
+    expandedSearchArticleIdsCte,
+    [
+      'search_filtered_article_ids AS (SELECT DISTINCT expanded_search_article_ids.article_id',
+      ' FROM expanded_search_article_ids',
+      ' WHERE NOT EXISTS (SELECT 1 FROM search_prefixes required_search_prefix',
+      ' WHERE NOT EXISTS (SELECT 1 FROM expanded_search_article_ids matched_search_article',
+      ' WHERE matched_search_article.article_id = expanded_search_article_ids.article_id',
+      ' AND matched_search_article.token_prefix = required_search_prefix.token_prefix)))',
+    ].join(''),
+  ].filter((cte) => {
+    return cte.length > 0
+  })
 }
 
 const getReviewServingFilterPostingArticleIdSql = () => {
@@ -671,8 +861,7 @@ const getReviewServingFilterPostingArticleIdSql = () => {
 
 const reviewServingListModePredicateTables = new Set([
   'mart.review_article_filter_posting_serving_v4',
-  'mart.review_article_judgment_detail_serving_v4',
-  'mart.review_article_serving_v4',
+  reviewServingArticleBaseTable,
 ])
 const reviewServingCountServingTable = 'mart.review_article_count_serving_v4'
 const reviewServingRuntimeListModeStrategies = new Set(['postingIntersection'])
@@ -692,22 +881,19 @@ const getReviewServingRowsSqlListModePredicate = (params: {
     return ''
   }
 
+  if (shouldUseDirectReviewArticleServingRead(params.contract) && params.contract.listMode) {
+    return ` AND list_contains(${reviewServingArticleDirectStateAlias}.list_mode_keys, ${getSqlStringLiteral(
+      params.contract.listMode,
+    )})`
+  }
+
   const listModeColumn =
-    params.contract.servingTable === reviewServingJudgmentDetailTable
-      ? `${reviewServingJudgmentDetailTable}.list_mode_key`
-      : params.contract.servingTable === reviewServingFilterPostingTable
-        ? `${reviewServingFilterPostingTable}.list_mode_key`
-        : 'list_mode_key'
+    params.contract.servingTable === reviewServingFilterPostingTable
+      ? `${reviewServingFilterPostingTable}.list_mode_key`
+      : 'list_mode_key'
 
   if (params.contract.listMode) {
-    const physicalListMode =
-      params.contract.servingTable === reviewServingJudgmentDetailTable && params.contract.listMode === 'both'
-        ? params.contract.key === 'review.both.list.humanJudgments'
-          ? 'human'
-          : 'llm'
-        : params.contract.listMode
-
-    return ` AND ${listModeColumn} = ${getSqlStringLiteral(physicalListMode)}`
+    return ` AND ${listModeColumn} = ${getSqlStringLiteral(params.contract.listMode)}`
   }
 
   return reviewServingRuntimeListModeStrategies.has(params.contract.physicalAccessStrategy)
@@ -742,6 +928,183 @@ const getReviewServingRowsSqlJudgmentPlaceholderPredicate = (contract: ReviewSer
 
 const getSqlStringLiteral = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
+}
+
+const getSqlStringLiteralArray = (values: readonly string[]) => {
+  return `[${values.map(getSqlStringLiteral).join(', ')}]::VARCHAR[]`
+}
+
+const getPostingFilterIntersectionGroupPredicate = (input: {
+  alias: string
+  group: ReviewServingPostingFilterIntersectionGroup
+}) => {
+  return `${input.alias}.filter_kind = ${getSqlStringLiteral(input.group.filterKind)} AND ${
+    input.alias
+  }.filter_value IN (SELECT unnest(${getSqlStringLiteralArray(input.group.filterValues)}))`
+}
+
+export const buildReviewServingPostingFilterIntersectionArticleCte = (input: {
+  cteName?: string
+  groups: readonly ReviewServingPostingFilterIntersectionGroup[]
+  listModeSql: string
+  projectIdSql: string
+  reviewConfigHashSql: string
+  snapshotIdSql: string
+  tableSql?: string
+}) => {
+  const groups = input.groups.filter((group) => {
+    return group.filterValues.length > 0
+  })
+
+  if (groups.length === 0) {
+    return ''
+  }
+
+  const cteName = input.cteName ?? 'posting_filtered_article_ids'
+  const tableSql = input.tableSql ?? reviewServingFilterPostingTable
+  const groupPredicates = groups.map((group) => {
+    return `(${getPostingFilterIntersectionGroupPredicate({alias: 'posting', group})})`
+  })
+
+  if (groups.length === 1) {
+    return [
+      `${cteName} AS (SELECT DISTINCT posting_article.article_id`,
+      ' FROM (',
+      ' SELECT posting.article_ids',
+      ` FROM ${tableSql} posting`,
+      ` WHERE posting.project_id = ${input.projectIdSql}`,
+      ` AND posting.snapshot_id = ${input.snapshotIdSql}`,
+      ` AND posting.review_config_hash = ${input.reviewConfigHashSql}`,
+      ` AND posting.list_mode_key = ${input.listModeSql}`,
+      ` AND (${groupPredicates.join(' OR ')})`,
+      ' ) posting',
+      ' CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id))',
+    ].join('')
+  }
+
+  const matchedGroupCases = groups.map((group, index) => {
+    return `WHEN ${getPostingFilterIntersectionGroupPredicate({alias: 'posting', group})} THEN ${index}`
+  })
+  const requiredGroupRows = groups.map((_group, index) => {
+    return `(${index})`
+  })
+
+  return [
+    'matched_posting_rows AS (SELECT posting.article_ids, posting.filter_kind, posting.filter_value,',
+    ` CASE ${matchedGroupCases.join(' ')} END AS matched_group_index,`,
+    ` SUM(array_length(posting.article_ids)) OVER (PARTITION BY CASE ${matchedGroupCases.join(
+      ' ',
+    )} END) AS matched_group_article_id_count`,
+    ` FROM ${tableSql} posting`,
+    ` WHERE posting.project_id = ${input.projectIdSql}`,
+    ` AND posting.snapshot_id = ${input.snapshotIdSql}`,
+    ` AND posting.review_config_hash = ${input.reviewConfigHashSql}`,
+    ` AND posting.list_mode_key = ${input.listModeSql}`,
+    ` AND (${groupPredicates.join(' OR ')}))`,
+    `, posting_anchor_rows AS (SELECT anchor.article_ids, anchor.matched_group_index`,
+    ' FROM matched_posting_rows anchor',
+    ' WHERE NOT EXISTS (SELECT 1',
+    ' FROM matched_posting_rows smaller_anchor_group',
+    ' WHERE smaller_anchor_group.matched_group_article_id_count < anchor.matched_group_article_id_count',
+    ' OR (smaller_anchor_group.matched_group_article_id_count = anchor.matched_group_article_id_count',
+    ' AND smaller_anchor_group.matched_group_index < anchor.matched_group_index)))',
+    ', posting_anchor_group AS (SELECT DISTINCT matched_group_index FROM posting_anchor_rows)',
+    ', posting_candidate_article_groups AS (SELECT DISTINCT candidate_article.article_id, candidate.matched_group_index',
+    ' FROM matched_posting_rows candidate',
+    ' CROSS JOIN posting_anchor_group anchor_group',
+    ' CROSS JOIN UNNEST(candidate.article_ids) AS candidate_article(article_id)',
+    ' WHERE candidate.matched_group_index <> anchor_group.matched_group_index)',
+    `, ${cteName} AS (SELECT DISTINCT anchor_article.article_id`,
+    ' FROM posting_anchor_rows anchor',
+    ' CROSS JOIN UNNEST(anchor.article_ids) AS anchor_article(article_id)',
+    ' WHERE NOT EXISTS (SELECT 1',
+    ` FROM (VALUES ${requiredGroupRows.join(', ')}) AS required_posting_group(required_group_index)`,
+    ' WHERE required_posting_group.required_group_index <> anchor.matched_group_index',
+    ' AND NOT EXISTS (SELECT 1',
+    ' FROM posting_candidate_article_groups candidate',
+    ' WHERE candidate.matched_group_index = required_posting_group.required_group_index',
+    ' AND candidate.article_id = anchor_article.article_id)))',
+  ].join('')
+}
+
+export const shouldUseDirectReviewArticleServingRead = (contract: ReviewServingReadContract) => {
+  return contract.servingTable === reviewServingArticleBaseTable
+}
+
+const shouldUseQueueAnchoredUnassessedRowsRead = (contract: ReviewServingReadContract) => {
+  return contract.key === 'review.unassessed.rows'
+}
+
+const qualifyUnassessedQueueSortSql = (sortSql: string, alias: string) => {
+  return sortSql
+    .replace(/\bactivity_sort_at\b/gu, `${alias}.activity_sort_at`)
+    .replace(/\barticle_id\b/gu, `${alias}.article_id`)
+}
+
+export const getReviewServingArticleReadSqlAlias = (contract: ReviewServingReadContract) => {
+  return shouldUseDirectReviewArticleServingRead(contract)
+    ? reviewServingArticleDirectBaseAlias
+    : reviewServingArticleBaseTable
+}
+
+export const getReviewServingArticleFilterStateSqlAlias = (contract: ReviewServingReadContract) => {
+  return shouldUseDirectReviewArticleServingRead(contract)
+    ? reviewServingArticleDirectStateAlias
+    : reviewServingArticleBaseTable
+}
+
+const getReviewServingArticlePatchWatermarkSql = (listMode: string) => {
+  return `${reviewServingArticleDirectStateAlias}.${listMode}_patch_watermark`
+}
+
+const getReviewServingExpandedArticlePatchWatermarkSql = () => {
+  return [
+    'CASE list_mode.list_mode_key',
+    ` WHEN 'llm' THEN ${reviewServingArticleDirectStateAlias}.llm_patch_watermark`,
+    ` WHEN 'human' THEN ${reviewServingArticleDirectStateAlias}.human_patch_watermark`,
+    ` WHEN 'both' THEN ${reviewServingArticleDirectStateAlias}.both_patch_watermark`,
+    ` WHEN 'unassessed' THEN ${reviewServingArticleDirectStateAlias}.unassessed_patch_watermark`,
+    ' ELSE NULL END',
+  ].join('')
+}
+
+const getReviewServingArticlePhysicalSelectColumns = (contract: ReviewServingReadContract) => {
+  if (!shouldUseDirectReviewArticleServingRead(contract)) {
+    return [
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'base_generation',
+      'patch_watermark',
+      'list_mode_key',
+      'article_id',
+      'article_created_at',
+      'sort_key',
+      'activity_sort_at',
+    ].map((column) => {
+      return `${reviewServingArticleBaseTable}.${column}`
+    })
+  }
+
+  const patchWatermarkSql = contract.listMode
+    ? getReviewServingArticlePatchWatermarkSql(contract.listMode)
+    : getReviewServingExpandedArticlePatchWatermarkSql()
+  const listModeKeySql = contract.listMode ? getSqlStringLiteral(contract.listMode) : 'list_mode.list_mode_key'
+
+  return [
+    `${reviewServingArticleDirectBaseAlias}.project_id`,
+    `${reviewServingArticleDirectBaseAlias}.review_config_hash`,
+    `${reviewServingArticleDirectBaseAlias}.snapshot_id`,
+    `${reviewServingArticleDirectBaseAlias}.base_generation`,
+    `${patchWatermarkSql} AS patch_watermark`,
+    `${listModeKeySql} AS list_mode_key`,
+    `${reviewServingArticleDirectBaseAlias}.article_id`,
+    `${reviewServingArticleDirectBaseAlias}.article_created_at`,
+    `${reviewServingArticleDirectBaseAlias}.sort_key`,
+    shouldUseQueueAnchoredUnassessedRowsRead(contract)
+      ? `${reviewServingUnassessedQueuePageAlias}.activity_sort_at AS activity_sort_at`
+      : `${reviewServingArticleDirectBaseAlias}.activity_sort_at`,
+  ]
 }
 
 const getReviewServingRowsSqlCountPredicate = (params: {
@@ -829,6 +1192,10 @@ const getRequiredReviewServingRowsSqlParameter = (
 }
 
 const getReviewServingRowsSqlScopeColumn = (params: {contract: ReviewServingReadContract; field: string}) => {
+  if (shouldUseDirectReviewArticleServingRead(params.contract)) {
+    return `${reviewServingArticleDirectBaseAlias}.${params.field}`
+  }
+
   return `${params.contract.servingTable}.${params.field}`
 }
 
@@ -837,6 +1204,11 @@ const getReviewServingRowsSqlArticlePredicate = (params: {
   articleIdsParameter?: string | null
   contract: ReviewServingReadContract
 }) => {
+  const tableAlias =
+    params.contract.servingTable === reviewServingArticleBaseTable
+      ? getReviewServingArticleReadSqlAlias(params.contract)
+      : params.contract.servingTable
+
   if (!params.contract.allowedFilters.includes('articleId')) {
     return ''
   }
@@ -848,7 +1220,7 @@ const getReviewServingRowsSqlArticlePredicate = (params: {
       params.contract,
     )
 
-    return ` AND ${params.contract.servingTable}.article_id IN (SELECT unnest(${articleIdsParameter}))`
+    return ` AND ${tableAlias}.article_id IN (SELECT unnest(${articleIdsParameter}))`
   }
 
   if (params.contract.physicalAccessStrategy !== 'keyedLookup') {
@@ -861,7 +1233,7 @@ const getReviewServingRowsSqlArticlePredicate = (params: {
     params.contract,
   )
 
-  return ` AND ${params.contract.servingTable}.article_id = ${articleIdParameter}`
+  return ` AND ${tableAlias}.article_id = ${articleIdParameter}`
 }
 
 const getReviewServingRowsSqlPostingPredicate = (params: {
@@ -875,6 +1247,7 @@ const getReviewServingRowsSqlPostingPredicate = (params: {
   reviewConfigHashParameter: string
   searchIdentityParameter: string
   searchTokenPrefixParameter?: string | null
+  searchTokenPrefixesParameter?: string | null
   snapshotIdParameter: string
 }) => {
   if (params.contract.physicalAccessStrategy !== 'postingIntersection') {
@@ -893,17 +1266,10 @@ const getReviewServingRowsSqlPostingPredicate = (params: {
   )
 
   const anchorPredicate = ` AND filter_kind = ${filterKindParameter} AND filter_value = ${filterValueParameter}`
-  const searchPredicate = params.searchTokenPrefixParameter
-    ? [
-        ' AND EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
-        ` WHERE search.project_id = ${params.projectIdParameter}`,
-        ` AND search.search_identity = ${params.searchIdentityParameter}`,
-        ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
-        ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
-        ` AND ${getReviewServingTitleSearchArticleMembershipPredicate(getReviewServingFilterPostingArticleIdSql())}`,
-        ` AND starts_with(search.token, ${params.searchTokenPrefixParameter}))`,
-      ].join('')
-    : ''
+  const searchPredicate =
+    params.searchTokenPrefixParameter || params.searchTokenPrefixesParameter
+      ? ` AND ${getReviewServingSearchFilteredArticleIdsPredicate(getReviewServingFilterPostingArticleIdSql())}`
+      : ''
 
   if (!params.filterPredicatesSql) {
     return `${anchorPredicate}${searchPredicate}`
@@ -950,16 +1316,7 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
   )
 
   const searchPredicate = params.searchTokenPrefixesParameter
-    ? [
-        ` AND NOT EXISTS (SELECT 1 FROM (SELECT unnest(${params.searchTokenPrefixesParameter}) AS token_prefix) search_prefix`,
-        ' WHERE NOT EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
-        ` WHERE search.project_id = ${params.projectIdParameter}`,
-        ` AND search.search_identity = ${params.searchIdentityParameter}`,
-        ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
-        ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
-        ` AND ${getReviewServingTitleSearchArticleMembershipPredicate(`${params.contract.servingTable}.article_id`)}`,
-        ' AND starts_with(search.token, search_prefix.token_prefix)))',
-      ].join('')
+    ? ` AND ${getReviewServingSearchFilteredArticleIdsPredicate(`${params.contract.servingTable}.article_id`)}`
     : ''
 
   return ` AND queue_kind = ${queueKindParameter}${searchPredicate}`
@@ -971,14 +1328,14 @@ const getReviewServingRowsSqlUnassessedQueuePredicate = (params: {
   reviewConfigHashParameter: string
   snapshotIdParameter: string
 }) => {
-  return params.contract.key === 'review.unassessed.rows'
+  return params.contract.key === 'review.unassessed.rows' && !shouldUseQueueAnchoredUnassessedRowsRead(params.contract)
     ? [
-        ' AND EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue',
+        ` AND EXISTS (SELECT 1 FROM ${reviewServingUnassessedQueueTable} ${reviewServingUnassessedQueueAlias}`,
         ` WHERE queue.project_id = ${params.projectIdParameter}`,
         ` AND queue.review_config_hash = ${params.reviewConfigHashParameter}`,
         ` AND queue.snapshot_id = ${params.snapshotIdParameter}`,
         " AND queue.queue_kind = 'unassessed'",
-        ` AND queue.article_id = ${params.contract.servingTable}.article_id)`,
+        ` AND queue.article_id = ${getReviewServingArticleReadSqlAlias(params.contract)}.article_id)`,
       ].join('')
     : ''
 }
@@ -1029,18 +1386,16 @@ const getReviewServingRowsSqlJobPredicate = (params: {
 
 const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingReadContract) => {
   if (contract.key === 'review.prompt.preview') {
-    return ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY ${reviewServingArticleTable}.article_id)`
+    return ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY ${getReviewServingArticleReadSqlAlias(contract)}.article_id)`
   }
 
-  return contract.servingTable === reviewServingJudgmentDetailTable
-    ? ` QUALIFY ${reviewServingJudgmentDetailListModePrioritySql} = min(${reviewServingJudgmentDetailListModePrioritySql}) OVER (PARTITION BY ${reviewServingJudgmentDetailTable}.article_id, ${reviewServingJudgmentDetailTable}.prompt_id)`
-    : ''
+  return ''
 }
 
 const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
-  if (contract.servingTable === reviewServingArticleTable) {
+  if (contract.servingTable === reviewServingArticleBaseTable) {
     const articleSelectColumns = [
-      ...reviewServingArticlePhysicalSelectColumns,
+      ...getReviewServingArticlePhysicalSelectColumns(contract),
       ...reviewServingArticleSelectedImportColumns,
       ...reviewServingArticlePayloadDisplayColumns,
       ...(contract.key === 'review.prompt.preview' ? ['LEFT(article.article_summary, 2000) AS article_summary'] : []),
@@ -1081,7 +1436,7 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
       `${reviewServingFilterPostingTable}.filter_value`,
       `${reviewServingFilterPostingTable}.list_mode_key`,
       `${getReviewServingFilterPostingArticleIdSql()} AS article_id`,
-      `${reviewServingArticleTable}.sort_key AS sort_key`,
+      `${reviewServingArticlePostingSortAlias}.sort_key AS sort_key`,
     ].join(', ')
   }
 
@@ -1114,6 +1469,8 @@ const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   searchTokenPrefixesParameter?: string | null
   searchTextParameter?: string | null
   snapshotIdParameter: string
+  useSearchCandidateArticleIds?: boolean
+  withCtesSql?: string | null
 }) => {
   return [
     getReviewServingRowsSqlArticlePredicate(params),
@@ -1153,31 +1510,33 @@ export const buildReviewServingRowsSql = (params: {
   searchTokenPrefixParameter?: string | null
   searchTokenPrefixesParameter?: string | null
   snapshotIdParameter: string
+  useSearchCandidateArticleIds?: boolean
 }) => {
+  const articleServingSqlAlias = getReviewServingArticleReadSqlAlias(params.contract)
   const selectedImportSnapshotIdParameter =
-    params.contract.servingTable === reviewServingArticleTable
+    params.contract.servingTable === reviewServingArticleBaseTable
       ? (params.selectedImportSnapshotIdParameter ?? '$selectedImportSnapshotId')
       : null
   const articleHydrationJoin =
-    params.contract.servingTable === reviewServingArticleTable
+    params.contract.servingTable === reviewServingArticleBaseTable
       ? [
           ` LEFT JOIN ${reviewServingSelectedImportTable} selected_import`,
           ` ON selected_import.project_id = ${params.projectIdParameter}`,
-          ` AND selected_import.project_id = ${reviewServingArticleTable}.project_id`,
+          ` AND selected_import.project_id = ${articleServingSqlAlias}.project_id`,
           ` AND selected_import.project_scope_identity = ${params.projectScopeIdentityParameter}`,
           ` AND selected_import.selected_import_snapshot_id = ${selectedImportSnapshotIdParameter}`,
-          ` AND selected_import.article_id = ${reviewServingArticleTable}.article_id`,
+          ` AND selected_import.article_id = ${articleServingSqlAlias}.article_id`,
           ` AND NOT selected_import.tombstone`,
           ` LEFT JOIN app.article article`,
-          ` ON article.id = ${reviewServingArticleTable}.article_id`,
+          ` ON article.id = ${articleServingSqlAlias}.article_id`,
           ` LEFT JOIN app.review_import_article_hot_field selected_hot`,
           ` ON selected_hot.import_route_id = selected_import.import_route_id`,
-          ` AND selected_hot.article_id = ${reviewServingArticleTable}.article_id`,
+          ` AND selected_hot.article_id = ${articleServingSqlAlias}.article_id`,
           ` AND selected_hot.source_record_key = selected_import.source_record_key`,
           ` AND NOT selected_hot.tombstone`,
           ` LEFT JOIN app.article_import_route_source_record selected_source`,
           ` ON selected_source.import_route_id = selected_import.import_route_id`,
-          ` AND selected_source.article_id = ${reviewServingArticleTable}.article_id`,
+          ` AND selected_source.article_id = ${articleServingSqlAlias}.article_id`,
           ` AND selected_source.source_record_key = selected_import.source_record_key`,
           ` AND selected_source.quarantined_at IS NULL`,
         ].join('')
@@ -1190,15 +1549,35 @@ export const buildReviewServingRowsSql = (params: {
     params.contract.servingTable === reviewServingFilterPostingTable
       ? [
           ` CROSS JOIN UNNEST(${reviewServingFilterPostingTable}.article_ids) AS ${reviewServingFilterPostingArticleAlias}(article_id)`,
-          ` INNER JOIN ${reviewServingArticleTable}`,
-          ` ON ${reviewServingArticleTable}.project_id = ${params.projectIdParameter}`,
-          ` AND ${reviewServingArticleTable}.project_id = ${reviewServingFilterPostingTable}.project_id`,
-          ` AND ${reviewServingArticleTable}.review_config_hash = ${params.reviewConfigHashParameter}`,
-          ` AND ${reviewServingArticleTable}.review_config_hash = ${reviewServingFilterPostingTable}.review_config_hash`,
-          ` AND ${reviewServingArticleTable}.snapshot_id = ${params.snapshotIdParameter}`,
-          ` AND ${reviewServingArticleTable}.snapshot_id = ${reviewServingFilterPostingTable}.snapshot_id`,
-          ` AND ${reviewServingArticleTable}.list_mode_key = ${reviewServingFilterPostingTable}.list_mode_key`,
-          ` AND ${reviewServingArticleTable}.article_id = ${getReviewServingFilterPostingArticleIdSql()}`,
+          ` INNER JOIN ${reviewServingArticleBaseTable} ${reviewServingArticlePostingSortAlias}`,
+          ` ON ${reviewServingArticlePostingSortAlias}.project_id = ${params.projectIdParameter}`,
+          ` AND ${reviewServingArticlePostingSortAlias}.project_id = ${reviewServingFilterPostingTable}.project_id`,
+          ` AND ${reviewServingArticlePostingSortAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+          ` AND ${reviewServingArticlePostingSortAlias}.review_config_hash = ${reviewServingFilterPostingTable}.review_config_hash`,
+          ` AND ${reviewServingArticlePostingSortAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+          ` AND ${reviewServingArticlePostingSortAlias}.snapshot_id = ${reviewServingFilterPostingTable}.snapshot_id`,
+          ` AND ${reviewServingArticlePostingSortAlias}.article_id = ${getReviewServingFilterPostingArticleIdSql()}`,
+        ].join('')
+      : ''
+  const postingArticleSortScopePredicate =
+    params.contract.servingTable === reviewServingFilterPostingTable
+      ? [
+          ` AND ${reviewServingArticlePostingSortAlias}.project_id = ${params.projectIdParameter}`,
+          ` AND ${reviewServingArticlePostingSortAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+        ].join('')
+      : ''
+  const queueArticleFilterJoin =
+    params.contract.physicalAccessStrategy === 'queueOrdering'
+    && (params.filterPredicatesSql?.includes(`${reviewServingQueueArticleFilterAlias}.`) ?? false)
+      ? [
+          ` INNER JOIN ${reviewServingArticleBaseTable} ${reviewServingQueueArticleFilterAlias}`,
+          ` ON ${reviewServingQueueArticleFilterAlias}.project_id = ${params.projectIdParameter}`,
+          ` AND ${reviewServingQueueArticleFilterAlias}.project_id = ${params.contract.servingTable}.project_id`,
+          ` AND ${reviewServingQueueArticleFilterAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+          ` AND ${reviewServingQueueArticleFilterAlias}.review_config_hash = ${params.contract.servingTable}.review_config_hash`,
+          ` AND ${reviewServingQueueArticleFilterAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+          ` AND ${reviewServingQueueArticleFilterAlias}.snapshot_id = ${params.contract.servingTable}.snapshot_id`,
+          ` AND ${reviewServingQueueArticleFilterAlias}.article_id = ${params.contract.servingTable}.article_id`,
         ].join('')
       : ''
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
@@ -1211,21 +1590,149 @@ export const buildReviewServingRowsSql = (params: {
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
   const listModeDedupeQualifier = getReviewServingRowsSqlListModeDedupeQualifier(params.contract)
   const selectSql = getReviewServingRowsSqlSelect(params.contract)
-  const sortSql = getSortSql(params.contract)
+  const baseSortSql =
+    params.contract.servingTable === reviewServingFilterPostingTable
+      ? getSortSql(params.contract).replaceAll(
+          `${reviewServingArticleBaseTable}.`,
+          `${reviewServingArticlePostingSortAlias}.`,
+        )
+      : shouldUseDirectReviewArticleServingRead(params.contract)
+        ? getSortSql(params.contract).replaceAll(
+            `${reviewServingArticleBaseTable}.`,
+            `${reviewServingArticleDirectBaseAlias}.`,
+          )
+        : getSortSql(params.contract)
+  const sortSql = shouldUseQueueAnchoredUnassessedRowsRead(params.contract)
+    ? qualifyUnassessedQueueSortSql(baseSortSql, reviewServingUnassessedQueuePageAlias)
+    : baseSortSql
 
   const projectIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'project_id'})
+  const ctes: string[] = []
+  const withCtesSql: unknown = params.withCtesSql
 
-  return [
-    `${selectSql} FROM ${params.contract.servingTable}${articleHydrationJoin}${judgmentDetailHydrationJoin}${postingArticleSortJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
+  if (typeof withCtesSql === 'string' && withCtesSql.length > 0) {
+    ctes.push(withCtesSql)
+  }
+
+  ctes.push(...getReviewServingRowsSqlSearchArticleCtes(params))
+
+  const sourceSql = shouldUseDirectReviewArticleServingRead(params.contract)
+    ? shouldUseQueueAnchoredUnassessedRowsRead(params.contract)
+      ? [
+          `${reviewServingUnassessedQueuePageAlias}`,
+          ` INNER JOIN ${reviewServingArticleBaseTable} ${reviewServingArticleDirectBaseAlias}`,
+          ` ON ${reviewServingArticleDirectBaseAlias}.project_id = ${params.projectIdParameter}`,
+          ` AND ${reviewServingArticleDirectBaseAlias}.project_id = ${reviewServingUnassessedQueuePageAlias}.project_id`,
+          ` AND ${reviewServingArticleDirectBaseAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+          ` AND ${reviewServingArticleDirectBaseAlias}.review_config_hash = ${reviewServingUnassessedQueuePageAlias}.review_config_hash`,
+          ` AND ${reviewServingArticleDirectBaseAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+          ` AND ${reviewServingArticleDirectBaseAlias}.snapshot_id = ${reviewServingUnassessedQueuePageAlias}.snapshot_id`,
+          ` AND ${reviewServingArticleDirectBaseAlias}.article_id = ${reviewServingUnassessedQueuePageAlias}.article_id`,
+          ` INNER JOIN ${reviewServingArticleListModeStateTable} ${reviewServingArticleDirectStateAlias}`,
+          ` ON ${reviewServingArticleDirectStateAlias}.project_id = ${reviewServingArticleDirectBaseAlias}.project_id`,
+          ` AND ${reviewServingArticleDirectStateAlias}.project_id = ${params.projectIdParameter}`,
+          ` AND ${reviewServingArticleDirectStateAlias}.review_config_hash = ${reviewServingArticleDirectBaseAlias}.review_config_hash`,
+          ` AND ${reviewServingArticleDirectStateAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+          ` AND ${reviewServingArticleDirectStateAlias}.snapshot_id = ${reviewServingArticleDirectBaseAlias}.snapshot_id`,
+          ` AND ${reviewServingArticleDirectStateAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+          ` AND ${reviewServingArticleDirectStateAlias}.article_id = ${reviewServingArticleDirectBaseAlias}.article_id`,
+        ].join('')
+      : [
+          `${reviewServingArticleBaseTable} ${reviewServingArticleDirectBaseAlias}`,
+          ` INNER JOIN ${reviewServingArticleListModeStateTable} ${reviewServingArticleDirectStateAlias}`,
+          ` ON ${reviewServingArticleDirectStateAlias}.project_id = ${reviewServingArticleDirectBaseAlias}.project_id`,
+          ` AND ${reviewServingArticleDirectStateAlias}.project_id = ${params.projectIdParameter}`,
+          ` AND ${reviewServingArticleDirectStateAlias}.review_config_hash = ${reviewServingArticleDirectBaseAlias}.review_config_hash`,
+          ` AND ${reviewServingArticleDirectStateAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+          ` AND ${reviewServingArticleDirectStateAlias}.snapshot_id = ${reviewServingArticleDirectBaseAlias}.snapshot_id`,
+          ` AND ${reviewServingArticleDirectStateAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+          ` AND ${reviewServingArticleDirectStateAlias}.article_id = ${reviewServingArticleDirectBaseAlias}.article_id`,
+          params.contract.listMode
+            ? ''
+            : ` CROSS JOIN UNNEST(${reviewServingArticleDirectStateAlias}.list_mode_keys) AS list_mode(list_mode_key)`,
+        ].join('')
+    : params.contract.servingTable
+
+  if (shouldUseQueueAnchoredUnassessedRowsRead(params.contract)) {
+    const queueCursorPredicate = cursorPredicate
+      .replaceAll(
+        `${reviewServingArticleDirectBaseAlias}.activity_sort_at`,
+        `${reviewServingUnassessedQueueCandidateAlias}.activity_sort_at`,
+      )
+      .replaceAll(
+        `${reviewServingArticleDirectBaseAlias}.article_id`,
+        `${reviewServingUnassessedQueueCandidateAlias}.article_id`,
+      )
+    const queueCandidateSortSql = qualifyUnassessedQueueSortSql(baseSortSql, reviewServingUnassessedQueueCandidateAlias)
+    const queueCandidateSql = [
+      `${reviewServingUnassessedQueueCandidateAlias} AS (SELECT`,
+      ` ${reviewServingUnassessedQueueAlias}.project_id,`,
+      ` ${reviewServingUnassessedQueueAlias}.review_config_hash,`,
+      ` ${reviewServingUnassessedQueueAlias}.snapshot_id,`,
+      ` ${reviewServingUnassessedQueueAlias}.article_id,`,
+      ` MAX(${reviewServingUnassessedQueueAlias}.activity_sort_at) AS activity_sort_at`,
+      ` FROM ${reviewServingUnassessedQueueTable} ${reviewServingUnassessedQueueAlias}`,
+      ` INNER JOIN ${reviewServingArticleBaseTable} ${reviewServingArticleDirectBaseAlias}`,
+      ` ON ${reviewServingArticleDirectBaseAlias}.project_id = ${params.projectIdParameter}`,
+      ` AND ${reviewServingArticleDirectBaseAlias}.project_id = ${reviewServingUnassessedQueueAlias}.project_id`,
+      ` AND ${reviewServingArticleDirectBaseAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+      ` AND ${reviewServingArticleDirectBaseAlias}.review_config_hash = ${reviewServingUnassessedQueueAlias}.review_config_hash`,
+      ` AND ${reviewServingArticleDirectBaseAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+      ` AND ${reviewServingArticleDirectBaseAlias}.snapshot_id = ${reviewServingUnassessedQueueAlias}.snapshot_id`,
+      ` AND ${reviewServingArticleDirectBaseAlias}.article_id = ${reviewServingUnassessedQueueAlias}.article_id`,
+      ` INNER JOIN ${reviewServingArticleListModeStateTable} ${reviewServingArticleDirectStateAlias}`,
+      ` ON ${reviewServingArticleDirectStateAlias}.project_id = ${reviewServingArticleDirectBaseAlias}.project_id`,
+      ` AND ${reviewServingArticleDirectStateAlias}.project_id = ${params.projectIdParameter}`,
+      ` AND ${reviewServingArticleDirectStateAlias}.review_config_hash = ${reviewServingArticleDirectBaseAlias}.review_config_hash`,
+      ` AND ${reviewServingArticleDirectStateAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+      ` AND ${reviewServingArticleDirectStateAlias}.snapshot_id = ${reviewServingArticleDirectBaseAlias}.snapshot_id`,
+      ` AND ${reviewServingArticleDirectStateAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+      ` AND ${reviewServingArticleDirectStateAlias}.article_id = ${reviewServingArticleDirectBaseAlias}.article_id`,
+      ` WHERE ${reviewServingUnassessedQueueAlias}.project_id = ${params.projectIdParameter}`,
+      ` AND ${reviewServingUnassessedQueueAlias}.review_config_hash = ${params.reviewConfigHashParameter}`,
+      ` AND ${reviewServingUnassessedQueueAlias}.snapshot_id = ${params.snapshotIdParameter}`,
+      ` AND ${reviewServingUnassessedQueueAlias}.queue_kind = 'unassessed'`,
+      identityPredicates,
+      listModePredicate,
+      physicalFilterPredicate,
+      ` GROUP BY ${reviewServingUnassessedQueueAlias}.project_id, ${reviewServingUnassessedQueueAlias}.review_config_hash, ${reviewServingUnassessedQueueAlias}.snapshot_id, ${reviewServingUnassessedQueueAlias}.article_id)`,
+    ].join('')
+    const queuePageSql = [
+      `${reviewServingUnassessedQueuePageAlias} AS (SELECT`,
+      ` ${reviewServingUnassessedQueueCandidateAlias}.project_id,`,
+      ` ${reviewServingUnassessedQueueCandidateAlias}.review_config_hash,`,
+      ` ${reviewServingUnassessedQueueCandidateAlias}.snapshot_id,`,
+      ` ${reviewServingUnassessedQueueCandidateAlias}.article_id,`,
+      ` ${reviewServingUnassessedQueueCandidateAlias}.activity_sort_at`,
+      ` FROM ${reviewServingUnassessedQueueCandidateAlias}`,
+      ' WHERE TRUE',
+      queueCursorPredicate,
+      ` ORDER BY ${queueCandidateSortSql} LIMIT ${params.limitParameter})`,
+    ].join('')
+
+    ctes.push(queueCandidateSql)
+    ctes.push(queuePageSql)
+  }
+  const outerPhysicalFilterPredicate = shouldUseQueueAnchoredUnassessedRowsRead(params.contract)
+    ? ''
+    : physicalFilterPredicate
+  const outerCursorPredicate = shouldUseQueueAnchoredUnassessedRowsRead(params.contract) ? '' : cursorPredicate
+  const cteSql = ctes.length > 0 ? `WITH ${ctes.join(', ')}` : ''
+
+  const rowsSql = [
+    `${selectSql} FROM ${sourceSql}${articleHydrationJoin}${judgmentDetailHydrationJoin}${postingArticleSortJoin}${queueArticleFilterJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
     judgmentPayloadKindPredicate,
     judgmentPlaceholderPredicate,
     countPredicate,
     facetVersionPredicate,
-    physicalFilterPredicate,
-    cursorPredicate,
+    outerPhysicalFilterPredicate,
+    outerCursorPredicate,
+    postingArticleSortScopePredicate,
     listModeDedupeQualifier,
     ` ORDER BY ${sortSql} LIMIT ${params.limitParameter}`,
   ].join('')
+
+  return [cteSql, rowsSql].filter(Boolean).join(' ')
 }

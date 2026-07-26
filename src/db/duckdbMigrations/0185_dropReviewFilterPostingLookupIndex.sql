@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_lookup;
+DROP INDEX IF EXISTS idx_review_article_filter_posting_serving_v4_lookup;

@@ -16,14 +16,7 @@ export type ReviewServingFilteredCountDatabase = ReviewServingReaderDatabase & {
   run?: (statement: string) => Promise<void>
 }
 
-export type ReviewServingFilteredCountComponentIdentities = {
-  componentIdentity: string
-  payloadIdentity: string
-  postingIdentity: string
-  projectScopeIdentity: string
-  queueIdentity: string
-  searchIdentity: string
-}
+export type ReviewServingFilteredCountComponentIdentities = {componentIdentity: string}
 
 export type ReviewServingFilteredCountLookup = ReviewServingFilteredCountComponentIdentities & {
   filterSignature: string
@@ -76,14 +69,7 @@ export const getReviewServingFilteredCountComponentIdentities = (
     'utf8',
   ).toString('base64url')
 
-  return {
-    componentIdentity,
-    payloadIdentity: getManifestComponentIdentity(manifest, 'payload') ?? '',
-    postingIdentity: getManifestComponentIdentity(manifest, 'posting') ?? '',
-    projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
-    queueIdentity: getManifestComponentIdentity(manifest, 'queue') ?? '',
-    searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
-  }
+  return {componentIdentity}
 }
 
 export const getReviewServingFilteredCountReadSql = (input: ReviewServingFilteredCountLookup) => {
@@ -111,11 +97,6 @@ export const getReviewServingFilteredCountUpsertSql = (
       list_mode_key,
       filter_signature,
       component_identity,
-      project_scope_identity,
-      search_identity,
-      posting_identity,
-      queue_identity,
-      payload_identity,
       count_value,
       count_updated_at
     ) VALUES (
@@ -125,11 +106,6 @@ export const getReviewServingFilteredCountUpsertSql = (
       ${getSqlLiteral(input.listModeKey)},
       ${getSqlLiteral(input.filterSignature)},
       ${getSqlLiteral(input.componentIdentity)},
-      ${getSqlLiteral(input.projectScopeIdentity)},
-      ${getSqlLiteral(input.searchIdentity)},
-      ${getSqlLiteral(input.postingIdentity)},
-      ${getSqlLiteral(input.queueIdentity)},
-      ${getSqlLiteral(input.payloadIdentity)},
       ${getSqlLiteral(input.countValue)},
       current_timestamp
     )
