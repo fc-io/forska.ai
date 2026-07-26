@@ -1384,21 +1384,38 @@ const getPostingRebuildChunkOutputChecksum = async (
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
-    SELECT
-      CAST(COUNT(*) AS INTEGER) AS actualCount,
-      sha256(COALESCE(string_agg(
+    WITH output_row(row_key) AS (
+      SELECT
         CAST(snapshot_id AS VARCHAR) || ':' ||
         CAST(review_config_hash AS VARCHAR) || ':' ||
         CAST(list_mode_key AS VARCHAR) || ':' ||
         CAST(filter_kind AS VARCHAR) || ':' ||
         CAST(filter_value AS VARCHAR) || ':' ||
-        CAST(article_id AS VARCHAR),
-        '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, filter_kind, filter_value, article_id
-      ), '')) AS actualChecksum
-    FROM mart.review_article_filter_posting_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+        CAST(serving_article.article_id AS VARCHAR) AS row_key
+      FROM mart.review_article_filter_posting_serving_v4 serving
+      CROSS JOIN UNNEST(serving.article_ids) AS serving_article(article_id)
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'serving_article', chunk: input.chunk})}
+      UNION ALL
+      SELECT
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(review_config_hash AS VARCHAR) || ':' ||
+        CAST(list_mode_key AS VARCHAR) || ':state:' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        CAST(duplicate_flag AS VARCHAR) || ':' ||
+        CAST(conflict_flag AS VARCHAR) || ':' ||
+        COALESCE(CAST(llm_status AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(human_status AS VARCHAR), '') AS row_key
+      FROM mart.review_article_filter_state_serving_v4 state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'state', chunk: input.chunk})}
+    )
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(row_key, '|' ORDER BY row_key), '')) AS actualChecksum
+    FROM output_row
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1410,12 +1427,23 @@ const getPostingRebuildChunkOutputCount = async (
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH output_row AS (
+      SELECT serving_article.article_id
+      FROM mart.review_article_filter_posting_serving_v4 serving
+      CROSS JOIN UNNEST(serving.article_ids) AS serving_article(article_id)
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'serving_article', chunk: input.chunk})}
+      UNION ALL
+      SELECT article_id
+      FROM mart.review_article_filter_state_serving_v4 state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'state', chunk: input.chunk})}
+    )
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM mart.review_article_filter_posting_serving_v4 serving
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND ${getSnapshotIdPredicate(input.snapshotIds)}
-      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+    FROM output_row
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}

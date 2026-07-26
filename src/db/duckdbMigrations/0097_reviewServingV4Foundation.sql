@@ -585,6 +585,18 @@ CREATE TABLE IF NOT EXISTS mart.review_article_filter_posting_serving_v4 (
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)
 );
 
+CREATE TABLE IF NOT EXISTS mart.review_article_filter_state_serving_v4 (
+  project_id VARCHAR NOT NULL,
+  review_config_hash VARCHAR NOT NULL,
+  snapshot_id VARCHAR NOT NULL,
+  list_mode_key VARCHAR NOT NULL,
+  article_id VARCHAR NOT NULL,
+  duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
+  conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
+  llm_status VARCHAR,
+  human_status VARCHAR
+);
+
 CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
@@ -781,8 +793,17 @@ ON mart.review_queue_patch_v4(project_id, queue_identity, base_generation, patch
 CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_patch_v4_lookup
 ON mart.review_article_filter_posting_patch_v4(project_id, posting_identity, base_generation, patch_watermark, filter_kind, filter_value, list_mode_key, sort_key, article_id);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_repaired_pk
+ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key);
+
 CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup
 ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_state_serving_v4_pk
+ON mart.review_article_filter_state_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, article_id);
+
+CREATE INDEX IF NOT EXISTS idx_review_article_filter_state_serving_v4_lookup
+ON mart.review_article_filter_state_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, duplicate_flag, conflict_flag, llm_status, human_status, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article
 ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order);

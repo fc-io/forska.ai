@@ -259,11 +259,11 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(sql).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   expect(sql).toContain('posting_filtered_article_ids AS')
   expect(sql).toContain("posting.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:yes']::VARCHAR[]))")
-  expect(sql).toContain("posting.filter_kind = 'duplicateFlag'")
-  expect(sql).toContain("posting.filter_kind = 'conflictFlag'")
-  expect(sql).toContain("posting.filter_kind = 'humanStatus'")
-  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['true']::VARCHAR[]))")
-  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(sql).toContain('state_filtered_article_ids AS')
+  expect(sql).toContain('FROM mart.review_article_filter_state_serving_v4 state')
+  expect(sql).toContain('state.duplicate_flag IS TRUE')
+  expect(sql).toContain('state.conflict_flag IS TRUE')
+  expect(sql).toContain("state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).not.toContain('serving.duplicate_flag = TRUE')
   expect(sql).not.toContain('serving.conflict_flag = TRUE')
   expect(sql).not.toContain('serving.human_status_key =')
@@ -294,8 +294,9 @@ test('human review prompt-filtered count intersects through one posting CTE with
   expect(countStatement).toContain(
     "posting.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:maybe', 'human:promptAnswer:prompt-1:yes']::VARCHAR[]))",
   )
-  expect(countStatement).toContain("posting.filter_kind = 'humanStatus'")
-  expect(countStatement).toContain("posting.filter_value IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(countStatement).toContain('state_filtered_article_ids AS')
+  expect(countStatement).toContain('FROM mart.review_article_filter_state_serving_v4 state')
+  expect(countStatement).toContain("state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(countStatement).not.toContain("serving.human_status_key = 'answered'")
 })
 
@@ -338,7 +339,7 @@ test('human review route service retries transient filtered row read failures', 
     queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       if (
         statement.includes('FROM mart.review_article_serving_v4')
-        && statement.includes("filter_0.filter_kind = 'duplicateFlag'")
+        && statement.includes('filter_state_0.duplicate_flag IS TRUE')
         && !statement.includes('COUNT(DISTINCT filtered_article_ids.article_id)')
       ) {
         rowAttempts += 1
@@ -360,8 +361,8 @@ test('human review route service retries transient filtered row read failures', 
 
   expect(result.data).toHaveLength(1)
   expect(rowAttempts).toBe(2)
-  expect(rowStatements.join('\n')).toContain("filter_0.filter_kind = 'duplicateFlag'")
-  expect(rowStatements.join('\n')).not.toContain('duplicate_flag = TRUE')
+  expect(rowStatements.join('\n')).toContain('filter_state_0.duplicate_flag IS TRUE')
+  expect(rowStatements.join('\n')).not.toContain("filter_0.filter_kind = 'duplicateFlag'")
 })
 
 test('human review route service allows the 500-row page cursor probe within the reader contract', async () => {
@@ -401,9 +402,8 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   expect(reader.statements).toHaveLength(9)
   expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
   expect(sql).toContain("list_mode_key = 'both'")
-  expect(sql).toContain("filter_kind = 'llmStatus'")
-  expect(sql).toContain("filter_kind = 'humanStatus'")
-  expect(sql).toContain("filter_value IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(sql).toContain("llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(sql).toContain("human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).not.toContain('serving.llm_status_key =')
   expect(sql).not.toContain('serving.human_status_key =')
   expect(sql).toContain("payload_kind = 'llm'")

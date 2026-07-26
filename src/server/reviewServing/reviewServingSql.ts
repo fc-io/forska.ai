@@ -45,6 +45,7 @@ export const reviewServingRegisteredSqlTables = [
     ...reviewServingReadContractList.map((contract) => {
       return contract.servingTable
     }),
+    'mart.review_article_filter_state_serving_v4',
   ]),
 ].sort()
 
@@ -269,6 +270,10 @@ const isBoundedJudgmentAuthoritativeHydrationReference = (
   )
 }
 
+const isBoundedTableFunctionReference = (tableReference: ReviewServingSqlTableReference) => {
+  return tableReference.table === 'unnest'
+}
+
 const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
   if (!options.requireRegisteredTable) {
     return []
@@ -315,6 +320,9 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
           'app.judgment_human_summary',
         ].includes(tableReference) || !hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
       )
+    })
+    .filter((tableReference) => {
+      return tableReference !== 'unnest'
     })
     .filter((tableReference) => {
       return !allowedTables.has(tableReference)
@@ -368,6 +376,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
               || isBoundedSelectedHotFieldLookupReference(sql, tableReference)
               || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
               || isBoundedJudgmentAuthoritativeHydrationReference(sql, tableReference)
+              || isBoundedTableFunctionReference(tableReference)
             ) {
               return false
             }
@@ -423,6 +432,7 @@ const reviewServingSearchJobTable = 'app.review_search_job'
 const reviewServingArticleTable = 'mart.review_article_serving_v4'
 const reviewServingSelectedImportTable = 'app.review_selected_article_import_v4'
 const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
+const reviewServingFilterPostingArticleAlias = 'filter_posting_article'
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
@@ -653,6 +663,10 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
 
 const getReviewServingTitleSearchArticleMembershipPredicate = (articleIdSql: string, searchAlias = 'search') => {
   return `list_contains(${searchAlias}.article_ids, ${articleIdSql})`
+}
+
+const getReviewServingFilterPostingArticleIdSql = () => {
+  return `${reviewServingFilterPostingArticleAlias}.article_id`
 }
 
 const reviewServingListModePredicateTables = new Set([
@@ -886,7 +900,7 @@ const getReviewServingRowsSqlPostingPredicate = (params: {
         ` AND search.search_identity = ${params.searchIdentityParameter}`,
         ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
         ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
-        ` AND ${getReviewServingTitleSearchArticleMembershipPredicate(`${params.contract.servingTable}.article_id`)}`,
+        ` AND ${getReviewServingTitleSearchArticleMembershipPredicate(getReviewServingFilterPostingArticleIdSql())}`,
         ` AND starts_with(search.token, ${params.searchTokenPrefixParameter}))`,
       ].join('')
     : ''
@@ -1059,7 +1073,16 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
   }
 
   if (contract.servingTable === reviewServingFilterPostingTable) {
-    return `SELECT ${reviewServingFilterPostingTable}.*, ${reviewServingArticleTable}.sort_key AS sort_key`
+    return [
+      `SELECT ${reviewServingFilterPostingTable}.project_id`,
+      `${reviewServingFilterPostingTable}.review_config_hash`,
+      `${reviewServingFilterPostingTable}.snapshot_id`,
+      `${reviewServingFilterPostingTable}.filter_kind`,
+      `${reviewServingFilterPostingTable}.filter_value`,
+      `${reviewServingFilterPostingTable}.list_mode_key`,
+      `${getReviewServingFilterPostingArticleIdSql()} AS article_id`,
+      `${reviewServingArticleTable}.sort_key AS sort_key`,
+    ].join(', ')
   }
 
   if (contract.servingTable === reviewServingTitleSearchTable) {
@@ -1166,6 +1189,7 @@ export const buildReviewServingRowsSql = (params: {
   const postingArticleSortJoin =
     params.contract.servingTable === reviewServingFilterPostingTable
       ? [
+          ` CROSS JOIN UNNEST(${reviewServingFilterPostingTable}.article_ids) AS ${reviewServingFilterPostingArticleAlias}(article_id)`,
           ` INNER JOIN ${reviewServingArticleTable}`,
           ` ON ${reviewServingArticleTable}.project_id = ${params.projectIdParameter}`,
           ` AND ${reviewServingArticleTable}.project_id = ${reviewServingFilterPostingTable}.project_id`,
@@ -1174,7 +1198,7 @@ export const buildReviewServingRowsSql = (params: {
           ` AND ${reviewServingArticleTable}.snapshot_id = ${params.snapshotIdParameter}`,
           ` AND ${reviewServingArticleTable}.snapshot_id = ${reviewServingFilterPostingTable}.snapshot_id`,
           ` AND ${reviewServingArticleTable}.list_mode_key = ${reviewServingFilterPostingTable}.list_mode_key`,
-          ` AND ${reviewServingArticleTable}.article_id = ${reviewServingFilterPostingTable}.article_id`,
+          ` AND ${reviewServingArticleTable}.article_id = ${getReviewServingFilterPostingArticleIdSql()}`,
         ].join('')
       : ''
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''

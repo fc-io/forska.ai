@@ -216,34 +216,34 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
   }
 
   const listMode = getListModeKey(criteria)
-  const getStatusPostingPredicate = (filterKind: 'humanStatus' | 'llmStatus', filterValue: string) => {
+  const getStatusStatePredicate = (filterKind: 'humanStatus' | 'llmStatus', filterValue: string) => {
     const alias = `${filterKind}Filter`
+    const columnName = filterKind === 'humanStatus' ? 'human_status' : 'llm_status'
 
     return `AND EXISTS (
         SELECT 1
-        FROM mart.review_article_filter_posting_serving_v4 ${alias}
+        FROM mart.review_article_filter_state_serving_v4 ${alias}
         WHERE ${alias}.project_id = s.project_id
           AND ${alias}.snapshot_id = s.snapshot_id
           AND ${alias}.review_config_hash = s.review_config_hash
           AND ${alias}.list_mode_key = s.list_mode_key
-          AND ${alias}.article_id = s.article_id
-          AND ${alias}.filter_kind = ${getSqlLiteral(filterKind)}
-          AND ${alias}.filter_value = ${getSqlLiteral(filterValue)}
+          AND list_contains(${alias}.article_ids, s.article_id)
+          AND ${alias}.${columnName} = ${getSqlLiteral(filterValue)}
       )`
   }
   const shouldRequireLlmJudgment =
     listMode === 'llm' && (!criteria.llmStatus || criteria.llmStatus === 'both' || criteria.llmStatus === 'partial')
   const humanStatusPredicate =
     listMode === 'human' || listMode === 'both'
-      ? getStatusPostingPredicate('humanStatus', criteria.humanStatus ?? 'answered')
+      ? getStatusStatePredicate('humanStatus', criteria.humanStatus ?? 'answered')
       : ''
   const llmStatusPredicate =
     listMode === 'both'
-      ? getStatusPostingPredicate('llmStatus', 'answered')
+      ? getStatusStatePredicate('llmStatus', 'answered')
       : criteria.llmStatus === 'complete'
-        ? getStatusPostingPredicate('llmStatus', 'answered')
+        ? getStatusStatePredicate('llmStatus', 'answered')
         : criteria.llmStatus === 'partial'
-          ? getStatusPostingPredicate('llmStatus', 'unanswered')
+          ? getStatusStatePredicate('llmStatus', 'unanswered')
           : ''
   const llmHasJudgmentPredicate = shouldRequireLlmJudgment
     ? `AND EXISTS (
@@ -315,7 +315,7 @@ const getPromptAnswerPredicates = (criteria: ReviewBulkOperationCriteria) => {
           AND prompt_filter_${index}.snapshot_id = s.snapshot_id
           AND prompt_filter_${index}.review_config_hash = s.review_config_hash
           AND prompt_filter_${index}.list_mode_key = s.list_mode_key
-          AND prompt_filter_${index}.article_id = s.article_id
+          AND list_contains(prompt_filter_${index}.article_ids, s.article_id)
           AND prompt_filter_${index}.filter_kind = 'promptAnswer'
           AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
       )`
@@ -330,16 +330,17 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
     return filter !== null
   })
   const simplePredicates = simpleFilters.map((filter, index) => {
+    const columnName = filter.kind === 'duplicateFlag' ? 'duplicate_flag' : 'conflict_flag'
+
     return `AND EXISTS (
       SELECT 1
-      FROM mart.review_article_filter_posting_serving_v4 filter_${index}
+      FROM mart.review_article_filter_state_serving_v4 filter_${index}
       WHERE filter_${index}.project_id = s.project_id
         AND filter_${index}.snapshot_id = s.snapshot_id
         AND filter_${index}.review_config_hash = s.review_config_hash
         AND filter_${index}.list_mode_key = s.list_mode_key
         AND filter_${index}.article_id = s.article_id
-        AND filter_${index}.filter_kind = ${getSqlLiteral(filter.kind)}
-        AND filter_${index}.filter_value = ${getSqlLiteral(filter.value)}
+        AND filter_${index}.${columnName} IS TRUE
     )`
   })
   const datePredicate =

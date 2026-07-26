@@ -615,9 +615,96 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       'mart.review_title_search_serving_v4',
       'mart.review_unassessed_queue_serving_v4',
       'mart.review_article_filter_posting_serving_v4',
+      'mart.review_article_filter_state_serving_v4',
     ])
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service skips compact filter posting startup repair before compact migration is applied', async () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-precompact-filter-posting-preflight-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath)
+  const connection = await duckdbInstance.connect()
+  await connection.run('CREATE SCHEMA mart')
+  await connection.run(`
+    CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+      project_id VARCHAR,
+      review_config_hash VARCHAR,
+      snapshot_id VARCHAR,
+      filter_kind VARCHAR,
+      filter_value VARCHAR,
+      list_mode_key VARCHAR,
+      article_id VARCHAR,
+      PRIMARY KEY(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)
+    )
+  `)
+  await connection.run(`
+    INSERT INTO mart.review_article_filter_posting_serving_v4 VALUES
+      ('project-1', 'review-config-1', 'snapshot-1', 'promptAnswer', 'answer:yes', 'llm', 'article-1'),
+      ('project-1', 'review-config-1', 'snapshot-1', 'promptAnswer', 'answer:yes', 'llm', 'article-2')
+  `)
+  await connection.run('CHECKPOINT')
+  connection.closeSync()
+  duckdbInstance.closeSync()
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?precompact-filter-posting-preflight-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT COUNT(*) AS total FROM mart.review_article_filter_posting_serving_v4')
+        console.log(JSON.stringify({rows}))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB precompact posting preflight failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.rows).toEqual([{total: '2'}])
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -3485,7 +3572,9 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'filter_kind',
       'filter_value',
       'list_mode_key',
-      'article_id',
+    ])
+    expect(articleFilterPostingProbe?.schemaRequirements).toEqual([
+      {columnNames: ['article_ids'], schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},
     ])
     expect(articleFilterPostingProbe?.mutationProbeSql).toContain(
       'DELETE FROM mart.review_article_filter_posting_serving_v4',

@@ -21,6 +21,30 @@ const getPostingFilterGroupPredicate = (group: ReviewServingDynamicCountPostingF
           AND ${alias}.filter_value IN (SELECT unnest(${getSqlLiteral(group.filterValues)}::VARCHAR[]))`
 }
 
+const isStateFilterGroup = (group: ReviewServingDynamicCountPostingFilterGroup) => {
+  return ['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus'].includes(group.filterKind)
+}
+
+const getStateFilterGroupPredicate = (group: ReviewServingDynamicCountPostingFilterGroup, alias = 'state') => {
+  if (group.filterKind === 'duplicateFlag') {
+    return group.filterValues.includes('true') ? `${alias}.duplicate_flag IS TRUE` : ''
+  }
+
+  if (group.filterKind === 'conflictFlag') {
+    return group.filterValues.includes('true') ? `${alias}.conflict_flag IS TRUE` : ''
+  }
+
+  if (group.filterKind === 'llmStatus') {
+    return `${alias}.llm_status IN (SELECT unnest(${getSqlLiteral(group.filterValues)}::VARCHAR[]))`
+  }
+
+  if (group.filterKind === 'humanStatus') {
+    return `${alias}.human_status IN (SELECT unnest(${getSqlLiteral(group.filterValues)}::VARCHAR[]))`
+  }
+
+  return ''
+}
+
 const getPostingFilteredArticleIdsCte = (groups: readonly ReviewServingDynamicCountPostingFilterGroup[]) => {
   if (groups.length === 0) {
     return ''
@@ -35,16 +59,43 @@ const getPostingFilteredArticleIdsCte = (groups: readonly ReviewServingDynamicCo
 
   return `,
 posting_filtered_article_ids AS (
-  SELECT posting.article_id
+  SELECT posting_article.article_id
   FROM mart.review_article_filter_posting_serving_v4 posting
+  CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)
   CROSS JOIN scoped
   WHERE posting.project_id = scoped.project_id
     AND posting.review_config_hash = scoped.review_config_hash
     AND posting.snapshot_id = scoped.snapshot_id
     AND posting.list_mode_key = scoped.list_mode_key
     AND (${groupPredicates.join('\n      OR ')})
-  GROUP BY posting.article_id
+  GROUP BY posting_article.article_id
   HAVING COUNT(DISTINCT CASE ${matchedGroupCases.join(' ')} END) = ${groups.length}
+)`
+}
+
+const getStateFilteredArticleIdsCte = (groups: readonly ReviewServingDynamicCountPostingFilterGroup[]) => {
+  if (groups.length === 0) {
+    return ''
+  }
+
+  const groupPredicates = groups
+    .map((group) => {
+      return getStateFilterGroupPredicate(group)
+    })
+    .filter(Boolean)
+
+  return groupPredicates.length === 0
+    ? ''
+    : `,
+state_filtered_article_ids AS (
+  SELECT state.article_id
+  FROM mart.review_article_filter_state_serving_v4 state
+  CROSS JOIN scoped
+  WHERE state.project_id = scoped.project_id
+    AND state.review_config_hash = scoped.review_config_hash
+    AND state.snapshot_id = scoped.snapshot_id
+    AND state.list_mode_key = scoped.list_mode_key
+    AND ${groupPredicates.join('\n    AND ')}
 )`
 }
 
@@ -106,9 +157,17 @@ llm_judged_article_ids AS (
 }
 
 const getFilteredJoinClauses = (input: ReviewServingDynamicCountSqlInput) => {
+  const postingGroups = (input.postingFilterGroups ?? []).filter((group) => {
+    return !isStateFilterGroup(group)
+  })
+  const stateGroups = (input.postingFilterGroups ?? []).filter(isStateFilterGroup)
+
   return [
-    (input.postingFilterGroups ?? []).length > 0
+    postingGroups.length > 0
       ? 'JOIN posting_filtered_article_ids posting_filter_ids ON posting_filter_ids.article_id = filtered_article_ids.article_id'
+      : '',
+    stateGroups.length > 0
+      ? 'JOIN state_filtered_article_ids state_filter_ids ON state_filter_ids.article_id = filtered_article_ids.article_id'
       : '',
     (input.searchTokenPrefixes ?? []).length > 0
       ? 'JOIN search_filtered_article_ids search_filter_ids ON search_filter_ids.article_id = filtered_article_ids.article_id'
@@ -125,7 +184,10 @@ const getFilteredJoinClauses = (input: ReviewServingDynamicCountSqlInput) => {
 }
 
 export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDynamicCountSqlInput) => {
-  const postingGroups = input.postingFilterGroups ?? []
+  const postingGroups = (input.postingFilterGroups ?? []).filter((group) => {
+    return !isStateFilterGroup(group)
+  })
+  const stateGroups = (input.postingFilterGroups ?? []).filter(isStateFilterGroup)
   const servingPredicates = input.servingPredicates?.filter(Boolean).join('\n') ?? ''
 
   return `
@@ -145,7 +207,7 @@ export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDyna
         AND serving.snapshot_id = scoped.snapshot_id
         AND serving.list_mode_key = scoped.list_mode_key
         ${servingPredicates}
-    )${getPostingFilteredArticleIdsCte(postingGroups)}${getSearchFilteredArticleIdsCte(input)}${getUnassessedQueueArticleIdsCte(input)}${getLlmJudgedArticleIdsCte(input)}
+    )${getPostingFilteredArticleIdsCte(postingGroups)}${getStateFilteredArticleIdsCte(stateGroups)}${getSearchFilteredArticleIdsCte(input)}${getUnassessedQueueArticleIdsCte(input)}${getLlmJudgedArticleIdsCte(input)}
     SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount
     FROM scoped_serving filtered_article_ids
     ${getFilteredJoinClauses(input)}

@@ -163,9 +163,9 @@ test('answer changes update serving postings without derived stats writes', asyn
   expect(result.validationResult).toBeUndefined()
   expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
-  expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).toMatchObject({
-    'mart.review_article_filter_posting_serving_v4': 1,
-  })
+  expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).not.toHaveProperty(
+    'mart.review_article_filter_posting_serving_v4',
+  )
   expect(joined).not.toContain('scope.source_updated_at')
   expect(joined).not.toContain('sort_key')
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
@@ -199,7 +199,7 @@ test('full posting rebuilds write serving state without derived stats refresh', 
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).not.toContain('COUNT(*) AS cardinality')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).not.toContain(
+  expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
   expectNoLegacyPostingSourcePatchTables(joined)
@@ -240,10 +240,11 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
+  expect(joined).toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
+    'LIST(DISTINCT CAST(posting.articleId AS VARCHAR) ORDER BY CAST(posting.articleId AS VARCHAR)) AS articleIds',
   )
   expect(joined).not.toContain('posting_identity,')
   expect(joined).not.toContain('AS posting_identity')
@@ -287,7 +288,7 @@ test('full posting rebuilds scope set-based serving upserts to article ranges', 
   expect(joined).toContain('scope.article_id >=')
   expect(joined).toContain('scope.article_id <=')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET',
   )
   expect(joined).not.toContain('posting_identity,')
   expect(joined).not.toContain('AS posting_identity')
@@ -311,7 +312,7 @@ test('chunked full posting rebuilds skip retired stats refresh', async () => {
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET',
   )
   expect(joined).not.toContain('posting_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
@@ -338,18 +339,14 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
 
   expect(result.diagnosticsJson.postingProjector).toMatchObject({fullRebuildMode: 'range-set-based', rangeCount: 2})
   expect(servingInserts).toHaveLength(1)
-  expect(servingInserts[0]).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
-  expect(servingInserts[0]).toContain("('article-1', 'article-3'), ('article-4', 'article-9')")
-  expect(servingInserts[0]).toContain('SELECT DISTINCT scope.article_id')
-  expect(countOccurrences(servingInserts[0], 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
-  expect(servingInserts[0]).toContain('judgment_detail_source AS')
-  expect(servingInserts[0]).toContain('article_judgment_status AS')
-  expect(servingInserts[0]).toContain(
-    'range.chunk_start_article_id IS NULL OR scope.article_id >= range.chunk_start_article_id',
-  )
-  expect(servingInserts[0]).toContain(
-    'range.chunk_end_article_id IS NULL OR scope.article_id <= range.chunk_end_article_id',
-  )
+  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(joined).toContain("('article-1', 'article-3'), ('article-4', 'article-9')")
+  expect(joined).toContain('SELECT DISTINCT scope.article_id')
+  expect(countOccurrences(joined, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
+  expect(joined).toContain('judgment_detail_source AS')
+  expect(joined).toContain('article_judgment_status AS')
+  expect(joined).toContain('range.chunk_start_article_id IS NULL OR scope.article_id >= range.chunk_start_article_id')
+  expect(joined).toContain('range.chunk_end_article_id IS NULL OR scope.article_id <= range.chunk_end_article_id')
   expect(servingInserts[0]).not.toContain('posting_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
@@ -546,7 +543,10 @@ test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows 
     database,
   )
   const deleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_article_filter_posting_serving_v4')
+    return (
+      statement.includes('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+      && statement.includes('USING deleted')
+    )
   })
   const existingSelect = statements.find((statement) => {
     return statement.includes('FROM mart.review_article_filter_posting_serving_v4 serving')
@@ -575,7 +575,10 @@ test('project-scoped posting rebuilds delete tombstoned serving rows without pro
     database,
   )
   const deleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_article_filter_posting_serving_v4')
+    return (
+      statement.includes('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+      && statement.includes('USING deleted')
+    )
   })
 
   expect(deleteStatement).toContain('USING deleted')
