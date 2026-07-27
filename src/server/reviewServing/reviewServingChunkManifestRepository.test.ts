@@ -852,6 +852,43 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
 
+test('next claimable chunk discovery selects only preclaim identity fields', async () => {
+  const pending = getChunkRowFromIdentity(baseChunkIdentity, [])
+  const {database, statements} = createFakeChunkManifestDatabase([pending])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:00:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({chunkId: pending.chunkId, inputDigest: 'digest-v1'})
+  const claimSelectStatement = statements.find((statement) => {
+    return statement.includes('FROM app.review_rebuild_chunk_manifest AS candidate')
+  })
+  expect(claimSelectStatement).toBeDefined()
+  expect(claimSelectStatement).toContain('candidate.chunk_id AS chunkId')
+  expect(claimSelectStatement).toContain('candidate.request_id AS requestId')
+  expect(claimSelectStatement).toContain('candidate.project_id AS projectId')
+  expect(claimSelectStatement).toContain('candidate.projection_component AS projectionComponent')
+  expect(claimSelectStatement).toContain('candidate.projection_identity AS projectionIdentity')
+  expect(claimSelectStatement).toContain('candidate.input_digest AS inputDigest')
+  expect(claimSelectStatement).toContain('candidate.input_watermark AS inputWatermark')
+  expect(claimSelectStatement).toContain('candidate.chunk_start_key AS chunkStartKey')
+  expect(claimSelectStatement).toContain('candidate.chunk_end_key AS chunkEndKey')
+  expect(claimSelectStatement).toContain('candidate.output_base_generation AS outputBaseGeneration')
+  expect(claimSelectStatement).toContain('candidate.checksum AS checksum')
+  expect(claimSelectStatement).toContain('ORDER BY')
+  expect(claimSelectStatement).not.toContain('candidate.diagnostics_json')
+  expect(claimSelectStatement).not.toContain('candidate.budget_json')
+  expect(claimSelectStatement).not.toContain('candidate.actual_')
+  expect(claimSelectStatement).not.toContain('candidate.max_')
+  expect(claimSelectStatement).not.toContain('candidate.duration_ms')
+  expect(claimSelectStatement).not.toContain('candidate.last_error')
+  expect(claimSelectStatement).not.toContain('candidate.lease_owner')
+  expect(claimSelectStatement).not.toContain('candidate.started_at')
+  expect(claimSelectStatement).not.toContain('candidate.completed_at')
+})
+
 test('next claimable chunk discovery does not favor newer pending requests over older pending work', async () => {
   const olderPending = {
     ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-older-pending'}, []),

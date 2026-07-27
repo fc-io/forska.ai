@@ -116,7 +116,7 @@ const runCommitWriterScript = <TResult>(body: string) => {
       'bun',
       '-e',
       `
-        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}, {getProjectTransferPlanWithCommitIdMaps}, {getProjectTransferOperationTableNames}] = await Promise.all([
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}, {getProjectTransferPlanWithCommitIdMaps}, {getProjectTransferOperationTableNames}, {intakeReviewImportDeltasToDirtyWork}] = await Promise.all([
           import('./src/db/migrateDuckdb.ts'),
           import('./src/server/services/appDatabaseService.ts'),
           import('./src/server/utils/duckdbService.ts'),
@@ -125,6 +125,7 @@ const runCommitWriterScript = <TResult>(body: string) => {
           import('./src/server/services/projectTransfer/projectTransferCommitWriter.ts'),
           import('./src/server/services/projectTransfer/projectTransferCommitIdMaps.ts'),
           import('./src/server/services/projectTransfer/projectTransferOperationTables.ts'),
+          import('./src/server/reviewServing/reviewImportDeltaDirtyIntakeService.ts'),
         ])
 
         resetDuckdbServiceForTests()
@@ -1672,6 +1673,262 @@ test('project transfer commit writer creates project rows and preserves safe pac
   ).toBe(true)
   expect(result.martCounts).toEqual({projectScopeArticleCount: 0})
   expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
+})
+
+test('project transfer import commit V4 route deltas intake into bounded dirty work without legacy fanout', () => {
+  const result = runCommitWriterScript<{
+    dirtyRows: Array<{
+      dirtyKind: string
+      latestDeltaId: string | null
+      latestSourceHighWaterMark: number
+      projectId: string
+      projectionComponent: string | null
+      sourcePartition: string
+      status: string
+    }>
+    emittedDeltaRows: Array<{
+      articleId: string | null
+      changeKind: string
+      importRouteId: string | null
+      reconciled: boolean
+      sourceHighWaterMark: number
+      sourcePartition: string
+    }>
+    reconciledDeltaRows: Array<{reconciled: boolean; sourceHighWaterMark: number}>
+    intakeResult: {dirtyWorkCount: number; maxSourceHighWaterMark: number | null; status: string}
+    legacyCounts: {
+      dirtyArticleRows: number
+      materializations: number
+      refreshRows: number
+      rebuildChunks: number
+      rebuildRequests: number
+    }
+    targetProjectId: string
+  }>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    await database.run("INSERT INTO app.import_route (id, route, name, active) VALUES ('target-route', 'covidence:v4-delta', 'V4 Delta Route', TRUE)")
+
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleId: 'legacy-v4-delta-article',
+      articleTitle: 'V4 Delta Article',
+      doi: '10.1000/v4-delta',
+      identifierInputs: [],
+      originalData: {source: 'transfer'},
+      provenance: {sourceArticleId: 'source-v4-delta-article'},
+      signature: {identifierKeys: ['doi:10.1000/v4-delta'], title: 'V4 Delta Article'},
+      sourceArticleId: 'source-v4-delta-article',
+      sourceMetadata: {journalTitle: 'Delta Journal'},
+    }
+    const secondArticle = {
+      articleId: 'legacy-v4-delta-article-2',
+      articleTitle: 'V4 Delta Article 2',
+      doi: '10.1000/v4-delta-2',
+      identifierInputs: [],
+      originalData: {source: 'transfer-2'},
+      provenance: {sourceArticleId: 'source-v4-delta-article-2'},
+      signature: {identifierKeys: ['doi:10.1000/v4-delta-2'], title: 'V4 Delta Article 2'},
+      sourceArticleId: 'source-v4-delta-article-2',
+      sourceMetadata: {journalTitle: 'Delta Journal 2'},
+    }
+    const articleImportRoute = {
+      externalArticleId: 'EXT-v4-delta',
+      importMetadata: {route: true},
+      matchMetadata: null,
+      provenance: {sourceArticleId: 'source-v4-delta-article', sourceImportRouteId: 'source-route'},
+      rawPayload: {raw: true},
+      signature: {},
+      sourceArticleId: 'source-v4-delta-article',
+      sourceArticleImportRouteId: 'source-air-v4-delta',
+      sourceImportRouteId: 'source-route',
+      sourceRecordHash: 'source-record-hash-v4-delta',
+      sourceRecordKey: 'source-record-key-v4-delta',
+    }
+    const secondArticleImportRoute = {
+      externalArticleId: 'EXT-v4-delta-2',
+      importMetadata: {route: true},
+      matchMetadata: null,
+      provenance: {sourceArticleId: 'source-v4-delta-article-2', sourceImportRouteId: 'source-route'},
+      rawPayload: {raw: true},
+      signature: {},
+      sourceArticleId: 'source-v4-delta-article-2',
+      sourceArticleImportRouteId: 'source-air-v4-delta-2',
+      sourceImportRouteId: 'source-route',
+      sourceRecordHash: 'source-record-hash-v4-delta-2',
+      sourceRecordKey: 'source-record-key-v4-delta-2',
+    }
+    const projectArticle = {
+      provenance: {sourceArticleId: 'source-v4-delta-article', sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId: 'source-v4-delta-article',
+      sourceProjectArticleId: 'source-project-article-v4-delta',
+      sourceProjectId: 'source-project',
+    }
+    const secondProjectArticle = {
+      provenance: {sourceArticleId: 'source-v4-delta-article-2', sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId: 'source-v4-delta-article-2',
+      sourceProjectArticleId: 'source-project-article-v4-delta-2',
+      sourceProjectId: 'source-project',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['doi:10.1000/v4-delta'],
+          packageArticleId: 'legacy-v4-delta-article',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-v4-delta-article',
+        },
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['doi:10.1000/v4-delta-2'],
+          packageArticleId: 'legacy-v4-delta-article-2',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-v4-delta-article-2',
+        },
+      ],
+      articleRoutePlan: [
+        {
+          action: 'write',
+          sourceArticleId: 'source-v4-delta-article',
+          sourceArticleImportRouteId: 'source-air-v4-delta',
+          sourceImportRouteId: 'source-route',
+          snapshotProjectArticleLink: false,
+          targetArticleId: null,
+          targetImportRouteId: 'target-route',
+          unsafeProjectIds: [],
+        },
+        {
+          action: 'write',
+          sourceArticleId: 'source-v4-delta-article-2',
+          sourceArticleImportRouteId: 'source-air-v4-delta-2',
+          sourceImportRouteId: 'source-route',
+          snapshotProjectArticleLink: false,
+          targetArticleId: null,
+          targetImportRouteId: 'target-route',
+          unsafeProjectIds: [],
+        },
+      ],
+      projectRoutePlan: [
+        {
+          action: 'link',
+          dateBoundedOutsideExportedArticleCount: 0,
+          dateBoundedRouteArticleCount: 1,
+          outsideExportedArticleCount: 0,
+          sourceImportRouteId: 'source-route',
+          sourceProjectImportRouteId: 'source-project-route-v4-delta',
+          targetImportRouteId: 'target-route',
+        },
+      ],
+    }
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-v4-delta-intake',
+      now,
+      payloads: {
+        articleImportRoutes: [articleImportRoute, secondArticleImportRoute],
+        articles: [article, secondArticle],
+        models: [getModelPayload()],
+        project: getProjectPayload(settings),
+        projectArticles: [projectArticle, secondProjectArticle],
+      },
+      plan: getBasePlan(targetPlan, dependencyResolution),
+      promotion: {
+        articleCreates: [
+          {article, sourceArticleId: 'source-v4-delta-article'},
+          {article: secondArticle, sourceArticleId: 'source-v4-delta-article-2'},
+        ],
+        articleFieldFills: [],
+        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-v4-delta-intake', updatedAt: now.toISOString()},
+        promotionPathByPackagePath: {},
+      },
+      schemaVersion: 1,
+      sessionId: 'session-v4-delta-intake',
+    })
+    const emittedDeltaRows = await database.queryJson("SELECT change_kind AS changeKind, import_route_id AS importRouteId, article_id AS articleId, source_partition AS sourcePartition, CAST(source_high_water_mark AS INTEGER) AS sourceHighWaterMark, reconciled_at IS NOT NULL AS reconciled FROM app.import_run_article_delta ORDER BY source_high_water_mark ASC")
+    const intakeResult = await intakeReviewImportDeltasToDirtyWork({
+      endSourceHighWaterMark: 2,
+      limit: 1,
+      sourcePartition: 'import-route:target-route',
+      startSourceHighWaterMark: 1,
+    }, database)
+    const dirtyRows = await database.queryJson("SELECT project_id AS projectId, dirty_kind AS dirtyKind, source_partition AS sourcePartition, CAST(latest_source_high_water_mark AS INTEGER) AS latestSourceHighWaterMark, latest_delta_id AS latestDeltaId, json_extract_string(projection_key, '$.projectionComponent') AS projectionComponent, status FROM app.review_serving_dirty_work ORDER BY projectionComponent ASC")
+    const reconciledDeltaRows = await database.queryJson("SELECT CAST(source_high_water_mark AS INTEGER) AS sourceHighWaterMark, reconciled_at IS NOT NULL AS reconciled FROM app.import_run_article_delta ORDER BY source_high_water_mark ASC")
+    const [legacyCounts] = await database.queryJson("SELECT (SELECT COUNT(*)::INTEGER FROM app.project_mart_refresh_state) AS refreshRows, (SELECT COUNT(*)::INTEGER FROM app.project_mart_refresh_article_state) AS dirtyArticleRows, (SELECT COUNT(*)::INTEGER FROM app.project_mart_dirty_materialization_state) AS materializations, (SELECT COUNT(*)::INTEGER FROM app.review_rebuild_request) AS rebuildRequests, (SELECT COUNT(*)::INTEGER FROM app.review_rebuild_chunk_manifest) AS rebuildChunks")
+
+    console.log(JSON.stringify({
+      dirtyRows,
+      emittedDeltaRows: emittedDeltaRows.map((row) => ({...row, reconciled: Boolean(row.reconciled)})),
+      intakeResult,
+      legacyCounts,
+      reconciledDeltaRows: reconciledDeltaRows.map((row) => ({...row, reconciled: Boolean(row.reconciled)})),
+      targetProjectId: writeResult.projectId,
+    }))
+  `)
+
+  expect(result.emittedDeltaRows).toHaveLength(2)
+  expect(result.emittedDeltaRows).toMatchObject([
+    {
+      changeKind: 'importRoute.article.added',
+      importRouteId: 'target-route',
+      reconciled: false,
+      sourceHighWaterMark: 1,
+      sourcePartition: 'import-route:target-route',
+    },
+    {
+      changeKind: 'importRoute.article.added',
+      importRouteId: 'target-route',
+      reconciled: false,
+      sourceHighWaterMark: 2,
+      sourcePartition: 'import-route:target-route',
+    },
+  ])
+  expect(result.emittedDeltaRows[0]?.articleId).toBeTruthy()
+  expect(result.emittedDeltaRows[1]?.articleId).toBeTruthy()
+  expect(result.reconciledDeltaRows).toEqual([
+    {reconciled: true, sourceHighWaterMark: 1},
+    {reconciled: false, sourceHighWaterMark: 2},
+  ])
+  expect(result.intakeResult).toEqual({dirtyWorkCount: 9, maxSourceHighWaterMark: 1, status: 'converted'})
+  expect(result.dirtyRows).toHaveLength(9)
+  expect(
+    result.dirtyRows.every((row) => {
+      return (
+        row.dirtyKind === 'importRoute.article.added'
+        && row.latestSourceHighWaterMark === 1
+        && row.projectId === result.targetProjectId
+        && row.sourcePartition === 'import-route:target-route'
+        && row.status === 'pending'
+      )
+    }),
+  ).toBe(true)
+  expect(
+    result.dirtyRows.map((row) => {
+      return row.projectionComponent
+    }),
+  ).toEqual([
+    'humanStatus',
+    'llmStatus',
+    'payload',
+    'posting',
+    'projectScope',
+    'queue',
+    'search',
+    'selectedImport',
+    'summary',
+  ])
+  expect(result.legacyCounts).toEqual({
+    dirtyArticleRows: 0,
+    materializations: 0,
+    refreshRows: 0,
+    rebuildChunks: 0,
+    rebuildRequests: 0,
+  })
 })
 
 test('project transfer commit writer consumes same-connection operation tables for set-based article writes', () => {
