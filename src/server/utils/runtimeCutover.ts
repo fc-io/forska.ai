@@ -110,7 +110,7 @@ export const probeDuckdbOwnerRuntimeReadiness = async (
   context: string,
 ): Promise<RuntimeCutoverProbeResult> => {
   try {
-    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(5_000)})
+    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(10_000)})
     const parsed = await readResponseJson(response)
     const runtimeVersion = getRuntimeCutoverVersionFromPeerResponse(parsed)
     const data = getObjectValue(getObjectValue(parsed)?.data)

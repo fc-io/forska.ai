@@ -12,7 +12,7 @@ import {
 import {isLocalOperatorApiExposed} from './publicRouteSurfaceGate.ts'
 
 const bunDefaultMaxHttpRequests = 256
-const ownerProxyReadinessFreshMs = 10_000
+const ownerProxyReadinessFreshMs = 30_000
 
 let lastCompatibleOwnerReadiness: {checkedAtMs: number; duckdbOwnerUrl: string} | null = null
 
