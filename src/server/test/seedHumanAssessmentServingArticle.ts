@@ -129,5 +129,26 @@ export const seedHumanAssessmentServingArticle = async (params: {
       ['${escapeSqlString(params.promptId)}']::VARCHAR[],
       current_timestamp
     );
+
+    INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_kind,
+      priority_bucket,
+      article_id,
+      activity_sort_at,
+      queue_updated_at
+    )
+    VALUES (
+      '${escapeSqlString(params.projectId)}',
+      '${escapeSqlString(reviewConfigHash)}',
+      '${escapeSqlString(params.snapshotId)}',
+      'human-unreviewed',
+      0,
+      '${escapeSqlString(params.articleId)}',
+      current_timestamp,
+      current_timestamp
+    );
   `)
 }

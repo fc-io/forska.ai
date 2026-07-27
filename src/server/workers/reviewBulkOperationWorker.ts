@@ -269,7 +269,7 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
     listMode === 'unassessed'
       ? `AND EXISTS (
         SELECT 1
-        FROM mart.review_unassessed_queue_serving_v4 queue
+        FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
         WHERE queue.project_id = s.project_id
           AND queue.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
           AND queue.snapshot_id = s.snapshot_id

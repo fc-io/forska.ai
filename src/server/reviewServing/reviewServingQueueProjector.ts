@@ -586,6 +586,89 @@ const getDeleteReplacedQueueServingStatement = (
           ]
 }
 
+const getRefreshUnassessedQueueArticleRankStatements = (
+  input: ProjectReviewServingQueueInput,
+  rows: readonly QueueSourceRow[],
+) => {
+  const broadProjectClaim = hasProjectScopedClaim(input.claims)
+  const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
+  const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
+  const reviewConfigHashes = getQueueReviewConfigHashes(rows)
+  const reviewConfigPredicate =
+    reviewConfigHashes.length === 0
+      ? ''
+      : `AND review_config_hash IN (${reviewConfigHashes.map(getSqlLiteral).join(', ')})`
+  const rangePredicate = getQueueServingRangePredicate(input)
+  const scopePredicate =
+    articleIds.length > 0
+      ? `AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})`
+      : hasChunkArticleRange(input)
+        ? rangePredicate
+        : ''
+
+  return input.snapshotId === null
+    || input.snapshotId === undefined
+    || (!broadProjectClaim
+      && !hasChunkArticleRange(input)
+      && articleIds.length === 0
+      && promptIds.length === 0
+      && reviewConfigHashes.length === 0)
+    ? []
+    : [
+        `DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${reviewConfigPredicate}
+          ${scopePredicate}`,
+        `INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          queue_kind,
+          priority_bucket,
+          article_id,
+          activity_sort_at,
+          queue_updated_at
+        )
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          queue_kind,
+          priority_bucket,
+          article_id,
+          activity_sort_at,
+          queue_updated_at
+        FROM (
+          SELECT
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            queue_kind,
+            priority_bucket,
+            article_id,
+            activity_sort_at,
+            MAX(queue_updated_at) OVER (
+              PARTITION BY project_id, review_config_hash, snapshot_id, queue_kind, article_id
+            ) AS queue_updated_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY project_id, review_config_hash, snapshot_id, queue_kind, article_id
+              ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC
+            ) AS article_rank
+          FROM mart.review_unassessed_queue_serving_v4
+          WHERE project_id = ${getSqlLiteral(input.projectId)}
+            AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            ${reviewConfigPredicate}
+            ${scopePredicate}
+        ) ranked_queue
+        WHERE article_rank = 1
+        ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, article_id) DO UPDATE SET
+          priority_bucket = excluded.priority_bucket,
+          activity_sort_at = excluded.activity_sort_at,
+          queue_updated_at = excluded.queue_updated_at`,
+      ]
+}
+
 export const projectReviewServingQueuePatches = async (
   input: ProjectReviewServingQueueInput,
   database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
@@ -602,12 +685,16 @@ export const projectReviewServingQueuePatches = async (
   const deleteReplacedQueueServingStatements = measureSync('deleteStatementBuildMs', () => {
     return getDeleteReplacedQueueServingStatement(input, rows)
   })
+  const refreshArticleRankStatements = measureSync('articleRankStatementBuildMs', () => {
+    return getRefreshUnassessedQueueArticleRankStatements(input, rows)
+  })
 
   const writer = await measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
         acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'queue',
+        postRecordStatements: refreshArticleRankStatements,
         projectionManifests: shouldAcknowledgeClaims ? [getQueuePatchManifest(input)] : [],
         records: servingRecords,
         statements: deleteReplacedQueueServingStatements,

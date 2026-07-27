@@ -1330,7 +1330,7 @@ test('buildReviewServingRowsSql uses activity ordering for unassessed row contra
   })
 
   expect(sql).toContain('unassessed_queue_page AS (SELECT')
-  expect(sql).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).toContain('list_mode_state.has_unassessed_list_mode IS TRUE')
@@ -1340,15 +1340,16 @@ test('buildReviewServingRowsSql uses activity ordering for unassessed row contra
   expect(sql).toContain("queue.queue_kind = 'unassessed'")
   expect(sql).toContain('serving.article_id = queue.article_id')
   expect(sql).toContain('unassessed_queue_candidate AS (SELECT')
-  expect(sql).toContain('MAX(queue.activity_sort_at) AS activity_sort_at')
-  expect(sql).toContain('GROUP BY queue.project_id, queue.review_config_hash, queue.snapshot_id, queue.article_id')
+  expect(sql).toContain('queue.activity_sort_at')
+  expect(sql).not.toContain('MAX(queue.activity_sort_at) AS activity_sort_at')
+  expect(sql).not.toContain('GROUP BY queue.project_id, queue.review_config_hash, queue.snapshot_id, queue.article_id')
   expect(sql).toContain(
     'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT $limit',
   )
   expect(sql).toContain('FROM unassessed_queue_page')
   expect(sql).toContain('unassessed_queue_page.activity_sort_at AS activity_sort_at')
   expect(sql).toContain('ORDER BY unassessed_queue_page.activity_sort_at DESC, unassessed_queue_page.article_id DESC')
-  expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   expect(sql).not.toContain('FROM mart.review_article_serving_v4')
   expect(sql).not.toContain('JOIN mart.review_article_serving_v4')
   expect(sql).not.toContain('ORDER BY sort_key')
@@ -1370,7 +1371,7 @@ test('buildReviewServingRowsSql keeps unassessed article-set hydration bounded t
   })
 
   expect(sql).toContain('AND serving.article_id IN (SELECT unnest($articleIds))')
-  expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   expect(sql).not.toContain('queue.article_id = mart.review_article_serving_v4.article_id')
   expect(sql).not.toContain('FROM mart.review_article_serving_v4')
   expect(sql).not.toContain('JOIN mart.review_article_serving_v4')

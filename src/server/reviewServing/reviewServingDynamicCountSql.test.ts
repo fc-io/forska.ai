@@ -695,7 +695,7 @@ test('dynamic filtered counts read unassessed membership from base and list-mode
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).toContain("WHEN 'unassessed' THEN list_mode_state.has_unassessed_list_mode")
   expect(sql).not.toContain('list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
-  expect(sql).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   expect(sql).not.toContain('FROM mart.review_article_serving_v4 serving')
   expect(sql).not.toContain('state_filtered_article_ids')
 })

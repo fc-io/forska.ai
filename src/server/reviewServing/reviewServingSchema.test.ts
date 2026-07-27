@@ -100,6 +100,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0197_reviewArticleServingListModeMembershipFlags.sql',
   '../../db/duckdbMigrations/0198_nullHumanJudgmentDetailAnswerArray.sql',
   '../../db/duckdbMigrations/0199_dropReviewArticleServingListModeKeys.sql',
+  '../../db/duckdbMigrations/0200_reviewUnassessedQueueArticleRankServing.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -225,6 +226,8 @@ const reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0198_nullHumanJudgmentDetailAnswerArray.sql']
 const reviewArticleServingListModeKeysDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0199_dropReviewArticleServingListModeKeys.sql']
+const reviewUnassessedQueueArticleRankForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0200_reviewUnassessedQueueArticleRankServing.sql']
 const reviewFilterStateServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0180_reviewFilterStateServing.sql']
 const reviewFilterPostingServingCompactForwardMigrationSql =
@@ -287,6 +290,7 @@ const hotServingTables = [
   'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
+  'mart.review_unassessed_queue_article_rank_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
 ] as const
 
@@ -321,6 +325,7 @@ const reviewServingPhase1Tables = [
   'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
+  'mart.review_unassessed_queue_article_rank_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
 ] as const
 const retiredReviewServingTables = new Set<string>([
@@ -619,6 +624,32 @@ test('unassessed queue serving schema drops derived queue identity', () => {
   expect(reviewQueueServingCompactForwardMigrationSql).toContain('[]::VARCHAR[]')
   expect(reviewQueueServingCompactForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id)',
+  )
+})
+
+test('unassessed queue article-rank serving schema stores one row per article', () => {
+  expect([...getTableColumns('mart.review_unassessed_queue_article_rank_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'queue_kind',
+    'priority_bucket',
+    'article_id',
+    'activity_sort_at',
+    'queue_updated_at',
+  ])
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
+    'PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, article_id)',
+  )
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
+    'ROW_NUMBER() OVER (\n      PARTITION BY project_id, review_config_hash, snapshot_id, queue_kind, article_id',
+  )
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
+    'ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC',
+  )
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain('MAX(queue_updated_at) OVER')
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
+    'idx_review_unassessed_queue_article_rank_serving_v4_order',
   )
 })
 

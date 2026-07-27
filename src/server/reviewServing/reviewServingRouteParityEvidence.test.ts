@@ -350,12 +350,8 @@ const getContractSqlMatch = (
   const tableMatch = usesDirectArticleServingSource(contract)
     ? contract.key === 'review.unassessed.rows'
       ? containsSql(statement, 'unassessed_queue_page AS')
-        && containsSql(statement, 'FROM mart.review_unassessed_queue_serving_v4 queue')
-        && containsSql(statement, 'MAX(queue.activity_sort_at) AS activity_sort_at')
-        && containsSql(
-          statement,
-          'GROUP BY queue.project_id, queue.review_config_hash, queue.snapshot_id, queue.article_id',
-        )
+        && containsSql(statement, 'FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
+        && containsSql(statement, 'queue.activity_sort_at')
         && containsSql(
           statement,
           'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT',
@@ -505,7 +501,7 @@ const createDatabase = async () => {
           return (
             caseInput.request.contractKey === 'review.unassessed.rows'
             && containsSql(statement, 'unassessed_queue_page AS')
-            && containsSql(statement, 'FROM mart.review_unassessed_queue_serving_v4 queue')
+            && containsSql(statement, 'FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
             && containsSql(
               statement,
               'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT',
