@@ -201,7 +201,13 @@ test('buildReviewServingRowsSql uses article ordering and payload hydration for 
   expect(sql).toContain('json_merge_patch')
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(sql).toContain('CROSS JOIN UNNEST(list_mode_state.list_mode_keys) AS list_mode(list_mode_key)')
+  expect(sql).toContain("('both', list_mode_state.has_both_list_mode)")
+  expect(sql).toContain("('llm', list_mode_state.has_llm_list_mode)")
+  expect(sql).toContain("('human', list_mode_state.has_human_list_mode)")
+  expect(sql).toContain("('unassessed', list_mode_state.has_unassessed_list_mode)")
+  expect(sql).toContain('AS list_mode(list_mode_key, has_list_mode)')
+  expect(sql).toContain('list_mode.has_list_mode IS TRUE')
+  expect(sql).not.toContain('list_mode_state.list_mode_keys')
   expect(sql).toContain('LEFT JOIN app.article article ON article.id = serving.article_id')
   expect(sql).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(sql).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
@@ -492,7 +498,13 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(sql).toContain('CROSS JOIN UNNEST(list_mode_state.list_mode_keys) AS list_mode(list_mode_key)')
+  expect(sql).toContain("('both', list_mode_state.has_both_list_mode)")
+  expect(sql).toContain("('llm', list_mode_state.has_llm_list_mode)")
+  expect(sql).toContain("('human', list_mode_state.has_human_list_mode)")
+  expect(sql).toContain("('unassessed', list_mode_state.has_unassessed_list_mode)")
+  expect(sql).toContain('AS list_mode(list_mode_key, has_list_mode)')
+  expect(sql).toContain('list_mode.has_list_mode IS TRUE')
+  expect(sql).not.toContain('list_mode_state.list_mode_keys')
   expect(sql).toContain('AND serving.article_id = $articleId')
   expect(sql).toContain('article.source_metadata')
   expect(sql).toContain('selected_source.import_metadata')
@@ -511,6 +523,213 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   expect(sql).not.toContain('FROM mart.review_article_serving_v4')
   expect(sql).not.toContain('JOIN mart.review_article_serving_v4')
   expect(sql).not.toContain('AND list_mode_key =')
+})
+
+test('direct article reads expand list modes from flags instead of stale list keys in DuckDB', async () => {
+  const contract = getRequiredReviewServingReadContract('review.detail.row')
+  const getSql = (articleId: string) => {
+    return buildReviewServingRowsSql({
+      articleIdParameter: `'${articleId}'`,
+      contract,
+      displayIdentityParameter: "'display-1'",
+      limitParameter: '10',
+      listModeParameter: "'llm'",
+      payloadIdentityParameter: "'payload-1'",
+      projectIdParameter: "'project-1'",
+      projectScopeIdentityParameter: "'scope-1'",
+      reviewConfigHashParameter: "'review-config-1'",
+      searchIdentityParameter: "'search-1'",
+      selectedImportSnapshotIdParameter: "'selected-import-snapshot-1'",
+      snapshotIdParameter: "'snapshot-1'",
+    })
+  }
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA mart;
+      CREATE SCHEMA app;
+      CREATE TABLE mart.review_article_serving_base_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        base_generation INTEGER,
+        article_id VARCHAR,
+        article_created_at TIMESTAMP,
+        sort_key VARCHAR,
+        activity_sort_at TIMESTAMP
+      );
+      CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        article_id VARCHAR,
+        list_mode_keys VARCHAR[],
+        has_llm_list_mode BOOLEAN,
+        has_human_list_mode BOOLEAN,
+        has_both_list_mode BOOLEAN,
+        has_unassessed_list_mode BOOLEAN,
+        llm_patch_watermark INTEGER,
+        human_patch_watermark INTEGER,
+        both_patch_watermark INTEGER,
+        unassessed_patch_watermark INTEGER
+      );
+      CREATE TABLE app.review_selected_article_import_v4 (
+        project_id VARCHAR,
+        project_scope_identity VARCHAR,
+        selected_import_snapshot_id VARCHAR,
+        article_id VARCHAR,
+        import_route_id VARCHAR,
+        source_record_key VARCHAR,
+        tombstone BOOLEAN
+      );
+      CREATE TABLE app.article (
+        id VARCHAR,
+        article_id VARCHAR,
+        article_title VARCHAR,
+        article_updated_at TIMESTAMP,
+        arxiv_id VARCHAR,
+        biorxiv_id VARCHAR,
+        medrxiv_id VARCHAR,
+        doi VARCHAR,
+        pubmed_id VARCHAR,
+        url VARCHAR,
+        full_text_pdf VARCHAR,
+        full_text_fetched_at TIMESTAMP,
+        full_text_conversion_status VARCHAR,
+        source_metadata JSON
+      );
+      CREATE TABLE app.review_import_article_hot_field (
+        import_route_id VARCHAR,
+        article_id VARCHAR,
+        source_record_key VARCHAR,
+        article_title VARCHAR,
+        external_id VARCHAR,
+        journal_title VARCHAR,
+        tombstone BOOLEAN
+      );
+      CREATE TABLE app.article_import_route_source_record (
+        import_route_id VARCHAR,
+        article_id VARCHAR,
+        source_record_key VARCHAR,
+        raw_payload JSON,
+        import_metadata JSON,
+        quarantined_at TIMESTAMP
+      );
+      INSERT INTO mart.review_article_serving_base_v4 VALUES
+      (
+        'project-1',
+        'review-config-1',
+        'snapshot-1',
+        7,
+        'article-1',
+        TIMESTAMP '2026-01-01 00:00:00',
+        'sort-1',
+        TIMESTAMP '2026-01-01 00:00:00'
+      ),
+      (
+        'project-1',
+        'review-config-1',
+        'snapshot-1',
+        7,
+        'article-2',
+        TIMESTAMP '2026-01-03 00:00:00',
+        'sort-2',
+        TIMESTAMP '2026-01-03 00:00:00'
+      );
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
+      (
+        'project-1',
+        'review-config-1',
+        'snapshot-1',
+        'article-1',
+        ['llm'],
+        FALSE,
+        TRUE,
+        FALSE,
+        FALSE,
+        11,
+        22,
+        33,
+        44
+      ),
+      (
+        'project-1',
+        'review-config-1',
+        'snapshot-1',
+        'article-2',
+        ['unassessed'],
+        TRUE,
+        TRUE,
+        TRUE,
+        FALSE,
+        111,
+        222,
+        333,
+        444
+      );
+      INSERT INTO app.article VALUES
+      (
+        'article-1',
+        'external-article-1',
+        'Article 1',
+        TIMESTAMP '2026-01-02 00:00:00',
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      ),
+      (
+        'article-2',
+        'external-article-2',
+        'Article 2',
+        TIMESTAMP '2026-01-04 00:00:00',
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      );
+    `)
+
+    const staleArrayReader = await connection.runAndReadAll(getSql('article-1'))
+    const staleArrayRows = staleArrayReader.getRowObjectsJson() as Array<{
+      list_mode_key: string
+      patch_watermark: number
+    }>
+
+    expect(staleArrayRows).toHaveLength(1)
+    expect(staleArrayRows[0]?.list_mode_key).toBe('human')
+    expect(staleArrayRows[0]?.patch_watermark).toBe(22)
+
+    const priorityReader = await connection.runAndReadAll(getSql('article-2'))
+    const priorityRows = priorityReader.getRowObjectsJson() as Array<{list_mode_key: string; patch_watermark: number}>
+
+    expect(
+      priorityRows.map((row) => {
+        return {listModeKey: row.list_mode_key, patchWatermark: row.patch_watermark}
+      }),
+    ).toEqual([
+      {listModeKey: 'both', patchWatermark: 333},
+      {listModeKey: 'llm', patchWatermark: 111},
+      {listModeKey: 'human', patchWatermark: 222},
+    ])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('buildReviewServingRowsSql covers judgment detail rows for article details', () => {
