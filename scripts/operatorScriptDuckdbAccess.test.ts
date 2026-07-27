@@ -73,6 +73,12 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
       'no row, duplicate, index, or recoverability inspection was attempted',
       'Filtered-Count Serving Physical Evidence',
       'Summary Rebuild Accumulator Lifecycle Evidence',
+      'Hot Payload Proxy Evidence',
+      'hotPayloadProxyEvidence',
+      'totalArrayMemberships',
+      'maxArrayLength',
+      'avgArrayLength',
+      'approxStringBytes',
       'proof-only; not retention cleanup authorization',
       'not deletion authorization',
     ],
@@ -263,6 +269,30 @@ test('package no longer exposes legacy mart refresh or large-rebuild worker scri
   expect(packageJson.scripts['db:duck:quarantine-dirty-refresh-article']).toBeUndefined()
   expect(packageJson.scripts['db:duck:unquarantine-dirty-refresh-article']).toBeUndefined()
   expect(packageJson.scripts['db:duck:recover-dirty-refresh-claims']).toBeUndefined()
+})
+
+test('review-serving physical evidence inspector reports proof-only hot payload proxies', () => {
+  const source = readSource('scripts/inspectReviewServingPhysicalEvidence.ts')
+
+  for (const expectedText of [
+    'HotPayloadProxyEvidenceReport',
+    'mart.review_article_filter_posting_serving_v4',
+    "'article_ids'",
+    'mart.review_unassessed_queue_serving_v4',
+    "'prompt_ids'",
+    'app.review_rebuild_chunk_manifest',
+    "'diagnostics_json'",
+    "'budget_json'",
+    'CAST(COALESCE(SUM(COALESCE(array_length("${column}"), 0)), 0) AS BIGINT) AS totalArrayMemberships',
+    'CAST(MAX(COALESCE(array_length("${column}"), 0)) AS BIGINT) AS maxArrayLength',
+    'AVG(COALESCE(array_length("${column}"), 0)) AS avgArrayLength',
+    'CAST(COALESCE(SUM(length(CAST("${column}" AS VARCHAR))), 0) AS BIGINT) AS approxStringBytes',
+    'Missing required evidence column: ${column}',
+    'Table is absent: ${table}',
+    'not deletion authorization, field-slimming authorization, migration authorization, or runtime cleanup authorization',
+  ]) {
+    expect(source).toContain(expectedText)
+  }
 })
 
 test('review-serving rebuild request terminalization CLI is opt-in and dry-run first', () => {
