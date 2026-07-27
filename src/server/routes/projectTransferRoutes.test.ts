@@ -16,6 +16,9 @@ const commitModulePath = new URL('../services/projectTransfer/projectTransferCom
 const exportModulePath = new URL('../services/projectTransfer/projectTransferExport.ts', import.meta.url).pathname
 const exportPackageModulePath = new URL('../services/projectTransfer/projectTransferExportPackage.ts', import.meta.url)
   .pathname
+const actualCommitModule = (await import(
+  `${commitModulePath}?projectTransferRoutesActual=${Date.now()}-${Math.random()}`
+)) as typeof import('../services/projectTransfer/projectTransferCommit.ts')
 const dependencyResolutionModulePath = new URL(
   '../services/projectTransfer/projectTransferDependencyResolution.ts',
   import.meta.url,
@@ -30,10 +33,47 @@ const futureDate = new Date('2035-01-01T00:00:00.000Z')
 const pastDate = new Date('2020-01-01T00:00:00.000Z')
 const bodyMethods = new Set(['PATCH', 'POST', 'PUT'])
 const csvExportRoute = {method: 'POST', samplePath: '/api/projects/project-1/export'} as const
-const readySessionId = 'export-ready'
-const readyPackagePath = `tmp/project-transfer/export/${readySessionId}/package.zip`
-const uploadSessionId = 'import-upload'
-const uploadPackagePath = `tmp/project-transfer/import/${uploadSessionId}/upload.zip`
+const routeTestSessionPrefix = `routes-${process.pid}-${Date.now().toString(36)}-${Math.random()
+  .toString(16)
+  .slice(2, 8)}`
+const getRouteTestSessionId = (name: string) => {
+  return `${routeTestSessionPrefix}-${name}`
+}
+const getImportRootPath = (sessionId: string) => {
+  return `tmp/project-transfer/import/${sessionId}`
+}
+const getExportRootPath = (sessionId: string) => {
+  return `tmp/project-transfer/export/${sessionId}`
+}
+const getImportPlanPath = (sessionId: string) => {
+  return `${getImportRootPath(sessionId)}/plan.json`
+}
+const getUploadPackagePath = (sessionId: string) => {
+  return `${getImportRootPath(sessionId)}/upload.zip`
+}
+const getReadyPackagePath = (sessionId: string) => {
+  return `${getExportRootPath(sessionId)}/package.zip`
+}
+const readySessionId = getRouteTestSessionId('export-ready')
+const readyPackagePath = getReadyPackagePath(readySessionId)
+const uploadSessionId = getRouteTestSessionId('import-upload')
+const uploadPackagePath = getUploadPackagePath(uploadSessionId)
+const uploadArrayBufferSessionId = getRouteTestSessionId('import-upload-buffer')
+const readOnlyGetSessionId = getRouteTestSessionId('import-read-only-get')
+const missingArtifactsGetSessionId = getRouteTestSessionId('import-missing-get')
+const resolveSessionId = getRouteTestSessionId('import-resolve')
+const missingArtifactsResolveSessionId = getRouteTestSessionId('import-missing-resolve')
+const resolveRaceSessionId = getRouteTestSessionId('import-resolve-race')
+const artifactSessionIds = [
+  readySessionId,
+  uploadSessionId,
+  uploadArrayBufferSessionId,
+  readOnlyGetSessionId,
+  missingArtifactsGetSessionId,
+  resolveSessionId,
+  missingArtifactsResolveSessionId,
+  resolveRaceSessionId,
+] as const
 
 const getFinalConflictCounts = (packageContractConflictCount = 0) => {
   return {
@@ -208,6 +248,10 @@ const resolveProjectTransferDependenciesMock = mock(async (_input: unknown) => {
 const writeProjectTransferDependencyPlanMock = mock(async (_input: unknown) => {})
 
 const commitProjectTransferImportSessionMock = mock(async (input: {request: unknown; sessionId: string}) => {
+  if (routeState.commitResult === null && !Object.hasOwn(routeState.sessions, input.sessionId)) {
+    return actualCommitModule.commitProjectTransferImportSession(input)
+  }
+
   const current = routeState.sessions[input.sessionId] ?? null
 
   return (
@@ -482,7 +526,11 @@ void mock.module(analyzeModulePath, () => {
 })
 
 void mock.module(commitModulePath, () => {
-  return {commitProjectTransferImportSession: commitProjectTransferImportSessionMock}
+  return {
+    commitProjectTransferImportSession: commitProjectTransferImportSessionMock,
+    loadProjectTransferCommitArtifacts: actualCommitModule.loadProjectTransferCommitArtifacts,
+    revalidateProjectTransferCommitPlan: actualCommitModule.revalidateProjectTransferCommitPlan,
+  }
 })
 
 void mock.module(dependencyResolutionModulePath, () => {
@@ -642,10 +690,10 @@ afterEach(() => {
     status: 'ok',
   }
   routeState.sessions = {}
-  rmSync(`tmp/project-transfer/export/${readySessionId}`, {force: true, recursive: true})
-  rmSync(`tmp/project-transfer/import/${uploadSessionId}`, {force: true, recursive: true})
-  rmSync('tmp/project-transfer/import/import-auto-resolve-get', {force: true, recursive: true})
-  rmSync('tmp/project-transfer/import/import-read-only-get', {force: true, recursive: true})
+  for (const sessionId of artifactSessionIds) {
+    rmSync(getExportRootPath(sessionId), {force: true, recursive: true})
+    rmSync(getImportRootPath(sessionId), {force: true, recursive: true})
+  }
 })
 
 afterAll(() => {
@@ -862,7 +910,7 @@ test('project transfer export download returns non-ready session JSON before tou
 
 test('project transfer export download streams the ready package with metadata headers', async () => {
   const app = await getProjectTransferApp()
-  mkdirSync(`tmp/project-transfer/export/${readySessionId}`, {recursive: true})
+  mkdirSync(getExportRootPath(readySessionId), {recursive: true})
   await globalThis.Bun.write(readyPackagePath, 'download-body')
   routeState.sessions[readySessionId] = getReadySessionRecord()
 
@@ -997,11 +1045,11 @@ test('project transfer import upload streams to upload.zip and persists public m
 })
 
 test('project transfer import upload falls back when the request body has no reader', async () => {
-  rmSync('tmp/project-transfer/import/import-upload-array-buffer', {force: true, recursive: true})
-  routeState.sessions['import-upload-array-buffer'] = getImportSessionRecord({id: 'import-upload-array-buffer'})
+  rmSync(getImportRootPath(uploadArrayBufferSessionId), {force: true, recursive: true})
+  routeState.sessions[uploadArrayBufferSessionId] = getImportSessionRecord({id: uploadArrayBufferSessionId})
   const app = await getProjectTransferApp()
   const bytes = textEncoder.encode('zip-body')
-  const request = new Request('http://localhost/api/projects/import/import-upload-array-buffer/upload', {
+  const request = new Request(`http://localhost/api/projects/import/${uploadArrayBufferSessionId}/upload`, {
     body: bytes,
     headers: {'content-type': 'application/zip'},
     method: 'PUT',
@@ -1027,8 +1075,8 @@ test('project transfer import upload falls back when the request body has no rea
 })
 
 test('project transfer import get ignores autoResolve query and remains read-only', async () => {
-  routeState.sessions['import-read-only-get'] = getImportSessionRecord({
-    id: 'import-read-only-get',
+  routeState.sessions[readOnlyGetSessionId] = getImportSessionRecord({
+    id: readOnlyGetSessionId,
     planRevision: 1,
     planSummaryJson: {
       blockerCount: 2,
@@ -1039,12 +1087,12 @@ test('project transfer import get ignores autoResolve query and remains read-onl
     },
     state: 'awaiting_resolution',
   })
-  mkdirSync('tmp/project-transfer/import/import-read-only-get', {recursive: true})
-  await globalThis.Bun.write('tmp/project-transfer/import/import-read-only-get/plan.json', '{}')
+  mkdirSync(getImportRootPath(readOnlyGetSessionId), {recursive: true})
+  await globalThis.Bun.write(getImportPlanPath(readOnlyGetSessionId), '{}')
   const app = await getProjectTransferApp()
 
   const response = await app.handle(
-    new Request('http://localhost/api/projects/import/import-read-only-get?autoResolve=true'),
+    new Request(`http://localhost/api/projects/import/${readOnlyGetSessionId}?autoResolve=true`),
   )
   const body = (await response.json()) as {
     data: {planRevision: number; planSummary: {dependencyStatuses: Record<string, string>}; state: string}
@@ -1065,8 +1113,8 @@ test('project transfer import get ignores autoResolve query and remains read-onl
 })
 
 test('project transfer import get fails the session when dependency artifacts are missing', async () => {
-  routeState.sessions['import-missing-artifacts-get'] = getImportSessionRecord({
-    id: 'import-missing-artifacts-get',
+  routeState.sessions[missingArtifactsGetSessionId] = getImportSessionRecord({
+    id: missingArtifactsGetSessionId,
     planRevision: 1,
     planSummaryJson: {
       blockerCount: 2,
@@ -1079,7 +1127,7 @@ test('project transfer import get fails the session when dependency artifacts ar
   })
   const app = await getProjectTransferApp()
 
-  const response = await app.handle(new Request('http://localhost/api/projects/import/import-missing-artifacts-get'))
+  const response = await app.handle(new Request(`http://localhost/api/projects/import/${missingArtifactsGetSessionId}`))
   const body = (await response.json()) as {data: {error: {message: string}; state: string}; error: string | null}
 
   expect(response.status).toBe(200)
@@ -1161,8 +1209,8 @@ test('project transfer import analyze returns accepted when expanded size is unk
 })
 
 test('project transfer import resolve updates the durable dependency plan and commit returns completed session data', async () => {
-  routeState.sessions['import-resolve'] = getImportSessionRecord({
-    id: 'import-resolve',
+  routeState.sessions[resolveSessionId] = getImportSessionRecord({
+    id: resolveSessionId,
     planRevision: 1,
     planSummaryJson: {
       blockerCount: 1,
@@ -1173,12 +1221,12 @@ test('project transfer import resolve updates the durable dependency plan and co
     },
     state: 'awaiting_resolution',
   })
-  mkdirSync('tmp/project-transfer/import/import-resolve', {recursive: true})
-  await globalThis.Bun.write('tmp/project-transfer/import/import-resolve/plan.json', '{}')
+  mkdirSync(getImportRootPath(resolveSessionId), {recursive: true})
+  await globalThis.Bun.write(getImportPlanPath(resolveSessionId), '{}')
   const app = await getProjectTransferApp()
 
   const resolveResponse = await app.handle(
-    new Request('http://localhost/api/projects/import/import-resolve/resolve-dependencies', {
+    new Request(`http://localhost/api/projects/import/${resolveSessionId}/resolve-dependencies`, {
       body: JSON.stringify({
         planRevision: 1,
         selectedProviderConnections: [
@@ -1206,12 +1254,12 @@ test('project transfer import resolve updates the durable dependency plan and co
   routeState.commitResult = {
     completion,
     history: null,
-    session: {...routeState.sessions['import-resolve'], completionPayloadJson: completion, state: 'completed'},
+    session: {...routeState.sessions[resolveSessionId], completionPayloadJson: completion, state: 'completed'},
     status: 'completed',
     statusCode: 200,
   }
   const commitResponse = await app.handle(
-    new Request('http://localhost/api/projects/import/import-resolve/commit', {
+    new Request(`http://localhost/api/projects/import/${resolveSessionId}/commit`, {
       body: JSON.stringify({expectedPlanRevision: 1}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -1238,13 +1286,13 @@ test('project transfer import resolve updates the durable dependency plan and co
   expect(commitBody).toMatchObject({data: {completion, state: 'completed'}, error: null})
   expect(commitProjectTransferImportSessionMock).toHaveBeenCalledWith({
     request: {expectedPlanRevision: 1},
-    sessionId: 'import-resolve',
+    sessionId: resolveSessionId,
   })
 })
 
 test('project transfer import resolve fails the session when dependency artifacts are missing', async () => {
-  routeState.sessions['import-missing-artifacts-resolve'] = getImportSessionRecord({
-    id: 'import-missing-artifacts-resolve',
+  routeState.sessions[missingArtifactsResolveSessionId] = getImportSessionRecord({
+    id: missingArtifactsResolveSessionId,
     planRevision: 1,
     planSummaryJson: {
       blockerCount: 2,
@@ -1263,7 +1311,7 @@ test('project transfer import resolve fails the session when dependency artifact
   const app = await getProjectTransferApp()
 
   const response = await app.handle(
-    new Request('http://localhost/api/projects/import/import-missing-artifacts-resolve/resolve-dependencies', {
+    new Request(`http://localhost/api/projects/import/${missingArtifactsResolveSessionId}/resolve-dependencies`, {
       body: JSON.stringify({planRevision: 1}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -1285,20 +1333,20 @@ test('project transfer import resolve fails the session when dependency artifact
 })
 
 test('project transfer import resolve does not publish a plan when the session revision update loses', async () => {
-  routeState.sessions['import-resolve-race'] = getImportSessionRecord({
-    id: 'import-resolve-race',
+  routeState.sessions[resolveRaceSessionId] = getImportSessionRecord({
+    id: resolveRaceSessionId,
     planRevision: 1,
     state: 'awaiting_resolution',
   })
-  mkdirSync('tmp/project-transfer/import/import-resolve-race', {recursive: true})
-  await globalThis.Bun.write('tmp/project-transfer/import/import-resolve-race/plan.json', '{}')
+  mkdirSync(getImportRootPath(resolveRaceSessionId), {recursive: true})
+  await globalThis.Bun.write(getImportPlanPath(resolveRaceSessionId), '{}')
   updateProjectTransferSessionPlanRevisionMock.mockImplementationOnce(async () => {
     return null
   })
   const app = await getProjectTransferApp()
 
   const response = await app.handle(
-    new Request('http://localhost/api/projects/import/import-resolve-race/resolve-dependencies', {
+    new Request(`http://localhost/api/projects/import/${resolveRaceSessionId}/resolve-dependencies`, {
       body: JSON.stringify({planRevision: 1}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -1536,7 +1584,7 @@ test('project transfer import cancellation cleans temp artifacts and repeats ide
     progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
     state: 'queued',
   })
-  mkdirSync(`tmp/project-transfer/import/${uploadSessionId}`, {recursive: true})
+  mkdirSync(getImportRootPath(uploadSessionId), {recursive: true})
   await globalThis.Bun.write(uploadPackagePath, 'zip-body')
   const app = await getProjectTransferApp()
 
