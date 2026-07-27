@@ -5018,8 +5018,8 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
             archived BOOLEAN
           )
         \`)
-        await database.run("INSERT INTO app.prompt VALUES ('prompt-1', FALSE)")
-        await database.run("INSERT INTO app.project_prompt VALUES ('project-1', 'prompt-1', TRUE, FALSE)")
+        await database.run("INSERT INTO app.prompt VALUES ('prompt-1', FALSE), ('prompt-2', FALSE)")
+        await database.run("INSERT INTO app.project_prompt VALUES ('project-1', 'prompt-1', TRUE, FALSE), ('project-1', 'prompt-2', TRUE, FALSE)")
         await database.run(\`
           CREATE TABLE app.review_serving_snapshot_manifest (
             project_id VARCHAR NOT NULL,
@@ -5341,13 +5341,13 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
         duplicateFlag: true,
         humanStatus: 'unanswered',
         llmHasJudgment: false,
-        llmStatus: 'answered',
+        llmStatus: 'unanswered',
       },
       {
         articleId: 'article-2',
         conflictFlag: true,
         duplicateFlag: true,
-        humanStatus: 'answered',
+        humanStatus: 'unanswered',
         llmHasJudgment: true,
         llmStatus: 'unanswered',
       },
@@ -5359,7 +5359,7 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
         duplicateFlag: true,
         humanStatus: 'unanswered',
         listModeKey: 'human',
-        llmStatus: 'answered',
+        llmStatus: 'unanswered',
       },
       {
         articleId: 'article-1',
@@ -5367,13 +5367,13 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
         duplicateFlag: true,
         humanStatus: 'unanswered',
         listModeKey: 'llm',
-        llmStatus: 'answered',
+        llmStatus: 'unanswered',
       },
       {
         articleId: 'article-2',
         conflictFlag: true,
         duplicateFlag: true,
-        humanStatus: 'answered',
+        humanStatus: 'unanswered',
         listModeKey: 'human',
         llmStatus: 'unanswered',
       },
@@ -5381,7 +5381,7 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
         articleId: 'article-2',
         conflictFlag: true,
         duplicateFlag: true,
-        humanStatus: 'answered',
+        humanStatus: 'unanswered',
         listModeKey: 'llm',
         llmStatus: 'unanswered',
       },

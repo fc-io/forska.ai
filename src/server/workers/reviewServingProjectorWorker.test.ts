@@ -1383,11 +1383,7 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
     }
 
     if (statement.includes('FROM app.project project') && statement.includes('LIMIT 1')) {
-      return [
-        {
-          ...projectSettings,
-        },
-      ] as T[]
+      return [{...projectSettings}] as T[]
     }
 
     return [] as T[]
@@ -5158,6 +5154,7 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     expect(result).toEqual({status: 'completed'})
     expect(postingChunk.requestId).toBeNull()
     expect(joined).toContain('string_agg(')
+    expect(joined).toContain('CAST(llm_has_judgment AS VARCHAR)')
     expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
     expect(joined).toContain(
       'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
@@ -5296,11 +5293,7 @@ test('payload and search rebuild chunk executors write bounded base rows and com
       }
 
       if (statement.includes('FROM app.project project') && statement.includes('LIMIT 1')) {
-        return [
-          {
-            ...projectSettings,
-          },
-        ] as T[]
+        return [{...projectSettings}] as T[]
       }
 
       if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4 detail')) {

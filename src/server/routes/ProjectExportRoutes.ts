@@ -299,15 +299,13 @@ const getExportPromptDetails = async (input: {
       project_prompt.prompt_order AS promptOrder,
       export_scope.source_project_order AS sourceProjectOrder
     FROM export_scope
-    INNER JOIN app.project_prompt project_prompt
-      ON project_prompt.project_id = export_scope.project_id
-     AND project_prompt.enabled
-     AND NOT project_prompt.archived
     INNER JOIN export_prompt
-      ON export_prompt.prompt_id = project_prompt.prompt_id
+      ON TRUE
     INNER JOIN app.prompt prompt
-      ON prompt.id = project_prompt.prompt_id
-     AND COALESCE(prompt.archived, FALSE) = FALSE
+      ON prompt.id = export_prompt.prompt_id
+    LEFT JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = export_scope.project_id
+     AND project_prompt.prompt_id = export_prompt.prompt_id
     ORDER BY project_prompt.prompt_order ASC NULLS LAST, prompt.id ASC, export_scope.source_project_order ASC
     LIMIT ${getSqlLiteral(maxResultRows)}
   `,

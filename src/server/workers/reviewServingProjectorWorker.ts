@@ -1392,7 +1392,8 @@ const getPostingRebuildChunkOutputChecksum = async (
         CAST(duplicate_flag AS VARCHAR) || ':' ||
         CAST(conflict_flag AS VARCHAR) || ':' ||
         COALESCE(CAST(llm_status AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(human_status AS VARCHAR), '') AS row_key
+        COALESCE(CAST(human_status AS VARCHAR), '') || ':' ||
+        CAST(llm_has_judgment AS VARCHAR) AS row_key
       FROM mart.review_article_serving_list_mode_state_v4 state
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSnapshotIdPredicate(input.snapshotIds)}
