@@ -17,18 +17,34 @@ Generated with:
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-requestless-artifact-operator-candidates.md
 ```
 
-The current project has:
+The current read-only primary DB snapshot reports:
 
-- 96,422 chunk-manifest rows.
-- 0 currently requestless chunk-manifest rows.
-- 79,852 chunk-manifest rows tied to two `failed-retryable`
-  requestless-bootstrap requests.
-- 16,570 chunk-manifest rows tied to one `failed-blocked-terminal` request.
-- Summary rebuild partial artifacts still dominated by failed/unclassified,
-  blocked-terminal, and retryable request dispositions.
+- 99,921 global chunk-manifest rows, including 96,422 scoped to project
+  `7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac`.
+- 781 global summary-accumulator rows, including 210 scoped to project
+  `7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac`.
+- 0 eligible chunk-manifest cleanup rows.
+- 0 eligible/runtime cleanup summary-accumulator rows.
 
-The inspector now prints sample request ids per request disposition. For the
-current run, the operator-relevant rows include:
+First-blocker categories for the scoped chunk manifest are:
+
+| Blocker | Rows |
+| --- | ---: |
+| `non_summary_chunk` | 78,842 |
+| `protected_rebuild_request` | 17,085 |
+| `newest_diagnostic_request` | 495 |
+| `eligible` | 0 |
+
+First-blocker categories for the scoped summary accumulator are:
+
+| Blocker | Rows |
+| --- | ---: |
+| `request_not_completed_admitted` | 166 |
+| `protected_rebuild_request` | 44 |
+| `eligible/runtime_cleanup` | 0 |
+
+The inspector prints sample request ids per request disposition. Historical
+operator-relevant rows from the evidence trail include:
 
 - `failed-retryable`: `requestless-bootstrap:0d51c37206c26e26ed0f9109`,
   `requestless-bootstrap:6100fc2a4e93df428c3b97cd`
@@ -37,6 +53,24 @@ current run, the operator-relevant rows include:
 - `failed-superseded-derived`: `rebuild:3c69f6834e35d933c2b924c18952111c`,
   `rebuild:46bc80c6d67f3c759427ee819654e429`,
   `requestless-bootstrap:929787658a6d45c4ac74985b`
+
+## 2026-07-27 Read-Only Refresh
+
+The latest primary-DB investigation keeps cleanup expansion blocked:
+
+- `requestless-bootstrap:6100fc2a4e93df428c3b97cd` is an active/protected
+  requestless-bootstrap blocker with pending or running chunks. It is not a
+  failed-request release target.
+- `rebuild:780e132cc91c31336d48f3ac67eb709a` remains a failed OOM request, but
+  its artifact rows are still protected by retryable, pending, running, or
+  blocked chunks.
+- `requestless-bootstrap:0d51c37206c26e26ed0f9109` remains a failed requestless
+  request that needs explicit operator disposition. The current release
+  operator refuses it because quarantined chunks make release unsafe.
+
+Conclusion: no cleanup-expanding code slice is authorized yet. The next action
+is operator recovery or terminalization with dry-run proof, followed by the
+usual current-DB progress gates before any cleanup predicate is widened.
 
 ## Disposition
 
