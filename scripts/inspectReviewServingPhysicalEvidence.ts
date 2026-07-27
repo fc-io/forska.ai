@@ -27,6 +27,7 @@ type EvidenceReport = {
   dirtyWorkRetentionEvidence: DirtyWorkRetentionEvidenceReport
   filteredCountServingPhysicalEvidence: FilteredCountServingPhysicalEvidenceReport
   generatedAt: string
+  hotPayloadProxyEvidence: HotPayloadProxyEvidenceReport
   judgmentDetailPayloadReadiness: JudgmentDetailPayloadReadinessReport
   mode: 'readonly-snapshot'
   options: CliOptions
@@ -207,6 +208,34 @@ type FilteredCountServingPhysicalEvidenceReport = {
   staleByTtlCandidateCounts: FilteredCountServingPhysicalEvidenceBucketRow[]
   table: 'mart.review_filtered_count_serving_v4'
   totalRowCount: number | null
+  verdict: 'not-authorized' | 'blocked'
+}
+type HotPayloadArrayProxyEvidence = {
+  approxStringBytes: number | null
+  avgArrayLength: number | null
+  column: 'article_ids' | 'prompt_ids'
+  currentProjectRows: number | null
+  error: string | null
+  maxArrayLength: number | null
+  rowCount: number | null
+  status: 'ok' | 'blocked'
+  table: 'mart.review_article_filter_posting_serving_v4' | 'mart.review_unassessed_queue_serving_v4'
+  totalArrayMemberships: number | null
+}
+type HotPayloadScalarProxyEvidence = {
+  approxStringBytes: number | null
+  column: 'budget_json' | 'diagnostics_json'
+  currentProjectRows: number | null
+  error: string | null
+  nonNullRows: number | null
+  rowCount: number | null
+  status: 'ok' | 'blocked'
+  table: 'app.review_rebuild_chunk_manifest'
+}
+type HotPayloadProxyEvidenceReport = {
+  arrayColumns: HotPayloadArrayProxyEvidence[]
+  note: string
+  scalarColumns: HotPayloadScalarProxyEvidence[]
   verdict: 'not-authorized' | 'blocked'
 }
 type RebuildArtifactDispositionArtifactRow = {
@@ -1014,6 +1043,170 @@ const getDuplicateProbe = async (
   const rows = await runReadonlyQuery<{duplicateCount: number | string}>(runtime, sql)
 
   return {duplicateCount: Number(rows[0]?.duplicateCount ?? 0), keyColumns, sql}
+}
+
+const getHotPayloadArrayProxyEvidence = async (
+  runtime: QueryRuntime,
+  table: HotPayloadArrayProxyEvidence['table'],
+  column: HotPayloadArrayProxyEvidence['column'],
+  projectId: string,
+): Promise<HotPayloadArrayProxyEvidence> => {
+  const blocked = (error: string): HotPayloadArrayProxyEvidence => {
+    return {
+      approxStringBytes: null,
+      avgArrayLength: null,
+      column,
+      currentProjectRows: null,
+      error,
+      maxArrayLength: null,
+      rowCount: null,
+      status: 'blocked',
+      table,
+      totalArrayMemberships: null,
+    }
+  }
+
+  try {
+    if (!(await getTableExists(runtime, table))) {
+      return blocked(`Table is absent: ${table}`)
+    }
+
+    const columns = await getTableColumns(runtime, table)
+
+    if (!hasColumn(columns, column)) {
+      return blocked(`Missing required evidence column: ${column}`)
+    }
+
+    const rows = await runReadonlyQuery<{
+      approxStringBytes: number | string | null
+      avgArrayLength: number | string | null
+      currentProjectRows: number | string
+      maxArrayLength: number | string | null
+      rowCount: number | string
+      totalArrayMemberships: number | string | null
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COALESCE(SUM(COALESCE(array_length("${column}"), 0)), 0) AS BIGINT) AS totalArrayMemberships,
+          CAST(MAX(COALESCE(array_length("${column}"), 0)) AS BIGINT) AS maxArrayLength,
+          AVG(COALESCE(array_length("${column}"), 0)) AS avgArrayLength,
+          CAST(COALESCE(SUM(length(CAST("${column}" AS VARCHAR))), 0) AS BIGINT) AS approxStringBytes
+        FROM ${table}
+      `,
+    )
+    const row = rows[0]
+
+    return {
+      approxStringBytes: getNumberOrNull(row?.approxStringBytes),
+      avgArrayLength: getNumberOrNull(row?.avgArrayLength),
+      column,
+      currentProjectRows: getNumberOrNull(row?.currentProjectRows),
+      error: null,
+      maxArrayLength: getNumberOrNull(row?.maxArrayLength),
+      rowCount: getNumberOrNull(row?.rowCount),
+      status: 'ok',
+      table,
+      totalArrayMemberships: getNumberOrNull(row?.totalArrayMemberships),
+    }
+  } catch (error) {
+    return blocked(error instanceof Error ? error.message : String(error))
+  }
+}
+
+const getHotPayloadScalarProxyEvidence = async (
+  runtime: QueryRuntime,
+  table: HotPayloadScalarProxyEvidence['table'],
+  column: HotPayloadScalarProxyEvidence['column'],
+  projectId: string,
+): Promise<HotPayloadScalarProxyEvidence> => {
+  const blocked = (error: string): HotPayloadScalarProxyEvidence => {
+    return {
+      approxStringBytes: null,
+      column,
+      currentProjectRows: null,
+      error,
+      nonNullRows: null,
+      rowCount: null,
+      status: 'blocked',
+      table,
+    }
+  }
+
+  try {
+    if (!(await getTableExists(runtime, table))) {
+      return blocked(`Table is absent: ${table}`)
+    }
+
+    const columns = await getTableColumns(runtime, table)
+
+    if (!hasColumn(columns, column)) {
+      return blocked(`Missing required evidence column: ${column}`)
+    }
+
+    const rows = await runReadonlyQuery<{
+      approxStringBytes: number | string | null
+      currentProjectRows: number | string
+      nonNullRows: number | string
+      rowCount: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE "${column}" IS NOT NULL) AS BIGINT) AS nonNullRows,
+          CAST(COALESCE(SUM(length(CAST("${column}" AS VARCHAR))), 0) AS BIGINT) AS approxStringBytes
+        FROM ${table}
+      `,
+    )
+    const row = rows[0]
+
+    return {
+      approxStringBytes: getNumberOrNull(row?.approxStringBytes),
+      column,
+      currentProjectRows: getNumberOrNull(row?.currentProjectRows),
+      error: null,
+      nonNullRows: getNumberOrNull(row?.nonNullRows),
+      rowCount: getNumberOrNull(row?.rowCount),
+      status: 'ok',
+      table,
+    }
+  } catch (error) {
+    return blocked(error instanceof Error ? error.message : String(error))
+  }
+}
+
+const getHotPayloadProxyEvidenceReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+): Promise<HotPayloadProxyEvidenceReport> => {
+  const arrayColumns = [
+    await getHotPayloadArrayProxyEvidence(
+      runtime,
+      'mart.review_article_filter_posting_serving_v4',
+      'article_ids',
+      projectId,
+    ),
+    await getHotPayloadArrayProxyEvidence(runtime, 'mart.review_unassessed_queue_serving_v4', 'prompt_ids', projectId),
+  ]
+  const scalarColumns = [
+    await getHotPayloadScalarProxyEvidence(runtime, 'app.review_rebuild_chunk_manifest', 'diagnostics_json', projectId),
+    await getHotPayloadScalarProxyEvidence(runtime, 'app.review_rebuild_chunk_manifest', 'budget_json', projectId),
+  ]
+
+  return {
+    arrayColumns,
+    note: 'Read-only proof-only hot payload proxy evidence for active post-stack storage candidates. Row, array-membership, and approximate string-byte proxies are physical-shape evidence only; they are not deletion authorization, field-slimming authorization, migration authorization, or runtime cleanup authorization.',
+    scalarColumns,
+    verdict: [...arrayColumns, ...scalarColumns].every((proxy) => {
+      return proxy.status === 'blocked'
+    })
+      ? 'blocked'
+      : 'not-authorized',
+  }
 }
 
 const getActivePinPredicate = () => {
@@ -4457,6 +4650,30 @@ const renderMarkdown = (report: EvidenceReport) => {
     report.projectorWatermarkNullableFieldEvidence.rowsBySourcePartition.map((row) => {
       return [`\`${row.label}\``, formatValue(row.rowCount)]
     })
+  const hotPayloadArrayProxyRows = report.hotPayloadProxyEvidence.arrayColumns.map((proxy) => {
+    return [
+      `\`${proxy.table}\``,
+      `\`${proxy.column}\``,
+      formatValue(proxy.rowCount),
+      formatValue(proxy.currentProjectRows),
+      formatValue(proxy.totalArrayMemberships),
+      formatValue(proxy.maxArrayLength),
+      formatValue(proxy.avgArrayLength),
+      formatValue(proxy.approxStringBytes),
+      proxy.error ? `Blocked: ${proxy.error}` : proxy.status,
+    ]
+  })
+  const hotPayloadScalarProxyRows = report.hotPayloadProxyEvidence.scalarColumns.map((proxy) => {
+    return [
+      `\`${proxy.table}\``,
+      `\`${proxy.column}\``,
+      formatValue(proxy.rowCount),
+      formatValue(proxy.currentProjectRows),
+      formatValue(proxy.nonNullRows),
+      formatValue(proxy.approxStringBytes),
+      proxy.error ? `Blocked: ${proxy.error}` : proxy.status,
+    ]
+  })
   const summaryContributionDuplicateRows = report.summaryContributionServingReadiness.duplicateProbes.map((probe) => {
     return [
       probe.label,
@@ -4735,6 +4952,40 @@ const renderMarkdown = (report: EvidenceReport) => {
     filteredCountTtlRows.length > 0
       ? formatMarkdownTable(['TTL bucket', 'Candidate rows', 'Current-project candidate rows'], filteredCountTtlRows)
       : '_No filtered-count TTL candidate rows were collected._',
+    '',
+    '## Hot Payload Proxy Evidence',
+    '',
+    `Verdict: ${
+      report.hotPayloadProxyEvidence.verdict === 'not-authorized'
+        ? 'not-authorized (proof-only; not deletion/slimming authorization)'
+        : 'blocked'
+    }`,
+    '',
+    report.hotPayloadProxyEvidence.note,
+    '',
+    hotPayloadArrayProxyRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Table',
+            'Array column',
+            'Rows',
+            'Current-project rows',
+            'Total array memberships',
+            'Max array length',
+            'Avg array length',
+            'Approx string bytes',
+            'Status',
+          ],
+          hotPayloadArrayProxyRows,
+        )
+      : '_No hot array payload proxy evidence rows were collected._',
+    '',
+    hotPayloadScalarProxyRows.length > 0
+      ? formatMarkdownTable(
+          ['Table', 'Scalar column', 'Rows', 'Current-project rows', 'Non-null rows', 'Approx string bytes', 'Status'],
+          hotPayloadScalarProxyRows,
+        )
+      : '_No hot scalar payload proxy evidence rows were collected._',
     '',
     '## Dirty-Work Retention Evidence',
     '',
@@ -5416,6 +5667,7 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
                 options.limit,
               ),
               generatedAt: new Date().toISOString(),
+              hotPayloadProxyEvidence: await getHotPayloadProxyEvidenceReport(runtime, options.projectId),
               judgmentDetailPayloadReadiness: await getJudgmentDetailPayloadReadinessReport(
                 runtime,
                 options.projectId,
