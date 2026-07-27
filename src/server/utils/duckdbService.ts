@@ -3151,8 +3151,29 @@ const copyDuckdbDatabaseBeforeWalRecovery = async ({
   return databaseBackupPath
 }
 
+const createDuckdbStartupMutationProbeDatabase = async (runtimeConfig: DuckdbRuntimeConfig) => {
+  const recoveryDirectory = `${runtimeConfig.databasePath}.startup-recovery`
+  const probeDatabasePath = join(recoveryDirectory, `${getDuckdbRecoveryPathPart()}.startup-probe.duckdb`)
+
+  await mkdir(recoveryDirectory, {recursive: true})
+  const copiedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+    databaseBackupPath: probeDatabasePath,
+    databasePath: runtimeConfig.databasePath,
+  })
+
+  if (copiedDatabasePath === null) {
+    throw new Error(`DuckDB startup mutation preflight could not copy ${runtimeConfig.databasePath}`)
+  }
+
+  return copiedDatabasePath
+}
+
+const removeDuckdbStartupMutationProbeDatabase = async (probeDatabasePath: string) => {
+  await Promise.all([rm(probeDatabasePath, {force: true}), rm(`${probeDatabasePath}.wal`, {force: true})])
+}
+
 const duckdbStartupRecoveryArtifactPattern =
-  /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z\.[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\.(?:duckdb|pre-repair\.duckdb|[^/]+\.wal|recovery\.json)$/iu
+  /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z\.[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\.(?:duckdb|pre-repair\.duckdb|startup-probe\.duckdb|[^/]+\.wal|recovery\.json)$/iu
 
 const getDuckdbStartupRecoveryArtifactPathPart = (fileName: string) => {
   return fileName.match(duckdbStartupRecoveryArtifactPattern)?.[1] ?? null
@@ -4104,7 +4125,46 @@ const getDuckdbIndexedTableRepairScript = () => {
   `
 }
 
-const getDuckdbStartupPreflightError = (
+const runDuckdbStartupPreflightChild = async ({
+  activeRepairSpecPath,
+  preflightRepairSpecs,
+  runtimeConfig,
+}: {
+  activeRepairSpecPath: string
+  preflightRepairSpecs: DuckdbStartupIndexedTableRepairSpec[]
+  runtimeConfig: DuckdbRuntimeConfig
+}) => {
+  const mutationProbeDatabasePath =
+    preflightRepairSpecs.length === 0 ? null : await createDuckdbStartupMutationProbeDatabase(runtimeConfig)
+  const preflightDatabasePath = mutationProbeDatabasePath ?? runtimeConfig.databasePath
+
+  try {
+    return globalThis.Bun.spawnSync(
+      [
+        process.execPath,
+        '-e',
+        getDuckdbStartupPreflightScript(),
+        JSON.stringify(preflightDatabasePath),
+        JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
+        JSON.stringify(preflightRepairSpecs),
+        JSON.stringify(activeRepairSpecPath),
+      ],
+      {
+        cwd: process.cwd(),
+        env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD: 'true'},
+        stderr: 'pipe',
+        stdin: 'ignore',
+        stdout: 'pipe',
+      },
+    )
+  } finally {
+    if (mutationProbeDatabasePath !== null) {
+      await removeDuckdbStartupMutationProbeDatabase(mutationProbeDatabasePath)
+    }
+  }
+}
+
+const getDuckdbStartupPreflightError = async (
   runtimeConfig: DuckdbRuntimeConfig,
   hadWalBeforePreflight: boolean,
   pendingPostRepairPreflightSpecs: DuckdbStartupIndexedTableRepairSpec[] = [],
@@ -4157,24 +4217,7 @@ const getDuckdbStartupPreflightError = (
 
   clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
 
-  const result = globalThis.Bun.spawnSync(
-    [
-      process.execPath,
-      '-e',
-      getDuckdbStartupPreflightScript(),
-      JSON.stringify(runtimeConfig.databasePath),
-      JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
-      JSON.stringify(preflightRepairSpecs),
-      JSON.stringify(activeRepairSpecPath),
-    ],
-    {
-      cwd: process.cwd(),
-      env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD: 'true'},
-      stderr: 'pipe',
-      stdin: 'ignore',
-      stdout: 'pipe',
-    },
-  )
+  const result = await runDuckdbStartupPreflightChild({activeRepairSpecPath, preflightRepairSpecs, runtimeConfig})
 
   if (result.exitCode === 0) {
     clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
@@ -4488,7 +4531,11 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
   for (let recoveryAttempt = 0; recoveryAttempt < duckdbStartupMaxRecoveryAttempts; ) {
     const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
-    const error = getDuckdbStartupPreflightError(runtimeConfig, hadWalBeforePreflight, pendingPostRepairPreflightSpecs)
+    const error = await getDuckdbStartupPreflightError(
+      runtimeConfig,
+      hadWalBeforePreflight,
+      pendingPostRepairPreflightSpecs,
+    )
 
     if (error === null) {
       if (!hadWalBeforePreflight && pendingPostRepairPreflightSpecs.length > 0) {
@@ -4539,15 +4586,6 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
     if (!markerOnlyRepair && hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
       await quarantineFailedDuckdbWalReplay(runtimeConfig, error)
       continue
-    }
-
-    if (!hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
-      await quarantineFailedDuckdbWalReplay(runtimeConfig, error, {
-        event: 'duckdb.startup.preflight-mutation-wal-quarantine',
-        message: '[duckdb] quarantined WAL left by failed startup mutation preflight',
-        recovery: 'startup-preflight-mutation-wal-quarantine',
-        walFileSuffix: 'failed-startup-probe',
-      })
     }
 
     const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
