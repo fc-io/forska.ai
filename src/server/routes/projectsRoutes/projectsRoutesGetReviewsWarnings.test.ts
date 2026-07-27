@@ -1,6 +1,6 @@
 import {rmSync, writeFileSync} from 'node:fs'
 
-import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {buildPromptConfigHash, buildReviewConfigHash} from '../../reviewServing/reviewProjectionIdentity.ts'
@@ -82,13 +82,6 @@ type ReviewsWarningsResponse = {
   }
 }
 
-type MartRefreshProgressSnapshot = {
-  claimedQueuedArticleIds: string[]
-  claimedQueuedProjectIds: string[]
-  processingArticleIds: string[]
-  processingProjectIds: string[]
-}
-
 type RefreshStateOverrides = {
   dirtyToken?: number
   lastCompletedDirtyToken?: number
@@ -111,15 +104,11 @@ type LargeRebuildStateOverrides = {
 }
 
 type ReviewRebuildChunkStatus = 'blocked_over_budget' | 'completed' | 'failed' | 'pending' | 'quarantined' | 'running'
-type DirtyMaterializationStatus = 'completed' | 'failed' | 'pending' | 'running' | 'unreconciled'
 type ReviewRebuildRequestStatus = 'admitted' | 'blocked_over_budget' | 'completed' | 'failed'
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
-let resetProgressSnapshotForTests: (() => void) | null = null
-let setAutoDrainEnabledForTests: ((enabled: boolean) => void) | null = null
-let setProgressSnapshotForTests: ((snapshot: MartRefreshProgressSnapshot) => void) | null = null
 
 const insertProjectFixture = async (projectId: string) => {
   if (!runDatabase) {
@@ -233,69 +222,6 @@ const insertLargeRebuildState = async (projectId: string, overrides: LargeRebuil
   `)
 }
 
-const insertDirtyArticleRefreshState = async (projectId: string, articleId: string, dirtyToken: number) => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  await runDatabase(`
-    INSERT INTO app.project_mart_refresh_article_state (
-      project_id,
-      article_id,
-      first_dirty_token,
-      last_dirty_token,
-      updated_at
-    ) VALUES (
-      '${projectId}',
-      '${articleId}',
-      ${dirtyToken},
-      ${dirtyToken},
-      TIMESTAMPTZ '2026-04-02T12:01:00.000Z'
-    )
-  `)
-}
-
-const insertDirtyMaterializationState = async (input: {
-  leaseExpiresAt?: string | null
-  materializationOwner?: string | null
-  projectId: string
-  sourceKind: string
-  status: DirtyMaterializationStatus
-  targetDirtyToken: number
-}) => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  await runDatabase(`
-    INSERT INTO app.project_mart_dirty_materialization_state (
-      project_id,
-      source_kind,
-      target_dirty_token,
-      source_scope_generation,
-      source_scope_expected_row_count,
-      materialization_status,
-      materialization_owner,
-      lease_expires_at,
-      created_at,
-      last_started_at,
-      updated_at
-    ) VALUES (
-      '${input.projectId}',
-      '${input.sourceKind}',
-      ${input.targetDirtyToken},
-      1,
-      1,
-      '${input.status}',
-      ${input.materializationOwner === undefined || input.materializationOwner === null ? 'NULL' : `'${input.materializationOwner}'`},
-      ${input.leaseExpiresAt === undefined || input.leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${input.leaseExpiresAt}'`},
-      TIMESTAMPTZ '2026-04-02T12:02:00.000Z',
-      ${input.status === 'running' ? "TIMESTAMPTZ '2026-04-02T12:02:30.000Z'" : 'NULL'},
-      TIMESTAMPTZ '2026-04-02T12:03:00.000Z'
-    )
-  `)
-}
-
 const insertReviewSourceChangeOutbox = async (projectId: string, status: 'pending' | 'quarantined' = 'pending') => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -328,74 +254,6 @@ const insertReviewSourceChangeOutbox = async (projectId: string, status: 'pendin
       '${status}',
       TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
       TIMESTAMPTZ '2026-04-02T12:00:00.000Z'
-    )
-  `)
-}
-
-const insertFreshArticleRefreshLease = async (projectId: string, articleId: string) => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  await runDatabase(`
-    INSERT INTO app.maintenance_work_lease (
-      id,
-      work_kind,
-      scope_kind,
-      project_id,
-      article_id,
-      required_consumer_role,
-      consumer_id,
-      last_started_at,
-      last_progressed_at,
-      lease_expires_at,
-      fresh_until_at
-    ) VALUES (
-      'test-article-refresh-lease-${projectId}',
-      'review_index_article_refresh',
-      'article',
-      '${projectId}',
-      '${articleId}',
-      'maintenance-worker',
-      'test-maintenance-worker',
-      TIMESTAMPTZ '2026-04-02T12:05:00.000Z',
-      TIMESTAMPTZ '2026-04-02T12:05:15.000Z',
-      TIMESTAMPTZ '2035-04-02T12:05:30.000Z',
-      TIMESTAMPTZ '2035-04-02T12:05:30.000Z'
-    )
-  `)
-}
-
-const insertFreshGenerationCleanupLease = async (projectId: string) => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  await runDatabase(`
-    INSERT INTO app.maintenance_work_lease (
-      id,
-      work_kind,
-      scope_kind,
-      project_id,
-      article_id,
-      required_consumer_role,
-      consumer_id,
-      last_started_at,
-      last_progressed_at,
-      lease_expires_at,
-      fresh_until_at
-    ) VALUES (
-      'test-generation-cleanup-lease-${projectId}',
-      'review_index_serving_generation_cleanup',
-      'project',
-      '${projectId}',
-      NULL,
-      'maintenance-worker',
-      'test-maintenance-worker',
-      TIMESTAMPTZ '2026-04-02T12:05:00.000Z',
-      TIMESTAMPTZ '2026-04-02T12:05:20.000Z',
-      TIMESTAMPTZ '2035-04-02T12:05:30.000Z',
-      TIMESTAMPTZ '2035-04-02T12:05:30.000Z'
     )
   `)
 }
@@ -789,10 +647,6 @@ beforeAll(async () => {
   runDatabase = (statement: string) => {
     return database.run(statement)
   }
-  resetProgressSnapshotForTests = () => {}
-  setAutoDrainEnabledForTests = () => {}
-  setProgressSnapshotForTests = () => {}
-  setAutoDrainEnabledForTests(false)
   app = new Elysia().use(projectsRoutesGetReviewsWarnings)
 })
 
@@ -1041,30 +895,6 @@ test('reviews warnings block candidate-only snapshots when server mutation work 
   expect(body.data.indexing.status).toBe('blocked')
 })
 
-test.skip('retired legacy mart diagnostics: stale snapshots usable during refresh without hiding pending work', async () => {
-  const projectId = 'project-stale-readable-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertReviewServingRow(projectId, `article-${projectId}`)
-  await insertActiveReviewServingManifest({
-    includeSearchState: false,
-    optionalComponents: [],
-    projectId,
-    snapshotId: 'snapshot-stale-readable-warning',
-    status: 'retired',
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 0, pendingCount: 1})
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
-  expect(body.data.indexing.status).toBe('refreshing')
-})
-
 test('reviews warnings report completed health for last-known-good serving with no pending work', async () => {
   const projectId = 'project-retired-completed-warning'
 
@@ -1109,32 +939,6 @@ test('reviews warnings do not treat failed serving snapshots as progressable rep
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('stale')
-})
-
-test.skip('retired legacy maintenance lease diagnostics: bounded cleanup lease progress', async () => {
-  const projectId = 'project-generation-cleanup-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertReviewServingRow(projectId, `article-${projectId}`)
-  await insertActiveReviewServingManifest({
-    includeSearchState: false,
-    optionalComponents: [],
-    projectId,
-    snapshotId: 'snapshot-generation-cleanup-warning',
-  })
-  await insertFreshGenerationCleanupLease(projectId)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.cleanup).toEqual({
-    inFlightGenerationCleanupCount: 1,
-    lastProgressedAt: '2026-04-02 12:05:20+00',
-  })
-  expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('completed')
-  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings expose optional search diagnostic without blocking ready activation', async () => {
@@ -1900,55 +1704,6 @@ test('reviews warnings search diagnostic ignores active snapshots for older revi
   })
 })
 
-test.skip('retired legacy mart diagnostics: quarantined article refreshes without pending healthy work', async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  const projectId = 'project-quarantined-article-warning'
-  const articleId = `article-${projectId}`
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertDirtyArticleRefreshState(projectId, articleId, 1)
-  await insertReviewServingRow(projectId, articleId)
-  await runDatabase(`
-    INSERT INTO app.project_mart_dirty_refresh_article_quarantine (
-      project_id,
-      article_id,
-      dirty_token,
-      error,
-      detected_by,
-      created_at,
-      updated_at
-    ) VALUES (
-      '${projectId}',
-      '${articleId}',
-      1,
-      'native crash repro',
-      'test-suite',
-      TIMESTAMPTZ '2026-04-02T12:02:00.000Z',
-      TIMESTAMPTZ '2026-04-02T12:03:00.000Z'
-    )
-  `)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.blockedReason).toBe('quarantine_barrier')
-  expect(body.data.indexing.quarantinedArticleRefreshCount).toBe(1)
-  expect(
-    body.data.indexing.quarantinedArticles.map((article) => {
-      return {articleId: article.articleId, detectedBy: article.detectedBy, error: article.error}
-    }),
-  ).toEqual([{articleId, detectedBy: 'test-suite', error: 'native crash repro'}])
-  expect(body.data.indexing.progressState).toBe('blocked')
-  expect(body.data.indexing.status).toBe('blocked')
-})
-
 test('reviews warnings request V4 repair without legacy judgment fact fallback outside the foreground response', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -2020,166 +1775,6 @@ test('reviews warnings request V4 repair without legacy judgment fact fallback o
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('stale')
-})
-
-test.skip('retired legacy mart diagnostics: queued article refreshes do not gate V4 repair', async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  const projectId = 'project-queued-article-refresh-blocks-v4-repair'
-  const articleId = `article-${projectId}`
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertDirtyArticleRefreshState(projectId, articleId, 2)
-  await runDatabase(`
-    INSERT INTO mart.project_scope_article (
-      project_id,
-      article_id,
-      in_curated_scope,
-      in_route_scope,
-      article_created_at,
-      article_updated_at
-    ) VALUES (
-      '${projectId}',
-      '${articleId}',
-      TRUE,
-      FALSE,
-      TIMESTAMPTZ '2026-04-02 12:00:00+00',
-      NULL
-    )
-  `)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedRefreshCount).toBe(1)
-})
-
-test.skip('retired legacy mart diagnostics: ledger and worker progress state', async () => {
-  if (!runDatabase || !setProgressSnapshotForTests) {
-    throw new Error('Test dependencies not initialized')
-  }
-
-  const projectId = 'project-refreshing-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 2,
-    lastCompletedDirtyToken: 1,
-    lastRequestedAt: '2026-04-02T12:00:00.000Z',
-    lastStartedAt: '2026-04-02T12:05:00.000Z',
-    leaseExpiresAt: '2035-04-02T12:05:30.000Z',
-    refreshStatus: 'running',
-  })
-  await insertActiveReviewServingManifest({
-    includeSearchState: false,
-    optionalComponents: [],
-    projectId,
-    snapshotId: 'snapshot-refreshing-warning',
-  })
-  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
-  setProgressSnapshotForTests({
-    claimedQueuedArticleIds: [`article-${projectId}`],
-    claimedQueuedProjectIds: [projectId],
-    processingArticleIds: [`article-${projectId}`],
-    processingProjectIds: [projectId],
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 12:00:00+00')
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedRefreshCount).toBe(0)
-  expect(body.data.indexing.inFlightRefreshCount).toBe(2)
-  expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.activeConsumerCount).toBe(1)
-  expect(body.data.indexing.activeWorkCount).toBe(2)
-  expect(body.data.indexing.eligibleConsumerPresent).toBe(true)
-  expect(body.data.indexing.progressState).toBe('processing')
-  expect(body.data.indexing.status).toBe('refreshing')
-})
-
-test.skip('retired legacy mart diagnostics: ledger-only running project refreshes without V4 state', async () => {
-  const projectId = 'project-ledger-only-running-refresh-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 2,
-    lastCompletedDirtyToken: 1,
-    lastRequestedAt: '2026-04-02T12:00:00.000Z',
-    lastStartedAt: '2026-04-02T12:05:00.000Z',
-    leaseExpiresAt: '2035-04-02T12:05:30.000Z',
-    refreshStatus: 'running',
-    workerId: 'maintenance-worker-ledger-only',
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.activeConsumerCount).toBe(1)
-  expect(body.data.indexing.activeWorkCount).toBe(1)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('processing')
-  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('refreshing')
-})
-
-test.skip('retired legacy mart diagnostics: dirty articles in live project scope', async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  const projectId = 'project-live-scope-dirty-warning'
-  const articleId = `article-${projectId}`
-  const staleArticleId = `article-${projectId}-stale`
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertActiveReviewServingManifest({
-    includeSearchState: false,
-    optionalComponents: [],
-    projectId,
-    snapshotId: 'snapshot-live-scope-dirty-warning',
-  })
-  await runDatabase(`
-    INSERT INTO app.import_route (id, route, name, active)
-    VALUES ('route-${projectId}', 'route-${projectId}', 'Live Scope Route', TRUE)
-  `)
-  await runDatabase(`
-    INSERT INTO app.project_import_route (id, project_id, import_route_id)
-    VALUES ('project-route-${projectId}', '${projectId}', 'route-${projectId}')
-  `)
-  await runDatabase(`
-    INSERT INTO app.article_import_route (id, article_id, import_route_id)
-    VALUES ('article-route-${projectId}', '${articleId}', 'route-${projectId}')
-  `)
-  await runDatabase(`
-    INSERT INTO app.article (id, article_title)
-    VALUES ('${staleArticleId}', 'Stale dirty article')
-  `)
-  await insertDirtyArticleRefreshState(projectId, articleId, 2)
-  await insertDirtyArticleRefreshState(projectId, staleArticleId, 2)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings request bounded V4 repair when fresh idle serving is missing outside the foreground response', async () => {
@@ -2404,73 +1999,6 @@ test('reviews warnings request bounded V4 repair for stale idle legacy no-work s
   expect(body.data.indexing.status).toBe('stale')
 })
 
-test.skip('retired legacy mart diagnostics: queued dirty materializations before missing snapshot repair', async () => {
-  const projectId = 'project-missing-serving-pending-dirty-materialization-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertDirtyMaterializationState({
-    projectId,
-    sourceKind: 'project_scope',
-    status: 'pending',
-    targetDirtyToken: 2,
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
-})
-
-test.skip('retired legacy mart diagnostics: running dirty materializations before missing snapshot repair', async () => {
-  const projectId = 'project-missing-serving-running-dirty-materialization-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertDirtyMaterializationState({
-    leaseExpiresAt: '2026-04-02T11:59:00.000Z',
-    materializationOwner: null,
-    projectId,
-    sourceKind: 'project_scope',
-    status: 'running',
-    targetDirtyToken: 2,
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
-})
-
-test.skip('retired legacy mart diagnostics: expired running legacy refresh before missing snapshot repair', async () => {
-  const projectId = 'project-missing-serving-expired-running-refresh-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 2,
-    lastCompletedDirtyToken: 1,
-    lastStartedAt: '2026-04-02T11:58:00.000Z',
-    leaseExpiresAt: '2026-04-02T11:59:00.000Z',
-    refreshStatus: 'running',
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.activeWorkCount).toBe(0)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
-})
-
 test('reviews warnings report blocked V4 repair without retrying terminal missing snapshot work', async () => {
   const projectId = 'project-missing-serving-blocked-bootstrap-warning'
 
@@ -2568,42 +2096,6 @@ test('reviews warnings ignore stale terminal chunks after same request is re-adm
   expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.status).toBe('refreshing')
-})
-
-test.skip('retired legacy mart diagnostics: fresh idle route scope before V4 repair', async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  const projectId = 'project-fresh-idle-route-scope-missing-v4-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 4, lastCompletedDirtyToken: 4, refreshStatus: 'idle'})
-  await runDatabase(`
-    DELETE FROM app.project_article
-    WHERE project_id = '${projectId}'
-  `)
-  await runDatabase(`
-    INSERT INTO app.import_route (id, route, name, active)
-    VALUES ('route-${projectId}', 'route-${projectId}', 'Route Scope', TRUE)
-  `)
-  await runDatabase(`
-    INSERT INTO app.project_import_route (id, project_id, import_route_id)
-    VALUES ('project-route-${projectId}', '${projectId}', 'route-${projectId}')
-  `)
-  await runDatabase(`
-    INSERT INTO app.article_import_route (id, article_id, import_route_id)
-    VALUES ('article-route-${projectId}', 'article-${projectId}', 'route-${projectId}')
-  `)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('stalled')
-  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings do not bootstrap missing serving rows for archived prompt links', async () => {
@@ -2745,218 +2237,6 @@ test('reviews warnings do not queue bootstrap rebuild for articles outside proje
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.status).toBe('not-needed')
-})
-
-test.skip('retired legacy maintenance lease diagnostics: fresh persisted article leases', async () => {
-  const projectId = 'project-persisted-article-lease-warning'
-
-  await insertProjectFixture(projectId)
-  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 1)
-  await insertFreshArticleRefreshLease(projectId, `article-${projectId}`)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.activeConsumerCount).toBe(1)
-  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('processing')
-  expect(body.data.indexing.lastStartedAt).toBe('2026-04-02 12:05:00+00')
-  expect(body.data.indexing.lastProgressedAt).toBe('2026-04-02 12:05:15+00')
-})
-
-test.skip('retired legacy maintenance lease diagnostics: active project-scoped claims', async () => {
-  const projectId = 'project-active-claim-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 2,
-    lastCompletedDirtyToken: 1,
-    lastRequestedAt: '2026-04-02T12:00:00.000Z',
-    lastStartedAt: '2026-04-02T12:05:00.000Z',
-    leaseExpiresAt: '2035-04-02T12:05:30.000Z',
-    refreshStatus: 'running',
-    workerId: 'maintenance-worker-active-claim',
-  })
-  await insertActiveReviewServingManifest({
-    includeSearchState: false,
-    optionalComponents: [],
-    projectId,
-    snapshotId: 'snapshot-active-claim-warning',
-  })
-  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
-
-  const {body, response} = await withServerMutationsDisabled(() => {
-    return postWarningsRequest(projectId)
-  })
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.activeConsumerCount).toBe(1)
-  expect(body.data.indexing.activeWorkCount).toBe(2)
-  expect(body.data.indexing.blockedReason).toBe(null)
-  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
-  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
-  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.lastProgressedAt).not.toBe(null)
-  expect(body.data.indexing.progressState).toBe('processing')
-  expect(body.data.indexing.status).toBe('refreshing')
-})
-
-test.skip('retired legacy mart diagnostics: failed refresh with dirty work', async () => {
-  const projectId = 'project-failed-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 3,
-    lastCompletedDirtyToken: 2,
-    lastFailedAt: '2026-04-02T12:07:00.000Z',
-    lastRequestedAt: '2026-04-02T12:00:00.000Z',
-    refreshStatus: 'failed',
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 12:00:00+00')
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('failed')
-  expect(body.data.indexing.status).toBe('failed')
-})
-
-test.skip('retired legacy mart diagnostics: failed dirty materializations without V4 state', async () => {
-  const projectId = 'project-failed-dirty-materialization-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 2,
-    lastCompletedDirtyToken: 1,
-    lastRequestedAt: '2026-04-02T12:00:00.000Z',
-    refreshStatus: 'idle',
-  })
-  await insertDirtyMaterializationState({projectId, sourceKind: 'project_scope', status: 'failed', targetDirtyToken: 2})
-  await insertDirtyMaterializationState({
-    projectId,
-    sourceKind: 'review_facts',
-    status: 'unreconciled',
-    targetDirtyToken: 2,
-  })
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('failed')
-  expect(body.data.indexing.status).toBe('failed')
-})
-
-test.skip('retired legacy maintenance lease diagnostics: expired running leases', async () => {
-  const projectId = 'project-expired-lease-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 2,
-    lastCompletedDirtyToken: 1,
-    lastRequestedAt: '2026-04-02T12:00:00.000Z',
-    lastStartedAt: '2026-04-02T12:05:00.000Z',
-    leaseExpiresAt: '2026-04-02T12:05:30.000Z',
-    refreshStatus: 'running',
-  })
-  await insertActiveReviewServingManifest({
-    includeSearchState: false,
-    optionalComponents: [],
-    projectId,
-    snapshotId: 'snapshot-expired-lease-warning',
-  })
-  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.status).toBe('refreshing')
-})
-
-test.skip('retired legacy owner diagnostics: pending work without local refresh consumer', async () => {
-  const projectId = 'project-blocked-no-consumer-warning'
-
-  await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {
-    dirtyToken: 2,
-    lastCompletedDirtyToken: 1,
-    lastRequestedAt: '2026-04-02T12:00:00.000Z',
-    refreshStatus: 'idle',
-  })
-  await insertActiveReviewServingManifest({
-    includeSearchState: false,
-    optionalComponents: [],
-    projectId,
-    snapshotId: 'snapshot-blocked-no-consumer-warning',
-  })
-
-  const {body, response} = await withServerMutationsDisabled(() => {
-    return postWarningsRequest(projectId)
-  })
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.activeConsumerCount).toBe(0)
-  expect(body.data.indexing.activeWorkCount).toBe(0)
-  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
-  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
-  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('blocked')
-  expect(body.data.indexing.requiredConsumerRole).toBe('maintenance-worker')
-  expect(body.data.indexing.status).toBe('blocked')
-})
-
-test.skip('retired legacy owner diagnostics: mart refresh drain disabled by memory policy', async () => {
-  const projectId = 'project-blocked-low-memory-warning'
-  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
-
-  process.env.DUCKDB_MEMORY_LIMIT = '5120MiB'
-
-  try {
-    await insertProjectFixture(projectId)
-    await insertProjectRefreshState(projectId, {
-      dirtyToken: 2,
-      lastCompletedDirtyToken: 1,
-      lastRequestedAt: '2026-04-02T12:00:00.000Z',
-      refreshStatus: 'idle',
-    })
-    await insertActiveReviewServingManifest({
-      includeSearchState: false,
-      optionalComponents: [],
-      projectId,
-      snapshotId: 'snapshot-blocked-low-memory-warning',
-    })
-
-    const {body, response} = await postWarningsRequest(projectId)
-
-    expect(response.status).toBe(200)
-    expect(body.data.indexing.blockedReason).toBe('paused_by_policy')
-    expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
-    expect(body.data.indexing.progressState).toBe('blocked')
-    expect(body.data.indexing.recoveryMode).toBe('none')
-    expect(body.data.indexing.status).toBe('blocked')
-  } finally {
-    if (previousDuckdbMemoryLimit === undefined) {
-      delete process.env.DUCKDB_MEMORY_LIMIT
-    } else {
-      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
-    }
-  }
 })
 
 test('reviews warnings keep V4 rebuild chunks refreshable when memory policy disables mart refresh drain', async () => {
@@ -3145,12 +2425,7 @@ test('reviews warnings route reuses reader diagnostics instead of duplicate curr
   expect(source).not.toContain('Promise.all([\n      readReviewServingRows')
 })
 
-afterEach(() => {
-  resetProgressSnapshotForTests?.()
-})
-
 afterAll(async () => {
-  setAutoDrainEnabledForTests?.(true)
   await closeDatabase?.()
   tempRuntimeRoot.cleanup()
 })
