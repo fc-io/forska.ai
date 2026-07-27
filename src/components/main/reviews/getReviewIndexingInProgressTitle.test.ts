@@ -13,34 +13,16 @@ import {
 import type {ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
 const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): ReviewsWarningsData['indexing'] => {
-  const queueMetrics = {
-    lastDurationMs: null,
-    lastWaitMs: null,
-    maxQueueDepth: 0,
-    queueDepth: 0,
-    tasksCompleted: 0,
-    tasksStarted: 0,
-    totalDurationMs: 0,
-    totalWaitMs: 0,
-  }
-
   return {
     activeConsumerCount: 0,
     activeWorkCount: 0,
     articleRefreshesPerMinute: null,
     blockedReason: null,
-    diagnostics: {
-      duckdbQueues: {background: queueMetrics, main: queueMetrics},
-      largeRebuild: {currentPhase: null, lastCycle: null},
-      processMemory: {rssBytes: 0},
-      tempSpill: {available: false, error: null, fileCount: null, tempDirectory: null, totalBytes: null},
-    },
     eligibleConsumerCount: 1,
     eligibleConsumerPresent: true,
     inFlightArticleRefreshCount: 0,
     inFlightProjectRefreshCount: 0,
     inFlightRefreshCount: 0,
-    largeRebuild: null,
     lastProgressedAt: null,
     lastProcessedAt: null,
     lastStartedAt: null,
@@ -59,7 +41,7 @@ const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): Revie
     recoveryMode: 'none',
     requiredConsumerRole: 'maintenance-worker',
     retryAfterAt: null,
-    serving: {readable: true, usable: true},
+    serving: {diagnostics: {}, manifest: {}, readable: true, usable: true},
     status: 'refreshing',
     ...overrides,
   }
@@ -116,31 +98,6 @@ test('review indexing blocked copy distinguishes worker wait from automatic memo
   expect(getReviewIndexingBlockedBody('waiting_for_maintenance_worker')).toContain('waiting for a maintenance worker')
   expect(getReviewIndexingBlockedTitle('paused_by_policy')).toBe('Review indexing recovering after memory pressure')
   expect(getReviewIndexingBlockedBody('paused_by_policy')).toContain('will resume review refresh work automatically')
-})
-
-test('legacy large rebuild fields do not change product warning copy', () => {
-  const copy = getReviewIndexingStateCopy({
-    indexing: getIndexing({
-      largeRebuild: {
-        cursorArticleCreatedAt: null,
-        cursorArticleId: null,
-        lastError: null,
-        lastProgressedAt: null,
-        lastStartedAt: null,
-        operatorNote: null,
-        progress: {remainingCurrentPhaseArticleCount: 10, rowsPerMinute: 600, scopeArticleCount: 20},
-        rebuildPhase: 'prompt_answer_fact',
-        refreshStatus: 'idle',
-        refreshToken: 1,
-      },
-      progressState: 'queued',
-    }),
-    projectId: 'project-1',
-    surface: 'banner',
-  })
-
-  expect(copy.title).toBe('Review indexing queued for project project-1')
-  expect(copy.description).not.toContain('Large rebuild')
 })
 
 test('cleanup copy keeps ready review pages usable', () => {

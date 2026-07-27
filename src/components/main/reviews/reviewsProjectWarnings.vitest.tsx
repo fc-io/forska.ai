@@ -31,17 +31,6 @@ vi.mock('@tanstack/solid-router', () => {
 })
 
 const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): ReviewsWarningsData => {
-  const queueMetrics = {
-    lastDurationMs: null,
-    lastWaitMs: null,
-    maxQueueDepth: 0,
-    queueDepth: 0,
-    tasksCompleted: 0,
-    tasksStarted: 0,
-    totalDurationMs: 0,
-    totalWaitMs: 0,
-  }
-
   return {
     enabledPromptCount: 1,
     indexing: {
@@ -49,18 +38,11 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       activeWorkCount: 0,
       articleRefreshesPerMinute: null,
       blockedReason: null,
-      diagnostics: {
-        duckdbQueues: {background: queueMetrics, main: queueMetrics},
-        largeRebuild: {currentPhase: null, lastCycle: null},
-        processMemory: {rssBytes: 0},
-        tempSpill: {available: false, error: null, fileCount: null, tempDirectory: null, totalBytes: null},
-      },
       eligibleConsumerCount: 1,
       eligibleConsumerPresent: true,
       inFlightArticleRefreshCount: 0,
       inFlightProjectRefreshCount: 0,
       inFlightRefreshCount: 0,
-      largeRebuild: null,
       lastProgressedAt: null,
       lastProcessedAt: null,
       lastStartedAt: null,
@@ -79,7 +61,7 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       recoveryMode: 'none',
       requiredConsumerRole: 'maintenance-worker',
       retryAfterAt: null,
-      serving: {readable: true, usable: true},
+      serving: {diagnostics: {}, manifest: {}, readable: true, usable: true},
       status: 'refreshing',
       ...indexing,
     },
@@ -185,25 +167,9 @@ test('renders automatic memory-pressure recovery without active progress copy', 
   }
 })
 
-test('does not render legacy staged large rebuild progress in product warnings', async () => {
+test('does not render retired large rebuild product warning copy', async () => {
   const {container, dispose} = await renderWarnings(
-    getWarningsData({
-      largeRebuild: {
-        cursorArticleCreatedAt: null,
-        cursorArticleId: 'article-148',
-        lastError: null,
-        lastProgressedAt: '2026-04-02T12:12:00.000Z',
-        lastStartedAt: '2026-04-02T12:05:00.000Z',
-        operatorNote: null,
-        progress: {remainingCurrentPhaseArticleCount: 12, rowsPerMinute: 600, scopeArticleCount: 148},
-        rebuildPhase: 'review_article_serving',
-        refreshStatus: 'idle',
-        refreshToken: 5,
-      },
-      pendingArticleRefreshCount: 148,
-      pendingRefreshCount: 149,
-      queuedArticleRefreshCount: 148,
-    }),
+    getWarningsData({pendingArticleRefreshCount: 148, pendingRefreshCount: 149, queuedArticleRefreshCount: 148}),
   )
 
   try {
@@ -222,42 +188,9 @@ test('renders user-facing counts and progress timestamps for review indexing wor
       activeConsumerCount: 2,
       activeWorkCount: 2,
       cleanup: {inFlightGenerationCleanupCount: 1, lastProgressedAt: '2026-04-02T12:11:00.000Z'},
-      dirtyMaterialization: {
-        activeOwnerCount: 1,
-        failedCount: 0,
-        incompleteCount: 2,
-        isActive: true,
-        lastProgressedAt: '2026-04-02T12:10:00.000Z',
-        oldestQueuedAt: '2026-04-02T12:00:00.000Z',
-        pendingCount: 1,
-        runningCount: 1,
-        unreconciledCount: 0,
-      },
-      freshness: {
-        dirtyToken: 8,
-        hasIncompleteDirtyMaterialization: true,
-        hasUnresolvedQuarantineBarrier: true,
-        isFresh: false,
-        lastCompletedDirtyToken: 6,
-        refreshStatus: 'running',
-        status: 'pending',
-        unresolvedQuarantineBarrierCount: 1,
-      },
       inFlightArticleRefreshCount: 2,
       inFlightProjectRefreshCount: 1,
       inFlightRefreshCount: 3,
-      largeRebuild: {
-        cursorArticleCreatedAt: null,
-        cursorArticleId: null,
-        lastError: null,
-        lastProgressedAt: '2026-04-02T12:12:00.000Z',
-        lastStartedAt: '2026-04-02T12:04:00.000Z',
-        operatorNote: null,
-        progress: {remainingCurrentPhaseArticleCount: 4, rowsPerMinute: null, scopeArticleCount: 9},
-        rebuildPhase: 'review_article_rollup',
-        refreshStatus: 'running',
-        refreshToken: 8,
-      },
       lastProgressedAt: '2026-04-02T12:12:00.000Z',
       lastStartedAt: '2026-04-02T12:04:00.000Z',
       pendingArticleRefreshCount: 2,
@@ -297,77 +230,47 @@ test('does not render admin-only diagnostics in the user indexing banner', async
     getWarningsData({
       activeConsumerCount: 1,
       activeWorkCount: 1,
-      diagnostics: {
-        duckdbQueues: {
-          background: {
-            lastDurationMs: 4,
-            lastWaitMs: 3,
-            maxQueueDepth: 7,
-            queueDepth: 2,
-            tasksCompleted: 11,
-            tasksStarted: 12,
-            totalDurationMs: 40,
-            totalWaitMs: 30,
-          },
-          main: {
-            lastDurationMs: 5,
-            lastWaitMs: 25,
-            maxQueueDepth: 9,
-            queueDepth: 4,
-            tasksCompleted: 21,
-            tasksStarted: 22,
-            totalDurationMs: 50,
-            totalWaitMs: 250,
-          },
-        },
-        largeRebuild: {
-          currentPhase: {
-            committedRowCount: 900,
-            cycleCount: 3,
-            durationMs: 60000,
-            lastEndedAt: '2026-04-02T12:12:00.000Z',
-            lastRssBytes: 123456789,
-            lastTempSpill: {
-              available: true,
-              error: null,
-              fileCount: 4,
-              tempDirectory: '/tmp/review-diagnostics',
-              totalBytes: 987654,
-            },
-            maxRssBytes: 123456789,
-            maxTempSpillBytes: 987654,
-            phase: 'review_article_serving',
-            queueWaitMs: 25,
-            rowsPerSecond: 15,
-          },
-          lastCycle: {
-            endedAt: '2026-04-02T12:12:00.000Z',
-            phase: 'review_article_serving',
-            queueWaitMs: 25,
-            rowsPerSecond: 15,
-            rssBytes: 123456789,
-            tempSpill: {
-              available: true,
-              error: null,
-              fileCount: 4,
-              tempDirectory: '/tmp/review-diagnostics',
-              totalBytes: 987654,
-            },
-          },
-        },
-        processMemory: {rssBytes: 123456789},
-        tempSpill: {
-          available: true,
-          error: null,
-          fileCount: 4,
-          tempDirectory: '/tmp/review-diagnostics',
-          totalBytes: 987654,
-        },
-      },
       inFlightProjectRefreshCount: 1,
       inFlightRefreshCount: 1,
       progressState: 'processing',
       queuedProjectRefreshCount: 0,
+      serving: {
+        diagnostics: {
+          duckdbQueues: {
+            background: {
+              lastDurationMs: 4,
+              lastWaitMs: 3,
+              maxQueueDepth: 7,
+              queueDepth: 2,
+              tasksCompleted: 11,
+              tasksStarted: 12,
+              totalDurationMs: 40,
+              totalWaitMs: 30,
+            },
+            main: {
+              lastDurationMs: 5,
+              lastWaitMs: 25,
+              maxQueueDepth: 9,
+              queueDepth: 4,
+              tasksCompleted: 21,
+              tasksStarted: 22,
+              totalDurationMs: 50,
+              totalWaitMs: 250,
+            },
+          },
+          processMemory: {rssBytes: 123456789},
+          tempSpill: {
+            available: true,
+            error: null,
+            fileCount: 4,
+            tempDirectory: '/tmp/review-diagnostics',
+            totalBytes: 987654,
+          },
+        },
+        manifest: {},
+        readable: true,
+        usable: true,
+      },
     }),
   )
 
