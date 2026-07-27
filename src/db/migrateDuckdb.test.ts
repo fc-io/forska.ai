@@ -78,6 +78,199 @@ test('DuckDB migrations keep projector watermark unindexed after primary-key rep
   expect(dropSql).toContain('DROP INDEX IF EXISTS idx_review_serving_projector_watermark_lookup;')
 })
 
+test('DuckDB migration rebuilds rebuild chunk manifests without mutable indexes', async () => {
+  const duckdbPath = `/tmp/forska-rebuild-chunk-manifest-noindex-${Date.now()}.duckdb`
+  const targetMigrationFile = '0205_rebuildChunkManifestWithoutIndexes.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_rebuild_chunk_manifest (
+            chunk_id VARCHAR PRIMARY KEY,
+            project_id VARCHAR,
+            projection_component VARCHAR NOT NULL,
+            projection_identity VARCHAR NOT NULL,
+            input_digest VARCHAR,
+            input_watermark BIGINT NOT NULL DEFAULT 0,
+            chunk_start_key VARCHAR NOT NULL,
+            chunk_end_key VARCHAR NOT NULL,
+            output_base_generation BIGINT NOT NULL DEFAULT 0,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            checksum VARCHAR,
+            lease_owner VARCHAR,
+            lease_expires_at TIMESTAMPTZ,
+            last_error VARCHAR,
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            request_id VARCHAR,
+            parent_chunk_id VARCHAR,
+            split_depth INTEGER DEFAULT 0,
+            snapshot_id VARCHAR,
+            snapshot_count INTEGER DEFAULT 1,
+            retry_count INTEGER DEFAULT 0,
+            retry_after TIMESTAMPTZ,
+            oom_category VARCHAR,
+            over_budget_reason VARCHAR,
+            estimated_input_rows BIGINT,
+            max_input_rows BIGINT,
+            actual_input_rows BIGINT,
+            estimated_output_rows BIGINT,
+            max_output_rows BIGINT,
+            actual_output_rows BIGINT,
+            estimated_output_bytes BIGINT,
+            max_output_bytes BIGINT,
+            actual_output_bytes BIGINT,
+            estimated_payload_bytes BIGINT,
+            max_payload_bytes BIGINT,
+            actual_payload_bytes BIGINT,
+            estimated_prompt_count BIGINT,
+            max_prompt_count BIGINT,
+            actual_prompt_count BIGINT,
+            estimated_temp_bytes BIGINT,
+            max_temp_bytes BIGINT,
+            actual_temp_bytes BIGINT,
+            duration_ms BIGINT,
+            workload_class VARCHAR,
+            admission_state VARCHAR DEFAULT 'admitted',
+            budget_json JSON DEFAULT '{}',
+            diagnostics_json JSON DEFAULT '{}'
+          )
+        \`)
+        await database.run(
+          "CREATE INDEX idx_review_rebuild_chunk_manifest_status ON app.review_rebuild_chunk_manifest(project_id, projection_component, projection_identity, status, chunk_start_key)"
+        )
+        await database.run(
+          "CREATE INDEX idx_review_rebuild_chunk_manifest_request_status ON app.review_rebuild_chunk_manifest(request_id, project_id, projection_component, status, admission_state, retry_after)"
+        )
+        await database.run(
+          "CREATE UNIQUE INDEX idx_review_rebuild_chunk_manifest_repaired_pk_test ON app.review_rebuild_chunk_manifest(chunk_id)"
+        ).catch(() => {})
+        await database.run(\`
+          INSERT INTO app.review_rebuild_chunk_manifest (
+            chunk_id,
+            project_id,
+            projection_component,
+            projection_identity,
+            input_digest,
+            input_watermark,
+            chunk_start_key,
+            chunk_end_key,
+            output_base_generation,
+            status,
+            request_id,
+            admission_state,
+            updated_at
+          )
+          VALUES (
+            'chunk-a',
+            'project-a',
+            'search',
+            'identity-a',
+            'digest-a',
+            42,
+            'article-a',
+            'article-z',
+            3,
+            'pending',
+            'request-a',
+            'admitted',
+            TIMESTAMPTZ '2026-07-28T00:00:00Z'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(
+          "SELECT chunk_id AS chunkId, status, request_id AS requestId FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
+        )
+        const indexes = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'app' AND table_name = 'review_rebuild_chunk_manifest' ORDER BY index_name"
+        )
+        const constraints = await database.queryJson(
+          "SELECT constraint_type AS constraintType FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name = 'review_rebuild_chunk_manifest' ORDER BY constraint_type"
+        )
+        console.log(JSON.stringify({constraints, indexes, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify rebuild chunk manifest migration',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      constraints: Array<{constraintType: string}>
+      indexes: Array<{indexName: string}>
+      rows: Array<{chunkId: string; requestId: string; status: string}>
+    }
+
+    expect(parsed.rows).toEqual([{chunkId: 'chunk-a', requestId: 'request-a', status: 'pending'}])
+    expect(parsed.indexes).toEqual([])
+    expect(
+      parsed.constraints.map((constraint) => {
+        return constraint.constraintType
+      }),
+    ).not.toContain('PRIMARY KEY')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('DuckDB migration creates dirty source watermark aggregate with dirty-work backfill', () => {
   const migrationSql = readFileSync(resolve(migrationsFolder, '0186_reviewServingDirtySourceWatermark.sql'), 'utf8')
 
@@ -796,6 +989,30 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0188_dropReviewTitleSearchTokenLookupIndex.sql'),
     'utf8',
   ).trim()
+  const reviewTitleSearchUniqueIndexDropSql = readFileSync(
+    resolve(migrationsFolder, '0204_dropReviewTitleSearchUniqueIndex.sql'),
+    'utf8',
+  ).trim()
+  const reviewRebuildChunkManifestNoIndexRepairSql = readFileSync(
+    resolve(migrationsFolder, '0205_rebuildChunkManifestWithoutIndexes.sql'),
+    'utf8',
+  ).trim()
+  const reviewQueueServingNoIndexRepairSql = readFileSync(
+    resolve(migrationsFolder, '0206_rebuildQueueServingWithoutIndexes.sql'),
+    'utf8',
+  ).trim()
+  const hotReviewServingNoIndexRepairSql = readFileSync(
+    resolve(migrationsFolder, '0207_rebuildHotReviewServingTablesWithoutRepairIndexes.sql'),
+    'utf8',
+  ).trim()
+  const reviewRebuildRequestNoIndexRepairSql = readFileSync(
+    resolve(migrationsFolder, '0208_rebuildReviewRebuildRequestWithoutIndexes.sql'),
+    'utf8',
+  ).trim()
+  const reviewQueueServingRepairIndexCleanupSql = readFileSync(
+    resolve(migrationsFolder, '0209_rebuildQueueServingRepairIndexCleanup.sql'),
+    'utf8',
+  ).trim()
   const reviewFilterPostingStatsDerivedColumnDropSql = readFileSync(
     resolve(migrationsFolder, '0129_dropReviewFilterPostingStatsDerivedColumns.sql'),
     'utf8',
@@ -984,6 +1201,41 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
       'DROP INDEX IF EXISTS idx_review_title_search_serving_v4_token;',
     ].join('\n'),
   )
+  expect(reviewTitleSearchUniqueIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS idx_review_title_search_serving_v4_repaired_pk',
+  )
+  expect(reviewRebuildChunkManifestNoIndexRepairSql).toContain(
+    'CREATE TABLE app.review_rebuild_chunk_manifest_noindex_repair',
+  )
+  expect(reviewRebuildChunkManifestNoIndexRepairSql).toContain(
+    'INSERT INTO app.review_rebuild_chunk_manifest_noindex_repair BY NAME',
+  )
+  expect(reviewRebuildChunkManifestNoIndexRepairSql).not.toContain('PRIMARY KEY')
+  expect(reviewQueueServingNoIndexRepairSql).toContain(
+    'CREATE TABLE mart.review_unassessed_queue_serving_v4_noindex_repair',
+  )
+  expect(reviewQueueServingNoIndexRepairSql).toContain(
+    'CREATE TABLE mart.review_unassessed_queue_article_rank_serving_v4_noindex_repair',
+  )
+  expect(reviewQueueServingNoIndexRepairSql).not.toContain('PRIMARY KEY')
+  expect(reviewQueueServingNoIndexRepairSql).not.toContain('CREATE INDEX')
+  expect(hotReviewServingNoIndexRepairSql).toContain('CREATE TABLE mart.review_title_search_serving_v4_noindex_repair')
+  expect(hotReviewServingNoIndexRepairSql).toContain(
+    'CREATE TABLE mart.review_article_filter_posting_serving_v4_noindex_repair',
+  )
+  expect(hotReviewServingNoIndexRepairSql).toContain(
+    'CREATE TABLE app.review_rebuild_chunk_manifest_noindex_repair_0207',
+  )
+  expect(hotReviewServingNoIndexRepairSql).not.toContain('PRIMARY KEY')
+  expect(hotReviewServingNoIndexRepairSql).not.toContain('CREATE INDEX')
+  expect(reviewRebuildRequestNoIndexRepairSql).toContain('CREATE TABLE app.review_rebuild_request_noindex_repair')
+  expect(reviewRebuildRequestNoIndexRepairSql).not.toContain('PRIMARY KEY')
+  expect(reviewRebuildRequestNoIndexRepairSql).not.toContain('CREATE INDEX')
+  expect(reviewQueueServingRepairIndexCleanupSql).toContain(
+    'CREATE TABLE mart.review_unassessed_queue_serving_v4_noindex_repair_0209',
+  )
+  expect(reviewQueueServingRepairIndexCleanupSql).not.toContain('PRIMARY KEY')
+  expect(reviewQueueServingRepairIndexCleanupSql).not.toContain('CREATE INDEX')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).toBe(
     [
       '-- Retired by 0147_dropReviewFilterPostingStats.sql.',

@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS mart.idx_review_title_search_serving_v4_repaired_pk;
+DROP INDEX IF EXISTS idx_review_title_search_serving_v4_repaired_pk;

@@ -103,6 +103,12 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0200_reviewUnassessedQueueArticleRankServing.sql',
   '../../db/duckdbMigrations/0201_dropLegacyReviewV3Marts.sql',
   '../../db/duckdbMigrations/0203_reviewSummaryRebuildAccumulatorChunkMembership.sql',
+  '../../db/duckdbMigrations/0204_dropReviewTitleSearchUniqueIndex.sql',
+  '../../db/duckdbMigrations/0205_rebuildChunkManifestWithoutIndexes.sql',
+  '../../db/duckdbMigrations/0206_rebuildQueueServingWithoutIndexes.sql',
+  '../../db/duckdbMigrations/0207_rebuildHotReviewServingTablesWithoutRepairIndexes.sql',
+  '../../db/duckdbMigrations/0208_rebuildReviewRebuildRequestWithoutIndexes.sql',
+  '../../db/duckdbMigrations/0209_rebuildQueueServingRepairIndexCleanup.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -286,6 +292,18 @@ const reviewFilteredCountComponentBreakoutDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0194_dropReviewFilteredCountComponentBreakoutColumns.sql'
   ]
+const reviewRebuildChunkManifestNoIndexForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0205_rebuildChunkManifestWithoutIndexes.sql']
+const reviewQueueServingNoIndexForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0206_rebuildQueueServingWithoutIndexes.sql']
+const reviewHotServingNoIndexForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0207_rebuildHotReviewServingTablesWithoutRepairIndexes.sql'
+  ]
+const reviewRebuildRequestNoIndexForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0208_rebuildReviewRebuildRequestWithoutIndexes.sql']
+const reviewQueueServingRepairIndexCleanupForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0209_rebuildQueueServingRepairIndexCleanup.sql']
 const hotServingTables = [
   'mart.review_article_serving_base_v4',
   'mart.review_article_serving_list_mode_state_v4',
@@ -573,8 +591,13 @@ test('title search serving schema drops repeated unused metadata and stores comp
   ])
   expect(schemaMigrationSql).not.toContain('title_prefix')
   expect(schemaMigrationSql).not.toContain('search_updated_at')
-  expect(hasActiveIndex('idx_review_title_search_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_title_search_serving_v4_repaired_pk')).toBe(false)
   expect(hasActiveIndex('idx_review_title_search_serving_v4_token')).toBe(false)
+  expect(reviewHotServingNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_title_search_serving_v4_noindex_repair',
+  )
+  expect(reviewHotServingNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewHotServingNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
 })
 
 test('selected import schema drops retired display-copy and selected-base flag columns', () => {
@@ -634,6 +657,16 @@ test('unassessed queue serving schema drops derived queue identity', () => {
   expect(reviewQueueServingCompactForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id)',
   )
+  expect(reviewQueueServingNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_unassessed_queue_serving_v4_noindex_repair',
+  )
+  expect(reviewQueueServingNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewQueueServingNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
+  expect(reviewQueueServingRepairIndexCleanupForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_unassessed_queue_serving_v4_noindex_repair_0209',
+  )
+  expect(reviewQueueServingRepairIndexCleanupForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewQueueServingRepairIndexCleanupForwardMigrationSql).not.toContain('CREATE INDEX')
 })
 
 test('unassessed queue article-rank serving schema stores one row per article', () => {
@@ -659,6 +692,9 @@ test('unassessed queue article-rank serving schema stores one row per article', 
   expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain('MAX(queue_updated_at) OVER')
   expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
     'idx_review_unassessed_queue_article_rank_serving_v4_order',
+  )
+  expect(reviewQueueServingNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_unassessed_queue_article_rank_serving_v4_noindex_repair',
   )
 })
 
@@ -820,6 +856,11 @@ test('Phase 1 schema migration separates logical snapshots from component bases 
 })
 
 test('Phase 5B schema migration adds rebuild request admission above chunk manifests', () => {
+  expect(reviewRebuildRequestNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_rebuild_request_noindex_repair',
+  )
+  expect(reviewRebuildRequestNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewRebuildRequestNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
   expect(
     getMissingColumns('app.review_rebuild_request', [
       'request_id',
@@ -859,6 +900,15 @@ test('Phase 5B schema migration adds rebuild request admission above chunk manif
       'diagnostics_json',
     ]),
   ).toEqual([])
+  expect(reviewRebuildChunkManifestNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewRebuildChunkManifestNoIndexForwardMigrationSql).toContain(
+    'ALTER TABLE app.review_rebuild_chunk_manifest_noindex_repair RENAME TO review_rebuild_chunk_manifest;',
+  )
+  expect(reviewRebuildChunkManifestNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
+  expect(reviewRebuildChunkManifestNoIndexForwardMigrationSql).not.toContain('CREATE UNIQUE INDEX')
+  expect(reviewHotServingNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_rebuild_chunk_manifest_noindex_repair_0207',
+  )
 })
 
 test('review-serving schema retires audited summary partial cleanup authorization', () => {
@@ -1332,6 +1382,9 @@ test('filter posting serving schema stores compact article id postings without s
   )
   expect(hasActiveIndex('idx_review_article_filter_posting_serving_v4_repaired_pk')).toBe(true)
   expect(hasActiveIndex('idx_review_article_filter_posting_serving_v4_lookup')).toBe(false)
+  expect(reviewHotServingNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_filter_posting_serving_v4_noindex_repair',
+  )
   expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain('article_ids VARCHAR[] NOT NULL')
   expect(reviewFilterPostingServingCompactForwardMigrationSql).toContain(
     'LIST(DISTINCT article_id ORDER BY article_id) AS article_ids',

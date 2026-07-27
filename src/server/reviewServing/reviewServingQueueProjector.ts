@@ -661,11 +661,7 @@ const getRefreshUnassessedQueueArticleRankStatements = (
             ${reviewConfigPredicate}
             ${scopePredicate}
         ) ranked_queue
-        WHERE article_rank = 1
-        ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, article_id) DO UPDATE SET
-          priority_bucket = excluded.priority_bucket,
-          activity_sort_at = excluded.activity_sort_at,
-          queue_updated_at = excluded.queue_updated_at`,
+        WHERE article_rank = 1`,
       ]
 }
 

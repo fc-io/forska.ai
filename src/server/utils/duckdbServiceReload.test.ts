@@ -3511,6 +3511,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     })
     expect(rebuildRequestProbe?.lowMemoryStartupPreflight).toBeUndefined()
     expect(rebuildRequestProbe?.repairPrimaryKeyColumns).toEqual(['request_id'])
+    expect(rebuildRequestProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(rebuildRequestProbe?.recreateSecondaryIndexes).toBe(false)
     expect(rebuildRequestProbe?.repairStrategy).toBe('dedupe-latest')
     expect(rebuildRequestProbe?.repairDedupeOrderSql).toContain("status IN ('admitted', 'running')")
     expect(rebuildRequestProbe?.mutationProbeSql).toContain('UPDATE app.review_rebuild_request')
@@ -3520,6 +3522,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     })
     expect(chunkManifestProbe?.lowMemoryStartupPreflight).toBe(true)
     expect(chunkManifestProbe?.repairPrimaryKeyColumns).toEqual(['chunk_id'])
+    expect(chunkManifestProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(chunkManifestProbe?.recreateSecondaryIndexes).toBe(false)
     expect(chunkManifestProbe?.repairStrategy).toBe('dedupe-latest')
     expect(chunkManifestProbe?.repairDedupeOrderSql).toContain("status = 'completed'")
     expect(chunkManifestProbe?.repairDedupeOrderSql).toContain("admission_state = 'admitted'")
@@ -3573,6 +3577,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       return spec.schemaName === 'mart' && spec.tableName === 'review_title_search_serving_v4'
     })
     expect(titleSearchProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(titleSearchProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(titleSearchProbe?.recreateSecondaryIndexes).toBe(false)
     expect(titleSearchProbe?.repairPrimaryKeyColumns).toEqual([
       'project_id',
       'search_identity',
@@ -3589,6 +3595,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       return spec.schemaName === 'mart' && spec.tableName === 'review_unassessed_queue_serving_v4'
     })
     expect(queueServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(queueServingProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(queueServingProbe?.recreateSecondaryIndexes).toBe(false)
     expect(queueServingProbe?.repairPrimaryKeyColumns).toEqual([
       'project_id',
       'review_config_hash',
@@ -3601,6 +3609,20 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(queueServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_unassessed_queue_serving_v4')
     expect(queueServingProbe?.mutationProbeSql).toContain('prompt_ids')
     expect(queueServingProbe?.mutationProbeSql).not.toContain('queue_identity')
+    const filterPostingProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_filter_posting_serving_v4'
+    })
+    expect(filterPostingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(filterPostingProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(filterPostingProbe?.recreateSecondaryIndexes).toBe(false)
+    expect(filterPostingProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'filter_kind',
+      'filter_value',
+      'list_mode_key',
+    ])
     const countServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_count_serving_v4'
     })
