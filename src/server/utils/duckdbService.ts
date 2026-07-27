@@ -5164,6 +5164,14 @@ const shouldWriteDuckdbStatementDiagnosticToStderr = () => {
   )
 }
 
+const shouldWriteDuckdbStatementLifecycleDiagnostics = () => {
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.FORSKA_DUCKDB_STATEMENT_LIFECYCLE_DIAGNOSTICS ?? '')
+      .trim()
+      .toLowerCase(),
+  )
+}
+
 const writeDuckdbStatementDiagnostic = ({
   duckdbConnection,
   durationMs,
@@ -5191,6 +5199,10 @@ const writeDuckdbStatementDiagnostic = ({
   }
 
   if (diagnosticContext === undefined) {
+    return
+  }
+
+  if (phase !== 'error' && !shouldWriteDuckdbStatementLifecycleDiagnostics()) {
     return
   }
 

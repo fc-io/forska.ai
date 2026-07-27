@@ -386,6 +386,7 @@ const defaultReviewServingProjectorWorkerMaxRetries = 1
 const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
+const defaultReviewServingProjectorWorkerActiveYieldMs = 1
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
 const defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = 0
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
@@ -5001,6 +5002,10 @@ const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
+  if (input.chunk.projectionComponent === 'summary') {
+    return true
+  }
+
   return (
     reviewServingDuckdbRecycleAfterRebuildComponents.has(input.chunk.projectionComponent)
     && input.chunk.requestId === null
@@ -8797,7 +8802,7 @@ export const runReviewServingProjectorWorker = async (
         ? getReviewServingProjectorWorkerProgressYieldMs({chunk: cycleResult.chunk, dependencies, options})
         : cycleResult.status === 'idle'
           ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
-          : 0
+          : defaultReviewServingProjectorWorkerActiveYieldMs
   const nextOptions = {
     ...options,
     completedRebuildChunksInRun,
@@ -8817,6 +8822,7 @@ export const runReviewServingProjectorWorker = async (
 }
 
 export {
+  defaultReviewServingProjectorWorkerActiveYieldMs,
   defaultReviewServingProjectorWorkerBatchSize,
   defaultReviewServingProjectorWorkerCleanupIntervalMs,
   defaultReviewServingProjectorWorkerErrorBackoffMs,

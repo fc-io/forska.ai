@@ -174,6 +174,7 @@ test('duckdb native statement diagnostics identify workload and connection witho
           DUCKDB_APPEND_LANE_COUNT: '1',
           DUCKDB_MEMORY_LIMIT: '20GB',
           DUCKDB_PATH: ':memory:',
+          FORSKA_DUCKDB_STATEMENT_LIFECYCLE_DIAGNOSTICS: 'true',
           SERVER_ROLE: 'maintenance-worker',
         },
       },
@@ -300,4 +301,124 @@ test('duckdb native statement diagnostics identify workload and connection witho
       return event.attrs.statementKind
     })
   expect(summaryTransactionKinds).toEqual(['BEGIN', 'BEGIN', 'COMMIT', 'COMMIT'])
+})
+
+test('duckdb native statement lifecycle diagnostics are opt-in while errors stay logged', () => {
+  const stdout = getSpawnOutput(
+    globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {mock} = await import('bun:test')
+
+          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').pathname
+          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+          const events = []
+          let connectCount = 0
+
+          void mock.module(runtimeLoggerModulePath, () => {
+            return {
+              exitWithRuntimeLogFlush: async () => {},
+              getRuntimeLogConfig: () => ({
+                logDir: '/tmp/forska-duckdb-diagnostics-test',
+                logLevel: 'INFO',
+                logStderrLevel: 'WARN',
+                runtimeProfile: 'local',
+              }),
+              writeRuntimeFailureLogEvent: () => false,
+              writeRuntimeLogEvent: (event) => {
+                events.push(event)
+                return true
+              },
+              writeRuntimeOperatorLogEvent: () => false,
+            }
+          })
+
+          void mock.module(serverRuntimeRoleModulePath, () => {
+            return {
+              canCurrentServerOwnDuckdb: () => true,
+              ensureCurrentDuckdbOwnerLease: async () => {},
+              registerDuckdbOwnerDemotionHandler: () => {},
+              releaseCurrentDuckdbOwnerLease: async () => {},
+            }
+          })
+
+          void mock.module('@duckdb/node-api', () => {
+            class MockConnection {
+              constructor(kind) {
+                this.kind = kind
+              }
+
+              async run(statement) {
+                if (statement.includes('FAIL_NATIVE')) {
+                  throw new TypeError('native failure')
+                }
+              }
+
+              async runAndReadAll() {
+                return {getRowObjectsJson: () => [{value: 1}]}
+              }
+
+              interrupt() {}
+              closeSync() {}
+            }
+
+            class MockInstance {
+              static async create() {
+                return new MockInstance()
+              }
+
+              async connect() {
+                connectCount += 1
+                return new MockConnection(connectCount === 1 ? 'control' : 'secondary')
+              }
+
+              closeSync() {}
+            }
+
+            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          })
+
+          const service = await import('./src/server/utils/duckdbService.ts')
+          await service.runDuckdbJsonQuery('SELECT 1 AS value', {
+            routeOrJobKey: 'reviewServing.summary.request',
+            workloadClass: 'reviewProjector',
+          })
+          await service.runDuckdbBackgroundStatement('FAIL_NATIVE', {
+            routeOrJobKey: 'maintenance.summary.refresh',
+            workloadClass: 'maintenance',
+          }).catch(() => {})
+          await service.closeDuckdbService({checkpointBeforeClose: false})
+          console.log(JSON.stringify({events}))
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          DUCKDB_APPEND_LANE_COUNT: '1',
+          DUCKDB_MEMORY_LIMIT: '20GB',
+          DUCKDB_PATH: ':memory:',
+          FORSKA_DUCKDB_STATEMENT_LIFECYCLE_DIAGNOSTICS: '',
+          SERVER_ROLE: 'maintenance-worker',
+        },
+      },
+    ),
+  )
+  const result = JSON.parse(stdout) as {events: DiagnosticEvent[]}
+
+  expect(result.events).toHaveLength(1)
+  expect(result.events[0]).toMatchObject({
+    attrs: {
+      errorMessage: 'native failure',
+      errorName: 'TypeError',
+      operation: 'backgroundStatement',
+      phase: 'error',
+      routeOrJobKey: 'maintenance.summary.refresh',
+      workloadClass: 'maintenance',
+    },
+    event: 'duckdb.statement.error',
+    severity: 'ERROR',
+  })
 })

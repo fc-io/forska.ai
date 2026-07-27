@@ -102,6 +102,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0199_dropReviewArticleServingListModeKeys.sql',
   '../../db/duckdbMigrations/0200_reviewUnassessedQueueArticleRankServing.sql',
   '../../db/duckdbMigrations/0201_dropLegacyReviewV3Marts.sql',
+  '../../db/duckdbMigrations/0203_reviewSummaryRebuildAccumulatorChunkMembership.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -324,6 +325,7 @@ const reviewServingPhase1Tables = [
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_rebuild_accumulator_v4',
+  'mart.review_article_summary_rebuild_accumulator_chunk_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
@@ -707,7 +709,29 @@ test('summary rebuild accumulator schema replaces chunk partial fanout', () => {
     'source_chunk_ids_key',
     'accumulator_updated_at',
   ])
+  expect([...getTableColumns('mart.review_article_summary_rebuild_accumulator_chunk_v4')]).toEqual([
+    'request_id',
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'summary_kind',
+    'summary_identity',
+    'list_mode_key',
+    'count_kind',
+    'filter_key',
+    'facet_kind',
+    'facet_key',
+    'facet_value',
+    'chunk_id',
+    'membership_created_at',
+  ])
   expect(schemaMigrationSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_article_summary_rebuild_accumulator_v4')
+  expect(schemaMigrationSql).toContain(
+    'CREATE TABLE IF NOT EXISTS mart.review_article_summary_rebuild_accumulator_chunk_v4',
+  )
+  expect(schemaMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_summary_rebuild_accumulator_chunk_v4_unique',
+  )
   expect(schemaMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_article_summary_rebuild_partial_v4;')
   expect(reviewSummaryPartialServingKeyDropForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_summary_rebuild_partial_v4_without_serving_key',
