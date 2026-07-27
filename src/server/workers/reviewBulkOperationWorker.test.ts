@@ -206,7 +206,7 @@ test('review bulk operation worker selects add-to-project batches from persisted
 
   expect(joined).toContain('FROM mart.review_article_serving_base_v4 s')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(joined).toContain("list_contains(list_mode_state.list_mode_keys, 'both')")
+  expect(joined).toContain('list_mode_state.has_both_list_mode IS TRUE')
   expect(joined).toContain("list_mode_state.human_status = 'answered'")
   expect(joined).toContain("list_mode_state.llm_status = 'answered'")
   expect(joined).not.toContain('review_article_filter_state_serving_v4')
@@ -242,9 +242,20 @@ test('review bulk operation worker applies unassessed queue scope for filter cri
 
   const joined = harness.statements.join('\n')
 
-  expect(joined).toContain("list_contains(list_mode_state.list_mode_keys, 'unassessed')")
+  expect(joined).toContain('list_mode_state.has_unassessed_list_mode IS TRUE')
   expect(joined).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
   expect(joined).toContain("queue.queue_kind = 'unassessed'")
+})
+
+test('review bulk operation worker does not fall back to LLM membership for unknown persisted list types', async () => {
+  const harness = createWorkerHarness({criteriaJson: {listType: 'retired-list-mode', operation: 'export'}})
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(joined).toContain('AND FALSE')
+  expect(joined).not.toContain('list_mode_state.has_llm_list_mode IS TRUE')
 })
 
 test('review bulk operation worker leaves substring add-to-project jobs on async search semantics', async () => {
@@ -306,7 +317,7 @@ test('review bulk operation worker keeps project PDF jobs out of review-tab defa
   const joined = harness.statements.join('\n')
 
   expect(joined).toContain('FROM mart.review_article_serving_base_v4 s')
-  expect(joined).toContain("list_contains(list_mode_state.list_mode_keys, 'llm')")
+  expect(joined).toContain('list_mode_state.has_llm_list_mode IS TRUE')
   expect(joined).not.toContain('s.llm_judged_prompt_count > 0')
   expect(joined).not.toContain('s.llm_status_key')
   expect(joined).not.toContain('s.human_status_key')
@@ -335,7 +346,7 @@ test('review bulk operation worker advances export jobs through bounded keyset s
   expect(result.status).toBe('partial')
   expect(harness.executedBatches).toEqual([['article-002', 'article-003']])
   expect(joined).toContain('FROM mart.review_article_serving_base_v4 s')
-  expect(joined).toContain("list_contains(list_mode_state.list_mode_keys, 'llm')")
+  expect(joined).toContain('list_mode_state.has_llm_list_mode IS TRUE')
   expect(joined).toContain('list_mode_state.llm_has_judgment IS TRUE')
   expect(joined).not.toContain('FROM mart.review_article_judgment_detail_serving_v4 llm_judgment_detail')
   expect(joined).not.toContain('s.llm_judged_prompt_count > 0')

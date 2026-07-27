@@ -1,6 +1,7 @@
 import {
   namedReviewFastCountDefinitions,
   type NamedReviewFastCountKey,
+  type ReviewServingListMode,
   type ReviewServingReadContract,
 } from './reviewServingContracts.ts'
 import {reviewServingReadContractList} from './reviewServingReadContracts.ts'
@@ -873,6 +874,13 @@ const reviewServingCountListModesByKey: Partial<Record<NamedReviewFastCountKey, 
   'review.queue.unassessedReady': 'unassessed',
 }
 
+const reviewServingListModeMembershipColumns: Record<ReviewServingListMode, string> = {
+  both: 'has_both_list_mode',
+  human: 'has_human_list_mode',
+  llm: 'has_llm_list_mode',
+  unassessed: 'has_unassessed_list_mode',
+}
+
 const getReviewServingRowsSqlListModePredicate = (params: {
   contract: ReviewServingReadContract
   listModeParameter: string
@@ -882,9 +890,7 @@ const getReviewServingRowsSqlListModePredicate = (params: {
   }
 
   if (shouldUseDirectReviewArticleServingRead(params.contract) && params.contract.listMode) {
-    return ` AND list_contains(${reviewServingArticleDirectStateAlias}.list_mode_keys, ${getSqlStringLiteral(
-      params.contract.listMode,
-    )})`
+    return ` AND ${reviewServingArticleDirectStateAlias}.${reviewServingListModeMembershipColumns[params.contract.listMode]} IS TRUE`
   }
 
   const listModeColumn =

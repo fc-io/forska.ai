@@ -557,6 +557,10 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        review_config_hash,
        snapshot_id,
        article_id,
+       has_llm_list_mode,
+       has_human_list_mode,
+       has_both_list_mode,
+       has_unassessed_list_mode,
        list_mode_keys,
        llm_patch_watermark,
        human_patch_watermark,
@@ -568,6 +572,10 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        review_config_hash,
        snapshot_id,
        article_id,
+       TRUE AS has_llm_list_mode,
+       TRUE AS has_human_list_mode,
+       TRUE AS has_both_list_mode,
+       TRUE AS has_unassessed_list_mode,
        ['llm', 'human', 'both', 'unassessed']::VARCHAR[] AS list_mode_keys,
        patch_watermark AS llm_patch_watermark,
        patch_watermark AS human_patch_watermark,
@@ -575,6 +583,10 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        patch_watermark AS unassessed_patch_watermark
      FROM review_selected_import_serving_rebuild_v4
      ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO UPDATE SET
+       has_llm_list_mode = EXCLUDED.has_llm_list_mode,
+       has_human_list_mode = EXCLUDED.has_human_list_mode,
+       has_both_list_mode = EXCLUDED.has_both_list_mode,
+       has_unassessed_list_mode = EXCLUDED.has_unassessed_list_mode,
        list_mode_keys = EXCLUDED.list_mode_keys,
        llm_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.llm_patch_watermark, 0), COALESCE(EXCLUDED.llm_patch_watermark, 0)),
        human_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.human_patch_watermark, 0), COALESCE(EXCLUDED.human_patch_watermark, 0)),

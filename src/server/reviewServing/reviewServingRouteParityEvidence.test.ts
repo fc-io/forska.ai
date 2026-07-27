@@ -413,7 +413,7 @@ const getContractSqlMatch = (
     && contract.physicalAccessStrategy !== 'queueOrdering'
     && contract.servingTable !== 'mart.review_article_judgment_detail_serving_v4'
       ? usesDirectArticleServingSource(contract)
-        ? containsSql(statement, `list_contains(list_mode_state.list_mode_keys, '${getPhysicalListMode(contract)}')`)
+        ? containsSql(statement, `list_mode_state.has_${getPhysicalListMode(contract)}_list_mode IS TRUE`)
         : containsSql(statement, `list_mode_key = '${getPhysicalListMode(contract)}'`)
       : true,
     contract.physicalAccessStrategy === 'postingIntersection' && request.listMode

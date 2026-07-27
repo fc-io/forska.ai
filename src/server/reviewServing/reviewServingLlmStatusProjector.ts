@@ -19,6 +19,16 @@ import {
 
 export type ReviewServingLlmStatusProjectorDatabase = ReviewServingProjectorWriterDatabase
 
+const getListModeMembershipPredicate = (stateAlias: string, listModeExpression: string) => {
+  return `CASE ${listModeExpression}
+          WHEN 'llm' THEN ${stateAlias}.has_llm_list_mode
+          WHEN 'human' THEN ${stateAlias}.has_human_list_mode
+          WHEN 'both' THEN ${stateAlias}.has_both_list_mode
+          WHEN 'unassessed' THEN ${stateAlias}.has_unassessed_list_mode
+          ELSE FALSE
+        END IS TRUE`
+}
+
 export type ProjectReviewServingLlmStatusInput = {
   baseGeneration: number
   chunkEndArticleId?: string | null
@@ -761,7 +771,7 @@ const getApplyLlmStatusServingStatement = (input: {
       WHERE state.project_id = ${getSqlLiteral(input.projectId)}
         AND state.review_config_hash = changed_article.review_config_hash
         AND state.article_id = changed_article.article_id
-        AND list_contains(state.list_mode_keys, changed_article.list_mode_key)
+        AND ${getListModeMembershipPredicate('state', 'changed_article.list_mode_key')}
         AND EXISTS (
           SELECT 1
           FROM mart.review_article_serving_base_v4 serving
