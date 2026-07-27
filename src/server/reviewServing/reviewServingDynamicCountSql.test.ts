@@ -16,11 +16,15 @@ test('dynamic filtered counts use posting-only fast path for one posting group',
   expect(sql).toContain('CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)')
   expect(sql).toContain('SELECT DISTINCT posting_article.article_id')
   expect(sql).toContain('FROM posting_filtered_article_ids filtered_article_ids')
-  expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
-  expect(sql).toContain('AND serving.article_id = filtered_article_ids.article_id')
-  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(sql).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  expect(sql).toContain('posting.project_id = scoped.project_id')
+  expect(sql).toContain('posting.review_config_hash = scoped.review_config_hash')
+  expect(sql).toContain('posting.snapshot_id = scoped.snapshot_id')
+  expect(sql).toContain('posting.list_mode_key = scoped.list_mode_key')
   expect(sql).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  expect(sql).not.toContain('mart.review_article_serving_base_v4')
+  expect(sql).not.toContain('mart.review_article_serving_list_mode_state_v4')
+  expect(sql).not.toContain('list_contains(list_mode_keys')
+  expect(sql).not.toContain('list_contains(list_mode_state.list_mode_keys')
   expect(sql).not.toContain('matched_posting_rows AS')
   expect(sql).not.toContain('posting_anchor_rows AS')
   expect(sql).not.toContain('HAVING COUNT(DISTINCT CASE')
@@ -56,16 +60,58 @@ test('dynamic filtered counts anchor multi-group posting intersections on the sm
   expect(sql).toContain('FROM (VALUES (0), (1)) AS required_posting_group(required_group_index)')
   expect(sql).toContain('SELECT DISTINCT anchor_article.article_id')
   expect(sql).toContain('FROM posting_filtered_article_ids filtered_article_ids')
-  expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
-  expect(sql).toContain('AND serving.article_id = filtered_article_ids.article_id')
-  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(sql).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  expect(sql).toContain('posting.project_id = scoped.project_id')
+  expect(sql).toContain('posting.review_config_hash = scoped.review_config_hash')
+  expect(sql).toContain('posting.snapshot_id = scoped.snapshot_id')
+  expect(sql).toContain('posting.list_mode_key = scoped.list_mode_key')
+  expect(sql).not.toContain('mart.review_article_serving_base_v4')
+  expect(sql).not.toContain('mart.review_article_serving_list_mode_state_v4')
+  expect(sql).not.toContain('list_contains(list_mode_keys')
+  expect(sql).not.toContain('list_contains(list_mode_state.list_mode_keys')
   expect(sql).not.toContain('CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)')
   expect(sql).not.toContain('list_contains(candidate.article_ids, anchor_article.article_id)')
   expect(sql).not.toContain('HAVING COUNT(DISTINCT CASE')
   expect(sql).not.toContain('ORDER BY array_length(anchor.article_ids)')
   expect(sql).not.toContain('JOIN posting_filtered_article_ids posting_filter_ids')
   expect(sql).not.toContain('scoped_serving AS')
+})
+
+test('dynamic filtered counts keep serving/state path when posting-only fast path gate is not met', () => {
+  const baseInput = {
+    listModeKey: 'llm',
+    postingFilterGroups: [{filterKind: 'importRoute', filterValues: ['import-route-1']}],
+    projectId: 'project-1',
+    reviewConfigHash: 'review-config-1',
+    snapshotId: 'snapshot-1',
+  }
+  const sqls = [
+    getReviewServingDynamicFilteredCountSql({
+      ...baseInput,
+      postingFilterGroups: [
+        {filterKind: 'importRoute', filterValues: ['import-route-1']},
+        {filterKind: 'duplicateFlag', filterValues: ['true']},
+      ],
+    }),
+    getReviewServingDynamicFilteredCountSql({
+      ...baseInput,
+      projectScopeIdentity: 'scope-1',
+      searchIdentity: 'search-1',
+      searchTokenPrefixes: ['heart'],
+    }),
+    getReviewServingDynamicFilteredCountSql({...baseInput, includeUnassessedQueue: true}),
+    getReviewServingDynamicFilteredCountSql({
+      ...baseInput,
+      servingPredicates: ["AND serving.article_created_at >= TIMESTAMPTZ '2026-01-01'"],
+    }),
+    getReviewServingDynamicFilteredCountSql({...baseInput, requireLlmJudgment: true}),
+  ]
+
+  for (const sql of sqls) {
+    expect(sql).toContain('scoped_serving AS')
+    expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+    expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+    expect(sql).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  }
 })
 
 test('dynamic filtered counts match legacy group-by semantics for multi-group posting intersections in DuckDB', async () => {
