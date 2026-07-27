@@ -72,6 +72,8 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
       "verdict: 'retired'",
       'no row, duplicate, index, or recoverability inspection was attempted',
       'Filtered-Count Serving Physical Evidence',
+      'Summary Rebuild Accumulator Lifecycle Evidence',
+      'proof-only; not retention cleanup authorization',
       'not deletion authorization',
     ],
     path: 'scripts/inspectReviewServingPhysicalEvidence.ts',
