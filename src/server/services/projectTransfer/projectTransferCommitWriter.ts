@@ -310,6 +310,7 @@ type ProjectTransferCommitWriterTempTableSet = {
   humanReviewPlan: string
   judgmentAssessmentPlan: string
   judgmentPlan: string
+  judgmentRows: string
   projectArticleSources: string
   projectRoutePlan: string
 }
@@ -417,6 +418,7 @@ const commitWriterSetBasedTableSuffixes = [
   'humanReviewPlan',
   'judgmentAssessmentPlan',
   'judgmentPlan',
+  'judgmentRows',
   'projectArticleSources',
   'projectRoutePlan',
 ] as const satisfies readonly (keyof ProjectTransferCommitWriterTempTableSet)[]
@@ -2149,7 +2151,7 @@ const insertCreatedArticlesSetBased = async ({
       article_map.target_id,
       ${Object.keys(articleColumnByPayloadField)
         .map((field) => {
-          return getArticleJsonFieldSql('create_row.article_json', field as ArticleField)
+          return getArticleJsonFieldSql('staged_article.payload_json', field as ArticleField)
         })
         .join(',\n')},
       ${getTimestampLiteral(now)},
@@ -2585,7 +2587,7 @@ const getArticleIdentifierStageRows = ({
 
 const getArticleCreateStageRows = (promotion: ProjectTransferCommitPromotionResult) => {
   return promotion.articleCreates.map((entry) => {
-    return {article: entry.article, sourceArticleId: entry.sourceArticleId}
+    return {sourceArticleId: entry.sourceArticleId}
   })
 }
 
@@ -2610,8 +2612,7 @@ const getCreateArticleCreatesTableSql = ({
   return `
     CREATE TEMP TABLE ${tableName} AS
     SELECT
-      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
-      json_extract(row_json, '$.article') AS article_json
+      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id
     FROM ${getJsonArrayRowsSourceSql(rows)}
   `
 }
@@ -2897,6 +2898,27 @@ const assertArticleIdentifierRowsCommitted = async ({
     : undefined
 }
 
+const assertArticleIdentifierRowsDoNotSplitTargets = (rows: readonly ArticleIdentifierCommitRow[]) => {
+  const articleIdsByIdentifier = rows.reduce<Map<string, Set<string>>>((identifierMap, row) => {
+    const key = getArticleIdentifierKey(row)
+    const articleIds = identifierMap.get(key) ?? new Set<string>()
+
+    articleIds.add(row.articleId)
+    identifierMap.set(key, articleIds)
+
+    return identifierMap
+  }, new Map())
+  const conflict = rows.find((row) => {
+    return (articleIdsByIdentifier.get(getArticleIdentifierKey(row))?.size ?? 0) > 1
+  })
+
+  return conflict === undefined
+    ? undefined
+    : failCommitWriter(
+        `article identifier ${conflict.identifier.kind}:${conflict.identifier.normalizedValue} maps to multiple package article targets`,
+      )
+}
+
 const getSetBasedArticleIdentifierJoinSql = (context: ProjectTransferCommitWriterSetBasedContext) => {
   return `
     FROM ${context.tempTables.articleIdentifiers} identifier
@@ -2930,6 +2952,31 @@ const assertArticleIdentifierStageRowsMapped = async ({
   return expectedCount === mappedCount
     ? expectedCount
     : failCommitWriter(`article identifier stage rows mapped ${mappedCount} of ${expectedCount} staged rows`)
+}
+
+const assertSetBasedArticleIdentifierRowsDoNotSplitTargets = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const [conflict] = await tx.queryJson<{kind: string; normalizedValue: string}>(`
+    SELECT
+      identifier.kind,
+      identifier.normalized_value AS normalizedValue
+    ${getSetBasedArticleIdentifierJoinSql(context)}
+    GROUP BY identifier.kind, identifier.normalized_value
+    HAVING COUNT(DISTINCT article_map.target_id) > 1
+    ORDER BY identifier.kind ASC, identifier.normalized_value ASC
+    LIMIT 1
+  `)
+
+  return conflict === undefined
+    ? undefined
+    : failCommitWriter(
+        `article identifier ${conflict.kind}:${conflict.normalizedValue} maps to multiple package article targets`,
+      )
 }
 
 const assertSetBasedArticleIdentifierRowsCommitted = async ({
@@ -2975,6 +3022,8 @@ const insertArticleIdentifiersSetBased = async ({
   if (expectedCount === 0) {
     return undefined
   }
+
+  await assertSetBasedArticleIdentifierRowsDoNotSplitTargets({context, tx})
 
   await tx.run(`
     INSERT INTO app.article_identifier (
@@ -3031,6 +3080,8 @@ const insertArticleIdentifiers = async ({
   if (rows.length === 0) {
     return undefined
   }
+
+  assertArticleIdentifierRowsDoNotSplitTargets(rows)
 
   await runChunks(rows, (rowChunk) => {
     return tx.run(`
@@ -4386,18 +4437,43 @@ const getSetBasedJudgmentRowsSql = ({
   `
 }
 
-const assertSetBasedJudgmentPlanRowsCommitSafe = async ({
+const getSetBasedJudgmentRowsWorkTable = (context: ProjectTransferCommitWriterSetBasedContext) => {
+  return context.tempTables.judgmentRows
+}
+
+const getSetBasedJudgmentRowsWorkSql = (tableName: string) => {
+  return `SELECT * FROM ${tableName}`
+}
+
+const loadSetBasedJudgmentRowsWorkTable = async ({
   context,
   now,
   projectId,
+  tableName,
   tx,
 }: {
   context: ProjectTransferCommitWriterSetBasedContext
   now: Date
   projectId: string
+  tableName: string
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
+  await tx.run(`
+    DROP TABLE IF EXISTS ${tableName};
+    CREATE TEMP TABLE ${tableName} AS
+    ${getSetBasedJudgmentRowsSql({context, now, projectId})}
+  `)
+}
+
+const assertSetBasedJudgmentPlanRowsCommitSafe = async ({
+  context,
+  rowsSql,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  rowsSql: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
   const [invalidAction] = await tx.queryJson<{action: string | null; sourceJudgmentId: string}>(`
     SELECT source_judgment_id AS sourceJudgmentId, action
     FROM ${context.tempTables.judgmentPlan}
@@ -4429,9 +4505,9 @@ const assertSetBasedJudgmentPlanRowsCommitSafe = async ({
   })
   const mappedCount = await getTableCount({sql: rowsSql, tx})
   const [unanswered] = await tx.queryJson<{sourceJudgmentId: string}>(`
-    SELECT ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentId')} AS sourceJudgmentId
-    FROM ${context.operationTables.tableNames.judgments} payload
-    WHERE ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} <> TRUE
+    SELECT rows.source_judgment_id AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    WHERE rows.is_answered <> TRUE
     ORDER BY sourceJudgmentId ASC
     LIMIT 1
   `)
@@ -4472,17 +4548,12 @@ const assertSetBasedJudgmentPlanRowsCommitSafe = async ({
 }
 
 const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
-  context,
-  now,
-  projectId,
+  rowsSql,
   tx,
 }: {
-  context: ProjectTransferCommitWriterSetBasedContext
-  now: Date
-  projectId: string
+  rowsSql: string
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
   const [physicalDuplicate] = await tx.queryJson<{sourceJudgmentId: string}>(`
     SELECT MIN(source_judgment_id) AS sourceJudgmentId
     FROM (${rowsSql}) rows
@@ -4525,18 +4596,13 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
 }
 
 const assertSetBasedJudgmentTargetsCommitSafe = async ({
-  context,
-  now,
-  projectId,
+  rowsSql,
   tx,
 }: {
-  context: ProjectTransferCommitWriterSetBasedContext
-  now: Date
-  projectId: string
+  rowsSql: string
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
-  await assertSetBasedJudgmentRowsDoNotDuplicate({context, now, projectId, tx})
+  await assertSetBasedJudgmentRowsDoNotDuplicate({rowsSql, tx})
 
   const [physicalConflict] = await tx.queryJson<{sourceJudgmentId: string}>(`
     SELECT rows.source_judgment_id AS sourceJudgmentId
@@ -4715,6 +4781,48 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
   await appendLlmJudgmentReviewServingDeltas(tx, deltaInputs)
 }
 
+const appendProjectTransferJudgmentCreatedDeltasSetBased = async ({
+  rowsSql,
+  tx,
+}: {
+  rowsSql: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const deltaInputs = await tx.queryJson<AppendLlmJudgmentReviewServingDeltaInput>(`
+    SELECT DISTINCT
+      rows.article_id AS articleId,
+      'judgment.llm.created' AS changeKind,
+      rows.id AS judgmentId,
+      rows.model_id AS modelId,
+      project.id AS projectId,
+      rows.prompt_id AS promptId,
+      'projectTransfer|' || project.id || '|' || rows.source_judgment_id || '|' || rows.id AS sourceMutationKey,
+      'insert' AS sourceOperation,
+      rows.updated_at AS sourceUpdatedAt,
+      rows.use_abstract AS useAbstract,
+      rows.use_fulltext AS useFulltext,
+      rows.use_fulltext_no_images AS useFulltextNoImages,
+      rows.use_title AS useTitle
+    FROM (${rowsSql}) rows
+    INNER JOIN app.project_article project_scope
+      ON project_scope.article_id = rows.article_id
+    INNER JOIN app.project project
+      ON project.id = project_scope.project_id
+    INNER JOIN app.project_prompt project_prompt
+      ON ${getProjectVisibleJudgmentScopeSql({
+        judgmentAlias: 'rows',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'project_scope',
+      })}
+    WHERE rows.action = 'insert'
+      AND project.id <> rows.project_id
+    ORDER BY project.id ASC, rows.source_judgment_id ASC, rows.id ASC
+  `)
+
+  await appendLlmJudgmentReviewServingDeltas(tx, deltaInputs)
+}
+
 const appendProjectTransferHumanJudgmentDeltas = async ({
   rows,
   tx,
@@ -4789,15 +4897,17 @@ const insertJudgmentRowsSetBased = async ({
   projectId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const expectedCount = await assertSetBasedJudgmentPlanRowsCommitSafe({context, now, projectId, tx})
+  const rowsTable = getSetBasedJudgmentRowsWorkTable(context)
+  await loadSetBasedJudgmentRowsWorkTable({context, now, projectId, tableName: rowsTable, tx})
+  const rowsSql = getSetBasedJudgmentRowsWorkSql(rowsTable)
+  const expectedCount = await assertSetBasedJudgmentPlanRowsCommitSafe({context, rowsSql, tx})
 
   if (expectedCount === 0) {
     return undefined
   }
 
-  await assertSetBasedJudgmentTargetsCommitSafe({context, now, projectId, tx})
+  await assertSetBasedJudgmentTargetsCommitSafe({rowsSql, tx})
 
-  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
   const expectedInsertCount = await getTableCount({sql: `SELECT id FROM (${rowsSql}) rows WHERE action = 'insert'`, tx})
 
   if (expectedInsertCount === 0) {
@@ -4861,24 +4971,7 @@ const insertJudgmentRowsSetBased = async ({
     return failCommitWriter(`judgment insert wrote ${insertedRows.length} of ${expectedInsertCount} staged rows`)
   }
 
-  const deltaRows = await tx.queryJson<ProjectTransferInsertedJudgmentDeltaRow>(`
-    SELECT
-      id,
-      source_judgment_id AS sourceJudgmentId,
-      article_id AS articleId,
-      model_id AS modelId,
-      project_id AS projectId,
-      prompt_id AS promptId,
-      updated_at AS updatedAt,
-      use_abstract AS useAbstract,
-      use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages,
-      use_title AS useTitle
-    FROM (${rowsSql}) rows
-    WHERE action = 'insert'
-  `)
-
-  await appendProjectTransferJudgmentCreatedDeltas({rows: deltaRows, tx})
+  await appendProjectTransferJudgmentCreatedDeltasSetBased({rowsSql, tx})
 
   return undefined
 }
@@ -5195,16 +5288,8 @@ const getSetBasedJudgmentAssessmentRowsSql = ({
   `
 }
 
-const getSetBasedJudgmentTargetIdsSql = ({
-  context,
-  now,
-  projectId,
-}: {
-  context: ProjectTransferCommitWriterSetBasedContext
-  now: Date
-  projectId: string
-}) => {
-  return `SELECT id AS judgment_id FROM (${getSetBasedJudgmentRowsSql({context, now, projectId})}) rows`
+const getSetBasedJudgmentTargetIdsSql = ({context}: {context: ProjectTransferCommitWriterSetBasedContext}) => {
+  return `SELECT id AS judgment_id FROM ${context.tempTables.judgmentRows}`
 }
 
 const assertSetBasedJudgmentAssessmentPlanRowsCommitSafe = async ({
@@ -5285,16 +5370,14 @@ const assertSetBasedJudgmentAssessmentPlanRowsCommitSafe = async ({
 const assertSetBasedJudgmentAssessmentTargetsCommitSafe = async ({
   context,
   now,
-  projectId,
   tx,
 }: {
   context: ProjectTransferCommitWriterSetBasedContext
   now: Date
-  projectId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
   const rowsSql = getSetBasedJudgmentAssessmentRowsSql({context, now})
-  const judgmentIdsSql = getSetBasedJudgmentTargetIdsSql({context, now, projectId})
+  const judgmentIdsSql = getSetBasedJudgmentTargetIdsSql({context})
   const [duplicate] = await tx.queryJson<{judgmentId: string}>(`
     SELECT judgment_id AS judgmentId
     FROM (${rowsSql}) rows
@@ -5391,17 +5474,15 @@ const assertSetBasedJudgmentAssessmentTargetsCommitSafe = async ({
 const insertJudgmentAssessmentRowsSetBased = async ({
   context,
   now,
-  projectId,
   tx,
 }: {
   context: ProjectTransferCommitWriterSetBasedContext
   now: Date
-  projectId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
   const expectedCount = await assertSetBasedJudgmentAssessmentPlanRowsCommitSafe({context, now, tx})
 
-  await assertSetBasedJudgmentAssessmentTargetsCommitSafe({context, now, projectId, tx})
+  await assertSetBasedJudgmentAssessmentTargetsCommitSafe({context, now, tx})
 
   if (expectedCount === 0) {
     return undefined
@@ -5444,21 +5525,19 @@ const insertJudgmentAssessmentRows = async ({
   allJudgmentIds,
   context,
   now,
-  projectId,
   rows,
   tx,
 }: {
   allJudgmentIds: readonly string[]
   context: ProjectTransferCommitWriterSetBasedContext | null
   now: Date
-  projectId: string
   rows: readonly JudgmentAssessmentCommitRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
   if (context !== null) {
     return allJudgmentIds.length === 0 && rows.length === 0
       ? undefined
-      : insertJudgmentAssessmentRowsSetBased({context, now, projectId, tx})
+      : insertJudgmentAssessmentRowsSetBased({context, now, tx})
   }
 
   await assertJudgmentAssessmentTargetsCommitSafe({allJudgmentIds, rows, tx})
@@ -6661,7 +6740,6 @@ const writeProjectTransferCommitAppTablesTx = async ({
       'human review plan',
       humanJudgments.length + humanJudgmentSummaries.length + reviews.length,
     )
-
     await assertProjectTransferCommitGeneratedIdsAvailable({maps: materializedPlan.commitIdMaps, runner: tx})
     await materializeImportedProviderConnectionSnapshots({
       generatedProviderConnectionIds: dependencyMaterialization.generatedProviderConnectionIds,
@@ -6710,7 +6788,6 @@ const writeProjectTransferCommitAppTablesTx = async ({
       commitIdMaps: materializedPlan.commitIdMaps,
       promotion,
     })
-
     await assertNoArticleIdConflicts({articles, matches: materializedPlan.targetPlan.articleMatches, tx})
     await insertProjectPromptRows(tx, projectPromptRows, materializedPlan.commitIdMaps, importedAt)
     await insertCreatedArticles({articleIdBySourceId, context: setBasedContext, now: importedAt, promotion, tx})
@@ -6793,7 +6870,6 @@ const writeProjectTransferCommitAppTablesTx = async ({
       allJudgmentIds: Object.values(judgmentIdBySourceId),
       context: setBasedContext,
       now: importedAt,
-      projectId: createdProject.id,
       rows: judgmentAssessmentRows,
       tx,
     })

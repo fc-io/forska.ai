@@ -2711,6 +2711,101 @@ test('project transfer commit writer validates set-based article identifier conf
   expect(result.newArticleCount).toBe(0)
 })
 
+test('project transfer commit writer rejects set-based package identifier splits before insert', () => {
+  const result = runCommitWriterScript<{errorMessage: string | null; newArticleCount: number; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const escapeSql = (value) => String(value).replaceAll("'", "''")
+    const jsonLiteral = (value) => "CAST('" + escapeSql(JSON.stringify(value)) + "' AS JSON)"
+    const operationDatabase = (tx) => ({
+      queryJson: tx.queryJson,
+      run: tx.run,
+      transaction: (work) => Promise.resolve(work(tx)),
+    })
+    const createOperationPayloadTable = (tx, tableName, rows) => {
+      return tx.run(\`
+        CREATE TEMP TABLE \${tableName} AS
+        SELECT
+          row_number() OVER () - 1 AS row_index,
+          row_json AS payload_json
+        FROM UNNEST(json_extract(\${jsonLiteral(rows)}, '$[*]')) AS rows(row_json)
+      \`)
+    }
+    const settings = {humanJudgmentMode: null, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const firstArticle = {
+      articleId: 'legacy-package-identifier-split-1',
+      articleTitle: 'Package Identifier Split 1',
+      doi: '10.1000/package-identifier-split',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-package-identifier-split-1'},
+      signature: {identifierKeys: ['doi:10.1000/package-identifier-split'], title: 'Package Identifier Split 1'},
+      sourceArticleId: 'source-package-identifier-split-1',
+    }
+    const secondArticle = {
+      articleId: 'legacy-package-identifier-split-2',
+      articleTitle: 'Package Identifier Split 2',
+      doi: '10.1000/package-identifier-split',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-package-identifier-split-2'},
+      signature: {identifierKeys: ['doi:10.1000/package-identifier-split'], title: 'Package Identifier Split 2'},
+      sourceArticleId: 'source-package-identifier-split-2',
+    }
+    const targetPlan = {
+      articleMatches: [firstArticle, secondArticle].map((article) => ({
+        action: 'create',
+        candidates: [],
+        conflicts: [],
+        identifierKeys: ['doi:10.1000/package-identifier-split'],
+        packageArticleId: article.articleId,
+        selectedTargetArticleId: null,
+        sourceArticleId: article.sourceArticleId,
+      })),
+    }
+    const operationTables = getProjectTransferOperationTableNames('commit_set_based_package_identifier_split')
+    const errorMessage = await catchMessage(() => {
+      return database.transaction(async (tx) => {
+        await createOperationPayloadTable(tx, operationTables.tableNames.articles, [firstArticle, secondArticle])
+        await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [])
+
+        return writeProjectTransferCommitAppTables({
+          commitId: 'commit-set-based-package-identifier-split',
+          database: operationDatabase(tx),
+          now,
+          operationTables,
+          payloads: {
+            articles: [firstArticle, secondArticle],
+            models: [getModelPayload()],
+            project: getProjectPayload(settings),
+          },
+          plan: getBasePlan(targetPlan, dependencyResolution),
+          promotion: {
+            articleCreates: [
+              {article: firstArticle, sourceArticleId: firstArticle.sourceArticleId},
+              {article: secondArticle, sourceArticleId: secondArticle.sourceArticleId},
+            ],
+            articleFieldFills: [],
+            manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-set-based-package-identifier-split', updatedAt: now.toISOString()},
+            promotionPathByPackagePath: {},
+          },
+          schemaVersion: 1,
+          sessionId: 'session-set-based-package-identifier-split',
+        })
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [newArticleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article WHERE doi = '10.1000/package-identifier-split'")
+
+    console.log(JSON.stringify({errorMessage, newArticleCount: newArticleCount.count, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain(
+    'article identifier doi:10.1000/package-identifier-split maps to multiple package article targets',
+  )
+  expect(result.projectCount).toBe(0)
+  expect(result.newArticleCount).toBe(0)
+})
+
 test('project transfer commit writer blocks duplicate project prompt remaps before insert', () => {
   const result = runCommitWriterScript<{errorMessage: string | null; projectCount: number; promptCount: number}>(`
     await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")

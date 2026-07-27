@@ -244,6 +244,9 @@ test('project-transfer export reads archived app-table scope and serializes lock
     routeArticleIdentifierInputs: Array<{inputKind: string; source: string; value: string}>
     routeArticleSelectedImportRoute: string | null
     routeArticleUrl: string | null
+    staleDuplicateArticleDoi: string | null
+    staleDuplicateArticleIdentifierKeys: string[]
+    staleDuplicateWarnings: Array<{code: string; details: {reason: string}; jsonPointer: string}>
     serializedArticleFullTextAssets: unknown
     serializedArticleFullTextHtml: string | null
     serializedArticleFullTextPdf: string | null
@@ -605,6 +608,42 @@ test('project-transfer export reads archived app-table scope and serializes lock
           TIMESTAMPTZ '2026-01-02T00:00:00Z'
         ),
         (
+          'article-stale-duplicate-doi',
+          'legacy-stale-duplicate-doi',
+          'Stale Duplicate DOI Article',
+          NULL,
+          ['Duplicate Author'],
+          1,
+          TIMESTAMPTZ '2026-03-03T00:00:00Z',
+          TIMESTAMPTZ '2026-03-04T00:00:00Z',
+          NULL,
+          NULL,
+          NULL,
+          '10.1000/route',
+          NULL,
+          'https://example.test/stale-duplicate',
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          0,
+          NULL,
+          NULL,
+          NULL,
+          'article-stale-duplicate-hash',
+          NULL,
+          CAST('{"staleDuplicate":true}' AS JSON),
+          'published',
+          CAST('{"manual":true}' AS JSON),
+          TIMESTAMPTZ '2026-01-01T00:00:00Z',
+          TIMESTAMPTZ '2026-01-02T00:00:00Z'
+        ),
+        (
           'article-null-date',
           'legacy-null-date',
           'Null Date Article',
@@ -724,6 +763,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       )
       VALUES
         ('pa-curated', 'project-archived-export', 'article-curated-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('pa-stale-duplicate-doi', 'project-archived-export', 'article-stale-duplicate-doi', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-summary', 'project-summary-export', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-missing-provider', 'project-missing-provider', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
@@ -833,6 +873,9 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const [serializedJudgment] = serialized.judgments.trim().split('\\n').map((line) => JSON.parse(line))
     const routeArticle = archived.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
     const curatedArticle = archived.payloads.articles.find((article) => article.sourceArticleId === 'article-curated-in')
+    const staleDuplicateArticle = archived.payloads.articles.find((article) => {
+      return article.sourceArticleId === 'article-stale-duplicate-doi'
+    })
     const rawOmittedArticle = rawOmitted.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
     const rawIncludedArticle = rawIncluded.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
     const rawForcedOmittedArticle = rawForcedOmitted.payloads.articles.find((article) => {
@@ -1042,6 +1085,9 @@ test('project-transfer export reads archived app-table scope and serializes lock
       routeArticleIdentifierInputs: routeArticle?.identifierInputs ?? [],
       routeArticleSelectedImportRoute: routeArticle?.selectedImportRoute ?? null,
       routeArticleUrl: routeArticle?.url ?? null,
+      staleDuplicateArticleDoi: staleDuplicateArticle?.doi ?? null,
+      staleDuplicateArticleIdentifierKeys: staleDuplicateArticle?.signature.identifierKeys ?? [],
+      staleDuplicateWarnings: staleDuplicateArticle?.warnings ?? [],
       serializedArticleFullTextAssets: serializedArticle.fullTextAssets,
       serializedArticleFullTextHtml: serializedArticle.fullTextHtml,
       serializedArticleFullTextPdf: serializedArticle.fullTextPdf,
@@ -1069,23 +1115,29 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.payloadKeys).toEqual([...projectTransferPayloadKeys].sort())
   expect(result.settingsArchived).toBe(true)
   expect(result.projectArchived).toBe(true)
-  expect(result.articleIds).toEqual(['article-route-in', 'article-curated-in'])
+  expect(result.articleIds).toEqual(['article-route-in', 'article-curated-in', 'article-stale-duplicate-doi'])
   expect(result.curatedArticleDoi).toBeNull()
   expect(result.curatedArticleIdentifierKeys).toEqual([])
+  expect(result.staleDuplicateArticleDoi).toBeNull()
+  expect(result.staleDuplicateArticleIdentifierKeys).toEqual([])
+  expect(result.staleDuplicateWarnings).toHaveLength(1)
+  expect(result.staleDuplicateWarnings[0]?.code).toBe('identifierConflict')
+  expect(result.staleDuplicateWarnings[0]?.details.reason).toBe('package-identifier-duplicate')
+  expect(result.staleDuplicateWarnings[0]?.jsonPointer).toBe('/doi')
   expect(
     result.routeArticleIdentifierInputs.some((input) => {
       return input.value === 'https://www.chictr.org.cn/showproj.html?proj=285095'
     }),
   ).toBe(false)
   expect(result.articleImportRouteIds).toEqual(['air-route-in'])
-  expect(result.projectArticleIds).toEqual(['article-curated-in'])
+  expect(result.projectArticleIds).toEqual(['article-curated-in', 'article-stale-duplicate-doi'])
   expect(result.importRouteActiveValues).toEqual([false])
   expect(result.judgmentIds).toEqual(['judgment-duplicate-answered', 'judgment-export'])
   expect(result.judgmentAssessmentIds).toEqual(['assessment-duplicate', 'assessment-export'])
   expect(result.humanJudgmentIds).toEqual(['human-disabled'])
   expect(result.humanSummaryIds).toEqual(['summary-human'])
   expect(result.exportSummary).toEqual({
-    articleCount: 2,
+    articleCount: 3,
     humanJudgmentCount: 1,
     judgmentCount: 2,
     promptHumanJudgmentCount: 1,

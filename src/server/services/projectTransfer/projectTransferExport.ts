@@ -1174,9 +1174,14 @@ const getProjectTransferExportArticleRows = async (
     return row.articleId
   })
 
-  return articleRows.map((row) => {
-    return getProjectTransferExportArticlePayloadRecord(row, identifiersByArticleId[row.canonicalArticleId ?? ''] ?? [])
-  })
+  return getProjectTransferExportPackageIdentifierDeduplicatedRecords(
+    articleRows.map((row) => {
+      return getProjectTransferExportArticlePayloadRecord(
+        row,
+        identifiersByArticleId[row.canonicalArticleId ?? ''] ?? [],
+      )
+    }),
+  )
 }
 
 const getProjectTransferExportArticleRawJsonEstimate = async (
@@ -1790,6 +1795,114 @@ const getProjectTransferExportSanitizedArticleIdentifierRecord = (
     ...sanitizedRecordWithWarnings,
     signature: getProjectTransferExportArticleSignature(sanitizedRecordWithWarnings),
   }
+}
+
+const getProjectTransferExportPackageDuplicateIdentifierOmissions = (
+  records: ProjectTransferExportArticlePayloadRecord[],
+) => {
+  const identifierEntries = records.flatMap((record) => {
+    const normalized = getProjectTransferNormalizedArticleIdentifiers(record)
+
+    return normalized.strongIdentifiers.map((identifier) => {
+      return {
+        canonicalEvidence: identifier.evidence.some((evidence) => {
+          return evidence.source === 'article_identifier'
+        }),
+        identifierKey: `${identifier.kind}:${identifier.normalizedValue}`,
+        sourceArticleId: record.sourceArticleId,
+      }
+    })
+  })
+  const entriesByIdentifierKey = getRowsByMany(identifierEntries, (entry) => {
+    return entry.identifierKey
+  })
+
+  return new Map(
+    records.map((record) => {
+      const normalized = getProjectTransferNormalizedArticleIdentifiers(record)
+      const omissions = normalized.strongIdentifiers.flatMap((identifier) => {
+        const identifierKey = `${identifier.kind}:${identifier.normalizedValue}`
+        const entries = entriesByIdentifierKey[identifierKey] ?? []
+        const sourceArticleIds = [
+          ...new Set(
+            entries.map((entry) => {
+              return entry.sourceArticleId
+            }),
+          ),
+        ]
+
+        if (sourceArticleIds.length <= 1) {
+          return []
+        }
+
+        const canonicalSourceArticleIds = [
+          ...new Set(
+            entries
+              .filter((entry) => {
+                return entry.canonicalEvidence
+              })
+              .map((entry) => {
+                return entry.sourceArticleId
+              }),
+          ),
+        ]
+        const shouldPreserveRecord =
+          canonicalSourceArticleIds.length === 1 && canonicalSourceArticleIds[0] === record.sourceArticleId
+
+        return shouldPreserveRecord
+          ? []
+          : identifier.evidence.map((evidence): ProjectTransferExportIdentifierOmission => {
+              return {inputKind: evidence.inputKind, rawValue: evidence.rawValue, source: evidence.source}
+            })
+      })
+
+      return [record.sourceArticleId, getUniqueProjectTransferExportIdentifierOmissions(omissions)] as const
+    }),
+  )
+}
+
+const getProjectTransferExportPackageDuplicateIdentifierWarnings = ({
+  omissions,
+  record,
+}: {
+  omissions: ProjectTransferExportIdentifierOmission[]
+  record: ProjectTransferExportArticlePayloadRecord
+}) => {
+  return omissions.map((omission) => {
+    return getProjectTransferExportArticleIdentifierWarning({
+      code: 'identifierConflict',
+      details: {inputKind: omission.inputKind, reason: 'package-identifier-duplicate', source: omission.source},
+      jsonPointer: getProjectTransferExportArticleIdentifierJsonPointer(record, omission),
+      message: 'Duplicate package article identifier was omitted from transfer identity.',
+      sourceArticleId: record.sourceArticleId,
+    })
+  })
+}
+
+const getProjectTransferExportPackageIdentifierDeduplicatedRecords = (
+  records: ProjectTransferExportArticlePayloadRecord[],
+) => {
+  const omissionsBySourceArticleId = getProjectTransferExportPackageDuplicateIdentifierOmissions(records)
+
+  return records.map((record) => {
+    const omissions = omissionsBySourceArticleId.get(record.sourceArticleId) ?? []
+
+    if (omissions.length === 0) {
+      return record
+    }
+
+    const sanitizedRecord = {
+      ...record,
+      ...getProjectTransferExportIdentifierOmittedFields(omissions),
+      identifierInputs: getProjectTransferExportSanitizedIdentifierInputs(record.identifierInputs, omissions),
+      warnings: [
+        ...(record.warnings ?? []),
+        ...getProjectTransferExportPackageDuplicateIdentifierWarnings({omissions, record}),
+      ],
+    }
+
+    return {...sanitizedRecord, signature: getProjectTransferExportArticleSignature(sanitizedRecord)}
+  })
 }
 
 const getProjectTransferExportArticleWarnings = (articles: ProjectTransferExportArticlePayloadRecord[]) => {

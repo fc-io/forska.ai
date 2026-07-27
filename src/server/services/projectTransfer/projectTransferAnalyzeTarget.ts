@@ -811,6 +811,31 @@ const getIdentifierConflictBlocker = ({
       ]
 }
 
+const getPackageIdentifierDuplicateBlockers = (inputs: readonly ImportedArticleMatchInput[]) => {
+  const sourceArticleIdsByIdentifier = inputs.reduce<Map<string, Set<string>>>((identifierMap, input) => {
+    input.identifierKeys.forEach((key) => {
+      const sourceArticleIds = identifierMap.get(key) ?? new Set<string>()
+
+      sourceArticleIds.add(input.sourceArticleId)
+      identifierMap.set(key, sourceArticleIds)
+    })
+
+    return identifierMap
+  }, new Map())
+
+  return [...sourceArticleIdsByIdentifier.entries()].flatMap(([key, sourceArticleIds]) => {
+    return sourceArticleIds.size <= 1
+      ? []
+      : [...sourceArticleIds].map((sourceArticleId) => {
+          return getPlanBlocker({
+            code: 'article_identifier_package_duplicate',
+            message: `${sourceArticleId} identifier ${key} is shared by ${sourceArticleIds.size} package articles`,
+            scope: `articles.${sourceArticleId}`,
+          })
+        })
+  })
+}
+
 const getPlanCandidates = (candidates: readonly TargetArticleCandidateDetail[]) => {
   return candidates.map((candidate): TargetArticleCandidate => {
     return {matchedIdentifiers: candidate.matchedIdentifiers, targetArticleId: candidate.targetArticleId}
@@ -830,10 +855,14 @@ const getInitialArticleMatchPlans = ({
     },
     {},
   )
+  const packageIdentifierBlockers = getPackageIdentifierDuplicateBlockers(inputs)
   const blockers = inputs.flatMap((input) => {
     const candidates = candidateDetailsBySourceArticleId[input.sourceArticleId] ?? []
 
     return [
+      ...packageIdentifierBlockers.filter((blocker) => {
+        return blocker.scope === `articles.${input.sourceArticleId}`
+      }),
       ...getAmbiguousIdentifierBlockers({candidates, sourceArticleId: input.sourceArticleId}),
       ...getIdentifierConflictBlocker({candidates, sourceArticleId: input.sourceArticleId}),
     ]

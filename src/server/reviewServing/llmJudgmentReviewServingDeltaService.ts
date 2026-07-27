@@ -85,10 +85,11 @@ export const appendLlmJudgmentReviewServingDeltas = async (
   tx: ReviewServingDeltaLedgerTransaction,
   inputs: readonly AppendLlmJudgmentReviewServingDeltaInput[],
 ) => {
-  return inputs.reduce<Promise<ReviewServingDeltaAppendResult[]>>(async (previousRun, input) => {
-    const results = await previousRun
-    const result = await appendLlmJudgmentReviewServingDelta(tx, input)
+  const results: ReviewServingDeltaAppendResult[] = []
 
-    return [...results, result]
-  }, Promise.resolve([]))
+  for (const input of inputs) {
+    results.push(await appendLlmJudgmentReviewServingDelta(tx, input))
+  }
+
+  return results
 }
