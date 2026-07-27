@@ -35,6 +35,7 @@ type DuckdbReloadSubprocessResult = {
   checkpointCount: number
   createCount: number
   errorMessage: string | null
+  failedPreflightWalExists: boolean
   firstPreflightSpecs: StartupRepairSpecJson[]
   firstRow: {value: number}
   manifest: {error?: string; recovery?: string; walQuarantinePath?: string} | null
@@ -46,6 +47,7 @@ type DuckdbReloadSubprocessResult = {
     tableName: string
   } | null
   preflightCount: number
+  preflightDatabasePaths: string[]
   preflightScript: string
   preflightSpecs: StartupRepairSpecJson[]
   preflightSpecsHistory: StartupRepairSpecJson[][]
@@ -3328,7 +3330,7 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
   }
 })
 
-test('duckdb service retries transient startup indexed-table repair locks', () => {
+test('duckdb service isolates failed startup mutation WAL while retrying indexed-table repair locks', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
@@ -3348,7 +3350,9 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
         const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
 
         let createCount = 0
+        let failedPreflightWalPath = ''
         let preflightCount = 0
+        const preflightDatabasePaths = []
         let firstPreflightSpecs = []
         let preflightScript = ''
         let preflightSpecs = []
@@ -3403,6 +3407,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
 
           preflightCount += 1
           preflightScript = script
+          const preflightDatabasePath = JSON.parse(String(command[3] ?? '""'))
+          preflightDatabasePaths.push(preflightDatabasePath)
           preflightSpecs = JSON.parse(String(command[5] ?? '[]'))
           if (preflightCount === 1) {
             firstPreflightSpecs = preflightSpecs
@@ -3419,7 +3425,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
                     schemaName: 'mart',
                     tableName: 'review_article_judgment_detail_serving_v4',
                   })),
-                  writeFileSync(duckdbPath + '.wal', 'probe wal'),
+                  failedPreflightWalPath = preflightDatabasePath + '.wal',
+                  writeFileSync(failedPreflightWalPath, 'probe wal'),
                   'PRIMARY_review_article_judgment_detail_serving_v4 duplicate key'
                 )),
               }
@@ -3486,8 +3493,10 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
           manifests.find((manifest) => manifest.recovery === 'startup-preflight-mutation-wal-quarantine') ?? null
         console.log(JSON.stringify({
           createCount,
+          failedPreflightWalExists: existsSync(failedPreflightWalPath),
           firstPreflightSpecs,
           preflightCount,
+          preflightDatabasePaths,
           preflightScript,
           preflightSpecs,
           preflightWalManifest,
@@ -3532,6 +3541,18 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
     expect(parsed.preflightCount).toBe(3)
+    expect(parsed.preflightDatabasePaths).toHaveLength(3)
+    expect(new Set(parsed.preflightDatabasePaths).size).toBe(3)
+    expect(
+      parsed.preflightDatabasePaths.every((preflightDatabasePath) => {
+        return (
+          preflightDatabasePath !== duckdbPath
+          && preflightDatabasePath.startsWith(`${duckdbPath}.startup-recovery/`)
+          && preflightDatabasePath.endsWith('.startup-probe.duckdb')
+        )
+      }),
+    ).toBe(true)
+    expect(parsed.failedPreflightWalExists).toBe(false)
     expect(parsed.repairLockProbeCount).toBe(2)
     expect(parsed.repairCount).toBe(1)
     expect(parsed.createCount).toBe(1)
@@ -3920,6 +3941,11 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(
       parsed.recoveryFiles.filter((fileName) => {
         return fileName.endsWith('.failed-startup-probe.wal')
+      }),
+    ).toHaveLength(0)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.startup-probe.duckdb')
       }),
     ).toHaveLength(0)
     expect(
