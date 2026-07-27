@@ -262,67 +262,11 @@ const insertReviewServingRow = async (projectId: string, articleId: string) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
+  void articleId
 
   await runDatabase(`
     INSERT INTO app.project_review_serving_generation (project_id, active_generation)
     VALUES ('${projectId}', 1)
-  `)
-  await runDatabase(`
-    INSERT INTO mart.review_article_serving (
-      project_id,
-      generation,
-      article_id,
-      article_created_at,
-      article_updated_at,
-      article_title,
-      article_external_id,
-      journal_title,
-      url,
-      full_text_pdf,
-      full_text_fetched_at,
-      full_text_conversion_status,
-      source_metadata,
-      has_all_llm_judgments,
-      llm_judged_prompt_count,
-      llm_judged_prompt_ids,
-      enabled_prompt_count,
-      human_answered_prompt_count,
-      human_answered_prompt_ids,
-      has_all_human_answers,
-      review_opened,
-      review_sections_completed,
-      latest_llm_created_at,
-      latest_human_updated_at,
-      latest_review_updated_at,
-      serving_updated_at
-    ) VALUES (
-      '${projectId}',
-      1,
-      '${articleId}',
-      TIMESTAMPTZ '2026-04-02 12:00:00+00',
-      NULL,
-      'Indexed article',
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      FALSE,
-      0,
-      NULL,
-      1,
-      0,
-      NULL,
-      FALSE,
-      FALSE,
-      0,
-      NULL,
-      NULL,
-      NULL,
-      current_timestamp
-    )
   `)
 }
 

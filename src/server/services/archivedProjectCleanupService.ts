@@ -45,10 +45,6 @@ const terminalJudgmentJobStatuses = ['completed', 'failed', 'project_removed']
 const archivedProjectCleanupWorkloadContext = getMaintenanceDuckdbWorkloadContext('archivedProjectCleanup')
 
 const archivedProjectMartCleanupMutations: CleanupMutation[] = [
-  'mart.review_article_serving_detail',
-  'mart.review_article_filter_member',
-  'mart.review_article_serving',
-  'mart.review_article_rollup',
   'mart.prompt_answer_fact',
   'app.review_answer_dictionary',
   'mart.project_scope_article',

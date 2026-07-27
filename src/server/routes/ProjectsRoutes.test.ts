@@ -386,79 +386,22 @@ const assertSourceCloneRerunState = async ({
   expect(sourceJudgmentRows).toEqual([{answeredOriginal: 'yes', id: sourceJudgmentId, promptId}])
 }
 
-const insertReviewArticleServingFixtureRows = async ({
-  generation,
-  projectId,
-  rowCount,
-}: {
-  generation: number
-  projectId: string
-  rowCount: number
-}) => {
+const insertProjectScopeArticleFixtureRows = async ({projectId, rowCount}: {projectId: string; rowCount: number}) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
 
   const valuesSql = Array.from({length: rowCount}, (_unused, index) => {
     const articleNumber = String(index + 1).padStart(3, '0')
-    return `(
-      '${projectId}',
-      ${generation},
-      'archive-serving-article-${articleNumber}',
-      TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      NULL,
-      'Archive Serving Article ${articleNumber}',
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      FALSE,
-      0,
-      NULL,
-      0,
-      0,
-      NULL,
-      FALSE,
-      FALSE,
-      0,
-      NULL,
-      NULL,
-      NULL,
-      current_timestamp
-    )`
+    return `('${projectId}', 'archive-scope-article-${articleNumber}', TRUE, FALSE)`
   }).join(', ')
 
   await runDatabase(`
-    INSERT INTO mart.review_article_serving (
+    INSERT INTO mart.project_scope_article (
       project_id,
-      generation,
       article_id,
-      article_created_at,
-      article_updated_at,
-      article_title,
-      article_external_id,
-      journal_title,
-      url,
-      full_text_pdf,
-      full_text_fetched_at,
-      full_text_conversion_status,
-      source_metadata,
-      has_all_llm_judgments,
-      llm_judged_prompt_count,
-      llm_judged_prompt_ids,
-      enabled_prompt_count,
-      human_answered_prompt_count,
-      human_answered_prompt_ids,
-      has_all_human_answers,
-      review_opened,
-      review_sections_completed,
-      latest_llm_created_at,
-      latest_human_updated_at,
-      latest_review_updated_at,
-      serving_updated_at
+      in_curated_scope,
+      in_route_scope
     ) VALUES ${valuesSql}
   `)
 }
@@ -495,9 +438,9 @@ beforeAll(async () => {
   cleanupArchivedProjectMartDataBatch = async (projectId: string) => {
     const rows = await database.queryJson<{rowId: bigint | number | string}>(`
       SELECT rowid AS rowId
-      FROM mart.review_article_serving
+      FROM mart.project_scope_article
       WHERE project_id = '${projectId}'
-      ORDER BY generation ASC, article_id ASC
+      ORDER BY article_id ASC
       LIMIT 10
     `)
 
@@ -506,7 +449,7 @@ beforeAll(async () => {
     }
 
     await database.run(`
-      DELETE FROM mart.review_article_serving
+      DELETE FROM mart.project_scope_article
       WHERE rowid IN (${rows
         .map((row) => {
           return `${row.rowId}`
@@ -834,7 +777,7 @@ test('archive route leaves archived mart cleanup to bounded maintenance batches 
   const projectId = 'archive-project-serving-purge'
 
   await insertProjectFixture({connectionId: 'archive-serving-connection', modelId: 'archive-serving-model', projectId})
-  await insertReviewArticleServingFixtureRows({generation: 2, projectId, rowCount: 398})
+  await insertProjectScopeArticleFixtureRows({projectId, rowCount: 398})
   await runDatabase(`
     INSERT INTO app.project_review_serving_generation (project_id, active_generation)
     VALUES ('${projectId}', 1)
@@ -844,9 +787,9 @@ test('archive route leaves archived mart cleanup to bounded maintenance batches 
 
   expect(response.status).toBe(200)
 
-  const [servingRowCount] = await queryDatabase<{count: number}>(`
+  const [scopeArticleRowCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
-    FROM mart.review_article_serving
+    FROM mart.project_scope_article
     WHERE project_id = '${projectId}'
   `)
   const [generationRowCount] = await queryDatabase<{count: number}>(`
@@ -864,19 +807,19 @@ test('archive route leaves archived mart cleanup to bounded maintenance batches 
     LIMIT 1
   `)
 
-  expect(Number(servingRowCount?.count ?? 0)).toBe(398)
+  expect(Number(scopeArticleRowCount?.count ?? 0)).toBe(398)
   expect(Number(generationRowCount?.count ?? 0)).toBe(1)
   expect(refreshState).toBeUndefined()
 
   const cleanupBatch = await cleanupArchivedProjectMartDataBatch(projectId)
-  const [servingRowCountAfterBatch] = await queryDatabase<{count: number}>(`
+  const [scopeArticleRowCountAfterBatch] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
-    FROM mart.review_article_serving
+    FROM mart.project_scope_article
     WHERE project_id = '${projectId}'
   `)
 
   expect(cleanupBatch.deletedRowCount).toBe(10)
-  expect(Number(servingRowCountAfterBatch?.count ?? 0)).toBe(388)
+  expect(Number(scopeArticleRowCountAfterBatch?.count ?? 0)).toBe(388)
 
   await flushMartRefreshes()
 })
@@ -1381,157 +1324,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
       current_timestamp
     )
   `)
-  await runDatabase(`
-    INSERT INTO mart.review_article_rollup (
-      project_id,
-      article_id,
-      article_created_at,
-      article_updated_at,
-      enabled_prompt_count,
-      llm_judged_prompt_count,
-      human_answered_prompt_count,
-      llm_judged_prompt_ids,
-      human_answered_prompt_ids,
-      has_all_llm_judgments,
-      has_all_human_answers,
-      in_curated_scope,
-      in_route_scope,
-      review_opened,
-      review_sections_completed,
-      latest_llm_created_at,
-      latest_human_updated_at,
-      latest_review_updated_at,
-      rollup_updated_at
-    ) VALUES (
-      '${sourceProjectId}',
-      '${articleId}',
-      TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      NULL,
-      1,
-      1,
-      1,
-      ['${promptId}'],
-      ['${promptId}'],
-      TRUE,
-      TRUE,
-      TRUE,
-      TRUE,
-      TRUE,
-      7,
-      current_timestamp,
-      current_timestamp,
-      current_timestamp,
-      current_timestamp
-    )
-  `)
-  await runDatabase(`
-    INSERT INTO mart.review_article_serving (
-      project_id,
-      generation,
-      article_id,
-      article_created_at,
-      article_updated_at,
-      article_title,
-      article_external_id,
-      journal_title,
-      url,
-      full_text_pdf,
-      full_text_fetched_at,
-      full_text_conversion_status,
-      source_metadata,
-      has_all_llm_judgments,
-      llm_judged_prompt_count,
-      llm_judged_prompt_ids,
-      enabled_prompt_count,
-      human_answered_prompt_count,
-      human_answered_prompt_ids,
-      has_all_human_answers,
-      review_opened,
-      review_sections_completed,
-      latest_llm_created_at,
-      latest_human_updated_at,
-      latest_review_updated_at,
-      serving_updated_at
-    ) VALUES (
-      '${sourceProjectId}',
-      3,
-      '${articleId}',
-      TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      NULL,
-      'Delete archived article',
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      TRUE,
-      1,
-      ['${promptId}'],
-      1,
-      1,
-      ['${promptId}'],
-      TRUE,
-      TRUE,
-      7,
-      NULL,
-      NULL,
-      NULL,
-      current_timestamp
-    )
-  `)
-  await runDatabase(`
-    INSERT INTO mart.review_article_filter_member (
-      project_id,
-      generation,
-      prompt_id,
-      answer_id,
-      article_id,
-      article_created_at,
-      numeric_answer_value
-    ) VALUES (
-      '${sourceProjectId}',
-      3,
-      '${promptId}',
-      1,
-      '${articleId}',
-      TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      1
-    )
-  `)
-  await runDatabase(`
-    INSERT INTO mart.review_article_serving_detail (
-      project_id,
-      generation,
-      article_id,
-      prompt_id,
-      prompt_order,
-      judgment_id,
-      created_at,
-      article_created_at,
-      article_updated_at,
-      model_id,
-      answered_original,
-      answered_original_as_array,
-      detail_updated_at
-    ) VALUES (
-      '${sourceProjectId}',
-      3,
-      '${articleId}',
-      '${promptId}',
-      0,
-      'delete-archived-judgment',
-      current_timestamp,
-      TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      NULL,
-      'delete-archived-source-model',
-      'yes',
-      ['yes'],
-      current_timestamp
-    )
-  `)
-
   const response = await app.handle(
     new Request('http://localhost/api/projects/delete-archived', {
       body: JSON.stringify({projectIds: [sourceProjectId]}),
@@ -1622,26 +1414,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
     FROM mart.prompt_answer_fact
     WHERE project_id = '${sourceProjectId}'
   `)
-  const [rollupRowCount] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM mart.review_article_rollup
-    WHERE project_id = '${sourceProjectId}'
-  `)
-  const [servingRowCount] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM mart.review_article_serving
-    WHERE project_id = '${sourceProjectId}'
-  `)
-  const [filterMemberRowCount] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM mart.review_article_filter_member
-    WHERE project_id = '${sourceProjectId}'
-  `)
-  const [servingDetailRowCount] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM mart.review_article_serving_detail
-    WHERE project_id = '${sourceProjectId}'
-  `)
   const [survivorPromptOrigin] = await queryDatabase<{originProjectId: string | null}>(`
     SELECT origin_project_id AS originProjectId
     FROM app.project_prompt
@@ -1720,10 +1492,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(servingGenerationRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectScopeArticleRowCount?.count ?? 0)).toBe(0)
   expect(Number(promptAnswerFactRowCount?.count ?? 0)).toBe(0)
-  expect(Number(rollupRowCount?.count ?? 0)).toBe(0)
-  expect(Number(servingRowCount?.count ?? 0)).toBe(0)
-  expect(Number(filterMemberRowCount?.count ?? 0)).toBe(0)
-  expect(Number(servingDetailRowCount?.count ?? 0)).toBe(0)
   expect(survivorPromptOrigin?.originProjectId).toBe(null)
   expect(survivorArticleOrigin?.importedFromProjectId).toBe(null)
   expect(Number(comparisonProjectRow?.count ?? 0)).toBe(1)

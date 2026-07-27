@@ -101,6 +101,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0198_nullHumanJudgmentDetailAnswerArray.sql',
   '../../db/duckdbMigrations/0199_dropReviewArticleServingListModeKeys.sql',
   '../../db/duckdbMigrations/0200_reviewUnassessedQueueArticleRankServing.sql',
+  '../../db/duckdbMigrations/0201_dropLegacyReviewV3Marts.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -228,6 +229,8 @@ const reviewArticleServingListModeKeysDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0199_dropReviewArticleServingListModeKeys.sql']
 const reviewUnassessedQueueArticleRankForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0200_reviewUnassessedQueueArticleRankServing.sql']
+const legacyReviewV3MartDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0201_dropLegacyReviewV3Marts.sql']
 const reviewFilterStateServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0180_reviewFilterStateServing.sql']
 const reviewFilterPostingServingCompactForwardMigrationSql =
@@ -343,6 +346,10 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_filter_state_serving_v4',
+  'mart.review_article_serving',
+  'mart.review_article_rollup',
+  'mart.review_article_filter_member',
+  'mart.review_article_serving_detail',
   'app.review_rebuild_partial_cleanup_authorization',
 ])
 
@@ -747,7 +754,7 @@ test('runtime review-serving code does not reference retired patch storage', () 
   const runtimeReferences = runtimeSourceFiles.flatMap((sourcePath) => {
     const source = readFileSync(sourcePath, 'utf8')
     const retiredReference = [...retiredReviewServingTables].find((tableName) => {
-      return source.includes(tableName)
+      return new RegExp(`${escapeRegex(tableName)}(?![A-Za-z0-9_])`).test(source)
     })
 
     return retiredReference === undefined ? [] : [`${sourcePath}: ${retiredReference}`]
@@ -1322,6 +1329,45 @@ test('filter state serving table is retired into list-mode state', () => {
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_state_serving_v4_pk',
   )
   expect(retiredReviewServingTables.has('mart.review_article_filter_state_serving_v4')).toBe(true)
+})
+
+test('legacy V3 review marts are retired from the final schema', () => {
+  const retiredTables = [
+    'mart.review_article_filter_state_serving_v4',
+    'mart.review_article_serving',
+    'mart.review_article_rollup',
+    'mart.review_article_filter_member',
+    'mart.review_article_serving_detail',
+  ]
+
+  expect(legacyReviewV3MartDropForwardMigrationSql.trim()).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_mart_review_article_serving_order;',
+      'DROP INDEX IF EXISTS idx_mart_review_article_serving_order;',
+      'DROP INDEX IF EXISTS mart.idx_mart_review_article_filter_member_lookup;',
+      'DROP INDEX IF EXISTS idx_mart_review_article_filter_member_lookup;',
+      'DROP INDEX IF EXISTS mart.idx_mart_review_article_serving_detail_lookup;',
+      'DROP INDEX IF EXISTS idx_mart_review_article_serving_detail_lookup;',
+      'DROP INDEX IF EXISTS mart.idx_mart_review_article_rollup_project_id;',
+      'DROP INDEX IF EXISTS idx_mart_review_article_rollup_project_id;',
+      'DROP INDEX IF EXISTS mart.idx_review_article_filter_state_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_article_filter_state_serving_v4_lookup;',
+      'DROP INDEX IF EXISTS mart.idx_review_article_filter_state_serving_v4_pk;',
+      'DROP INDEX IF EXISTS idx_review_article_filter_state_serving_v4_pk;',
+      '',
+      'DROP TABLE IF EXISTS mart.review_article_filter_state_serving_v4;',
+      'DROP TABLE IF EXISTS mart.review_article_serving;',
+      'DROP TABLE IF EXISTS mart.review_article_rollup;',
+      'DROP TABLE IF EXISTS mart.review_article_filter_member;',
+      'DROP TABLE IF EXISTS mart.review_article_serving_detail;',
+    ].join('\n'),
+  )
+
+  for (const tableName of retiredTables) {
+    expect(getTableSql(tableName)).toBe('')
+    expect(reviewServingPhase1Tables).not.toContain(tableName)
+    expect(retiredReviewServingTables.has(tableName)).toBe(true)
+  }
 })
 
 test('filter option schema drops reconstructable payload JSON column', () => {
