@@ -290,44 +290,6 @@ type AutoSyncAllProgress = {
   error: string | null
 }
 
-type RetiredProjectMartLargeRebuildMutationResponse = {
-  message: string
-  projectId: string
-  retired: true
-  status: 'retired'
-}
-
-type RetiredProjectMartDirtyMaterializationMutationResponse = RetiredProjectMartLargeRebuildMutationResponse & {
-  sourceKind: string
-  targetDirtyToken: number
-}
-
-const getRetiredProjectMartLargeRebuildMutationResponse = (
-  projectId: string,
-): RetiredProjectMartLargeRebuildMutationResponse => {
-  return {
-    message: 'Legacy project mart large rebuild mutations are retired; use V4 review-serving rebuild requests.',
-    projectId,
-    retired: true,
-    status: 'retired',
-  }
-}
-
-const getRetiredProjectMartDirtyMaterializationMutationResponse = (params: {
-  projectId: string
-  sourceKind: string
-  targetDirtyToken: number
-}): RetiredProjectMartDirtyMaterializationMutationResponse => {
-  return {
-    message: 'Legacy project mart dirty-materialization mutations are retired; enqueue V4 review-serving rebuild work.',
-    projectId: params.projectId,
-    retired: true,
-    sourceKind: params.sourceKind,
-    status: 'retired',
-    targetDirtyToken: params.targetDirtyToken,
-  }
-}
-
 const getProjectJudgmentClause = (projectScope: ProjectScope | null, judgmentAlias: string) => {
   if (!projectScope) {
     return null
@@ -749,63 +711,6 @@ export const adminInvestigateRoutes = new Elysia()
   .get(workerRuntimeDiagnosticsPath, async () => {
     return getWorkerRuntimeDiagnostics()
   })
-  .post(
-    '/api/admin/project-mart-large-rebuild-run',
-    async ({body}) => {
-      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
-    },
-    {
-      body: t.Object({
-        batchSize: t.Optional(t.Numeric()),
-        maxCycles: t.Numeric(),
-        maxNoProgressBackoffs: t.Optional(t.Numeric()),
-        maxWakeMs: t.Optional(t.Numeric()),
-        projectId: t.String(),
-        until: t.Optional(
-          t.Union([
-            t.Literal('completed'),
-            t.Literal('failed'),
-            t.Literal('idle'),
-            t.Literal('phase-change'),
-            t.Literal('max-cycles'),
-          ]),
-        ),
-        workerId: t.Optional(t.String()),
-      }),
-    },
-  )
-  .post(
-    '/api/admin/project-mart-large-rebuild-pause',
-    async ({body}) => {
-      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
-    },
-    {body: t.Object({projectId: t.String(), reason: t.Optional(t.String())})},
-  )
-  .post(
-    '/api/admin/project-mart-large-rebuild-resume',
-    async ({body}) => {
-      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
-    },
-    {body: t.Object({projectId: t.String()})},
-  )
-  .post(
-    '/api/admin/project-mart-large-rebuild-note',
-    async ({body}) => {
-      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
-    },
-    {body: t.Object({note: t.Union([t.String(), t.Null()]), projectId: t.String()})},
-  )
-  .post(
-    '/api/admin/project-mart-dirty-materialization-requeue',
-    async ({body}) => {
-      return getRetiredProjectMartDirtyMaterializationMutationResponse({
-        projectId: body.projectId,
-        sourceKind: body.sourceKind,
-        targetDirtyToken: body.targetDirtyToken,
-      })
-    },
-    {body: t.Object({projectId: t.String(), sourceKind: t.String(), targetDirtyToken: t.Numeric()})},
-  )
   .get('/api/admin/list-prompts-with-types', async () => {
     const promptsList = await getTypedPrompts()
     const filtered = promptsList.filter((prompt) => {

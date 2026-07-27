@@ -1,4 +1,4 @@
-import {rmSync} from 'node:fs'
+import {readFileSync, rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
@@ -570,374 +570,39 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
   }
 })
 
-test('admin project mart large rebuild run route is retired for the selected project', () => {
-  const duckdbPath = `/tmp/f1-admin-large-rebuild-run-route-${Date.now()}.duckdb`
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {Elysia} = await import('elysia')
-        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
-        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-        const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
+test('retired project mart admin mutation routes are removed from admin investigate routes', async () => {
+  const adminSource = readFileSync(`${process.cwd()}/src/server/routes/AdminInvestigateRoutes.ts`, 'utf8')
+  const removedRoutePaths = [
+    '/api/admin/project-mart-large-rebuild-run',
+    '/api/admin/project-mart-large-rebuild-pause',
+    '/api/admin/project-mart-large-rebuild-resume',
+    '/api/admin/project-mart-large-rebuild-note',
+    '/api/admin/project-mart-dirty-materialization-requeue',
+  ]
+  const removedHelpers = [
+    'RetiredProjectMartLargeRebuildMutationResponse',
+    'RetiredProjectMartDirtyMaterializationMutationResponse',
+    'getRetiredProjectMartLargeRebuildMutationResponse',
+    'getRetiredProjectMartDirtyMaterializationMutationResponse',
+  ]
 
-        await migrateDuckdb()
-
-        const database = getAppDatabaseService()
-        await database.run(\`
-          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-          VALUES ('connection-admin-large-rebuild-run', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
-        \`)
-        await database.run(\`
-          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-          VALUES ('model-admin-large-rebuild-run', 'connection-admin-large-rebuild-run', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.project (id, name, archived, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-          VALUES ('project-admin-large-rebuild-run', 'Admin Large Rebuild Run', FALSE, 'model-admin-large-rebuild-run', TRUE, TRUE, FALSE, FALSE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, active_dirty_token, last_completed_dirty_token, refresh_status)
-          VALUES ('project-admin-large-rebuild-run', 0, 0, 0, 'idle')
-        \`)
-        await database.run(\`
-          INSERT INTO app.prompt (id, original_text, content_hash)
-          VALUES ('prompt-admin-large-rebuild-run', 'Prompt admin large rebuild run', 'hash-admin-large-rebuild-run')
-        \`)
-        await database.run(\`
-          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
-          VALUES ('project-prompt-admin-large-rebuild-run', 'project-admin-large-rebuild-run', 'prompt-admin-large-rebuild-run', 1, TRUE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at)
-          VALUES ('article-admin-large-rebuild-run', 'Article admin large rebuild run', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z')
-        \`)
-        await database.run(\`
-          INSERT INTO mart.project_scope_article (
-            project_id,
-            article_id,
-            in_curated_scope,
-            in_route_scope,
-            article_created_at,
-            article_updated_at
-          ) VALUES (
-            'project-admin-large-rebuild-run',
-            'article-admin-large-rebuild-run',
-            TRUE,
-            FALSE,
-            TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
-            TIMESTAMPTZ '2026-04-01T01:00:00.000Z'
-          )
-        \`)
-        await database.run(\`
-          INSERT INTO mart.judgment_fact (
-            judgment_id,
-            article_id,
-            prompt_id,
-            model_id,
-            project_id,
-            snapshot_project_id,
-            snapshot_project_model_name,
-            use_title,
-            use_abstract,
-            use_fulltext,
-            use_fulltext_no_images,
-            chunking_strategy,
-            is_answered,
-            answered_original,
-            answered_original_as_array,
-            normalized_answers,
-            confidence_original,
-            explanation,
-            quotes,
-            article_title,
-            article_created_at,
-            article_updated_at,
-            article_import_route,
-            article_publication_status,
-            created_at,
-            updated_at
-          ) VALUES (
-            'judgment-admin-large-rebuild-run',
-            'article-admin-large-rebuild-run',
-            'prompt-admin-large-rebuild-run',
-            'model-admin-large-rebuild-run',
-            'project-admin-large-rebuild-run',
-            'project-admin-large-rebuild-run',
-            'Project project-admin-large-rebuild-run',
-            TRUE,
-            TRUE,
-            FALSE,
-            FALSE,
-            NULL,
-            TRUE,
-            'yes',
-            ['yes'],
-            ['yes'],
-            1,
-            NULL,
-            NULL,
-            'Article admin large rebuild run',
-            TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
-            TIMESTAMPTZ '2026-04-01T01:00:00.000Z',
-            NULL,
-            NULL,
-            TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
-            TIMESTAMPTZ '2026-04-03T00:00:00.000Z'
-          )
-        \`)
-        await database.run(\`
-          INSERT INTO app.project_mart_large_rebuild_state (project_id, refresh_token, rebuild_phase, refresh_status)
-          VALUES ('project-admin-large-rebuild-run', 3, 'prompt_answer_fact', 'idle')
-        \`)
-
-        const app = new Elysia().use(adminInvestigateRoutes)
-        const response = await app.handle(
-          new Request('http://localhost/api/admin/project-mart-large-rebuild-run', {
-            method: 'POST',
-            headers: {'content-type': 'application/json'},
-            body: JSON.stringify({projectId: 'project-admin-large-rebuild-run', maxCycles: 1, maxWakeMs: 10_000, until: 'max-cycles', batchSize: 1, workerId: 'admin-runner'}),
-          }),
-        )
-        console.log(await response.text())
-        await database.close()
-      `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        API_SERVER_PORT: '3001',
-        DUCKDB_PATH: duckdbPath,
-        SERVER_ROLE: 'dev-single',
-        VITE_PORT: '3000',
-      },
-    },
-  )
-
-  try {
-    if (runRoute.exitCode !== 0) {
-      throw new Error(
-        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild run route test failed',
-      )
-    }
-
-    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      projectId: string
-      retired: boolean
-      status: string
-    }
-
-    expect(responseBody).toMatchObject({projectId: 'project-admin-large-rebuild-run', retired: true, status: 'retired'})
-  } finally {
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  for (const removedText of [...removedRoutePaths, ...removedHelpers]) {
+    expect(adminSource).not.toContain(removedText)
   }
-})
 
-test('admin project mart large rebuild pause and resume routes are retired', () => {
-  const duckdbPath = `/tmp/f1-admin-large-rebuild-pause-route-${Date.now()}.duckdb`
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {Elysia} = await import('elysia')
-        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
-        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-        const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
-
-        await migrateDuckdb()
-
-        const database = getAppDatabaseService()
-        await database.run(\`
-          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-          VALUES ('connection-admin-large-rebuild-pause', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
-        \`)
-        await database.run(\`
-          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-          VALUES ('model-admin-large-rebuild-pause', 'connection-admin-large-rebuild-pause', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.project (id, name, archived, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-          VALUES ('project-admin-large-rebuild-pause', 'Admin Large Rebuild Pause', FALSE, 'model-admin-large-rebuild-pause', TRUE, TRUE, FALSE, FALSE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.project_mart_large_rebuild_state (project_id, refresh_token, rebuild_phase, refresh_status, cursor_article_id)
-          VALUES ('project-admin-large-rebuild-pause', 4, 'prompt_answer_fact', 'idle', 'article-pause-1')
-        \`)
-
-        const app = new Elysia().use(adminInvestigateRoutes)
-        const pausedResponse = await app.handle(
-          new Request('http://localhost/api/admin/project-mart-large-rebuild-pause', {
-            method: 'POST',
-            headers: {'content-type': 'application/json'},
-            body: JSON.stringify({projectId: 'project-admin-large-rebuild-pause', reason: 'Paused by operator for inspection'}),
-          }),
-        )
-        const resumedResponse = await app.handle(
-          new Request('http://localhost/api/admin/project-mart-large-rebuild-resume', {
-            method: 'POST',
-            headers: {'content-type': 'application/json'},
-            body: JSON.stringify({projectId: 'project-admin-large-rebuild-pause'}),
-          }),
-        )
-        console.log(JSON.stringify({paused: await pausedResponse.json(), resumed: await resumedResponse.json()}))
-        await database.close()
-      `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        API_SERVER_PORT: '3001',
-        DUCKDB_PATH: duckdbPath,
-        SERVER_ROLE: 'dev-single',
-        VITE_PORT: '3000',
-      },
-    },
-  )
-
-  try {
-    if (runRoute.exitCode !== 0) {
-      throw new Error(
-        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild pause route test failed',
-      )
-    }
-
-    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      paused: {projectId: string; retired: boolean; status: string}
-      resumed: {projectId: string; retired: boolean; status: string}
-    }
-
-    expect(responseBody.paused).toMatchObject({
-      projectId: 'project-admin-large-rebuild-pause',
-      retired: true,
-      status: 'retired',
-    })
-    expect(responseBody.resumed).toMatchObject({
-      projectId: 'project-admin-large-rebuild-pause',
-      retired: true,
-      status: 'retired',
-    })
-  } finally {
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-  }
-})
-
-test('admin project mart large rebuild note route is retired', () => {
-  const duckdbPath = `/tmp/f1-admin-large-rebuild-note-route-${Date.now()}.duckdb`
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {Elysia} = await import('elysia')
-        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
-        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-        const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
-
-        await migrateDuckdb()
-
-        const database = getAppDatabaseService()
-        await database.run(\`
-          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-          VALUES ('connection-admin-large-rebuild-note', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
-        \`)
-        await database.run(\`
-          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-          VALUES ('model-admin-large-rebuild-note', 'connection-admin-large-rebuild-note', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.project (id, name, archived, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-          VALUES ('project-admin-large-rebuild-note', 'Admin Large Rebuild Note', FALSE, 'model-admin-large-rebuild-note', TRUE, TRUE, FALSE, FALSE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.project_mart_large_rebuild_state (project_id, refresh_token, rebuild_phase, refresh_status, last_error)
-          VALUES ('project-admin-large-rebuild-note', 4, 'prompt_answer_fact', 'failed', 'existing failure')
-        \`)
-
-        const app = new Elysia().use(adminInvestigateRoutes)
-        const noteResponse = await app.handle(
-          new Request('http://localhost/api/admin/project-mart-large-rebuild-note', {
-            method: 'POST',
-            headers: {'content-type': 'application/json'},
-            body: JSON.stringify({projectId: 'project-admin-large-rebuild-note', note: 'Watch cursor after restarting worker'}),
-          }),
-        )
-        console.log(JSON.stringify(await noteResponse.json()))
-        await database.close()
-      `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        API_SERVER_PORT: '3001',
-        DUCKDB_PATH: duckdbPath,
-        SERVER_ROLE: 'dev-single',
-        VITE_PORT: '3000',
-      },
-    },
-  )
-
-  try {
-    if (runRoute.exitCode !== 0) {
-      throw new Error(
-        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild note route test failed',
-      )
-    }
-
-    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      projectId: string
-      retired: boolean
-      status: string
-    }
-
-    expect(responseBody).toMatchObject({
-      projectId: 'project-admin-large-rebuild-note',
-      retired: true,
-      status: 'retired',
-    })
-  } finally {
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-  }
-})
-
-test('admin project mart dirty-materialization requeue route is retired', async () => {
   const {Elysia} = await import('elysia')
   const {adminInvestigateRoutes} = await import('./AdminInvestigateRoutes.ts')
   const app = new Elysia().use(adminInvestigateRoutes)
-  const response = await app.handle(
-    new Request('http://localhost/api/admin/project-mart-dirty-materialization-requeue', {
-      body: JSON.stringify({
-        projectId: 'project-admin-dirty-materialization-requeue',
-        sourceKind: 'project_scope',
-        targetDirtyToken: 42,
-      }),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-    }),
-  )
-  const responseBody = (await response.json()) as {
-    projectId: string
-    retired: boolean
-    sourceKind: string
-    status: string
-    targetDirtyToken: number
-  }
 
-  expect(responseBody).toMatchObject({
-    projectId: 'project-admin-dirty-materialization-requeue',
-    retired: true,
-    sourceKind: 'project_scope',
-    status: 'retired',
-    targetDirtyToken: 42,
-  })
+  for (const routePath of removedRoutePaths) {
+    const response = await app.handle(
+      new Request(`http://localhost${routePath}`, {
+        body: JSON.stringify({projectId: 'removed-project-mart-admin-route'}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+      }),
+    )
+
+    expect(response.status).toBe(404)
+  }
 })

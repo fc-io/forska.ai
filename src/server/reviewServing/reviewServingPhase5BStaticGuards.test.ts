@@ -188,13 +188,24 @@ test('admin legacy mart mutation routes stay retired or removed', async () => {
   const routeInventorySource = await readText('src/server/routes/routeSurfaceInventory.ts')
   const navigationSource = await readText('src/components/Navigation.tsx')
   const settingsSource = await readText('src/app/routes/+settings/+index.tsx')
+  const removedRoutePaths = [
+    '/api/admin/project-mart-large-rebuild-run',
+    '/api/admin/project-mart-large-rebuild-pause',
+    '/api/admin/project-mart-large-rebuild-resume',
+    '/api/admin/project-mart-large-rebuild-note',
+    '/api/admin/project-mart-dirty-materialization-requeue',
+  ]
 
   expect(adminSource).not.toContain('getProjectMartDirtyMaterializationService')
   expect(adminSource).not.toContain('requeueDirtyMaterialization')
   expect(adminSource).not.toContain('getProjectMartLargeRebuildHeartbeatConfig')
-  expect(adminSource).toContain('getRetiredProjectMartLargeRebuildMutationResponse')
-  expect(adminSource).toContain('getRetiredProjectMartDirtyMaterializationMutationResponse')
-  expect(routeInventorySource).toContain('retired legacy rebuild/materialization controls')
+  expect(adminSource).not.toContain('getRetiredProjectMartLargeRebuildMutationResponse')
+  expect(adminSource).not.toContain('getRetiredProjectMartDirtyMaterializationMutationResponse')
+  expect(routeInventorySource).not.toContain('retired legacy rebuild/materialization controls')
+  for (const routePath of removedRoutePaths) {
+    expect(adminSource).not.toContain(routePath)
+    expect(routeInventorySource).not.toContain(routePath)
+  }
   expect(navigationSource).not.toContain('/admin/project-mart-large-rebuild')
   expect(settingsSource).not.toContain('projectMartLargeRebuildHeartbeat')
   expect(settingsSource).not.toContain('Maintenance rebuild tuning')

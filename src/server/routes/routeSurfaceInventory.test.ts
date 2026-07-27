@@ -20,6 +20,13 @@ type MountedRoute = {method: string; path: string}
 type SourceFile = {path: string; source: string}
 
 const projectRoot = process.cwd()
+const removedProjectMartAdminMutationRoutes = [
+  '/api/admin/project-mart-large-rebuild-run',
+  '/api/admin/project-mart-large-rebuild-pause',
+  '/api/admin/project-mart-large-rebuild-resume',
+  '/api/admin/project-mart-large-rebuild-note',
+  '/api/admin/project-mart-dirty-materialization-requeue',
+]
 
 const getMountedRoutes = (): MountedRoute[] => {
   return [
@@ -135,6 +142,19 @@ test('release-blocked current routes are explicit', () => {
     .map(getRouteSurfaceRouteKey)
 
   expect(blockedRouteKeys).toEqual(['POST /api/datasources/import/fhir-ehr-patients'])
+})
+
+test('retired project mart admin mutation routes are absent from the live route inventory', () => {
+  const inventoryPaths = routeSurfaceRoutes.map((route) => {
+    return route.path
+  })
+  const source = readFileSync(join(projectRoot, 'src/server/routes/routeSurfaceInventory.ts'), 'utf8')
+
+  for (const routePath of removedProjectMartAdminMutationRoutes) {
+    expect(inventoryPaths).not.toContain(routePath)
+    expect(source).not.toContain(routePath)
+  }
+  expect(source).not.toContain('retired legacy rebuild/materialization controls')
 })
 
 test('public route surface gate covers internal, diagnostics, debug, and remove-before-release categories', () => {
