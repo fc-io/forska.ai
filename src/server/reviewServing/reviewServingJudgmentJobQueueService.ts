@@ -282,9 +282,7 @@ export const getJudgmentJobUnassessedCountFromServing = async (params: {
   const [row] = await database.queryJson<{count: number}>(
     `
     SELECT COUNT(DISTINCT queue.article_id) AS count
-    FROM mart.review_unassessed_queue_serving_v4 queue
-    CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)
-    ${getCurrentPromptJoin('expanded_prompt.prompt_id')}
+    FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
     ${getUnassessedServingArticleJoin()}
     WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
       AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
@@ -316,44 +314,22 @@ export const getJudgmentJobUnassessedArticlesFromServing = async (params: {
 
   const rows = await database.queryJson<JudgmentJobServingArticleRow>(
     `
-    WITH eligible_queue AS (
-      SELECT
-        queue.article_id,
-        queue.priority_bucket,
-        queue.activity_sort_at,
-        article_record.article_title,
-        article.article_created_at,
-        article_record.article_updated_at
-      FROM mart.review_unassessed_queue_serving_v4 queue
-      CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)
-      ${getCurrentPromptJoin('expanded_prompt.prompt_id')}
-      ${getUnassessedServingArticleJoin()}
-      LEFT JOIN app.article article_record
-        ON article_record.id = queue.article_id
-      WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
-        AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
-        AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
-        AND queue.queue_kind = 'unassessed'
-        ${getDatePredicate('article.article_created_at', params.projectDateFrom, params.projectDateTo)}
-        ${getConfiguredArticleScopePredicate(params.importRouteIds)}
-    ), article_queue AS (
-      SELECT
-        article_id,
-        MAX(priority_bucket) AS priorityBucket
-      FROM eligible_queue
-      GROUP BY article_id
-    )
     SELECT
-      eligible.article_id AS articleId,
-      any_value(eligible.article_title) AS articleTitle,
-      any_value(eligible.article_created_at) AS articleCreatedAt,
-      any_value(eligible.article_updated_at) AS articleUpdatedAt
-    FROM eligible_queue eligible
-    INNER JOIN article_queue
-      ON article_queue.article_id = eligible.article_id
-      AND article_queue.priorityBucket = eligible.priority_bucket
-    GROUP BY eligible.article_id, article_queue.priorityBucket
-    ORDER BY article_queue.priorityBucket DESC, MAX(eligible.activity_sort_at) DESC, eligible.article_id DESC
+      queue.article_id AS articleId,
+      article_record.article_title AS articleTitle,
+      article.article_created_at AS articleCreatedAt,
+      article_record.article_updated_at AS articleUpdatedAt
+    FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
+    ${getUnassessedServingArticleJoin()}
+    LEFT JOIN app.article article_record
+      ON article_record.id = queue.article_id
+    WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
+      AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
+      AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
+      AND queue.queue_kind = 'unassessed'
+      ${getDatePredicate('article.article_created_at', params.projectDateFrom, params.projectDateTo)}
+      ${getConfiguredArticleScopePredicate(params.importRouteIds)}
+    ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC
     LIMIT ${limit}
   `,
     getJudgmentJobQueueWorkloadContext('judgmentJobs.unassessedArticles', params.projectId, limit),
