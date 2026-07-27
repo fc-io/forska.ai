@@ -181,11 +181,6 @@ test('user config update rejects archived or config-disabled conversion models',
       email: localUserDefaults.email,
       fullTextConversionModelId: 'update-archived-model',
       name: localUserDefaults.name,
-      projectMartLargeRebuildBatchSize: null,
-      projectMartLargeRebuildMaxCyclesPerWake: null,
-      projectMartLargeRebuildMaxWakeMs: null,
-      projectMartLargeRebuildPollIntervalMs: null,
-      projectMartLargeRebuildTuningMode: 'automatic',
       unpaywallEmail: null,
     })
     .then(() => {
@@ -200,11 +195,6 @@ test('user config update rejects archived or config-disabled conversion models',
       email: localUserDefaults.email,
       fullTextConversionModelId: 'update-disabled-model',
       name: localUserDefaults.name,
-      projectMartLargeRebuildBatchSize: null,
-      projectMartLargeRebuildMaxCyclesPerWake: null,
-      projectMartLargeRebuildMaxWakeMs: null,
-      projectMartLargeRebuildPollIntervalMs: null,
-      projectMartLargeRebuildTuningMode: 'automatic',
       unpaywallEmail: null,
     })
     .then(() => {
