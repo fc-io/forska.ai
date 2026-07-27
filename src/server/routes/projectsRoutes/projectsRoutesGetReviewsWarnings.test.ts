@@ -28,53 +28,11 @@ type ReviewsWarningsResponse = {
         | 'waiting_for_maintenance_worker'
         | null
       cleanup: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
-      diagnostics: {
-        duckdbQueues: {background: {queueDepth: number}; main: {queueDepth: number}}
-        largeRebuild: {
-          currentPhase: null | {
-            committedRowCount: number
-            lastRssBytes: number | null
-            maxTempSpillBytes: number | null
-            queueWaitMs: number | null
-            rowsPerSecond: number | null
-          }
-          lastCycle: null | {
-            phase: string | null
-            queueWaitMs: number | null
-            rowsPerSecond: number | null
-            rssBytes: number | null
-          }
-        }
-        processMemory: {rssBytes: number}
-        tempSpill: {available: boolean; totalBytes: number | null}
-      }
       eligibleConsumerCount: number
       eligibleConsumerPresent: boolean
-      dirtyMaterialization: {
-        failedCount: number
-        incompleteCount: number
-        pendingCount: number
-        runningCount: number
-        unreconciledCount: number
-      }
-      freshness: {
-        hasIncompleteDirtyMaterialization: boolean
-        hasUnresolvedQuarantineBarrier: boolean
-        isFresh: boolean
-        status: 'fresh' | 'pending' | 'stale'
-        unresolvedQuarantineBarrierCount: number
-      }
       inFlightArticleRefreshCount: number
       inFlightProjectRefreshCount: number
       inFlightRefreshCount: number
-      largeRebuild: null | {
-        refreshStatus: 'idle' | 'paused' | 'running' | null
-        progress: null | {
-          remainingCurrentPhaseArticleCount: number | null
-          rowsPerMinute: number | null
-          scopeArticleCount: number
-        }
-      }
       lastProgressedAt: string | null
       lastProcessedAt: string | null
       lastStartedAt: string | null
@@ -1981,12 +1939,6 @@ test.skip('retired legacy mart diagnostics: quarantined article refreshes withou
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.blockedReason).toBe('quarantine_barrier')
-  expect(body.data.indexing.freshness).toMatchObject({
-    hasUnresolvedQuarantineBarrier: true,
-    isFresh: false,
-    status: 'stale',
-    unresolvedQuarantineBarrierCount: 1,
-  })
   expect(body.data.indexing.quarantinedArticleRefreshCount).toBe(1)
   expect(
     body.data.indexing.quarantinedArticles.map((article) => {
@@ -2239,7 +2191,6 @@ test('reviews warnings request bounded V4 repair when fresh idle serving is miss
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
@@ -2468,7 +2419,6 @@ test.skip('retired legacy mart diagnostics: queued dirty materializations before
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.dirtyMaterialization).toMatchObject({failedCount: 0, pendingCount: 1})
   expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.status).toBe('refreshing')
@@ -2492,7 +2442,6 @@ test.skip('retired legacy mart diagnostics: running dirty materializations befor
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.dirtyMaterialization).toMatchObject({activeOwnerCount: 0, runningCount: 1})
   expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.status).toBe('refreshing')
@@ -2651,7 +2600,6 @@ test.skip('retired legacy mart diagnostics: fresh idle route scope before V4 rep
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.freshness.isFresh).toBe(true)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
@@ -2677,7 +2625,6 @@ test('reviews warnings do not bootstrap missing serving rows for archived prompt
   expect(response.status).toBe(200)
   expect(body.data.enabledPromptCount).toBe(0)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.status).toBe('not-needed')
@@ -2702,7 +2649,6 @@ test('reviews warnings do not bootstrap missing serving rows for archived prompt
   expect(response.status).toBe(200)
   expect(body.data.enabledPromptCount).toBe(0)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.status).toBe('not-needed')
@@ -2724,7 +2670,6 @@ test('reviews warnings report candidate serving generation as pending activation
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.status).toBe('refreshing')
@@ -2768,7 +2713,6 @@ test('reviews warnings wait for retryable failed serving generation before queue
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('processing')
@@ -2798,7 +2742,6 @@ test('reviews warnings do not queue bootstrap rebuild for articles outside proje
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(false)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.status).toBe('not-needed')
@@ -2905,7 +2848,6 @@ test.skip('retired legacy mart diagnostics: failed dirty materializations withou
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.dirtyMaterialization).toMatchObject({failedCount: 1, unreconciledCount: 1})
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('failed')
@@ -3109,7 +3051,6 @@ test('reviews warnings ignore failed legacy large rebuild state while requesting
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('stalled')
@@ -3139,7 +3080,6 @@ test('reviews warnings keep active serving ready when legacy large rebuild has f
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.status).toBe('ready')

@@ -224,36 +224,6 @@ const isUsableReviewServingWarningSnapshot = (status: string) => {
   return status === 'active' || status === 'retired'
 }
 
-const getEmptyRuntimeDiagnostics = () => {
-  return {
-    duckdbQueues: {
-      background: {
-        lastDurationMs: null,
-        lastWaitMs: null,
-        maxQueueDepth: 0,
-        queueDepth: 0,
-        tasksCompleted: 0,
-        tasksStarted: 0,
-        totalDurationMs: 0,
-        totalWaitMs: 0,
-      },
-      main: {
-        lastDurationMs: null,
-        lastWaitMs: null,
-        maxQueueDepth: 0,
-        queueDepth: 0,
-        tasksCompleted: 0,
-        tasksStarted: 0,
-        totalDurationMs: 0,
-        totalWaitMs: 0,
-      },
-    },
-    largeRebuild: {currentPhase: null, lastCycle: null},
-    processMemory: {rssBytes: process.memoryUsage().rss},
-    tempSpill: {available: false, error: null, fileCount: null, tempDirectory: null, totalBytes: null},
-  }
-}
-
 export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
@@ -409,34 +379,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           articleRefreshesPerMinute: null,
           blockedReason,
           cleanup: {inFlightGenerationCleanupCount: 0, lastProgressedAt: null},
-          diagnostics: getEmptyRuntimeDiagnostics(),
-          dirtyMaterialization: {
-            activeOwnerCount: 0,
-            failedCount: 0,
-            incompleteCount: 0,
-            isActive: false,
-            lastProgressedAt: null,
-            oldestQueuedAt: null,
-            pendingCount: 0,
-            runningCount: 0,
-            unreconciledCount: 0,
-          },
           eligibleConsumerCount,
           eligibleConsumerPresent: eligibleConsumerCount > 0,
-          freshness: {
-            dirtyToken: null,
-            hasIncompleteDirtyMaterialization: false,
-            hasUnresolvedQuarantineBarrier: false,
-            isFresh: hasReviewServingRows,
-            lastCompletedDirtyToken: null,
-            refreshStatus: null,
-            status: hasReviewServingRows ? 'fresh' : pendingRefreshCount > 0 ? 'pending' : 'stale',
-            unresolvedQuarantineBarrierCount: 0,
-          },
           inFlightArticleRefreshCount: 0,
           inFlightProjectRefreshCount: inFlightRefreshCount,
           inFlightRefreshCount,
-          largeRebuild: null,
           lastProgressedAt,
           lastProcessedAt: servingDiagnostics.snapshot.activeUpdatedAt,
           lastStartedAt: null,
