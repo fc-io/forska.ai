@@ -174,10 +174,10 @@ test('repeated import changes collapse into one dirty row per project component 
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
 
-  expect(dirtyInserts).toHaveLength(10)
-  expect(dirtyWorkIds.size).toBe(5)
+  expect(dirtyInserts).toHaveLength(8)
+  expect(dirtyWorkIds.size).toBe(4)
   expect(parseProjectionKey(dirtyInserts[0] ?? '').projectionComponent).toBe('selectedImport')
-  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[5] ?? ''))
+  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[4] ?? ''))
 })
 
 test('import projection identity is stable across per-mutation article values', async () => {
@@ -215,7 +215,7 @@ test('import projection identity is stable across per-mutation article values', 
   expect(uniqueProjectionKeys.size).toBe(9)
 })
 
-test('selected import rank-field changes dirty search and payload but not display or judgment input components', async () => {
+test('selected import rank-field changes dirty search but not display payload or judgment input components', async () => {
   const {database, statements} = createFakeIntakeDatabase([
     createReviewImportDelta({deltaId: 'delta-selected', changeKind: 'importRoute.article.rankFields.updated'}),
   ])
@@ -235,11 +235,12 @@ test('selected import rank-field changes dirty search and payload but not displa
     return parseProjectionKey(statement).projectionComponent
   })
 
-  expect(result).toMatchObject({dirtyWorkCount: 5, maxSourceHighWaterMark: 1, status: 'converted'})
+  expect(result).toMatchObject({dirtyWorkCount: 4, maxSourceHighWaterMark: 1, status: 'converted'})
   expect(projectionKey).toMatchObject({projectionComponent: 'selectedImport'})
-  expect(projectionComponents).toEqual(['selectedImport', 'posting', 'search', 'summary', 'payload'])
+  expect(projectionComponents).toEqual(['selectedImport', 'posting', 'search', 'summary'])
   expect(dirtyInsert).toContain('importRoute.article.rankFields.updated')
   expect(dirtyInsert).not.toContain('display')
+  expect(dirtyInsert).not.toContain('payload')
   expect(dirtyInsert).not.toContain('judgmentInputContent')
 })
 

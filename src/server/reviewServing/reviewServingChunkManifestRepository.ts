@@ -981,8 +981,35 @@ export const getNextClaimableReviewServingRebuildChunk = async (
   })
 
   const rows = await measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.queryMs', async () => {
-    return database.queryJson<ReviewServingRebuildChunkManifestRow>(`
-      ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
+    return database.queryJson<
+      Pick<
+        ReviewServingRebuildChunkManifestRow,
+        | 'checksum'
+        | 'chunkEndKey'
+        | 'chunkId'
+        | 'chunkStartKey'
+        | 'inputDigest'
+        | 'inputWatermark'
+        | 'outputBaseGeneration'
+        | 'projectId'
+        | 'projectionComponent'
+        | 'projectionIdentity'
+        | 'requestId'
+      >
+    >(`
+      SELECT
+        candidate.chunk_id AS chunkId,
+        candidate.request_id AS requestId,
+        candidate.project_id AS projectId,
+        candidate.projection_component AS projectionComponent,
+        candidate.projection_identity AS projectionIdentity,
+        candidate.input_digest AS inputDigest,
+        candidate.input_watermark AS inputWatermark,
+        candidate.chunk_start_key AS chunkStartKey,
+        candidate.chunk_end_key AS chunkEndKey,
+        candidate.output_base_generation AS outputBaseGeneration,
+        candidate.checksum AS checksum
+      FROM app.review_rebuild_chunk_manifest AS candidate
       WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
       ORDER BY
         ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
@@ -1014,10 +1041,10 @@ export const getNextClaimableReviewServingRebuildChunk = async (
       LIMIT 1
     `)
   })
-  const row = rows[0]
+  const row = rows[0] ?? null
 
   return measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.mapMs', async () => {
-    return row === undefined
+    return row === null
       ? null
       : {
           chunkId: row.chunkId,
