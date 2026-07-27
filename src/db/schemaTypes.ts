@@ -60,11 +60,6 @@ export type UserRecord = {
   email: string
   role: string | null
   maintenanceWorkerDuckdbMemoryLimit: string | null
-  projectMartLargeRebuildBatchSize: number | null
-  projectMartLargeRebuildMaxCyclesPerWake: number | null
-  projectMartLargeRebuildMaxWakeMs: number | null
-  projectMartLargeRebuildPollIntervalMs: number | null
-  projectMartLargeRebuildTuningMode: 'automatic' | 'manual'
   unpaywallEmail: string | null
   fullTextConversionModelId: string | null
   createdAt: Date

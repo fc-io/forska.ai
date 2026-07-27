@@ -15,16 +15,7 @@ import {
 
 const gibibyte = 1024 ** 3
 const projectRoot = process.cwd()
-const defaultLocalAppSettings = {
-  maintenanceWorkerDuckdbMemoryLimit: null,
-  codexBin: null,
-  duckdbBin: null,
-  projectMartLargeRebuildBatchSize: null,
-  projectMartLargeRebuildMaxCyclesPerWake: null,
-  projectMartLargeRebuildMaxWakeMs: null,
-  projectMartLargeRebuildPollIntervalMs: null,
-  projectMartLargeRebuildTuningMode: 'automatic' as const,
-}
+const defaultLocalAppSettings = {maintenanceWorkerDuckdbMemoryLimit: null, codexBin: null, duckdbBin: null}
 
 test('background server stack keeps direct DuckDB access behind shared utilities', () => {
   const source = readFileSync(join(projectRoot, 'src/server/utils/backgroundServerStack.ts'), 'utf8')
@@ -115,16 +106,7 @@ test('background server stack honors machine-local maintenance-worker DuckDB mem
   expect(
     getBackgroundServerStackConfig(
       {API_SERVER_PORT: '4100'},
-      {
-        maintenanceWorkerDuckdbMemoryLimit: '12GB',
-        codexBin: null,
-        duckdbBin: null,
-        projectMartLargeRebuildBatchSize: null,
-        projectMartLargeRebuildMaxCyclesPerWake: null,
-        projectMartLargeRebuildMaxWakeMs: null,
-        projectMartLargeRebuildPollIntervalMs: null,
-        projectMartLargeRebuildTuningMode: 'automatic',
-      },
+      {maintenanceWorkerDuckdbMemoryLimit: '12GB', codexBin: null, duckdbBin: null},
     ),
   ).toEqual({
     apiPort: 4100,
