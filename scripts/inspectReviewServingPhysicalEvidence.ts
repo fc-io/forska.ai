@@ -35,6 +35,7 @@ type EvidenceReport = {
   rebuildArtifactDispositionEvidence: RebuildArtifactDispositionEvidenceReport
   retentionCleanupEligibility: RetentionCleanupEligibilityReport
   selectedImportPayloadSlimmingReadiness: SelectedImportPayloadSlimmingReadinessReport
+  summaryRebuildAccumulatorLifecycleEvidence: SummaryRebuildAccumulatorLifecycleEvidenceReport
   summaryContributionServingReadiness: SummaryContributionServingReadinessReport
   snapshotPath: string
   tables: TableEvidence[]
@@ -238,6 +239,33 @@ type RebuildArtifactDispositionEvidenceReport = {
   requestlessChunkRows: number | null
   requestlessRowsByAdoptionHint: RebuildArtifactDispositionRequestlessChunkRow[]
   table: 'app.review_rebuild_chunk_manifest'
+  verdict: 'not-authorized' | 'blocked'
+}
+type SummaryRebuildAccumulatorBlockerCount = {category: string; rows: number}
+type SummaryRebuildAccumulatorLifecycleRow = {
+  admissionState: string
+  distinctRequests: number
+  requestDisposition: string
+  requestStatus: string
+  rows: number
+}
+type SummaryRebuildAccumulatorLifecycleEvidenceReport = {
+  activeRequestRows: number | null
+  admittedRequestRows: number | null
+  blockerCounts: SummaryRebuildAccumulatorBlockerCount[]
+  completedRequestCandidateRows: number | null
+  currentProjectRows: number | null
+  error: string | null
+  failedRequestCandidateRows: number | null
+  globalRows: number | null
+  newestDiagnosticRequestProtectedRows: number | null
+  note: string
+  projectId: string
+  protectedRequestRows: number | null
+  rowsByRequestLifecycle: SummaryRebuildAccumulatorLifecycleRow[]
+  rowsJoinedToCompletedSummaryChunks: number | null
+  table: 'mart.review_article_summary_rebuild_accumulator_v4'
+  terminalRequestCandidateRows: number | null
   verdict: 'not-authorized' | 'blocked'
 }
 type RebuildRequestLifecycleFieldColumnEvidence = {
@@ -1807,6 +1835,280 @@ const getRebuildArtifactDispositionEvidenceReport = async (
       table,
       verdict: 'blocked',
     }
+  }
+}
+
+const getSummaryRebuildAccumulatorLifecycleEvidenceReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<SummaryRebuildAccumulatorLifecycleEvidenceReport> => {
+  const table = 'mart.review_article_summary_rebuild_accumulator_v4' as const
+  const requiredColumns = [
+    'request_id',
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'source_chunk_ids_key',
+  ] as const
+  const emptyReport = (
+    error: string | null,
+    note: string,
+    verdict: SummaryRebuildAccumulatorLifecycleEvidenceReport['verdict'],
+  ): SummaryRebuildAccumulatorLifecycleEvidenceReport => {
+    return {
+      activeRequestRows: null,
+      admittedRequestRows: null,
+      blockerCounts: [],
+      completedRequestCandidateRows: null,
+      currentProjectRows: null,
+      error,
+      failedRequestCandidateRows: null,
+      globalRows: null,
+      newestDiagnosticRequestProtectedRows: null,
+      note,
+      projectId,
+      protectedRequestRows: null,
+      rowsByRequestLifecycle: [],
+      rowsJoinedToCompletedSummaryChunks: null,
+      table,
+      terminalRequestCandidateRows: null,
+      verdict,
+    }
+  }
+
+  try {
+    if (!(await getTableExists(runtime, table))) {
+      return emptyReport(
+        null,
+        'Read-only proof-only accumulator lifecycle evidence was not collected because mart.review_article_summary_rebuild_accumulator_v4 is absent in this snapshot. Absence is not cleanup authorization.',
+        'blocked',
+      )
+    }
+
+    const accumulatorColumns = await getTableColumns(runtime, table)
+    const missingColumns = requiredColumns.filter((column) => {
+      return !hasColumn(accumulatorColumns, column)
+    })
+
+    if (missingColumns.length > 0) {
+      return emptyReport(
+        `Missing required evidence columns: ${missingColumns.join(', ')}`,
+        'Read-only accumulator lifecycle evidence collection was blocked by table-shape drift. Failed evidence collection is not retention cleanup authorization.',
+        'blocked',
+      )
+    }
+
+    const requestStatus = await getRequiredColumnStatus(runtime, 'app.review_rebuild_request', [
+      'request_id',
+      'project_id',
+      'status',
+      'admission_state',
+      'retry_after',
+      'retry_policy_json',
+      'last_error',
+      'updated_at',
+    ])
+    const chunkStatus = await getRequiredColumnStatus(runtime, 'app.review_rebuild_chunk_manifest', [
+      'request_id',
+      'project_id',
+      'chunk_id',
+      'projection_component',
+      'status',
+      'admission_state',
+      'retry_count',
+    ])
+    const manifestStatus = await getRequiredColumnStatus(runtime, 'app.review_serving_snapshot_manifest', [
+      'project_id',
+      'snapshot_id',
+      'snapshot_status',
+      'last_known_good_snapshot_id',
+      'selected_import_snapshot_id',
+    ])
+    const pinStatus = await getRequiredColumnStatus(runtime, 'app.review_serving_snapshot_pin', [
+      'project_id',
+      'snapshot_id',
+      'released_at',
+      'ref_count',
+      'expires_at',
+    ])
+    const missingJoinShapes = [
+      requestStatus.tableExists && requestStatus.missingColumns.length === 0
+        ? null
+        : `app.review_rebuild_request${
+            requestStatus.tableExists ? ` missing ${requestStatus.missingColumns.join(', ')}` : ' absent'
+          }`,
+      chunkStatus.tableExists && chunkStatus.missingColumns.length === 0
+        ? null
+        : `app.review_rebuild_chunk_manifest${
+            chunkStatus.tableExists ? ` missing ${chunkStatus.missingColumns.join(', ')}` : ' absent'
+          }`,
+      manifestStatus.tableExists && manifestStatus.missingColumns.length === 0
+        ? null
+        : `app.review_serving_snapshot_manifest${
+            manifestStatus.tableExists ? ` missing ${manifestStatus.missingColumns.join(', ')}` : ' absent'
+          }`,
+      pinStatus.tableExists && pinStatus.missingColumns.length === 0
+        ? null
+        : `app.review_serving_snapshot_pin${pinStatus.tableExists ? ` missing ${pinStatus.missingColumns.join(', ')}` : ' absent'}`,
+    ].filter((entry): entry is string => {
+      return entry !== null
+    })
+
+    if (missingJoinShapes.length > 0) {
+      return emptyReport(
+        `Missing required evidence join shape: ${missingJoinShapes.join('; ')}`,
+        'Read-only accumulator lifecycle evidence collection was blocked by missing related-table shape. Failed evidence collection is not retention cleanup authorization.',
+        'blocked',
+      )
+    }
+
+    const requestDispositionSql = getRebuildRequestDispositionCaseSql('request')
+    const activeSnapshotPredicate = getActiveSnapshotManifestGuardPredicate('snapshot_id')
+    const activePinPredicate = getActiveSnapshotPinGuardPredicate('snapshot_id')
+    const protectedRequestPredicate = getProtectedRebuildRequestPredicate('request')
+    const newestDiagnosticPredicate = getNewestDiagnosticRebuildRequestPredicate('request')
+    const completedSummaryChunkJoinPredicate = `EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_chunk_manifest chunk
+            WHERE chunk.project_id = candidate.project_id
+              AND chunk.request_id = candidate.request_id
+              AND chunk.projection_component = 'summary'
+              AND chunk.status = 'completed'
+              AND chunk.admission_state = 'admitted'
+              AND contains(candidate.source_chunk_ids_key, CONCAT('\n', chunk.chunk_id, '\n'))
+          )`
+
+    const totals = await runReadonlyQuery<{
+      activeRequestRows: number | string
+      admittedRequestRows: number | string
+      completedRequestCandidateRows: number | string
+      currentProjectRows: number | string
+      failedRequestCandidateRows: number | string
+      globalRows: number | string
+      newestDiagnosticRequestProtectedRows: number | string
+      protectedRequestRows: number | string
+      rowsJoinedToCompletedSummaryChunks: number | string
+      terminalRequestCandidateRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRows,
+          CAST(COUNT(*) FILTER (WHERE candidate.project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE request.status IN ('pending_admission', 'admitted', 'running')) AS BIGINT) AS activeRequestRows,
+          CAST(COUNT(*) FILTER (WHERE request.admission_state = 'admitted') AS BIGINT) AS admittedRequestRows,
+          CAST(COUNT(*) FILTER (WHERE ${protectedRequestPredicate}) AS BIGINT) AS protectedRequestRows,
+          CAST(COUNT(*) FILTER (WHERE ${newestDiagnosticPredicate}) AS BIGINT) AS newestDiagnosticRequestProtectedRows,
+          CAST(COUNT(*) FILTER (
+            WHERE request.status IN ('completed', 'failed', 'blocked_over_budget', 'quarantined')
+          ) AS BIGINT) AS terminalRequestCandidateRows,
+          CAST(COUNT(*) FILTER (
+            WHERE request.status = 'completed'
+              AND request.admission_state = 'admitted'
+          ) AS BIGINT) AS completedRequestCandidateRows,
+          CAST(COUNT(*) FILTER (WHERE request.status = 'failed') AS BIGINT) AS failedRequestCandidateRows,
+          CAST(COUNT(*) FILTER (WHERE ${completedSummaryChunkJoinPredicate}) AS BIGINT) AS rowsJoinedToCompletedSummaryChunks
+        FROM ${table} candidate
+        LEFT JOIN app.review_rebuild_request request
+          ON request.project_id = candidate.project_id
+          AND request.request_id = candidate.request_id
+      `,
+    )
+    const rowsByRequestLifecycle = await runReadonlyQuery<{
+      admissionState: string | null
+      distinctRequests: number | string
+      requestDisposition: string
+      requestStatus: string | null
+      rows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          ${requestDispositionSql} AS requestDisposition,
+          COALESCE(request.status, 'missing') AS requestStatus,
+          COALESCE(request.admission_state, 'missing') AS admissionState,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(DISTINCT candidate.request_id) AS BIGINT) AS distinctRequests
+        FROM ${table} candidate
+        LEFT JOIN app.review_rebuild_request request
+          ON request.project_id = candidate.project_id
+          AND request.request_id = candidate.request_id
+        WHERE candidate.project_id = ${getSqlLiteral(projectId)}
+        GROUP BY requestDisposition, request.status, request.admission_state
+        ORDER BY rows DESC, requestDisposition, requestStatus, admissionState
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const blockerCounts = await runReadonlyQuery<{category: string; rows: number | string}>(
+      runtime,
+      `
+        WITH classified AS (
+          SELECT
+            CASE
+              WHEN candidate.request_id IS NULL THEN 'missing_request_id'
+              WHEN candidate.source_chunk_ids_key IS NULL THEN 'missing_source_chunk_ids_key'
+              WHEN request.request_id IS NULL THEN 'missing_rebuild_request'
+              WHEN ${protectedRequestPredicate} THEN 'protected_rebuild_request'
+              WHEN ${newestDiagnosticPredicate} THEN 'newest_diagnostic_request'
+              WHEN ${activeSnapshotPredicate} THEN 'active_or_last_known_good_snapshot_protected'
+              WHEN ${activePinPredicate} THEN 'pinned_snapshot_protected'
+              WHEN NOT (${getManifestReviewConfigHashPredicate()}) THEN 'missing_snapshot_manifest'
+              WHEN request.status IS DISTINCT FROM 'completed'
+                OR request.admission_state IS DISTINCT FROM 'admitted' THEN 'request_not_completed_admitted'
+              WHEN NOT (${completedSummaryChunkJoinPredicate}) THEN 'no_completed_summary_chunk_join'
+              ELSE 'proof_only_completed_accumulator_candidate_not_authorized'
+            END AS category
+          FROM ${table} candidate
+          LEFT JOIN app.review_rebuild_request request
+            ON request.project_id = candidate.project_id
+            AND request.request_id = candidate.request_id
+          WHERE candidate.project_id = ${getSqlLiteral(projectId)}
+        )
+        SELECT category, CAST(COUNT(*) AS BIGINT) AS rows
+        FROM classified
+        GROUP BY category
+        ORDER BY rows DESC, category
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const row = totals[0]
+
+    return {
+      activeRequestRows: getNumberOrNull(row?.activeRequestRows),
+      admittedRequestRows: getNumberOrNull(row?.admittedRequestRows),
+      blockerCounts: blockerCounts.map((blocker) => {
+        return {category: blocker.category, rows: Number(blocker.rows ?? 0)}
+      }),
+      completedRequestCandidateRows: getNumberOrNull(row?.completedRequestCandidateRows),
+      currentProjectRows: getNumberOrNull(row?.currentProjectRows),
+      error: null,
+      failedRequestCandidateRows: getNumberOrNull(row?.failedRequestCandidateRows),
+      globalRows: getNumberOrNull(row?.globalRows),
+      newestDiagnosticRequestProtectedRows: getNumberOrNull(row?.newestDiagnosticRequestProtectedRows),
+      note: 'Read-only proof-only lifecycle/retention evidence for mart.review_article_summary_rebuild_accumulator_v4. Completed accumulator rows joined to completed summary chunks are candidate evidence only; this section does not authorize runtime retention behavior, deletion, service table specs, or migrations.',
+      projectId,
+      protectedRequestRows: getNumberOrNull(row?.protectedRequestRows),
+      rowsByRequestLifecycle: rowsByRequestLifecycle.map((lifecycleRow) => {
+        return {
+          admissionState: lifecycleRow.admissionState ?? 'missing',
+          distinctRequests: Number(lifecycleRow.distinctRequests ?? 0),
+          requestDisposition: lifecycleRow.requestDisposition,
+          requestStatus: lifecycleRow.requestStatus ?? 'missing',
+          rows: Number(lifecycleRow.rows ?? 0),
+        }
+      }),
+      rowsJoinedToCompletedSummaryChunks: getNumberOrNull(row?.rowsJoinedToCompletedSummaryChunks),
+      table,
+      terminalRequestCandidateRows: getNumberOrNull(row?.terminalRequestCandidateRows),
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return emptyReport(
+      error instanceof Error ? error.message : String(error),
+      'Read-only accumulator lifecycle evidence collection failed. Failed evidence collection is not retention cleanup authorization.',
+      'blocked',
+    )
   }
 }
 
@@ -4041,6 +4343,21 @@ const renderMarkdown = (report: EvidenceReport) => {
       ]
     },
   )
+  const summaryRebuildAccumulatorLifecycleRows =
+    report.summaryRebuildAccumulatorLifecycleEvidence.rowsByRequestLifecycle.map((row) => {
+      return [
+        `\`${row.requestDisposition}\``,
+        `\`${row.requestStatus}\``,
+        `\`${row.admissionState}\``,
+        formatValue(row.rows),
+        formatValue(row.distinctRequests),
+      ]
+    })
+  const summaryRebuildAccumulatorBlockerRows = report.summaryRebuildAccumulatorLifecycleEvidence.blockerCounts.map(
+    (row) => {
+      return [`\`${row.category}\``, formatValue(row.rows)]
+    },
+  )
   const rebuildRequestLifecycleColumnRows = report.rebuildRequestLifecycleFieldEvidence.columns.map((column) => {
     return [
       `\`${column.column}\``,
@@ -4500,6 +4817,53 @@ const renderMarkdown = (report: EvidenceReport) => {
           rebuildRequestDispositionRows,
         )
       : '_No rebuild request disposition rows were collected._',
+    '',
+    '## Summary Rebuild Accumulator Lifecycle Evidence',
+    '',
+    `Verdict: ${
+      report.summaryRebuildAccumulatorLifecycleEvidence.verdict === 'not-authorized'
+        ? 'not-authorized (proof-only; not retention cleanup authorization)'
+        : 'blocked'
+    }`,
+    '',
+    report.summaryRebuildAccumulatorLifecycleEvidence.note,
+    '',
+    `Table: \`${report.summaryRebuildAccumulatorLifecycleEvidence.table}\``,
+    '',
+    `Global rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.globalRows)}`,
+    '',
+    `Current-project rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.currentProjectRows)}`,
+    '',
+    `Active request rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.activeRequestRows)}`,
+    '',
+    `Admitted request rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.admittedRequestRows)}`,
+    '',
+    `Protected request rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.protectedRequestRows)}`,
+    '',
+    `Newest diagnostic request protected rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.newestDiagnosticRequestProtectedRows)}`,
+    '',
+    `Terminal request candidate rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.terminalRequestCandidateRows)}`,
+    '',
+    `Completed request candidate rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.completedRequestCandidateRows)}`,
+    '',
+    `Failed request candidate rows: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.failedRequestCandidateRows)}`,
+    '',
+    `Rows joined to completed summary chunks: ${formatValue(report.summaryRebuildAccumulatorLifecycleEvidence.rowsJoinedToCompletedSummaryChunks)}`,
+    '',
+    report.summaryRebuildAccumulatorLifecycleEvidence.error
+      ? `Status: Blocked: ${report.summaryRebuildAccumulatorLifecycleEvidence.error}`
+      : 'Status: ok',
+    '',
+    summaryRebuildAccumulatorLifecycleRows.length > 0
+      ? formatMarkdownTable(
+          ['Request disposition', 'Request status', 'Admission state', 'Rows', 'Distinct requests'],
+          summaryRebuildAccumulatorLifecycleRows,
+        )
+      : '_No summary rebuild accumulator request lifecycle rows were collected._',
+    '',
+    summaryRebuildAccumulatorBlockerRows.length > 0
+      ? formatMarkdownTable(['Retention blocker/category', 'Rows'], summaryRebuildAccumulatorBlockerRows)
+      : '_No summary rebuild accumulator blocker categories were collected._',
     '',
     '## Rebuild Request Lifecycle Field Evidence',
     '',
@@ -5078,6 +5442,11 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               selectedImportPayloadSlimmingReadiness: await getSelectedImportPayloadSlimmingReadinessReport(
                 runtime,
                 options.projectId,
+              ),
+              summaryRebuildAccumulatorLifecycleEvidence: await getSummaryRebuildAccumulatorLifecycleEvidenceReport(
+                runtime,
+                options.projectId,
+                options.limit,
               ),
               summaryContributionServingReadiness: await getSummaryContributionServingReadinessReport(
                 runtime,
