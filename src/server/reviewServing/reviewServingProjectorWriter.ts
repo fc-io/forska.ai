@@ -757,11 +757,13 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
   return [
     `
     UPDATE mart.review_title_search_serving_v4 existing
-    SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)
+    SET article_ids = (SELECT LIST(DISTINCT merged_article_id ORDER BY merged_article_id)
       FROM (
-        SELECT unnest(COALESCE(existing.article_ids, []::VARCHAR[])) AS article_id
+        SELECT existing_article.article_id AS merged_article_id
+        FROM unnest(COALESCE(existing.article_ids, []::VARCHAR[])) AS existing_article(article_id)
         UNION ALL
-        SELECT unnest(COALESCE(final_rows.article_ids, []::VARCHAR[])) AS article_id
+        SELECT final_article.article_id AS merged_article_id
+        FROM unnest(COALESCE(final_rows.article_ids, []::VARCHAR[])) AS final_article(article_id)
       ) merged_article_ids
     )
     FROM (
