@@ -98,6 +98,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0195_cleanupReviewServingDirtyWorkRetention.sql',
   '../../db/duckdbMigrations/0196_dropReviewArticleServingCompatibilityView.sql',
   '../../db/duckdbMigrations/0197_reviewArticleServingListModeMembershipFlags.sql',
+  '../../db/duckdbMigrations/0198_nullHumanJudgmentDetailAnswerArray.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -219,6 +220,8 @@ const reviewSummaryOptionUpdatedAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0192_dropReviewSummaryOptionUpdatedAt.sql']
 const reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0193_dropReviewJudgmentDetailLlmPlaceholders.sql']
+const reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0198_nullHumanJudgmentDetailAnswerArray.sql']
 const reviewFilterStateServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0180_reviewFilterStateServing.sql']
 const reviewFilterPostingServingCompactForwardMigrationSql =
@@ -1623,6 +1626,12 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
     'CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article',
   )
   expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).not.toContain('detail_updated_at')
+  expect(reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql).toContain(
+    'UPDATE mart.review_article_judgment_detail_serving_v4',
+  )
+  expect(reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql).toContain('SET answered_original_as_array = NULL')
+  expect(reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql).toContain("WHERE payload_kind = 'human'")
+  expect(reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql).not.toContain("payload_kind = 'llm'")
   expect(countScopeForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
   )

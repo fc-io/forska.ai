@@ -89,6 +89,12 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   const inserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   })
+  const llmInsert = inserts.find((statement) => {
+    return statement.includes("'llm' AS payload_kind")
+  })
+  const humanInsert = inserts.find((statement) => {
+    return statement.includes("'human' AS payload_kind")
+  })
 
   expect(result).toMatchObject({
     diagnosticsJson: {
@@ -116,6 +122,10 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(inserts.join('\n')).not.toContain('list_mode_key,')
   expect(inserts.join('\n')).not.toContain('DO UPDATE SET')
   expect(inserts.join('\n')).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
+  expect(llmInsert).toContain('payload.answered_original_as_array')
+  expect(humanInsert).toContain('payload.answer AS answered_original')
+  expect(humanInsert).toContain('NULL AS answered_original_as_array')
+  expect(humanInsert).not.toContain('[payload.answer]')
   expect(joined).toContain("'llm'")
   expect(joined).toContain("'human'")
   expect(inserts.join('\n')).not.toContain("'both' AS payload_kind")

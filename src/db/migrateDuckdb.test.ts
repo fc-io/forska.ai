@@ -5986,6 +5986,167 @@ test('DuckDB migration drops LLM unanswered judgment-detail placeholders without
   }
 })
 
+test('DuckDB migration nulls retained human judgment-detail answer arrays while preserving LLM arrays', async () => {
+  const duckdbPath = `/tmp/forska-review-judgment-detail-human-answer-array-null-${Date.now()}.duckdb`
+  const targetMigrationFile = '0198_nullHumanJudgmentDetailAnswerArray.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL DEFAULT 'llm',
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            prompt_order INTEGER,
+            judgment_id VARCHAR,
+            is_answered BOOLEAN,
+            answered_original VARCHAR,
+            answered_original_as_array VARCHAR[],
+            judgment_created_at TIMESTAMPTZ,
+            human_comment VARCHAR,
+            placeholder_kind VARCHAR,
+            detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            payload_kind,
+            article_id,
+            prompt_id,
+            prompt_order,
+            judgment_id,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            judgment_created_at,
+            human_comment,
+            placeholder_kind,
+            detail_updated_at
+          )
+          VALUES
+            ('project-1', 'config-1', 'snapshot-1', 'human', 'article-1', 'prompt-1', 1, 'human-1', TRUE, 'include', ['include'], TIMESTAMPTZ '2026-01-01 00:00:00+00', 'comment', NULL, TIMESTAMPTZ '2026-01-01 01:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'human', 'article-1', 'prompt-2', 2, 'human-2', TRUE, 'exclude', NULL, TIMESTAMPTZ '2026-01-01 02:00:00+00', NULL, NULL, TIMESTAMPTZ '2026-01-01 03:00:00+00'),
+            ('project-1', 'config-1', 'snapshot-1', 'llm', 'article-1', 'prompt-1', 1, 'llm-1', TRUE, 'maybe', ['maybe', 'include'], TIMESTAMPTZ '2026-01-01 04:00:00+00', NULL, NULL, TIMESTAMPTZ '2026-01-01 05:00:00+00')
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            payload_kind AS payloadKind,
+            prompt_id AS promptId,
+            answered_original AS answeredOriginal,
+            answered_original_as_array IS NULL AS answerArrayIsNull,
+            answered_original_as_array[1] AS answerArrayFirst,
+            answered_original_as_array[2] AS answerArraySecond
+          FROM mart.review_article_judgment_detail_serving_v4
+          ORDER BY payload_kind, prompt_id
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0198_nullHumanJudgmentDetailAnswerArray.sql'"
+        )
+
+        console.log(JSON.stringify({migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39997',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39998',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify human answer-array nulling',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      migrationRows: Array<{name: string}>
+      rows: Array<{
+        answerArrayFirst: string | null
+        answerArrayIsNull: boolean
+        answerArraySecond: string | null
+        answeredOriginal: string | null
+        payloadKind: string
+        promptId: string
+      }>
+    }
+
+    expect(parsed.rows).toEqual([
+      {
+        answerArrayFirst: null,
+        answerArrayIsNull: true,
+        answerArraySecond: null,
+        answeredOriginal: 'include',
+        payloadKind: 'human',
+        promptId: 'prompt-1',
+      },
+      {
+        answerArrayFirst: null,
+        answerArrayIsNull: true,
+        answerArraySecond: null,
+        answeredOriginal: 'exclude',
+        payloadKind: 'human',
+        promptId: 'prompt-2',
+      },
+      {
+        answerArrayFirst: 'maybe',
+        answerArrayIsNull: false,
+        answerArraySecond: 'include',
+        answeredOriginal: 'maybe',
+        payloadKind: 'llm',
+        promptId: 'prompt-1',
+      },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
 test('DuckDB migration drops selected-import display-copy columns while preserving retained rows and upserts', async () => {
   const duckdbPath = `/tmp/forska-selected-import-display-copy-drop-${Date.now()}.duckdb`
   const targetMigrationFile = '0124_dropReviewSelectedImportDisplayCopyColumns.sql'

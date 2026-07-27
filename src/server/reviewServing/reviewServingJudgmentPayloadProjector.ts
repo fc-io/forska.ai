@@ -445,7 +445,7 @@ const getHumanJudgmentDirectInsertStatement = (
         payload.human_judgment_id AS judgment_id,
         payload.is_answered,
         payload.answer AS answered_original,
-        CASE WHEN payload.answer IS NULL THEN NULL ELSE [payload.answer] END AS answered_original_as_array,
+        NULL AS answered_original_as_array,
         payload.human_judgment_created_at AS judgment_created_at,
         payload.comment AS human_comment,
         NULL AS placeholder_kind,
