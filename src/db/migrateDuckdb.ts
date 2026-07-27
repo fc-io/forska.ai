@@ -9,6 +9,7 @@ import {getEnv} from '../server/utils/env.ts'
 
 const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
 const workloadContext = getMaintenanceDuckdbWorkloadContext('migrateDuckdb')
+const lowMemoryMigrationCheckpointThreshold = '1KiB'
 
 const nonTransactionalDuckdbMigrationFiles = new Set([
   '0013_rebuildArticleWithoutOpenalexId.sql',
@@ -188,6 +189,30 @@ const shouldCheckpointAfterDuckdbMigration = (duckdbMemoryLimit: string) => {
   return memoryLimitMiB === null || memoryLimitMiB > 6400
 }
 
+const setDuckdbMigrationCheckpointThreshold = async (checkpointThreshold: string) => {
+  await getAppDatabaseService().run(
+    `SET checkpoint_threshold = '${escapeSqlString(checkpointThreshold)}'`,
+    workloadContext,
+  )
+}
+
+const applyPendingDuckdbMigrations = async (migrationFiles: string[]) => {
+  await ensureDuckdbMigrationsTable()
+  return applyDuckdbMigrationFiles(migrationFiles, await getAppliedDuckdbMigrationNames())
+}
+
+const applyLowMemoryDuckdbMigrations = async (migrationFiles: string[]) => {
+  const configuredCheckpointThreshold = getAppDatabaseService().getRuntimeConfig().checkpointThreshold
+
+  await setDuckdbMigrationCheckpointThreshold(lowMemoryMigrationCheckpointThreshold)
+
+  try {
+    return await applyPendingDuckdbMigrations(migrationFiles)
+  } finally {
+    await setDuckdbMigrationCheckpointThreshold(configuredCheckpointThreshold)
+  }
+}
+
 export const migrateDuckdb = async (): Promise<void> => {
   const migrationFiles = getDuckdbMigrationFiles(migrationsFolder)
   const env = getEnv()
@@ -195,8 +220,10 @@ export const migrateDuckdb = async (): Promise<void> => {
   console.log(`[db:duck:mig] duckdb path: ${env.DUCKDB_PATH}`)
   console.log(`[db:duck:mig] migrations folder: ${migrationsFolder}`)
 
-  await ensureDuckdbMigrationsTable()
-  const appliedMigrationCount = await applyDuckdbMigrationFiles(migrationFiles, await getAppliedDuckdbMigrationNames())
+  const shouldUseLowMemoryCheckpointing = !shouldCheckpointAfterDuckdbMigration(env.DUCKDB_MEMORY_LIMIT)
+  const appliedMigrationCount = shouldUseLowMemoryCheckpointing
+    ? await applyLowMemoryDuckdbMigrations(migrationFiles)
+    : await applyPendingDuckdbMigrations(migrationFiles)
 
   if (appliedMigrationCount > 0 && shouldCheckpointAfterDuckdbMigration(env.DUCKDB_MEMORY_LIMIT)) {
     await getAppDatabaseService().maintenance('checkpoint', workloadContext)

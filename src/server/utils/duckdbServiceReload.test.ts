@@ -603,9 +603,13 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
         return `${spec.schemaName}.${spec.tableName}`
       }),
     ).toEqual([
+      'app.review_projection_identity_manifest',
       'app.review_serving_projector_watermark',
+      'app.review_serving_dirty_work',
       'app.review_serving_snapshot_manifest',
       'app.comparison_project_serving_generation',
+      'app.review_serving_dirty_work_ack',
+      'app.review_selected_import_snapshot',
       'app.review_rebuild_chunk_manifest',
       'mart.review_article_count_serving_v4',
       'mart.review_filtered_count_serving_v4',
@@ -797,6 +801,119 @@ test('duckdb service skips compact unassessed queue startup repair before compac
   }
 })
 
+test('duckdb service skips summary count startup repair before list-mode schema is applied', async () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-pre-list-mode-summary-count-repair-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = `${duckdbPath}.startup-recovery`
+  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+
+  mkdirSync(recoveryDirectory, {recursive: true})
+
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath)
+  const connection = await duckdbInstance.connect()
+  await connection.run('CREATE SCHEMA mart')
+  await connection.run(`
+    CREATE TABLE mart.review_article_count_serving_v4 (
+      project_id VARCHAR,
+      review_config_hash VARCHAR,
+      snapshot_id VARCHAR,
+      count_kind VARCHAR,
+      summary_definition_version VARCHAR,
+      filter_key VARCHAR,
+      count_value BIGINT,
+      availability VARCHAR,
+      stale_reason VARCHAR,
+      count_updated_at TIMESTAMPTZ,
+      PRIMARY KEY(project_id, review_config_hash, snapshot_id, count_kind, summary_definition_version, filter_key)
+    )
+  `)
+  await connection.run(`
+    INSERT INTO mart.review_article_count_serving_v4 VALUES (
+      'project-1',
+      'review-config-1',
+      'snapshot-1',
+      'review.list.total',
+      'v1',
+      'list:all',
+      7,
+      'ready',
+      NULL,
+      TIMESTAMPTZ '2026-01-01T00:00:00Z'
+    )
+  `)
+  await connection.run('CHECKPOINT')
+  connection.closeSync()
+  duckdbInstance.closeSync()
+  writeFileSync(
+    activeRepairSpecPath,
+    JSON.stringify({
+      phase: 'inline-primary-key-repair',
+      repairSpecs: [{schemaName: 'mart', tableName: 'review_article_count_serving_v4'}],
+      schemaName: 'mart',
+      tableName: 'review_article_count_serving_v4',
+    }),
+  )
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {existsSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?pre-list-mode-summary-count-repair-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT COUNT(*) AS total FROM mart.review_article_count_serving_v4')
+        const activeMarkerExists = existsSync(activeRepairSpecPath)
+        console.log(JSON.stringify({activeMarkerExists, rows}))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB pre-list-mode summary count repair failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.activeMarkerExists).toBe(false)
+    expect(parsed.rows).toEqual([{total: '1'}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service keeps targeted startup preflight recovery on low-memory workers', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-low-memory-preflight-marker-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
@@ -818,7 +935,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
       '-e',
       `
         const {Buffer} = await import('node:buffer')
-        const {existsSync, readdirSync, unlinkSync} = await import('node:fs')
+        const {existsSync, readdirSync, unlinkSync, writeFileSync} = await import('node:fs')
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
@@ -872,6 +989,24 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
           if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD === 'true') {
             preflightCount += 1
             preflightSpecsHistory.push(JSON.parse(String(command[5] ?? '[]')))
+
+            if (preflightCount === 3) {
+              writeFileSync(
+                activeRepairSpecPath,
+                JSON.stringify({
+                  phase: 'custom-mutation-probe',
+                  schemaName: 'app',
+                  tableName: 'review_rebuild_chunk_manifest',
+                }),
+              )
+              return {
+                exitCode: 133,
+                signalCode: 'SIGTRAP',
+                stdout: Buffer.from(''),
+                stderr: Buffer.from('native commit crash'),
+              }
+            }
+
             return {
               exitCode: 0,
               signalCode: null,
@@ -959,16 +1094,21 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
 
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
-    expect(parsed.preflightCount).toBe(2)
+    expect(parsed.preflightCount).toBe(5)
     expect(parsed.preflightSpecsHistory[0]).toEqual([])
     expect(
       parsed.preflightSpecsHistory[1]?.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
     ).toContain('app.review_serving_dirty_work')
+    expect(
+      parsed.preflightSpecsHistory[3]?.map((spec) => {
+        return `${spec.schemaName}.${spec.tableName}`
+      }),
+    ).toEqual(['app.review_rebuild_chunk_manifest'])
     expect(parsed.activeMarkerExists).toBe(false)
     expect(parsed.checkpointCount).toBe(1)
-    expect(parsed.repairCount).toBe(1)
+    expect(parsed.repairCount).toBe(2)
     expect(
       parsed.recoveryFiles.filter((fileName) => {
         return fileName.endsWith('.pre-repair.duckdb')
@@ -1424,6 +1564,8 @@ test('duckdb service startup repair strips table primary key constraints once', 
         result.stderr.toString() || result.stdout.toString() || 'DuckDB real indexed-table repair subprocess failed',
       )
     }
+
+    expect(result.stderr.toString()).toBe('')
 
     const parsed = parseJsonSubprocessStdout<{
       firstCatalog: {indexSql: string[]; tableSql: string}
@@ -2075,6 +2217,7 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
       reason: 'index-delete',
       repairSpecs: [
         {schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},
+        {schemaName: 'app', tableName: 'review_serving_dirty_work'},
         {schemaName: 'app', tableName: 'review_serving_projector_watermark'},
       ],
       schemaName: 'mart',
@@ -3389,7 +3532,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
 
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
-    expect(parsed.preflightCount).toBe(2)
+    expect(parsed.preflightCount).toBe(3)
     expect(parsed.repairLockProbeCount).toBe(2)
     expect(parsed.repairCount).toBe(1)
     expect(parsed.createCount).toBe(1)
@@ -3447,6 +3590,39 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(watermarkProbe?.repairPrimaryKeyColumns).toEqual(['watermark_id'])
     expect(watermarkProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
     expect(watermarkProbe?.recreateSecondaryIndexes).toBe(false)
+    const dirtyWorkProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_serving_dirty_work'
+    })
+    expect(dirtyWorkProbe?.mutationProbeSql).toContain('WITH eligible_lane AS')
+    expect(dirtyWorkProbe?.mutationProbeSql).toContain('claim_candidates AS')
+    expect(dirtyWorkProbe?.mutationProbeSql).toContain('{"projectionComponent":"selectedImport","projectionIdentity":')
+    expect(dirtyWorkProbe?.mutationProbeSql).toContain('RETURNING dirty_work_id')
+    expect(dirtyWorkProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(dirtyWorkProbe?.repairPrimaryKeyColumns).toEqual(['dirty_work_id'])
+    expect(dirtyWorkProbe?.repairStrategy).toBe('dedupe-latest')
+    const dirtyWorkAckProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_serving_dirty_work_ack'
+    })
+    expect(dirtyWorkAckProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(dirtyWorkAckProbe?.repairPrimaryKeyColumns).toEqual(['dirty_ack_id'])
+    expect(dirtyWorkAckProbe?.repairStrategy).toBe('dedupe-latest')
+    const projectionIdentityProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_projection_identity_manifest'
+    })
+    expect(projectionIdentityProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(projectionIdentityProbe?.mutationProbeSql).toContain('UPDATE app.review_projection_identity_manifest')
+    expect(projectionIdentityProbe?.mutationProbeSql).toContain('UPDATE app.review_selected_import_snapshot')
+    expect(projectionIdentityProbe?.postRepairDependencySpecs).toEqual([
+      {schemaName: 'app', tableName: 'review_selected_import_snapshot'},
+    ])
+    expect(projectionIdentityProbe?.repairPrimaryKeyColumns).toEqual(['manifest_id'])
+    expect(projectionIdentityProbe?.repairStrategy).toBe('dedupe-latest')
+    const selectedImportSnapshotProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_selected_import_snapshot'
+    })
+    expect(selectedImportSnapshotProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(selectedImportSnapshotProbe?.repairPrimaryKeyColumns).toEqual(['selected_import_snapshot_id'])
+    expect(selectedImportSnapshotProbe?.repairStrategy).toBe('dedupe-latest')
     const comparisonServingGenerationProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'comparison_project_serving_generation'
     })
@@ -3641,6 +3817,22 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(countServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_article_count_serving_v4')
     expect(countServingProbe?.mutationProbeSql).toContain('SET stale_reason = stale_reason')
     expect(countServingProbe?.mutationProbeSql).not.toContain('count_updated_at')
+    expect(countServingProbe?.schemaRequirements).toEqual([
+      {
+        columnNames: [
+          'project_id',
+          'review_config_hash',
+          'snapshot_id',
+          'list_mode_key',
+          'count_kind',
+          'summary_definition_version',
+          'filter_key',
+          'stale_reason',
+        ],
+        schemaName: 'mart',
+        tableName: 'review_article_count_serving_v4',
+      },
+    ])
     const filteredCountServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filtered_count_serving_v4'
     })
@@ -3654,6 +3846,21 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'component_identity',
     ])
     expect(filteredCountServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_filtered_count_serving_v4')
+    expect(filteredCountServingProbe?.schemaRequirements).toEqual([
+      {
+        columnNames: [
+          'project_id',
+          'review_config_hash',
+          'snapshot_id',
+          'list_mode_key',
+          'filter_signature',
+          'component_identity',
+          'count_updated_at',
+        ],
+        schemaName: 'mart',
+        tableName: 'review_filtered_count_serving_v4',
+      },
+    ])
     const facetServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_facet_serving_v4'
     })
