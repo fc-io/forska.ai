@@ -71,6 +71,8 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
       'DuckDBInstance.create',
       "verdict: 'retired'",
       'no row, duplicate, index, or recoverability inspection was attempted',
+      'Filtered-Count Serving Physical Evidence',
+      'not deletion authorization',
     ],
     path: 'scripts/inspectReviewServingPhysicalEvidence.ts',
   },

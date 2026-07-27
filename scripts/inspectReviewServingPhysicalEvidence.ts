@@ -25,6 +25,7 @@ type CliOptions = {
 type EvidenceReport = {
   chunkManifestDiagnosticsReadiness: ChunkManifestDiagnosticsReadinessReport
   dirtyWorkRetentionEvidence: DirtyWorkRetentionEvidenceReport
+  filteredCountServingPhysicalEvidence: FilteredCountServingPhysicalEvidenceReport
   generatedAt: string
   judgmentDetailPayloadReadiness: JudgmentDetailPayloadReadinessReport
   mode: 'readonly-snapshot'
@@ -175,6 +176,37 @@ type DirtyWorkRetentionEvidenceReport = {
   protectedNonCompletedRows: number | null
   verdict: 'not-authorized' | 'blocked'
   watermarkTable: 'app.review_serving_project_dirty_source_watermark'
+}
+type FilteredCountServingPhysicalEvidenceBucketRow = {
+  bucket: 'older-than-7d' | 'older-than-14d' | 'older-than-30d'
+  candidateRows: number
+  currentProjectCandidateRows: number
+}
+type FilteredCountServingPhysicalEvidenceGroupStats = {
+  avgRowsPerProjectConfigSnapshotListMode: number | null
+  maxRowsPerProjectConfigSnapshotListMode: number | null
+}
+type FilteredCountServingPhysicalEvidenceStatusListModeRow = {
+  currentProjectRows: number
+  listModeKey: string
+  rowCount: number
+  snapshotStatus: string
+}
+type FilteredCountServingPhysicalEvidenceReport = {
+  activeOrLastKnownGoodSnapshotProtectedRows: number | null
+  currentProjectRows: number | null
+  error: string | null
+  globalRowCount: number | null
+  groupStats: FilteredCountServingPhysicalEvidenceGroupStats
+  missingSnapshotManifestRows: number | null
+  note: string
+  pinnedSnapshotProtectedRows: number | null
+  projectId: string
+  rowsBySnapshotStatusAndListMode: FilteredCountServingPhysicalEvidenceStatusListModeRow[]
+  staleByTtlCandidateCounts: FilteredCountServingPhysicalEvidenceBucketRow[]
+  table: 'mart.review_filtered_count_serving_v4'
+  totalRowCount: number | null
+  verdict: 'not-authorized' | 'blocked'
 }
 type RebuildArtifactDispositionArtifactRow = {
   artifactTable: string
@@ -449,6 +481,7 @@ const hotReviewServingTables = [
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_count_serving_v4',
+  'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
   'mart.review_title_search_serving_v4',
@@ -511,6 +544,14 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'list_mode_key',
     'count_kind',
     'filter_key',
+  ],
+  'mart.review_filtered_count_serving_v4': [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'list_mode_key',
+    'filter_signature',
+    'component_identity',
   ],
   'mart.review_article_filter_posting_serving_v4': [
     'project_id',
@@ -1937,6 +1978,277 @@ const getProjectorWatermarkNullableFieldReport = async (
       rowsByProjectScope: [],
       rowsBySourcePartition: [],
       table,
+      verdict: 'blocked',
+    }
+  }
+}
+
+const getFilteredCountServingPhysicalEvidenceReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<FilteredCountServingPhysicalEvidenceReport> => {
+  const table = 'mart.review_filtered_count_serving_v4' as const
+  const requiredColumns = ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key']
+
+  try {
+    if (!(await getTableExists(runtime, table))) {
+      return {
+        activeOrLastKnownGoodSnapshotProtectedRows: null,
+        currentProjectRows: null,
+        error: null,
+        globalRowCount: null,
+        groupStats: {avgRowsPerProjectConfigSnapshotListMode: null, maxRowsPerProjectConfigSnapshotListMode: null},
+        missingSnapshotManifestRows: null,
+        note: 'Read-only physical evidence only. mart.review_filtered_count_serving_v4 is absent in this snapshot, so no row-retention evidence was collected and this section is not deletion authorization.',
+        pinnedSnapshotProtectedRows: null,
+        projectId,
+        rowsBySnapshotStatusAndListMode: [],
+        staleByTtlCandidateCounts: [],
+        table,
+        totalRowCount: null,
+        verdict: 'blocked',
+      }
+    }
+
+    const columns = await getTableColumns(runtime, table)
+    const missingColumns = requiredColumns.filter((column) => {
+      return !hasColumn(columns, column)
+    })
+
+    if (missingColumns.length > 0) {
+      return {
+        activeOrLastKnownGoodSnapshotProtectedRows: null,
+        currentProjectRows: null,
+        error: `Missing required evidence columns: ${missingColumns.join(', ')}`,
+        globalRowCount: null,
+        groupStats: {avgRowsPerProjectConfigSnapshotListMode: null, maxRowsPerProjectConfigSnapshotListMode: null},
+        missingSnapshotManifestRows: null,
+        note: 'Read-only physical evidence collection was blocked by table-shape drift. Failed evidence collection is not deletion authorization.',
+        pinnedSnapshotProtectedRows: null,
+        projectId,
+        rowsBySnapshotStatusAndListMode: [],
+        staleByTtlCandidateCounts: [],
+        table,
+        totalRowCount: null,
+        verdict: 'blocked',
+      }
+    }
+
+    const manifestExists = await getTableExists(runtime, 'app.review_serving_snapshot_manifest')
+    const manifestColumns = manifestExists ? await getTableColumns(runtime, 'app.review_serving_snapshot_manifest') : []
+    const hasManifestJoinShape =
+      manifestExists
+      && hasColumn(manifestColumns, 'project_id')
+      && hasColumn(manifestColumns, 'snapshot_id')
+      && hasColumn(manifestColumns, 'snapshot_status')
+    const hasManifestGuardShape =
+      hasManifestJoinShape
+      && hasColumn(manifestColumns, 'last_known_good_snapshot_id')
+      && hasColumn(manifestColumns, 'selected_import_snapshot_id')
+    const pinExists = await getTableExists(runtime, 'app.review_serving_snapshot_pin')
+    const pinColumns = pinExists ? await getTableColumns(runtime, 'app.review_serving_snapshot_pin') : []
+    const hasPinGuardShape =
+      pinExists
+      && hasColumn(pinColumns, 'project_id')
+      && hasColumn(pinColumns, 'snapshot_id')
+      && hasColumn(pinColumns, 'released_at')
+      && hasColumn(pinColumns, 'ref_count')
+      && hasColumn(pinColumns, 'expires_at')
+    const hasCountUpdatedAt = hasColumn(columns, 'count_updated_at')
+    const activeOrLastKnownGoodPredicate = hasManifestGuardShape
+      ? getActiveSnapshotManifestGuardPredicate('snapshot_id')
+      : 'FALSE'
+    const pinnedPredicate = hasPinGuardShape ? getActiveSnapshotPinGuardPredicate('snapshot_id') : 'FALSE'
+    const snapshotStatusExpression = hasManifestJoinShape
+      ? "COALESCE(manifest.snapshot_status, 'missing-manifest')"
+      : "'unknown'"
+    const manifestJoinSql = hasManifestJoinShape
+      ? `
+          LEFT JOIN app.review_serving_snapshot_manifest manifest
+            ON manifest.project_id = candidate.project_id
+            AND manifest.snapshot_id = candidate.snapshot_id
+        `
+      : ''
+    const staleCandidateFilter = hasCountUpdatedAt
+      ? `snapshot_status = 'candidate' AND count_updated_at < current_timestamp - INTERVAL`
+      : null
+
+    const countRows = await runReadonlyQuery<{
+      activeOrLastKnownGoodSnapshotProtectedRows: number | string
+      currentProjectRows: number | string
+      globalRowCount: number | string
+      missingSnapshotManifestRows: number | string
+      pinnedSnapshotProtectedRows: number | string
+    }>(
+      runtime,
+      `
+        WITH classified AS (
+          SELECT
+            candidate.*,
+            ${activeOrLastKnownGoodPredicate} AS active_or_last_known_good_protected,
+            ${pinnedPredicate} AS pinned_protected,
+            ${snapshotStatusExpression} AS snapshot_status
+          FROM ${table} candidate
+          ${manifestJoinSql}
+        )
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE active_or_last_known_good_protected) AS BIGINT) AS activeOrLastKnownGoodSnapshotProtectedRows,
+          CAST(COUNT(*) FILTER (WHERE pinned_protected) AS BIGINT) AS pinnedSnapshotProtectedRows,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'missing-manifest') AS BIGINT) AS missingSnapshotManifestRows
+        FROM classified
+      `,
+    )
+    const groupStatsRows = await runReadonlyQuery<{
+      avgRowsPerProjectConfigSnapshotListMode: number | string | null
+      maxRowsPerProjectConfigSnapshotListMode: number | string | null
+    }>(
+      runtime,
+      `
+        WITH grouped AS (
+          SELECT
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            list_mode_key,
+            COUNT(*) AS rows_per_group
+          FROM ${table}
+          GROUP BY project_id, review_config_hash, snapshot_id, list_mode_key
+        )
+        SELECT
+          CAST(MAX(rows_per_group) AS BIGINT) AS maxRowsPerProjectConfigSnapshotListMode,
+          AVG(rows_per_group) AS avgRowsPerProjectConfigSnapshotListMode
+        FROM grouped
+      `,
+    )
+    const statusRows = await runReadonlyQuery<{
+      currentProjectRows: number | string
+      listModeKey: string | null
+      rowCount: number | string
+      snapshotStatus: string | null
+    }>(
+      runtime,
+      `
+        WITH classified AS (
+          SELECT
+            candidate.*,
+            ${snapshotStatusExpression} AS snapshot_status
+          FROM ${table} candidate
+          ${manifestJoinSql}
+        )
+        SELECT
+          snapshot_status AS snapshotStatus,
+          list_mode_key AS listModeKey,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows
+        FROM classified
+        GROUP BY snapshot_status, list_mode_key
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, snapshot_status, list_mode_key
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const staleByTtlCandidateCounts = staleCandidateFilter
+      ? await runReadonlyQuery<FilteredCountServingPhysicalEvidenceBucketRow>(
+          runtime,
+          `
+            WITH classified AS (
+              SELECT
+                candidate.*,
+                ${snapshotStatusExpression} AS snapshot_status
+              FROM ${table} candidate
+              ${manifestJoinSql}
+            )
+            SELECT
+              bucket,
+              CAST(candidateRows AS BIGINT) AS candidateRows,
+              CAST(currentProjectCandidateRows AS BIGINT) AS currentProjectCandidateRows
+            FROM (
+              SELECT
+                'older-than-7d' AS bucket,
+                COUNT(*) FILTER (WHERE ${staleCandidateFilter} 7 DAY) AS candidateRows,
+                COUNT(*) FILTER (
+                  WHERE project_id = ${getSqlLiteral(projectId)} AND ${staleCandidateFilter} 7 DAY
+                ) AS currentProjectCandidateRows
+              FROM classified
+              UNION ALL
+              SELECT
+                'older-than-14d' AS bucket,
+                COUNT(*) FILTER (WHERE ${staleCandidateFilter} 14 DAY) AS candidateRows,
+                COUNT(*) FILTER (
+                  WHERE project_id = ${getSqlLiteral(projectId)} AND ${staleCandidateFilter} 14 DAY
+                ) AS currentProjectCandidateRows
+              FROM classified
+              UNION ALL
+              SELECT
+                'older-than-30d' AS bucket,
+                COUNT(*) FILTER (WHERE ${staleCandidateFilter} 30 DAY) AS candidateRows,
+                COUNT(*) FILTER (
+                  WHERE project_id = ${getSqlLiteral(projectId)} AND ${staleCandidateFilter} 30 DAY
+                ) AS currentProjectCandidateRows
+              FROM classified
+            ) ttl_buckets
+          `,
+        )
+      : []
+    const row = countRows[0]
+    const groupStatsRow = groupStatsRows[0]
+
+    return {
+      activeOrLastKnownGoodSnapshotProtectedRows: getNumberOrNull(row?.activeOrLastKnownGoodSnapshotProtectedRows),
+      currentProjectRows: getNumberOrNull(row?.currentProjectRows),
+      error: null,
+      globalRowCount: getNumberOrNull(row?.globalRowCount),
+      groupStats: {
+        avgRowsPerProjectConfigSnapshotListMode: getNumberOrNull(
+          groupStatsRow?.avgRowsPerProjectConfigSnapshotListMode,
+        ),
+        maxRowsPerProjectConfigSnapshotListMode: getNumberOrNull(
+          groupStatsRow?.maxRowsPerProjectConfigSnapshotListMode,
+        ),
+      },
+      missingSnapshotManifestRows: getNumberOrNull(row?.missingSnapshotManifestRows),
+      note: `Read-only proof-only physical evidence for dynamic filtered-count serving rows. Snapshot-protection evidence uses active/LKG${
+        hasPinGuardShape ? '/pinned' : ''
+      } manifest context available in this snapshot; stale TTL buckets are conservative candidate-row counts and are not retention policy, deletion authorization, or migration authorization.`,
+      pinnedSnapshotProtectedRows: getNumberOrNull(row?.pinnedSnapshotProtectedRows),
+      projectId,
+      rowsBySnapshotStatusAndListMode: statusRows.map((statusRow) => {
+        return {
+          currentProjectRows: Number(statusRow.currentProjectRows ?? 0),
+          listModeKey: String(statusRow.listModeKey ?? 'NULL'),
+          rowCount: Number(statusRow.rowCount ?? 0),
+          snapshotStatus: String(statusRow.snapshotStatus ?? 'NULL'),
+        }
+      }),
+      staleByTtlCandidateCounts: staleByTtlCandidateCounts.map((bucket) => {
+        return {
+          bucket: bucket.bucket,
+          candidateRows: Number(bucket.candidateRows ?? 0),
+          currentProjectCandidateRows: Number(bucket.currentProjectCandidateRows ?? 0),
+        }
+      }),
+      table,
+      totalRowCount: getNumberOrNull(row?.globalRowCount),
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      activeOrLastKnownGoodSnapshotProtectedRows: null,
+      currentProjectRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      globalRowCount: null,
+      groupStats: {avgRowsPerProjectConfigSnapshotListMode: null, maxRowsPerProjectConfigSnapshotListMode: null},
+      missingSnapshotManifestRows: null,
+      note: 'Read-only filtered-count physical evidence collection failed. Failed evidence collection is not deletion authorization.',
+      pinnedSnapshotProtectedRows: null,
+      projectId,
+      rowsBySnapshotStatusAndListMode: [],
+      staleByTtlCandidateCounts: [],
+      table,
+      totalRowCount: null,
       verdict: 'blocked',
     }
   }
@@ -3682,6 +3994,18 @@ const renderMarkdown = (report: EvidenceReport) => {
   const dirtyWorkBlockerRows = report.dirtyWorkRetentionEvidence.blockerCounts.map((row) => {
     return [`\`${row.category}\``, formatValue(row.rows)]
   })
+  const filteredCountSnapshotListModeRows =
+    report.filteredCountServingPhysicalEvidence.rowsBySnapshotStatusAndListMode.map((row) => {
+      return [
+        `\`${row.snapshotStatus}\``,
+        `\`${row.listModeKey}\``,
+        formatValue(row.rowCount),
+        formatValue(row.currentProjectRows),
+      ]
+    })
+  const filteredCountTtlRows = report.filteredCountServingPhysicalEvidence.staleByTtlCandidateCounts.map((row) => {
+    return [`\`${row.bucket}\``, formatValue(row.candidateRows), formatValue(row.currentProjectCandidateRows)]
+  })
   const rebuildRequestlessArtifactDispositionRows =
     report.rebuildArtifactDispositionEvidence.requestlessRowsByAdoptionHint.map((row) => {
       return [
@@ -4051,6 +4375,49 @@ const renderMarkdown = (report: EvidenceReport) => {
     retentionCleanupBlockerRows.length > 0
       ? formatMarkdownTable(['Table', 'First blocker/category', 'Rows'], retentionCleanupBlockerRows)
       : '_No retention cleanup blocker categories were collected._',
+    '',
+    '## Filtered-Count Serving Physical Evidence',
+    '',
+    `Verdict: ${
+      report.filteredCountServingPhysicalEvidence.verdict === 'not-authorized'
+        ? 'not-authorized (evidence only; not deletion authorization)'
+        : 'blocked'
+    }`,
+    '',
+    report.filteredCountServingPhysicalEvidence.note,
+    '',
+    `Table: \`${report.filteredCountServingPhysicalEvidence.table}\``,
+    '',
+    `Total rows: ${formatValue(report.filteredCountServingPhysicalEvidence.totalRowCount)}`,
+    '',
+    `Global rows: ${formatValue(report.filteredCountServingPhysicalEvidence.globalRowCount)}`,
+    '',
+    `Current-project rows: ${formatValue(report.filteredCountServingPhysicalEvidence.currentProjectRows)}`,
+    '',
+    `Active/LKG snapshot protected rows: ${formatValue(report.filteredCountServingPhysicalEvidence.activeOrLastKnownGoodSnapshotProtectedRows)}`,
+    '',
+    `Pinned snapshot protected rows: ${formatValue(report.filteredCountServingPhysicalEvidence.pinnedSnapshotProtectedRows)}`,
+    '',
+    `Rows with missing snapshot manifest: ${formatValue(report.filteredCountServingPhysicalEvidence.missingSnapshotManifestRows)}`,
+    '',
+    `Max rows per (project_id, review_config_hash, snapshot_id, list_mode_key): ${formatValue(report.filteredCountServingPhysicalEvidence.groupStats.maxRowsPerProjectConfigSnapshotListMode)}`,
+    '',
+    `Avg rows per (project_id, review_config_hash, snapshot_id, list_mode_key): ${formatValue(report.filteredCountServingPhysicalEvidence.groupStats.avgRowsPerProjectConfigSnapshotListMode)}`,
+    '',
+    report.filteredCountServingPhysicalEvidence.error
+      ? `Status: Blocked: ${report.filteredCountServingPhysicalEvidence.error}`
+      : 'Status: ok',
+    '',
+    filteredCountSnapshotListModeRows.length > 0
+      ? formatMarkdownTable(
+          ['Snapshot status', 'List mode', 'Rows', 'Current-project rows'],
+          filteredCountSnapshotListModeRows,
+        )
+      : '_No filtered-count snapshot-status/list-mode rows were collected._',
+    '',
+    filteredCountTtlRows.length > 0
+      ? formatMarkdownTable(['TTL bucket', 'Candidate rows', 'Current-project candidate rows'], filteredCountTtlRows)
+      : '_No filtered-count TTL candidate rows were collected._',
     '',
     '## Dirty-Work Retention Evidence',
     '',
@@ -4675,6 +5042,11 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
                 options.limit,
               ),
               dirtyWorkRetentionEvidence: await getDirtyWorkRetentionEvidenceReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
+              filteredCountServingPhysicalEvidence: await getFilteredCountServingPhysicalEvidenceReport(
                 runtime,
                 options.projectId,
                 options.limit,
