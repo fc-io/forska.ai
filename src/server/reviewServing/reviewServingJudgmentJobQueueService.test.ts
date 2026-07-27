@@ -42,7 +42,7 @@ const createFakeReadOnlyDatabase = () => {
         return [{count: 1}] as T[]
       }
 
-      if (statement.includes('WITH eligible_queue AS')) {
+      if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')) {
         return [getArticleRow()] as T[]
       }
 
@@ -97,6 +97,18 @@ const expectUnassessedDirectServingJoin = (statement: string) => {
   expect(statement).not.toContain('article.list_mode_key')
 }
 
+const expectArticleRankQueueRead = (statement: string) => {
+  expect(statement).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
+  expect(statement).not.toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(statement).not.toContain('CROSS JOIN UNNEST(queue.prompt_ids)')
+}
+
+const expectPromptQueueRead = (statement: string) => {
+  expect(statement).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(statement).toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
+  expect(statement).not.toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
+}
+
 const service = (await import(
   `${serviceModulePath}?judgment-job-queue-scope=${Date.now()}`
 )) as JudgmentJobQueueServiceModule
@@ -118,13 +130,16 @@ test('judgment job count and preview scope keeps route matches plus curated arti
     projectId: 'project-1',
   })
   const queueStatements = apiDatabase.statements.filter((statement) => {
-    return statement.includes('FROM mart.review_unassessed_queue_serving_v4 queue')
+    return statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   })
 
   expect(count).toBe(1)
   expect(articles).toHaveLength(1)
   expect(queueStatements).toHaveLength(2)
-  queueStatements.forEach(expectUnassessedDirectServingJoin)
+  queueStatements.forEach((statement) => {
+    expectUnassessedDirectServingJoin(statement)
+    expectArticleRankQueueRead(statement)
+  })
   expect(
     queueStatements.map((statement) => {
       return statement.includes('FROM app.article_import_route article_route_scope')
@@ -166,6 +181,7 @@ test('judgment job count scope without import routes uses curated project articl
   })
 
   expectUnassessedDirectServingJoin(countStatement ?? '')
+  expectArticleRankQueueRead(countStatement ?? '')
   expect(countStatement ?? '').toContain('FROM app.project_article project_article_scope')
   expect(countStatement ?? '').not.toContain('FROM app.article_import_route article_route_scope')
 })
@@ -185,6 +201,7 @@ test('judgment job refill scope rechecks current project dates routes and curate
 
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
   expectUnassessedDirectServingJoin(refillStatement ?? '')
+  expectPromptQueueRead(refillStatement ?? '')
   expect(refillStatement ?? '').toContain('INNER JOIN app.project current_project')
   expect(refillStatement ?? '').toContain('INNER JOIN app.article current_article')
   expect(refillStatement ?? '').toContain('article.article_created_at >= current_project.date_from')
@@ -192,7 +209,6 @@ test('judgment job refill scope rechecks current project dates routes and curate
   expect(refillStatement ?? '').toContain('FROM app.project_import_route current_project_route_scope')
   expect(refillStatement ?? '').toContain('INNER JOIN app.article_import_route current_article_route_scope')
   expect(refillStatement ?? '').toContain('FROM app.project_article current_project_article_scope')
-  expect(refillStatement ?? '').toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
   expect(refillStatement ?? '').toContain(
     'ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC',
   )
