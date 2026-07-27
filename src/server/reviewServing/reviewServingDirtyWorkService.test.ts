@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {
   claimReviewServingDirtyWork,
+  cleanupReviewServingDirtyWorkRetention,
   compactReviewServingDirtyWorkAcknowledgements,
   completeReviewServingDirtyWorkClaims,
   completeReviewServingDirtyWorkClaimsAndAdvanceWatermark,
@@ -289,11 +290,195 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       ? ack.dirtyRangeStart === null && ack.dirtyRangeEnd === null
       : ack.dirtyRangeStart <= dirtyRangeStart && (ack.dirtyRangeEnd ?? '') >= dirtyRangeEnd
   }
+  const isAckRangeCoveringDirtyWork = (ack: FakeAckRow, row: FakeDirtyWorkRow) => {
+    return ack.dirtyRangeStart === null && ack.dirtyRangeEnd === null
+      ? true
+      : row.dirtyRangeStart !== null
+          && row.dirtyRangeEnd !== null
+          && ack.dirtyRangeStart !== null
+          && ack.dirtyRangeEnd !== null
+          && ack.dirtyRangeStart <= row.dirtyRangeStart
+          && ack.dirtyRangeEnd >= row.dirtyRangeEnd
+  }
+  const isDirtyWorkCoveredByAck = (row: FakeDirtyWorkRow) => {
+    return [...acks.values()].some((ack) => {
+      return (
+        ack.projectionComponent === row.projectionComponent
+        && ack.projectionIdentity === row.projectionIdentity
+        && ack.sourcePartition === row.sourcePartition
+        && ack.status === 'completed'
+        && ack.completedSourceHighWaterMark >= row.latestSourceHighWaterMark
+        && (ack.dirtyWorkId === row.dirtyWorkId || (ack.dirtyWorkId === null && isAckRangeCoveringDirtyWork(ack, row)))
+      )
+    })
+  }
+  const isDirtyWorkSourceWatermarkAdvanced = (row: FakeDirtyWorkRow) => {
+    if (row.projectId === null) {
+      return false
+    }
+
+    return (
+      (dirtySourceWatermarks.get(`${row.projectId}:${row.sourcePartition}`)?.sourceHighWaterMark ?? -1)
+      >= row.latestSourceHighWaterMark
+    )
+  }
+  const hasLowerRetentionBlocker = (row: FakeDirtyWorkRow, highWaterMark = row.latestSourceHighWaterMark) => {
+    return [...dirtyWork.values()].some((blocker) => {
+      return (
+        blocker.projectionComponent === row.projectionComponent
+        && blocker.projectionIdentity === row.projectionIdentity
+        && blocker.sourcePartition === row.sourcePartition
+        && blocker.status !== 'completed'
+        && blocker.latestSourceHighWaterMark <= highWaterMark
+      )
+    })
+  }
+  const getRetentionReadyRows = () => {
+    return [...dirtyWork.values()].filter((row) => {
+      return (
+        row.status === 'completed'
+        && isDirtyWorkSourceWatermarkAdvanced(row)
+        && isDirtyWorkCoveredByAck(row)
+        && !hasLowerRetentionBlocker(row)
+      )
+    })
+  }
+  const getRetentionReadyLanes = (statement: string) => {
+    const lanes = new Map<
+      string,
+      {
+        completedSourceHighWaterMark: number
+        projectionComponent: string
+        projectionIdentity: string
+        sourcePartition: string
+      }
+    >()
+
+    getRetentionReadyRows().forEach((row) => {
+      const key = `${row.projectionComponent}:${row.projectionIdentity}:${row.sourcePartition}`
+      const existing = lanes.get(key)
+
+      lanes.set(key, {
+        completedSourceHighWaterMark: Math.max(
+          existing?.completedSourceHighWaterMark ?? 0,
+          row.latestSourceHighWaterMark,
+        ),
+        projectionComponent: row.projectionComponent,
+        projectionIdentity: row.projectionIdentity,
+        sourcePartition: row.sourcePartition,
+      })
+    })
+
+    return [...lanes.values()]
+      .filter((lane) => {
+        return (
+          ![...dirtyWork.values()].some((blocker) => {
+            return (
+              blocker.projectionComponent === lane.projectionComponent
+              && blocker.projectionIdentity === lane.projectionIdentity
+              && blocker.sourcePartition === lane.sourcePartition
+              && blocker.status !== 'completed'
+              && blocker.latestSourceHighWaterMark <= lane.completedSourceHighWaterMark
+            )
+          })
+          && ![...dirtyWork.values()].some((uncoveredCompleted) => {
+            return (
+              uncoveredCompleted.projectionComponent === lane.projectionComponent
+              && uncoveredCompleted.projectionIdentity === lane.projectionIdentity
+              && uncoveredCompleted.sourcePartition === lane.sourcePartition
+              && uncoveredCompleted.status === 'completed'
+              && uncoveredCompleted.latestSourceHighWaterMark <= lane.completedSourceHighWaterMark
+              && (!isDirtyWorkSourceWatermarkAdvanced(uncoveredCompleted)
+                || !isDirtyWorkCoveredByAck(uncoveredCompleted))
+            )
+          })
+        )
+      })
+      .sort((left, right) => {
+        return (
+          left.projectionComponent.localeCompare(right.projectionComponent)
+          || left.projectionIdentity.localeCompare(right.projectionIdentity)
+          || left.sourcePartition.localeCompare(right.sourcePartition)
+        )
+      })
+      .slice(0, getLimit(statement))
+  }
+  const deleteRetentionAcks = (statement: string) => {
+    const limit = getLimit(statement)
+    const syntheticAcks = [...acks.values()].filter((ack) => {
+      return ack.status === 'completed' && ack.dirtyWorkId === null
+    })
+    const deletable = [...acks.values()]
+      .filter((ack) => {
+        return syntheticAcks.some((highWaterAck) => {
+          return (
+            ack.dirtyAckId !== highWaterAck.dirtyAckId
+            && ack.status === 'completed'
+            && ack.projectionComponent === highWaterAck.projectionComponent
+            && ack.projectionIdentity === highWaterAck.projectionIdentity
+            && ack.sourcePartition === highWaterAck.sourcePartition
+            && ack.completedSourceHighWaterMark <= highWaterAck.completedSourceHighWaterMark
+          )
+        })
+      })
+      .sort((left, right) => {
+        return (
+          left.completedSourceHighWaterMark - right.completedSourceHighWaterMark
+          || left.dirtyAckId.localeCompare(right.dirtyAckId)
+        )
+      })
+      .slice(0, limit)
+
+    deletable.forEach((ack) => {
+      acks.delete(ack.dirtyAckId)
+    })
+
+    return deletable.map((ack) => {
+      return {dirtyAckId: ack.dirtyAckId}
+    })
+  }
+  const deleteRetentionDirtyWork = (statement: string) => {
+    const deletable = getRetentionReadyRows()
+      .sort((left, right) => {
+        return (
+          left.updatedAt.localeCompare(right.updatedAt)
+          || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
+          || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+        )
+      })
+      .slice(0, getLimit(statement))
+
+    deletable.forEach((row) => {
+      dirtyWork.delete(row.dirtyWorkId)
+    })
+
+    return deletable.map((row) => {
+      return {dirtyWorkId: row.dirtyWorkId}
+    })
+  }
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
 
     if (statement.includes('FROM app.review_source_change_outbox')) {
       return (options.barrier === undefined || options.barrier === null ? [] : [options.barrier]) as T[]
+    }
+
+    if (statement.includes('WITH retention_ready_dirty_work AS')) {
+      return getRetentionReadyLanes(statement) as T[]
+    }
+
+    if (
+      statement.includes('DELETE FROM app.review_serving_dirty_work_ack')
+      && statement.includes('RETURNING dirty_ack_id AS dirtyAckId')
+    ) {
+      return deleteRetentionAcks(statement) as T[]
+    }
+
+    if (
+      statement.includes('DELETE FROM app.review_serving_dirty_work')
+      && statement.includes('RETURNING dirty_work_id AS dirtyWorkId')
+    ) {
+      return deleteRetentionDirtyWork(statement) as T[]
     }
 
     if (statement.includes('FROM app.review_serving_dirty_work_ack')) {
@@ -852,4 +1037,201 @@ test('ack compaction replays the same high-water row without updating it', async
     dirtyWorkId: null,
     projectionComponent: 'display',
   })
+})
+
+test('retention cleanup preserves pending running and failed dirty work rows', async () => {
+  const {database, dirtyWork} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  await upsertDisplayWork(database, {...getBaseScope(2, '2', '2'), scopeId: 'project-1:article-2'}, 'delta-2')
+  await upsertDisplayWork(database, {...getBaseScope(3, '3', '3'), scopeId: 'project-1:article-3'}, 'delta-3')
+  await upsertDisplayWork(database, {...getBaseScope(4, '4', '4'), scopeId: 'project-1:article-4'}, 'delta-4')
+  const claims = await claimReviewServingDirtyWork({limit: 4, projectionComponent: 'display'}, database)
+
+  await completeReviewServingDirtyWorkClaims(claims.slice(0, 1), database)
+  await failReviewServingDirtyWorkClaims([claims[1]?.dirtyWorkId ?? ''], database)
+  await releaseReviewServingDirtyWorkClaims([claims[2]?.dirtyWorkId ?? ''], database)
+
+  const result = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+  const statuses = [...dirtyWork.values()].map((row) => {
+    return row.status
+  })
+
+  expect(result.deletedDirtyWorkCount).toBe(1)
+  expect(statuses.sort()).toEqual(['failed', 'pending', 'running'])
+})
+
+test('retention cleanup inserts high-water ack and removes point and older synthetic acknowledgements', async () => {
+  const {acks, database} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(3, '3', '3'), 'delta-3')
+  let claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const first = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+
+  await upsertDisplayWork(database, getBaseScope(5, '5', '5'), 'delta-5')
+  claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const second = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+  const remainingAcks = [...acks.values()]
+
+  expect(first.compactedAcknowledgements[0]).toMatchObject({
+    completedSourceHighWaterMark: 3,
+    projectionComponent: 'display',
+  })
+  expect(second.deletedAcknowledgementCount).toBe(2)
+  expect(remainingAcks).toHaveLength(1)
+  expect(remainingAcks[0]).toMatchObject({
+    completedSourceHighWaterMark: 5,
+    dirtyRangeEnd: null,
+    dirtyRangeStart: null,
+    dirtyWorkId: null,
+  })
+})
+
+test('retention cleanup deletes only completed dirty rows covered by ack and project source watermark', async () => {
+  const {acks, database, dirtySourceWatermarks, dirtyWork} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(5, '5', '5'), 'delta-5')
+  await upsertDisplayWork(database, {...getBaseScope(8, '8', '8'), scopeId: 'project-1:article-8'}, 'delta-8')
+  const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const highWaterClaim = claims.find((claim) => {
+    return claim.latestSourceHighWaterMark === 8
+  })
+
+  if (highWaterClaim !== undefined) {
+    ;[...acks.values()]
+      .filter((ack) => {
+        return ack.dirtyWorkId === highWaterClaim.dirtyWorkId
+      })
+      .forEach((ack) => {
+        acks.delete(ack.dirtyAckId)
+      })
+  }
+
+  dirtySourceWatermarks.set('project-1:article:display', {
+    projectId: 'project-1',
+    sourceHighWaterMark: 5,
+    sourcePartition: 'article:display',
+  })
+
+  const result = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+  const remainingHighWaters = [...dirtyWork.values()].map((row) => {
+    return row.latestSourceHighWaterMark
+  })
+
+  expect(result.deletedDirtyWorkCount).toBe(1)
+  expect(remainingHighWaters).toEqual([8])
+})
+
+test('retention cleanup does not let point acknowledgements cover other dirty rows', async () => {
+  const {acks, database, dirtyWork} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(5, '1', '1'), 'delta-5')
+  await upsertDisplayWork(database, {...getBaseScope(8, '1', '1'), scopeId: 'project-1:article-8'}, 'delta-8')
+  const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const lowWaterClaim = claims.find((claim) => {
+    return claim.latestSourceHighWaterMark === 5
+  })
+
+  if (lowWaterClaim !== undefined) {
+    ;[...acks.values()]
+      .filter((ack) => {
+        return ack.dirtyWorkId === lowWaterClaim.dirtyWorkId
+      })
+      .forEach((ack) => {
+        acks.delete(ack.dirtyAckId)
+      })
+  }
+
+  const result = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 0, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 0},
+    database,
+  )
+  const remainingHighWaters = [...dirtyWork.values()].map((row) => {
+    return row.latestSourceHighWaterMark
+  })
+
+  expect(result.deletedDirtyWorkCount).toBe(1)
+  expect(remainingHighWaters).toEqual([5])
+})
+
+test('retention cleanup is idempotent after rows are compacted and deleted', async () => {
+  const {acks, database, dirtyWork} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(5, '5', '5'), 'delta-5')
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const first = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+  const second = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+
+  expect(first).toMatchObject({compactedLaneCount: 1, deletedAcknowledgementCount: 1, deletedDirtyWorkCount: 1})
+  expect(second).toMatchObject({compactedLaneCount: 0, deletedAcknowledgementCount: 0, deletedDirtyWorkCount: 0})
+  expect(acks.size).toBe(1)
+  expect(dirtyWork.size).toBe(0)
+})
+
+test('retention cleanup skips lanes blocked by non-completed work at or below high-water', async () => {
+  const {acks, database, dirtyWork} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(4, '4', '4'), 'delta-4')
+  await upsertDisplayWork(database, {...getBaseScope(5, '5', '5'), scopeId: 'project-1:article-5'}, 'delta-5')
+  const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+  const highWaterClaim = claims.find((claim) => {
+    return claim.latestSourceHighWaterMark === 5
+  })
+
+  await completeReviewServingDirtyWorkClaims(highWaterClaim === undefined ? [] : [highWaterClaim], database)
+  await releaseReviewServingDirtyWorkClaims(
+    claims
+      .filter((claim) => {
+        return claim.latestSourceHighWaterMark === 4
+      })
+      .map((claim) => {
+        return claim.dirtyWorkId
+      }),
+    database,
+  )
+
+  const result = await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+
+  expect(result).toMatchObject({compactedLaneCount: 0, deletedAcknowledgementCount: 0, deletedDirtyWorkCount: 0})
+  expect([...acks.values()]).toHaveLength(1)
+  expect(
+    [...dirtyWork.values()]
+      .map((row) => {
+        return row.status
+      })
+      .sort(),
+  ).toEqual(['completed', 'pending'])
 })

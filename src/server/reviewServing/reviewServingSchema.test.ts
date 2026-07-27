@@ -95,6 +95,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0192_dropReviewSummaryOptionUpdatedAt.sql',
   '../../db/duckdbMigrations/0193_dropReviewJudgmentDetailLlmPlaceholders.sql',
   '../../db/duckdbMigrations/0194_dropReviewFilteredCountComponentBreakoutColumns.sql',
+  '../../db/duckdbMigrations/0195_cleanupReviewServingDirtyWorkRetention.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {

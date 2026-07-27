@@ -154,6 +154,7 @@ const createWorkerHarness = (input?: {
   }
   const wakeInputs: unknown[] = []
   const claimInputs: unknown[] = []
+  const dirtyWorkRetentionCleanupInputs: unknown[] = []
   const cleanupInputs: unknown[] = []
   const failedChunks: unknown[] = []
   const garbageCollectedChunks: ReviewServingRebuildChunkManifest[] = []
@@ -164,6 +165,16 @@ const createWorkerHarness = (input?: {
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
   const dependencies: ReviewServingProjectorWorkerDependencies = {
+    cleanupDirtyWorkRetention: async (cleanupInput) => {
+      dirtyWorkRetentionCleanupInputs.push(cleanupInput)
+
+      return {
+        compactedAcknowledgements: [],
+        compactedLaneCount: 2,
+        deletedAcknowledgementCount: 3,
+        deletedDirtyWorkCount: 5,
+      }
+    },
     cleanupRetentionState: async (cleanupInput: {
       batchSize?: number
       projectId: string
@@ -246,6 +257,7 @@ const createWorkerHarness = (input?: {
     cleanupInputs,
     database,
     dependencies,
+    dirtyWorkRetentionCleanupInputs,
     failedChunks,
     fatalRecycledInputs,
     garbageCollectedChunks,
@@ -4290,6 +4302,7 @@ test('worker schedules cleanup only after its cleanup interval elapses', async (
   const cleanupTarget = {batchSize: 10, now: new Date('2026-06-16T10:00:00.000Z'), projectId: 'project-1'}
   const skippedHarness = createWorkerHarness({cleanupTargets: [cleanupTarget], nowMs: 1_000})
   const completedHarness = createWorkerHarness({cleanupTargets: [cleanupTarget], nowMs: 62_000})
+  const dirtyWorkOnlyHarness = createWorkerHarness({cleanupTargets: [], nowMs: 62_000})
 
   const skipped = await runReviewServingProjectorWorkerOnce(
     {cleanupIntervalMs: 60_000, lastCleanupAtMs: 10_000, workerId: 'worker-1'},
@@ -4299,10 +4312,21 @@ test('worker schedules cleanup only after its cleanup interval elapses', async (
     {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
     completedHarness.dependencies,
   )
+  const dirtyWorkOnly = await runReviewServingProjectorWorkerOnce(
+    {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
+    dirtyWorkOnlyHarness.dependencies,
+  )
 
   expect(skipped.cleanup.status).toBe('skipped')
   expect(skippedHarness.cleanupInputs).toEqual([])
+  expect(skippedHarness.dirtyWorkRetentionCleanupInputs).toEqual([])
   expect(completed.cleanup).toEqual({
+    dirtyWorkRetentionCleanup: {
+      compactedAcknowledgements: [],
+      compactedLaneCount: 2,
+      deletedAcknowledgementCount: 3,
+      deletedDirtyWorkCount: 5,
+    },
     retentionCleanups: [
       {
         cleanupBatchSize: 10,
@@ -4316,7 +4340,12 @@ test('worker schedules cleanup only after its cleanup interval elapses', async (
     retentionScopes: ['project-1'],
     status: 'completed',
   })
+  expect(completedHarness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
   expect(completed.nextCleanupAtMs).toBe(62_000)
+  expect(dirtyWorkOnly.cleanup.status).toBe('completed')
+  expect(dirtyWorkOnly.cleanup.retentionCleanups).toEqual([])
+  expect(dirtyWorkOnly.cleanup.dirtyWorkRetentionCleanup).toMatchObject({deletedDirtyWorkCount: 5})
+  expect(dirtyWorkOnly.nextCleanupAtMs).toBe(62_000)
 })
 
 test('worker backs off failed wakes and stops cleanly when aborted during sleep', async () => {

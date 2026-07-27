@@ -49,6 +49,23 @@ export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   sourcePartition: string
 }
 
+export type CleanupReviewServingDirtyWorkRetentionParams = {
+  acknowledgementDeleteLimit?: number
+  dirtyWorkDeleteLimit?: number
+  laneCompactionLimit?: number
+}
+
+export type CleanupReviewServingDirtyWorkRetentionCompaction = CompactReviewServingDirtyWorkAcknowledgementsParams & {
+  dirtyAckId: string
+}
+
+export type CleanupReviewServingDirtyWorkRetentionResult = {
+  compactedAcknowledgements: CleanupReviewServingDirtyWorkRetentionCompaction[]
+  compactedLaneCount: number
+  deletedAcknowledgementCount: number
+  deletedDirtyWorkCount: number
+}
+
 export type ReviewServingDirtyWorkClaim = {
   articleId: string | null
   dirtyKind: string
@@ -179,6 +196,10 @@ const getNormalizedLimit = (params: {limit: number; maxWakeCount?: number}) => {
   const maxWakeCount = params.maxWakeCount === undefined ? limit : Math.max(0, Math.floor(params.maxWakeCount))
 
   return Math.min(limit, maxWakeCount)
+}
+
+const getNormalizedCleanupLimit = (value: number | undefined, fallback: number) => {
+  return Math.max(0, Math.floor(value ?? fallback))
 }
 
 const getStaleRunningClaimSeconds = (params: ClaimReviewServingDirtyWorkParams) => {
@@ -674,4 +695,255 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
   `)
 
   return {compactedThroughHighWaterMark: input.completedSourceHighWaterMark, dirtyAckId}
+}
+
+const getCompletedDirtyWorkCoveredByAckPredicate = (dirtyWorkSql: string) => {
+  const projectionComponentSql = `json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionComponent')`
+  const projectionIdentitySql = `json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionIdentity')`
+
+  return `EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_ack ack
+      WHERE ack.projection_component = ${projectionComponentSql}
+        AND ack.projection_identity = ${projectionIdentitySql}
+        AND ack.source_partition = ${dirtyWorkSql}.source_partition
+        AND ack.status = 'completed'
+        AND ack.completed_source_high_water_mark >= ${dirtyWorkSql}.latest_source_high_water_mark
+        AND (
+          ack.dirty_work_id = ${dirtyWorkSql}.dirty_work_id
+          OR (
+            ack.dirty_work_id IS NULL
+            AND (
+              (ack.dirty_range_start IS NULL AND ack.dirty_range_end IS NULL)
+              OR (
+                ${dirtyWorkSql}.dirty_range_start IS NOT NULL
+                AND ${dirtyWorkSql}.dirty_range_end IS NOT NULL
+                AND ack.dirty_range_start <= ${dirtyWorkSql}.dirty_range_start
+                AND ack.dirty_range_end >= ${dirtyWorkSql}.dirty_range_end
+              )
+            )
+          )
+        )
+    )`
+}
+
+const getDirtyWorkSourceWatermarkAdvancedPredicate = (dirtyWorkSql: string) => {
+  return `${dirtyWorkSql}.project_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM app.review_serving_project_dirty_source_watermark watermark
+      WHERE watermark.project_id = ${dirtyWorkSql}.project_id
+        AND watermark.source_partition = ${dirtyWorkSql}.source_partition
+        AND watermark.source_high_water_mark >= ${dirtyWorkSql}.latest_source_high_water_mark
+    )`
+}
+
+const getNoLowerRetentionBlockerPredicate = (dirtyWorkSql: string, highWaterMarkSql: string) => {
+  return `NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work blocker
+      WHERE json_extract_string(blocker.projection_key, '$.projectionComponent')
+          = json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionComponent')
+        AND json_extract_string(blocker.projection_key, '$.projectionIdentity')
+          = json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionIdentity')
+        AND blocker.source_partition = ${dirtyWorkSql}.source_partition
+        AND blocker.status <> 'completed'
+        AND blocker.latest_source_high_water_mark <= ${highWaterMarkSql}
+    )`
+}
+
+const getReviewServingDirtyWorkRetentionLanes = async (
+  params: {limit: number},
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  if (params.limit === 0) {
+    return []
+  }
+
+  return database.queryJson<{
+    completedSourceHighWaterMark: number
+    projectionComponent: ReviewServingProjectionComponent
+    projectionIdentity: string
+    sourcePartition: string
+  }>(`
+    WITH retention_ready_dirty_work AS (
+      SELECT
+        json_extract_string(dirty_work.projection_key, '$.projectionComponent') AS projectionComponent,
+        json_extract_string(dirty_work.projection_key, '$.projectionIdentity') AS projectionIdentity,
+        dirty_work.source_partition AS sourcePartition,
+        MAX(dirty_work.latest_source_high_water_mark) AS completedSourceHighWaterMark
+      FROM app.review_serving_dirty_work dirty_work
+      WHERE dirty_work.status = 'completed'
+        AND dirty_work.projection_key IS NOT NULL
+        AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('dirty_work')}
+        AND ${getCompletedDirtyWorkCoveredByAckPredicate('dirty_work')}
+        AND ${getNoLowerRetentionBlockerPredicate('dirty_work', 'dirty_work.latest_source_high_water_mark')}
+      GROUP BY
+        projectionComponent,
+        projectionIdentity,
+        dirty_work.source_partition
+    )
+    SELECT
+      projectionComponent,
+      projectionIdentity,
+      sourcePartition,
+      completedSourceHighWaterMark
+    FROM retention_ready_dirty_work retention_lane
+    WHERE projectionComponent IS NOT NULL
+      AND projectionIdentity IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_dirty_work blocker
+        WHERE json_extract_string(blocker.projection_key, '$.projectionComponent') = retention_lane.projectionComponent
+          AND json_extract_string(blocker.projection_key, '$.projectionIdentity') = retention_lane.projectionIdentity
+          AND blocker.source_partition = retention_lane.sourcePartition
+          AND blocker.status <> 'completed'
+          AND blocker.latest_source_high_water_mark <= retention_lane.completedSourceHighWaterMark
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_dirty_work uncovered_completed
+        WHERE json_extract_string(uncovered_completed.projection_key, '$.projectionComponent')
+            = retention_lane.projectionComponent
+          AND json_extract_string(uncovered_completed.projection_key, '$.projectionIdentity')
+            = retention_lane.projectionIdentity
+          AND uncovered_completed.source_partition = retention_lane.sourcePartition
+          AND uncovered_completed.status = 'completed'
+          AND uncovered_completed.latest_source_high_water_mark <= retention_lane.completedSourceHighWaterMark
+          AND NOT (
+            uncovered_completed.projection_key IS NOT NULL
+            AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('uncovered_completed')}
+            AND ${getCompletedDirtyWorkCoveredByAckPredicate('uncovered_completed')}
+          )
+      )
+    ORDER BY projectionComponent ASC, projectionIdentity ASC, sourcePartition ASC
+    LIMIT ${params.limit}
+  `)
+}
+
+const deleteReviewServingDirtyWorkAcknowledgementsForRetention = async (
+  params: {compactions: readonly CleanupReviewServingDirtyWorkRetentionCompaction[]; limit: number},
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  if (params.limit === 0 || params.compactions.length === 0) {
+    return 0
+  }
+
+  const lanePredicate = params.compactions
+    .map((compaction) => {
+      return `(
+          dirty_ack_id <> ${getSqlLiteral(compaction.dirtyAckId)}
+          AND projection_component = ${getSqlLiteral(compaction.projectionComponent)}
+          AND projection_identity = ${getSqlLiteral(compaction.projectionIdentity)}
+          AND source_partition = ${getSqlLiteral(compaction.sourcePartition)}
+          AND completed_source_high_water_mark <= ${getSqlLiteral(compaction.completedSourceHighWaterMark)}
+        )`
+    })
+    .join('\n        OR ')
+
+  const rows = await database.queryJson<{dirtyAckId: string}>(`
+    DELETE FROM app.review_serving_dirty_work_ack
+    WHERE dirty_ack_id IN (
+      SELECT dirty_ack_id
+      FROM app.review_serving_dirty_work_ack
+      WHERE status = 'completed'
+        AND (
+          ${lanePredicate}
+        )
+      ORDER BY completed_source_high_water_mark ASC, dirty_ack_id ASC
+      LIMIT ${params.limit}
+    )
+    RETURNING dirty_ack_id AS dirtyAckId
+  `)
+
+  return rows.length
+}
+
+const deleteReviewServingDirtyWorkRowsForRetention = async (
+  params: {limit: number},
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  if (params.limit === 0) {
+    return 0
+  }
+
+  const rows = await database.queryJson<{dirtyWorkId: string}>(`
+    DELETE FROM app.review_serving_dirty_work
+    WHERE dirty_work_id IN (
+      SELECT dirty_work.dirty_work_id
+      FROM app.review_serving_dirty_work dirty_work
+      WHERE dirty_work.status = 'completed'
+        AND dirty_work.projection_key IS NOT NULL
+        AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('dirty_work')}
+        AND ${getCompletedDirtyWorkCoveredByAckPredicate('dirty_work')}
+        AND ${getNoLowerRetentionBlockerPredicate('dirty_work', 'dirty_work.latest_source_high_water_mark')}
+      ORDER BY dirty_work.updated_at ASC, dirty_work.latest_source_high_water_mark ASC, dirty_work.dirty_work_id ASC
+      LIMIT ${params.limit}
+    )
+    RETURNING dirty_work_id AS dirtyWorkId
+  `)
+
+  return rows.length
+}
+
+export const cleanupReviewServingDirtyWorkRetention = async (
+  params: CleanupReviewServingDirtyWorkRetentionParams = {},
+  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
+): Promise<CleanupReviewServingDirtyWorkRetentionResult> => {
+  const laneCompactionLimit = getNormalizedCleanupLimit(params.laneCompactionLimit, 50)
+  const acknowledgementDeleteLimit = getNormalizedCleanupLimit(params.acknowledgementDeleteLimit, 1000)
+  const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(params.dirtyWorkDeleteLimit, 1000)
+
+  return database.transaction(async (tx) => {
+    const lanes = await getReviewServingDirtyWorkRetentionLanes({limit: laneCompactionLimit}, tx)
+    const deletedDirtyWorkCount = await deleteReviewServingDirtyWorkRowsForRetention({limit: dirtyWorkDeleteLimit}, tx)
+    const compactedAcknowledgements = await lanes.reduce<Promise<CleanupReviewServingDirtyWorkRetentionCompaction[]>>(
+      async (previousCompactions, lane) => {
+        const compactions = await previousCompactions
+        const dirtyAckId = getDirtyAckHighWaterId(lane)
+
+        await tx.run(`
+        INSERT INTO app.review_serving_dirty_work_ack (
+          dirty_ack_id,
+          dirty_work_id,
+          projection_component,
+          projection_identity,
+          source_partition,
+          completed_source_high_water_mark,
+          dirty_range_start,
+          dirty_range_end,
+          status,
+          completed_at
+        ) VALUES (
+          ${getSqlLiteral(dirtyAckId)},
+          NULL,
+          ${getSqlLiteral(lane.projectionComponent)},
+          ${getSqlLiteral(lane.projectionIdentity)},
+          ${getSqlLiteral(lane.sourcePartition)},
+          ${getSqlLiteral(lane.completedSourceHighWaterMark)},
+          NULL,
+          NULL,
+          'completed',
+          current_timestamp
+        )
+        ON CONFLICT(dirty_ack_id) DO NOTHING
+      `)
+
+        return [...compactions, {...lane, dirtyAckId}]
+      },
+      Promise.resolve([]),
+    )
+
+    const deletedAcknowledgementCount = await deleteReviewServingDirtyWorkAcknowledgementsForRetention(
+      {compactions: compactedAcknowledgements, limit: acknowledgementDeleteLimit},
+      tx,
+    )
+
+    return {
+      compactedAcknowledgements,
+      compactedLaneCount: compactedAcknowledgements.length,
+      deletedAcknowledgementCount,
+      deletedDirtyWorkCount,
+    }
+  })
 }

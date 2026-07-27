@@ -28,6 +28,8 @@ import {
 } from '../reviewServing/reviewServingChunkManifestRepository.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
 import {
+  cleanupReviewServingDirtyWorkRetention,
+  type CleanupReviewServingDirtyWorkRetentionResult,
   completeReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
@@ -186,6 +188,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
 }
 
 type ReviewServingProjectorWorkerDependencies = {
+  cleanupDirtyWorkRetention?: typeof cleanupReviewServingDirtyWorkRetention
   cleanupRetentionState?: typeof cleanupReviewServingRetentionState
   getCleanupTargets?: (
     database: ReviewServingRetentionServiceDatabase,
@@ -278,11 +281,13 @@ type ReviewServingProjectorWorkerChunkResult =
 
 type ReviewServingProjectorWorkerCleanupResult =
   | {
+      dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
       retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
       retentionScopes: readonly string[]
       status: 'completed'
     }
   | {
+      dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
       retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
       retentionScopes: readonly string[]
       status: 'skipped'
@@ -5015,6 +5020,7 @@ const collectGarbageAfterCompletedRebuildChunk = () => {
 
 const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWorkerDependencies = {
   collectGarbageAfterCompletedRebuildChunk,
+  cleanupDirtyWorkRetention: cleanupReviewServingDirtyWorkRetention,
   cleanupRetentionState: cleanupReviewServingRetentionState,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
   getAppendQueueDepth: () => {
@@ -6559,6 +6565,7 @@ const logReviewServingProjectorWorkerCycle = (result: ReviewServingProjectorWork
       cleanupRetentionCleanups: result.cleanup.retentionCleanups,
       cleanupRetentionScopes: result.cleanup.retentionScopes,
       cleanupStatus: result.cleanup.status,
+      dirtyWorkRetentionCleanup: result.cleanup.dirtyWorkRetentionCleanup,
       component: 'reviewServingProjectorWorker',
       deltaIntakeStatus: result.deltaIntake.status,
       event: 'cycle',
@@ -8527,14 +8534,20 @@ const runReviewServingProjectorWorkerCleanup = async ({
   const lastCleanupAtMs = options.lastCleanupAtMs ?? null
 
   if (!shouldRunCleanup({cleanupIntervalMs, lastCleanupAtMs, nowMs})) {
-    return {retentionCleanups: [], retentionScopes: [], status: 'skipped'}
+    return {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped'}
   }
 
   const cleanupTargets = await dependencies.getCleanupTargets?.(database)
   const cleanupRetentionState = dependencies.cleanupRetentionState
+  const dirtyWorkRetentionCleanup = (await dependencies.cleanupDirtyWorkRetention?.({}, database)) ?? null
 
   if (!cleanupRetentionState || cleanupTargets === undefined || cleanupTargets.length === 0) {
-    return {retentionCleanups: [], retentionScopes: [], status: 'skipped'}
+    return {
+      dirtyWorkRetentionCleanup,
+      retentionCleanups: [],
+      retentionScopes: [],
+      status: dirtyWorkRetentionCleanup === null ? 'skipped' : 'completed',
+    }
   }
 
   const retentionCleanups = await cleanupTargets.reduce<Promise<ReviewServingRetentionCleanupResult[]>>(
@@ -8550,7 +8563,7 @@ const runReviewServingProjectorWorkerCleanup = async ({
     return cleanup.retentionScope
   })
 
-  return {retentionCleanups, retentionScopes, status: 'completed'}
+  return {dirtyWorkRetentionCleanup, retentionCleanups, retentionScopes, status: 'completed'}
 }
 
 const getDeltaIntakePartitions = async (database: ReviewServingProjectorWorkerDatabase, tableName: string) => {
@@ -8681,7 +8694,7 @@ export const runReviewServingProjectorWorkerCycle = async (
         },
       })
   const cleanup = shouldRunOnlyRebuildChunk
-    ? {retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
+    ? {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
     : await runReviewServingProjectorWorkerCleanup({database, dependencies, options})
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
