@@ -1,0 +1,8 @@
+DROP INDEX IF EXISTS app.idx_app_project_transfer_session_stale_recovery;
+DROP INDEX IF EXISTS idx_app_project_transfer_session_stale_recovery;
+DROP INDEX IF EXISTS app.idx_app_project_transfer_session_owner_heartbeat;
+DROP INDEX IF EXISTS idx_app_project_transfer_session_owner_heartbeat;
+DROP INDEX IF EXISTS app.idx_app_project_transfer_session_commit;
+DROP INDEX IF EXISTS idx_app_project_transfer_session_commit;
+DROP INDEX IF EXISTS app.idx_app_project_transfer_session_package;
+DROP INDEX IF EXISTS idx_app_project_transfer_session_package;

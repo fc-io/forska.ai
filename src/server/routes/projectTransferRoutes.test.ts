@@ -62,6 +62,7 @@ const uploadArrayBufferSessionId = getRouteTestSessionId('import-upload-buffer')
 const readOnlyGetSessionId = getRouteTestSessionId('import-read-only-get')
 const missingArtifactsGetSessionId = getRouteTestSessionId('import-missing-get')
 const resolveSessionId = getRouteTestSessionId('import-resolve')
+const routeFlowSessionId = getRouteTestSessionId('route-flow')
 const missingArtifactsResolveSessionId = getRouteTestSessionId('import-missing-resolve')
 const resolveRaceSessionId = getRouteTestSessionId('import-resolve-race')
 const artifactSessionIds = [
@@ -71,6 +72,7 @@ const artifactSessionIds = [
   readOnlyGetSessionId,
   missingArtifactsGetSessionId,
   resolveSessionId,
+  routeFlowSessionId,
   missingArtifactsResolveSessionId,
   resolveRaceSessionId,
 ] as const
@@ -1287,6 +1289,133 @@ test('project transfer import resolve updates the durable dependency plan and co
   expect(commitProjectTransferImportSessionMock).toHaveBeenCalledWith({
     request: {expectedPlanRevision: 1},
     sessionId: resolveSessionId,
+  })
+})
+
+test('project transfer routes carry inline export bytes through import analyze resolve and commit', async () => {
+  const app = await getProjectTransferApp()
+
+  const exportResponse = await getRouteResponse(app, '/api/projects/project-1/export-project', 'POST')
+  const packageBytes = new Uint8Array(await exportResponse.arrayBuffer())
+  const createResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/sessions', {
+      body: JSON.stringify({sessionId: routeFlowSessionId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const uploadResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${routeFlowSessionId}/upload`, {
+      body: packageBytes,
+      headers: {'content-type': 'application/zip', 'x-project-transfer-filename': 'project-transfer-project-1.zip'},
+      method: 'PUT',
+    }),
+  )
+  const uploadBody = (await uploadResponse.json()) as {
+    data: {state: string; upload: {byteLength: number; checksumSha256: string; fileName: string}; uploadPath?: string}
+    error: string | null
+  }
+  const analyzeResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${routeFlowSessionId}/analyze`, {
+      body: JSON.stringify({expandedBytes: 0, zipBytes: packageBytes.byteLength}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const analyzeBody = (await analyzeResponse.json()) as {
+    data: {planRevision: number; state: string; upload: {checksumSha256: string} | null}
+    error: string | null
+  }
+  mkdirSync(getImportRootPath(routeFlowSessionId), {recursive: true})
+  await globalThis.Bun.write(getImportPlanPath(routeFlowSessionId), '{}')
+  const resolveResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${routeFlowSessionId}/resolve-dependencies`, {
+      body: JSON.stringify({
+        planRevision: analyzeBody.data.planRevision,
+        selectedModels: [{sourceModelId: 'model-1', targetModelId: 'target-model-1'}],
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const resolveBody = (await resolveResponse.json()) as {
+    data: {planRevision: number; planSummary: {dependencyStatuses: Record<string, string>}; state: string}
+    error: string | null
+  }
+  const completion = {
+    importWarnings: [],
+    packageFingerprint: 'route-flow-fingerprint',
+    projectId: 'route-flow-imported-project',
+    projectName: 'Route Flow Imported Project',
+    status: 'completed' as const,
+    targetProjectId: 'route-flow-imported-project',
+    targetProjectName: 'Route Flow Imported Project',
+    transferHistoryId: 'history-route-flow',
+  }
+  routeState.commitResult = {
+    completion,
+    history: null,
+    session: {...routeState.sessions[routeFlowSessionId], completionPayloadJson: completion, state: 'completed'},
+    status: 'completed',
+    statusCode: 200,
+  }
+  const commitResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${routeFlowSessionId}/commit`, {
+      body: JSON.stringify({planRevision: resolveBody.data.planRevision}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const commitBody = (await commitResponse.json()) as {
+    data: {completion: typeof completion; state: string; uploadPath?: string}
+    error: string | null
+  }
+
+  expect(exportResponse.status).toBe(200)
+  expect(exportResponse.headers.get('content-type')).toBe('application/zip')
+  expect(createResponse.status).toBe(201)
+  expect(uploadResponse.status).toBe(200)
+  expect(uploadBody).toMatchObject({
+    data: {
+      state: 'queued',
+      upload: {
+        byteLength: packageBytes.byteLength,
+        checksumSha256: createHash('sha256').update(packageBytes).digest('hex'),
+        fileName: 'project-transfer-project-1.zip',
+      },
+    },
+    error: null,
+  })
+  expect(readFileSync(getUploadPackagePath(routeFlowSessionId))).toEqual(Buffer.from(packageBytes))
+  expect(uploadBody.data.uploadPath).toBeUndefined()
+  expect(analyzeResponse.status).toBe(200)
+  expect(analyzeBody).toMatchObject({
+    data: {planRevision: 1, state: 'awaiting_resolution', upload: uploadBody.data.upload},
+    error: null,
+  })
+  expect(resolveResponse.status).toBe(200)
+  expect(resolveBody).toMatchObject({
+    data: {
+      planRevision: 2,
+      planSummary: {dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'}},
+      state: 'ready_to_commit',
+    },
+    error: null,
+  })
+  expect(commitResponse.status).toBe(200)
+  expect(commitBody).toMatchObject({data: {completion, state: 'completed'}, error: null})
+  expect(commitBody.data.uploadPath).toBeUndefined()
+  expect(createProjectTransferExportMock).toHaveBeenCalledWith({projectId: 'project-1'})
+  expect(analyzeProjectTransferImportPackageMock).toHaveBeenCalledWith(
+    expect.objectContaining({planRevision: 1, uploadMetadata: uploadBody.data.upload}),
+  )
+  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledWith(expect.objectContaining({deferPlanWrite: true}))
+  expect(commitProjectTransferImportSessionMock).toHaveBeenCalledWith({
+    request: {planRevision: 2},
+    sessionId: routeFlowSessionId,
   })
 })
 

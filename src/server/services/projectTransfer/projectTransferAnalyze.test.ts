@@ -1095,6 +1095,64 @@ test('blocks article identifier conflicts and project-prompt canonical remap col
   }
 })
 
+test('blocks duplicate package article identifiers before commit', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+      cwd,
+      payloadOverride: (payloads) => {
+        const article = payloads.articles[0]
+
+        if (article === undefined) {
+          throw new Error('Expected article fixture')
+        }
+
+        return {
+          ...payloads,
+          articles: [
+            article,
+            {
+              ...article,
+              articleId: 'source-app-article-duplicate',
+              articleTitle: 'Fixture Article Duplicate',
+              provenance: {sourceArticleId: 'article-duplicate'},
+              signature: {...article.signature, title: 'Fixture Article Duplicate'},
+              sourceArticleId: 'article-duplicate',
+            },
+          ],
+        }
+      },
+    })
+    const result = await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 5,
+      runner: getNewArticleRouteAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+
+    expect(result.plan.canCommit).toBe(false)
+    expect(result.planSummary.conflictCounts.articleConflictCount).toBeGreaterThanOrEqual(2)
+    const blockerCodes = result.plan.blockers.map((blocker) => {
+      return blocker.code
+    })
+    expect(blockerCodes).toContain('article_identifier_package_duplicate')
+    expect(
+      result.plan.targetPlan.articleMatches.map((match) => {
+        return {action: match.action, sourceArticleId: match.sourceArticleId}
+      }),
+    ).toEqual([
+      {action: 'blocked', sourceArticleId: 'article-1'},
+      {action: 'blocked', sourceArticleId: 'article-duplicate'},
+    ])
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('exposes package-contract blockers with non-wizard resolution kinds', async () => {
   const cwd = getRuntimeRoot()
 
@@ -1170,6 +1228,62 @@ test('records streamed NDJSON row validation failures as package-contract blocke
     expect(result.analysis.stagedPackage?.rowCounts.articles).toBe(0)
     expect(extractedArticlesText).toBe('')
   } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('stages large NDJSON payloads without accumulating per-line write stream error listeners', async () => {
+  const cwd = getRuntimeRoot()
+  const maxListenerWarnings: string[] = []
+  const onWarning = (warning: Error) => {
+    if (warning.name === 'MaxListenersExceededWarning' && warning.message.includes('WriteStream')) {
+      maxListenerWarnings.push(warning.message)
+    }
+  }
+
+  process.on('warning', onWarning)
+
+  try {
+    const largeText = 'x'.repeat(64 * 1024)
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+      cwd,
+      payloadOverride: (payloads) => {
+        const [article] = payloads.articles
+
+        if (article === undefined) {
+          throw new Error('Expected article fixture')
+        }
+
+        return {
+          ...payloads,
+          articles: Array.from({length: 24}, (_value, index) => {
+            return {
+              ...article,
+              fullText: largeText,
+              provenance: {...article.provenance, sourceArticleId: `article-${index + 1}`},
+              sourceArticleId: `article-${index + 1}`,
+            }
+          }),
+        }
+      },
+    })
+
+    await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 9,
+      runner: getEmptyAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0)
+    })
+
+    expect(maxListenerWarnings).toEqual([])
+  } finally {
+    process.off('warning', onWarning)
     rmSync(cwd, {force: true, recursive: true})
   }
 })

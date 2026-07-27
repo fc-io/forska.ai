@@ -485,6 +485,14 @@ Entry format:
 - Fix: Added `app.review_rebuild_request`, request-owned chunk manifest fields, request admission, budget/diagnostic fields, retry-after/over-budget metadata, and claim gating so request-owned chunks are claimable only after the parent request is admitted.
 - Verification: `bun test src/server/reviewServing/reviewServingSchema.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts`.
 
+## 2026-07-27 - Project Transfer Import Smoke
+
+- Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` during real project-transfer import commit of the first lexicographic primary project, followed by `Failed to delete all rows from index` invalidations on stale secondary `app.project_transfer_session` rows.
+- Context: Primary export of `cov | GPT 5.5 xhigh | 1` into the secondary runtime through the HTTP project-transfer import flow.
+- Cause: Import commit carried too much staged article/judgment payload through DuckDB set-based writes, and the mutable project-transfer session table still had secondary indexes over frequently updated state/owner/fingerprint columns.
+- Fix: Kept article create staging source-id only, materialized set-based judgment rows once as a narrow temp projection for validation/insert/delta derivation, sanitized duplicate package article identifiers during export, fixed import staging stream listener cleanup, and dropped the mutable `app.project_transfer_session` secondary indexes.
+- Verification: Focused project-transfer export/analyze/commit/route tests plus real primary-to-secondary package smoke.
+
 ## 2026-06-23 - Phase 5B Operator Request Cutover
 
 - Error: Normal operator scripts named around large rebuild and `judgment_fact` repair still requested legacy `project_mart_large_rebuild_state` work.
