@@ -591,8 +591,14 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).toContain(
     "supported_list_mode(list_mode_key) AS (VALUES ('llm'), ('human'), ('both'), ('unassessed'))",
   )
-  expect(queryStatements.join('\n')).toContain('INNER JOIN supported_list_mode list_mode')
-  expect(queryStatements.join('\n')).toContain('list_contains(state.list_mode_keys, list_mode.list_mode_key)')
+  expect(queryStatements.join('\n')).toContain('INNER JOIN supported_list_mode list_mode_filter ON TRUE')
+  expect(queryStatements.join('\n')).toContain("('llm', state.has_llm_list_mode)")
+  expect(queryStatements.join('\n')).toContain("('human', state.has_human_list_mode)")
+  expect(queryStatements.join('\n')).toContain("('both', state.has_both_list_mode)")
+  expect(queryStatements.join('\n')).toContain("('unassessed', state.has_unassessed_list_mode)")
+  expect(queryStatements.join('\n')).toContain('list_mode_filter.list_mode_key = list_mode.list_mode_key')
+  expect(queryStatements.join('\n')).toContain('list_mode.has_list_mode IS TRUE')
+  expect(queryStatements.join('\n')).not.toContain('list_contains(state.list_mode_keys')
   expect(queryStatements.join('\n')).not.toContain('CROSS JOIN unnest(state.list_mode_keys)')
   expect(queryStatements.join('\n')).not.toContain('JOIN mart.review_article_serving_v4')
   expect(queryStatements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')

@@ -152,6 +152,20 @@ const getListModeCte = (listModeKeys: readonly string[]) => {
   return getValuesCte('list_mode_key', listModeKeys)
 }
 
+const getListModeFlagExpansionJoinSql = (stateAlias: string, listModeAlias: string) => {
+  return `
+          INNER JOIN list_mode_key_filter ${listModeAlias}_filter ON TRUE
+          INNER JOIN LATERAL (
+            VALUES
+              ('llm', ${stateAlias}.has_llm_list_mode),
+              ('human', ${stateAlias}.has_human_list_mode),
+              ('both', ${stateAlias}.has_both_list_mode),
+              ('unassessed', ${stateAlias}.has_unassessed_list_mode)
+          ) ${listModeAlias}(list_mode_key, has_list_mode)
+            ON ${listModeAlias}_filter.list_mode_key = ${listModeAlias}.list_mode_key
+            AND ${listModeAlias}.has_list_mode IS TRUE`
+}
+
 const getContributionKey = (
   row: Pick<PostingContributionRow, 'articleId' | 'filterKind' | 'filterValue' | 'listModeKey'>,
 ) => {
@@ -302,8 +316,7 @@ const getFullRebuildPostingContributionRowsStatement = (
             AND list_mode_state.review_config_hash = serving.review_config_hash
             AND list_mode_state.snapshot_id = serving.snapshot_id
             AND list_mode_state.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)
+          ${getListModeFlagExpansionJoinSql('list_mode_state', 'list_mode_key')}
         ),
         project_settings AS (
           SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
