@@ -357,18 +357,6 @@ export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDyna
     )${getPostingFilteredArticleIdsCte(postingGroups)}
     SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount
     FROM posting_filtered_article_ids filtered_article_ids
-    CROSS JOIN scoped
-    INNER JOIN mart.review_article_serving_base_v4 serving
-      ON serving.project_id = scoped.project_id
-      AND serving.review_config_hash = scoped.review_config_hash
-      AND serving.snapshot_id = scoped.snapshot_id
-      AND serving.article_id = filtered_article_ids.article_id
-    INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state
-      ON list_mode_state.project_id = serving.project_id
-      AND list_mode_state.review_config_hash = serving.review_config_hash
-      AND list_mode_state.snapshot_id = serving.snapshot_id
-      AND list_mode_state.article_id = serving.article_id
-      AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)
   `
   }
 
