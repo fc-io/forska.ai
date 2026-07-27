@@ -16,9 +16,13 @@ import {
   getReviewServingBenchmarkSmokeInput,
   getReviewServingBenchmarkTempSpillViolations,
   getReviewServingBenchmarkWorkItemShapeViolations,
+  getReviewServingFilterPostingRepresentationProof,
   reviewServingBenchmarkOverlapWorkloadDefinition,
   reviewServingBenchmarkPhase6ReleaseGate,
   type ReviewServingBenchmarkWorkloadOperation,
+  reviewServingFilterPostingRepresentationProofDisclaimer,
+  reviewServingFilterPostingRepresentationProofOperations,
+  reviewServingFilterPostingRepresentationProofPostings,
   reviewServingSynthetic10m7PromptOverlapFixture,
   runReviewServingBenchmarkEffect,
   runReviewServingBenchmarkSmoke,
@@ -389,6 +393,91 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
   })
   expect(getReviewServingBenchmarkReleaseReportViolations(result.releaseReport)).toEqual([])
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
+})
+
+test('review-serving filter-posting representation proof compares compact arrays and exploded candidates only', () => {
+  const proof = getReviewServingFilterPostingRepresentationProof()
+
+  expect(proof.disclaimer).toBe(reviewServingFilterPostingRepresentationProofDisclaimer)
+  expect(proof.disclaimer).toContain('Proof-only benchmark fixture')
+  expect(proof.disclaimer).toContain('does not change production query behavior or schema')
+  expect(proof.disclaimer).toContain('not authorization to migrate')
+  expect(proof.postingCount).toBe(reviewServingFilterPostingRepresentationProofPostings.length)
+  expect(
+    reviewServingFilterPostingRepresentationProofOperations.map((operation) => {
+      return operation.key
+    }),
+  ).toEqual(['singleFilterExpansion', 'multiFilterIntersection', 'countStyleArticleIds'])
+  expect(
+    proof.operations.map((operation) => {
+      return {
+        compactMetrics: operation.compactArrayUnnest.metrics,
+        explodedMetrics: operation.explodedTempCandidates.metrics,
+        filterKeys: operation.filterKeys,
+        key: operation.key,
+        resultKind: operation.resultKind,
+        sameArticleIds: operation.sameArticleIds,
+        sameCount: operation.sameCount,
+      }
+    }),
+  ).toEqual([
+    {
+      compactMetrics: {explodedCandidateRows: 5, postingRowsRead: 1},
+      explodedMetrics: {explodedCandidateRows: 5, postingRowsRead: 1},
+      filterKeys: ['prompt:alpha'],
+      key: 'singleFilterExpansion',
+      resultKind: 'articleIds',
+      sameArticleIds: true,
+      sameCount: true,
+    },
+    {
+      compactMetrics: {explodedCandidateRows: 13, postingRowsRead: 3},
+      explodedMetrics: {explodedCandidateRows: 13, postingRowsRead: 3},
+      filterKeys: ['prompt:alpha', 'prompt:beta', 'label:included'],
+      key: 'multiFilterIntersection',
+      resultKind: 'articleIds',
+      sameArticleIds: true,
+      sameCount: true,
+    },
+    {
+      compactMetrics: {explodedCandidateRows: 12, postingRowsRead: 3},
+      explodedMetrics: {explodedCandidateRows: 12, postingRowsRead: 3},
+      filterKeys: ['prompt:alpha', 'label:included', 'human:reviewed'],
+      key: 'countStyleArticleIds',
+      resultKind: 'countStyleArticleIds',
+      sameArticleIds: true,
+      sameCount: true,
+    },
+  ])
+  expect(
+    proof.operations.map((operation) => {
+      return {
+        compactArticleIds: operation.compactArrayUnnest.articleIds,
+        count: operation.compactArrayUnnest.count,
+        explodedArticleIds: operation.explodedTempCandidates.articleIds,
+        key: operation.key,
+      }
+    }),
+  ).toEqual([
+    {
+      compactArticleIds: ['article-001', 'article-002', 'article-003', 'article-005', 'article-008'],
+      count: 5,
+      explodedArticleIds: ['article-001', 'article-002', 'article-003', 'article-005', 'article-008'],
+      key: 'singleFilterExpansion',
+    },
+    {
+      compactArticleIds: ['article-002', 'article-003', 'article-008'],
+      count: 3,
+      explodedArticleIds: ['article-002', 'article-003', 'article-008'],
+      key: 'multiFilterIntersection',
+    },
+    {
+      compactArticleIds: ['article-003', 'article-008'],
+      count: 2,
+      explodedArticleIds: ['article-003', 'article-008'],
+      key: 'countStyleArticleIds',
+    },
+  ])
 })
 
 test('review-serving benchmark metrics shape keeps latency, memory, temp, queue, row, and work counters explicit', () => {
