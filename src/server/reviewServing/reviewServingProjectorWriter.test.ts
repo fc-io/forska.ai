@@ -179,15 +179,20 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   const articleRankInsertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   })
+  const updateStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_unassessed_queue_serving_v4 existing')
+  })
+  const articleRankUpdateStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_unassessed_queue_article_rank_serving_v4 existing')
+  })
 
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id) DO UPDATE SET',
-  )
-  expect(insertStatement).toContain('prompt_ids = list_sort(list_distinct(list_concat(')
-  expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
-  expect(articleRankInsertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, article_id) DO UPDATE SET',
-  )
+  expect(updateStatement).toContain('prompt_ids = list_sort(list_distinct(list_concat(')
+  expect(updateStatement).toContain('queue_updated_at = final_queue_rows.queue_updated_at')
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(articleRankUpdateStatement).toContain('priority_bucket = final_article_rank_rows.priority_bucket')
+  expect(articleRankInsertStatement).toContain('WHERE NOT EXISTS')
+  expect(articleRankInsertStatement).not.toContain('ON CONFLICT')
   expect(articleRankInsertStatement).toContain('ROW_NUMBER() OVER (')
   expect(articleRankInsertStatement).toContain(
     'ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC',
@@ -195,7 +200,7 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   expect(articleRankInsertStatement).toContain('WHERE article_rank = 1')
 })
 
-test('title search rebuild ranges merge rows with one bounded conflict upsert and no scoped indexed deletes', async () => {
+test('title search rebuild ranges merge rows with bounded update and insert-missing statements', async () => {
   const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
   const baseRange = {
     articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
@@ -231,14 +236,14 @@ test('title search rebuild ranges merge rows with one bounded conflict upsert an
     statements.filter((statement) => {
       return statement.includes('UPDATE mart.review_title_search_serving_v4')
     }),
-  ).toHaveLength(0)
+  ).toHaveLength(1)
   expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_title_search_serving_v4')
-  expect(statements.join('\n')).not.toContain('WHERE NOT EXISTS')
-  expect(statements.join('\n')).toContain(
+  expect(statements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(statements.join('\n')).not.toContain(
     'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET',
   )
-  expect(statements.join('\n')).toContain('article_ids = list_sort(list_distinct(list_concat(')
-  expect(statements.join('\n')).toContain('COALESCE(excluded.article_ids, []::VARCHAR[])')
+  expect(statements.join('\n')).toContain('SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
+  expect(statements.join('\n')).toContain('COALESCE(final_rows.article_ids, []::VARCHAR[])')
   expect(statements.join('\n')).toContain(
     'LIST(DISTINCT tokenized.article_id ORDER BY tokenized.article_id) AS article_ids',
   )
@@ -282,10 +287,11 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
   })
 
   expect(insertStatements).toHaveLength(2)
-  expect(updateStatements).toHaveLength(0)
-  expect(insertStatements.join('\n')).toContain(
+  expect(updateStatements).toHaveLength(2)
+  expect(insertStatements.join('\n')).not.toContain(
     'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET',
   )
+  expect(insertStatements.join('\n')).toContain('WHERE NOT EXISTS')
   expect(insertStatements.join('\n')).not.toContain("OR (scope.article_id >= 'article-3'")
 })
 

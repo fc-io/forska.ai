@@ -199,9 +199,9 @@ test('full posting rebuilds write serving state without derived stats refresh', 
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).not.toContain('COUNT(*) AS cardinality')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
-  )
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT')
   expectNoLegacyPostingSourcePatchTables(joined)
   expect(joined).not.toContain('SUM(contribution.contribution_value)')
   expect(joined).not.toContain('343341342341341300000')
@@ -238,10 +238,10 @@ test('full posting rebuilds write serving without contribution or incremental pa
     'mart.review_article_summary_contribution_v4',
   )
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
-  )
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT')
   expect(joined).toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
   expect(joined).toContain(
     'LIST(DISTINCT CAST(posting.articleId AS VARCHAR) ORDER BY CAST(posting.articleId AS VARCHAR)) AS articleIds',
@@ -298,9 +298,9 @@ test('full posting rebuilds scope set-based serving upserts to article ranges', 
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('scope.article_id >=')
   expect(joined).toContain('scope.article_id <=')
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET',
-  )
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT')
   expect(joined).not.toContain('posting_identity,')
   expect(joined).not.toContain('AS posting_identity')
   expect(joined).not.toContain('sort_key = excluded.sort_key')
@@ -322,9 +322,9 @@ test('chunked full posting rebuilds skip retired stats refresh', async () => {
 
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET',
-  )
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT')
   expect(joined).not.toContain('posting_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
@@ -352,6 +352,8 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
   expect(servingInserts).toHaveLength(1)
   expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(joined).toContain("('article-1', 'article-3'), ('article-4', 'article-9')")
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('SET article_ids = list_filter')
   expect(joined).toContain('SELECT DISTINCT scope.article_id')
   expect(countOccurrences(joined, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
   expect(joined).toContain('judgment_detail_source AS')
@@ -378,7 +380,9 @@ test('deletes write tombstones and remove serving rows without derived stats wri
 
   expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(0)
-  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('SET article_ids = list_filter')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
@@ -642,7 +646,7 @@ test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows 
   expect(deleteStatement).toContain('filter_kind = deleted.filter_kind')
   expect(deleteStatement).toContain('snapshot_id')
   expect(deleteStatement).not.toContain('article_id IN')
-  expect(deleteStatement).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 WHERE project_id')
+  expect(deleteStatement).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
 })
 
 test('project-scoped posting rebuilds delete tombstoned serving rows without prompt ids', async () => {

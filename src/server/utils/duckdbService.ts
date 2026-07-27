@@ -456,6 +456,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_serving_snapshot_manifest;
     `,
     lowMemoryStartupPreflight: true,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     repairDedupeOrderSql: `
       CASE
         WHEN snapshot_status = 'active' THEN 0
@@ -865,6 +867,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       request_id DESC
     `,
     repairStrategy: 'dedupe-latest',
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     schemaName: 'app',
     tableName: 'review_rebuild_request',
   },
@@ -1021,6 +1025,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     `,
     repairPrimaryKeyColumns: ['chunk_id'],
     repairStrategy: 'dedupe-latest',
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     schemaName: 'app',
     schemaRequirements: [
       {
@@ -2031,6 +2037,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     `,
     repairPrimaryKeyColumns: ['project_id', 'search_identity', 'project_scope_identity', 'snapshot_id', 'token'],
     repairStrategy: 'empty-derived',
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     schemaName: 'mart',
     tableName: 'review_title_search_serving_v4',
   },
@@ -2175,6 +2183,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'activity_sort_at',
       'article_id',
     ],
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     schemaName: 'mart',
     schemaRequirements: [
       {
@@ -2290,6 +2300,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'filter_value',
       'list_mode_key',
     ],
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     schemaName: 'mart',
     schemaRequirements: [
       {columnNames: ['article_ids'], schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},

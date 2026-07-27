@@ -756,6 +756,32 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
 
   return [
     `
+    UPDATE mart.review_title_search_serving_v4 existing
+    SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)
+      FROM (
+        SELECT unnest(COALESCE(existing.article_ids, []::VARCHAR[])) AS article_id
+        UNION ALL
+        SELECT unnest(COALESCE(final_rows.article_ids, []::VARCHAR[])) AS article_id
+      ) merged_article_ids
+    )
+    FROM (
+      ${finalRowsCteSql}
+      SELECT
+        final_rows.project_id,
+        final_rows.search_identity,
+        final_rows.project_scope_identity,
+        final_rows.snapshot_id,
+        final_rows.token,
+        final_rows.article_ids
+      FROM final_rows
+    ) final_rows
+    WHERE existing.project_id IS NOT DISTINCT FROM final_rows.project_id
+      AND existing.search_identity IS NOT DISTINCT FROM final_rows.search_identity
+      AND existing.project_scope_identity IS NOT DISTINCT FROM final_rows.project_scope_identity
+      AND existing.snapshot_id IS NOT DISTINCT FROM final_rows.snapshot_id
+      AND existing.token IS NOT DISTINCT FROM final_rows.token
+  `,
+    `
     INSERT INTO mart.review_title_search_serving_v4 (
       project_id,
       search_identity,
@@ -773,8 +799,15 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       final_rows.token,
       final_rows.article_ids
     FROM final_rows
-    ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET
-      article_ids = ${mergeReviewServingTitleSearchArticleIdsSql('excluded.article_ids', 'mart.review_title_search_serving_v4.article_ids')}
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_title_search_serving_v4 existing
+      WHERE existing.project_id IS NOT DISTINCT FROM final_rows.project_id
+        AND existing.search_identity IS NOT DISTINCT FROM final_rows.search_identity
+        AND existing.project_scope_identity IS NOT DISTINCT FROM final_rows.project_scope_identity
+        AND existing.snapshot_id IS NOT DISTINCT FROM final_rows.snapshot_id
+        AND existing.token IS NOT DISTINCT FROM final_rows.token
+    )
   `,
   ]
 }
@@ -887,20 +920,7 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
 }
 
 const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQueueRebuildRowsInput) => {
-  return [
-    `
-    INSERT INTO mart.review_unassessed_queue_serving_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      queue_kind,
-      priority_bucket,
-      activity_sort_at,
-      article_id,
-      prompt_ids,
-      queue_updated_at
-    )
-    WITH ${input.rebuildSourceCtesSql},
+  const queueRowsCteSql = `WITH ${input.rebuildSourceCtesSql},
     queue_rows AS (
       SELECT
         ${getSqlLiteral(input.projectId)} AS project_id,
@@ -923,45 +943,32 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
         queue.priority_bucket,
         queue.activity_sort_at,
         queue.article_id
-    )
-    SELECT
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      queue_kind,
-      priority_bucket,
-      activity_sort_at,
-      article_id,
-      prompt_ids,
-      queue_updated_at
-    FROM queue_rows
-    QUALIFY ROW_NUMBER() OVER (
-      PARTITION BY
+    ),
+    final_queue_rows AS (
+      SELECT
         project_id,
         review_config_hash,
         snapshot_id,
         queue_kind,
         priority_bucket,
         activity_sort_at,
-        article_id
-      ORDER BY queue_updated_at DESC
-    ) = 1
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id) DO UPDATE SET
-      prompt_ids = ${mergeReviewServingQueuePromptIdsSql('excluded.prompt_ids', 'mart.review_unassessed_queue_serving_v4.prompt_ids')},
-      queue_updated_at = excluded.queue_updated_at
-  `,
-    `
-    INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      queue_kind,
-      priority_bucket,
-      article_id,
-      activity_sort_at,
-      queue_updated_at
-    )
-    WITH ${input.rebuildSourceCtesSql},
+        article_id,
+        prompt_ids,
+        queue_updated_at
+      FROM queue_rows
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          queue_kind,
+          priority_bucket,
+          activity_sort_at,
+          article_id
+        ORDER BY queue_updated_at DESC
+      ) = 1
+    )`
+  const articleRankRowsCteSql = `WITH ${input.rebuildSourceCtesSql},
     queue_rows AS (
       SELECT
         ${getSqlLiteral(input.projectId)} AS project_id,
@@ -984,7 +991,103 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       FROM queue_union queue
       WHERE NOT queue.tombstone
         AND queue.prompt_id IS NOT NULL
+    ),
+    final_article_rank_rows AS (
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        queue_kind,
+        priority_bucket,
+        article_id,
+        activity_sort_at,
+        queue_updated_at
+      FROM queue_rows
+      WHERE article_rank = 1
+    )`
+
+  return [
+    `
+    UPDATE mart.review_unassessed_queue_serving_v4 existing
+    SET
+      prompt_ids = ${mergeReviewServingQueuePromptIdsSql('final_queue_rows.prompt_ids', 'existing.prompt_ids')},
+      queue_updated_at = final_queue_rows.queue_updated_at
+    FROM (
+      ${queueRowsCteSql}
+      SELECT * FROM final_queue_rows
+    ) final_queue_rows
+    WHERE existing.project_id IS NOT DISTINCT FROM final_queue_rows.project_id
+      AND existing.review_config_hash IS NOT DISTINCT FROM final_queue_rows.review_config_hash
+      AND existing.snapshot_id IS NOT DISTINCT FROM final_queue_rows.snapshot_id
+      AND existing.queue_kind IS NOT DISTINCT FROM final_queue_rows.queue_kind
+      AND existing.priority_bucket IS NOT DISTINCT FROM final_queue_rows.priority_bucket
+      AND existing.activity_sort_at IS NOT DISTINCT FROM final_queue_rows.activity_sort_at
+      AND existing.article_id IS NOT DISTINCT FROM final_queue_rows.article_id
+  `,
+    `
+    INSERT INTO mart.review_unassessed_queue_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_kind,
+      priority_bucket,
+      activity_sort_at,
+      article_id,
+      prompt_ids,
+      queue_updated_at
     )
+    ${queueRowsCteSql}
+    SELECT
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_kind,
+      priority_bucket,
+      activity_sort_at,
+      article_id,
+      prompt_ids,
+      queue_updated_at
+    FROM final_queue_rows
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_unassessed_queue_serving_v4 existing
+      WHERE existing.project_id IS NOT DISTINCT FROM final_queue_rows.project_id
+        AND existing.review_config_hash IS NOT DISTINCT FROM final_queue_rows.review_config_hash
+        AND existing.snapshot_id IS NOT DISTINCT FROM final_queue_rows.snapshot_id
+        AND existing.queue_kind IS NOT DISTINCT FROM final_queue_rows.queue_kind
+        AND existing.priority_bucket IS NOT DISTINCT FROM final_queue_rows.priority_bucket
+        AND existing.activity_sort_at IS NOT DISTINCT FROM final_queue_rows.activity_sort_at
+        AND existing.article_id IS NOT DISTINCT FROM final_queue_rows.article_id
+    )
+  `,
+    `
+    UPDATE mart.review_unassessed_queue_article_rank_serving_v4 existing
+    SET
+      priority_bucket = final_article_rank_rows.priority_bucket,
+      activity_sort_at = final_article_rank_rows.activity_sort_at,
+      queue_updated_at = final_article_rank_rows.queue_updated_at
+    FROM (
+      ${articleRankRowsCteSql}
+      SELECT * FROM final_article_rank_rows
+    ) final_article_rank_rows
+    WHERE existing.project_id IS NOT DISTINCT FROM final_article_rank_rows.project_id
+      AND existing.review_config_hash IS NOT DISTINCT FROM final_article_rank_rows.review_config_hash
+      AND existing.snapshot_id IS NOT DISTINCT FROM final_article_rank_rows.snapshot_id
+      AND existing.queue_kind IS NOT DISTINCT FROM final_article_rank_rows.queue_kind
+      AND existing.article_id IS NOT DISTINCT FROM final_article_rank_rows.article_id
+  `,
+    `
+    INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_kind,
+      priority_bucket,
+      article_id,
+      activity_sort_at,
+      queue_updated_at
+    )
+    ${articleRankRowsCteSql}
     SELECT
       project_id,
       review_config_hash,
@@ -994,12 +1097,16 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       article_id,
       activity_sort_at,
       queue_updated_at
-    FROM queue_rows
-    WHERE article_rank = 1
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, article_id) DO UPDATE SET
-      priority_bucket = excluded.priority_bucket,
-      activity_sort_at = excluded.activity_sort_at,
-      queue_updated_at = excluded.queue_updated_at
+    FROM final_article_rank_rows
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_unassessed_queue_article_rank_serving_v4 existing
+      WHERE existing.project_id IS NOT DISTINCT FROM final_article_rank_rows.project_id
+        AND existing.review_config_hash IS NOT DISTINCT FROM final_article_rank_rows.review_config_hash
+        AND existing.snapshot_id IS NOT DISTINCT FROM final_article_rank_rows.snapshot_id
+        AND existing.queue_kind IS NOT DISTINCT FROM final_article_rank_rows.queue_kind
+        AND existing.article_id IS NOT DISTINCT FROM final_article_rank_rows.article_id
+    )
   `,
   ]
 }
