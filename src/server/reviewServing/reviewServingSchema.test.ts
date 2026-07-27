@@ -96,6 +96,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0193_dropReviewJudgmentDetailLlmPlaceholders.sql',
   '../../db/duckdbMigrations/0194_dropReviewFilteredCountComponentBreakoutColumns.sql',
   '../../db/duckdbMigrations/0195_cleanupReviewServingDirtyWorkRetention.sql',
+  '../../db/duckdbMigrations/0196_dropReviewArticleServingCompatibilityView.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -326,6 +327,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_filter_posting_stats_v4',
   'mart.review_article_judgment_detail_hydration_serving_v4',
   'mart.review_article_serving_payload_v4',
+  'mart.review_article_serving_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_filter_state_serving_v4',
@@ -735,8 +737,14 @@ test('project import delta cursor is retired from the review-serving schema', ()
 })
 
 test('Phase 1 schema migration separates logical snapshots from component bases and patches', () => {
+  expect(getMissingColumns('mart.review_article_serving_base_v4', ['snapshot_id', 'base_generation'])).toEqual([])
   expect(
-    getMissingColumns('mart.review_article_serving_v4', ['snapshot_id', 'base_generation', 'patch_watermark']),
+    getMissingColumns('mart.review_article_serving_list_mode_state_v4', [
+      'llm_patch_watermark',
+      'human_patch_watermark',
+      'both_patch_watermark',
+      'unassessed_patch_watermark',
+    ]),
   ).toEqual([])
   expect(getMissingColumns('app.review_serving_snapshot_manifest', ['required_components_json'])).toEqual([])
   expect(getMissingColumns('app.review_serving_snapshot_manifest', ['optional_components_json'])).toEqual([])
@@ -938,39 +946,8 @@ test('historical payload serving slimming migrations remain ordered before final
 
 test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(
-    getMissingColumns('mart.review_article_serving_v4', ['article_created_at', 'sort_key', 'activity_sort_at']),
+    getMissingColumns('mart.review_article_serving_base_v4', ['article_created_at', 'sort_key', 'activity_sort_at']),
   ).toEqual([])
-  expect(
-    getMissingColumns('mart.review_article_serving_v4', [
-      'article_title',
-      'article_external_id',
-      'article_updated_at',
-      'arxiv_id',
-      'biorxiv_id',
-      'medrxiv_id',
-      'doi',
-      'pmid',
-      'journal_title',
-      'url',
-      'full_text_pdf',
-      'full_text_fetched_at',
-      'full_text_conversion_status',
-    ]),
-  ).toEqual([
-    'article_title',
-    'article_external_id',
-    'article_updated_at',
-    'arxiv_id',
-    'biorxiv_id',
-    'medrxiv_id',
-    'doi',
-    'pmid',
-    'journal_title',
-    'url',
-    'full_text_pdf',
-    'full_text_fetched_at',
-    'full_text_conversion_status',
-  ])
   const removedIdentityColumns = [
     'display_identity',
     'project_scope_identity',
@@ -984,8 +961,6 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
     'review_opened',
     'review_sections_completed',
     'publication_year',
-    'duplicate_flag',
-    'conflict_flag',
     'selected_import_route_id',
     'serving_updated_at',
     'llm_status_key',
@@ -995,7 +970,10 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
     'human_answered_prompt_count',
   ]
   expect(
-    [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
+    [
+      ...getTableColumns('mart.review_article_serving_base_v4'),
+      ...getTableColumns('mart.review_article_serving_list_mode_state_v4'),
+    ].filter((columnName) => {
       return removedIdentityColumns.includes(columnName)
     }),
   ).toEqual([])
@@ -1081,24 +1059,19 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('llm_status_key VARCHAR')
   expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('human_status_key VARCHAR')
   expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('enabled_prompt_count')
-  const articleServingFoundationSchemaSql = reviewServingFoundationSchemaSql.slice(
-    reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4'),
-    reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_display_patch_v4'),
-  )
-  expect(articleServingFoundationSchemaSql).not.toContain('duplicate_flag BOOLEAN')
-  expect(articleServingFoundationSchemaSql).not.toContain('conflict_flag BOOLEAN')
-  expect(articleServingFoundationSchemaSql).not.toContain('selected_import_route_id')
-  expect(articleServingFoundationSchemaSql).not.toContain('serving_updated_at')
-  expect(articleServingFoundationSchemaSql).not.toContain('llm_status_key')
-  expect(articleServingFoundationSchemaSql).not.toContain('human_status_key')
-  expect(articleServingFoundationSchemaSql).not.toContain('enabled_prompt_count')
+  expect(getTableSql('mart.review_article_serving_v4')).toBe('')
+  expect(getTableSql('mart.review_article_serving_base_v4')).not.toContain('selected_import_route_id')
+  expect(getTableSql('mart.review_article_serving_base_v4')).not.toContain('serving_updated_at')
+  expect(getTableSql('mart.review_article_serving_list_mode_state_v4')).not.toContain('llm_status_key')
+  expect(getTableSql('mart.review_article_serving_list_mode_state_v4')).not.toContain('human_status_key')
+  expect(getTableSql('mart.review_article_serving_list_mode_state_v4')).not.toContain('enabled_prompt_count')
   expect(reviewServingFoundationSchemaSql).not.toContain('idx_review_article_serving_v4_publication_year')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_opened')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_sections_completed')
   expect(articleMetadataStatusForwardMigrationSql).not.toContain('ALTER TABLE mart.review_article_serving_v4')
 })
 
-test('article serving list-mode normalization keeps logical rows on a compatibility view', () => {
+test('article serving list-mode normalization created historical base/state tables and compatibility view', () => {
   expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_serving_base_v4',
   )
@@ -1150,8 +1123,16 @@ test('article serving list-mode normalization keeps logical rows on a compatibil
   expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
     'DROP TABLE IF EXISTS mart.review_article_filter_state_serving_v4;',
   )
-  expect(reviewServingFoundationSchemaSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4')
-  expect(reviewServingFoundationSchemaSql).not.toContain('CREATE VIEW mart.review_article_serving_v4')
+  expect(getTableSql('mart.review_article_serving_v4')).toBe('')
+})
+
+test('article serving compatibility view is retired from the final schema', () => {
+  const lastCreateViewIndex = schemaMigrationSql.lastIndexOf('CREATE OR REPLACE VIEW mart.review_article_serving_v4 AS')
+  const lastDropViewIndex = schemaMigrationSql.lastIndexOf('DROP VIEW IF EXISTS mart.review_article_serving_v4;')
+
+  expect(lastDropViewIndex).toBeGreaterThan(lastCreateViewIndex)
+  expect(reviewServingPhase1Tables).not.toContain('mart.review_article_serving_v4')
+  expect(retiredReviewServingTables.has('mart.review_article_serving_v4')).toBe(true)
 })
 
 test('selected import patch mart is retired from the review-serving schema', () => {

@@ -18,7 +18,6 @@ const reviewServingProjectConfigIdentityModulePath = new URL(
 ).pathname
 const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')
 const articleServingListModeStateFixtureTable = ['mart', 'review_article_serving_list_mode_state_v4'].join('.')
-const articleServingCompatibilityViewFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
 const judgmentDetailServingFixtureTable = ['mart', 'review_article_judgment_detail_serving_v4'].join('.')
 
 type ExportJobRequest = {criteria: Record<string, unknown>} & Record<string, unknown>
@@ -595,8 +594,8 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).toContain('INNER JOIN supported_list_mode list_mode')
   expect(queryStatements.join('\n')).toContain('list_contains(state.list_mode_keys, list_mode.list_mode_key)')
   expect(queryStatements.join('\n')).not.toContain('CROSS JOIN unnest(state.list_mode_keys)')
-  expect(queryStatements.join('\n')).not.toContain(`JOIN ${articleServingCompatibilityViewFixtureTable}`)
-  expect(queryStatements.join('\n')).not.toContain(`FROM ${articleServingCompatibilityViewFixtureTable}`)
+  expect(queryStatements.join('\n')).not.toContain('JOIN mart.review_article_serving_v4')
+  expect(queryStatements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
   expect(queryStatements.join('\n')).toContain(`JOIN ${judgmentDetailServingFixtureTable}`)
   expect(queryStatements.join('\n')).toContain('ranked_export_article AS')
   expect(queryStatements.join('\n')).toContain('article.source_metadata')
@@ -702,5 +701,5 @@ test('project export download rejects partially unavailable source snapshots', a
 
   expect(response.status).toBe(409)
   expect(body).toEqual({error: 'Export serving snapshot is unavailable', success: false})
-  expect(queryStatements.join('\n')).not.toContain(`JOIN ${articleServingCompatibilityViewFixtureTable}`)
+  expect(queryStatements.join('\n')).not.toContain('JOIN mart.review_article_serving_v4')
 })

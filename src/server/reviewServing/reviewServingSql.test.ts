@@ -1456,7 +1456,7 @@ test('buildReviewServingRowsSql sources article-row selected import route ids fr
 test('assertReviewServingSqlShape reads table references from SQL', () => {
   const sql = `
     SELECT s.article_id
-    FROM mart.review_article_serving_v4 s
+    FROM mart.review_article_serving_base_v4 s
     JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
@@ -1464,7 +1464,7 @@ test('assertReviewServingSqlShape reads table references from SQL', () => {
   `
 
   expect(getReviewServingSqlTableReferences(sql)).toEqual([
-    'mart.review_article_serving_v4',
+    'mart.review_article_serving_base_v4',
     'mart.review_article_filter_posting_serving_v4',
   ])
 })
@@ -1528,7 +1528,7 @@ test('assertReviewServingSqlShape rejects unregistered tables and unbounded read
   `
   const unboundedSql = `
     SELECT *
-    FROM mart.review_article_serving_v4
+    FROM mart.review_article_serving_base_v4
     WHERE snapshot_id = ?
   `
   const unregisteredViolations = getReviewServingSqlShapeViolations(unregisteredSql).map((violation) => {
@@ -1547,7 +1547,7 @@ test('assertReviewServingSqlShape rejects unregistered tables and unbounded read
 test('assertReviewServingSqlShape requires snapshot scope by default', () => {
   const missingSnapshotSql = `
     SELECT *
-    FROM mart.review_article_serving_v4
+    FROM mart.review_article_serving_base_v4
     WHERE project_id = ?
     ORDER BY article_id ASC
     LIMIT ?
@@ -1608,7 +1608,7 @@ test('assertReviewServingSqlShape allows scoped query-local posting article CTEs
 test('assertReviewServingSqlShape requires real bound scope predicates', () => {
   const sql = `
     SELECT s.article_id
-    FROM mart.review_article_serving_v4 s
+    FROM mart.review_article_serving_base_v4 s
     JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ?
       AND s.snapshot_id = ?
@@ -1627,7 +1627,7 @@ test('assertReviewServingSqlShape requires real bound scope predicates', () => {
 test('assertReviewServingSqlShape does not accept scope predicates from qualify clauses', () => {
   const sql = `
     SELECT s.article_id
-    FROM mart.review_article_serving_v4 s
+    FROM mart.review_article_serving_base_v4 s
     JOIN mart.review_article_filter_posting_serving_v4 p ON list_contains(p.article_ids, s.article_id)
     WHERE s.project_id = ? AND s.snapshot_id = ?
     QUALIFY p.project_id = ? AND p.snapshot_id = ?
@@ -1645,7 +1645,7 @@ test('assertReviewServingSqlShape does not accept scope predicates from qualify 
 test('assertReviewServingSqlShape requires driving-table scope predicates in the where clause', () => {
   const sql = `
     SELECT s.article_id
-    FROM mart.review_article_serving_v4 s
+    FROM mart.review_article_serving_base_v4 s
     INNER JOIN mart.review_article_filter_posting_serving_v4 posting
       ON s.project_id = ?
       AND s.snapshot_id = ?
@@ -1669,7 +1669,7 @@ test('assertReviewServingSqlShape requires driving-table scope predicates in the
 test('assertReviewServingSqlShape rejects literal scope predicates', () => {
   const sql = `
     SELECT s.article_id
-    FROM mart.review_article_serving_v4 s
+    FROM mart.review_article_serving_base_v4 s
     WHERE s.project_id = 'project-1'
       AND s.snapshot_id = 'snapshot-1'
     ORDER BY s.sort_key DESC, s.article_id DESC
