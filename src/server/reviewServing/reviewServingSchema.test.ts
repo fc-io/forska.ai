@@ -99,6 +99,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0196_dropReviewArticleServingCompatibilityView.sql',
   '../../db/duckdbMigrations/0197_reviewArticleServingListModeMembershipFlags.sql',
   '../../db/duckdbMigrations/0198_nullHumanJudgmentDetailAnswerArray.sql',
+  '../../db/duckdbMigrations/0199_dropReviewArticleServingListModeKeys.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -222,6 +223,8 @@ const reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0193_dropReviewJudgmentDetailLlmPlaceholders.sql']
 const reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0198_nullHumanJudgmentDetailAnswerArray.sql']
+const reviewArticleServingListModeKeysDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0199_dropReviewArticleServingListModeKeys.sql']
 const reviewFilterStateServingForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0180_reviewFilterStateServing.sql']
 const reviewFilterPostingServingCompactForwardMigrationSql =
@@ -1063,6 +1066,13 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('llm_status_key VARCHAR')
   expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('human_status_key VARCHAR')
   expect(reviewArticleServingStatusCountCopyDropForwardMigrationSql).not.toContain('enabled_prompt_count')
+  expect(reviewArticleServingListModeKeysDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_list_mode_state_v4_repair',
+  )
+  expect(reviewArticleServingListModeKeysDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_list_mode_state_v4_repair RENAME TO review_article_serving_list_mode_state_v4;',
+  )
+  expect(reviewArticleServingListModeKeysDropForwardMigrationSql).not.toContain('list_mode_keys')
   expect(getTableSql('mart.review_article_serving_v4')).toBe('')
   expect(getTableSql('mart.review_article_serving_base_v4')).not.toContain('selected_import_route_id')
   expect(getTableSql('mart.review_article_serving_base_v4')).not.toContain('serving_updated_at')
@@ -1113,7 +1123,6 @@ test('article serving list-mode normalization created historical base/state tabl
     'review_config_hash',
     'snapshot_id',
     'article_id',
-    'list_mode_keys',
     'has_llm_list_mode',
     'has_human_list_mode',
     'has_both_list_mode',

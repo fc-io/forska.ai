@@ -319,7 +319,7 @@ test('display base rows flow through writer with display fields and selected imp
   expect(baseInsert).toContain('WITH display_base AS')
   expect(baseInsert).not.toContain('CROSS JOIN list_mode')
   expect(baseInsert).not.toContain(') VALUES (\n      ')
-  expect(stateInsert).toContain("['llm', 'human']::VARCHAR[] AS list_mode_keys")
+  expect(stateInsert).not.toContain('list_mode_keys')
   expect(stateInsert).toContain('FALSE AS has_both_list_mode')
   expect(stateInsert).toContain('TRUE AS has_human_list_mode')
   expect(stateInsert).toContain('TRUE AS has_llm_list_mode')

@@ -306,14 +306,6 @@ const getDisplayBaseRows = async (
   return database.queryJson<DisplayProjectionRow>(getDisplayBaseRowsSql(input))
 }
 
-const getListModeKeysArraySql = (listModeKeys: readonly string[]) => {
-  return `[${listModeKeys
-    .map((listModeKey) => {
-      return getSqlLiteral(listModeKey)
-    })
-    .join(', ')}]::VARCHAR[]`
-}
-
 const getHasListModeSql = (listModeKeys: readonly string[], listModeKey: string) => {
   return listModeKeys.includes(listModeKey) ? 'TRUE' : 'FALSE'
 }
@@ -413,7 +405,6 @@ const getInsertDisplayListModeStateRowsStatement = (input: ProjectReviewServingD
       has_llm_list_mode,
       has_unassessed_list_mode,
       human_patch_watermark,
-      list_mode_keys,
       llm_patch_watermark,
       project_id,
       review_config_hash,
@@ -431,7 +422,6 @@ const getInsertDisplayListModeStateRowsStatement = (input: ProjectReviewServingD
       ${getHasListModeSql(input.listModeKeys, 'llm')} AS has_llm_list_mode,
       ${getHasListModeSql(input.listModeKeys, 'unassessed')} AS has_unassessed_list_mode,
       0 AS human_patch_watermark,
-      ${getListModeKeysArraySql(input.listModeKeys)} AS list_mode_keys,
       0 AS llm_patch_watermark,
       ${getSqlLiteral(input.projectId)} AS project_id,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
