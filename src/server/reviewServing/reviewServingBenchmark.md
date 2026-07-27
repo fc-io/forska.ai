@@ -28,6 +28,20 @@ Phase 6 physical runs fail if p95 latency exceeds 2,000 ms, p99 latency exceeds
 5,000 ms, peak process RSS exceeds 20 GiB, process RSS growth exceeds 4 GiB, or
 any accepted foreground sample records DuckDB temp spill.
 
+## Filter-Posting Representation Proof
+
+`getReviewServingFilterPostingRepresentationProof()` is a proof-only,
+deterministic fixture for comparing filter-posting representation alternatives.
+It uses the same synthetic posting rows to compare the current compact
+`article_ids` array expansion/intersection shape with an exploded temporary
+candidate-row shape. It covers single filter expansion, multi-filter
+intersection, and a count-style article-id result.
+
+This fixture does not change production query behavior or schema. It is not
+authorization to migrate the serving schema; it only records evidence for
+whether a future schema/index redesign is worth designing, testing, migrating,
+and validating separately.
+
 Smoke command:
 
 ```bash

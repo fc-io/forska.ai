@@ -179,6 +179,47 @@ export type ReviewServingBenchmarkRunResult = {
   workload: ReviewServingBenchmarkWorkloadDefinition
 }
 
+export type ReviewServingFilterPostingRepresentation = 'compactArrayUnnest' | 'explodedTempCandidates'
+
+export type ReviewServingFilterPostingProofOperationKey =
+  | 'singleFilterExpansion'
+  | 'multiFilterIntersection'
+  | 'countStyleArticleIds'
+
+export type ReviewServingFilterPostingProofPosting = {articleIds: readonly string[]; filterKey: string}
+
+export type ReviewServingFilterPostingProofOperation = {
+  filterKeys: readonly string[]
+  key: ReviewServingFilterPostingProofOperationKey
+  resultKind: 'articleIds' | 'countStyleArticleIds'
+}
+
+export type ReviewServingFilterPostingProofMetrics = {explodedCandidateRows: number; postingRowsRead: number}
+
+export type ReviewServingFilterPostingProofOperationResult = {
+  articleIds: readonly string[]
+  count: number
+  metrics: ReviewServingFilterPostingProofMetrics
+  operationKey: ReviewServingFilterPostingProofOperationKey
+  representation: ReviewServingFilterPostingRepresentation
+}
+
+export type ReviewServingFilterPostingProofOperationComparison = {
+  compactArrayUnnest: ReviewServingFilterPostingProofOperationResult
+  explodedTempCandidates: ReviewServingFilterPostingProofOperationResult
+  filterKeys: readonly string[]
+  key: ReviewServingFilterPostingProofOperationKey
+  resultKind: ReviewServingFilterPostingProofOperation['resultKind']
+  sameArticleIds: boolean
+  sameCount: boolean
+}
+
+export type ReviewServingFilterPostingRepresentationProof = {
+  disclaimer: string
+  operations: readonly ReviewServingFilterPostingProofOperationComparison[]
+  postingCount: number
+}
+
 export type ReviewServingBenchmarkRequestCountViolation = {
   actualRequestCount: number
   expectedRequestCount: number
@@ -275,6 +316,30 @@ export type ReviewServingBenchmarkPerformanceViolation = {
 type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: number}
 
 const gibibyte = 1024 ** 3
+
+export const reviewServingFilterPostingRepresentationProofDisclaimer =
+  'Proof-only benchmark fixture for filter-posting representation alternatives. It does not change production query behavior or schema, and it is not authorization to migrate without separate design, indexing, migration, and live validation work.'
+
+export const reviewServingFilterPostingRepresentationProofPostings = [
+  {filterKey: 'prompt:alpha', articleIds: ['article-001', 'article-002', 'article-003', 'article-005', 'article-008']},
+  {filterKey: 'prompt:beta', articleIds: ['article-002', 'article-003', 'article-004', 'article-008']},
+  {filterKey: 'label:included', articleIds: ['article-002', 'article-003', 'article-008', 'article-013']},
+  {filterKey: 'human:reviewed', articleIds: ['article-003', 'article-008', 'article-021']},
+] as const satisfies readonly ReviewServingFilterPostingProofPosting[]
+
+export const reviewServingFilterPostingRepresentationProofOperations = [
+  {filterKeys: ['prompt:alpha'], key: 'singleFilterExpansion', resultKind: 'articleIds'},
+  {
+    filterKeys: ['prompt:alpha', 'prompt:beta', 'label:included'],
+    key: 'multiFilterIntersection',
+    resultKind: 'articleIds',
+  },
+  {
+    filterKeys: ['prompt:alpha', 'label:included', 'human:reviewed'],
+    key: 'countStyleArticleIds',
+    resultKind: 'countStyleArticleIds',
+  },
+] as const satisfies readonly ReviewServingFilterPostingProofOperation[]
 
 export const reviewServingBenchmarkPhase6PerformanceTargets = {
   maxP95LatencyMs: 2_000,
@@ -741,6 +806,130 @@ const getPeak = (values: readonly number[]) => {
 
 const getAverage = (values: readonly number[]) => {
   return values.length === 0 ? 0 : Number((getTotal(values) / values.length).toFixed(2))
+}
+
+const getReviewServingFilterPostingByKey = (postings: readonly ReviewServingFilterPostingProofPosting[]) => {
+  return new Map(
+    postings.map((posting) => {
+      return [posting.filterKey, posting.articleIds] as const
+    }),
+  )
+}
+
+const uniqueArticleIds = (articleIds: readonly string[]) => {
+  return [...new Set(articleIds)]
+}
+
+const getCompactArrayUnnestProofResult = ({
+  operation,
+  postings,
+}: {
+  operation: ReviewServingFilterPostingProofOperation
+  postings: readonly ReviewServingFilterPostingProofPosting[]
+}): ReviewServingFilterPostingProofOperationResult => {
+  const postingByKey = getReviewServingFilterPostingByKey(postings)
+  const articleIdArrays = operation.filterKeys.map((filterKey) => {
+    return uniqueArticleIds(postingByKey.get(filterKey) ?? [])
+  })
+  const firstArticleIds = articleIdArrays[0] ?? []
+  const remainingArticleIdSets = articleIdArrays.slice(1).map((articleIds) => {
+    return new Set(articleIds)
+  })
+  const articleIds = firstArticleIds.filter((articleId) => {
+    return remainingArticleIdSets.every((articleIdSet) => {
+      return articleIdSet.has(articleId)
+    })
+  })
+  const explodedCandidateRows = articleIdArrays.reduce((total, ids) => {
+    return total + ids.length
+  }, 0)
+
+  return {
+    articleIds,
+    count: articleIds.length,
+    metrics: {explodedCandidateRows, postingRowsRead: articleIdArrays.length},
+    operationKey: operation.key,
+    representation: 'compactArrayUnnest',
+  }
+}
+
+const getExplodedTempCandidateProofResult = ({
+  operation,
+  postings,
+}: {
+  operation: ReviewServingFilterPostingProofOperation
+  postings: readonly ReviewServingFilterPostingProofPosting[]
+}): ReviewServingFilterPostingProofOperationResult => {
+  const filterKeySet = new Set(operation.filterKeys)
+  const explodedRows = postings.flatMap((posting) => {
+    return uniqueArticleIds(posting.articleIds).map((articleId) => {
+      return {articleId, filterKey: posting.filterKey}
+    })
+  })
+  const candidateRows = explodedRows.filter((row) => {
+    return filterKeySet.has(row.filterKey)
+  })
+  const articleCounts = candidateRows.reduce<Map<string, Set<string>>>((counts, row) => {
+    const filterKeys = counts.get(row.articleId) ?? new Set<string>()
+    filterKeys.add(row.filterKey)
+    counts.set(row.articleId, filterKeys)
+
+    return counts
+  }, new Map())
+  const articleIds = [...articleCounts.entries()]
+    .filter(([, filterKeys]) => {
+      return filterKeys.size === operation.filterKeys.length
+    })
+    .map(([articleId]) => {
+      return articleId
+    })
+    .sort()
+
+  return {
+    articleIds,
+    count: articleIds.length,
+    metrics: {
+      explodedCandidateRows: candidateRows.length,
+      postingRowsRead: postings.filter((posting) => {
+        return filterKeySet.has(posting.filterKey)
+      }).length,
+    },
+    operationKey: operation.key,
+    representation: 'explodedTempCandidates',
+  }
+}
+
+export const getReviewServingFilterPostingRepresentationProof = ({
+  operations = reviewServingFilterPostingRepresentationProofOperations,
+  postings = reviewServingFilterPostingRepresentationProofPostings,
+}: {
+  operations?: readonly ReviewServingFilterPostingProofOperation[]
+  postings?: readonly ReviewServingFilterPostingProofPosting[]
+} = {}): ReviewServingFilterPostingRepresentationProof => {
+  const operationComparisons = operations.map((operation) => {
+    const compactArrayUnnest = getCompactArrayUnnestProofResult({operation, postings})
+    const explodedTempCandidates = getExplodedTempCandidateProofResult({operation, postings})
+
+    return {
+      compactArrayUnnest,
+      explodedTempCandidates,
+      filterKeys: operation.filterKeys,
+      key: operation.key,
+      resultKind: operation.resultKind,
+      sameArticleIds:
+        compactArrayUnnest.articleIds.length === explodedTempCandidates.articleIds.length
+        && compactArrayUnnest.articleIds.every((articleId, index) => {
+          return articleId === explodedTempCandidates.articleIds[index]
+        }),
+      sameCount: compactArrayUnnest.count === explodedTempCandidates.count,
+    }
+  })
+
+  return {
+    disclaimer: reviewServingFilterPostingRepresentationProofDisclaimer,
+    operations: operationComparisons,
+    postingCount: postings.length,
+  }
 }
 
 const getObservationValues = (
