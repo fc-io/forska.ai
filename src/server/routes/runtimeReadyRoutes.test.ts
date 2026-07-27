@@ -334,7 +334,7 @@ test('runtime readiness expires transient owner probe tolerance', async () => {
     await withRuntimeOwnerEnv(async () => {
       expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
 
-      now += 10_001
+      now += 30_001
 
       expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
     }, 'http://127.0.0.1:4999')
