@@ -362,12 +362,14 @@ type SelectedImportDisplayCopyGlobalStatusRow = {
 type SelectedImportDuplicateConflictGlobalEvidence = {
   activeOrLastKnownGoodRows: number | null
   candidateRows: number | null
+  conflictFlagStatus: 'active' | 'retired/dropped'
   hotConflictTrueRows: number | null
   hotDuplicateTrueRows: number | null
   hotResolvedRows: number | null
   missingHotRows: number | null
   note: string
   otherRows: number | null
+  duplicateFlagStatus: 'active' | 'retired/dropped'
   rows: SelectedImportDuplicateConflictGlobalStatusRow[]
   selectedBaseConflictTrueRows: number | null
   selectedBaseDuplicateTrueRows: number | null
@@ -378,6 +380,24 @@ type SelectedImportDuplicateConflictGlobalEvidence = {
   totalRows: number | null
   conflictMismatchRows: number | null
   duplicateMismatchRows: number | null
+}
+type SelectedImportDuplicateConflictGlobalTotals = {
+  activeOrLastKnownGoodRows: number
+  candidateRows: number
+  conflictMismatchRows: number
+  duplicateMismatchRows: number
+  hotConflictTrueRows: number
+  hotDuplicateTrueRows: number
+  hotResolvedRows: number
+  missingHotRows: number
+  otherRows: number
+  selectedBaseConflictTrueRows: number
+  selectedBaseDuplicateTrueRows: number
+  selectedBaseFalseOrDefaultConflictRowsWithoutHot: number
+  selectedBaseFalseOrDefaultDuplicateRowsWithoutHot: number
+  selectedBaseTrueConflictRowsWithoutHot: number
+  selectedBaseTrueDuplicateRowsWithoutHot: number
+  totalRows: number
 }
 type SelectedImportDuplicateConflictGlobalStatusRow = {
   activeOrLastKnownGoodProtected: boolean
@@ -2771,6 +2791,8 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
     activeOrLastKnownGoodRows: null,
     candidateRows: null,
     conflictMismatchRows: null,
+    conflictFlagStatus: 'retired/dropped',
+    duplicateFlagStatus: 'retired/dropped',
     duplicateMismatchRows: null,
     hotConflictTrueRows: null,
     hotDuplicateTrueRows: null,
@@ -2813,8 +2835,10 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         return getGlobalDisplayCopyExpressions(column, selectedBaseColumnNames)
       })
       .join(',\n        ')
-    const selectedBaseDuplicateFlagSql = selectedBaseColumnNames.has('duplicate_flag') ? 'duplicate_flag' : 'FALSE'
-    const selectedBaseConflictFlagSql = selectedBaseColumnNames.has('conflict_flag') ? 'conflict_flag' : 'FALSE'
+    const duplicateFlagStatus = selectedBaseColumnNames.has('duplicate_flag') ? 'active' : 'retired/dropped'
+    const conflictFlagStatus = selectedBaseColumnNames.has('conflict_flag') ? 'active' : 'retired/dropped'
+    const selectedBaseDuplicateFlagSql = duplicateFlagStatus === 'active' ? 'duplicate_flag' : 'FALSE'
+    const selectedBaseConflictFlagSql = conflictFlagStatus === 'active' ? 'conflict_flag' : 'FALSE'
     const selectedBaseRows = await runReadonlyQuery<Record<string, number | string | null>>(
       runtime,
       `
@@ -3094,7 +3118,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       }),
       totalRows: globalDisplayCopyTotals.totalRows,
     }
-    const duplicateConflictTotals = duplicateConflictRows.reduce(
+    const duplicateConflictTotals = duplicateConflictRows.reduce<SelectedImportDuplicateConflictGlobalTotals>(
       (totals, row) => {
         totals.totalRows += Number(row.rowCount ?? 0)
         totals.activeOrLastKnownGoodRows += Number(row.activeOrLastKnownGoodRows ?? 0)
@@ -3140,7 +3164,9 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
     )
     const selectedImportDuplicateConflictGlobalEvidence: SelectedImportDuplicateConflictGlobalEvidence = {
       ...duplicateConflictTotals,
-      note: 'Duplicate/conflict evidence is read-only fallback readiness only. Hot rows are resolved from selected-base identity `(import_route_id, article_id, source_record_key)`. `IS DISTINCT FROM` mismatches include unresolved hot rows where hot flags are NULL while selected-base flags provide TRUE/FALSE or default FALSE fallback values. Selected-base flag writers and selected-base fallback/default semantics remain required when hot rows do not resolve; this is not schema removal authorization.',
+      conflictFlagStatus,
+      duplicateFlagStatus,
+      note: 'Duplicate/conflict evidence is read-only fallback readiness only. Hot rows are resolved from retained selected-base identity `(import_route_id, article_id, source_record_key)`. `IS DISTINCT FROM` mismatches include unresolved hot rows where hot flags are NULL while the selected-base/default side provides TRUE/FALSE or default FALSE fallback values. Hot-field/default fallback semantics and retained selected-base identity remain required when hot rows do not resolve. Selected-base flag columns may already be retired/dropped; this is not schema removal authorization.',
       rows: duplicateConflictRows.map((row) => {
         return {
           activeOrLastKnownGoodProtected: Boolean(row.activeOrLastKnownGoodProtected),
@@ -5210,9 +5236,13 @@ const renderMarkdown = (report: EvidenceReport) => {
         )
       : '_No global selected-import display-copy status/protection rows were collected._',
     '',
-    'Global/current-DB duplicate/conflict flag fallback evidence is read-only and uses retained selected-base identity `(import_route_id, article_id, source_record_key)` to resolve hot-field rows. It does not authorize removing selected-base flag writers or columns.',
+    'Global/current-DB duplicate/conflict flag fallback evidence is read-only and uses retained selected-base identity `(import_route_id, article_id, source_record_key)` to resolve hot-field rows. Selected-base flag columns may already be retired/dropped; the protected contract is the retained identity plus hot-field/default fallback semantics.',
     '',
     report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.note,
+    '',
+    `Selected-base duplicate flag column status: ${report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.duplicateFlagStatus}`,
+    '',
+    `Selected-base conflict flag column status: ${report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.conflictFlagStatus}`,
     '',
     `Duplicate/conflict selected-base rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.totalRows)}`,
     '',
@@ -5226,25 +5256,25 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     `Selected-base rows without resolved hot rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.missingHotRows)}`,
     '',
-    `Selected-base duplicate TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseDuplicateTrueRows)}`,
+    `Selected-base/default duplicate TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseDuplicateTrueRows)}`,
     '',
     `Hot duplicate TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.hotDuplicateTrueRows)}`,
     '',
     `Duplicate flag mismatches by IS DISTINCT FROM: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.duplicateMismatchRows)}`,
     '',
-    `Selected-base duplicate false/default rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseFalseOrDefaultDuplicateRowsWithoutHot)}`,
+    `Selected-base/default duplicate false rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseFalseOrDefaultDuplicateRowsWithoutHot)}`,
     '',
-    `Selected-base duplicate TRUE rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseTrueDuplicateRowsWithoutHot)}`,
+    `Selected-base/default duplicate TRUE rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseTrueDuplicateRowsWithoutHot)}`,
     '',
-    `Selected-base conflict TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseConflictTrueRows)}`,
+    `Selected-base/default conflict TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseConflictTrueRows)}`,
     '',
     `Hot conflict TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.hotConflictTrueRows)}`,
     '',
     `Conflict flag mismatches by IS DISTINCT FROM: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.conflictMismatchRows)}`,
     '',
-    `Selected-base conflict false/default rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseFalseOrDefaultConflictRowsWithoutHot)}`,
+    `Selected-base/default conflict false rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseFalseOrDefaultConflictRowsWithoutHot)}`,
     '',
-    `Selected-base conflict TRUE rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseTrueConflictRowsWithoutHot)}`,
+    `Selected-base/default conflict TRUE rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseTrueConflictRowsWithoutHot)}`,
     '',
     selectedImportDuplicateConflictStatusRows.length > 0
       ? formatMarkdownTable(
