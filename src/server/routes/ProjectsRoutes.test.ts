@@ -9,7 +9,8 @@ import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-projects-routes')
 const tempDbPath = tempRuntimeRoot.duckdbPath
-const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
+const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')
+const articleServingListModeStateFixtureTable = ['mart', 'review_article_serving_list_mode_state_v4'].join('.')
 const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
   .pathname
 const promptPreviewRoutePath = new URL('./projectsRoutes/projectsRoutesGetPromptPreview.ts', import.meta.url).pathname
@@ -640,13 +641,12 @@ test('project prompt preview uses the first project article and shared prompt bu
     )
   `)
   await runDatabase(`
-    INSERT INTO ${articleServingFixtureTable} (
+    INSERT INTO ${articleServingBaseFixtureTable} (
       project_id,
       review_config_hash,
       snapshot_id,
       base_generation,
       patch_watermark,
-      list_mode_key,
       article_id,
       article_created_at,
       sort_key,
@@ -657,22 +657,42 @@ test('project prompt preview uses the first project article and shared prompt bu
       'snapshot-preview-route',
       1,
       0,
-      'llm',
       'preview-article-second',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
-    ), (
+    );
+
+    INSERT INTO ${articleServingListModeStateFixtureTable} (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      article_id,
+      list_mode_keys,
+      llm_patch_watermark,
+      human_patch_watermark,
+      both_patch_watermark,
+      unassessed_patch_watermark,
+      duplicate_flag,
+      conflict_flag,
+      llm_status,
+      human_status,
+      llm_has_judgment
+    ) VALUES (
       '${projectId}',
       ${getSqlLiteral(reviewConfigHash)},
       'snapshot-preview-route',
-      1,
-      0,
-      'human',
       'preview-article-second',
-      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
-      TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
+      ['llm', 'human'],
+      0,
+      0,
+      0,
+      0,
+      FALSE,
+      FALSE,
+      NULL,
+      NULL,
+      FALSE
     )
   `)
   const response = await app.handle(

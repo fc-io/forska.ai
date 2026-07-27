@@ -110,6 +110,17 @@ test('DuckDB migration refreshes dirty-source watermarks and leaves dirty-work p
   expect(migrationSql).not.toContain("status = 'failed'")
 })
 
+test('DuckDB migration retires review article serving compatibility view without touching base/state tables', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0196_dropReviewArticleServingCompatibilityView.sql'),
+    'utf8',
+  ).trim()
+
+  expect(migrationSql).toBe('DROP VIEW IF EXISTS mart.review_article_serving_v4;')
+  expect(migrationSql).not.toContain('review_article_serving_base_v4')
+  expect(migrationSql).not.toContain('review_article_serving_list_mode_state_v4')
+})
+
 test('DuckDB migrations retire bounded review-serving storage with forward drops', () => {
   const reviewQueuePatchDropSql = readFileSync(
     resolve(migrationsFolder, '0118_dropReviewQueuePatchV4.sql'),

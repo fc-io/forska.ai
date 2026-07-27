@@ -446,7 +446,6 @@ const hotReviewServingTables = [
   'app.review_rebuild_request',
   'app.review_rebuild_chunk_manifest',
   'app.review_serving_retention_mark',
-  'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_count_serving_v4',
@@ -538,7 +537,6 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'summary_definition_version',
     'contribution_key',
   ],
-  'mart.review_article_serving_v4': ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
   'mart.review_article_summary_rebuild_accumulator_v4': [
     'request_id',
     'project_id',

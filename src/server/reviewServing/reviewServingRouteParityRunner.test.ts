@@ -10,7 +10,7 @@ import {
 type TestRow = {articleId: string; title: string}
 
 const validSql =
-  'SELECT article_id FROM mart.review_article_serving_v4 WHERE project_id = $projectId AND snapshot_id = $snapshotId ORDER BY sort_key DESC LIMIT $limit'
+  'SELECT article_id FROM mart.review_article_serving_base_v4 WHERE project_id = $projectId AND snapshot_id = $snapshotId ORDER BY sort_key DESC LIMIT $limit'
 const readyRequest: ReviewServingReaderRequest = {
   contractKey: 'review.llm.rows',
   limit: 1,
@@ -238,7 +238,7 @@ test('runReviewServingRouteParity blocks route migration on SQL-shape mismatches
   await runSingleMismatchCase('sqlShape', {
     cases: [{expectedRows: fixtureRows, name: 'llm rows sql', request: readyRequest}],
     reader: async () => {
-      return getAcceptedResult(fixtureRows, {sql: 'SELECT article_id FROM mart.review_article_serving_v4'})
+      return getAcceptedResult(fixtureRows, {sql: 'SELECT article_id FROM mart.review_article_serving_base_v4'})
     },
     routeKey: 'review.llm.rows',
   })

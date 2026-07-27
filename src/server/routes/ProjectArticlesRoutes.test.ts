@@ -9,7 +9,8 @@ const projectMartDirtyRefreshStateServiceModulePath = new URL(
 ).pathname
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-project-articles-routes')
-const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
+const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')
+const articleServingListModeStateFixtureTable = ['mart', 'review_article_serving_list_mode_state_v4'].join('.')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
@@ -195,20 +196,40 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       TIMESTAMPTZ '2026-01-04T00:00:00.000Z'
     );
 
-    INSERT INTO ${articleServingFixtureTable} (
+    INSERT INTO ${articleServingBaseFixtureTable} (
       project_id,
       review_config_hash,
       snapshot_id,
       base_generation,
       patch_watermark,
-      list_mode_key,
       article_id,
       article_created_at,
       sort_key,
       activity_sort_at
     ) VALUES ${articleRows
       .map((article) => {
-        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', 1, 0, 'llm', '${article.id}', TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}')`
+        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', 1, 0, '${article.id}', TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}')`
+      })
+      .join(', ')};
+
+    INSERT INTO ${articleServingListModeStateFixtureTable} (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      article_id,
+      list_mode_keys,
+      llm_patch_watermark,
+      human_patch_watermark,
+      both_patch_watermark,
+      unassessed_patch_watermark,
+      duplicate_flag,
+      conflict_flag,
+      llm_status,
+      human_status,
+      llm_has_judgment
+    ) VALUES ${articleRows
+      .map((article) => {
+        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', '${article.id}', ['llm'], 0, 0, 0, 0, FALSE, FALSE, NULL, NULL, FALSE)`
       })
       .join(', ')};
 
