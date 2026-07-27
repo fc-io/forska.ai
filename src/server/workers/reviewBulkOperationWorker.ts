@@ -194,6 +194,32 @@ const getListModeKey = (criteria: ReviewBulkOperationCriteria) => {
   return criteria.listType ?? 'llm'
 }
 
+const getListModeMembershipColumn = (listModeKey: string) => {
+  if (listModeKey === 'llm') {
+    return 'has_llm_list_mode'
+  }
+
+  if (listModeKey === 'human') {
+    return 'has_human_list_mode'
+  }
+
+  if (listModeKey === 'both') {
+    return 'has_both_list_mode'
+  }
+
+  if (listModeKey === 'unassessed') {
+    return 'has_unassessed_list_mode'
+  }
+
+  return null
+}
+
+const getListModeMembershipPredicate = (listModeKey: string, stateAlias = 'list_mode_state') => {
+  const membershipColumn = getListModeMembershipColumn(listModeKey)
+
+  return membershipColumn ? `${stateAlias}.${membershipColumn} IS TRUE` : 'FALSE'
+}
+
 const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBulkOperationCriteria) => {
   return criteria.sourceProjectIds && criteria.sourceProjectIds.length > 0 ? criteria.sourceProjectIds : [job.projectId]
 }
@@ -459,7 +485,7 @@ const getSearchCandidateArticleIdsCteSql = (input: {
        AND list_mode_state.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
        AND list_mode_state.snapshot_id = s.snapshot_id
        AND list_mode_state.article_id = s.article_id
-       AND list_contains(list_mode_state.list_mode_keys, ${getSqlLiteral(getListModeKey(input.criteria))})
+       AND ${getListModeMembershipPredicate(getListModeKey(input.criteria))}
       INNER JOIN snapshot_scope
         ON snapshot_scope.project_id = s.project_id
        AND snapshot_scope.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
@@ -615,7 +641,7 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
      AND list_mode_state.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
      AND list_mode_state.snapshot_id = s.snapshot_id
      AND list_mode_state.article_id = s.article_id
-     AND list_contains(list_mode_state.list_mode_keys, ${getSqlLiteral(getListModeKey(criteria))})
+     AND ${getListModeMembershipPredicate(getListModeKey(criteria))}
     INNER JOIN snapshot_scope
       ON snapshot_scope.project_id = s.project_id
      AND snapshot_scope.review_config_hash IS NOT DISTINCT FROM s.review_config_hash

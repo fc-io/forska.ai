@@ -314,6 +314,10 @@ const getListModeKeysArraySql = (listModeKeys: readonly string[]) => {
     .join(', ')}]::VARCHAR[]`
 }
 
+const getHasListModeSql = (listModeKeys: readonly string[], listModeKey: string) => {
+  return listModeKeys.includes(listModeKey) ? 'TRUE' : 'FALSE'
+}
+
 const getInsertDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBaseInput) => {
   return `
     INSERT INTO mart.review_article_serving_base_v4 (
@@ -404,6 +408,10 @@ const getInsertDisplayListModeStateRowsStatement = (input: ProjectReviewServingD
     INSERT INTO mart.review_article_serving_list_mode_state_v4 (
       article_id,
       both_patch_watermark,
+      has_both_list_mode,
+      has_human_list_mode,
+      has_llm_list_mode,
+      has_unassessed_list_mode,
       human_patch_watermark,
       list_mode_keys,
       llm_patch_watermark,
@@ -418,6 +426,10 @@ const getInsertDisplayListModeStateRowsStatement = (input: ProjectReviewServingD
     SELECT
       display_base.articleId AS article_id,
       0 AS both_patch_watermark,
+      ${getHasListModeSql(input.listModeKeys, 'both')} AS has_both_list_mode,
+      ${getHasListModeSql(input.listModeKeys, 'human')} AS has_human_list_mode,
+      ${getHasListModeSql(input.listModeKeys, 'llm')} AS has_llm_list_mode,
+      ${getHasListModeSql(input.listModeKeys, 'unassessed')} AS has_unassessed_list_mode,
       0 AS human_patch_watermark,
       ${getListModeKeysArraySql(input.listModeKeys)} AS list_mode_keys,
       0 AS llm_patch_watermark,

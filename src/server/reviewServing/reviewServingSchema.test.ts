@@ -97,6 +97,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0194_dropReviewFilteredCountComponentBreakoutColumns.sql',
   '../../db/duckdbMigrations/0195_cleanupReviewServingDirtyWorkRetention.sql',
   '../../db/duckdbMigrations/0196_dropReviewArticleServingCompatibilityView.sql',
+  '../../db/duckdbMigrations/0197_reviewArticleServingListModeMembershipFlags.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -1110,6 +1111,10 @@ test('article serving list-mode normalization created historical base/state tabl
     'snapshot_id',
     'article_id',
     'list_mode_keys',
+    'has_llm_list_mode',
+    'has_human_list_mode',
+    'has_both_list_mode',
+    'has_unassessed_list_mode',
     'llm_patch_watermark',
     'human_patch_watermark',
     'both_patch_watermark',

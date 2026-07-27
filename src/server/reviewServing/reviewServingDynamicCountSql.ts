@@ -56,6 +56,16 @@ const getStateFilterGroupPredicate = (group: ReviewServingDynamicCountPostingFil
   return ''
 }
 
+const getListModeMembershipPredicate = (stateAlias: string, listModeExpression: string) => {
+  return `CASE ${listModeExpression}
+        WHEN 'llm' THEN ${stateAlias}.has_llm_list_mode
+        WHEN 'human' THEN ${stateAlias}.has_human_list_mode
+        WHEN 'both' THEN ${stateAlias}.has_both_list_mode
+        WHEN 'unassessed' THEN ${stateAlias}.has_unassessed_list_mode
+        ELSE FALSE
+      END IS TRUE`
+}
+
 const getPostingFilteredArticleIdsCte = (groups: readonly ReviewServingDynamicCountPostingFilterGroup[]) => {
   if (groups.length === 0) {
     return ''
@@ -162,7 +172,7 @@ const getDirectServingStateJoinSql = (stateAlias = 'list_mode_state') => {
     ` AND ${stateAlias}.snapshot_id = serving.snapshot_id`,
     ` AND ${stateAlias}.snapshot_id = scoped.snapshot_id`,
     ` AND ${stateAlias}.article_id = serving.article_id`,
-    ` AND list_contains(${stateAlias}.list_mode_keys, scoped.list_mode_key)`,
+    ` AND ${getListModeMembershipPredicate(stateAlias, 'scoped.list_mode_key')}`,
   ].join('\n      ')
 }
 
@@ -377,7 +387,7 @@ export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDyna
     WHERE list_mode_state.project_id = scoped.project_id
       AND list_mode_state.review_config_hash = scoped.review_config_hash
       AND list_mode_state.snapshot_id = scoped.snapshot_id
-      AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)
+      AND ${getListModeMembershipPredicate('list_mode_state', 'scoped.list_mode_key')}
         ${statePredicates}
   `
   }

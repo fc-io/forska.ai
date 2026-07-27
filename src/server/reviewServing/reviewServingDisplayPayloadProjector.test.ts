@@ -320,6 +320,10 @@ test('display base rows flow through writer with display fields and selected imp
   expect(baseInsert).not.toContain('CROSS JOIN list_mode')
   expect(baseInsert).not.toContain(') VALUES (\n      ')
   expect(stateInsert).toContain("['llm', 'human']::VARCHAR[] AS list_mode_keys")
+  expect(stateInsert).toContain('FALSE AS has_both_list_mode')
+  expect(stateInsert).toContain('TRUE AS has_human_list_mode')
+  expect(stateInsert).toContain('TRUE AS has_llm_list_mode')
+  expect(stateInsert).toContain('FALSE AS has_unassessed_list_mode')
   expect(stateInsert).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
   expect(stateInsert).toContain('DO NOTHING')
   const insertTargetSql = baseInsert?.split('WITH display_base AS')[0] ?? ''

@@ -155,7 +155,7 @@ test('readReviewServingRows admits ready manifests and executes serving SQL only
   expect(reader.statements[0]).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(reader.statements[0]).toContain("WHERE serving.project_id = 'project-1'")
   expect(reader.statements[0]).toContain("serving.snapshot_id = 'active-snapshot'")
-  expect(reader.statements[0]).toContain("list_contains(list_mode_state.list_mode_keys, 'llm')")
+  expect(reader.statements[0]).toContain('list_mode_state.has_llm_list_mode IS TRUE')
   expect(reader.statements[0]).not.toContain('FROM mart.review_article_serving_v4')
   expect(reader.statements[0]).toContain('selected_import.import_route_id AS selected_import_route_id')
   expect(reader.statements[0]).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
@@ -755,7 +755,7 @@ test('readReviewServingRows hydrates filtered lists through postings and article
   expect(reader.statements[0]).not.toContain('CROSS JOIN UNNEST(search.article_ids) AS search_article(article_id)')
   expect(reader.statements[1]).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(reader.statements[1]).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(reader.statements[1]).toContain("list_contains(list_mode_state.list_mode_keys, 'both')")
+  expect(reader.statements[1]).toContain('list_mode_state.has_both_list_mode IS TRUE')
   expect(reader.statements[1]).not.toContain('FROM mart.review_article_serving_v4')
   expect(reader.statements[1]).toContain(
     "AND serving.article_id IN (SELECT unnest(['article-1', 'article-2']::VARCHAR[]))",

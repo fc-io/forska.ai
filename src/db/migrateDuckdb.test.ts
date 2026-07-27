@@ -121,6 +121,175 @@ test('DuckDB migration retires review article serving compatibility view without
   expect(migrationSql).not.toContain('review_article_serving_list_mode_state_v4')
 })
 
+test('DuckDB migration backfills fixed list-mode membership flags', async () => {
+  const duckdbPath = `/tmp/forska-review-list-mode-membership-flags-${Date.now()}.duckdb`
+  const targetMigrationFile = '0197_reviewArticleServingListModeMembershipFlags.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            list_mode_keys VARCHAR[] NOT NULL,
+            llm_patch_watermark BIGINT,
+            human_patch_watermark BIGINT,
+            both_patch_watermark BIGINT,
+            unassessed_patch_watermark BIGINT,
+            duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            llm_status VARCHAR,
+            human_status VARCHAR,
+            llm_has_judgment BOOLEAN NOT NULL DEFAULT FALSE
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            article_id,
+            list_mode_keys
+          )
+          VALUES
+            ('project-1', 'review-config-1', 'snapshot-1', 'article-1', ['llm', 'both']),
+            ('project-1', 'review-config-1', 'snapshot-1', 'article-2', ['human', 'unassessed'])
+        \`)
+
+        await migrateDuckdb()
+
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            article_id,
+            list_mode_keys
+          )
+          VALUES ('project-1', 'review-config-1', 'snapshot-1', 'article-3', [])
+        \`)
+
+        const columns = await database.queryJson(\`
+          SELECT
+            column_name AS columnName,
+            is_nullable AS isNullable,
+            column_default AS columnDefault
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_article_serving_list_mode_state_v4'
+            AND column_name LIKE 'has_%_list_mode'
+          ORDER BY ordinal_position
+        \`)
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            has_llm_list_mode AS hasLlmListMode,
+            has_human_list_mode AS hasHumanListMode,
+            has_both_list_mode AS hasBothListMode,
+            has_unassessed_list_mode AS hasUnassessedListMode
+          FROM mart.review_article_serving_list_mode_state_v4
+          ORDER BY article_id
+        \`)
+
+        console.log(JSON.stringify({columns, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify list-mode membership migration',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      columns: Array<{columnDefault: string | null; columnName: string; isNullable: string}>
+      rows: Array<{
+        articleId: string
+        hasBothListMode: boolean
+        hasHumanListMode: boolean
+        hasLlmListMode: boolean
+        hasUnassessedListMode: boolean
+      }>
+    }
+
+    expect(parsed.columns).toEqual([
+      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_llm_list_mode', isNullable: 'NO'},
+      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_human_list_mode', isNullable: 'NO'},
+      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_both_list_mode', isNullable: 'NO'},
+      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_unassessed_list_mode', isNullable: 'NO'},
+    ])
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        hasBothListMode: true,
+        hasHumanListMode: false,
+        hasLlmListMode: true,
+        hasUnassessedListMode: false,
+      },
+      {
+        articleId: 'article-2',
+        hasBothListMode: false,
+        hasHumanListMode: true,
+        hasLlmListMode: false,
+        hasUnassessedListMode: true,
+      },
+      {
+        articleId: 'article-3',
+        hasBothListMode: false,
+        hasHumanListMode: false,
+        hasLlmListMode: false,
+        hasUnassessedListMode: false,
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
 test('DuckDB migrations retire bounded review-serving storage with forward drops', () => {
   const reviewQueuePatchDropSql = readFileSync(
     resolve(migrationsFolder, '0118_dropReviewQueuePatchV4.sql'),

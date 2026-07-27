@@ -66,6 +66,13 @@ type SnapshotComponentStates = {
   required?: readonly SnapshotComponentState[]
 }
 
+const hasAnyListModeMembershipPredicate = (stateAlias: string) => {
+  return `(${stateAlias}.has_llm_list_mode IS TRUE
+              OR ${stateAlias}.has_human_list_mode IS TRUE
+              OR ${stateAlias}.has_both_list_mode IS TRUE
+              OR ${stateAlias}.has_unassessed_list_mode IS TRUE)`
+}
+
 type SelectedImportDirtyRow = {
   articleId: string
   articleTitle: string | null
@@ -142,7 +149,7 @@ const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportDirtyInput,
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
             ${getDirtyArticleRangePredicateSql(input, 'serving')}
-            AND COALESCE(array_length(state.list_mode_keys), 0) > 0
+            AND ${hasAnyListModeMembershipPredicate('state')}
             AND EXISTS (
               SELECT 1
               FROM app.review_serving_snapshot_manifest snapshot
@@ -575,7 +582,7 @@ const getApplySelectedImportServingStatements = (input: {
                 AND existing.review_config_hash = template.review_config_hash
                 AND existing.snapshot_id = template.snapshot_id
                 AND existing.article_id = changed.article_id
-                AND COALESCE(array_length(existing_state.list_mode_keys), 0) > 0
+                AND ${hasAnyListModeMembershipPredicate('existing_state')}
             )
           ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING`,
         `WITH ${changedCte}, ${servingTemplateCte}
@@ -584,6 +591,10 @@ const getApplySelectedImportServingStatements = (input: {
             review_config_hash,
             snapshot_id,
             article_id,
+            has_llm_list_mode,
+            has_human_list_mode,
+            has_both_list_mode,
+            has_unassessed_list_mode,
             list_mode_keys,
             llm_patch_watermark,
             human_patch_watermark,
@@ -595,6 +606,10 @@ const getApplySelectedImportServingStatements = (input: {
             template.review_config_hash,
             template.snapshot_id,
             changed.article_id,
+            TRUE AS has_llm_list_mode,
+            TRUE AS has_human_list_mode,
+            TRUE AS has_both_list_mode,
+            TRUE AS has_unassessed_list_mode,
             ['llm', 'human', 'both', 'unassessed']::VARCHAR[] AS list_mode_keys,
             ${getSqlLiteral(input.patchWatermark)} AS llm_patch_watermark,
             ${getSqlLiteral(input.patchWatermark)} AS human_patch_watermark,
@@ -604,6 +619,10 @@ const getApplySelectedImportServingStatements = (input: {
           CROSS JOIN serving_template template
           WHERE changed.scope_tombstone = FALSE
           ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO UPDATE SET
+            has_llm_list_mode = EXCLUDED.has_llm_list_mode,
+            has_human_list_mode = EXCLUDED.has_human_list_mode,
+            has_both_list_mode = EXCLUDED.has_both_list_mode,
+            has_unassessed_list_mode = EXCLUDED.has_unassessed_list_mode,
             list_mode_keys = EXCLUDED.list_mode_keys,
             llm_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.llm_patch_watermark, 0), COALESCE(EXCLUDED.llm_patch_watermark, 0)),
             human_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.human_patch_watermark, 0), COALESCE(EXCLUDED.human_patch_watermark, 0)),

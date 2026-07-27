@@ -110,7 +110,9 @@ test('dynamic filtered counts keep serving/state path when posting-only fast pat
     expect(sql).toContain('scoped_serving AS')
     expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
     expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-    expect(sql).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+    expect(sql).toContain("WHEN 'llm' THEN list_mode_state.has_llm_list_mode")
+    expect(sql).toContain("WHEN 'unassessed' THEN list_mode_state.has_unassessed_list_mode")
+    expect(sql).not.toContain('list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
   }
 })
 
@@ -141,7 +143,11 @@ test('dynamic filtered counts match legacy group-by semantics for multi-group po
         review_config_hash VARCHAR,
         snapshot_id VARCHAR,
         article_id VARCHAR,
-        list_mode_keys VARCHAR[]
+        list_mode_keys VARCHAR[],
+        has_llm_list_mode BOOLEAN DEFAULT TRUE,
+        has_human_list_mode BOOLEAN DEFAULT FALSE,
+        has_both_list_mode BOOLEAN DEFAULT FALSE,
+        has_unassessed_list_mode BOOLEAN DEFAULT FALSE
       );
       INSERT INTO mart.review_article_filter_posting_serving_v4 VALUES
         ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-1', 'article-2', 'article-3', 'article-4']),
@@ -156,7 +162,13 @@ test('dynamic filtered counts match legacy group-by semantics for multi-group po
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3'),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-4'),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-5');
-      INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        list_mode_keys
+      ) VALUES
         ('project-1', 'review-config-1', 'snapshot-1', 'article-1', ['llm']),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-2', ['llm']),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3', ['llm']),
@@ -225,7 +237,13 @@ test('dynamic filtered counts match legacy group-by semantics for multi-group po
        AND list_mode_state.snapshot_id = serving.snapshot_id
        AND list_mode_state.snapshot_id = scoped.snapshot_id
        AND list_mode_state.article_id = serving.article_id
-       AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)
+       AND CASE scoped.list_mode_key
+        WHEN 'llm' THEN list_mode_state.has_llm_list_mode
+        WHEN 'human' THEN list_mode_state.has_human_list_mode
+        WHEN 'both' THEN list_mode_state.has_both_list_mode
+        WHEN 'unassessed' THEN list_mode_state.has_unassessed_list_mode
+        ELSE FALSE
+      END IS TRUE
     `)
 
     expect(optimizedReader.getRowObjectsJson()).toEqual(legacyReader.getRowObjectsJson())
@@ -263,7 +281,11 @@ test('dynamic filtered counts match legacy semantics when anchor groups tie', as
         review_config_hash VARCHAR,
         snapshot_id VARCHAR,
         article_id VARCHAR,
-        list_mode_keys VARCHAR[]
+        list_mode_keys VARCHAR[],
+        has_llm_list_mode BOOLEAN DEFAULT TRUE,
+        has_human_list_mode BOOLEAN DEFAULT FALSE,
+        has_both_list_mode BOOLEAN DEFAULT FALSE,
+        has_unassessed_list_mode BOOLEAN DEFAULT FALSE
       );
       INSERT INTO mart.review_article_filter_posting_serving_v4 VALUES
         ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-1', 'article-2']),
@@ -272,7 +294,13 @@ test('dynamic filtered counts match legacy semantics when anchor groups tie', as
         ('project-1', 'review-config-1', 'snapshot-1', 'article-1'),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-2'),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3');
-      INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        list_mode_keys
+      ) VALUES
         ('project-1', 'review-config-1', 'snapshot-1', 'article-1', ['llm']),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-2', ['llm']),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3', ['llm']);
@@ -336,7 +364,13 @@ test('dynamic filtered counts match legacy semantics when anchor groups tie', as
        AND list_mode_state.snapshot_id = serving.snapshot_id
        AND list_mode_state.snapshot_id = scoped.snapshot_id
        AND list_mode_state.article_id = serving.article_id
-       AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)
+       AND CASE scoped.list_mode_key
+        WHEN 'llm' THEN list_mode_state.has_llm_list_mode
+        WHEN 'human' THEN list_mode_state.has_human_list_mode
+        WHEN 'both' THEN list_mode_state.has_both_list_mode
+        WHEN 'unassessed' THEN list_mode_state.has_unassessed_list_mode
+        ELSE FALSE
+      END IS TRUE
     `)
 
     expect(optimizedReader.getRowObjectsJson()).toEqual(legacyReader.getRowObjectsJson())
@@ -363,7 +397,8 @@ test('dynamic filtered counts read fixed list modes from base and list-mode stat
 
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(sql).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  expect(sql).toContain("WHEN 'both' THEN list_mode_state.has_both_list_mode")
+  expect(sql).not.toContain('list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
   expect(sql).toContain('list_mode_state.duplicate_flag IS TRUE')
   expect(sql).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4 posting')
@@ -395,7 +430,8 @@ test('dynamic filtered counts use state-only fast path for list-mode-state filte
   expect(sql).toContain('list_mode_state.project_id = scoped.project_id')
   expect(sql).toContain('list_mode_state.review_config_hash = scoped.review_config_hash')
   expect(sql).toContain('list_mode_state.snapshot_id = scoped.snapshot_id')
-  expect(sql).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  expect(sql).toContain("WHEN 'both' THEN list_mode_state.has_both_list_mode")
+  expect(sql).not.toContain('list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
   expect(sql).toContain('list_mode_state.duplicate_flag IS TRUE')
   expect(sql).toContain('list_mode_state.conflict_flag IS TRUE')
   expect(sql).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
@@ -553,7 +589,11 @@ test('dynamic filtered counts preserve all-prefix candidate search semantics wit
         review_config_hash VARCHAR,
         snapshot_id VARCHAR,
         article_id VARCHAR,
-        list_mode_keys VARCHAR[]
+        list_mode_keys VARCHAR[],
+        has_llm_list_mode BOOLEAN DEFAULT TRUE,
+        has_human_list_mode BOOLEAN DEFAULT FALSE,
+        has_both_list_mode BOOLEAN DEFAULT FALSE,
+        has_unassessed_list_mode BOOLEAN DEFAULT FALSE
       );
       CREATE TABLE mart.review_title_search_serving_v4 (
         project_id VARCHAR,
@@ -570,7 +610,13 @@ test('dynamic filtered counts preserve all-prefix candidate search semantics wit
         ('project-1', 'review-config-1', 'snapshot-1', 'article-2'),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3'),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-4');
-      INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        list_mode_keys
+      ) VALUES
         ('project-1', 'review-config-1', 'snapshot-1', 'article-1', ['llm']),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-2', ['llm']),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3', ['llm']),
@@ -647,7 +693,8 @@ test('dynamic filtered counts read unassessed membership from base and list-mode
 
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(sql).toContain('AND list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
+  expect(sql).toContain("WHEN 'unassessed' THEN list_mode_state.has_unassessed_list_mode")
+  expect(sql).not.toContain('list_contains(list_mode_state.list_mode_keys, scoped.list_mode_key)')
   expect(sql).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
   expect(sql).not.toContain('FROM mart.review_article_serving_v4 serving')
   expect(sql).not.toContain('state_filtered_article_ids')

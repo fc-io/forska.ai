@@ -5,8 +5,8 @@ import type {ReviewServingReaderDatabase} from './reviewServingReader.ts'
 type HumanAssessmentOverviewAnsweredCountRow = {totalCount: number | null}
 type HumanAssessmentOverviewAnsweredProjectCountRow = {projectId: string; totalCount: number | null}
 
-const getHumanAssessmentListMode = (contractKey: 'review.both.count' | 'review.human.count') => {
-  return contractKey === 'review.both.count' ? 'both' : 'human'
+const getHumanAssessmentListModeColumn = (contractKey: 'review.both.count' | 'review.human.count') => {
+  return contractKey === 'review.both.count' ? 'has_both_list_mode' : 'has_human_list_mode'
 }
 
 const getHumanAssessmentCompletedCountPredicate = (contractKey: 'review.both.count' | 'review.human.count') => {
@@ -19,7 +19,7 @@ const getHumanAssessmentCompletedCountPredicate = (contractKey: 'review.both.cou
       : ''
 
   return `
-      AND list_contains(list_mode_state.list_mode_keys, ${getSqlLiteral(getHumanAssessmentListMode(contractKey))})
+      AND list_mode_state.${getHumanAssessmentListModeColumn(contractKey)} IS TRUE
       ${humanStatusPredicate}
       ${llmStatusPredicate}`
 }
