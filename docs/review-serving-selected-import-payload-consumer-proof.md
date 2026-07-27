@@ -32,16 +32,17 @@ The later duplicate/conflict proof slice is deliberately narrower than the
 display-copy migration. `duplicate_flag` and `conflict_flag` may be preferred
 from `app.review_import_article_hot_field` when the retained
 `(import_route_id, article_id, source_record_key)` selected-base identity can
-resolve a hot row, but selected-base fallback/default behavior and selected-base
-flag writers remain required.
+resolve a hot row, while hot-field/default fallback behavior and the retained
+selected-base identity remain required. Selected-base flag columns may already
+be retired/dropped.
 
 The physical evidence inspector now reports duplicate/conflict readiness as
 read-only current-DB evidence in the same selected-import section. It counts
 selected-base rows, hot rows resolved by retained identity, selected-base and
 hot TRUE counts, `IS DISTINCT FROM` mismatch counts, and missing-hot rows where
-selected-base TRUE or false/default fallback values still carry the result. This
-evidence is intentionally post-drop-safe for the display-copy columns and does
-not imply schema-removal authorization for the flag columns.
+selected-base/default TRUE or false fallback values still carry the result.
+This evidence is intentionally post-drop-safe for the display-copy and
+duplicate/conflict columns.
 
 ## Latest Evidence
 
@@ -77,12 +78,12 @@ display-copy migration is now reported by
 
 - Selected-base rows: 620,792
 - Hot-field rows resolved by `(import_route_id, article_id, source_record_key)` from those selected-base rows: 0
-- Selected-base `duplicate_flag = TRUE` rows: 0
-- Selected-base `conflict_flag = TRUE` rows: 0
+- Selected-base/default `duplicate_flag = TRUE` rows: 0
+- Selected-base/default `conflict_flag = TRUE` rows: 0
 - Hot `duplicate_flag = TRUE` rows: 0
 - Hot `conflict_flag = TRUE` rows: 0
-- `IS DISTINCT FROM` mismatches for both flags: 620,792, because hot columns are null while selected-base flags default false
-- Missing-hot selected-base false/default fallback rows for both flags: 620,792
+- `IS DISTINCT FROM` mismatches for both flags: 620,792, because hot columns are null while the selected-base/default side is false
+- Missing-hot selected-base/default false fallback rows for both flags: 620,792
 
 ## Verdict
 
@@ -100,6 +101,6 @@ those physical columns, while
 `import_route_id`, `source_record_key`, `selected_rank_key`, and
 `selected_rank_numeric` remain active identity/rank/source state and are not
 part of the write-suppression claim. Duplicate/conflict consumers can prefer hot
-fields only with selected-base fallback/default semantics preserved; the current
-DB does not authorize stopping selected-base flag writers or removing the
-selected-base flag columns.
+fields only with hot-field/default fallback semantics and retained selected-base
+identity preserved. The current DB does not require selected-base flag columns
+to remain present; they may already be retired/dropped.
