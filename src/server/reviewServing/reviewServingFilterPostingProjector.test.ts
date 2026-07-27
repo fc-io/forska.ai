@@ -265,8 +265,9 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('judgment_detail_source AS')
   expect(joined).toContain('article_judgment_status AS')
   expect(joined).toContain(
-    "WHEN article_judgment_status.llm_enabled_prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'",
+    "WHEN enabled_prompt_count.prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'",
   )
+  expect(joined).not.toContain('llm_enabled_prompt_count')
   expect(joined).not.toContain('serving.llm_status_key')
   expect(joined).not.toContain('serving.human_status_key')
   expect(joined).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
@@ -462,7 +463,7 @@ test('human postings read only the current status patch per logical prompt key',
   expect(selectStatement).toContain('human_detail AS')
 })
 
-test('status postings derive article-level status from judgment detail rows', async () => {
+test('status postings compare LLM answered rows to project enabled prompt count', async () => {
   const {database, statements} = createPostingDatabase({newRows: []})
 
   await projectReviewServingFilterPostings(projectInput([postingClaim()], ['llm', 'human']), database)
@@ -493,10 +494,14 @@ test('status postings derive article-level status from judgment detail rows', as
     'CAST(article_judgment_status.llm_answered_non_placeholder_prompt_count > 0 AS VARCHAR) AS filterValue',
   )
   expect(selectStatement).toContain("'humanStatus' AS filterKind")
-  expect(selectStatement).toContain('WHEN article_judgment_status.llm_enabled_prompt_count = 0 THEN NULL')
+  expect(selectStatement).toContain('enabled_prompt_count AS')
+  expect(selectStatement).toContain('FROM app.project_prompt project_prompt')
+  expect(selectStatement).toContain('INNER JOIN app.prompt prompt')
+  expect(selectStatement).toContain('WHEN enabled_prompt_count.prompt_count = 0 THEN NULL')
   expect(selectStatement).toContain(
-    "WHEN article_judgment_status.llm_enabled_prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'",
+    "WHEN enabled_prompt_count.prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'",
   )
+  expect(selectStatement).not.toContain('llm_enabled_prompt_count')
   expect(selectStatement).toContain(
     "WHEN enabled_prompt_count.prompt_count = article_judgment_status.human_answered_prompt_count THEN 'answered'",
   )

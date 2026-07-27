@@ -172,8 +172,8 @@ FROM (
     article_status.snapshot_id,
     article_status.article_id,
     CASE
-      WHEN article_status.llm_enabled_prompt_count = 0 THEN NULL
-      WHEN article_status.llm_enabled_prompt_count = article_status.llm_answered_prompt_count THEN 'answered'
+      WHEN COALESCE(enabled_prompt_count.prompt_count, 0) = 0 THEN NULL
+      WHEN enabled_prompt_count.prompt_count = article_status.llm_answered_prompt_count THEN 'answered'
       ELSE 'unanswered'
     END AS llm_status,
     article_status.llm_answered_non_placeholder_prompt_count > 0 AS llm_has_judgment,

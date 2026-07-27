@@ -340,9 +340,6 @@ const getFullRebuildPostingContributionRowsStatement = (
             scoped.article_id,
             COUNT(detail.prompt_id) FILTER (
               WHERE detail.payload_kind = 'llm'
-            ) AS llm_enabled_prompt_count,
-            COUNT(detail.prompt_id) FILTER (
-              WHERE detail.payload_kind = 'llm'
                 AND detail.is_answered IS TRUE
             ) AS llm_answered_prompt_count,
             COUNT(detail.prompt_id) FILTER (
@@ -372,13 +369,14 @@ const getFullRebuildPostingContributionRowsStatement = (
             FALSE AS tombstone,
             'llmStatus' AS filterKind,
             CASE
-              WHEN article_judgment_status.llm_enabled_prompt_count = 0 THEN NULL
-              WHEN article_judgment_status.llm_enabled_prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'
+              WHEN enabled_prompt_count.prompt_count = 0 THEN NULL
+              WHEN enabled_prompt_count.prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'
               ELSE 'unanswered'
             END AS filterValue
           FROM scoped_serving serving
           INNER JOIN article_judgment_status
             ON article_judgment_status.article_id = serving.article_id
+          CROSS JOIN enabled_prompt_count
           UNION ALL
           SELECT
             serving.article_id AS articleId,

@@ -548,7 +548,7 @@ test('project export download hydrates completed durable job selection as CSV', 
       ]
     }
 
-    if (statement.includes('FROM export_scope') && statement.includes('INNER JOIN app.project_prompt project_prompt')) {
+    if (statement.includes('FROM export_scope') && statement.includes('LEFT JOIN app.project_prompt project_prompt')) {
       return [
         {
           id: 'prompt-1',
@@ -623,8 +623,7 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).not.toContain('FROM app.article')
   expect(queryStatements.join('\n')).not.toContain('FROM app.judgment')
   expect(queryStatements.join('\n')).toContain('JOIN app.prompt prompt')
-  expect(queryStatements.join('\n')).toContain('INNER JOIN app.project_prompt project_prompt')
-  expect(queryStatements.join('\n')).toContain('project_prompt.enabled')
+  expect(queryStatements.join('\n')).toContain('LEFT JOIN app.project_prompt project_prompt')
   expect(queryStatements.join('\n')).not.toContain('OFFSET')
   expect(queryStatements.join('\n')).not.toContain('model_id AS modelId')
   expect(queryStatements.join('\n')).toContain(
@@ -649,8 +648,9 @@ test('project export serving queries read prompt and judgment scalars', () => {
   expect(promptMetadataQuery).toContain('prompt.original_text AS originalText')
   expect(promptMetadataQuery).toContain('prompt.type')
   expect(promptMetadataQuery).toContain('INNER JOIN app.prompt prompt')
-  expect(promptMetadataQuery).toContain('INNER JOIN app.project_prompt project_prompt')
-  expect(promptMetadataQuery).toContain('project_prompt.enabled')
+  expect(promptMetadataQuery).toContain('LEFT JOIN app.project_prompt project_prompt')
+  expect(promptMetadataQuery).not.toContain('project_prompt.enabled')
+  expect(promptMetadataQuery).not.toContain('COALESCE(prompt.archived, FALSE) = FALSE')
   expect(promptMetadataQuery).not.toContain('mart.review_article_judgment_detail_serving_v4 detail')
   expect(promptMetadataQuery).not.toContain("'$.prompt.promptHeading'")
   expect(promptMetadataQuery).not.toContain("'$.prompt.originalText'")
