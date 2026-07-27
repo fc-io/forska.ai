@@ -234,7 +234,9 @@ test('sql-native title search rebuild inserts chunk tokens with conflict-ignore 
   })
 
   expect(deleteStatement).toBeUndefined()
-  expect(updateStatement).toContain('SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
+  expect(updateStatement).toContain(
+    'SET article_ids = (SELECT LIST(DISTINCT merged_article_id ORDER BY merged_article_id)',
+  )
   expect(insertStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(insertStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(insertStatement).toContain('COALESCE(selected_hot.article_title, article.article_title)')

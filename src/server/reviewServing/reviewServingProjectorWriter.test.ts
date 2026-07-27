@@ -1,4 +1,4 @@
-import {readdirSync, readFileSync} from 'node:fs'
+import {existsSync, readdirSync, readFileSync, rmSync} from 'node:fs'
 import {join, relative} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -13,6 +13,24 @@ import {
 } from './reviewServingProjectorWriter.ts'
 
 const workspaceRoot = join(import.meta.dir, '../../..')
+
+const removeFileIfExists = (filePath: string) => {
+  if (existsSync(filePath)) {
+    rmSync(filePath, {force: true, recursive: true})
+  }
+}
+
+const runDuckdbSql = (duckdbPath: string, sql: string) => {
+  const result = Bun.spawnSync(['duckdb', duckdbPath], {
+    stdin: new TextEncoder().encode(sql),
+  })
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB command failed')
+  }
+
+  return result.stdout.toString()
+}
 
 const getTypeScriptFiles = (directory: string): readonly string[] => {
   return readdirSync(directory, {withFileTypes: true}).flatMap((entry) => {
@@ -242,7 +260,9 @@ test('title search rebuild ranges merge rows with bounded update and insert-miss
   expect(statements.join('\n')).not.toContain(
     'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET',
   )
-  expect(statements.join('\n')).toContain('SET article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
+  expect(statements.join('\n')).toContain(
+    'SET article_ids = (SELECT LIST(DISTINCT merged_article_id ORDER BY merged_article_id)',
+  )
   expect(statements.join('\n')).toContain('COALESCE(final_rows.article_ids, []::VARCHAR[])')
   expect(statements.join('\n')).toContain(
     'LIST(DISTINCT tokenized.article_id ORDER BY tokenized.article_id) AS article_ids',
@@ -251,6 +271,84 @@ test('title search rebuild ranges merge rows with bounded update and insert-miss
   expect(statements.join('\n')).toContain("OR (scope.article_id >= 'article-3' AND scope.article_id <= 'article-4')")
   expect(statements.join('\n')).not.toContain("existing.project_id || ''")
   expect(statements.join('\n')).not.toContain("existing.token || ''")
+})
+
+test('title search rebuild range merge executes against compact DuckDB token postings', async () => {
+  const {database, statements} = createWriterDatabase()
+  const duckdbPath = join(workspaceRoot, '.tmp', `title-search-rebuild-merge-${Date.now()}.duckdb`)
+  removeFileIfExists(duckdbPath)
+
+  try {
+    runDuckdbSql(
+      duckdbPath,
+      `
+        CREATE SCHEMA app;
+        CREATE SCHEMA mart;
+        CREATE TABLE app.article(id VARCHAR, title VARCHAR);
+        CREATE TABLE mart.project_scope_article(
+          project_id VARCHAR,
+          article_id VARCHAR,
+          in_curated_scope BOOLEAN,
+          in_route_scope BOOLEAN
+        );
+        CREATE TABLE mart.review_title_search_serving_v4(
+          project_id VARCHAR,
+          search_identity VARCHAR,
+          project_scope_identity VARCHAR,
+          snapshot_id VARCHAR,
+          token VARCHAR,
+          article_ids VARCHAR[]
+        );
+        INSERT INTO app.article VALUES
+          ('article-1', 'Alpha Beta'),
+          ('article-2', 'Beta Gamma');
+        INSERT INTO mart.project_scope_article VALUES
+          ('project-1', 'article-1', TRUE, FALSE),
+          ('project-1', 'article-2', TRUE, FALSE);
+        INSERT INTO mart.review_title_search_serving_v4 VALUES
+          ('project-1', 'search:identity-1', 'scope:identity-1', 'snapshot-1', 'beta', ['article-0']);
+      `,
+    )
+
+    await writeReviewServingTitleSearchRebuildRanges(
+      {
+        ranges: [
+          {
+            articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
+            articleTitleSql: 'article.title',
+            projectId: 'project-1',
+            projectScopeIdentity: 'scope:identity-1',
+            searchIdentity: 'search:identity-1',
+            selectedImportJoinSql: '',
+            snapshotId: 'snapshot-1',
+          },
+        ],
+      },
+      database,
+    )
+
+    const mergeStatements = statements.filter((statement) => {
+      return (
+        statement.includes('UPDATE mart.review_title_search_serving_v4')
+        || statement.includes('INSERT INTO mart.review_title_search_serving_v4')
+      )
+    })
+    runDuckdbSql(duckdbPath, mergeStatements.join(';\n'))
+
+    const rowsJson = runDuckdbSql(
+      duckdbPath,
+      `
+        SELECT token, article_ids AS articleIds
+        FROM mart.review_title_search_serving_v4
+        ORDER BY token;
+      `,
+    )
+    expect(rowsJson).toContain('alpha')
+    expect(rowsJson).toContain('gamma')
+    expect(rowsJson).toContain('[article-0, article-1, article-2]')
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
 })
 
 test('title search rebuild ranges keep per-range inserts when source inputs are incompatible', async () => {
