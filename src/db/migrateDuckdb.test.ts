@@ -1,4 +1,4 @@
-import {existsSync, readdirSync, readFileSync, unlinkSync} from 'node:fs'
+import {existsSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync} from 'node:fs'
 import {resolve} from 'node:path'
 
 import {expect, mock, test} from 'bun:test'
@@ -8807,6 +8807,7 @@ test('provider model natural key migration deduplicates existing model reference
 })
 
 test('migrateDuckdb preserves the original failure when rollback is already inactive', async () => {
+  process.env.DUCKDB_MEMORY_LIMIT = '20GB'
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-test.duckdb'
 
   const targetMigrationFile = '0039_humanJudgmentSummaryMode.sql'
@@ -8969,7 +8970,7 @@ test('migrateDuckdb skips checkpoint when no migration files are applied', async
   }
 })
 
-test('migrateDuckdb skips post-migration checkpoint under low-memory DuckDB profile', async () => {
+test('migrateDuckdb uses incremental checkpoints under low-memory DuckDB profile', async () => {
   process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-low-memory-checkpoint-skip-test.duckdb'
   process.env.SERVER_ROLE = 'maintenance-worker'
@@ -8988,6 +8989,9 @@ test('migrateDuckdb skips post-migration checkpoint under low-memory DuckDB prof
       getAppDatabaseService: () => {
         return {
           close: async () => {},
+          getRuntimeConfig: () => {
+            return {checkpointThreshold: '8192MiB'}
+          },
           maintenance: async (command: string) => {
             maintenanceCommands.push(command)
           },
@@ -9016,8 +9020,126 @@ test('migrateDuckdb skips post-migration checkpoint under low-memory DuckDB prof
     expect(runStatements.join('\n')).toContain(
       'CREATE TABLE IF NOT EXISTS mart.review_article_summary_rebuild_partial_v4',
     )
+    expect(runStatements[0]).toContain("SET checkpoint_threshold = '1KiB'")
+    expect(runStatements.at(-1)).toContain("SET checkpoint_threshold = '8192MiB'")
     expect(maintenanceCommands).toEqual([])
   } finally {
     mock.restore()
+  }
+})
+
+test('low-memory migration WAL survives interruption after adding a column to a checked table', () => {
+  const dataRoot = `/tmp/forska-migrate-duckdb-low-memory-wal-${Date.now()}`
+  const duckdbPath = `${dataRoot}.duckdb`
+  const migrationCompletedPath = `${dataRoot}.migration-completed`
+  const targetMigrationFile = '0102_reviewWriteOverlayReadSurface.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const migrationResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {writeFileSync} = await import('node:fs')
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA app')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_write_overlay (
+            overlay_id VARCHAR PRIMARY KEY,
+            CHECK (length(trim(overlay_id)) > 0)
+          )
+        \`)
+        await database.run("INSERT INTO app.review_write_overlay VALUES ('overlay-1')")
+        await database.maintenance('checkpoint')
+
+        await migrateDuckdb()
+        writeFileSync(${JSON.stringify(migrationCompletedPath)}, 'completed')
+        process.kill(process.pid, 'SIGKILL')
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: `${dataRoot}-temp`,
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    expect(existsSync(migrationCompletedPath)).toBe(true)
+    expect(migrationResult.signalCode).toBe('SIGKILL')
+    expect(existsSync(`${duckdbPath}.wal`) ? statSync(`${duckdbPath}.wal`).size : 0).toBe(0)
+
+    const reopenResult = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {DuckDBInstance} = await import('@duckdb/node-api')
+          const instance = await DuckDBInstance.create(${JSON.stringify(duckdbPath)}, {
+            access_mode: 'READ_ONLY',
+            memory_limit: '1GB',
+            threads: '1',
+          })
+          const connection = await instance.connect()
+          const reader = await connection.runAndReadAll(\`
+            SELECT overlay_id AS overlayId, read_surface AS readSurface
+            FROM app.review_write_overlay
+          \`)
+          console.log(JSON.stringify(reader.getRowObjectsJson()))
+          connection.closeSync()
+          instance.closeSync()
+        `,
+      ],
+      {cwd: process.cwd()},
+    )
+
+    if (reopenResult.exitCode !== 0) {
+      throw new Error(
+        reopenResult.stderr.toString()
+          || reopenResult.stdout.toString()
+          || 'Failed to reopen low-memory migration database',
+      )
+    }
+
+    expect(JSON.parse(reopenResult.stdout.toString().trim())).toEqual([{overlayId: 'overlay-1', readSurface: 'row'}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(migrationCompletedPath)
+    rmSync(`${duckdbPath}.startup-recovery`, {force: true, recursive: true})
+    rmSync(`${dataRoot}-temp`, {force: true, recursive: true})
   }
 })

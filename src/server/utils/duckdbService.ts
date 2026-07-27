@@ -228,6 +228,7 @@ const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
 const duckdbStartupPreflightLockRetryDelaysMs = [100, 250, 500, 1000]
 const duckdbStartupIndexedTableRepairLockRetryDelaysMs = [100, 250, 500, 1000]
+const duckdbStartupMaxRecoveryAttempts = 8
 type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
   lowMemoryStartupPreflight?: boolean
@@ -261,6 +262,135 @@ type DuckdbStartupPreflightRepairMarker = {
   tableName?: unknown
 }
 const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[] = [
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT manifest_id
+        FROM app.review_projection_identity_manifest
+        GROUP BY manifest_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_projection_identity_manifest;
+      CREATE TEMP TABLE startup_probe_review_projection_identity_manifest AS
+      SELECT *
+      FROM app.review_projection_identity_manifest
+      WHERE projection_component = 'selectedImport'
+      ORDER BY updated_at DESC, manifest_id ASC
+      LIMIT 1;
+      DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
+      CREATE TEMP TABLE startup_probe_review_selected_import_snapshot AS
+      SELECT *
+      FROM app.review_selected_import_snapshot
+      WHERE selected_import_snapshot_id = (
+        SELECT input_digest
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      )
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.review_projection_identity_manifest
+      SET
+        base_generation = base_generation,
+        patch_watermark = patch_watermark,
+        status = status,
+        updated_at = current_timestamp
+      WHERE manifest_id = (
+        SELECT manifest_id
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      );
+      UPDATE app.review_selected_import_snapshot
+      SET
+        project_id = project_id,
+        project_scope_identity = project_scope_identity,
+        source_delta_high_water = source_delta_high_water,
+        status = status,
+        updated_at = current_timestamp
+      WHERE selected_import_snapshot_id = (
+        SELECT selected_import_snapshot_id
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      );
+      INSERT INTO app.review_selected_import_snapshot BY NAME
+      SELECT *
+      FROM startup_probe_review_selected_import_snapshot probe
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM app.review_selected_import_snapshot existing
+        WHERE existing.selected_import_snapshot_id = probe.selected_import_snapshot_id
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_projection_identity_manifest
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      )
+      WHERE manifest_id = (
+        SELECT manifest_id
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      );
+      UPDATE app.review_selected_import_snapshot
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      )
+      WHERE selected_import_snapshot_id = (
+        SELECT selected_import_snapshot_id
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_projection_identity_manifest;
+      DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
+    `,
+    lowMemoryStartupPreflight: true,
+    postRepairDependencySpecs: [{schemaName: 'app', tableName: 'review_selected_import_snapshot'}],
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'active' THEN 0 WHEN status = 'candidate' THEN 1 ELSE 2 END ASC,
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      manifest_id DESC
+    `,
+    repairPrimaryKeyColumns: ['manifest_id'],
+    repairStrategy: 'dedupe-latest',
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: [
+          'manifest_id',
+          'projection_component',
+          'input_digest',
+          'input_watermarks_json',
+          'base_generation',
+          'patch_watermark',
+          'status',
+          'updated_at',
+        ],
+        schemaName: 'app',
+        tableName: 'review_projection_identity_manifest',
+      },
+      {
+        columnNames: [
+          'selected_import_snapshot_id',
+          'project_id',
+          'project_scope_identity',
+          'source_delta_high_water',
+          'status',
+          'updated_at',
+        ],
+        schemaName: 'app',
+        tableName: 'review_selected_import_snapshot',
+      },
+    ],
+    tableName: 'review_projection_identity_manifest',
+  },
   {
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
@@ -324,26 +454,78 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     mutationProbeSql: `
       DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work;
       CREATE TEMP TABLE startup_probe_review_serving_dirty_work AS
+      WITH eligible_lane AS (
+        SELECT source_partition, projection_key
+        FROM app.review_serving_dirty_work
+        WHERE status IN ('pending', 'failed', 'running')
+          AND starts_with(
+            projection_key,
+            '{"projectionComponent":"selectedImport","projectionIdentity":'
+          )
+        ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+        LIMIT 1
+      )
       SELECT
         dirty_work_id,
         status,
         updated_at
       FROM app.review_serving_dirty_work
-      WHERE
-        status = 'pending'
-        OR status = 'failed'
-        OR status = 'running'
+      WHERE status IN ('pending', 'failed', 'running')
+        AND starts_with(
+          projection_key,
+          '{"projectionComponent":"selectedImport","projectionIdentity":'
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM eligible_lane
+          WHERE eligible_lane.source_partition = app.review_serving_dirty_work.source_partition
+            AND eligible_lane.projection_key = app.review_serving_dirty_work.projection_key
+        )
       ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
       LIMIT 64;
       BEGIN;
+      WITH eligible_lane AS (
+        SELECT source_partition, projection_key
+        FROM app.review_serving_dirty_work oldest
+        WHERE status IN ('pending', 'failed', 'running')
+          AND starts_with(
+            projection_key,
+            '{"projectionComponent":"selectedImport","projectionIdentity":'
+          )
+        ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+        LIMIT 1
+      ),
+      claim_candidates AS (
+        SELECT dirty_work_id
+        FROM app.review_serving_dirty_work
+        WHERE status IN ('pending', 'failed', 'running')
+          AND starts_with(
+            projection_key,
+            '{"projectionComponent":"selectedImport","projectionIdentity":'
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM eligible_lane
+            WHERE eligible_lane.source_partition = app.review_serving_dirty_work.source_partition
+              AND eligible_lane.projection_key = app.review_serving_dirty_work.projection_key
+          )
+        ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+        LIMIT 64
+      )
       UPDATE app.review_serving_dirty_work
       SET
         status = 'running',
         updated_at = current_timestamp
       WHERE dirty_work_id IN (
         SELECT dirty_work_id
-        FROM startup_probe_review_serving_dirty_work
-      );
+        FROM claim_candidates
+      )
+        AND status IN ('pending', 'failed', 'running')
+        AND starts_with(
+          projection_key,
+          '{"projectionComponent":"selectedImport","projectionIdentity":'
+        )
+      RETURNING dirty_work_id;
       COMMIT;
       BEGIN;
       UPDATE app.review_serving_dirty_work
@@ -367,6 +549,15 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work;
     `,
+    lowMemoryStartupPreflight: true,
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'running' THEN 0 WHEN status = 'pending' THEN 1 ELSE 2 END ASC,
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      dirty_work_id DESC
+    `,
+    repairPrimaryKeyColumns: ['dirty_work_id'],
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     tableName: 'review_serving_dirty_work',
   },
@@ -660,6 +851,15 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work_ack;
     `,
+    lowMemoryStartupPreflight: true,
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'completed' THEN 0 ELSE 1 END ASC,
+      completed_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      dirty_ack_id DESC
+    `,
+    repairPrimaryKeyColumns: ['dirty_ack_id'],
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     tableName: 'review_serving_dirty_work_ack',
   },
@@ -721,6 +921,16 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
     `,
+    lowMemoryStartupPreflight: true,
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'completed' THEN 0 WHEN status = 'running' THEN 1 ELSE 2 END ASC,
+      updated_at DESC NULLS LAST,
+      completed_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      selected_import_snapshot_id DESC
+    `,
+    repairPrimaryKeyColumns: ['selected_import_snapshot_id'],
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     tableName: 'review_selected_import_snapshot',
   },
@@ -1186,6 +1396,22 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'summary_definition_version',
       'filter_key',
     ],
+    schemaRequirements: [
+      {
+        columnNames: [
+          'project_id',
+          'review_config_hash',
+          'snapshot_id',
+          'list_mode_key',
+          'count_kind',
+          'summary_definition_version',
+          'filter_key',
+          'stale_reason',
+        ],
+        schemaName: 'mart',
+        tableName: 'review_article_count_serving_v4',
+      },
+    ],
     schemaName: 'mart',
     tableName: 'review_article_count_serving_v4',
   },
@@ -1313,6 +1539,21 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'list_mode_key',
       'filter_signature',
       'component_identity',
+    ],
+    schemaRequirements: [
+      {
+        columnNames: [
+          'project_id',
+          'review_config_hash',
+          'snapshot_id',
+          'list_mode_key',
+          'filter_signature',
+          'component_identity',
+          'count_updated_at',
+        ],
+        schemaName: 'mart',
+        tableName: 'review_filtered_count_serving_v4',
+      },
     ],
     schemaName: 'mart',
     tableName: 'review_filtered_count_serving_v4',
@@ -2927,7 +3168,7 @@ const pruneDuckdbStartupRecoveryArtifactsSafely = async (
     )
 
     if (prunedArtifactFileNames.length > 0) {
-      writeRuntimeOperatorLogEvent({
+      writeRuntimeLogEvent({
         attrs: {
           databasePath: runtimeConfig.databasePath,
           prunedArtifactCount: prunedArtifactFileNames.length,
@@ -4062,7 +4303,7 @@ const checkpointDuckdbStartupWalReplay = async (runtimeConfig: DuckdbRuntimeConf
   )
 
   if (result.exitCode === 0) {
-    writeRuntimeOperatorLogEvent({
+    writeRuntimeLogEvent({
       attrs: {databasePath: runtimeConfig.databasePath},
       event: 'duckdb.startup.wal-checkpoint',
       message: '[duckdb] checkpointed replayed WAL before startup mutation preflight',
@@ -4191,7 +4432,7 @@ const repairDuckdbStartupIndexedTables = async (
       2,
     ),
   )
-  writeRuntimeFailureLogEvent({
+  writeRuntimeLogEvent({
     attrs: {
       databasePath: runtimeConfig.databasePath,
       error,
@@ -4205,9 +4446,8 @@ const repairDuckdbStartupIndexedTables = async (
       postRepairCheckpointWarning: checkpointSkipped ? outputText : null,
     },
     event: 'duckdb.startup.indexed-table-repair',
-    message: '[duckdb] rebuilt indexed tables after startup mutation preflight failure',
-    severity: 'WARN',
-    terminalArgs: [`database_backup=${preservedDatabasePath ?? 'none'}`, `manifest=${manifestPath}`],
+    message: '[duckdb] completed startup indexed-table recovery',
+    severity: 'INFO',
   })
 
   if (checkpointSkipped) {
@@ -4223,18 +4463,19 @@ const repairDuckdbStartupIndexedTables = async (
 }
 
 const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) => {
-  let attemptedIndexedTableRepair = false
   let checkpointedWalReplay = false
   let lockRetryCount = 0
   let pendingPostRepairPreflightSpecs: DuckdbStartupIndexedTableRepairSpec[] = []
+  let repairedTableKeys = new Set<string>()
 
-  for (let recoveryAttempt = 0; recoveryAttempt < 3; ) {
+  for (let recoveryAttempt = 0; recoveryAttempt < duckdbStartupMaxRecoveryAttempts; ) {
     const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
     const error = getDuckdbStartupPreflightError(runtimeConfig, hadWalBeforePreflight, pendingPostRepairPreflightSpecs)
 
     if (error === null) {
-      if (!hadWalBeforePreflight) {
+      if (!hadWalBeforePreflight && pendingPostRepairPreflightSpecs.length > 0) {
         pendingPostRepairPreflightSpecs = []
+        continue
       }
 
       if (hadWalBeforePreflight && !checkpointedWalReplay) {
@@ -4291,15 +4532,23 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
       })
     }
 
-    if (!attemptedIndexedTableRepair) {
-      attemptedIndexedTableRepair = true
-      const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
+    const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
+    const repairTableKeys = repairSpecs.map((repairSpec) => {
+      return `${repairSpec.schemaName}.${repairSpec.tableName}`
+    })
+
+    if (
+      repairTableKeys.some((repairTableKey) => {
+        return !repairedTableKeys.has(repairTableKey)
+      })
+    ) {
       const repairResult = await repairDuckdbStartupIndexedTables(runtimeConfig, error)
       const repairMarkerPath = error instanceof Error ? error.repairMarkerPath : undefined
 
       if (typeof repairMarkerPath === 'string') {
         clearDuckdbStartupPreflightActiveRepairSpec(repairMarkerPath)
       }
+      repairedTableKeys = new Set([...repairedTableKeys, ...repairTableKeys])
       pendingPostRepairPreflightSpecs = repairSpecs
       if (repairResult.checkpointSkipped) {
         return
