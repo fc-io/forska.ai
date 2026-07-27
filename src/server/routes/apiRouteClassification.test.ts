@@ -36,6 +36,13 @@ const judgmentJobUnassessedCountRoute = {
   samplePath: '/api/judgmentsjobs-unassessed-count',
 } as const
 const runtimeAssetRoute = {endpoint: 'runtime-asset', method: 'GET', samplePath: '/api/runtime-asset'} as const
+const removedProjectMartAdminMutationRoutes = [
+  '/api/admin/project-mart-large-rebuild-run',
+  '/api/admin/project-mart-large-rebuild-pause',
+  '/api/admin/project-mart-large-rebuild-resume',
+  '/api/admin/project-mart-large-rebuild-note',
+  '/api/admin/project-mart-dirty-materialization-requeue',
+]
 const ownerRoutedRoutes = [
   ...projectTransferRouteSpecs,
   comparisonJudgmentsRoute,
@@ -98,6 +105,18 @@ test('owner-private owner-backed routes do not re-proxy', () => {
         proxyPathname: pathname,
         shouldProxy: false,
       }
+    }),
+  )
+})
+
+test('retired project mart admin mutation routes are not classified as live API routes', () => {
+  const classifications = removedProjectMartAdminMutationRoutes.map((routePath) => {
+    return {classification: classifyApiRoute(routePath, 'POST'), routePath}
+  })
+
+  expect(classifications).toEqual(
+    removedProjectMartAdminMutationRoutes.map((routePath) => {
+      return {classification: 'unclassified', routePath}
     }),
   )
 })
