@@ -12,6 +12,13 @@ import {
 import {isLocalOperatorApiExposed} from './publicRouteSurfaceGate.ts'
 
 const bunDefaultMaxHttpRequests = 256
+const ownerProxyReadinessFreshMs = 10_000
+
+let lastCompatibleOwnerReadiness: {checkedAtMs: number; duckdbOwnerUrl: string} | null = null
+
+export const resetRuntimeReadyOwnerProbeCacheForTests = () => {
+  lastCompatibleOwnerReadiness = null
+}
 
 const getBunMaxHttpRequestsState = () => {
   const configuredValue = process.env.BUN_CONFIG_MAX_HTTP_REQUESTS?.trim() ?? null
@@ -32,12 +39,33 @@ const getOwnerProxyReady = async (duckdbOwnerUrl: string | null, ownerProxy: boo
   }
 
   if (duckdbOwnerUrl === null) {
+    lastCompatibleOwnerReadiness = null
     return false
   }
 
   const result = await probeDuckdbOwnerRuntimeReadiness(duckdbOwnerUrl, 'runtime readiness DuckDB owner')
+  const now = Date.now()
 
-  return result.status === 'compatible'
+  if (result.status === 'compatible') {
+    lastCompatibleOwnerReadiness = {checkedAtMs: now, duckdbOwnerUrl}
+    return true
+  }
+
+  if (result.status === 'unreachable') {
+    const freshOwner =
+      lastCompatibleOwnerReadiness?.duckdbOwnerUrl === duckdbOwnerUrl
+      && now - lastCompatibleOwnerReadiness.checkedAtMs <= ownerProxyReadinessFreshMs
+
+    if (freshOwner) {
+      return true
+    }
+  }
+
+  if (result.status === 'incompatible') {
+    lastCompatibleOwnerReadiness = null
+  }
+
+  return false
 }
 
 const getConfiguredDuckdbOwnerUrl = () => {

@@ -654,6 +654,22 @@ const getSummaryRebuildAccumulatorScalarKeyPredicate = (input: {leftAlias: strin
         AND COALESCE(${input.leftAlias}.facet_value, '') = COALESCE(${input.rightAlias}.facet_value, '')`
 }
 
+const getSummaryRebuildAccumulatorMembershipPredicate = (input: {
+  accumulatorAlias: string
+  chunkIdSql: string
+  membershipAlias: string
+}) => {
+  return `EXISTS (
+        SELECT 1
+        FROM mart.review_article_summary_rebuild_accumulator_chunk_v4 ${input.membershipAlias}
+        WHERE ${input.membershipAlias}.chunk_id = ${input.chunkIdSql}
+          ${getSummaryRebuildAccumulatorScalarKeyPredicate({
+            leftAlias: input.membershipAlias,
+            rightAlias: input.accumulatorAlias,
+          })}
+      )`
+}
+
 const getDirectFullSummaryPartialRecord = (input: {
   chunkId: string
   record: ReviewServingProjectorRecord
@@ -683,7 +699,7 @@ const getDirectFullSummaryPartialRecord = (input: {
       review_config_hash: values.review_config_hash,
       snapshot_id: values.snapshot_id,
       stale_reason: values.stale_reason ?? null,
-      source_chunk_ids_key: `\n${input.chunkId}\n`,
+      source_chunk_ids_key: '',
       summary_definition_version: values.summary_definition_version,
       summary_identity: values.summary_identity,
       summary_kind: summaryKind,
@@ -728,11 +744,18 @@ const getSummaryRebuildPartialScopePredicate = (input: {
 const getCompletedSummaryRebuildAccumulatorChunkJoin = (accumulatorAlias: string) => {
   return `INNER JOIN app.review_rebuild_chunk_manifest chunk
       ON chunk.request_id = ${accumulatorAlias}.request_id
-      AND contains(${accumulatorAlias}.source_chunk_ids_key, '\n' || chunk.chunk_id || '\n')
       AND chunk.project_id = ${accumulatorAlias}.project_id
       AND chunk.snapshot_id = ${accumulatorAlias}.snapshot_id
       AND chunk.projection_component = 'summary'
-      AND chunk.status = 'completed'`
+      AND chunk.status = 'completed'
+      AND (
+        contains(${accumulatorAlias}.source_chunk_ids_key, '\n' || chunk.chunk_id || '\n')
+        OR ${getSummaryRebuildAccumulatorMembershipPredicate({
+          accumulatorAlias,
+          chunkIdSql: 'chunk.chunk_id',
+          membershipAlias: 'accumulator_chunk',
+        })}
+      )`
 }
 
 const getCompletedSummaryRebuildAccumulatorExistsPredicate = (accumulatorAlias: string) => {
@@ -740,11 +763,18 @@ const getCompletedSummaryRebuildAccumulatorExistsPredicate = (accumulatorAlias: 
       SELECT 1
       FROM app.review_rebuild_chunk_manifest chunk
       WHERE chunk.request_id = ${accumulatorAlias}.request_id
-        AND contains(${accumulatorAlias}.source_chunk_ids_key, '\n' || chunk.chunk_id || '\n')
         AND chunk.project_id = ${accumulatorAlias}.project_id
         AND chunk.snapshot_id = ${accumulatorAlias}.snapshot_id
         AND chunk.projection_component = 'summary'
         AND chunk.status = 'completed'
+        AND (
+          contains(${accumulatorAlias}.source_chunk_ids_key, '\n' || chunk.chunk_id || '\n')
+          OR ${getSummaryRebuildAccumulatorMembershipPredicate({
+            accumulatorAlias,
+            chunkIdSql: 'chunk.chunk_id',
+            membershipAlias: 'accumulator_chunk',
+          })}
+        )
     )`
 }
 
@@ -812,6 +842,17 @@ const getSummaryRebuildAccumulatorPartialCount = async (
   return Number(rows[0]?.partialCount ?? 0)
 }
 
+const summaryRebuildAccumulatorWriteBatchSize = 64
+
+const getSummaryRebuildAccumulatorRecordBatches = (records: readonly ReviewServingProjectorRecord[]) => {
+  const batches: ReviewServingProjectorRecord[][] = []
+  for (let offset = 0; offset < records.length; offset += summaryRebuildAccumulatorWriteBatchSize) {
+    batches.push(records.slice(offset, offset + summaryRebuildAccumulatorWriteBatchSize))
+  }
+
+  return batches
+}
+
 const getInsertSummaryRebuildAccumulatorChunkStatement = (input: {
   chunkId: string
   records: readonly ReviewServingProjectorRecord[]
@@ -856,12 +897,38 @@ const getInsertSummaryRebuildAccumulatorChunkStatement = (input: {
     })
     .join(',\n        ')
   const chunkMarker = `\n${input.chunkId}\n`
+  const accumulatorScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'accumulator'})
+  const existingScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'existing'})
+  const membershipScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'accumulator_chunk'})
 
   return `
     DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_chunk;
 
-    CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_chunk AS
-    SELECT *
+    CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_chunk (
+      request_id VARCHAR NOT NULL,
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      summary_kind VARCHAR NOT NULL,
+      summary_identity VARCHAR NOT NULL,
+      list_mode_key VARCHAR,
+      count_kind VARCHAR,
+      summary_definition_version VARCHAR NOT NULL,
+      filter_key VARCHAR,
+      facet_kind VARCHAR,
+      facet_key VARCHAR,
+      facet_value VARCHAR,
+      prompt_id VARCHAR,
+      answer_id INTEGER,
+      answer_value VARCHAR,
+      availability VARCHAR NOT NULL,
+      stale_reason VARCHAR,
+      count_value BIGINT,
+      source_chunk_ids_key VARCHAR NOT NULL
+    );
+
+    INSERT INTO temp_summary_rebuild_accumulator_chunk (${columns.join(', ')})
+    SELECT ${columns.join(', ')}
     FROM (VALUES
         ${valuesSql}
     ) AS incoming(${columns.join(', ')});
@@ -873,10 +940,15 @@ const getInsertSummaryRebuildAccumulatorChunkStatement = (input: {
         THEN COALESCE(accumulator.count_value, 0) + COALESCE(incoming.count_value, 0)
         ELSE NULL
       END,
-      source_chunk_ids_key = accumulator.source_chunk_ids_key || ${getSqlLiteral(input.chunkId)} || '\n',
       accumulator_updated_at = now()
     FROM temp_summary_rebuild_accumulator_chunk incoming
-    WHERE NOT contains(accumulator.source_chunk_ids_key, ${getSqlLiteral(chunkMarker)})
+    WHERE ${accumulatorScopePredicate}
+      AND NOT contains(accumulator.source_chunk_ids_key, ${getSqlLiteral(chunkMarker)})
+      AND NOT ${getSummaryRebuildAccumulatorMembershipPredicate({
+        accumulatorAlias: 'accumulator',
+        chunkIdSql: getSqlLiteral(input.chunkId),
+        membershipAlias: 'accumulator_chunk',
+      })}
       ${getSummaryRebuildAccumulatorScalarKeyPredicate({leftAlias: 'accumulator', rightAlias: 'incoming'})};
 
     INSERT INTO mart.review_article_summary_rebuild_accumulator_v4 (
@@ -890,12 +962,69 @@ const getInsertSummaryRebuildAccumulatorChunkStatement = (input: {
     WHERE NOT EXISTS (
       SELECT 1
       FROM mart.review_article_summary_rebuild_accumulator_v4 existing
-      WHERE TRUE
+      WHERE ${existingScopePredicate}
         ${getSummaryRebuildAccumulatorScalarKeyPredicate({leftAlias: 'existing', rightAlias: 'incoming'})}
+    );
+
+    INSERT INTO mart.review_article_summary_rebuild_accumulator_chunk_v4 (
+      request_id,
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      summary_kind,
+      summary_identity,
+      list_mode_key,
+      count_kind,
+      filter_key,
+      facet_kind,
+      facet_key,
+      facet_value,
+      chunk_id,
+      membership_created_at
+    )
+    SELECT
+      incoming.request_id,
+      incoming.project_id,
+      incoming.review_config_hash,
+      incoming.snapshot_id,
+      incoming.summary_kind,
+      incoming.summary_identity,
+      incoming.list_mode_key,
+      incoming.count_kind,
+      incoming.filter_key,
+      incoming.facet_kind,
+      incoming.facet_key,
+      incoming.facet_value,
+      ${getSqlLiteral(input.chunkId)} AS chunk_id,
+      current_timestamp
+    FROM temp_summary_rebuild_accumulator_chunk incoming
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_article_summary_rebuild_accumulator_chunk_v4 accumulator_chunk
+      WHERE ${membershipScopePredicate}
+        AND accumulator_chunk.chunk_id = ${getSqlLiteral(input.chunkId)}
+        ${getSummaryRebuildAccumulatorScalarKeyPredicate({leftAlias: 'accumulator_chunk', rightAlias: 'incoming'})}
     );
 
     DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_chunk
   `
+}
+
+const getInsertSummaryRebuildAccumulatorChunkStatements = (input: {
+  chunkId: string
+  records: readonly ReviewServingProjectorRecord[]
+  projectId: string
+  requestId: string
+  reviewConfigHash: string
+  snapshotId: string
+}) => {
+  return getSummaryRebuildAccumulatorRecordBatches(input.records)
+    .map((records) => {
+      return getInsertSummaryRebuildAccumulatorChunkStatement({...input, records})
+    })
+    .filter((statement): statement is string => {
+      return statement !== null
+    })
 }
 
 const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
@@ -1214,7 +1343,7 @@ const projectPartialFullReviewServingSummaries = async (input: {
       summaryRecords,
     })
   })
-  const accumulatorStatement = getInsertSummaryRebuildAccumulatorChunkStatement({
+  const accumulatorStatements = getInsertSummaryRebuildAccumulatorChunkStatements({
     chunkId: getRequiredSummaryRebuildChunkId(input.projectorInput),
     projectId: input.projectorInput.projectId,
     records: partialRecords,
@@ -1227,10 +1356,7 @@ const projectPartialFullReviewServingSummaries = async (input: {
       {
         component: 'summary',
         records: [],
-        statements: [
-          ...getDirectFullSummaryPartialDeleteStatements(input.projectorInput),
-          ...(accumulatorStatement === null ? [] : [accumulatorStatement]),
-        ],
+        statements: [...getDirectFullSummaryPartialDeleteStatements(input.projectorInput), ...accumulatorStatements],
       },
       input.database,
     )

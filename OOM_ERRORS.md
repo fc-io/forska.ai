@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-27 - Summary Rebuild Accumulator Chunk Membership
+
+- Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while updating `mart.review_article_summary_rebuild_accumulator_v4`.
+- Context: Primary split-runtime `reviewServing.projector.worker` processing requestless summary rebuild chunks.
+- Cause: Each accumulator row appended every contributing chunk id to `source_chunk_ids_key`, so later chunks rewrote increasingly wide VARCHAR rows; retries and chunk splitting increased the string amplification instead of reducing it.
+- Fix: Added normalized `mart.review_article_summary_rebuild_accumulator_chunk_v4` membership, stopped appending new chunk ids to accumulator rows, kept legacy string membership readable for existing rows, scoped accumulator writes by request/project/snapshot identity, and recycled DuckDB after completed summary chunks.
+- Verification: `bun test src/server/reviewServing/reviewServingSummaryProjector.test.ts src/server/reviewServing/reviewServingSchema.test.ts src/db/migrateDuckdb.test.ts src/server/workers/reviewServingProjectorWorker.test.ts src/server/utils/duckdbServiceDiagnostics.test.ts src/server/routes/runtimeReadyRoutes.test.ts`; touched-file ESLint, Prettier, and `git diff --check`; `bun run test:network-smoke:current-db`; live primary log/readiness watch.
+
 ## 2026-07-12 - Bounded Rebuild Native Teardown Trap
 
 - Error: `maintenance pid=70197 exited unexpectedly with code 133 signal=SIGTRAP; restart planned` after request-associated summary child progress.

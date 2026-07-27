@@ -4,7 +4,7 @@ import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.
 import {resetServerRuntimeRoleForTests} from '../utils/serverRuntimeRole.ts'
 import {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} from './apiRouteClassification.ts'
 import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
-import {runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
+import {resetRuntimeReadyOwnerProbeCacheForTests, runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
 
 type RuntimeReadyResponse = {
   data: {
@@ -115,6 +115,7 @@ const withRuntimeOwnerEnv = async (run: () => Promise<void>, duckdbOwnerUrl?: st
       process.env.SERVER_DUCKDB_OWNER_URL = duckdbOwnerUrl ?? 'http://127.0.0.1:1'
     }
     resetServerRuntimeRoleForTests()
+    resetRuntimeReadyOwnerProbeCacheForTests()
     await run()
   } finally {
     if (previousRole === undefined) {
@@ -134,6 +135,7 @@ const withRuntimeOwnerEnv = async (run: () => Promise<void>, duckdbOwnerUrl?: st
     }
 
     resetServerRuntimeRoleForTests()
+    resetRuntimeReadyOwnerProbeCacheForTests()
   }
 }
 
@@ -206,6 +208,138 @@ test('runtime readiness requires API proxy target to be ready DuckDB owner', asy
       expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
     }, 'http://127.0.0.1:4999')
   } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('runtime readiness tolerates transient owner probe timeouts after a fresh ready probe', async () => {
+  const previousFetch = globalThis.fetch
+  const readyResponse = {data: {duckdbOwner: true, ready: true, runtimeVersion: 'split-runtime-v1'}}
+  const timeoutError = new Error('The operation timed out.')
+  let calls = 0
+
+  try {
+    globalThis.fetch = (async () => {
+      calls += 1
+
+      if (calls === 1) {
+        return Response.json(readyResponse)
+      }
+
+      throw timeoutError
+    }) as unknown as typeof fetch
+
+    await withRuntimeOwnerEnv(async () => {
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
+    }, 'http://127.0.0.1:4999')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('runtime readiness does not mask the first unreachable owner probe', async () => {
+  const previousFetch = globalThis.fetch
+
+  try {
+    globalThis.fetch = (async () => {
+      throw new Error('The operation timed out.')
+    }) as unknown as typeof fetch
+
+    await withRuntimeOwnerEnv(async () => {
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+    }, 'http://127.0.0.1:4999')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('runtime readiness does not reuse a cached owner probe for another owner URL', async () => {
+  const previousFetch = globalThis.fetch
+  const readyResponse = {data: {duckdbOwner: true, ready: true, runtimeVersion: 'split-runtime-v1'}}
+
+  try {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const normalizedUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url
+
+      if (normalizedUrl.startsWith('http://127.0.0.1:4999/')) {
+        return Response.json(readyResponse)
+      }
+
+      throw new Error('The operation timed out.')
+    }) as unknown as typeof fetch
+
+    await withRuntimeOwnerEnv(async () => {
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
+
+      process.env.SERVER_DUCKDB_OWNER_URL = 'http://127.0.0.1:5999'
+      resetServerRuntimeRoleForTests()
+
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+    }, 'http://127.0.0.1:4999')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('runtime readiness clears a cached owner probe when the owner responds not ready', async () => {
+  const previousFetch = globalThis.fetch
+  const responses = [
+    {data: {duckdbOwner: true, ready: true, runtimeVersion: 'split-runtime-v1'}},
+    {data: {duckdbOwner: true, ready: false, runtimeVersion: 'split-runtime-v1'}},
+  ]
+
+  try {
+    globalThis.fetch = (async () => {
+      const response = responses.shift()
+
+      if (response === undefined) {
+        throw new Error('The operation timed out.')
+      }
+
+      return Response.json(response)
+    }) as unknown as typeof fetch
+
+    await withRuntimeOwnerEnv(async () => {
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+    }, 'http://127.0.0.1:4999')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('runtime readiness expires transient owner probe tolerance', async () => {
+  const previousFetch = globalThis.fetch
+  const previousDateNow = Date.now
+  const readyResponse = {data: {duckdbOwner: true, ready: true, runtimeVersion: 'split-runtime-v1'}}
+  let now = 1_000
+  let calls = 0
+
+  try {
+    Date.now = () => {
+      return now
+    }
+    globalThis.fetch = (async () => {
+      calls += 1
+
+      if (calls === 1) {
+        return Response.json(readyResponse)
+      }
+
+      throw new Error('The operation timed out.')
+    }) as unknown as typeof fetch
+
+    await withRuntimeOwnerEnv(async () => {
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
+
+      now += 10_001
+
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+    }, 'http://127.0.0.1:4999')
+  } finally {
+    Date.now = previousDateNow
     globalThis.fetch = previousFetch
   }
 })
