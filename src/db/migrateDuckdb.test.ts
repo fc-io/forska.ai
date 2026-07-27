@@ -121,6 +121,215 @@ test('DuckDB migration retires review article serving compatibility view without
   expect(migrationSql).not.toContain('review_article_serving_list_mode_state_v4')
 })
 
+test('DuckDB migration drops legacy review V3 marts and stale filter-state table', async () => {
+  const duckdbPath = `/tmp/forska-drop-legacy-review-v3-marts-${Date.now()}.duckdb`
+  const targetMigrationFile = '0201_dropLegacyReviewV3Marts.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run("CREATE TABLE mart.review_article_serving (project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, has_all_llm_judgments BOOLEAN NOT NULL, article_created_at TIMESTAMPTZ NOT NULL, article_id VARCHAR NOT NULL)")
+        await database.run("CREATE TABLE mart.review_article_filter_member (project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, prompt_id VARCHAR NOT NULL, answer_id BIGINT NOT NULL, article_id VARCHAR NOT NULL)")
+        await database.run("CREATE TABLE mart.review_article_serving_detail (project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, article_id VARCHAR NOT NULL, prompt_order INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL)")
+        await database.run("CREATE TABLE mart.review_article_rollup (project_id VARCHAR NOT NULL, has_all_llm_judgments BOOLEAN NOT NULL, article_created_at TIMESTAMPTZ NOT NULL, article_id VARCHAR NOT NULL)")
+        await database.run("CREATE TABLE mart.review_article_filter_state_serving_v4 (project_id VARCHAR NOT NULL, review_config_hash VARCHAR NOT NULL, snapshot_id VARCHAR NOT NULL, list_mode_key VARCHAR NOT NULL, article_id VARCHAR NOT NULL, duplicate_flag BOOLEAN NOT NULL, conflict_flag BOOLEAN NOT NULL, llm_status VARCHAR, human_status VARCHAR)")
+        await database.run("CREATE INDEX idx_mart_review_article_serving_order ON mart.review_article_serving(project_id, generation, has_all_llm_judgments, article_created_at, article_id)")
+        await database.run("CREATE INDEX idx_mart_review_article_filter_member_lookup ON mart.review_article_filter_member(project_id, generation, prompt_id, answer_id, article_id)")
+        await database.run("CREATE INDEX idx_mart_review_article_serving_detail_lookup ON mart.review_article_serving_detail(project_id, generation, article_id, prompt_order, created_at)")
+        await database.run("CREATE INDEX idx_mart_review_article_rollup_project_id ON mart.review_article_rollup(project_id, has_all_llm_judgments, article_created_at, article_id)")
+        await database.run("CREATE UNIQUE INDEX idx_review_article_filter_state_serving_v4_pk ON mart.review_article_filter_state_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)")
+        await database.run("CREATE INDEX idx_review_article_filter_state_serving_v4_lookup ON mart.review_article_filter_state_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, duplicate_flag, conflict_flag, llm_status, human_status, article_id)")
+
+        await migrateDuckdb()
+
+        const tableRows = await database.queryJson(\`
+          SELECT table_name AS tableName
+          FROM information_schema.tables
+          WHERE table_schema = 'mart'
+            AND table_name IN (
+              'review_article_filter_state_serving_v4',
+              'review_article_serving',
+              'review_article_rollup',
+              'review_article_filter_member',
+              'review_article_serving_detail'
+            )
+          ORDER BY table_name
+        \`)
+        const indexRows = await database.queryJson(\`
+          SELECT index_name AS indexName
+          FROM duckdb_indexes()
+          WHERE index_name IN (
+            'idx_mart_review_article_serving_order',
+            'idx_mart_review_article_filter_member_lookup',
+            'idx_mart_review_article_serving_detail_lookup',
+            'idx_mart_review_article_rollup_project_id',
+            'idx_review_article_filter_state_serving_v4_lookup',
+            'idx_review_article_filter_state_serving_v4_pk'
+          )
+          ORDER BY index_name
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0201_dropLegacyReviewV3Marts.sql'"
+        )
+
+        console.log(JSON.stringify({indexRows, migrationRows, tableRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39987',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39988',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify legacy mart drop')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      indexRows: Array<{indexName: string}>
+      migrationRows: Array<{name: string}>
+      tableRows: Array<{tableName: string}>
+    }
+
+    expect(parsed.tableRows).toEqual([])
+    expect(parsed.indexRows).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('DuckDB legacy review V3 mart drop migration is idempotent when targets are absent', async () => {
+  const duckdbPath = `/tmp/forska-drop-legacy-review-v3-marts-absent-${Date.now()}.duckdb`
+  const targetMigrationFile = '0201_dropLegacyReviewV3Marts.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+
+        await migrateDuckdb()
+
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0201_dropLegacyReviewV3Marts.sql'"
+        )
+
+        console.log(JSON.stringify({migrationRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39985',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39986',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify idempotent legacy mart drop',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {migrationRows: Array<{name: string}>}
+
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('DuckDB migration backfills fixed list-mode membership flags', async () => {
   const duckdbPath = `/tmp/forska-review-list-mode-membership-flags-${Date.now()}.duckdb`
   const targetMigrationFile = '0197_reviewArticleServingListModeMembershipFlags.sql'

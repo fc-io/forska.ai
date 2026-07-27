@@ -1567,7 +1567,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
     const materializationRows = await database.queryJson("SELECT project_id AS projectId, CAST(target_dirty_token AS INTEGER) AS targetDirtyToken FROM app.project_mart_dirty_materialization_state ORDER BY project_id ASC, target_dirty_token ASC")
     const reviewChangeDeltaRows = await database.queryJson("SELECT change_kind AS changeKind, source_table AS sourceTable, project_id AS projectId, article_id AS articleId FROM app.review_change_delta ORDER BY change_kind ASC, source_table ASC, project_id ASC NULLS LAST, article_id ASC NULLS LAST")
     const importRunDeltaRows = await database.queryJson("SELECT change_kind AS changeKind, import_route_id AS importRouteId, article_id AS articleId FROM app.import_run_article_delta ORDER BY change_kind ASC, import_route_id ASC NULLS LAST, article_id ASC NULLS LAST")
-    const [martCounts] = await database.queryJson("SELECT (SELECT COUNT(*)::INTEGER FROM mart.project_scope_article) AS projectScopeArticleCount, (SELECT COUNT(*)::INTEGER FROM mart.review_article_serving) AS reviewServingCount")
+    const [martCounts] = await database.queryJson("SELECT (SELECT COUNT(*)::INTEGER FROM mart.project_scope_article) AS projectScopeArticleCount")
 
     console.log(JSON.stringify({
       articleImportRouteCount: articleImportRouteCount.count,
@@ -1670,7 +1670,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
       )
     }),
   ).toBe(true)
-  expect(result.martCounts).toEqual({projectScopeArticleCount: 0, reviewServingCount: 0})
+  expect(result.martCounts).toEqual({projectScopeArticleCount: 0})
   expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
 })
 

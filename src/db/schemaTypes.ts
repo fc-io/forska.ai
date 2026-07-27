@@ -34,9 +34,6 @@ export type ProjectMartLargeRebuildPhase =
   | 'judgment_fact'
   | 'prompt_answer_fact'
   | 'review_answer_dictionary'
-  | 'review_article_filter_member'
-  | 'review_article_rollup'
-  | 'review_article_serving'
 export type ProjectTransferDirection = 'import' | 'export'
 export type ProjectTransferImportState =
   | 'awaiting_upload'
