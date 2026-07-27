@@ -217,7 +217,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       review_config_hash,
       snapshot_id,
       article_id,
-      list_mode_keys,
+      has_llm_list_mode,
       llm_patch_watermark,
       human_patch_watermark,
       both_patch_watermark,
@@ -229,7 +229,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       llm_has_judgment
     ) VALUES ${articleRows
       .map((article) => {
-        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', '${article.id}', ['llm'], 0, 0, 0, 0, FALSE, FALSE, NULL, NULL, FALSE)`
+        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', '${article.id}', TRUE, 0, 0, 0, 0, FALSE, FALSE, NULL, NULL, FALSE)`
       })
       .join(', ')};
 

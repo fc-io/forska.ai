@@ -411,6 +411,7 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).toContain('has_human_list_mode = EXCLUDED.has_human_list_mode')
   expect(joined).toContain('has_both_list_mode = EXCLUDED.has_both_list_mode')
   expect(joined).toContain('has_unassessed_list_mode = EXCLUDED.has_unassessed_list_mode')
+  expect(joined).not.toContain('list_mode_keys')
   expect(joined).not.toContain('LEFT JOIN mart.review_selected_import_patch_v4')
 })
 

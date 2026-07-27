@@ -163,6 +163,7 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain('has_human_list_mode = EXCLUDED.has_human_list_mode')
   expect(joined).toContain('has_both_list_mode = EXCLUDED.has_both_list_mode')
   expect(joined).toContain('has_unassessed_list_mode = EXCLUDED.has_unassessed_list_mode')
+  expect(joined).not.toContain('list_mode_keys')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expectSelectedImportBaseInsertOmitsDisplayCopyColumns(baseInsertStatement ?? '')
   expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns(baseInsertStatement ?? '')
