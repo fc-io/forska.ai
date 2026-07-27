@@ -91,6 +91,25 @@ test('DuckDB migration creates dirty source watermark aggregate with dirty-work 
   expect(migrationSql).toContain('source_high_water_mark = GREATEST')
 })
 
+test('DuckDB migration refreshes dirty-source watermarks and leaves dirty-work pruning bounded at runtime', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0195_cleanupReviewServingDirtyWorkRetention.sql'),
+    'utf8',
+  )
+  const watermarkInsertIndex = migrationSql.indexOf('INSERT INTO app.review_serving_project_dirty_source_watermark')
+
+  expect(watermarkInsertIndex).toBeGreaterThanOrEqual(0)
+  expect(migrationSql).toContain('FROM app.review_serving_dirty_work')
+  expect(migrationSql).toContain('MAX(latest_source_high_water_mark) AS source_high_water_mark')
+  expect(migrationSql).toContain('source_high_water_mark = GREATEST')
+  expect(migrationSql).not.toContain('DELETE FROM app.review_serving_dirty_work')
+  expect(migrationSql).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
+  expect(migrationSql).not.toContain("status IN ('pending'")
+  expect(migrationSql).not.toContain("status = 'pending'")
+  expect(migrationSql).not.toContain("status = 'running'")
+  expect(migrationSql).not.toContain("status = 'failed'")
+})
+
 test('DuckDB migrations retire bounded review-serving storage with forward drops', () => {
   const reviewQueuePatchDropSql = readFileSync(
     resolve(migrationsFolder, '0118_dropReviewQueuePatchV4.sql'),
