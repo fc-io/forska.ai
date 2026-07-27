@@ -23,6 +23,20 @@ export type ReviewServingExportSnapshotScope = {projectId: string; reviewConfigH
 
 export type ReviewServingExportArticleRepositoryDatabase = {queryJson: <T>(statement: string) => Promise<T[]>}
 
+const getListModeFlagExpansionJoinSql = (stateAlias: string, listModeAlias: string) => {
+  return `
+        INNER JOIN supported_list_mode ${listModeAlias}_filter ON TRUE
+        INNER JOIN LATERAL (
+          VALUES
+            ('llm', ${stateAlias}.has_llm_list_mode),
+            ('human', ${stateAlias}.has_human_list_mode),
+            ('both', ${stateAlias}.has_both_list_mode),
+            ('unassessed', ${stateAlias}.has_unassessed_list_mode)
+        ) ${listModeAlias}(list_mode_key, has_list_mode)
+          ON ${listModeAlias}_filter.list_mode_key = ${listModeAlias}.list_mode_key
+         AND ${listModeAlias}.has_list_mode IS TRUE`
+}
+
 export const readReviewServingExportArticles = async (input: {
   articleIds: string[]
   database: ReviewServingExportArticleRepositoryDatabase
@@ -105,8 +119,7 @@ export const readReviewServingExportArticles = async (input: {
          AND state.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
          AND state.snapshot_id = s.snapshot_id
          AND state.article_id = s.article_id
-        INNER JOIN supported_list_mode list_mode
-          ON list_contains(state.list_mode_keys, list_mode.list_mode_key)
+        ${getListModeFlagExpansionJoinSql('state', 'list_mode')}
         LEFT JOIN app.article article
           ON article.id = s.article_id
         LEFT JOIN app.review_selected_article_import_v4 selected_base

@@ -135,6 +135,20 @@ const getDetailListModeExpansionPredicate = (input: ProjectReviewServingFilterOp
     : "detail.payload_kind = 'llm' AND list_mode_key.list_mode_key IN ('llm', 'both')"
 }
 
+const getListModeFlagExpansionJoinSql = (stateAlias: string, listModeAlias: string) => {
+  return `
+          INNER JOIN list_mode_key_filter ${listModeAlias}_filter ON TRUE
+          INNER JOIN LATERAL (
+            VALUES
+              ('llm', ${stateAlias}.has_llm_list_mode),
+              ('human', ${stateAlias}.has_human_list_mode),
+              ('both', ${stateAlias}.has_both_list_mode),
+              ('unassessed', ${stateAlias}.has_unassessed_list_mode)
+          ) ${listModeAlias}(list_mode_key, has_list_mode)
+            ON ${listModeAlias}_filter.list_mode_key = ${listModeAlias}.list_mode_key
+            AND ${listModeAlias}.has_list_mode IS TRUE`
+}
+
 const getDirectServingStateJoinSql = (stateAlias = 'list_mode_state') => {
   return `
           FROM mart.review_article_serving_base_v4 serving
@@ -143,7 +157,7 @@ const getDirectServingStateJoinSql = (stateAlias = 'list_mode_state') => {
             AND ${stateAlias}.review_config_hash = serving.review_config_hash
             AND ${stateAlias}.snapshot_id = serving.snapshot_id
             AND ${stateAlias}.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_contains(${stateAlias}.list_mode_keys, list_mode_key.list_mode_key)`
+          ${getListModeFlagExpansionJoinSql(stateAlias, 'list_mode_key')}`
 }
 
 const getScopedSelectedArticleCteSql = (

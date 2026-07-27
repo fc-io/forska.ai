@@ -295,9 +295,14 @@ const expectDirectServingStateSourceRead = (statement: string | undefined) => {
   expect(statement).toBeDefined()
   expect(statement).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
   expect(statement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(statement).toContain(
-    'INNER JOIN list_mode_key_filter list_mode_key\n            ON list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)',
-  )
+  expect(statement).toContain('INNER JOIN list_mode_key_filter list_mode_key_filter ON TRUE')
+  expect(statement).toContain("('llm', list_mode_state.has_llm_list_mode)")
+  expect(statement).toContain("('human', list_mode_state.has_human_list_mode)")
+  expect(statement).toContain("('both', list_mode_state.has_both_list_mode)")
+  expect(statement).toContain("('unassessed', list_mode_state.has_unassessed_list_mode)")
+  expect(statement).toContain('list_mode_key_filter.list_mode_key = list_mode_key.list_mode_key')
+  expect(statement).toContain('list_mode_key.has_list_mode IS TRUE')
+  expect(statement).not.toContain('list_contains(list_mode_state.list_mode_keys')
   expect(statement).not.toContain('mart.review_article_serving_v4')
 }
 
@@ -345,6 +350,57 @@ test('projects list-mode count replacements with summary identity and definition
   expect(joined).toContain('DELETE FROM mart.review_filter_facet_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
+})
+
+test('list-mode flag expansion ignores stale array membership and keeps requested modes bounded', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`
+      CREATE TABLE list_mode_state (
+        article_id VARCHAR NOT NULL,
+        list_mode_keys VARCHAR[] NOT NULL,
+        has_llm_list_mode BOOLEAN NOT NULL,
+        has_human_list_mode BOOLEAN NOT NULL,
+        has_both_list_mode BOOLEAN NOT NULL,
+        has_unassessed_list_mode BOOLEAN NOT NULL
+      )
+    `)
+    await connection.run(`
+      INSERT INTO list_mode_state VALUES
+        ('article-1', ['llm', 'human', 'both'], TRUE, FALSE, TRUE, FALSE),
+        ('article-2', ['human'], FALSE, TRUE, FALSE, FALSE)
+    `)
+    await connection.run('CREATE TABLE list_mode_key_filter(list_mode_key VARCHAR NOT NULL)')
+    await connection.run("INSERT INTO list_mode_key_filter VALUES ('human'), ('both')")
+
+    const reader = await connection.runAndReadAll(`
+      SELECT
+        list_mode_state.article_id AS articleId,
+        list_mode_key.list_mode_key AS listModeKey
+      FROM list_mode_state
+      INNER JOIN list_mode_key_filter list_mode_key_filter ON TRUE
+      INNER JOIN LATERAL (
+        VALUES
+          ('llm', list_mode_state.has_llm_list_mode),
+          ('human', list_mode_state.has_human_list_mode),
+          ('both', list_mode_state.has_both_list_mode),
+          ('unassessed', list_mode_state.has_unassessed_list_mode)
+      ) list_mode_key(list_mode_key, has_list_mode)
+        ON list_mode_key_filter.list_mode_key = list_mode_key.list_mode_key
+        AND list_mode_key.has_list_mode IS TRUE
+      ORDER BY articleId ASC, listModeKey ASC
+    `)
+
+    expect(reader.getRowObjectsJson()).toEqual([
+      {articleId: 'article-1', listModeKey: 'both'},
+      {articleId: 'article-2', listModeKey: 'human'},
+    ])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('dirty summary recompute scopes source reads to claimed articles', async () => {
@@ -497,7 +553,14 @@ test('unchunked full summary rebuild writes final serving rows without contribut
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(joined).toContain('list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)')
+  expect(joined).toContain('INNER JOIN list_mode_key_filter list_mode_key_filter ON TRUE')
+  expect(joined).toContain("('llm', list_mode_state.has_llm_list_mode)")
+  expect(joined).toContain("('human', list_mode_state.has_human_list_mode)")
+  expect(joined).toContain("('both', list_mode_state.has_both_list_mode)")
+  expect(joined).toContain("('unassessed', list_mode_state.has_unassessed_list_mode)")
+  expect(joined).toContain('list_mode_key_filter.list_mode_key = list_mode_key.list_mode_key')
+  expect(joined).toContain('list_mode_key.has_list_mode IS TRUE')
+  expect(joined).not.toContain('list_contains(list_mode_state.list_mode_keys')
   expect(joined).not.toContain('mart.review_article_serving_v4')
   expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).toContain('INNER JOIN scoped_serving serving')
@@ -545,7 +608,14 @@ test('chunked full summary rebuild stages aggregate request partials without art
   expect(partialInsertStatements.join('\n')).toContain('source_chunk_ids_key')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(joined).toContain('list_contains(list_mode_state.list_mode_keys, list_mode_key.list_mode_key)')
+  expect(joined).toContain('INNER JOIN list_mode_key_filter list_mode_key_filter ON TRUE')
+  expect(joined).toContain("('llm', list_mode_state.has_llm_list_mode)")
+  expect(joined).toContain("('human', list_mode_state.has_human_list_mode)")
+  expect(joined).toContain("('both', list_mode_state.has_both_list_mode)")
+  expect(joined).toContain("('unassessed', list_mode_state.has_unassessed_list_mode)")
+  expect(joined).toContain('list_mode_key_filter.list_mode_key = list_mode_key.list_mode_key')
+  expect(joined).toContain('list_mode_key.has_list_mode IS TRUE')
+  expect(joined).not.toContain('list_contains(list_mode_state.list_mode_keys')
   expect(joined).not.toContain('mart.review_article_serving_v4')
   expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).toContain('INNER JOIN scoped_serving serving')
