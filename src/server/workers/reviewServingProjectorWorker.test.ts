@@ -71,6 +71,8 @@ const reviewArticleServingDirectReadStateJoin = 'INNER JOIN mart.review_article_
 const reviewArticleServingDirectReadScopedProject = "WHERE base.project_id = 'project-1'"
 const reviewArticleServingDirectReadScopedRangeStart = "AND base.article_id >= 'article-001'"
 const reviewArticleServingDirectReadScopedRangeEnd = "AND base.article_id <= 'article-099'"
+const reviewArticleServingDirectReadFlagExpansion = 'AS list_mode(list_mode_key, has_list_mode)'
+const reviewArticleServingDirectReadFlagPredicate = 'WHERE list_mode.has_list_mode IS TRUE'
 const reviewArticleServingCompatibilityViewRead = 'FROM mart.review_article_serving_v4 serving'
 
 const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
@@ -4916,6 +4918,14 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
   expect(joined).toContain(reviewArticleServingDirectReadScopedProject)
   expect(joined).toContain(reviewArticleServingDirectReadScopedRangeStart)
   expect(joined).toContain(reviewArticleServingDirectReadScopedRangeEnd)
+  expect(joined).toContain("('both', scoped.has_both_list_mode)")
+  expect(joined).toContain("('llm', scoped.has_llm_list_mode)")
+  expect(joined).toContain("('human', scoped.has_human_list_mode)")
+  expect(joined).toContain("('unassessed', scoped.has_unassessed_list_mode)")
+  expect(joined).toContain(reviewArticleServingDirectReadFlagExpansion)
+  expect(joined).toContain(reviewArticleServingDirectReadFlagPredicate)
+  expect(joined).not.toContain('state.list_mode_keys')
+  expect(joined).not.toContain('scoped.list_mode_keys')
   expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
   expect(joined).toContain("checksum = 'checksum-display-1'")
   expect(joined).not.toContain('string_agg(')
@@ -5000,6 +5010,10 @@ test('debug rebuild validation mode forces full checksum for chunks without expe
     expect(joined).toContain('string_agg(')
     expect(joined).toContain(reviewArticleServingDirectReadTable)
     expect(joined).toContain(reviewArticleServingDirectReadStateJoin)
+    expect(joined).toContain(reviewArticleServingDirectReadFlagExpansion)
+    expect(joined).toContain(reviewArticleServingDirectReadFlagPredicate)
+    expect(joined).not.toContain('state.list_mode_keys')
+    expect(joined).not.toContain('scoped.list_mode_keys')
     expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
     expect(joined).not.toContain("sha256('cheap-count:'")
     expect(joined).toContain("checksum = 'checksum-display-debug'")
@@ -5084,6 +5098,10 @@ test('expected-checksum rebuild chunk keeps strict checksum validation', async (
   expect(joined).toContain('string_agg(')
   expect(joined).toContain(reviewArticleServingDirectReadTable)
   expect(joined).toContain(reviewArticleServingDirectReadStateJoin)
+  expect(joined).toContain(reviewArticleServingDirectReadFlagExpansion)
+  expect(joined).toContain(reviewArticleServingDirectReadFlagPredicate)
+  expect(joined).not.toContain('state.list_mode_keys')
+  expect(joined).not.toContain('scoped.list_mode_keys')
   expect(joined).not.toContain(reviewArticleServingCompatibilityViewRead)
   expect(joined).not.toContain("sha256('cheap-count:'")
   expect(joined).toContain('"validationMode":"strict-checksum"')

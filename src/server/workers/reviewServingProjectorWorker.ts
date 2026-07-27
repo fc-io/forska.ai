@@ -1032,7 +1032,10 @@ const getReviewArticleServingDirectReadSql = (input: {
           base.article_created_at,
           base.sort_key,
           base.activity_sort_at,
-          state.list_mode_keys,
+          state.has_both_list_mode,
+          state.has_llm_list_mode,
+          state.has_human_list_mode,
+          state.has_unassessed_list_mode,
           state.llm_patch_watermark,
           state.human_patch_watermark,
           state.both_patch_watermark,
@@ -1053,7 +1056,13 @@ const getReviewArticleServingDirectReadSql = (input: {
           AND ${getAliasedSnapshotIdPredicate('base', input.snapshotIds)}
           AND ${getChunkArticleRangePredicate({alias: 'base', chunk: input.chunk})}
       ) scoped
-      CROSS JOIN unnest(scoped.list_mode_keys) AS list_mode(list_mode_key)
+      CROSS JOIN (VALUES
+        ('both', scoped.has_both_list_mode),
+        ('llm', scoped.has_llm_list_mode),
+        ('human', scoped.has_human_list_mode),
+        ('unassessed', scoped.has_unassessed_list_mode)
+      ) AS list_mode(list_mode_key, has_list_mode)
+      WHERE list_mode.has_list_mode IS TRUE
     ) ${input.alias}`
 }
 

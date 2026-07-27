@@ -881,6 +881,17 @@ const reviewServingListModeMembershipColumns: Record<ReviewServingListMode, stri
   unassessed: 'has_unassessed_list_mode',
 }
 
+const getReviewServingDirectListModeExpansionSql = (stateAlias: string) => {
+  return [
+    ' CROSS JOIN (VALUES',
+    ` ('both', ${stateAlias}.has_both_list_mode),`,
+    ` ('llm', ${stateAlias}.has_llm_list_mode),`,
+    ` ('human', ${stateAlias}.has_human_list_mode),`,
+    ` ('unassessed', ${stateAlias}.has_unassessed_list_mode)`,
+    ') AS list_mode(list_mode_key, has_list_mode)',
+  ].join('')
+}
+
 const getReviewServingRowsSqlListModePredicate = (params: {
   contract: ReviewServingReadContract
   listModeParameter: string
@@ -891,6 +902,10 @@ const getReviewServingRowsSqlListModePredicate = (params: {
 
   if (shouldUseDirectReviewArticleServingRead(params.contract) && params.contract.listMode) {
     return ` AND ${reviewServingArticleDirectStateAlias}.${reviewServingListModeMembershipColumns[params.contract.listMode]} IS TRUE`
+  }
+
+  if (shouldUseDirectReviewArticleServingRead(params.contract)) {
+    return ' AND list_mode.has_list_mode IS TRUE'
   }
 
   const listModeColumn =
@@ -1655,7 +1670,7 @@ export const buildReviewServingRowsSql = (params: {
           ` AND ${reviewServingArticleDirectStateAlias}.article_id = ${reviewServingArticleDirectBaseAlias}.article_id`,
           params.contract.listMode
             ? ''
-            : ` CROSS JOIN UNNEST(${reviewServingArticleDirectStateAlias}.list_mode_keys) AS list_mode(list_mode_key)`,
+            : getReviewServingDirectListModeExpansionSql(reviewServingArticleDirectStateAlias),
         ].join('')
     : params.contract.servingTable
 
