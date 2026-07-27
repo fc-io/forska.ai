@@ -50,6 +50,7 @@ export type ReviewServingProjectorWritableTable =
   | 'mart.review_filter_facet_serving_v4'
   | 'mart.review_filter_option_serving_v4'
   | 'mart.review_title_search_serving_v4'
+  | 'mart.review_unassessed_queue_article_rank_serving_v4'
   | 'mart.review_unassessed_queue_serving_v4'
 
 export type ReviewServingProjectorRecordValue = Date | ReviewServingIdentityValue | readonly string[] | null
@@ -135,6 +136,7 @@ export type WriteReviewServingProjectorComponentInput = {
   candidateSnapshot?: ReviewServingSnapshotManifestInput
   component: ReviewServingProjectionComponent
   projectionManifests?: readonly ReviewServingProjectionIdentityManifestInput[]
+  postRecordStatements?: readonly string[]
   records?: readonly ReviewServingProjectorRecord[]
   repairDirtyWork?: readonly ReviewServingDirtyWorkInput[]
   scanGuardedInsertMissingRecordTables?: readonly ReviewServingProjectorWritableTable[]
@@ -947,6 +949,57 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       prompt_ids = ${mergeReviewServingQueuePromptIdsSql('excluded.prompt_ids', 'mart.review_unassessed_queue_serving_v4.prompt_ids')},
       queue_updated_at = excluded.queue_updated_at
   `,
+    `
+    INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_kind,
+      priority_bucket,
+      article_id,
+      activity_sort_at,
+      queue_updated_at
+    )
+    WITH ${input.rebuildSourceCtesSql},
+    queue_rows AS (
+      SELECT
+        ${getSqlLiteral(input.projectId)} AS project_id,
+        queue.review_config_hash,
+        ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+        queue.queue_kind,
+        queue.priority_bucket,
+        queue.article_id,
+        queue.activity_sort_at,
+        current_timestamp AS queue_updated_at,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            project_id,
+            queue.review_config_hash,
+            snapshot_id,
+            queue.queue_kind,
+            queue.article_id
+          ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC
+        ) AS article_rank
+      FROM queue_union queue
+      WHERE NOT queue.tombstone
+        AND queue.prompt_id IS NOT NULL
+    )
+    SELECT
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_kind,
+      priority_bucket,
+      article_id,
+      activity_sort_at,
+      queue_updated_at
+    FROM queue_rows
+    WHERE article_rank = 1
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, article_id) DO UPDATE SET
+      priority_bucket = excluded.priority_bucket,
+      activity_sort_at = excluded.activity_sort_at,
+      queue_updated_at = excluded.queue_updated_at
+  `,
   ]
 }
 
@@ -1035,6 +1088,14 @@ export const writeReviewServingProjectorComponent = async (
         insertOnlyTables,
         scanGuardedInsertMissingTables,
       })
+    })
+
+    await measure('postRecordStatementsMs', async () => {
+      await (input.postRecordStatements ?? []).reduce<Promise<void>>((previous, statement) => {
+        return previous.then(async () => {
+          await tx.run(statement)
+        })
+      }, Promise.resolve())
     })
 
     if (input.selectedImportSnapshotCursor !== undefined) {

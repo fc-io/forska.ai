@@ -7643,6 +7643,179 @@ test('DuckDB migration preserves legacy nullable queue prompt rows during compac
   }
 })
 
+test('DuckDB migration derives unassessed queue article rank from one winning queue row', async () => {
+  const duckdbPath = `/tmp/forska-review-queue-article-rank-${Date.now()}.duckdb`
+  const targetMigrationFile = '0200_reviewUnassessedQueueArticleRankServing.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_unassessed_queue_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            queue_kind VARCHAR NOT NULL,
+            priority_bucket INTEGER NOT NULL,
+            activity_sort_at TIMESTAMPTZ NOT NULL,
+            article_id VARCHAR NOT NULL,
+            prompt_ids VARCHAR[] NOT NULL,
+            queue_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_unassessed_queue_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            queue_kind,
+            priority_bucket,
+            activity_sort_at,
+            article_id,
+            prompt_ids,
+            queue_updated_at
+          )
+          VALUES
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'unassessed',
+              1,
+              TIMESTAMPTZ '2026-07-25T09:00:00Z',
+              'article-a',
+              ['prompt-low'],
+              TIMESTAMPTZ '2026-07-25T09:10:00Z'
+            ),
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'unassessed',
+              2,
+              TIMESTAMPTZ '2026-07-25T08:00:00Z',
+              'article-a',
+              ['prompt-high'],
+              TIMESTAMPTZ '2026-07-25T08:10:00Z'
+            ),
+            (
+              'project-a',
+              'config-a',
+              'snapshot-a',
+              'unassessed',
+              1,
+              TIMESTAMPTZ '2026-07-25T07:00:00Z',
+              'article-b',
+              ['prompt-b'],
+              TIMESTAMPTZ '2026-07-25T07:10:00Z'
+            )
+        \`)
+
+        await migrateDuckdb()
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            CAST(priority_bucket AS INTEGER) AS priorityBucket,
+            activity_sort_at AS activitySortAt,
+            queue_updated_at AS queueUpdatedAt
+          FROM mart.review_unassessed_queue_article_rank_serving_v4
+          ORDER BY article_id
+        \`)
+        const indexes = await database.queryJson(\`
+          SELECT index_name AS indexName
+          FROM duckdb_indexes()
+          WHERE index_name = 'idx_review_unassessed_queue_article_rank_serving_v4_order'
+        \`)
+        console.log(JSON.stringify({indexes, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify queue article-rank migration',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      indexes: Array<{indexName: string}>
+      rows: Array<{activitySortAt: string; articleId: string; priorityBucket: number; queueUpdatedAt: string}>
+    }
+
+    expect(parsed.indexes).toEqual([{indexName: 'idx_review_unassessed_queue_article_rank_serving_v4_order'}])
+    // Rank ordering comes from the winning queue row; freshness tracks the latest prompt queue row for the article.
+    expect(parsed.rows).toEqual([
+      {
+        activitySortAt: expect.stringContaining('10:00') as string,
+        articleId: 'article-a',
+        priorityBucket: 2,
+        queueUpdatedAt: expect.stringContaining('11:10') as string,
+      },
+      {
+        activitySortAt: expect.stringContaining('09:00') as string,
+        articleId: 'article-b',
+        priorityBucket: 1,
+        queueUpdatedAt: expect.stringContaining('09:10') as string,
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('DuckDB migrations add canonical article identifiers and keep legacy article ids non-unique', async () => {
   const duckdbPath = `/tmp/forska-canonical-article-identifier-${Date.now()}.duckdb`
   const canonicalSchemaMigrationSql = readFileSync(

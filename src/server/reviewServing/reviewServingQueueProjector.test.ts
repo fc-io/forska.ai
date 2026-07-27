@@ -98,6 +98,12 @@ test('LLM answer changes acknowledge queue work without legacy patch rows', asyn
   const servingDelete = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
   })
+  const articleRankDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
+  })
+  const articleRankInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
+  })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
   expect(joined).not.toContain('mart.review_queue_patch_v4')
@@ -106,6 +112,9 @@ test('LLM answer changes acknowledge queue work without legacy patch rows', asyn
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(servingDelete).toContain('snapshot_id =')
   expect(servingDelete).toContain("article_id IN ('article-1')")
+  expect(articleRankDelete).toContain("article_id IN ('article-1')")
+  expect(articleRankInsert).toContain('FROM mart.review_unassessed_queue_serving_v4')
+  expect(statements.indexOf(servingDelete ?? '')).toBeLessThan(statements.indexOf(articleRankDelete ?? ''))
 })
 
 test('queue no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -175,6 +184,9 @@ test('prompt config changes rebuild prompt-scoped and summary queue rows', async
   const servingUpdate = statements.find((statement) => {
     return statement.includes('UPDATE mart.review_unassessed_queue_serving_v4')
   })
+  const articleRankInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
+  })
   const queueSelect = statements.find((statement) => {
     return statement.includes('FROM queue_union queue')
   })
@@ -183,6 +195,7 @@ test('prompt config changes rebuild prompt-scoped and summary queue rows', async
   expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
   expect(servingUpdate).toContain('SET prompt_ids = list_filter(prompt_ids')
   expect(servingUpdate).toContain("['prompt-1', 'summary']::VARCHAR[]")
+  expect(articleRankInsert).toContain('FROM mart.review_unassessed_queue_serving_v4')
   expect(queueSelect).toContain("OR queue.prompt_id = 'summary'")
   expect(queueSelect?.match(/queue_union AS/g) ?? []).toHaveLength(1)
 })

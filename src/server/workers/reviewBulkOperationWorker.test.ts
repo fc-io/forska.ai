@@ -243,7 +243,7 @@ test('review bulk operation worker applies unassessed queue scope for filter cri
   const joined = harness.statements.join('\n')
 
   expect(joined).toContain('list_mode_state.has_unassessed_list_mode IS TRUE')
-  expect(joined).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(joined).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   expect(joined).toContain("queue.queue_kind = 'unassessed'")
 })
 

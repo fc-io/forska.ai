@@ -103,7 +103,7 @@ const createReaderDatabase = () => {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
-      if (statement.includes('FROM mart.review_unassessed_queue_serving_v4')) {
+      if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4')) {
         return [{activity_sort_at: '2026-01-04T00:00:00.000Z', article_id: 'article-1', priority_bucket: 1}] as T[]
       }
 
@@ -489,12 +489,13 @@ test('unassessed review route service pages filtered distinct article rows and q
 
   expect(reader.statements).toHaveLength(6)
   expect(servingStatement).toContain('unassessed_queue_page AS')
-  expect(servingStatement).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(servingStatement).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   expect(servingStatement).toContain('FROM unassessed_queue_page')
   expect(servingStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(servingStatement).toContain('list_mode_state.has_unassessed_list_mode IS TRUE')
   expect(servingStatement).toContain('unassessed_queue_candidate AS (SELECT')
-  expect(servingStatement).toContain('MAX(queue.activity_sort_at) AS activity_sort_at')
+  expect(servingStatement).toContain('queue.activity_sort_at')
+  expect(servingStatement).not.toContain('MAX(queue.activity_sort_at) AS activity_sort_at')
   expect(servingStatement).toContain(
     'ORDER BY unassessed_queue_candidate.activity_sort_at DESC, unassessed_queue_candidate.article_id DESC LIMIT 26',
   )
@@ -504,7 +505,7 @@ test('unassessed review route service pages filtered distinct article rows and q
   expect(countStatement).toContain("'unassessed' AS list_mode_key")
   expect(countStatement).toContain("WHEN 'unassessed' THEN list_mode_state.has_unassessed_list_mode")
   expect(countStatement).toContain('unassessed_queue_article_ids AS')
-  expect(countStatement).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(countStatement).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
   expect(countStatement).toContain("queue.queue_kind = 'unassessed'")
   expect(countStatement).toContain('search_filtered_article_ids AS')
   expect(countStatement).toContain('starts_with(search.token, search_prefix.token_prefix)')
@@ -562,7 +563,7 @@ test('human, both, and unassessed services surface stale and unavailable freshne
   )
 
   expect(staleResult.totalCount).toBe(1)
-  expect(staleReader.statements.join('\n')).toContain('FROM mart.review_unassessed_queue_serving_v4')
+  expect(staleReader.statements.join('\n')).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4')
 
   const humanReader = createReaderDatabase()
   const bothReader = createReaderDatabase()

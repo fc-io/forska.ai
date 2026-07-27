@@ -50,6 +50,7 @@ export const reviewServingRegisteredSqlTables = [
     }),
     'mart.review_article_serving_base_v4',
     'mart.review_article_serving_list_mode_state_v4',
+    'mart.review_unassessed_queue_article_rank_serving_v4',
   ]),
 ].sort()
 
@@ -222,20 +223,13 @@ const hasOnlyBoundedPostingFilterIntersectionAggregation = (sql: string) => {
 }
 
 const hasOnlyBoundedUnassessedQueueArticleAnchorAggregation = (sql: string) => {
-  const groupByClauses = [...sql.matchAll(/\bgroup\s+by\b/giu)]
-
   return (
-    groupByClauses.length === 1
-    && /\bunassessed_queue_candidate\s+as\s*\(/iu.test(sql)
-    && /\bfrom\s+mart\.review_unassessed_queue_serving_v4\s+queue\b/iu.test(sql)
-    && /\bmax\s*\(\s*queue\.activity_sort_at\s*\)\s+as\s+activity_sort_at/iu.test(sql)
+    /\bunassessed_queue_candidate\s+as\s*\(/iu.test(sql)
+    && /\bfrom\s+mart\.review_unassessed_queue_article_rank_serving_v4\s+queue\b/iu.test(sql)
     && /\bwhere\s+queue\.project_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
     && /\bqueue\.snapshot_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
     && /\bqueue\.review_config_hash\s*=\s*[$:@?][\w.]+/iu.test(sql)
     && /\bqueue\.queue_kind\s*=\s*'unassessed'/iu.test(sql)
-    && /\bgroup\s+by\s+queue\.project_id\s*,\s*queue\.review_config_hash\s*,\s*queue\.snapshot_id\s*,\s*queue\.article_id/iu.test(
-      sql,
-    )
   )
 }
 
@@ -504,7 +498,7 @@ const reviewServingArticleListModeStateTable = 'mart.review_article_serving_list
 const reviewServingArticleDirectBaseAlias = 'serving'
 const reviewServingArticleDirectStateAlias = 'list_mode_state'
 const reviewServingArticlePostingSortAlias = 'serving_order'
-const reviewServingUnassessedQueueTable = 'mart.review_unassessed_queue_serving_v4'
+const reviewServingUnassessedQueueArticleRankTable = 'mart.review_unassessed_queue_article_rank_serving_v4'
 const reviewServingUnassessedQueueAlias = 'queue'
 const reviewServingUnassessedQueueCandidateAlias = 'unassessed_queue_candidate'
 const reviewServingUnassessedQueuePageAlias = 'unassessed_queue_page'
@@ -1351,7 +1345,7 @@ const getReviewServingRowsSqlUnassessedQueuePredicate = (params: {
 }) => {
   return params.contract.key === 'review.unassessed.rows' && !shouldUseQueueAnchoredUnassessedRowsRead(params.contract)
     ? [
-        ` AND EXISTS (SELECT 1 FROM ${reviewServingUnassessedQueueTable} ${reviewServingUnassessedQueueAlias}`,
+        ` AND EXISTS (SELECT 1 FROM ${reviewServingUnassessedQueueArticleRankTable} ${reviewServingUnassessedQueueAlias}`,
         ` WHERE queue.project_id = ${params.projectIdParameter}`,
         ` AND queue.review_config_hash = ${params.reviewConfigHashParameter}`,
         ` AND queue.snapshot_id = ${params.snapshotIdParameter}`,
@@ -1691,8 +1685,8 @@ export const buildReviewServingRowsSql = (params: {
       ` ${reviewServingUnassessedQueueAlias}.review_config_hash,`,
       ` ${reviewServingUnassessedQueueAlias}.snapshot_id,`,
       ` ${reviewServingUnassessedQueueAlias}.article_id,`,
-      ` MAX(${reviewServingUnassessedQueueAlias}.activity_sort_at) AS activity_sort_at`,
-      ` FROM ${reviewServingUnassessedQueueTable} ${reviewServingUnassessedQueueAlias}`,
+      ` ${reviewServingUnassessedQueueAlias}.activity_sort_at`,
+      ` FROM ${reviewServingUnassessedQueueArticleRankTable} ${reviewServingUnassessedQueueAlias}`,
       ` INNER JOIN ${reviewServingArticleBaseTable} ${reviewServingArticleDirectBaseAlias}`,
       ` ON ${reviewServingArticleDirectBaseAlias}.project_id = ${params.projectIdParameter}`,
       ` AND ${reviewServingArticleDirectBaseAlias}.project_id = ${reviewServingUnassessedQueueAlias}.project_id`,
@@ -1716,7 +1710,7 @@ export const buildReviewServingRowsSql = (params: {
       identityPredicates,
       listModePredicate,
       physicalFilterPredicate,
-      ` GROUP BY ${reviewServingUnassessedQueueAlias}.project_id, ${reviewServingUnassessedQueueAlias}.review_config_hash, ${reviewServingUnassessedQueueAlias}.snapshot_id, ${reviewServingUnassessedQueueAlias}.article_id)`,
+      `)`,
     ].join('')
     const queuePageSql = [
       `${reviewServingUnassessedQueuePageAlias} AS (SELECT`,

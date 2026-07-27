@@ -176,12 +176,23 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
   })
+  const articleRankInsertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
+  })
 
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id) DO UPDATE SET',
   )
   expect(insertStatement).toContain('prompt_ids = list_sort(list_distinct(list_concat(')
   expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
+  expect(articleRankInsertStatement).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, article_id) DO UPDATE SET',
+  )
+  expect(articleRankInsertStatement).toContain('ROW_NUMBER() OVER (')
+  expect(articleRankInsertStatement).toContain(
+    'ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC',
+  )
+  expect(articleRankInsertStatement).toContain('WHERE article_rank = 1')
 })
 
 test('title search rebuild ranges merge rows with one bounded conflict upsert and no scoped indexed deletes', async () => {

@@ -274,7 +274,7 @@ const getUnassessedQueueArticleIdsCte = (input: ReviewServingDynamicCountSqlInpu
     ? `,
 unassessed_queue_article_ids AS (
   SELECT DISTINCT queue.article_id
-  FROM mart.review_unassessed_queue_serving_v4 queue
+  FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
   CROSS JOIN scoped
   WHERE queue.project_id = scoped.project_id
     AND queue.review_config_hash IS NOT DISTINCT FROM scoped.review_config_hash
