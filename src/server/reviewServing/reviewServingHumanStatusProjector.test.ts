@@ -159,6 +159,7 @@ test('human prompt answer deltas update serving directly', async () => {
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+  expect(joined).toContain('SELECT DISTINCT list_mode_key, article_id, review_config_hash')
   expect(joined).toContain('review_config_hash')
   expect(joined).toContain('state.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash')
   expect(joined).toContain("prompt_id <> 'summary'")

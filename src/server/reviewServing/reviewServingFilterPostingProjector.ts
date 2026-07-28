@@ -543,7 +543,7 @@ const getCompactPostingValuesSql = (rows: readonly CompactPostingRow[]) => {
 }
 
 const getMergePostingArticleIdsSql = (incomingArticleIdsSql: string, existingArticleIdsSql: string) => {
-  return `(SELECT LIST(DISTINCT article_id ORDER BY article_id) FROM (SELECT UNNEST(COALESCE(${existingArticleIdsSql}, []::VARCHAR[])) AS article_id UNION ALL SELECT UNNEST(${incomingArticleIdsSql}) AS article_id))`
+  return `list_sort(list_distinct(list_concat(COALESCE(${existingArticleIdsSql}, []::VARCHAR[]), COALESCE(${incomingArticleIdsSql}, []::VARCHAR[]))))`
 }
 
 const getDeleteServingRowsStatement = (

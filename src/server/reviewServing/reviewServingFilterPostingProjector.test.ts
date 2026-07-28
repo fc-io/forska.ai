@@ -242,7 +242,8 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain('ON CONFLICT')
-  expect(joined).toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
+  expect(joined).toContain('article_ids = list_sort(list_distinct(list_concat(')
+  expect(joined).toContain('COALESCE(source.articleIds, []::VARCHAR[])')
   expect(joined).toContain(
     'LIST(DISTINCT CAST(posting.articleId AS VARCHAR) ORDER BY CAST(posting.articleId AS VARCHAR)) AS articleIds',
   )

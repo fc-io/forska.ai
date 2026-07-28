@@ -51,6 +51,31 @@ test('DuckDB migrations rebuild review rebuild request indexes instead of updati
   expect(migrationSql).not.toContain('UPDATE app.review_rebuild_request')
 })
 
+test('DuckDB migrations drop mutable review-serving queue indexes', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0210_dropReviewServingMutableSecondaryIndexes.sql'),
+    'utf8',
+  )
+
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_dirty_work_lookup;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_dirty_work_ack_component;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_projection_identity_manifest_component;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_selected_import_snapshot_active;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_selected_article_import_v4_order;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_snapshot_manifest_status;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_snapshot_pin_active;')
+})
+
+test('DuckDB migrations drop mutable judgment-detail indexes', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0211_dropReviewJudgmentDetailMutableIndexes.sql'),
+    'utf8',
+  )
+
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS mart.idx_review_article_judgment_detail_serving_v4_repaired_pk;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS mart.idx_review_article_judgment_detail_serving_v4_article;')
+})
+
 test('DuckDB migrations drop the posting stats index that duplicates the repaired unique key', () => {
   const migrationSql = readFileSync(
     resolve(migrationsFolder, '0114_dropReviewFilterPostingStatsLookupIndex.sql'),
@@ -9275,6 +9300,78 @@ test('migrateDuckdb uses incremental checkpoints under low-memory DuckDB profile
     expect(runStatements[0]).toContain("SET checkpoint_threshold = '1KiB'")
     expect(runStatements.at(-1)).toContain("SET checkpoint_threshold = '8192MiB'")
     expect(maintenanceCommands).toEqual([])
+  } finally {
+    mock.restore()
+  }
+})
+
+test('migrateDuckdb preserves low-memory migration failure when checkpoint restore also fails', async () => {
+  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+  process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-low-memory-restore-failure-test.duckdb'
+  process.env.SERVER_ROLE = 'maintenance-worker'
+
+  const targetMigrationFile = '0112_reviewServingSummaryRebuildPartial.sql'
+  const targetSql = readFileSync(resolve(migrationsFolder, targetMigrationFile), 'utf8').trim()
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const migrationError = new Error('Fatal migration failure')
+  const restoreError = new Error('Invalidated runtime cannot restore checkpoint threshold')
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const runStatements: string[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          close: async () => {},
+          getRuntimeConfig: () => {
+            return {checkpointThreshold: '8192MiB'}
+          },
+          maintenance: async () => {},
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            return statement.includes('FROM app_schema_migration')
+              ? (appliedNames.map((name) => {
+                  return {name}
+                }) as T[])
+              : []
+          },
+          run: async (statement: string) => {
+            const normalizedStatement = statement.trim()
+            runStatements.push(normalizedStatement)
+
+            if (normalizedStatement === targetSql) {
+              throw migrationError
+            }
+
+            if (normalizedStatement === "SET checkpoint_threshold = '8192MiB'") {
+              throw restoreError
+            }
+          },
+        }
+      },
+    }
+  })
+
+  try {
+    const {migrateDuckdb} = (await import(
+      `${migrationModulePath}?low-memory-restore-failure-test=${Date.now()}`
+    )) as MigrateDuckdbModule
+    const error = await migrateDuckdb().then(
+      () => {
+        return null
+      },
+      (caughtError: unknown) => {
+        return caughtError instanceof Error ? caughtError : new Error(String(caughtError))
+      },
+    )
+
+    expect(error?.message).toBe(
+      `${migrationError.message} -- checkpoint threshold restore failed: ${restoreError.message}`,
+    )
+    expect(runStatements).toContain('ROLLBACK')
+    expect(runStatements.at(-1)).toBe("SET checkpoint_threshold = '8192MiB'")
   } finally {
     mock.restore()
   }

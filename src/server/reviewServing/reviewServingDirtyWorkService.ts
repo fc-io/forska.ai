@@ -330,7 +330,7 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
       dirty_range_end,
       status,
       completed_at
-    ) VALUES (
+    ) SELECT
       ${getSqlLiteral(getDirtyAckId(claim))},
       ${getSqlLiteral(claim.dirtyWorkId)},
       ${getSqlLiteral(claim.projectionComponent)},
@@ -341,8 +341,11 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
       ${getSqlLiteral(claim.dirtyRangeEnd)},
       'completed',
       current_timestamp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_ack existing
+      WHERE (existing.dirty_ack_id || '') = (${getSqlLiteral(getDirtyAckId(claim))} || '')
     )
-    ON CONFLICT(dirty_ack_id) DO NOTHING
   `)
 }
 
@@ -668,7 +671,7 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
       dirty_range_end,
       status,
       completed_at
-    ) VALUES (
+    ) SELECT
       ${getSqlLiteral(dirtyAckId)},
       NULL,
       ${getSqlLiteral(input.projectionComponent)},
@@ -679,8 +682,11 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
       NULL,
       'completed',
       current_timestamp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_ack existing
+      WHERE (existing.dirty_ack_id || '') = (${getSqlLiteral(dirtyAckId)} || '')
     )
-    ON CONFLICT(dirty_ack_id) DO NOTHING
   `)
 
   await database.run(`
@@ -914,7 +920,7 @@ export const cleanupReviewServingDirtyWorkRetention = async (
           dirty_range_end,
           status,
           completed_at
-        ) VALUES (
+        ) SELECT
           ${getSqlLiteral(dirtyAckId)},
           NULL,
           ${getSqlLiteral(lane.projectionComponent)},
@@ -925,8 +931,11 @@ export const cleanupReviewServingDirtyWorkRetention = async (
           NULL,
           'completed',
           current_timestamp
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM app.review_serving_dirty_work_ack existing
+          WHERE (existing.dirty_ack_id || '') = (${getSqlLiteral(dirtyAckId)} || '')
         )
-        ON CONFLICT(dirty_ack_id) DO NOTHING
       `)
 
         return [...compactions, {...lane, dirtyAckId}]

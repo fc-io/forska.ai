@@ -1,0 +1,14 @@
+DROP INDEX IF EXISTS app.idx_review_serving_dirty_work_lookup;
+DROP INDEX IF EXISTS idx_review_serving_dirty_work_lookup;
+DROP INDEX IF EXISTS app.idx_review_serving_dirty_work_ack_component;
+DROP INDEX IF EXISTS idx_review_serving_dirty_work_ack_component;
+DROP INDEX IF EXISTS app.idx_review_projection_identity_manifest_component;
+DROP INDEX IF EXISTS idx_review_projection_identity_manifest_component;
+DROP INDEX IF EXISTS app.idx_review_selected_import_snapshot_active;
+DROP INDEX IF EXISTS idx_review_selected_import_snapshot_active;
+DROP INDEX IF EXISTS app.idx_review_selected_article_import_v4_order;
+DROP INDEX IF EXISTS idx_review_selected_article_import_v4_order;
+DROP INDEX IF EXISTS app.idx_review_serving_snapshot_manifest_status;
+DROP INDEX IF EXISTS idx_review_serving_snapshot_manifest_status;
+DROP INDEX IF EXISTS app.idx_review_serving_snapshot_pin_active;
+DROP INDEX IF EXISTS idx_review_serving_snapshot_pin_active;

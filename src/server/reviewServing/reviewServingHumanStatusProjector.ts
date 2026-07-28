@@ -608,7 +608,7 @@ const getApplyHumanStatusServingStatement = (input: {
     : `WITH changed(list_mode_key, article_id, review_config_hash, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
         SELECT * FROM (VALUES ${values})
       ), changed_article AS (
-        SELECT DISTINCT list_mode_key, article_id
+        SELECT DISTINCT list_mode_key, article_id, review_config_hash
         FROM changed
       ), candidate_prompt AS (
         SELECT

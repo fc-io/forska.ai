@@ -837,7 +837,7 @@ test('claims stale running work after the running lease expires', async () => {
 })
 
 test('completion and failure move running claims into retention-ready terminal states', async () => {
-  const {acks, database} = createFakeDirtyWorkDatabase()
+  const {acks, database, statements} = createFakeDirtyWorkDatabase()
   const first = await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
   const second = await upsertDisplayWork(
     database,
@@ -856,10 +856,15 @@ test('completion and failure move running claims into retention-ready terminal s
 
   const completed = await getReviewServingDirtyWork(first.dirtyWorkId, database)
   const failed = await getReviewServingDirtyWork(second.dirtyWorkId, database)
+  const acknowledgementInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack')
+  })
 
   expect(completed?.status).toBe('completed')
   expect(failed?.status).toBe('failed')
   expect(acks.size).toBe(1)
+  expect(acknowledgementInsert).toContain('WHERE NOT EXISTS')
+  expect(acknowledgementInsert).not.toContain('ON CONFLICT')
 })
 
 test('completion advances dirty source watermarks by project and source partition without dropping acknowledgements', async () => {
@@ -989,9 +994,11 @@ test('ack compaction creates a component high-water row and removes covered poin
   })
 
   const compactedAckInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('dirty_work_id')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('NULL,')
   })
-  expect(compactedAckInsert).toContain('ON CONFLICT(dirty_ack_id) DO NOTHING')
+  expect(compactedAckInsert).toContain('WHERE NOT EXISTS')
+  expect(compactedAckInsert).toContain('FROM app.review_serving_dirty_work_ack existing')
+  expect(compactedAckInsert).not.toContain('ON CONFLICT')
   expect(compactedAckInsert).not.toContain('DO UPDATE SET')
 })
 
@@ -1028,7 +1035,8 @@ test('ack compaction replays the same high-water row without updating it', async
 
   expect(secondResult.dirtyAckId).toBe(firstResult.dirtyAckId)
   expect(compactedAckInserts).toHaveLength(2)
-  expect(compactedAckInserts.join('\n')).toContain('ON CONFLICT(dirty_ack_id) DO NOTHING')
+  expect(compactedAckInserts.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(compactedAckInserts.join('\n')).not.toContain('ON CONFLICT')
   expect(compactedAckInserts.join('\n')).not.toContain('DO UPDATE SET')
   expect(remainingAcks).toHaveLength(1)
   expect(remainingAcks[0]).toMatchObject({
@@ -1065,7 +1073,7 @@ test('retention cleanup preserves pending running and failed dirty work rows', a
 })
 
 test('retention cleanup inserts high-water ack and removes point and older synthetic acknowledgements', async () => {
-  const {acks, database} = createFakeDirtyWorkDatabase({barrier: null})
+  const {acks, database, statements} = createFakeDirtyWorkDatabase({barrier: null})
 
   await upsertDisplayWork(database, getBaseScope(3, '3', '3'), 'delta-3')
   let claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
@@ -1085,12 +1093,18 @@ test('retention cleanup inserts high-water ack and removes point and older synth
     database,
   )
   const remainingAcks = [...acks.values()]
+  const syntheticAckInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('NULL,')
+  })
 
   expect(first.compactedAcknowledgements[0]).toMatchObject({
     completedSourceHighWaterMark: 3,
     projectionComponent: 'display',
   })
   expect(second.deletedAcknowledgementCount).toBe(2)
+  expect(syntheticAckInserts).toHaveLength(2)
+  expect(syntheticAckInserts.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(syntheticAckInserts.join('\n')).not.toContain('ON CONFLICT')
   expect(remainingAcks).toHaveLength(1)
   expect(remainingAcks[0]).toMatchObject({
     completedSourceHighWaterMark: 5,

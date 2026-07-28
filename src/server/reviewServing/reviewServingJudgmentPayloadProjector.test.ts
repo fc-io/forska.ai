@@ -116,9 +116,9 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeUndefined()
   expect(result.diagnosticsJson.judgmentPayloadProjector.writer.records.inputRecordCount).toBe(0)
   expect(inserts).toHaveLength(2)
-  expect(inserts.join('\n')).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING',
-  )
+  expect(inserts.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(inserts.join('\n')).toContain('FROM mart.review_article_judgment_detail_serving_v4 existing')
+  expect(inserts.join('\n')).not.toContain('ON CONFLICT')
   expect(inserts.join('\n')).not.toContain('list_mode_key,')
   expect(inserts.join('\n')).not.toContain('DO UPDATE SET')
   expect(inserts.join('\n')).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
@@ -303,9 +303,9 @@ test('claimless article-range judgment payload rebuild writes detail rows with S
   expect(joined).not.toContain('assessment.id AS assessment_id')
   expect(joined).not.toContain('json_object(')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4 detail')
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING',
-  )
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 existing')
+  expect(joined).not.toContain('ON CONFLICT')
   expect(joined).not.toContain('DO UPDATE SET')
   expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
 })
@@ -339,9 +339,9 @@ test('claimless judgment payload range batches write llm and human inserts once'
   expect(joined).toContain("'human' AS payload_kind")
   expect(joined).not.toContain("VALUES ('llm'), ('both')")
   expect(joined).not.toContain("VALUES ('human'), ('both')")
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING',
-  )
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 existing')
+  expect(joined).not.toContain('ON CONFLICT')
   expect(joined).not.toContain('DO UPDATE SET')
 })
 

@@ -612,6 +612,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       'app.comparison_project_serving_generation',
       'app.review_serving_dirty_work_ack',
       'app.review_selected_import_snapshot',
+      'app.review_selected_article_import_v4',
       'app.review_rebuild_chunk_manifest',
       'mart.review_article_count_serving_v4',
       'mart.review_filtered_count_serving_v4',
@@ -1140,7 +1141,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
   }
 })
 
-test('duckdb service retries stale mutation-probe repair markers before rebuilding indexed tables', () => {
+test('duckdb service repairs persisted mutation-probe markers before running another probe', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-stale-mutation-marker-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
   const recoveryDirectory = duckdbPath + '.startup-recovery'
@@ -1292,14 +1293,14 @@ test('duckdb service retries stale mutation-probe repair markers before rebuildi
 
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
-    expect(parsed.preflightCount).toBe(1)
+    expect(parsed.preflightCount).toBe(2)
     expect(
       parsed.preflightSpecsHistory[0]?.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
     ).toEqual(['app.review_serving_dirty_work'])
     expect(parsed.activeMarkerExists).toBe(false)
-    expect(parsed.repairCount).toBe(0)
+    expect(parsed.repairCount).toBe(1)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
   } finally {
@@ -1592,6 +1593,267 @@ test('duckdb service startup repair strips table primary key constraints once', 
       'idx_review_serving_projector_watermark_duplicate_lookup',
     )
     expect(parsed.rows).toEqual([{watermark_id: 'watermark'}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service removes repaired dirty-work and selected-import indexes before mutation', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-dirty-work-index-removal-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = `${duckdbPath}.startup-recovery`
+
+  mkdirSync(dataRoot, {recursive: true})
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {existsSync, readdirSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+        const {DuckDBInstance} = await import('@duckdb/node-api')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const recoveryDirectory = ${JSON.stringify(recoveryDirectory)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const instance = await DuckDBInstance.create(duckdbPath, {
+          checkpoint_threshold: '64MiB',
+          memory_limit: '2GB',
+          preserve_insertion_order: 'false',
+          threads: '1',
+        })
+        const connection = await instance.connect()
+        await connection.run('CREATE SCHEMA app')
+        await connection.run(\`
+          CREATE TABLE app.review_serving_dirty_work (
+            dirty_work_id VARCHAR,
+            project_id VARCHAR,
+            scope_kind VARCHAR NOT NULL,
+            scope_id VARCHAR NOT NULL,
+            article_id VARCHAR,
+            projection_key VARCHAR,
+            dirty_kind VARCHAR NOT NULL,
+            source_partition VARCHAR NOT NULL,
+            first_source_high_water_mark BIGINT NOT NULL,
+            latest_source_high_water_mark BIGINT NOT NULL,
+            latest_delta_id VARCHAR,
+            dirty_range_start VARCHAR,
+            dirty_range_end VARCHAR,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await connection.run(
+          'CREATE UNIQUE INDEX idx_review_serving_dirty_work_repaired_pk_legacy ON app.review_serving_dirty_work(dirty_work_id)',
+        )
+        await connection.run(
+          'CREATE INDEX idx_review_serving_dirty_work_lookup ON app.review_serving_dirty_work(project_id, dirty_kind, latest_source_high_water_mark)',
+        )
+        await connection.run(\`
+          CREATE TABLE app.review_rebuild_chunk_manifest (
+            chunk_id VARCHAR,
+            project_id VARCHAR,
+            projection_component VARCHAR,
+            chunk_start_key VARCHAR,
+            chunk_end_key VARCHAR,
+            status VARCHAR,
+            last_error VARCHAR,
+            updated_at TIMESTAMPTZ
+          )
+        \`)
+        await connection.run(\`
+          CREATE TABLE app.review_selected_article_import_v4 (
+            project_id VARCHAR NOT NULL,
+            project_scope_identity VARCHAR NOT NULL,
+            selected_import_snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            import_route_id VARCHAR,
+            source_record_key VARCHAR,
+            selected_rank_key VARCHAR,
+            selected_rank_numeric DOUBLE,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await connection.run(\`
+          CREATE UNIQUE INDEX idx_review_selected_article_import_v4_repaired_pk
+          ON app.review_selected_article_import_v4(
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id
+          )
+        \`)
+        await connection.run(\`
+          CREATE INDEX idx_review_selected_article_import_v4_order
+          ON app.review_selected_article_import_v4(
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            selected_rank_key,
+            article_id
+          )
+        \`)
+        await connection.run(\`
+          INSERT INTO app.review_serving_dirty_work (
+            dirty_work_id,
+            project_id,
+            scope_kind,
+            scope_id,
+            article_id,
+            projection_key,
+            dirty_kind,
+            source_partition,
+            first_source_high_water_mark,
+            latest_source_high_water_mark,
+            latest_delta_id,
+            dirty_range_start,
+            dirty_range_end,
+            status
+          ) VALUES (
+            'dirty-work-1',
+            'project-1',
+            'article',
+            'article:1',
+            'article-1',
+            '{"projectionComponent":"selectedImport","projectionIdentity":"selectedImport:1"}',
+            'source-change',
+            'import-run-article',
+            1,
+            2,
+            'delta-1',
+            'article-1',
+            'article-1',
+            'failed'
+          )
+        \`)
+        await connection.run(\`
+          INSERT INTO app.review_selected_article_import_v4 (
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id,
+            selected_rank_key,
+            selected_rank_numeric
+          ) VALUES (
+            'project-1',
+            'project-scope-1',
+            'selected-import-snapshot-1',
+            'article-1',
+            'rank-1',
+            1
+          )
+        \`)
+        await connection.run('CHECKPOINT')
+        connection.closeSync()
+        instance.closeSync()
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?dirty-work-index-removal=' + Date.now())
+        const constraints = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT constraint_type AS constraintType, constraint_column_names AS columnNames
+          FROM duckdb_constraints()
+          WHERE schema_name = 'app'
+            AND table_name = 'review_serving_dirty_work'
+            AND constraint_type = 'PRIMARY KEY'
+        \`)
+        const indexes = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT index_name AS indexName
+          FROM duckdb_indexes()
+          WHERE schema_name = 'app'
+            AND table_name = 'review_serving_dirty_work'
+          ORDER BY index_name
+        \`)
+        const rows = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT dirty_work_id AS dirtyWorkId, status
+          FROM app.review_serving_dirty_work
+        \`)
+        const selectedImportConstraints = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT constraint_type AS constraintType, constraint_column_names AS columnNames
+          FROM duckdb_constraints()
+          WHERE schema_name = 'app'
+            AND table_name = 'review_selected_article_import_v4'
+            AND constraint_type = 'PRIMARY KEY'
+        \`)
+        const selectedImportIndexes = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT index_name AS indexName
+          FROM duckdb_indexes()
+          WHERE schema_name = 'app'
+            AND table_name = 'review_selected_article_import_v4'
+          ORDER BY index_name
+        \`)
+        const selectedImportRows = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT project_id AS projectId, article_id AS articleId
+          FROM app.review_selected_article_import_v4
+        \`)
+        const recoveryManifestCount = existsSync(recoveryDirectory)
+          ? readdirSync(recoveryDirectory).filter((fileName) => fileName.endsWith('.recovery.json')).length
+          : 0
+        await duckdbService.closeDuckdbService()
+
+        console.log(JSON.stringify({
+          constraints,
+          indexes,
+          recoveryManifestCount,
+          rows,
+          selectedImportConstraints,
+          selectedImportIndexes,
+          selectedImportRows,
+        }))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB dirty-work index removal subprocess failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<{
+      constraints: Array<{columnNames: string[]; constraintType: string}>
+      indexes: Array<{indexName: string}>
+      recoveryManifestCount: number
+      rows: Array<{dirtyWorkId: string; status: string}>
+      selectedImportConstraints: Array<{columnNames: string[]; constraintType: string}>
+      selectedImportIndexes: Array<{indexName: string}>
+      selectedImportRows: Array<{articleId: string; projectId: string}>
+    }>(result.stdout.toString())
+
+    expect(parsed.constraints).toEqual([])
+    expect(parsed.indexes).toEqual([])
+    expect(parsed.recoveryManifestCount).toBe(1)
+    expect(parsed.rows).toEqual([{dirtyWorkId: 'dirty-work-1', status: 'failed'}])
+    expect(parsed.selectedImportConstraints).toEqual([])
+    expect(parsed.selectedImportIndexes).toEqual([])
+    expect(parsed.selectedImportRows).toEqual([{articleId: 'article-1', projectId: 'project-1'}])
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -2080,7 +2342,7 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
   }
 })
 
-test('duckdb service keeps the repairable indexed target when a transaction fails on commit', () => {
+test('duckdb service keeps all repairable indexed targets when a named-table transaction fails on commit', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-commit-fatal-index-marker-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
   const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
@@ -2133,7 +2395,7 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
 
             async run(statement) {
               if (this.instanceId === 1 && /^(COMMIT|ROLLBACK)\\b/i.test(statement.trim())) {
-                throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. FatalException: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 8 rows. Chunk: Chunk - [10 Columns]')
+                throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. FatalException: Invalid Input Error: Failed to delete all rows from index in mart.review_article_filter_posting_serving_v4. Only deleted 0 out of 8 rows. Chunk: Chunk - [10 Columns]')
               }
             }
 
@@ -2220,7 +2482,6 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
       repairSpecs: [
         {schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},
         {schemaName: 'app', tableName: 'review_serving_dirty_work'},
-        {schemaName: 'app', tableName: 'review_serving_projector_watermark'},
       ],
       schemaName: 'mart',
       tableName: 'review_article_filter_posting_serving_v4',
@@ -3374,13 +3635,27 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
           if (options?.env?.FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD === 'true') {
             repairLockProbeCount += 1
 
-            return repairLockProbeCount === 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (script.includes('const repairId')) {
+            repairCount += 1
+            repairScript = script
+            repairOptions = JSON.parse(String(command[4] ?? '{}'))
+            repairSpecs = JSON.parse(String(command[5] ?? '[]'))
+
+            return repairCount === 1
               ? {
                   exitCode: 1,
                   signalCode: null,
                   stdout: Buffer.from(''),
                   stderr: Buffer.from((
-                    writeFileSync(duckdbPath, 'database-after-lock-holder'),
+                    writeFileSync(duckdbPath, 'database-after-repair-lock'),
                     'IO Error: Could not set lock on file "' + duckdbPath + '": Conflicting lock is held in bun (PID 12345) by user fredrik.'
                   )),
                 }
@@ -3390,20 +3665,6 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
                   stdout: Buffer.from(''),
                   stderr: Buffer.from(''),
                 }
-          }
-
-          if (script.includes('const repairId')) {
-            repairCount += 1
-            repairScript = script
-            repairOptions = JSON.parse(String(command[4] ?? '{}'))
-            repairSpecs = JSON.parse(String(command[5] ?? '[]'))
-
-            return {
-              exitCode: 0,
-              signalCode: null,
-              stdout: Buffer.from(''),
-              stderr: Buffer.from(''),
-            }
           }
 
           preflightCount += 1
@@ -3555,7 +3816,7 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
     ).toBe(true)
     expect(parsed.failedPreflightWalExists).toBe(false)
     expect(parsed.repairLockProbeCount).toBe(2)
-    expect(parsed.repairCount).toBe(1)
+    expect(parsed.repairCount).toBe(2)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
     expect(parsed.walExists).toBe(false)
@@ -3571,7 +3832,7 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
       'app.review_rebuild_chunk_manifest',
       'mart.review_article_judgment_detail_serving_v4',
     ])
-    expect(parsed.repairBackupContent).toBe('database-after-lock-holder')
+    expect(parsed.repairBackupContent).toBe('database')
     expect(parsed.repairOptions?.checkpoint_threshold).toBe('8GB')
     expect(parsed.repairScript).toContain("await connection.run('CHECKPOINT')")
     expect(parsed.repairScript).toContain("spec.repairStrategy !== 'empty-derived'")
@@ -3588,6 +3849,7 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
     expect(parsed.repairScript).toContain("'DROP INDEX IF EXISTS ' + spec.schemaName")
     expect(parsed.repairScript).toContain('CREATE UNIQUE INDEX IF NOT EXISTS idx_')
     expect(parsed.repairScript).toContain("'_repaired_pk_' + repairId")
+    expect(parsed.repairScript).toContain('repaired table still contains indexes')
     expect(parsed.repairScript).toContain("startsWith('idx_' + spec.tableName + '_repaired_pk')")
     expect(parsed.repairScript).toContain("replace(/^CREATE UNIQUE INDEX /, 'CREATE UNIQUE INDEX IF NOT EXISTS ')")
     expect(
@@ -3619,18 +3881,24 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
     expect(dirtyWorkProbe?.mutationProbeSql).toContain('{"projectionComponent":"selectedImport","projectionIdentity":')
     expect(dirtyWorkProbe?.mutationProbeSql).toContain('RETURNING dirty_work_id')
     expect(dirtyWorkProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(dirtyWorkProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(dirtyWorkProbe?.recreateSecondaryIndexes).toBe(false)
     expect(dirtyWorkProbe?.repairPrimaryKeyColumns).toEqual(['dirty_work_id'])
     expect(dirtyWorkProbe?.repairStrategy).toBe('dedupe-latest')
     const dirtyWorkAckProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_serving_dirty_work_ack'
     })
     expect(dirtyWorkAckProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(dirtyWorkAckProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(dirtyWorkAckProbe?.recreateSecondaryIndexes).toBe(false)
     expect(dirtyWorkAckProbe?.repairPrimaryKeyColumns).toEqual(['dirty_ack_id'])
     expect(dirtyWorkAckProbe?.repairStrategy).toBe('dedupe-latest')
     const projectionIdentityProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_projection_identity_manifest'
     })
     expect(projectionIdentityProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(projectionIdentityProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(projectionIdentityProbe?.recreateSecondaryIndexes).toBe(false)
     expect(projectionIdentityProbe?.mutationProbeSql).toContain('UPDATE app.review_projection_identity_manifest')
     expect(projectionIdentityProbe?.mutationProbeSql).toContain('UPDATE app.review_selected_import_snapshot')
     expect(projectionIdentityProbe?.postRepairDependencySpecs).toEqual([
@@ -3642,6 +3910,8 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
       return spec.schemaName === 'app' && spec.tableName === 'review_selected_import_snapshot'
     })
     expect(selectedImportSnapshotProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(selectedImportSnapshotProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(selectedImportSnapshotProbe?.recreateSecondaryIndexes).toBe(false)
     expect(selectedImportSnapshotProbe?.repairPrimaryKeyColumns).toEqual(['selected_import_snapshot_id'])
     expect(selectedImportSnapshotProbe?.repairStrategy).toBe('dedupe-latest')
     const comparisonServingGenerationProbe = parsed.firstPreflightSpecs.find((spec) => {
@@ -3694,12 +3964,22 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
     const selectedImportProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_selected_article_import_v4'
     })
+    expect(selectedImportProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(selectedImportProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(selectedImportProbe?.recreateSecondaryIndexes).toBe(false)
+    expect(selectedImportProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'project_scope_identity',
+      'selected_import_snapshot_id',
+      'article_id',
+    ])
     expect(selectedImportProbe?.mutationProbeSql).toContain("projection_component = 'selectedImport'")
     expect(selectedImportProbe?.mutationProbeSql).toContain('INSERT INTO app.review_selected_article_import_v4 BY NAME')
     const snapshotManifestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_serving_snapshot_manifest'
     })
     expect(snapshotManifestProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(snapshotManifestProbe?.recreateSecondaryIndexes).toBe(false)
     expect(snapshotManifestProbe?.repairPrimaryKeyColumns).toEqual(['project_id', 'snapshot_id'])
     expect(snapshotManifestProbe?.repairStrategy).toBe('dedupe-latest')
     expect(snapshotManifestProbe?.repairDedupeOrderSql).toContain("snapshot_status = 'active'")
@@ -3741,8 +4021,8 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
       tableName: 'review_rebuild_request',
     })
     expect(parsed.preflightScript).toContain('schemaRequirementsSatisfied(spec.schemaRequirements)')
-    expect(parsed.preflightScript).toContain('needsInlinePrimaryKeyRepairBeforeMutation')
-    expect(parsed.preflightScript).toContain('inline-primary-key-repair')
+    expect(parsed.preflightScript).toContain('needsIndexedTableShapeRepairBeforeMutation')
+    expect(parsed.preflightScript).toContain('indexed-table-shape-repair')
     const judgmentDetailProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_judgment_detail_serving_v4'
     })
@@ -3757,14 +4037,16 @@ test('duckdb service isolates failed startup mutation WAL while retrying indexed
     ])
     expect(judgmentDetailProbe?.mutationProbeSql).toContain("projection_component = 'judgmentInputContent'")
     expect(judgmentDetailProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
-    expect(judgmentDetailProbe?.mutationProbeSql).not.toContain(
+    expect(judgmentDetailProbe?.mutationProbeSql).toContain(
       'DELETE FROM mart.review_article_judgment_detail_serving_v4',
     )
-    expect(judgmentDetailProbe?.mutationProbeSql).not.toContain(
+    expect(judgmentDetailProbe?.mutationProbeSql).toContain(
       'INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME',
     )
     expect(judgmentDetailProbe?.skipGenericDeleteInsertProbe).toBe(true)
     expect(judgmentDetailProbe?.repairStrategy).toBe('empty-derived')
+    expect(judgmentDetailProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(judgmentDetailProbe?.recreateSecondaryIndexes).toBe(false)
     expect(judgmentDetailProbe?.postRepairDependencySpecs).toEqual([
       {schemaName: 'app', tableName: 'review_rebuild_request'},
       {schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'},

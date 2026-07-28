@@ -270,9 +270,18 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     }
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
-      if (statement.includes('WHERE manifest_id =')) {
-        const manifestId = getSqlStrings(statement)[0] ?? ''
-        const manifest = projectionManifests.get(manifestId)
+      if (statement.includes('manifest_id AS manifestId')) {
+        const strings = getSqlStrings(statement)
+        const manifestId = strings[0] ?? ''
+        const manifest =
+          projectionManifests.get(manifestId)
+          ?? [...projectionManifests.values()].find((projectionManifest) => {
+            return (
+              projectionManifest.projectId === strings[1]
+              && projectionManifest.projectionComponent === strings[2]
+              && projectionManifest.projectionIdentity === strings[3]
+            )
+          })
 
         return (manifest === undefined ? [] : [manifest]) as T[]
       }

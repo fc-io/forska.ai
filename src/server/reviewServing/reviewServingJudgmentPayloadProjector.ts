@@ -340,7 +340,16 @@ const getLlmJudgmentDirectInsertStatement = (
         payload.placeholder_kind,
         COALESCE(payload.judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM mart.review_article_judgment_detail_serving_v4 existing
+        WHERE (existing.project_id || '') = (${getSqlLiteral(input.projectId)} || '')
+          AND (existing.review_config_hash || '') = (${getSqlLiteral(input.reviewConfigHash)} || '')
+          AND (existing.snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
+          AND (existing.payload_kind || '') = ('llm' || '')
+          AND (existing.article_id || '') = (payload.article_id || '')
+          AND (existing.prompt_id || '') = (payload.prompt_id || '')
+      )
     `
 }
 
@@ -451,7 +460,16 @@ const getHumanJudgmentDirectInsertStatement = (
         NULL AS placeholder_kind,
         COALESCE(payload.human_judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM mart.review_article_judgment_detail_serving_v4 existing
+        WHERE (existing.project_id || '') = (${getSqlLiteral(input.projectId)} || '')
+          AND (existing.review_config_hash || '') = (${getSqlLiteral(input.reviewConfigHash)} || '')
+          AND (existing.snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
+          AND (existing.payload_kind || '') = ('human' || '')
+          AND (existing.article_id || '') = (payload.article_id || '')
+          AND (existing.prompt_id || '') = (payload.prompt_id || '')
+      )
     `
 }
 

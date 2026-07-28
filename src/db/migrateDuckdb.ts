@@ -203,14 +203,24 @@ const applyPendingDuckdbMigrations = async (migrationFiles: string[]) => {
 
 const applyLowMemoryDuckdbMigrations = async (migrationFiles: string[]) => {
   const configuredCheckpointThreshold = getAppDatabaseService().getRuntimeConfig().checkpointThreshold
+  let appliedMigrationCount: number
 
   await setDuckdbMigrationCheckpointThreshold(lowMemoryMigrationCheckpointThreshold)
 
   try {
-    return await applyPendingDuckdbMigrations(migrationFiles)
-  } finally {
-    await setDuckdbMigrationCheckpointThreshold(configuredCheckpointThreshold)
+    appliedMigrationCount = await applyPendingDuckdbMigrations(migrationFiles)
+  } catch (migrationError) {
+    try {
+      await setDuckdbMigrationCheckpointThreshold(configuredCheckpointThreshold)
+    } catch (restoreError) {
+      throw getChainedDuckdbMigrationError(migrationError, restoreError, 'checkpoint threshold restore failed')
+    }
+
+    throw getNormalizedDuckdbMigrationError(migrationError)
   }
+
+  await setDuckdbMigrationCheckpointThreshold(configuredCheckpointThreshold)
+  return appliedMigrationCount
 }
 
 export const migrateDuckdb = async (): Promise<void> => {

@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-28 - Review-Serving Mutable ART Index Commit Trap
+
+- Error: The maintenance owner exited with `SIGTRAP` at about 0.9GB RSS while `duckdb::DuckTransaction::Commit` finalized a selected-import projector transaction; later isolated runs surfaced `Failed to delete all rows from index` before native runtime invalidation.
+- Context: `writeReviewServingProjectorComponent`, dirty-work retention, rebuild-request state transitions, and projection-manifest updates against a database whose review-serving tables had previously been repaired with replacement ART indexes.
+- Cause: `app.review_selected_article_import_v4` retained a replacement unique index because its startup repair spec omitted the four key columns and the low-memory preflight. Several secondary ART indexes over mutable queue/status columns contained missing row entries, and both indexes on `mart.review_article_judgment_detail_serving_v4` reproduced the native fatal on a one-row delete even though its old timestamp-only startup probe passed. The original crash was not an OOM, and WAL replay/checkpoint remained healthy.
+- Fix: Indexed-table recovery treats selected-import and judgment-detail as index-free 6400MiB preflight targets, exercises judgment-detail with a real delete/reinsert probe, and does not recreate affected mutable ART indexes. Migrations `0210_dropReviewServingMutableSecondaryIndexes.sql` and `0211_dropReviewJudgmentDetailMutableIndexes.sql` remove those indexes from otherwise healthy databases, while index-free writers use explicit existence guards. Human-status and posting projector SQL errors found during the same full-worker gate were also corrected.
+- Verification: Focused DuckDB/projector tests; a one-row delete reproduced the judgment-detail ART fatal on the preserved database; a fresh preserved-database clone then applied the recovery migrations and completed three worker cycles with zero error, fatal, or runtime-restart events; its second startup required no further repair.
+
 ## 2026-07-27 - Summary Rebuild Accumulator Chunk Membership
 
 - Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while updating `mart.review_article_summary_rebuild_accumulator_v4`.
