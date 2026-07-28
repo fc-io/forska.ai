@@ -1,5 +1,5 @@
-import {useMutation, useQuery} from '@tanstack/solid-query'
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
+import {useMutation} from '@tanstack/solid-query'
+import {createEffect, createMemo, createSignal, For, onCleanup, Show} from 'solid-js'
 
 import {getApiRequestUrl} from '../../../app/utils/getApiRequestUrl.ts'
 import {apiClient} from '../../../services/apiClient.ts'
@@ -476,26 +476,8 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
   const sessionId = createMemo(() => {
     return session()?.exportId ?? null
   })
-  const sessionQuery = useQuery(() => {
-    const exportId = sessionId()
-
-    return {
-      enabled: exportId !== null,
-      queryFn: () => {
-        return fetchProjectTransferExportSession(exportId ?? '')
-      },
-      queryKey: ['project-transfer-export', exportId],
-      refetchInterval: (query: {state: {data?: unknown}}) => {
-        const data = query.state.data as ProjectTransferExportSession | undefined
-
-        return data && data.status !== 'ready' ? 2_000 : false
-      },
-      retry: false,
-      suspense: false,
-    }
-  })
   const currentSession = createMemo(() => {
-    return sessionId() === null ? session() : (sessionQuery.data ?? session())
+    return session()
   })
   const hasActiveSession = createMemo(() => {
     return Boolean(currentSession() && currentSession()?.status !== 'ready')
@@ -529,13 +511,15 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
         : getSessionStatusMessage(currentSession())
   })
   const buttonLabel = createMemo(() => {
-    return startExportMutation.isPending
-      ? 'Exporting...'
-      : isDownloading()
-        ? 'Downloading...'
-        : hasActiveSession()
-          ? 'Preparing...'
-          : 'Export Project'
+    return currentSession()?.status === 'ready'
+      ? 'Download Package'
+      : startExportMutation.isPending
+        ? 'Exporting...'
+        : isDownloading()
+          ? 'Downloading...'
+          : hasActiveSession()
+            ? 'Preparing...'
+            : 'Export Project'
   })
   const wrapperClass = createMemo(() => {
     return props.showModeDetails
@@ -589,8 +573,8 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
   })
 
   createEffect(() => {
-    const data = sessionQuery.data
-    const readySession = data?.status === 'ready' ? data : null
+    const resolvedSession = currentSession()
+    const readySession = resolvedSession?.status === 'ready' ? resolvedSession : null
     const alreadyDownloaded = readySession !== null && downloadedIds().has(readySession.exportId)
     const downloadFailed = readySession !== null && downloadFailedIds().has(readySession.exportId)
     const shouldDownload =
@@ -599,20 +583,61 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
       && !alreadyDownloaded
       && !downloadFailed
 
-    if (readySession !== null && !alreadyDownloaded) {
-      setSession(readySession)
-    }
-
     if (shouldDownload) {
       startReadySessionDownload(readySession)
     }
   })
 
   createEffect(() => {
-    if (sessionQuery.isError) {
-      setErrorMessage(getErrorMessage(sessionQuery.error, 'Failed to fetch project transfer export status'))
-      setSession(null)
+    const exportId = sessionId()
+    const resolvedSession = currentSession()
+
+    if (exportId === null || resolvedSession === null || resolvedSession.status === 'ready') {
+      return
     }
+
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    let cancelled = false
+    let timeoutId: number | undefined
+    const pollSession = () => {
+      if (cancelled) {
+        return
+      }
+
+      void fetchProjectTransferExportSession(exportId)
+        .then((nextSession) => {
+          if (cancelled) {
+            return
+          }
+
+          setSession(nextSession)
+
+          if (nextSession.status !== 'ready') {
+            timeoutId = window.setTimeout(pollSession, 2_000)
+          }
+        })
+        .catch((error) => {
+          if (cancelled) {
+            return
+          }
+
+          setErrorMessage(getErrorMessage(error, 'Failed to fetch project transfer export status'))
+          setSession(null)
+        })
+    }
+
+    timeoutId = window.setTimeout(pollSession, 2_000)
+
+    onCleanup(() => {
+      cancelled = true
+
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId)
+      }
+    })
   })
 
   return (
@@ -684,10 +709,14 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
         </fieldset>
       </Show>
       <div class="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" class={props.class} disabled={isBusy()} onClick={handleExportProject}>
-          {buttonLabel()}
-        </Button>
-        <Show when={readyDownloadSession() && readyDownloadUrl()}>
+        <Show
+          when={readyDownloadSession() && readyDownloadUrl()}
+          fallback={
+            <Button size="sm" variant="outline" class={props.class} disabled={isBusy()} onClick={handleExportProject}>
+              {buttonLabel()}
+            </Button>
+          }
+        >
           {(downloadUrl) => {
             const readySession = readyDownloadSession()
 
@@ -700,7 +729,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
                 download={readySession?.filename}
                 href={downloadUrl()}
               >
-                Download package
+                {buttonLabel()}
               </Button>
             )
           }}
