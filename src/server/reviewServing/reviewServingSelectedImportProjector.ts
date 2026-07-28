@@ -8,6 +8,7 @@ import {
   type ReviewServingIdentityValue,
 } from './reviewProjectionIdentity.ts'
 import {type ReviewServingProjectionIdentityManifestInput} from './reviewServingManifestRepository.ts'
+import {type ReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
@@ -19,6 +20,7 @@ export type ReviewServingSelectedImportProjectorDatabase = ReviewServingProjecto
 
 export type ProjectReviewServingSelectedImportBatchInput = {
   limit: number
+  manifestInputWatermarks?: ReviewServingSourcePartitionWatermarks
   projectId: string
   projectScopeIdentity: string
   selectedImportSnapshotId?: string | null
@@ -61,6 +63,7 @@ export type ProjectReviewServingSelectedImportArticleRangeInput = {
   selectedImportSnapshotId: string
   servingBaseGeneration?: number
   servingProjectionIdentity?: string
+  manifestInputWatermarks?: ReviewServingSourcePartitionWatermarks
   sourceDeltaHighWater: number
   writeProjectionState?: boolean
 }
@@ -641,7 +644,7 @@ const getSelectedImportProjectionManifest = (input: {
     definitionVersion: selectedImportProjectorDefinitionVersion,
     inputDigest: input.selectedImportSnapshotId,
     inputWatermark: input.sourceDeltaHighWater,
-    inputWatermarks: {importRunArticle: input.sourceDeltaHighWater},
+    inputWatermarks: input.manifestInputWatermarks ?? {importRunArticle: input.sourceDeltaHighWater},
     invalidationReason: 'selectedImport.base.completed',
     patchRangeEnd: input.sourceDeltaHighWater,
     patchRangeStart: input.sourceDeltaHighWater,

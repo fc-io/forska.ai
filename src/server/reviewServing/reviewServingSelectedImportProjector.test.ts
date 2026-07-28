@@ -105,7 +105,13 @@ test('selected-import projector creates snapshot cursor and selected article imp
   })
 
   const result = await projectReviewServingSelectedImportBatch(
-    {limit: 2, projectId: 'project-1', projectScopeIdentity: 'projectScope:identity-1', sourceDeltaHighWater: 9},
+    {
+      limit: 2,
+      manifestInputWatermarks: {importRunArticle: 9, projectScope: 11, reviewChange: 13},
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      sourceDeltaHighWater: 9,
+    },
     database,
   )
 
@@ -141,6 +147,7 @@ test('selected-import projector creates snapshot cursor and selected article imp
       return (
         statement.includes('INSERT INTO app.review_projection_identity_manifest')
         && statement.includes("'selectedImport'")
+        && statement.includes('\'{"importRunArticle":9,"projectScope":11,"reviewChange":13}\'::JSON')
       )
     }),
   ).toBe(true)
@@ -314,6 +321,7 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
           projectScopeIdentity: 'projectScope:identity-1',
           replaceExistingRows: false,
           selectedImportSnapshotId: 'selected-import-snapshot-1',
+          manifestInputWatermarks: {importRunArticle: 9, projectScope: 11, reviewChange: 13},
           sourceDeltaHighWater: 9,
         },
         {
@@ -323,6 +331,7 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
           projectScopeIdentity: 'projectScope:identity-1',
           replaceExistingRows: false,
           selectedImportSnapshotId: 'selected-import-snapshot-1',
+          manifestInputWatermarks: {importRunArticle: 9, projectScope: 11, reviewChange: 13},
           sourceDeltaHighWater: 9,
         },
       ],
@@ -345,6 +354,7 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
   )
+  expect(joined).toContain('\'{"importRunArticle":9,"projectScope":11,"reviewChange":13}\'::JSON')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
   expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')

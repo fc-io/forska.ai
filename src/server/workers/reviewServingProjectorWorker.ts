@@ -1719,7 +1719,6 @@ const runPayloadRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
-  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = snapshots.map((snapshot) => {
     return snapshot.snapshotId
@@ -1802,6 +1801,7 @@ const runSearchRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = snapshots.map((snapshot) => {
     return snapshot.snapshotId
@@ -2952,6 +2952,7 @@ const projectSelectedImportArticleRangeForClaimedRebuild = async (
   input: {
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
+    manifestInputWatermarks?: Record<string, number>
     projectId: string
     projectScopeIdentity: string
     selectedImportSnapshotId: string
@@ -2972,6 +2973,7 @@ const projectSelectedImportArticleRangeForClaimedRebuild = async (
         selectedImportSnapshotId: input.selectedImportSnapshotId,
         servingBaseGeneration: input.chunk.outputBaseGeneration,
         servingProjectionIdentity: input.chunk.projectionIdentity,
+        manifestInputWatermarks: input.manifestInputWatermarks,
         sourceDeltaHighWater: input.sourceDeltaHighWater,
         writeProjectionState: true,
       },
@@ -2990,6 +2992,7 @@ const drainSelectedImportBaseProjectionForClaimedRebuild = async (
   input: {
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
+    manifestInputWatermarks?: Record<string, number>
     projectId: string
     projectScopeIdentity: string
     selectedImportSnapshotId: string
@@ -3003,6 +3006,7 @@ const drainSelectedImportBaseProjectionForClaimedRebuild = async (
       beforeBatch: async () => {
         await requireClaimedRebuildChunk(input, database)
       },
+      manifestInputWatermarks: input.manifestInputWatermarks,
     },
     database,
   )
@@ -3013,6 +3017,7 @@ const runSelectedImportRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifestInputWatermarks = await getSelectedImportRebuildChunkManifestInputWatermarks(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const selectedImportSnapshotIds = snapshots.map((snapshot) => {
     return requireSelectedImportSnapshotId(snapshot)
@@ -3053,7 +3058,14 @@ const runSelectedImportRebuildChunk = async (
             const deleteResetMs = getNonNegativeElapsedMs(deleteResetStartedAtMs)
             const sourceQueryStartedAtMs = Date.now()
             await drainSelectedImportBaseProjectionForClaimedRebuild(
-              {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+              {
+                ...input,
+                manifestInputWatermarks,
+                projectId,
+                projectScopeIdentity,
+                selectedImportSnapshotId,
+                sourceDeltaHighWater,
+              },
               projectorDatabase,
             )
             const sourceQueryMs = getNonNegativeElapsedMs(sourceQueryStartedAtMs)
@@ -3066,6 +3078,7 @@ const runSelectedImportRebuildChunk = async (
                 selectedImportSnapshotId,
                 servingBaseGeneration: input.chunk.outputBaseGeneration,
                 servingProjectionIdentity: input.chunk.projectionIdentity,
+                manifestInputWatermarks,
                 sourceDeltaHighWater,
               },
               projectorDatabase,
@@ -3086,7 +3099,14 @@ const runSelectedImportRebuildChunk = async (
           } else {
             const rangeStartedAtMs = Date.now()
             await projectSelectedImportArticleRangeForClaimedRebuild(
-              {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+              {
+                ...input,
+                manifestInputWatermarks,
+                projectId,
+                projectScopeIdentity,
+                selectedImportSnapshotId,
+                sourceDeltaHighWater,
+              },
               projectorDatabase,
             )
 
@@ -3119,8 +3139,25 @@ const canRunSelectedImportRebuildChunkBatch = (chunks: readonly ReviewServingReb
   )
 }
 
+const getSelectedImportRebuildChunkManifestInputWatermarks = async (
+  chunk: ReviewServingRebuildChunkManifest,
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const manifest = await getReviewServingProjectionIdentityManifest(
+    {
+      projectId: requireRebuildChunkProjectId(chunk),
+      projectionComponent: chunk.projectionComponent,
+      projectionIdentity: chunk.projectionIdentity,
+    },
+    database,
+  )
+
+  return manifest?.inputWatermarks ?? {importRunArticle: chunk.inputWatermark}
+}
+
 const getSelectedImportRebuildChunkBatchRange = (input: {
   chunk: ReviewServingRebuildChunkManifest
+  manifestInputWatermarks?: Record<string, number>
   projectId: string
   projectScopeIdentity: string
   selectedImportSnapshotId: string
@@ -3136,6 +3173,7 @@ const getSelectedImportRebuildChunkBatchRange = (input: {
     selectedImportSnapshotId: input.selectedImportSnapshotId,
     servingBaseGeneration: input.chunk.outputBaseGeneration,
     servingProjectionIdentity: input.chunk.projectionIdentity,
+    manifestInputWatermarks: input.manifestInputWatermarks,
     sourceDeltaHighWater: input.sourceDeltaHighWater,
     writeProjectionState: true,
   }
@@ -3201,6 +3239,7 @@ const runSelectedImportRebuildChunkBatch = async (
     return null
   }
   const projectId = requireRebuildChunkProjectId(firstChunk)
+  const manifestInputWatermarks = await getSelectedImportRebuildChunkManifestInputWatermarks(firstChunk, database)
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const selectedImportSnapshotIds = snapshots.map((snapshot) => {
     return requireSelectedImportSnapshotId(snapshot)
@@ -3224,6 +3263,7 @@ const runSelectedImportRebuildChunkBatch = async (
       const ranges = input.chunks.map((chunk) => {
         return getSelectedImportRebuildChunkBatchRange({
           chunk,
+          manifestInputWatermarks,
           projectId,
           projectScopeIdentity,
           selectedImportSnapshotId,
