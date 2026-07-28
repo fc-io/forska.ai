@@ -292,9 +292,11 @@ test('LLM full rebuild chunks copy serving rows without prompt fanout source sca
   expect(applyStatement).toContain('INNER JOIN article_range_filter range')
   expect(applyStatement).toContain('serving.article_id >= range.chunk_start_article_id')
   expect(applyStatement).toContain('serving.article_id <= range.chunk_end_article_id')
-  expect(applyStatement).toContain('SET llm_patch_watermark')
+  expect(applyStatement).toContain('SET llm_status = article_status.llm_status')
+  expect(applyStatement).toContain('llm_has_judgment = article_status.llm_has_judgment')
+  expect(applyStatement).toContain('llm_patch_watermark =')
   expect(applyStatement).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
-  expect(applyStatement).not.toContain('FROM app.project_prompt project_prompt')
+  expect(applyStatement).toContain('FROM app.project_prompt project_prompt')
 })
 
 test('LLM direct full rebuild chunks copy-replace serving without patch rows', async () => {
@@ -336,7 +338,9 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
   expect(insertStatement).toBeUndefined()
   expect(resetStatement).not.toContain('llm_judged_prompt_count')
   expect(resetStatement).not.toContain('llm_status_key')
-  expect(resetStatement).toContain('SET llm_patch_watermark')
+  expect(resetStatement).toContain('llm_status = article_status.llm_status')
+  expect(resetStatement).toContain('llm_has_judgment = article_status.llm_has_judgment')
+  expect(resetStatement).toContain('llm_patch_watermark =')
   expect(resetStatement).toContain("('article-1', 'article-9')")
   expect(resetStatement).toContain('serving.article_id >= range.chunk_start_article_id')
   expect(resetStatement).toContain('serving.article_id <= range.chunk_end_article_id')
@@ -412,8 +416,10 @@ test('LLM range rebuild batches write one SQL-native serving replacement stateme
   expect(replacementStatements).toHaveLength(1)
   expect(replacementStatements[0]).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(replacementStatements[0]).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
-  expect(joined).not.toContain('FROM app.project_prompt project_prompt')
-  expect(joined).not.toContain('FROM app."judgment" judgment')
+  expect(joined).toContain('FROM app.project_prompt project_prompt')
+  expect(joined).toContain('llm_status = article_status.llm_status')
+  expect(joined).toContain('llm_has_judgment = article_status.llm_has_judgment')
+  expect(joined).toContain('FROM app."judgment" judgment')
 })
 
 test('article judgment-input claims rebuild article-scoped LLM status rows', async () => {
