@@ -86,10 +86,24 @@ export const getReviewServingFilteredCountReadSql = (input: ReviewServingFiltere
   `
 }
 
-export const getReviewServingFilteredCountUpsertSql = (
+export const getReviewServingFilteredCountWriteSqls = (
   input: ReviewServingFilteredCountLookup & {countValue: number},
 ) => {
-  return `
+  const keyPredicate = `
+    project_id = ${getSqlLiteral(input.projectId)}
+      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND list_mode_key = ${getSqlLiteral(input.listModeKey)}
+      AND filter_signature = ${getSqlLiteral(input.filterSignature)}
+      AND component_identity = ${getSqlLiteral(input.componentIdentity)}
+  `
+
+  return [
+    `
+    DELETE FROM mart.review_filtered_count_serving_v4
+    WHERE ${keyPredicate}
+  `,
+    `
     INSERT INTO mart.review_filtered_count_serving_v4 (
       project_id,
       review_config_hash,
@@ -109,11 +123,8 @@ export const getReviewServingFilteredCountUpsertSql = (
       ${getSqlLiteral(input.countValue)},
       current_timestamp
     )
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, filter_signature, component_identity)
-    DO UPDATE SET
-      count_value = excluded.count_value,
-      count_updated_at = now()
-  `
+  `,
+  ]
 }
 
 export const getReviewServingFilteredCountPruneSql = (
@@ -174,7 +185,9 @@ export const getReviewServingFilteredCountValue = async (input: GetReviewServing
 
   const countValue = await input.computeCount()
 
-  await executeCountServingStatement(input.database, getReviewServingFilteredCountUpsertSql({...input, countValue}))
+  for (const statement of getReviewServingFilteredCountWriteSqls({...input, countValue})) {
+    await executeCountServingStatement(input.database, statement)
+  }
   await executeCountServingStatement(input.database, getReviewServingFilteredCountPruneSql(input))
 
   return countValue

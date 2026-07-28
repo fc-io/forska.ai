@@ -1013,6 +1013,22 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0209_rebuildQueueServingRepairIndexCleanup.sql'),
     'utf8',
   ).trim()
+  const reviewJudgmentDetailNoIndexRepairSql = readFileSync(
+    resolve(migrationsFolder, '0210_rebuildReviewJudgmentDetailServingWithoutIndexes.sql'),
+    'utf8',
+  ).trim()
+  const reviewDirtyWorkAckNoIndexRepairSql = readFileSync(
+    resolve(migrationsFolder, '0211_rebuildReviewServingDirtyWorkAckWithoutIndexes.sql'),
+    'utf8',
+  ).trim()
+  const reviewArticleServingStateConflictIndexRestoreSql = readFileSync(
+    resolve(migrationsFolder, '0212_restoreReviewArticleServingStateConflictIndexes.sql'),
+    'utf8',
+  ).trim()
+  const reviewRemainingHotTableIndexDropSql = readFileSync(
+    resolve(migrationsFolder, '0213_dropRemainingReviewServingHotTableIndexes.sql'),
+    'utf8',
+  ).trim()
   const reviewFilterPostingStatsDerivedColumnDropSql = readFileSync(
     resolve(migrationsFolder, '0129_dropReviewFilterPostingStatsDerivedColumns.sql'),
     'utf8',
@@ -1236,6 +1252,49 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewQueueServingRepairIndexCleanupSql).not.toContain('PRIMARY KEY')
   expect(reviewQueueServingRepairIndexCleanupSql).not.toContain('CREATE INDEX')
+  expect(reviewJudgmentDetailNoIndexRepairSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_noindex_repair_0210',
+  )
+  expect(reviewJudgmentDetailNoIndexRepairSql).not.toContain('PRIMARY KEY')
+  expect(reviewJudgmentDetailNoIndexRepairSql).not.toContain('CREATE INDEX')
+  expect(reviewDirtyWorkAckNoIndexRepairSql).toContain(
+    'CREATE TABLE app.review_serving_dirty_work_ack_noindex_repair_0211',
+  )
+  expect(reviewDirtyWorkAckNoIndexRepairSql).not.toContain('PRIMARY KEY')
+  expect(reviewDirtyWorkAckNoIndexRepairSql).not.toContain('CREATE INDEX')
+  expect(reviewArticleServingStateConflictIndexRestoreSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_base_v4_pk',
+  )
+  expect(reviewArticleServingStateConflictIndexRestoreSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_serving_base_v4_order',
+  )
+  expect(reviewArticleServingStateConflictIndexRestoreSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_list_mode_state_v4_pk',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_serving_base_v4_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_serving_base_v4_order;',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_serving_list_mode_state_v4_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_repaired_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_count_serving_v4_lookup;',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_filtered_count_serving_v4_repaired_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_filter_facet_serving_v4_lookup;',
+  )
+  expect(reviewRemainingHotTableIndexDropSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_filter_option_serving_v4_repaired_pk;',
+  )
   expect(reviewFilterPostingStatsDerivedColumnDropSql).toBe(
     [
       '-- Retired by 0147_dropReviewFilterPostingStats.sql.',
@@ -8253,7 +8312,7 @@ test('DuckDB migration derives unassessed queue article rank from one winning qu
       rows: Array<{activitySortAt: string; articleId: string; priorityBucket: number; queueUpdatedAt: string}>
     }
 
-    expect(parsed.indexes).toEqual([{indexName: 'idx_review_unassessed_queue_article_rank_serving_v4_order'}])
+    expect(parsed.indexes).toEqual([])
     // Rank ordering comes from the winning queue row; freshness tracks the latest prompt queue row for the article.
     expect(parsed.rows).toEqual([
       {

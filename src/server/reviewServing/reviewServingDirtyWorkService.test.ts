@@ -991,7 +991,8 @@ test('ack compaction creates a component high-water row and removes covered poin
   const compactedAckInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('dirty_work_id')
   })
-  expect(compactedAckInsert).toContain('ON CONFLICT(dirty_ack_id) DO NOTHING')
+  expect(compactedAckInsert).toContain('WHERE NOT EXISTS')
+  expect(compactedAckInsert).toContain('existing.dirty_ack_id = incoming.dirty_ack_id')
   expect(compactedAckInsert).not.toContain('DO UPDATE SET')
 })
 
@@ -1028,7 +1029,8 @@ test('ack compaction replays the same high-water row without updating it', async
 
   expect(secondResult.dirtyAckId).toBe(firstResult.dirtyAckId)
   expect(compactedAckInserts).toHaveLength(2)
-  expect(compactedAckInserts.join('\n')).toContain('ON CONFLICT(dirty_ack_id) DO NOTHING')
+  expect(compactedAckInserts.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(compactedAckInserts.join('\n')).toContain('existing.dirty_ack_id = incoming.dirty_ack_id')
   expect(compactedAckInserts.join('\n')).not.toContain('DO UPDATE SET')
   expect(remainingAcks).toHaveLength(1)
   expect(remainingAcks[0]).toMatchObject({

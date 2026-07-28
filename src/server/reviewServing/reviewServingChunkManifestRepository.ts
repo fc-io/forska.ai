@@ -1394,15 +1394,22 @@ const getReviewServingRebuildChunkRetryPolicy = async (
 }
 
 export const markReviewServingRebuildChunkFailed = async (
-  input: {chunkId: string; error: string; leaseOwner?: string; now?: Date | string},
+  input: {
+    chunkId: string
+    error: string
+    failureMode?: 'quarantine' | 'retryable'
+    leaseOwner?: string
+    now?: Date | string
+  },
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
   const leasePredicate = input.leaseOwner ? `AND lease_owner = ${getSqlLiteral(input.leaseOwner)}` : ''
   const existing = await getReviewServingRebuildChunkManifest({chunkId: input.chunkId}, database)
   const retryPolicy = await getReviewServingRebuildChunkRetryPolicy({requestId: existing?.requestId ?? null}, database)
   const retryCount = (existing?.retryCount ?? 0) + 1
-  const exhausted = retryCount >= retryPolicy.maxAttempts
-  const status = exhausted ? retryPolicy.terminalState : 'failed'
+  const forceQuarantine = input.failureMode === 'quarantine'
+  const exhausted = forceQuarantine || retryCount >= retryPolicy.maxAttempts
+  const status = forceQuarantine ? 'quarantined' : exhausted ? retryPolicy.terminalState : 'failed'
   const retryAfter = exhausted
     ? null
     : new Date(new Date(input.now ?? new Date()).getTime() + retryPolicy.retryAfterMs).toISOString()

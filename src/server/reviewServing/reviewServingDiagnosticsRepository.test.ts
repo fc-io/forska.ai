@@ -54,6 +54,7 @@ const createDiagnosticsDatabase = () => {
             rebuildChunkPendingCount: 5,
             rebuildChunkQuarantinedCount: 1,
             rebuildChunkRunningCount: 2,
+            rebuildChunkTerminalQuarantinedCount: 1,
             rebuildChunkUpdatedAt: '2026-06-18T10:02:00.000Z',
             retryableOutboxCount: 2,
             snapshotActiveCount: 1,
@@ -127,6 +128,7 @@ const createDiagnosticsDatabase = () => {
             oldestClaimableQueuedAt: '2026-06-18T08:30:00.000Z',
             oldestQueuedAt: '2026-06-18T08:00:00.000Z',
             pendingCount: 5,
+            rebuildChunkTerminalQuarantinedCount: 1,
             quarantinedCount: 1,
             runningCount: 2,
             updatedAt: '2026-06-18T10:02:00.000Z',
@@ -197,6 +199,7 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
       pendingCount: 5,
       quarantinedCount: 1,
       runningCount: 2,
+      terminalQuarantinedCount: 1,
     },
     search: {availability: 'ready', optionalComponent: true, snapshotId: 'snapshot-1'},
     snapshot: {
@@ -250,7 +253,8 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain("latest_request.status IN ('failed', 'quarantined')")
   expect(statements.join('\n')).toContain("latest_request.reason <> 'requestless_bootstrap_rebuild'")
   expect(statements.join('\n')).toContain("latest_request.status IN ('blocked_over_budget', 'failed')")
-  expect(statements.join('\n')).toContain("latest_request.status IN ('quarantined', 'failed')")
+  expect(statements.join('\n')).toContain("latest_request.status IN ('admitted', 'running', 'quarantined', 'failed')")
+  expect(statements.join('\n')).toContain('AS terminalQuarantinedCount')
   expect(statements.join('\n')).toContain('app.review_source_change_outbox')
   expect(statements.join('\n')).toContain('app.review_delta_reconciliation_cursor')
 })

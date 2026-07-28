@@ -337,8 +337,15 @@ const getInsertDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBa
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
       display_base.sortKey AS sort_key
     FROM display_base
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_article_serving_base_v4 existing
+      WHERE existing.project_id = ${getSqlLiteral(input.projectId)}
+        AND existing.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND existing.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND existing.article_id = display_base.articleId
+    )
     ORDER BY display_base.articleId ASC
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING
   `.trim()
 }
 
@@ -428,8 +435,15 @@ const getInsertDisplayListModeStateRowsStatement = (input: ProjectReviewServingD
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
       0 AS unassessed_patch_watermark
     FROM display_base
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_article_serving_list_mode_state_v4 existing
+      WHERE existing.project_id = ${getSqlLiteral(input.projectId)}
+        AND existing.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND existing.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND existing.article_id = display_base.articleId
+    )
     ORDER BY display_base.articleId ASC
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING
   `.trim()
 }
 

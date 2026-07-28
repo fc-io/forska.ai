@@ -305,8 +305,9 @@ test('display base rows flow through writer with display fields and selected imp
   const stateInsert = inserts.find((statement) => {
     return statement.includes('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   })
-  expect(baseInsert).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
-  expect(baseInsert).toContain('DO NOTHING')
+  expect(baseInsert).toContain('WHERE NOT EXISTS')
+  expect(baseInsert).not.toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
+  expect(baseInsert).not.toContain('DO NOTHING')
   expect(baseInsert).not.toContain('DO UPDATE SET')
   expect(baseInsert).not.toContain('base_generation = excluded.base_generation')
   expect(baseInsert).not.toContain('patch_watermark = excluded.patch_watermark')
@@ -324,8 +325,9 @@ test('display base rows flow through writer with display fields and selected imp
   expect(stateInsert).toContain('TRUE AS has_human_list_mode')
   expect(stateInsert).toContain('TRUE AS has_llm_list_mode')
   expect(stateInsert).toContain('FALSE AS has_unassessed_list_mode')
-  expect(stateInsert).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
-  expect(stateInsert).toContain('DO NOTHING')
+  expect(stateInsert).toContain('WHERE NOT EXISTS')
+  expect(stateInsert).not.toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
+  expect(stateInsert).not.toContain('DO NOTHING')
   const insertTargetSql = baseInsert?.split('WITH display_base AS')[0] ?? ''
 
   expect(insertTargetSql).not.toContain('article_title')
@@ -396,8 +398,9 @@ test('display base range rebuilds insert candidate rows without indexed serving 
   expect(joined).toContain("scope.article_id <= 'article-050'")
   expect(joined).toContain("scope.article_id >= 'article-051'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
-  expect(joined).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
-  expect(joined).toContain('DO NOTHING')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
+  expect(joined).not.toContain('DO NOTHING')
   expect(joined).not.toContain('DO UPDATE SET')
   expect(joined).not.toContain('article_title = excluded.article_title')
   expect(joined).not.toContain('selected_import_route_id = excluded.selected_import_route_id')
@@ -439,10 +442,10 @@ test('display base rebuilds emit no stale row deletion statement', async () => {
 
   // This hardening slice is statement-shape only: stale row cleanup remains a
   // future semantic cleanup path, separate from avoiding indexed scoped mutation.
-  expect(joined).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
-  expect(joined).toContain('DO NOTHING')
+  expect(joined).not.toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
+  expect(joined).not.toContain('DO NOTHING')
   expect(joined).not.toContain('DO UPDATE SET')
   expect(joined).not.toContain('DELETE FROM mart.review_article_serving_base_v4')
-  expect(joined).not.toContain('NOT EXISTS')
+  expect(joined).toContain('NOT EXISTS')
   expect(joined).not.toContain('stale')
 })

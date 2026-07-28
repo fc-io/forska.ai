@@ -69,6 +69,8 @@ type ReviewsWarningsResponse = {
             expiredLeaseCount?: number
             failedCount: number
             pendingCount: number
+            quarantinedCount?: number
+            terminalQuarantinedCount?: number
           }
           quarantine: {quarantinedOutboxCount: number; retryableOutboxCount: number; unresolvedOutboxCount: number}
         }
@@ -782,6 +784,7 @@ test('reviews warnings ignore failed requestless bootstrap bookkeeping behind se
     failedCount: 0,
     pendingCount: 0,
     quarantinedCount: 1,
+    terminalQuarantinedCount: 0,
   })
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('ready')
@@ -1970,6 +1973,49 @@ test('reviews warnings report blocked V4 repair without retrying terminal missin
   expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.status).toBe('failed')
   expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+})
+
+test('reviews warnings fail readable serving when the latest active V4 rebuild has a quarantined chunk', async () => {
+  const projectId = 'project-readable-serving-active-quarantined-v4-warning'
+  const requestId = 'request-readable-serving-active-quarantined-v4-warning'
+
+  await insertProjectFixture(projectId)
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-readable-serving-active-quarantined-v4-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId,
+    status: 'admitted',
+    updatedAt: '2026-04-02T12:05:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-readable-serving-active-quarantined-v4-warning',
+    createdAt: '2026-04-02T12:01:00.000Z',
+    lastError: 'DuckDB fatal index delete failed after WAL replay',
+    projectId,
+    requestId,
+    status: 'quarantined',
+    updatedAt: '2026-04-02T12:05:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.serving.readable).toBe(true)
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
+    failedCount: 0,
+    pendingCount: 0,
+    quarantinedCount: 1,
+    terminalQuarantinedCount: 1,
+  })
+  expect(body.data.indexing.status).toBe('failed')
 })
 
 test('reviews warnings prioritize terminal V4 request over disabled mutation backlog', async () => {

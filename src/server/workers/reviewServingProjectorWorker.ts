@@ -590,6 +590,10 @@ const isDuckDbFatalRuntimeError = (error: unknown) => {
   )
 }
 
+const getRebuildChunkFailureModeInput = (error: unknown) => {
+  return isDuckDbFatalRuntimeError(error) ? ({failureMode: 'quarantine'} as const) : {}
+}
+
 const canSplitRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
   return chunk.chunkStartKey < chunk.chunkEndKey && (chunk.splitDepth ?? 0) < 12
 }
@@ -7202,7 +7206,12 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
     await recycleDuckdbAfterFatalRebuildChunkError({chunk: effectiveClaimedChunk, dependencies, error})
     const failedChunk = await measureReviewServingProjectorWorkerPhase(timings, 'failUpdateMs', async () => {
       return service.failChunk(
-        {chunkId: effectiveClaimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId},
+        {
+          chunkId: effectiveClaimedChunk.chunkId,
+          error: getErrorText(error),
+          ...getRebuildChunkFailureModeInput(error),
+          leaseOwner: workerId,
+        },
         database,
       )
     })
@@ -7492,17 +7501,29 @@ const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   error: unknown
   workerId: string
 }): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
-  const failedResults = await input.claimedChunks.reduce<Promise<ReviewServingProjectorWorkerChunkResult[]>>(
-    async (previous, claimed) => {
-      const results = await previous
+  if (isDuckDbFatalRuntimeError(input.error)) {
+    const firstClaimed = input.claimedChunks[0]
+
+    if (firstClaimed !== undefined) {
       await recycleDuckdbAfterFatalRebuildChunkError({
-        chunk: claimed.chunk,
+        chunk: firstClaimed.chunk,
         dependencies: input.dependencies,
         error: input.error,
       })
+    }
+  }
+
+  const failedResults = await input.claimedChunks.reduce<Promise<ReviewServingProjectorWorkerChunkResult[]>>(
+    async (previous, claimed) => {
+      const results = await previous
       const failedChunk = await measureReviewServingProjectorWorkerPhase(claimed.timings, 'failUpdateMs', async () => {
         return claimed.service.failChunk(
-          {chunkId: claimed.chunk.chunkId, error: getErrorText(input.error), leaseOwner: input.workerId},
+          {
+            chunkId: claimed.chunk.chunkId,
+            error: getErrorText(input.error),
+            ...getRebuildChunkFailureModeInput(input.error),
+            leaseOwner: input.workerId,
+          },
           input.database,
         )
       })

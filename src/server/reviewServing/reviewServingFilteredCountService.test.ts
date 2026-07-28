@@ -4,8 +4,8 @@ import {
   getReviewServingFilteredCountPruneSql,
   getReviewServingFilteredCountReadSql,
   getReviewServingFilteredCountSignature,
-  getReviewServingFilteredCountUpsertSql,
   getReviewServingFilteredCountValue,
+  getReviewServingFilteredCountWriteSqls,
   type ReviewServingFilteredCountDatabase,
   type ReviewServingFilteredCountLookup,
 } from './reviewServingFilteredCountService.ts'
@@ -34,21 +34,22 @@ test('filtered count serving read SQL only touches the memoized count table', ()
   expect(sql).not.toContain('review_article_judgment_detail_serving_v4')
 })
 
-test('filtered count serving upsert records composed component identity and prunes bounded scope', () => {
-  const upsertSql = getReviewServingFilteredCountUpsertSql({...lookup, countValue: 42})
+test('filtered count serving write records composed component identity without indexed upsert', () => {
+  const writeSqls = getReviewServingFilteredCountWriteSqls({...lookup, countValue: 42})
+  const writeSql = writeSqls.join('\n')
   const pruneSql = getReviewServingFilteredCountPruneSql({...lookup, maxRowsPerScope: 17})
 
-  expect(upsertSql).toContain('INSERT INTO mart.review_filtered_count_serving_v4')
-  expect(upsertSql).toContain('component_identity')
-  expect(upsertSql).not.toContain('project_scope_identity')
-  expect(upsertSql).not.toContain('search_identity')
-  expect(upsertSql).not.toContain('posting_identity')
-  expect(upsertSql).not.toContain('queue_identity')
-  expect(upsertSql).not.toContain('payload_identity')
-  expect(upsertSql).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, filter_signature, component_identity)',
-  )
-  expect(upsertSql).toContain('count_updated_at = now()')
+  expect(writeSqls).toHaveLength(2)
+  expect(writeSql).toContain('DELETE FROM mart.review_filtered_count_serving_v4')
+  expect(writeSql).toContain('INSERT INTO mart.review_filtered_count_serving_v4')
+  expect(writeSql).toContain('component_identity')
+  expect(writeSql).not.toContain('project_scope_identity')
+  expect(writeSql).not.toContain('search_identity')
+  expect(writeSql).not.toContain('posting_identity')
+  expect(writeSql).not.toContain('queue_identity')
+  expect(writeSql).not.toContain('payload_identity')
+  expect(writeSql).not.toContain('ON CONFLICT')
+  expect(writeSql).not.toContain('excluded.')
   expect(pruneSql).toContain('ROW_NUMBER() OVER')
   expect(pruneSql).toContain('row_rank > 17')
 })
@@ -105,8 +106,9 @@ test('filtered count serving fills and bounds after a miss', async () => {
   })
 
   expect(value).toBe(42)
-  expect(statements).toHaveLength(3)
+  expect(statements).toHaveLength(4)
   expect(statements[0]).toContain('FROM mart.review_filtered_count_serving_v4')
-  expect(statements[1]).toContain('INSERT INTO mart.review_filtered_count_serving_v4')
-  expect(statements[2]).toContain('row_rank > 3')
+  expect(statements[1]).toContain('DELETE FROM mart.review_filtered_count_serving_v4')
+  expect(statements[2]).toContain('INSERT INTO mart.review_filtered_count_serving_v4')
+  expect(statements[3]).toContain('row_rank > 3')
 })

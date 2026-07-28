@@ -109,6 +109,10 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0207_rebuildHotReviewServingTablesWithoutRepairIndexes.sql',
   '../../db/duckdbMigrations/0208_rebuildReviewRebuildRequestWithoutIndexes.sql',
   '../../db/duckdbMigrations/0209_rebuildQueueServingRepairIndexCleanup.sql',
+  '../../db/duckdbMigrations/0210_rebuildReviewJudgmentDetailServingWithoutIndexes.sql',
+  '../../db/duckdbMigrations/0211_rebuildReviewServingDirtyWorkAckWithoutIndexes.sql',
+  '../../db/duckdbMigrations/0212_restoreReviewArticleServingStateConflictIndexes.sql',
+  '../../db/duckdbMigrations/0213_dropRemainingReviewServingHotTableIndexes.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -304,10 +308,21 @@ const reviewRebuildRequestNoIndexForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0208_rebuildReviewRebuildRequestWithoutIndexes.sql']
 const reviewQueueServingRepairIndexCleanupForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0209_rebuildQueueServingRepairIndexCleanup.sql']
+const reviewJudgmentDetailNoIndexForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0210_rebuildReviewJudgmentDetailServingWithoutIndexes.sql'
+  ]
+const reviewDirtyWorkAckNoIndexForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0211_rebuildReviewServingDirtyWorkAckWithoutIndexes.sql'
+  ]
+const reviewRemainingHotTableIndexDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0213_dropRemainingReviewServingHotTableIndexes.sql']
 const hotServingTables = [
   'mart.review_article_serving_base_v4',
   'mart.review_article_serving_list_mode_state_v4',
   'mart.review_article_filter_posting_serving_v4',
+  'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filtered_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
@@ -680,9 +695,8 @@ test('unassessed queue article-rank serving schema stores one row per article', 
     'activity_sort_at',
     'queue_updated_at',
   ])
-  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
-    'PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, article_id)',
-  )
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).not.toContain('ON CONFLICT')
   expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
     'ROW_NUMBER() OVER (\n      PARTITION BY project_id, review_config_hash, snapshot_id, queue_kind, article_id',
   )
@@ -690,9 +704,7 @@ test('unassessed queue article-rank serving schema stores one row per article', 
     'ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC',
   )
   expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain('MAX(queue_updated_at) OVER')
-  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).toContain(
-    'idx_review_unassessed_queue_article_rank_serving_v4_order',
-  )
+  expect(reviewUnassessedQueueArticleRankForwardMigrationSql).not.toContain('CREATE INDEX')
   expect(reviewQueueServingNoIndexForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_unassessed_queue_article_rank_serving_v4_noindex_repair',
   )
@@ -944,6 +956,36 @@ test('Phase 1 schema migration keeps raw payloads out of hot serving tables', ()
       return getTableSql(tableName).includes('source_metadata JSON') ? [tableName] : []
     }),
   ).toEqual([])
+})
+
+test('Phase 1 schema migration drops remaining review-serving hot-table indexes', () => {
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_serving_base_v4_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_serving_base_v4_order;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_serving_list_mode_state_v4_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_repaired_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_article_count_serving_v4_lookup;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_filtered_count_serving_v4_repaired_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_filter_facet_serving_v4_lookup;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_filter_option_serving_v4_repaired_pk;',
+  )
+  expect(reviewRemainingHotTableIndexDropForwardMigrationSql).toContain(
+    'DROP INDEX IF EXISTS mart.idx_review_unassessed_queue_article_rank_serving_v4_order;',
+  )
 })
 
 test('Phase 1 payload serving table is retired from the final schema', () => {
@@ -1380,7 +1422,7 @@ test('filter posting serving schema stores compact article id postings without s
       'DROP INDEX IF EXISTS idx_review_article_filter_posting_serving_v4_lookup;',
     ].join('\n'),
   )
-  expect(hasActiveIndex('idx_review_article_filter_posting_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_article_filter_posting_serving_v4_repaired_pk')).toBe(false)
   expect(hasActiveIndex('idx_review_article_filter_posting_serving_v4_lookup')).toBe(false)
   expect(reviewHotServingNoIndexForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_filter_posting_serving_v4_noindex_repair',
@@ -1478,7 +1520,7 @@ test('filter option schema drops reconstructable payload JSON column', () => {
   ])
   expect(getTableColumns('mart.review_filter_option_serving_v4').has('option_payload_json')).toBe(false)
   expect(getTableColumns('mart.review_filter_option_serving_v4').has('option_updated_at')).toBe(false)
-  expect(hasActiveIndex('idx_review_filter_option_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_filter_option_serving_v4_repaired_pk')).toBe(false)
   expect(hasActiveIndex('idx_review_filter_option_serving_v4_lookup')).toBe(false)
 })
 
@@ -1619,7 +1661,7 @@ test('dynamic filtered count serving schema keys signatures by snapshot and comp
   expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('posting_identity VARCHAR')
   expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('queue_identity VARCHAR')
   expect(reviewFilteredCountComponentBreakoutDropForwardMigrationSql).not.toContain('payload_identity VARCHAR')
-  expect(hasActiveIndex('idx_review_filtered_count_serving_v4_repaired_pk')).toBe(true)
+  expect(hasActiveIndex('idx_review_filtered_count_serving_v4_repaired_pk')).toBe(false)
   expect(hasActiveIndex('idx_review_filtered_count_serving_v4_lookup')).toBe(false)
 })
 
@@ -1788,6 +1830,19 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article',
   )
+  expect(reviewJudgmentDetailNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_noindex_repair_0210',
+  )
+  expect(reviewJudgmentDetailNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewJudgmentDetailNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
+  expect(reviewDirtyWorkAckNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_serving_dirty_work_ack_noindex_repair_0211',
+  )
+  expect(reviewDirtyWorkAckNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewDirtyWorkAckNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
+  expect(hasActiveIndex('idx_review_serving_dirty_work_ack_component')).toBe(false)
+  expect(hasActiveIndex('idx_review_article_judgment_detail_serving_v4_article')).toBe(false)
+  expect(hasActiveIndex('idx_review_article_judgment_detail_serving_v4_repaired_pk')).toBe(false)
   expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).not.toContain('detail_updated_at')
   expect(reviewJudgmentDetailHumanAnswerArrayNullForwardMigrationSql).toContain(
     'UPDATE mart.review_article_judgment_detail_serving_v4',

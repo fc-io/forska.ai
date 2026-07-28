@@ -2030,6 +2030,41 @@ test('failed rebuild chunks record retry backoff and exhaust to the request term
   expect(statements.join('\n')).toContain('retry_after')
 })
 
+test('fatal rebuild chunks are quarantined without retry backoff', async () => {
+  const retryIdentity = {
+    ...baseChunkIdentity,
+    requestId: 'rebuild:fatal-quarantine',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const running = {
+    ...getChunkRowFromIdentity(retryIdentity, []),
+    leaseOwner: 'worker-fatal',
+    status: 'running' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([running])
+  const chunkId = getReviewServingRebuildChunkId(retryIdentity)
+
+  const quarantined = await markReviewServingRebuildChunkFailed(
+    {
+      chunkId,
+      error: 'FatalException: failed to delete data from index during delete',
+      failureMode: 'quarantine',
+      leaseOwner: 'worker-fatal',
+      now: '2026-06-16T14:00:00.000Z',
+    },
+    database,
+  )
+
+  expect(quarantined).toMatchObject({
+    lastError: 'FatalException: failed to delete data from index during delete',
+    leaseOwner: null,
+    retryAfter: null,
+    retryCount: 1,
+    status: 'quarantined',
+  })
+  expect(rows.get(chunkId)).toMatchObject({leaseOwner: null, retryAfter: null, status: 'quarantined'})
+  expect(statements.join('\n')).toContain("status = 'quarantined'")
+})
+
 test('expired running rebuild chunk leases are reclaimed without retry delay', async () => {
   const retryIdentity = {
     ...baseChunkIdentity,
