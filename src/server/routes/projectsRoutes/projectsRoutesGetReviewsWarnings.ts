@@ -337,7 +337,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       enabledPromptCount,
       hasAnyArticlesInScope,
       hasBlockedCandidateSnapshot,
-      hasLatestTerminalV4Request: servingDiagnostics.rebuildChunks.failedCount > 0,
+      hasLatestTerminalV4Request:
+        servingDiagnostics.rebuildChunks.failedCount + servingDiagnostics.rebuildChunks.terminalQuarantinedCount > 0,
       hasQuarantineBarrier: terminalQuarantineCount > 0,
       hasReviewServingRows,
       hasTerminalV4Work:

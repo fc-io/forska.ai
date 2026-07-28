@@ -39,6 +39,7 @@ export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnostics
   expiredLeaseCount: number
   oldestClaimableQueuedAt: string | null
   quarantinedCount: number
+  terminalQuarantinedCount: number
 }
 
 export type ReviewServingDiagnosticsQuarantineBarrier = {
@@ -125,6 +126,7 @@ type DiagnosticsSummaryRow = {
   rebuildChunkOldestQueuedAt: string | null
   rebuildChunkPendingCount: number
   rebuildChunkQuarantinedCount: number
+  rebuildChunkTerminalQuarantinedCount: number
   rebuildChunkRunningCount: number
   rebuildChunkUpdatedAt: string | null
   retryableOutboxCount: number
@@ -207,6 +209,7 @@ const emptyRebuildChunkState: ReviewServingDiagnosticsRebuildChunkState = {
   expiredLeaseCount: 0,
   oldestClaimableQueuedAt: null,
   quarantinedCount: 0,
+  terminalQuarantinedCount: 0,
 }
 const emptyQuarantineState = {quarantinedOutboxCount: 0, retryableOutboxCount: 0, unresolvedOutboxCount: 0}
 
@@ -592,10 +595,16 @@ const getDiagnosticsSummaryRowsEffect = (
                 latest_request.request_id IS NULL
                 OR (
                   classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
-                  AND latest_request.status IN ('quarantined', 'failed')
+                  AND latest_request.status IN ('admitted', 'running', 'quarantined', 'failed')
                 )
               )
           ) AS INTEGER) AS quarantinedCount,
+          CAST(COUNT(*) FILTER (
+            WHERE classified_chunk.status = 'quarantined'
+              AND classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+              AND latest_request.status IN ('admitted', 'running', 'quarantined', 'failed')
+              AND latest_request.reason <> 'requestless_bootstrap_rebuild'
+          ) AS INTEGER) AS terminalQuarantinedCount,
           CAST(COUNT(*) FILTER (
             WHERE classified_chunk.status = 'running'
               AND (
@@ -661,6 +670,7 @@ const getDiagnosticsSummaryRowsEffect = (
         rebuild_chunk.blockedQueuedCount AS rebuildChunkBlockedQueuedCount,
         rebuild_chunk.blockedOverBudgetCount AS rebuildChunkBlockedOverBudgetCount,
         rebuild_chunk.quarantinedCount AS rebuildChunkQuarantinedCount,
+        rebuild_chunk.terminalQuarantinedCount AS rebuildChunkTerminalQuarantinedCount,
         rebuild_chunk.expiredLeaseCount AS rebuildChunkExpiredLeaseCount,
         rebuild_chunk.oldestQueuedAt AS rebuildChunkOldestQueuedAt,
         rebuild_chunk.oldestClaimableQueuedAt AS rebuildChunkOldestClaimableQueuedAt,
@@ -714,6 +724,7 @@ const getDiagnosticsRebuildChunkState = (row: DiagnosticsSummaryRow | undefined)
         expiredLeaseCount: Number(row.rebuildChunkExpiredLeaseCount),
         oldestClaimableQueuedAt: row.rebuildChunkOldestClaimableQueuedAt,
         quarantinedCount: Number(row.rebuildChunkQuarantinedCount),
+        terminalQuarantinedCount: Number(row.rebuildChunkTerminalQuarantinedCount),
       }
 }
 

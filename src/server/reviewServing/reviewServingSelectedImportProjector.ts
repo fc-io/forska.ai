@@ -554,7 +554,29 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
     `INSERT INTO mart.review_article_serving_base_v4 (${selectedImportServingColumns})
      SELECT ${selectedImportServingColumns}
      FROM review_selected_import_serving_rebuild_v4
-     ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO NOTHING`,
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM mart.review_article_serving_base_v4 existing
+       WHERE existing.project_id = review_selected_import_serving_rebuild_v4.project_id
+         AND existing.review_config_hash = review_selected_import_serving_rebuild_v4.review_config_hash
+         AND existing.snapshot_id = review_selected_import_serving_rebuild_v4.snapshot_id
+         AND existing.article_id = review_selected_import_serving_rebuild_v4.article_id
+     )`,
+    `UPDATE mart.review_article_serving_list_mode_state_v4 state
+     SET
+       has_llm_list_mode = TRUE,
+       has_human_list_mode = TRUE,
+       has_both_list_mode = TRUE,
+       has_unassessed_list_mode = TRUE,
+       llm_patch_watermark = GREATEST(COALESCE(state.llm_patch_watermark, 0), COALESCE(rebuild.patch_watermark, 0)),
+       human_patch_watermark = GREATEST(COALESCE(state.human_patch_watermark, 0), COALESCE(rebuild.patch_watermark, 0)),
+       both_patch_watermark = GREATEST(COALESCE(state.both_patch_watermark, 0), COALESCE(rebuild.patch_watermark, 0)),
+       unassessed_patch_watermark = GREATEST(COALESCE(state.unassessed_patch_watermark, 0), COALESCE(rebuild.patch_watermark, 0))
+     FROM review_selected_import_serving_rebuild_v4 rebuild
+     WHERE state.project_id = rebuild.project_id
+       AND state.review_config_hash = rebuild.review_config_hash
+       AND state.snapshot_id = rebuild.snapshot_id
+       AND state.article_id = rebuild.article_id`,
     `INSERT INTO mart.review_article_serving_list_mode_state_v4 (
        project_id,
        review_config_hash,
@@ -583,15 +605,14 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        patch_watermark AS both_patch_watermark,
        patch_watermark AS unassessed_patch_watermark
      FROM review_selected_import_serving_rebuild_v4
-     ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id) DO UPDATE SET
-       has_llm_list_mode = EXCLUDED.has_llm_list_mode,
-       has_human_list_mode = EXCLUDED.has_human_list_mode,
-       has_both_list_mode = EXCLUDED.has_both_list_mode,
-       has_unassessed_list_mode = EXCLUDED.has_unassessed_list_mode,
-       llm_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.llm_patch_watermark, 0), COALESCE(EXCLUDED.llm_patch_watermark, 0)),
-       human_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.human_patch_watermark, 0), COALESCE(EXCLUDED.human_patch_watermark, 0)),
-       both_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.both_patch_watermark, 0), COALESCE(EXCLUDED.both_patch_watermark, 0)),
-       unassessed_patch_watermark = GREATEST(COALESCE(mart.review_article_serving_list_mode_state_v4.unassessed_patch_watermark, 0), COALESCE(EXCLUDED.unassessed_patch_watermark, 0))`,
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM mart.review_article_serving_list_mode_state_v4 existing
+       WHERE existing.project_id = review_selected_import_serving_rebuild_v4.project_id
+         AND existing.review_config_hash = review_selected_import_serving_rebuild_v4.review_config_hash
+         AND existing.snapshot_id = review_selected_import_serving_rebuild_v4.snapshot_id
+         AND existing.article_id = review_selected_import_serving_rebuild_v4.article_id
+     )`,
   ]
 }
 

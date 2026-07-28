@@ -176,6 +176,7 @@ const applyDuckdbMigrationFiles = async (fileNames: string[], appliedNames: Set<
   if (!appliedNames.has(currentFileName)) {
     console.log(`[db:duck:mig] applying ${currentFileName}`)
     await applyDuckdbMigrationFile(currentFileName)
+    appliedNames.add(currentFileName)
     return 1 + (await applyDuckdbMigrationFiles(fileNames.slice(1), appliedNames))
   }
 

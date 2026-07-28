@@ -2847,6 +2847,91 @@ test('worker fails every preclaimed component batch chunk when a batch writer th
   ])
 })
 
+test('worker quarantines every preclaimed component batch chunk after a fatal DuckDB error', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const fatalError = 'FatalException: failed to delete data from index during delete'
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    inputDigest: 'freshReviewServingSnapshot',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-fatal-batch-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-fatal-batch-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    if (statement.includes('INSERT INTO mart.project_scope_article')) {
+      throw new Error(fatalError)
+    }
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    failChunk: async (failure) => {
+      harness.failedChunks.push(failure)
+
+      return {
+        ...(chunksById.get(failure.chunkId) ?? firstChunk),
+        lastError: failure.error,
+        leaseOwner: null,
+        status: failure.failureMode === 'quarantine' ? ('quarantined' as const) : ('failed' as const),
+      }
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.status).toBe('failed')
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, status: 'failed'})
+  expect(harness.fatalRecycledInputs).toHaveLength(1)
+  expect(harness.fatalRecycledInputs[0]?.chunk).toEqual(firstChunk)
+  expect(harness.failedChunks).toEqual([
+    {chunkId: firstChunk.chunkId, error: fatalError, failureMode: 'quarantine', leaseOwner: 'worker-1'},
+    {chunkId: secondChunk.chunkId, error: fatalError, failureMode: 'quarantine', leaseOwner: 'worker-1'},
+  ])
+})
+
 test('worker stops a rebuild chunk batch after a foreground request chunk completes', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {
@@ -3240,7 +3325,7 @@ test('worker retries claimable failed or expired chunk leases and records execut
   expect(harness.failedChunks).toEqual([{chunkId: 'chunk-1', error: 'chunk executor failed', leaseOwner: 'worker-2'}])
 })
 
-test('worker recycles DuckDB before retrying fatal rebuild chunk runtime errors', async () => {
+test('worker recycles DuckDB and quarantines fatal rebuild chunk runtime errors', async () => {
   const harness = createWorkerHarness()
 
   harness.dependencies.rebuildChunkService = {
@@ -3265,6 +3350,7 @@ test('worker recycles DuckDB before retrying fatal rebuild chunk runtime errors'
     {
       chunkId: 'chunk-1',
       error: 'FatalException: Database has been invalidated because of a previous fatal error',
+      failureMode: 'quarantine',
       leaseOwner: 'worker-2',
     },
   ])
@@ -5229,9 +5315,11 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     expect(joined).toContain('string_agg(')
     expect(joined).toContain('CAST(llm_has_judgment AS VARCHAR)')
     expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
-    expect(joined).toContain(
+    expect(joined).not.toContain(
       'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
     )
+    expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+    expect(joined).toContain('WHERE NOT EXISTS (')
     expect(joined).toContain('state_source AS (')
     expect(joined).toContain('SET duplicate_flag = COALESCE(source.duplicateFlag, FALSE)')
     expect(joined).toContain('"validationMode":"debug-strict-checksum"')
@@ -5686,18 +5774,21 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).not.toContain('human_status_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain(
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('WHERE NOT EXISTS (')
   expect(joined).toContain('state_source AS (')
   expect(joined).toContain('SET duplicate_flag = COALESCE(source.duplicateFlag, FALSE)')
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
-  expect(joined).toContain(
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING',
   )
+  expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 existing')
   expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
   expect(joined).toContain("article_id >= 'article-001'")
@@ -7619,9 +7710,11 @@ test('admission-presplit posting rebuild chunk executes directly above the old r
 
   expect(result).toEqual({status: 'completed'})
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain(
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('WHERE NOT EXISTS (')
   expect(joined).toContain('state_source AS (')
   expect(joined).toContain('SET duplicate_flag = COALESCE(source.duplicateFlag, FALSE)')
   expect(joined).not.toContain('NTILE(')
@@ -7780,9 +7873,10 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
   expect(joined).not.toContain('scope.project_scope_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
-  expect(joined).toContain(
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, payload_kind, article_id, prompt_id) DO NOTHING',
   )
+  expect(joined).toContain('FROM mart.review_article_judgment_detail_serving_v4 existing')
   expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain('lease_expires_at > current_timestamp')
   expect(joined).toContain('RETURNING chunk_id AS chunkId')

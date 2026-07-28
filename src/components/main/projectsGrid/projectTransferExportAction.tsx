@@ -279,6 +279,10 @@ const downloadBlob = (blob: Blob, filename: string) => {
   URL.revokeObjectURL(url)
 }
 
+const navigateToDownloadUrl = (url: string) => {
+  window.location.assign(url)
+}
+
 const downloadProjectTransferPackageResponse = async (response: Response, fallbackFilename: string) => {
   const filename = getProjectTransferPackageFilename(response, fallbackFilename)
   const blob = await response.blob()
@@ -404,18 +408,9 @@ const startProjectTransferExport = async (
 const downloadProjectTransferPackageFromSession = async (
   session: ProjectTransferExportReadySession,
 ): Promise<ProjectTransferExportSession | null> => {
-  const response = await fetch(getProjectTransferDownloadRequestUrl(session.downloadUrl), {
-    credentials: 'include',
-    method: 'GET',
-  })
+  navigateToDownloadUrl(getProjectTransferDownloadRequestUrl(session.downloadUrl))
 
-  if (response.ok && isProjectTransferPackageResponse(response)) {
-    await downloadProjectTransferPackageResponse(response, session.filename)
-
-    return null
-  }
-
-  return readProjectTransferExportSessionResponse(response, 'Failed to download project transfer export')
+  return null
 }
 
 const getProgressByteValues = (progress: ProjectTransferExportProgress | null | undefined) => {
@@ -525,7 +520,13 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
     return startExportMutation.isPending || hasActiveSession() || isDownloading()
   })
   const statusMessage = createMemo(() => {
-    return isDownloading() ? 'Downloading package...' : getSessionStatusMessage(currentSession())
+    const readySession = currentSession()?.status === 'ready' ? currentSession() : null
+
+    return isDownloading()
+      ? 'Starting package download...'
+      : readySession !== null && downloadedIds().has(readySession.exportId)
+        ? 'Package ready. If the download did not start, use Download package.'
+        : getSessionStatusMessage(currentSession())
   })
   const buttonLabel = createMemo(() => {
     return startExportMutation.isPending
@@ -553,7 +554,6 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
           setDownloadedIds((ids) => {
             return addExportId(ids, readySession.exportId)
           })
-          setSession(null)
         } else {
           setSession(nextSession)
         }
@@ -577,6 +577,16 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
     setSession(null)
     startExportMutation.mutate({projectId: props.projectId, rawArticleProvenanceMode: rawArticleProvenanceMode()})
   }
+  const readyDownloadSession = createMemo(() => {
+    const resolvedSession = currentSession()
+
+    return resolvedSession?.status === 'ready' ? resolvedSession : null
+  })
+  const readyDownloadUrl = createMemo(() => {
+    const readySession = readyDownloadSession()
+
+    return readySession === null ? null : getProjectTransferDownloadRequestUrl(readySession.downloadUrl)
+  })
 
   createEffect(() => {
     const data = sessionQuery.data
@@ -673,9 +683,29 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
           </For>
         </fieldset>
       </Show>
-      <Button size="sm" variant="outline" class={props.class} disabled={isBusy()} onClick={handleExportProject}>
-        {buttonLabel()}
-      </Button>
+      <div class="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" class={props.class} disabled={isBusy()} onClick={handleExportProject}>
+          {buttonLabel()}
+        </Button>
+        <Show when={readyDownloadSession() && readyDownloadUrl()}>
+          {(downloadUrl) => {
+            const readySession = readyDownloadSession()
+
+            return (
+              <Button
+                as="a"
+                size="sm"
+                variant="default"
+                class={props.class}
+                download={readySession?.filename}
+                href={downloadUrl()}
+              >
+                Download package
+              </Button>
+            )
+          }}
+        </Show>
+      </div>
       <Show when={statusMessage()}>
         {(message) => {
           return (

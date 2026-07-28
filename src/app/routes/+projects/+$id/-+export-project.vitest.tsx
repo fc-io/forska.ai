@@ -19,6 +19,7 @@ const mockState = vi.hoisted(() => {
       isError: false,
       isLoading: false,
     },
+    getExportSession: vi.fn<(exportId: string) => Promise<unknown>>(),
     routeProjectId: 'project-1',
   }
 })
@@ -61,7 +62,11 @@ vi.mock('../../../../services/apiClient.ts', () => {
       api: {
         projects: {
           export: () => {
-            return {get: vi.fn()}
+            return {
+              get: () => {
+                return mockState.getExportSession('export-1')
+              },
+            }
           },
         },
       },
@@ -86,6 +91,9 @@ vi.mock('../../../../components/ui/button', () => {
 const originalCreateObjectURL = Reflect.get(URL, 'createObjectURL')
 const originalRevokeObjectURL = Reflect.get(URL, 'revokeObjectURL')
 let anchorClickSpy: ReturnType<typeof vi.spyOn>
+let locationAssignSpy: ReturnType<typeof vi.spyOn>
+let clickedDownload: string | null
+let clickedHref: string | null
 
 const getQueryClient = () => {
   return new QueryClient({defaultOptions: {mutations: {retry: false}, queries: {retry: false}}})
@@ -153,6 +161,9 @@ describe('export project page', () => {
       isError: false,
       isLoading: false,
     }
+    mockState.getExportSession.mockReset()
+    clickedDownload = null
+    clickedHref = null
     vi.stubGlobal('fetch', vi.fn())
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
@@ -161,7 +172,13 @@ describe('export project page', () => {
       }),
     })
     Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: vi.fn()})
-    anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clickedDownload = this.download
+      clickedHref = this.href
+    })
+    locationAssignSpy = vi.spyOn(window.location, 'assign').mockImplementation(() => {})
   })
 
   afterEach(() => {
@@ -226,6 +243,93 @@ describe('export project page', () => {
         })
         expect(anchorClickSpy).toHaveBeenCalled()
       })
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+
+  test('starts large exports with browser navigation and leaves a manual download link when ready', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockImplementation((_input, init) => {
+      const method = init?.method ?? 'GET'
+
+      return Promise.resolve(
+        method === 'POST'
+          ? getJsonResponse(
+              {
+                data: {
+                  downloadUrl: '/api/projects/export/export-1/download',
+                  expiresAt: '2030-01-01T00:00:00.000Z',
+                  exportId: 'export-1',
+                  filename: 'project-transfer-project-1-export-1.zip',
+                  status: 'queued',
+                },
+                error: null,
+              },
+              202,
+            )
+          : getJsonResponse({
+              data: {
+                articleCount: 12,
+                defaultRawArticleProvenanceMode: 'omit',
+                humanJudgmentCount: 4,
+                judgmentCount: 34,
+                promptHumanJudgmentCount: 3,
+                summaryHumanJudgmentCount: 1,
+              },
+              error: null,
+            }),
+      )
+    })
+    mockState.getExportSession.mockResolvedValue({
+      data: {
+        data: {
+          byteLength: 671_000_000,
+          checksumSha256: 'a'.repeat(64),
+          downloadUrl: '/api/projects/export/export-1/download',
+          expiresAt: '2030-01-01T00:00:00.000Z',
+          exportId: 'export-1',
+          filename: 'project-transfer-project-1-export-1.zip',
+          packageFingerprint: 'fingerprint-1',
+          progress: {percent: 100},
+          status: 'ready',
+        },
+        error: null,
+      },
+      error: null,
+    })
+    const {container, dispose, queryClient} = await renderExportProject()
+
+    try {
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Transfer project')
+      })
+
+      const exportButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Export Project'
+      })
+
+      exportButton?.click()
+
+      await waitForCondition(() => {
+        expect(locationAssignSpy).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/export/export-1/download')
+        expect(container.textContent).toContain('Package ready')
+      })
+      const downloadLink = Array.from(container.querySelectorAll('a')).find((link) => {
+        return link.textContent?.trim() === 'Download package'
+      })
+
+      expect(downloadLink?.href).toBe('http://127.0.0.1:3001/api/projects/export/export-1/download')
+      expect(downloadLink?.download).toBe('project-transfer-project-1-export-1.zip')
+      expect(anchorClickSpy).not.toHaveBeenCalled()
+      expect(clickedHref).toBeNull()
+      expect(clickedDownload).toBeNull()
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        'http://127.0.0.1:3001/api/projects/export/export-1/download',
+        expect.anything(),
+      )
     } finally {
       dispose()
       queryClient.clear()

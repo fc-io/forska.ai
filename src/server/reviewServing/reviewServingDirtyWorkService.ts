@@ -330,7 +330,10 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
       dirty_range_end,
       status,
       completed_at
-    ) VALUES (
+    )
+    SELECT *
+    FROM (
+      VALUES (
       ${getSqlLiteral(getDirtyAckId(claim))},
       ${getSqlLiteral(claim.dirtyWorkId)},
       ${getSqlLiteral(claim.projectionComponent)},
@@ -341,8 +344,24 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
       ${getSqlLiteral(claim.dirtyRangeEnd)},
       'completed',
       current_timestamp
+      )
+    ) AS incoming(
+      dirty_ack_id,
+      dirty_work_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      completed_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end,
+      status,
+      completed_at
     )
-    ON CONFLICT(dirty_ack_id) DO NOTHING
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_ack existing
+      WHERE existing.dirty_ack_id = incoming.dirty_ack_id
+    )
   `)
 }
 
@@ -668,7 +687,10 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
       dirty_range_end,
       status,
       completed_at
-    ) VALUES (
+    )
+    SELECT *
+    FROM (
+      VALUES (
       ${getSqlLiteral(dirtyAckId)},
       NULL,
       ${getSqlLiteral(input.projectionComponent)},
@@ -679,8 +701,24 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
       NULL,
       'completed',
       current_timestamp
+      )
+    ) AS incoming(
+      dirty_ack_id,
+      dirty_work_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      completed_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end,
+      status,
+      completed_at
     )
-    ON CONFLICT(dirty_ack_id) DO NOTHING
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_ack existing
+      WHERE existing.dirty_ack_id = incoming.dirty_ack_id
+    )
   `)
 
   await database.run(`
@@ -914,7 +952,10 @@ export const cleanupReviewServingDirtyWorkRetention = async (
           dirty_range_end,
           status,
           completed_at
-        ) VALUES (
+        )
+        SELECT *
+        FROM (
+          VALUES (
           ${getSqlLiteral(dirtyAckId)},
           NULL,
           ${getSqlLiteral(lane.projectionComponent)},
@@ -925,8 +966,24 @@ export const cleanupReviewServingDirtyWorkRetention = async (
           NULL,
           'completed',
           current_timestamp
+          )
+        ) AS incoming(
+          dirty_ack_id,
+          dirty_work_id,
+          projection_component,
+          projection_identity,
+          source_partition,
+          completed_source_high_water_mark,
+          dirty_range_start,
+          dirty_range_end,
+          status,
+          completed_at
         )
-        ON CONFLICT(dirty_ack_id) DO NOTHING
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM app.review_serving_dirty_work_ack existing
+          WHERE existing.dirty_ack_id = incoming.dirty_ack_id
+        )
       `)
 
         return [...compactions, {...lane, dirtyAckId}]

@@ -1,0 +1,9 @@
+DROP INDEX IF EXISTS mart.idx_review_article_serving_base_v4_pk;
+DROP INDEX IF EXISTS mart.idx_review_article_serving_base_v4_order;
+DROP INDEX IF EXISTS mart.idx_review_article_serving_list_mode_state_v4_pk;
+DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_repaired_pk;
+DROP INDEX IF EXISTS mart.idx_review_article_count_serving_v4_lookup;
+DROP INDEX IF EXISTS mart.idx_review_filtered_count_serving_v4_repaired_pk;
+DROP INDEX IF EXISTS mart.idx_review_filter_facet_serving_v4_lookup;
+DROP INDEX IF EXISTS mart.idx_review_filter_option_serving_v4_repaired_pk;
+DROP INDEX IF EXISTS mart.idx_review_unassessed_queue_article_rank_serving_v4_order;
