@@ -1107,6 +1107,8 @@ test('worker writes compatible selected import rebuild chunks through one batch 
   expect(harness.runChunkInputs).toEqual([])
   expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(joined).toContain('source_delta_high_water = 9')
+  expect(joined).toContain('\'{"importRunArticle":42}\'::JSON')
   expect(joined).toContain('selectedImportBatchWriter')
 })
 
