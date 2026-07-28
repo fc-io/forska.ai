@@ -294,7 +294,7 @@ const ensureComparisonProjectServingStatusRow = async (
       generation_updated_at
     )
     SELECT
-      project.id,
+      DISTINCT project.id,
       0,
       current_timestamp
     FROM ${comparisonProjectTable} project
@@ -333,7 +333,7 @@ const ensureComparisonProjectServingStatusRows = async (
       generation_updated_at
     )
     SELECT
-      project.id,
+      DISTINCT project.id,
       0,
       ${getTimestampLiteral(now)}
     FROM ${comparisonProjectTable} project

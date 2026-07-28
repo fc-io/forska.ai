@@ -597,6 +597,10 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       LEFT JOIN active_comparison_generation active_generation
         ON active_generation.comparison_project_id = project.id
       WHERE project.archived = FALSE
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY project.id
+        ORDER BY project.id ASC
+      ) = 1
     `,
     recreateRepairPrimaryKeyIndex: false,
     recreateSecondaryIndexes: false,
