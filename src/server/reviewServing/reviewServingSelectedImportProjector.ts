@@ -635,18 +635,22 @@ const getSelectedImportProjectorRecord = (
 }
 
 const getSelectedImportProjectionManifest = (input: {
+  manifestInputWatermarks?: ReviewServingSourcePartitionWatermarks
   projectId: string
   selectedImportSnapshotId: string
   sourceDeltaHighWater: number
 }): ReviewServingProjectionIdentityManifestInput => {
+  const inputWatermarks = input.manifestInputWatermarks ?? {importRunArticle: input.sourceDeltaHighWater}
+  const inputWatermark = Math.max(input.sourceDeltaHighWater, 0, ...Object.values(inputWatermarks))
+
   return {
     baseGeneration: 0,
     definitionVersion: selectedImportProjectorDefinitionVersion,
     inputDigest: input.selectedImportSnapshotId,
-    inputWatermark: input.sourceDeltaHighWater,
-    inputWatermarks: input.manifestInputWatermarks ?? {importRunArticle: input.sourceDeltaHighWater},
+    inputWatermark,
+    inputWatermarks,
     invalidationReason: 'selectedImport.base.completed',
-    patchRangeEnd: input.sourceDeltaHighWater,
+    patchRangeEnd: inputWatermark,
     patchRangeStart: input.sourceDeltaHighWater,
     patchWatermark: input.sourceDeltaHighWater,
     projectId: input.projectId,
