@@ -405,6 +405,9 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
   const bulkEvents = events.filter((event) => {
     return event.kind.startsWith('bulk:') || event.kind.startsWith('bulk-run:')
   })
+  const statusRowInsertEvents = events.filter((event) => {
+    return event.kind.includes('INSERT INTO app.comparison_project_serving_generation')
+  })
 
   expect(mutationAndBulkEvents).toEqual([
     'status:queued',
@@ -428,6 +431,11 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
   expect(
     bulkEvents.every((event) => {
       return !event.activeTransaction
+    }),
+  ).toBe(true)
+  expect(
+    statusRowInsertEvents.every((event) => {
+      return event.kind.includes('SELECT\n      DISTINCT project.id')
     }),
   ).toBe(true)
 })

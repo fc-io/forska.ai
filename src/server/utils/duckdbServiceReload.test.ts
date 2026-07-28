@@ -3459,6 +3459,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(comparisonServingGenerationProbe?.postRepairSql).toContain("'stale'")
     expect(comparisonServingGenerationProbe?.postRepairSql).toContain('FROM app.comparison_project project')
     expect(comparisonServingGenerationProbe?.postRepairSql).toContain('MAX(generation) AS active_generation')
+    expect(comparisonServingGenerationProbe?.postRepairSql).toContain('PARTITION BY project.id')
     expect(comparisonServingGenerationProbe?.postRepairSchemaRequirements).toContainEqual({
       columnNames: ['id', 'archived'],
       schemaName: 'app',
