@@ -1621,7 +1621,8 @@ test('duckdb service startup repair rebuilds comparison serving generation as st
       parsed.indexSql.some((sql) => {
         return /^CREATE UNIQUE INDEX\b/i.test(sql) && sql.includes('comparison_project_id')
       }),
-    ).toBe(true)
+    ).toBe(false)
+    expect(parsed.indexSql.join('\n')).not.toMatch(/\bUNIQUE\b/i)
     expect(parsed.rows).toEqual([
       {
         activeGeneration: 7,

@@ -598,6 +598,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         ON active_generation.comparison_project_id = project.id
       WHERE project.archived = FALSE
     `,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     repairPrimaryKeyColumns: ['comparison_project_id'],
     repairStrategy: 'empty-derived',
     schemaRequirements: [

@@ -127,6 +127,7 @@ const emptyComparisonProjectServingCleanupResult = {deletedRowCount: 0, tables: 
 const comparisonProjectServingRebuildWorkloadContext = getComparisonProjectServingWorkloadContext({
   routeOrJobKey: 'comparisonServing.rebuild',
 })
+const pendingComparisonProjectServingRebuilds = new Map<string, Promise<unknown>>()
 const comparisonProjectServingStatuses = new Set<ComparisonProjectServingStatus>([
   'failed',
   'missing',
@@ -299,7 +300,11 @@ const ensureComparisonProjectServingStatusRow = async (
     FROM ${comparisonProjectTable} project
     WHERE project.id = ${getSqlLiteral(comparisonProjectId)}
       AND project.archived = FALSE
-    ON CONFLICT(comparison_project_id) DO NOTHING
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ${comparisonProjectServingGenerationTable} status
+        WHERE status.comparison_project_id = project.id
+      )
   `)
 }
 
@@ -334,7 +339,11 @@ const ensureComparisonProjectServingStatusRows = async (
     FROM ${comparisonProjectTable} project
     INNER JOIN requested_comparison_project requested ON requested.comparison_project_id = project.id
     WHERE project.archived = FALSE
-    ON CONFLICT(comparison_project_id) DO NOTHING
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ${comparisonProjectServingGenerationTable} status
+        WHERE status.comparison_project_id = project.id
+      )
   `)
 }
 
@@ -879,6 +888,37 @@ const rebuildComparisonProjectServing = async (
   }
 }
 
+const rebuildComparisonProjectServingSerialized = async (
+  comparisonProjectId: string,
+  overrides: ComparisonProjectServingRebuildDependencyOverrides = {},
+) => {
+  const pendingRebuild = pendingComparisonProjectServingRebuilds.get(comparisonProjectId)
+
+  if (pendingRebuild) {
+    await pendingRebuild.catch(() => {})
+    const dependencies = getComparisonProjectServingRebuildDependencies(overrides)
+    const status = await getComparisonProjectServingStatus(comparisonProjectId, {database: dependencies.database})
+
+    return {
+      cleanupResult: emptyComparisonProjectServingCleanupResult,
+      generation: status.servingGeneration,
+      skipped: true,
+      status,
+    }
+  }
+
+  const rebuildPromise = rebuildComparisonProjectServing(comparisonProjectId, overrides)
+  pendingComparisonProjectServingRebuilds.set(comparisonProjectId, rebuildPromise)
+
+  try {
+    return await rebuildPromise
+  } finally {
+    if (pendingComparisonProjectServingRebuilds.get(comparisonProjectId) === rebuildPromise) {
+      pendingComparisonProjectServingRebuilds.delete(comparisonProjectId)
+    }
+  }
+}
+
 const getNextUnavailableComparisonProjectServingRebuildCandidate = async (
   now: Date,
   dependencies: ComparisonProjectServingRebuildDependencies,
@@ -934,7 +974,7 @@ const rebuildNextUnavailableComparisonProjectServing = async (
     return {comparisonProjectId: null, rebuilt: false as const, rebuildResult: null}
   }
 
-  const rebuildResult = await rebuildComparisonProjectServing(comparisonProjectId, overrides)
+  const rebuildResult = await rebuildComparisonProjectServingSerialized(comparisonProjectId, overrides)
 
   return {comparisonProjectId, rebuilt: rebuildResult.skipped !== true, rebuildResult}
 }
@@ -1027,7 +1067,7 @@ const comparisonProjectServingRebuildService = {
   markComparisonProjectsServingStale,
   markComparisonProjectsServingStaleTx,
   rebuildNextUnavailableComparisonProjectServing,
-  rebuildComparisonProjectServing,
+  rebuildComparisonProjectServing: rebuildComparisonProjectServingSerialized,
 }
 
 export const getComparisonProjectServingRebuildService = () => {
