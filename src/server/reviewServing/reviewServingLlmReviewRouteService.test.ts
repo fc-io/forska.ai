@@ -300,7 +300,7 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
-  expect(reader.statements).toHaveLength(8)
+  expect(reader.statements).toHaveLength(9)
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).toContain('list_mode_state.has_llm_list_mode IS TRUE')
@@ -454,7 +454,7 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
   })
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
-  expect(reader.statements).toHaveLength(5)
+  expect(reader.statements).toHaveLength(6)
   expect(countStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(countStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(countStatement).toContain("WHEN 'llm' THEN list_mode_state.has_llm_list_mode")

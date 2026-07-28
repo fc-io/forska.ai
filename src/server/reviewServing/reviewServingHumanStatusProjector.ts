@@ -607,9 +607,6 @@ const getApplyHumanStatusServingStatement = (input: {
     ? null
     : `WITH changed(list_mode_key, article_id, review_config_hash, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
         SELECT * FROM (VALUES ${values})
-      ), changed_article AS (
-        SELECT DISTINCT list_mode_key, article_id
-        FROM changed
       ), candidate_prompt AS (
         SELECT
           changed.list_mode_key,
@@ -633,24 +630,39 @@ const getApplyHumanStatusServingStatement = (input: {
             AND newer.review_config_hash IS NOT DISTINCT FROM candidate.review_config_hash
             AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
         )
+      ), article_status AS (
+        SELECT
+          latest_prompt.list_mode_key,
+          latest_prompt.article_id,
+          latest_prompt.review_config_hash,
+          CASE
+            WHEN COUNT(DISTINCT latest_prompt.prompt_id) FILTER (WHERE NOT latest_prompt.tombstone) = 0 THEN NULL
+            WHEN COUNT(DISTINCT latest_prompt.prompt_id) FILTER (
+              WHERE NOT latest_prompt.tombstone AND latest_prompt.human_status_key = 'answered'
+            ) = COUNT(DISTINCT latest_prompt.prompt_id) FILTER (WHERE NOT latest_prompt.tombstone) THEN 'answered'
+            ELSE 'unanswered'
+          END AS human_status
+        FROM latest_prompt
+        GROUP BY latest_prompt.list_mode_key, latest_prompt.article_id, latest_prompt.review_config_hash
       )
       UPDATE mart.review_article_serving_list_mode_state_v4 state
       SET
+        human_status = article_status.human_status,
         human_patch_watermark = CASE
-          WHEN changed_article.list_mode_key = 'human'
+          WHEN article_status.list_mode_key = 'human'
             THEN GREATEST(COALESCE(state.human_patch_watermark, 0), ${getSqlLiteral(input.patchWatermark)})
           ELSE state.human_patch_watermark
         END,
         both_patch_watermark = CASE
-          WHEN changed_article.list_mode_key = 'both'
+          WHEN article_status.list_mode_key = 'both'
             THEN GREATEST(COALESCE(state.both_patch_watermark, 0), ${getSqlLiteral(input.patchWatermark)})
           ELSE state.both_patch_watermark
         END
-      FROM changed_article
+      FROM article_status
       WHERE state.project_id = ${getSqlLiteral(input.projectId)}
-        AND state.review_config_hash IS NOT DISTINCT FROM changed_article.review_config_hash
-        AND state.article_id = changed_article.article_id
-        AND ${getListModeMembershipPredicate('state', 'changed_article.list_mode_key')}
+        AND state.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash
+        AND state.article_id = article_status.article_id
+        AND ${getListModeMembershipPredicate('state', 'article_status.list_mode_key')}
         AND EXISTS (
           SELECT 1
           FROM mart.review_article_serving_base_v4 serving
@@ -718,28 +730,79 @@ const getApplyHumanStatusServingRangeReplacementStatements = (input: {
   return setClauses.length === 0
     ? []
     : [
-        `WITH ${getRangeValuesCte(input.ranges)}
+        `WITH ${getRangeValuesCte(input.ranges)},
+     enabled_prompt_count AS (
+       SELECT
+         project_prompt.project_id,
+         COUNT(DISTINCT prompt.id) AS prompt_count
+       FROM app.project_prompt project_prompt
+       INNER JOIN app.prompt prompt
+         ON prompt.id = project_prompt.prompt_id
+       WHERE project_prompt.enabled
+         AND NOT project_prompt.archived
+         AND COALESCE(prompt.archived, FALSE) = FALSE
+       GROUP BY project_prompt.project_id
+     ),
+     article_status AS (
+       SELECT
+         serving.project_id,
+         serving.review_config_hash,
+         serving.snapshot_id,
+         serving.article_id,
+         CASE
+           WHEN COALESCE(project.human_judgment_mode, 'prompt') = 'summary'
+             AND BOOL_OR(judgment_human_summary.id IS NOT NULL) THEN 'answered'
+           WHEN COALESCE(project.human_judgment_mode, 'prompt') = 'summary' THEN 'unanswered'
+           WHEN COALESCE(enabled_prompt_count.prompt_count, 0) = 0 THEN NULL
+           WHEN enabled_prompt_count.prompt_count = COUNT(DISTINCT prompt.id) FILTER (
+             WHERE judgment_human.id IS NOT NULL
+           ) THEN 'answered'
+           ELSE 'unanswered'
+         END AS human_status
+       FROM mart.review_article_serving_base_v4 serving
+       INNER JOIN article_range_filter range
+         ON (range.chunk_start_article_id IS NULL OR serving.article_id >= range.chunk_start_article_id)
+        AND (range.chunk_end_article_id IS NULL OR serving.article_id <= range.chunk_end_article_id)
+       INNER JOIN app.project project
+         ON project.id = serving.project_id
+       LEFT JOIN enabled_prompt_count
+         ON enabled_prompt_count.project_id = serving.project_id
+       LEFT JOIN app.project_prompt project_prompt
+         ON project_prompt.project_id = project.id
+        AND project_prompt.enabled
+        AND NOT project_prompt.archived
+       LEFT JOIN app.prompt prompt
+         ON prompt.id = project_prompt.prompt_id
+        AND COALESCE(prompt.archived, FALSE) = FALSE
+       LEFT JOIN app."judgment_human" judgment_human
+         ON judgment_human.project_id IS NOT DISTINCT FROM serving.project_id
+        AND judgment_human.article_id = serving.article_id
+        AND judgment_human.prompt_id = prompt.id
+        AND COALESCE(project.human_judgment_mode, 'prompt') <> 'summary'
+       LEFT JOIN app."judgment_human_summary" judgment_human_summary
+         ON judgment_human_summary.project_id = serving.project_id
+        AND judgment_human_summary.article_id = serving.article_id
+        AND COALESCE(project.human_judgment_mode, 'prompt') = 'summary'
+       WHERE serving.project_id = ${getSqlLiteral(firstRange.projectId)}
+         AND serving.base_generation = ${getSqlLiteral(firstRange.baseGeneration)}
+         AND EXISTS (
+           SELECT 1
+           FROM app.review_serving_snapshot_manifest snapshot
+           WHERE snapshot.project_id = serving.project_id
+             AND snapshot.snapshot_id = serving.snapshot_id
+             AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+             AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(firstRange.projectionIdentity)}
+             AND snapshot.snapshot_status IN ('candidate', 'active')
+         )
+       GROUP BY serving.project_id, serving.review_config_hash, serving.snapshot_id, serving.article_id, project.human_judgment_mode, enabled_prompt_count.prompt_count
+     )
      UPDATE mart.review_article_serving_list_mode_state_v4 state
-     SET ${setClauses.join(', ')}
-     FROM mart.review_article_serving_base_v4 serving
-     INNER JOIN article_range_filter range
-       ON (range.chunk_start_article_id IS NULL OR serving.article_id >= range.chunk_start_article_id)
-      AND (range.chunk_end_article_id IS NULL OR serving.article_id <= range.chunk_end_article_id)
-     WHERE state.project_id = serving.project_id
-       AND state.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-       AND state.snapshot_id = serving.snapshot_id
-       AND state.article_id = serving.article_id
-       AND serving.project_id = ${getSqlLiteral(firstRange.projectId)}
-       AND serving.base_generation = ${getSqlLiteral(firstRange.baseGeneration)}
-       AND EXISTS (
-         SELECT 1
-         FROM app.review_serving_snapshot_manifest snapshot
-         WHERE snapshot.project_id = serving.project_id
-           AND snapshot.snapshot_id = serving.snapshot_id
-           AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-           AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(firstRange.projectionIdentity)}
-           AND snapshot.snapshot_status IN ('candidate', 'active')
-       )`,
+     SET ${['human_status = article_status.human_status', ...setClauses].join(', ')}
+     FROM article_status
+     WHERE state.project_id = article_status.project_id
+       AND state.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash
+       AND state.snapshot_id = article_status.snapshot_id
+       AND state.article_id = article_status.article_id`,
       ]
 }
 
