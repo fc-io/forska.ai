@@ -394,13 +394,20 @@ test('comparison serving explicit cleanup refuses the active generation', () => 
   ])
 })
 
-test('comparison serving full cleanup removes mart rows and the generation status row', () => {
+test('comparison serving full cleanup removes mart rows and resets the generation status row', () => {
   const result = runScript<{
     activeAfterCleanup: number | null
+    activeAfterRestaging: number | null
     cleanupResult: {deletedRowCount: number}
-    generationRowsAfterCleanup: Array<{comparisonProjectId: string}>
+    generationRowsAfterCleanup: Array<{
+      activeGeneration: string
+      comparisonProjectId: string
+      servingGeneration: string | null
+      servingStatus: string
+    }>
     rowsAfterCleanup: Array<{generation: string; rowCount: string; tableName: string}>
     rowsBeforeCleanup: Array<{generation: string; rowCount: string; tableName: string}>
+    stagedGenerationAfterCleanup: number
   }>(`
     await database.run(\`
       INSERT INTO app.comparison_project_serving_generation (comparison_project_id, active_generation)
@@ -414,24 +421,41 @@ test('comparison serving full cleanup removes mart rows and the generation statu
     const rowsAfterCleanup = await getGenerationRows()
     const activeAfterCleanup = await service.getActiveComparisonProjectServingGeneration(comparisonProjectId)
     const generationRowsAfterCleanup = await database.queryJson(\`
-      SELECT comparison_project_id AS comparisonProjectId
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        CAST(active_generation AS VARCHAR) AS activeGeneration,
+        serving_status AS servingStatus,
+        CAST(serving_generation AS VARCHAR) AS servingGeneration
       FROM app.comparison_project_serving_generation
       WHERE comparison_project_id = '\${comparisonProjectId}'
     \`)
+    const stagedGenerationAfterCleanup = await service.createInactiveComparisonProjectServingGeneration(comparisonProjectId)
+    const activeAfterRestaging = await service.getActiveComparisonProjectServingGeneration(comparisonProjectId)
 
     console.log(JSON.stringify({
       activeAfterCleanup,
+      activeAfterRestaging,
       cleanupResult,
       generationRowsAfterCleanup,
       rowsAfterCleanup,
       rowsBeforeCleanup,
+      stagedGenerationAfterCleanup,
     }))
     await database.close()
   `)
 
   expect(result.cleanupResult.deletedRowCount).toBe(11)
   expect(result.activeAfterCleanup).toBeNull()
-  expect(result.generationRowsAfterCleanup).toEqual([])
+  expect(result.activeAfterRestaging).toBeNull()
+  expect(result.stagedGenerationAfterCleanup).toBe(1)
+  expect(result.generationRowsAfterCleanup).toEqual([
+    {
+      activeGeneration: '0',
+      comparisonProjectId: 'comparison-serving-project',
+      servingGeneration: null,
+      servingStatus: 'missing',
+    },
+  ])
   expect(result.rowsBeforeCleanup).toEqual([
     {generation: '1', rowCount: '1', tableName: 'article'},
     {generation: '2', rowCount: '1', tableName: 'article'},

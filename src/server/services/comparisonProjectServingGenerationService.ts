@@ -77,11 +77,16 @@ const ensureComparisonProjectServingGenerationRow = async (
       comparison_project_id,
       active_generation,
       generation_updated_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(comparisonProjectId)},
       0,
       current_timestamp
-    ) ON CONFLICT(comparison_project_id) DO NOTHING
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${comparisonProjectServingGenerationTable}
+      WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+    )
   `)
 }
 
@@ -172,9 +177,27 @@ const getAllComparisonProjectServingRowsDeleteSql = ({
   `
 }
 
-const getComparisonProjectServingStatusRowDeleteSql = (comparisonProjectId: string) => {
+const getComparisonProjectServingStatusRowResetSql = (comparisonProjectId: string) => {
   return `
-    DELETE FROM ${comparisonProjectServingGenerationTable}
+    UPDATE ${comparisonProjectServingGenerationTable}
+    SET
+      active_generation = 0,
+      generation_updated_at = current_timestamp,
+      serving_status = 'missing',
+      serving_generation = NULL,
+      serving_started_at = NULL,
+      serving_completed_at = NULL,
+      serving_failed_at = NULL,
+      serving_error = NULL,
+      serving_phase = NULL,
+      serving_phase_started_at = NULL,
+      serving_last_progressed_at = NULL,
+      serving_staged_article_count = 0,
+      serving_staged_cell_count = 0,
+      serving_staged_filter_member_count = 0,
+      serving_staged_filter_stats_count = 0,
+      serving_total_article_count = NULL,
+      serving_total_cell_count = NULL
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
     RETURNING comparison_project_id AS comparisonProjectId
   `
@@ -302,7 +325,7 @@ const cleanupComparisonProjectServing = async (
       runner,
     })
     const generationRows = await runner.queryJson<{comparisonProjectId: string}>(
-      getComparisonProjectServingStatusRowDeleteSql(comparisonProjectId),
+      getComparisonProjectServingStatusRowResetSql(comparisonProjectId),
     )
     const generationTable = {
       deletedRowCount: generationRows.length,
