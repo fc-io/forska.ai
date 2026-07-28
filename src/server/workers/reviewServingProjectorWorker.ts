@@ -1719,6 +1719,7 @@ const runPayloadRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = snapshots.map((snapshot) => {
     return snapshot.snapshotId
