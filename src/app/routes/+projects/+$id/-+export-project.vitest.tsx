@@ -313,12 +313,16 @@ describe('export project page', () => {
 
       exportButton?.click()
 
+      await new Promise((resolve) => {
+        setTimeout(resolve, 2_500)
+      })
+
       await waitForCondition(() => {
         expect(locationAssignSpy).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/export/export-1/download')
         expect(container.textContent).toContain('Package ready')
       })
       const downloadLink = Array.from(container.querySelectorAll('a')).find((link) => {
-        return link.textContent?.trim() === 'Download package'
+        return link.textContent?.trim() === 'Download Package'
       })
 
       expect(downloadLink?.href).toBe('http://127.0.0.1:3001/api/projects/export/export-1/download')
@@ -330,6 +334,100 @@ describe('export project page', () => {
         'http://127.0.0.1:3001/api/projects/export/export-1/download',
         expect.anything(),
       )
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+
+  test('continues polling queued exports until the package is ready', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockImplementation((_input, init) => {
+      const method = init?.method ?? 'GET'
+
+      return Promise.resolve(
+        method === 'POST'
+          ? getJsonResponse(
+              {
+                data: {
+                  downloadUrl: '/api/projects/export/export-1/download',
+                  expiresAt: '2030-01-01T00:00:00.000Z',
+                  exportId: 'export-1',
+                  filename: 'project-transfer-project-1-export-1.zip',
+                  status: 'queued',
+                },
+                error: null,
+              },
+              202,
+            )
+          : getJsonResponse({
+              data: {
+                articleCount: 12,
+                defaultRawArticleProvenanceMode: 'omit',
+                humanJudgmentCount: 4,
+                judgmentCount: 34,
+                promptHumanJudgmentCount: 3,
+                summaryHumanJudgmentCount: 1,
+              },
+              error: null,
+            }),
+      )
+    })
+    mockState.getExportSession
+      .mockResolvedValueOnce({
+        data: {
+          data: {
+            downloadUrl: '/api/projects/export/export-1/download',
+            expiresAt: '2030-01-01T00:00:00.000Z',
+            exportId: 'export-1',
+            filename: 'project-transfer-project-1-export-1.zip',
+            progress: {percent: 40},
+            status: 'packaging',
+          },
+          error: null,
+        },
+        error: null,
+      })
+      .mockResolvedValue({
+        data: {
+          data: {
+            byteLength: 671_000_000,
+            checksumSha256: 'a'.repeat(64),
+            downloadUrl: '/api/projects/export/export-1/download',
+            expiresAt: '2030-01-01T00:00:00.000Z',
+            exportId: 'export-1',
+            filename: 'project-transfer-project-1-export-1.zip',
+            packageFingerprint: 'fingerprint-1',
+            progress: {percent: 100},
+            status: 'ready',
+          },
+          error: null,
+        },
+        error: null,
+      })
+    const {container, dispose, queryClient} = await renderExportProject()
+
+    try {
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Transfer project')
+      })
+
+      const exportButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Export Project'
+      })
+
+      exportButton?.click()
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 4_500)
+      })
+
+      await waitForCondition(() => {
+        expect(mockState.getExportSession).toHaveBeenCalledTimes(2)
+        expect(locationAssignSpy).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/export/export-1/download')
+        expect(container.textContent).toContain('Package ready')
+      })
     } finally {
       dispose()
       queryClient.clear()
