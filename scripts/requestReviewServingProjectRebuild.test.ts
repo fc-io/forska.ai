@@ -53,6 +53,7 @@ test('requestReviewServingProjectRebuild CLI requests one project V4 rebuild', (
   }
 
   const response = JSON.parse(getLastJsonLine(result.stdout.toString())) as {
+    components: string[] | null
     projectId: string
     reason: string
     requestIds: string[]
@@ -71,6 +72,7 @@ test('requestReviewServingProjectRebuild CLI requests one project V4 rebuild', (
   expect(response).toMatchObject({
     projectId: 'project-request-review-serving',
     reason: 'test-request-review-serving-project-rebuild',
+    components: null,
     requestedCount: 1,
     status: 'requested',
   })
@@ -82,4 +84,47 @@ test('requestReviewServingProjectRebuild CLI requests one project V4 rebuild', (
     status: 'admitted',
   })
   expect(legacyRow).toEqual({count: 0})
+})
+
+test('requestReviewServingProjectRebuild CLI can request narrow component rebuilds', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-project-rebuild-components.duckdb')
+  seedLargeRebuildCommandProjectDatabase({duckdbPath, projects: [{projectId: 'project-request-review-serving'}]})
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      'scripts/requestReviewServingProjectRebuild.ts',
+      '--project-id=project-request-review-serving',
+      '--reason=test-request-review-serving-project-rebuild-components',
+      '--components=projectScope',
+    ],
+    {cwd: projectRoot, env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath}},
+  )
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.toString() || result.stdout.toString() || 'request narrow review-serving project rebuild failed',
+    )
+  }
+
+  const response = JSON.parse(getLastJsonLine(result.stdout.toString())) as {
+    components: string[] | null
+    projectId: string
+    reason: string
+    requestIds: string[]
+    requestedCount: number
+    status: string
+  }
+  const [requestRow] = runQuery(
+    duckdbPath,
+    "SELECT requested_components_json AS requestedComponentsJson FROM app.review_rebuild_request WHERE project_id = 'project-request-review-serving'",
+  ) as Array<{requestedComponentsJson: string}>
+
+  expect(response).toMatchObject({
+    components: ['projectScope'],
+    projectId: 'project-request-review-serving',
+    requestedCount: 1,
+    status: 'requested',
+  })
+  expect(JSON.parse(requestRow.requestedComponentsJson)).toEqual(['projectScope'])
 })

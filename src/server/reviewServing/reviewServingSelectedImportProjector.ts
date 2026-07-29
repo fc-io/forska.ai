@@ -327,11 +327,11 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
     )
     WITH ${
       ranges === undefined
-        ? 'selected_import_candidates AS'
+        ? 'selected_import_candidate_source AS'
         : `${getArticleRangeFilterCte(ranges)},
-    selected_import_candidates AS`
+    selected_import_candidate_source AS`
     } (
-      SELECT DISTINCT
+      SELECT
         scope.article_id,
         hot.import_route_id,
         hot.source_record_key,
@@ -370,6 +370,40 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
         AND NOT hot.tombstone
         ${ranges === undefined ? getArticleRangePredicateSql(input) : ''}
     ),
+    selected_import_duplicate_keys AS (
+      SELECT
+        candidate.article_id,
+        candidate.import_route_id,
+        candidate.source_record_key,
+        candidate.selected_rank_key,
+        candidate.selected_rank_numeric,
+        candidate.tombstone,
+        COUNT(*) AS row_count
+      FROM selected_import_candidate_source candidate
+      GROUP BY
+        candidate.article_id,
+        candidate.import_route_id,
+        candidate.source_record_key,
+        candidate.selected_rank_key,
+        candidate.selected_rank_numeric,
+        candidate.tombstone
+      HAVING COUNT(*) > 1
+    ),
+    selected_import_duplicate_assertion AS (
+      SELECT
+        CASE
+          WHEN COUNT(*) = 0 THEN 1
+          ELSE error('selected-import range insert produced duplicate article keys')
+        END AS assertion_passed
+      FROM selected_import_duplicate_keys
+    ),
+    selected_import_candidates AS (
+      SELECT DISTINCT
+        candidate.*
+      FROM selected_import_candidate_source candidate
+      CROSS JOIN selected_import_duplicate_assertion assertion
+      WHERE assertion.assertion_passed = 1
+    ),
     selected_import_winner AS (
       SELECT
         ranked.*
@@ -389,20 +423,41 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
         FROM selected_import_candidates candidate
       ) ranked
       WHERE ranked.selected_import_row_rank = 1
+    ),
+    selected_import_insert_rows AS (
+      SELECT
+        ${getSqlLiteral(input.projectId)} AS project_id,
+        ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
+        ${getSqlLiteral(input.selectedImportSnapshotId)} AS selected_import_snapshot_id,
+        candidate.article_id,
+        candidate.import_route_id,
+        candidate.source_record_key,
+        candidate.selected_rank_key,
+        candidate.selected_rank_numeric,
+        candidate.tombstone,
+        current_timestamp AS selected_import_updated_at
+      FROM selected_import_winner candidate
     )
     SELECT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
-      ${getSqlLiteral(input.selectedImportSnapshotId)} AS selected_import_snapshot_id,
-      candidate.article_id,
-      candidate.import_route_id,
-      candidate.source_record_key,
-      candidate.selected_rank_key,
-      candidate.selected_rank_numeric,
-      candidate.tombstone,
-      current_timestamp AS selected_import_updated_at
-    FROM selected_import_winner candidate
-    ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING
+      insert_row.project_id,
+      insert_row.project_scope_identity,
+      insert_row.selected_import_snapshot_id,
+      insert_row.article_id,
+      insert_row.import_route_id,
+      insert_row.source_record_key,
+      insert_row.selected_rank_key,
+      insert_row.selected_rank_numeric,
+      insert_row.tombstone,
+      insert_row.selected_import_updated_at
+    FROM selected_import_insert_rows insert_row
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_selected_article_import_v4 existing
+      WHERE existing.project_id = insert_row.project_id
+        AND existing.project_scope_identity = insert_row.project_scope_identity
+        AND existing.selected_import_snapshot_id = insert_row.selected_import_snapshot_id
+        AND existing.article_id = insert_row.article_id
+    )
   `
 }
 

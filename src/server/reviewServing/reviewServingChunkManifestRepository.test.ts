@@ -817,7 +817,13 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     database,
   )
 
-  expect(next).toEqual({...baseChunkIdentity, checksum: null, chunkId: pending.chunkId, requestId: null})
+  expect(next).toEqual({
+    ...baseChunkIdentity,
+    checksum: null,
+    chunkId: pending.chunkId,
+    requestId: null,
+    snapshotId: null,
+  })
   expect(statements.join('\n')).toContain("candidate.status = 'pending'")
   expect(statements.join('\n')).toContain("candidate.status = 'failed'")
   expect(statements.join('\n')).toContain("request.status IN ('admitted', 'running')")

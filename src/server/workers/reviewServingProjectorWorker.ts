@@ -948,9 +948,15 @@ const getRebuildChunkSnapshots = async (
     },
     database,
   )
-  const matchingSnapshots = snapshots.filter((snapshot) => {
+  const generationMatchingSnapshots = snapshots.filter((snapshot) => {
     return getSnapshotComponentBaseGeneration(snapshot, chunk.projectionComponent) === chunk.outputBaseGeneration
   })
+  const matchingSnapshots =
+    chunk.snapshotId != null
+      ? generationMatchingSnapshots.filter((snapshot) => {
+          return snapshot.snapshotId === chunk.snapshotId
+        })
+      : generationMatchingSnapshots
 
   if (matchingSnapshots.length === 0) {
     throw new Error(
@@ -6773,6 +6779,7 @@ const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
     && nextChunk.projectId === firstChunk.projectId
     && nextChunk.projectionComponent === firstChunk.projectionComponent
     && nextChunk.projectionIdentity === firstChunk.projectionIdentity
+    && (nextChunk.snapshotId ?? null) === (firstChunk.snapshotId ?? null)
     && nextChunk.outputBaseGeneration === firstChunk.outputBaseGeneration
     && nextChunk.inputWatermark === firstChunk.inputWatermark
     && claimedChunks.every((claimedChunk) => {
@@ -6829,6 +6836,7 @@ type CompatibleStatusRebuildChunkBatchInputRow = {
   projectionComponent: ReviewServingProjectionComponent
   projectionIdentity: string
   requestId: string | null
+  snapshotId: string | null
 }
 
 const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
@@ -6858,7 +6866,8 @@ const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
       candidate.project_id AS projectId,
       candidate.projection_component AS projectionComponent,
       candidate.projection_identity AS projectionIdentity,
-      candidate.request_id AS requestId
+      candidate.request_id AS requestId,
+      candidate.snapshot_id AS snapshotId
     FROM app.review_rebuild_chunk_manifest candidate
     WHERE ${getReviewServingRebuildChunkClaimWhere(
       {now: input.now, projectId: input.projectId, projectionComponent: input.firstChunk.projectionComponent},
@@ -6890,6 +6899,7 @@ const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
       projectionComponent: row.projectionComponent,
       projectionIdentity: row.projectionIdentity,
       requestId: row.requestId ?? null,
+      snapshotId: row.snapshotId ?? null,
     }
   })
 }

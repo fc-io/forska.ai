@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {
+  allocateReviewServingSourceHighWaterMark,
   appendReviewServingChangeDelta,
   appendReviewServingImportRunArticleDelta,
   appendReviewServingSourceChangeOutbox,
@@ -164,6 +165,17 @@ test('review-serving delta append rejects unknown change kinds before high-water
       return statement.includes('review_delta_reconciliation_cursor')
     }),
   ).toBe(false)
+})
+
+test('review-serving delta high-water cursor initializes without DuckDB conflict writes', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  const sourceHighWaterMark = await allocateReviewServingSourceHighWaterMark(tx, 'judgment:project-1')
+
+  expect(sourceHighWaterMark).toBe(1)
+  const cursorInsert = getInsertStatement(statements, 'app.review_delta_reconciliation_cursor') ?? ''
+  expect(cursorInsert).toContain('WHERE NOT EXISTS')
+  expect(cursorInsert).not.toContain('ON CONFLICT')
 })
 
 test('import article delta appends common envelope fields without affected-project fanout', async () => {

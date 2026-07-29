@@ -995,6 +995,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         | 'projectionComponent'
         | 'projectionIdentity'
         | 'requestId'
+        | 'snapshotId'
       >
     >(`
       SELECT
@@ -1003,6 +1004,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         candidate.project_id AS projectId,
         candidate.projection_component AS projectionComponent,
         candidate.projection_identity AS projectionIdentity,
+        candidate.snapshot_id AS snapshotId,
         candidate.input_digest AS inputDigest,
         candidate.input_watermark AS inputWatermark,
         candidate.chunk_start_key AS chunkStartKey,
@@ -1058,6 +1060,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
           projectionComponent: row.projectionComponent,
           projectionIdentity: row.projectionIdentity,
           requestId: row.requestId ?? null,
+          snapshotId: row.snapshotId ?? null,
         }
   })
 }

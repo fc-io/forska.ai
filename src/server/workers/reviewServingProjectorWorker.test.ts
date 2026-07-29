@@ -1150,6 +1150,143 @@ test('low-memory worker charges request-associated selected import batch complet
   ).toBe(16)
 })
 
+test('explicit rebuild chunk only projects its targeted snapshot context', async () => {
+  const statements: string[] = []
+  const projectSettings = {
+    humanJudgmentMode: 'prompt' as const,
+    modelExecutionOptions: null,
+    modelId: 'model-1',
+    modelProviderBaseUrl: null,
+    modelProviderConnectionId: null,
+    modelProviderKind: null,
+    modelRemoteModelId: null,
+    modelVariant: null,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+  const reviewConfigHash = buildReviewConfigHash({
+    humanJudgmentMode: projectSettings.humanJudgmentMode,
+    modelExecutionIdentity: {
+      modelExecutionOptions: null,
+      modelId: projectSettings.modelId,
+      providerBaseUrl: projectSettings.modelProviderBaseUrl,
+      providerConnectionId: projectSettings.modelProviderConnectionId,
+      providerKind: projectSettings.modelProviderKind,
+      remoteModelId: projectSettings.modelRemoteModelId,
+      variant: projectSettings.modelVariant,
+    },
+    modelId: projectSettings.modelId,
+    promptConfigs: [],
+    useAbstract: projectSettings.useAbstract,
+    useFulltext: projectSettings.useFulltext,
+    useFulltextNoImages: projectSettings.useFulltextNoImages,
+    useTitle: projectSettings.useTitle,
+  })
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '2', component: 'payload', projectionIdentity: 'payload:project-1'},
+    ],
+  }
+  const targetedChunk = {
+    ...chunkManifest,
+    chunkId: 'chunk-explicit-snapshot-target',
+    projectionComponent: 'payload' as const,
+    projectionIdentity: 'payload:project-1',
+    requestId: 'rebuild-explicit-snapshot',
+    snapshotId: 'snapshot-target',
+  } satisfies ReviewServingRebuildChunkManifest
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [targetedChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash,
+            selectedImportSnapshotId: 'selected-import-snapshot-target',
+            snapshotId: 'snapshot-target',
+          },
+          {
+            componentStateJson: componentState,
+            reviewConfigHash,
+            selectedImportSnapshotId: 'selected-import-snapshot-other',
+            snapshotId: 'snapshot-other',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: 2,
+            definitionVersion: 'payload:v1',
+            inputDigest: targetedChunk.inputDigest,
+            inputWatermark: targetedChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: 9},
+            invalidationReason: targetedChunk.inputDigest,
+            manifestId: 'manifest-payload-target',
+            patchRangeEnd: targetedChunk.inputWatermark,
+            patchRangeStart: targetedChunk.inputWatermark,
+            patchWatermark: targetedChunk.inputWatermark,
+            projectId: targetedChunk.projectId,
+            projectionComponent: targetedChunk.projectionComponent,
+            projectionIdentity: targetedChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash,
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.project project') && statement.includes('LIMIT 1')) {
+        return [{...projectSettings}] as T[]
+      }
+
+      if (statement.includes('FROM app.project_prompt')) {
+        return [] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4 detail')) {
+        return [{actualChecksum: 'checksum-payload-target', actualCount: 1, actualPayloadBytes: 7}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: targetedChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const projectorStatements = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+      || statement.includes('FROM mart.review_article_judgment_detail_serving_v4 detail')
+      || statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+    )
+  })
+  const joined = projectorStatements.join('\n')
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('snapshot-target')
+  expect(joined).not.toContain('snapshot-other')
+})
+
 test('worker writes compatible display rebuild chunks through one batch writer', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
@@ -6339,7 +6476,7 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
     projectionComponent: 'projectScope' as const,
     projectionIdentity: 'projectScope:project-1',
     requestId: null,
-    snapshotId: 'snapshot-bootstrap-1',
+    snapshotId: null,
   }
   const projectScopeChunk = {
     ...chunkManifest,
@@ -6447,7 +6584,7 @@ test('worker adopts requestless bootstrap chunks through existing request withou
     projectionComponent: 'projectScope' as const,
     projectionIdentity: 'projectScope:project-1',
     requestId: null,
-    snapshotId: 'snapshot-bootstrap-existing',
+    snapshotId: null,
   }
   const projectScopeChunk = {
     ...chunkManifest,
@@ -6577,7 +6714,7 @@ test('requestless bootstrap adoption skips duplicate insert for existing request
       projectionComponent: 'projectScope',
       projectionIdentity: 'projectScope:project-1',
       requestId: null,
-      snapshotId: 'snapshot-bootstrap-existing',
+      snapshotId: null,
     }
     const requestDigest = createHash('sha256')
       .update([
@@ -6697,7 +6834,7 @@ test('requestless bootstrap adoption skips duplicate insert for existing request
         TIMESTAMPTZ '\${chunk.leaseExpiresAt}',
         TIMESTAMPTZ '\${chunk.startedAt}',
         NULL,
-        '\${chunk.snapshotId}'
+        NULL
       )
     \`)
 
@@ -6825,7 +6962,7 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
       projectionComponent: 'summary',
       projectionIdentity: 'summary:project-1',
       requestId: null,
-      snapshotId: 'snapshot-summary-1',
+      snapshotId: null,
     }
     const requestDigest = createHash('sha256')
       .update([
@@ -6946,7 +7083,7 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
         TIMESTAMPTZ '\${chunk.leaseExpiresAt}',
         TIMESTAMPTZ '\${chunk.startedAt}',
         NULL,
-        '\${chunk.snapshotId}'
+        NULL
       )
     \`)
 
