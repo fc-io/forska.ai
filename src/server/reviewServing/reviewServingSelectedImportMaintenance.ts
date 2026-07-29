@@ -2,6 +2,7 @@ import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 
 export type ReviewServingSelectedImportMaintenanceDatabase = {run: (statement: string) => Promise<void>}
 
+export const selectedImportCompatibilityView = 'app.review_selected_article_import_v4'
 export const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
 export const selectedImportStagingTable = 'mart.review_selected_article_import_staging_v4'
 

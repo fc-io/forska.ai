@@ -6,11 +6,16 @@ import {expect, test} from 'bun:test'
 import {type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   getReviewServingProjectorReplayKey,
+  type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
   writeReviewServingQueueRebuildRows,
   writeReviewServingTitleSearchRebuildRanges,
 } from './reviewServingProjectorWriter.ts'
+import {
+  selectedImportCompatibilityView,
+  selectedImportPublishedTable,
+} from './reviewServingSelectedImportMaintenance.ts'
 
 const workspaceRoot = join(import.meta.dir, '../../..')
 
@@ -648,26 +653,124 @@ test('selected import snapshot cursor writes unchanged rows through update and i
   expect(writeStatements.join('\n')).not.toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
 })
 
-test('projector writer rejects raw selected-import current mutations outside selected-import owner', async () => {
+test.each([
+  {
+    label: 'delete',
+    statement: `
+      DELETE FROM ${selectedImportPublishedTable}
+      WHERE project_id = 'project-1'
+    `,
+  },
+  {
+    label: 'insert-or-replace',
+    statement: `
+      INSERT OR REPLACE INTO ${selectedImportPublishedTable} (project_id)
+      SELECT 'project-1'
+    `,
+  },
+  {
+    label: 'create-or-replace',
+    statement: `
+      CREATE OR REPLACE TABLE ${selectedImportPublishedTable} AS
+      SELECT 'project-1' AS project_id
+    `,
+  },
+  {
+    label: 'alter',
+    statement: `
+      ALTER TABLE ${selectedImportPublishedTable} ADD COLUMN bypass_flag BOOLEAN
+    `,
+  },
+])(
+  'projector writer rejects raw selected-import current $label mutations outside selected-import owner',
+  async ({statement}) => {
+    const {database, getTransactionCount} = createWriterDatabase()
+
+    try {
+      await writeReviewServingProjectorComponent({component: 'summary', statements: [statement]}, database)
+      throw new Error('expected selected-import current mutation guard to reject')
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toContain(
+        'mutations must go through the selectedImport projector ownership path',
+      )
+    }
+    expect(getTransactionCount()).toBe(0)
+  },
+)
+
+test.each([
+  {
+    label: 'raw insert statement',
+    input: {
+      component: 'selectedImport' as const,
+      statements: [
+        `
+          INSERT INTO ${selectedImportCompatibilityView} (project_id)
+          SELECT 'project-1'
+        `,
+      ],
+    },
+  },
+  {
+    label: 'raw update statement',
+    input: {
+      component: 'selectedImport' as const,
+      statements: [
+        `
+          UPDATE ${selectedImportCompatibilityView}
+          SET source_record_key = 'source-2'
+          WHERE project_id = 'project-1'
+        `,
+      ],
+    },
+  },
+  {
+    label: 'raw delete statement',
+    input: {
+      component: 'selectedImport' as const,
+      statements: [
+        `
+          DELETE FROM ${selectedImportCompatibilityView}
+          WHERE project_id = 'project-1'
+        `,
+      ],
+    },
+  },
+  {
+    label: 'raw replace-view statement',
+    input: {
+      component: 'selectedImport' as const,
+      statements: [
+        `
+          CREATE OR REPLACE VIEW ${selectedImportCompatibilityView} AS
+          SELECT 'project-1' AS project_id
+        `,
+      ],
+    },
+  },
+  {
+    label: 'record target',
+    input: {
+      component: 'selectedImport' as const,
+      records: [
+        {
+          keyColumns: ['project_id'],
+          table: selectedImportCompatibilityView as ReviewServingProjectorRecord['table'],
+          values: {project_id: 'project-1'},
+        },
+      ],
+    },
+  },
+])('projector writer rejects selected-import compatibility view writes from $label', async ({input}) => {
   const {database, getTransactionCount} = createWriterDatabase()
 
   try {
-    await writeReviewServingProjectorComponent(
-      {
-        component: 'summary',
-        statements: [
-          `
-            DELETE FROM mart.review_selected_article_import_current_v4
-            WHERE project_id = 'project-1'
-          `,
-        ],
-      },
-      database,
-    )
-    throw new Error('expected selected-import current mutation guard to reject')
+    await writeReviewServingProjectorComponent(input, database)
+    throw new Error('expected selected-import compatibility view write guard to reject')
   } catch (error) {
     expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toContain('mutations must go through the selectedImport projector ownership path')
+    expect((error as Error).message).toContain('is a read-only compatibility view')
   }
   expect(getTransactionCount()).toBe(0)
 })
@@ -680,7 +783,7 @@ test('projector writer allows selected-import owner to publish current rows with
       component: 'selectedImport',
       postRecordStatements: [
         `
-          INSERT INTO mart.review_selected_article_import_current_v4 (project_id)
+          INSERT INTO ${selectedImportPublishedTable} (project_id)
           SELECT 'project-1'
         `,
       ],
@@ -689,7 +792,7 @@ test('projector writer allows selected-import owner to publish current rows with
   )
 
   expect(getTransactionCount()).toBe(1)
-  expect(statements.join('\n')).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
+  expect(statements.join('\n')).toContain(`INSERT INTO ${selectedImportPublishedTable}`)
 })
 
 test('projector writer batches same-shape record replacements into update and insert-missing statements', async () => {
