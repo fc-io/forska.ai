@@ -44,6 +44,18 @@ Evidence required before treating this slice as done:
 
 ### 1. Move selected-import writes to append/staging plus compaction
 
+Status: in progress.
+
+Implemented follow-up slices:
+
+- `mart.review_selected_article_import_staging_v4` now exists as the replay
+  staging surface with deterministic row identity, source watermark/partition,
+  publish scope, and publish timestamp columns.
+- Article-range rebuild publication now stages deterministic winner rows before
+  publishing bounded current rows into
+  `mart.review_selected_article_import_current_v4`, then marks staging rows as
+  published and refreshes the compatibility mirror.
+
 Build a selected-import staging model where rebuild chunks append deterministic
 candidate/range rows and a bounded compaction step selects the current winner per
 project/article/snapshot generation.

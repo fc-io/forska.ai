@@ -71,6 +71,7 @@ export type ProjectReviewServingSelectedImportArticleRangeInput = {
 const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'
 const selectedImportCompatibilityTable = 'app.review_selected_article_import_v4'
 const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
+const selectedImportStagingTable = 'mart.review_selected_article_import_staging_v4'
 const nullRankKeySort = '~'
 const nullRankNumericSort = 1e308
 
@@ -310,12 +311,19 @@ const getDeleteSelectedImportArticleRangeRowsStatement = (
   `
 }
 
-const getInsertSelectedImportArticleRangeRowsStatement = (
+const getStageSelectedImportArticleRangeRowsStatement = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
   ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
 ) => {
+  const projectionIdentity = buildReviewDirtyProjectionIdentity({
+    projectId: input.projectId,
+    projectionComponent: 'selectedImport',
+  })
+  const publishScopeKey = `${input.projectId}|${input.projectScopeIdentity}|${input.selectedImportSnapshotId}`
+
   return `
-    INSERT INTO ${selectedImportPublishedTable} (
+    INSERT INTO ${selectedImportStagingTable} (
+      staging_row_id,
       project_id,
       project_scope_identity,
       selected_import_snapshot_id,
@@ -325,7 +333,13 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       selected_rank_key,
       selected_rank_numeric,
       tombstone,
-      selected_import_updated_at
+      selected_import_updated_at,
+      projection_identity,
+      source_delta_high_water,
+      source_partition,
+      publish_scope_key,
+      created_at,
+      published_at
     )
     WITH ${
       ranges === undefined
@@ -428,6 +442,18 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
     ),
     selected_import_insert_rows AS (
       SELECT
+        concat(
+          'selectedImportRange:',
+          ${getSqlLiteral(input.projectId)},
+          ':',
+          ${getSqlLiteral(input.projectScopeIdentity)},
+          ':',
+          ${getSqlLiteral(input.selectedImportSnapshotId)},
+          ':',
+          candidate.article_id,
+          ':',
+          CAST(${getSqlLiteral(input.sourceDeltaHighWater)} AS VARCHAR)
+        ) AS staging_row_id,
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
         ${getSqlLiteral(input.selectedImportSnapshotId)} AS selected_import_snapshot_id,
@@ -437,10 +463,17 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
         candidate.selected_rank_key,
         candidate.selected_rank_numeric,
         candidate.tombstone,
-        current_timestamp AS selected_import_updated_at
+        current_timestamp AS selected_import_updated_at,
+        ${getSqlLiteral(projectionIdentity)} AS projection_identity,
+        ${getSqlLiteral(input.sourceDeltaHighWater)} AS source_delta_high_water,
+        'selected-import-range' AS source_partition,
+        ${getSqlLiteral(publishScopeKey)} AS publish_scope_key,
+        current_timestamp AS created_at,
+        NULL::TIMESTAMPTZ AS published_at
       FROM selected_import_winner candidate
     )
     SELECT
+      insert_row.staging_row_id,
       insert_row.project_id,
       insert_row.project_scope_identity,
       insert_row.selected_import_snapshot_id,
@@ -450,16 +483,137 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       insert_row.selected_rank_key,
       insert_row.selected_rank_numeric,
       insert_row.tombstone,
-      insert_row.selected_import_updated_at
+      insert_row.selected_import_updated_at,
+      insert_row.projection_identity,
+      insert_row.source_delta_high_water,
+      insert_row.source_partition,
+      insert_row.publish_scope_key,
+      insert_row.created_at,
+      insert_row.published_at
     FROM selected_import_insert_rows insert_row
     WHERE NOT EXISTS (
       SELECT 1
-      FROM ${selectedImportPublishedTable} existing
-      WHERE existing.project_id = insert_row.project_id
-        AND existing.project_scope_identity = insert_row.project_scope_identity
-        AND existing.selected_import_snapshot_id = insert_row.selected_import_snapshot_id
-        AND existing.article_id = insert_row.article_id
+      FROM ${selectedImportStagingTable} existing
+      WHERE existing.staging_row_id = insert_row.staging_row_id
     )
+  `
+}
+
+const getPublishSelectedImportArticleRangeRowsStatement = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+  ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
+) => {
+  return `
+    INSERT INTO ${selectedImportPublishedTable} (
+      project_id,
+      project_scope_identity,
+      selected_import_snapshot_id,
+      article_id,
+      import_route_id,
+      source_record_key,
+      selected_rank_key,
+      selected_rank_numeric,
+      tombstone,
+      selected_import_updated_at
+    )
+    WITH ${
+      ranges === undefined
+        ? 'staged_range AS'
+        : `${getArticleRangeFilterCte(ranges)},
+    staged_range AS`
+    } (
+      SELECT
+        staged.project_id,
+        staged.project_scope_identity,
+        staged.selected_import_snapshot_id,
+        staged.article_id,
+        staged.import_route_id,
+        staged.source_record_key,
+        staged.selected_rank_key,
+        staged.selected_rank_numeric,
+        staged.tombstone,
+        staged.selected_import_updated_at,
+        staged.source_delta_high_water
+      FROM ${selectedImportStagingTable} staged
+      ${
+        ranges === undefined
+          ? ''
+          : `INNER JOIN article_range_filter range
+        ON staged.article_id >= range.chunk_start_article_id
+        AND staged.article_id <= range.chunk_end_article_id`
+      }
+      WHERE staged.project_id = ${getSqlLiteral(input.projectId)}
+        AND staged.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND staged.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        ${
+          ranges === undefined
+            ? `AND staged.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+        AND staged.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+            : ''
+        }
+    ), published_winner AS (
+      SELECT *
+      FROM staged_range
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY article_id
+        ORDER BY
+          source_delta_high_water DESC,
+          selected_import_updated_at DESC,
+          import_route_id ASC NULLS LAST,
+          source_record_key ASC NULLS LAST,
+          selected_rank_key ASC NULLS LAST,
+          selected_rank_numeric ASC NULLS LAST,
+          tombstone ASC
+      ) = 1
+    )
+    SELECT
+      winner.project_id,
+      winner.project_scope_identity,
+      winner.selected_import_snapshot_id,
+      winner.article_id,
+      winner.import_route_id,
+      winner.source_record_key,
+      winner.selected_rank_key,
+      winner.selected_rank_numeric,
+      winner.tombstone,
+      winner.selected_import_updated_at
+    FROM published_winner winner
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${selectedImportPublishedTable} existing
+      WHERE existing.project_id = winner.project_id
+        AND existing.project_scope_identity = winner.project_scope_identity
+        AND existing.selected_import_snapshot_id = winner.selected_import_snapshot_id
+        AND existing.article_id = winner.article_id
+    )
+  `
+}
+
+const getMarkSelectedImportArticleRangeStagingPublishedStatement = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+  ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
+) => {
+  return `
+    UPDATE ${selectedImportStagingTable}
+    SET published_at = COALESCE(published_at, current_timestamp)
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      ${
+        ranges === undefined
+          ? `AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+          : `AND EXISTS (
+        SELECT 1
+        FROM (${ranges
+          .map((range) => {
+            return `SELECT ${getSqlLiteral(range.chunkStartArticleId)} AS chunk_start_article_id, ${getSqlLiteral(range.chunkEndArticleId)} AS chunk_end_article_id`
+          })
+          .join(' UNION ALL ')}) article_range_filter
+        WHERE ${selectedImportStagingTable}.article_id >= article_range_filter.chunk_start_article_id
+          AND ${selectedImportStagingTable}.article_id <= article_range_filter.chunk_end_article_id
+      )`
+      }
   `
 }
 
@@ -1054,13 +1208,17 @@ export const projectReviewServingSelectedImportArticleRange = async (
         statements:
           params.replaceExistingRows === false
             ? [
-                getInsertSelectedImportArticleRangeRowsStatement(params),
+                getStageSelectedImportArticleRangeRowsStatement(params),
+                getPublishSelectedImportArticleRangeRowsStatement(params),
+                getMarkSelectedImportArticleRangeStagingPublishedStatement(params),
                 ...getMirrorSelectedImportCompatibilityStatements(params),
                 ...getRefreshSelectedImportServingArticleRangeStatements(params),
               ]
             : [
                 getDeleteSelectedImportArticleRangeRowsStatement(params),
-                getInsertSelectedImportArticleRangeRowsStatement(params),
+                getStageSelectedImportArticleRangeRowsStatement(params),
+                getPublishSelectedImportArticleRangeRowsStatement(params),
+                getMarkSelectedImportArticleRangeStagingPublishedStatement(params),
                 ...getMirrorSelectedImportCompatibilityStatements(params),
                 ...getRefreshSelectedImportServingArticleRangeStatements(params),
               ],
@@ -1103,19 +1261,25 @@ export const projectReviewServingSelectedImportArticleRanges = async (
   const writer = await measure('writerMs', async () => {
     const statements = canUseSetBasedSelectedImportArticleRangeInsert(params.ranges)
       ? [
-          getInsertSelectedImportArticleRangeRowsStatement(firstRange, params.ranges),
+          getStageSelectedImportArticleRangeRowsStatement(firstRange, params.ranges),
+          getPublishSelectedImportArticleRangeRowsStatement(firstRange, params.ranges),
+          getMarkSelectedImportArticleRangeStagingPublishedStatement(firstRange, params.ranges),
           ...getMirrorSelectedImportCompatibilityStatements(firstRange, params.ranges),
         ]
       : params.ranges.flatMap((range) => {
           return range.replaceExistingRows === false
             ? [
-                getInsertSelectedImportArticleRangeRowsStatement(range),
+                getStageSelectedImportArticleRangeRowsStatement(range),
+                getPublishSelectedImportArticleRangeRowsStatement(range),
+                getMarkSelectedImportArticleRangeStagingPublishedStatement(range),
                 ...getMirrorSelectedImportCompatibilityStatements(range),
                 ...getRefreshSelectedImportServingArticleRangeStatements(range),
               ]
             : [
                 getDeleteSelectedImportArticleRangeRowsStatement(range),
-                getInsertSelectedImportArticleRangeRowsStatement(range),
+                getStageSelectedImportArticleRangeRowsStatement(range),
+                getPublishSelectedImportArticleRangeRowsStatement(range),
+                getMarkSelectedImportArticleRangeStagingPublishedStatement(range),
                 ...getMirrorSelectedImportCompatibilityStatements(range),
                 ...getRefreshSelectedImportServingArticleRangeStatements(range),
               ]
