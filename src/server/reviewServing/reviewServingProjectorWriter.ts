@@ -40,7 +40,6 @@ export type ReviewServingProjectorWriterTransaction = {
 }
 
 export type ReviewServingProjectorWritableTable =
-  | 'mart.review_selected_article_import_current_v4'
   | 'mart.review_selected_article_import_staging_v4'
   | 'mart.review_article_count_serving_v4'
   | 'mart.review_article_filter_posting_serving_v4'
@@ -65,7 +64,10 @@ export type ReviewServingProjectorRecord = {
 
 export type DeleteReviewServingProjectorRowsInput = {
   predicates: Record<string, ReviewServingProjectorRecordValue | readonly string[]>
-  table: ReviewServingProjectorWritableTable | 'app.review_selected_article_import_v4'
+  table:
+    | ReviewServingProjectorWritableTable
+    | 'app.review_selected_article_import_v4'
+    | 'mart.review_selected_article_import_current_v4'
 }
 
 export type RemoveReviewServingTitleSearchArticleIdsInput = {
