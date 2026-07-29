@@ -2907,6 +2907,17 @@ const resetSelectedImportSnapshotForRebuild = async (
     },
     database,
   )
+  await deleteReviewServingProjectorRows(
+    {
+      predicates: {
+        project_id: input.projectId,
+        project_scope_identity: input.projectScopeIdentity,
+        selected_import_snapshot_id: input.selectedImportSnapshotId,
+      },
+      table: 'mart.review_selected_article_import_staging_v4',
+    },
+    database,
+  )
   await database.run(`
     DELETE FROM app.review_selected_import_snapshot
     WHERE project_id = ${getSqlLiteral(input.projectId)}
