@@ -638,6 +638,59 @@ test('reviews warnings block invalid candidate snapshots that cannot be activate
   expect(body.data.indexing.status).toBe('blocked')
 })
 
+test('reviews warnings stay ready when an invalid stale candidate remains behind an active snapshot', async () => {
+  const projectId = 'project-active-with-invalid-stale-candidate-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-active-with-invalid-stale-candidate-warning',
+  })
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    selectedImportSnapshotId: 'selected-import-invalid-stale-candidate-warning',
+    snapshotId: 'snapshot-invalid-stale-candidate-warning',
+    status: 'candidate',
+  })
+  await runDatabase?.(`
+    INSERT INTO app.review_selected_import_snapshot (
+      selected_import_snapshot_id,
+      project_id,
+      project_scope_identity,
+      source_delta_high_water,
+      status,
+      updated_at
+    ) VALUES (
+      'selected-import-invalid-stale-candidate-warning',
+      '${projectId}',
+      'projectScope:identity-1',
+      1,
+      'candidate',
+      current_timestamp
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving.diagnostics.snapshot).toMatchObject({
+    activeCount: 1,
+    candidateCount: 1,
+    invalidCandidateCount: 1,
+  })
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(body.data.indexing.status).toBe('ready')
+})
+
 test('reviews warnings keep invalid bootstrap candidates refreshing while rebuild chunks can progress', async () => {
   const projectId = 'project-candidate-invalid-selected-import-progressing-warning'
 

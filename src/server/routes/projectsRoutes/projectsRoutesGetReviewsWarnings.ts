@@ -332,7 +332,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const eligibleConsumerCount =
       claimableRefreshCount > 0 && !isServerMutationWorkDisabled && !reviewServingProjectorPaused ? 1 : 0
     const hasBlockedCandidateSnapshot =
-      servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
+      !hasReviewServingRows && servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
