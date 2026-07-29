@@ -251,6 +251,24 @@ const getNonNewTargetIds = (values: readonly (string | null)[]) => {
   ]
 }
 
+const getImportedTargetModelSourceId = (targetModelId: string | null) => {
+  const prefix = 'new:model:'
+
+  return targetModelId?.startsWith(prefix) === true ? targetModelId.slice(prefix.length) : null
+}
+
+const getPotentialConcreteTargetModelIds = ({
+  sourceModelId,
+  targetModelId,
+}: {
+  sourceModelId: string
+  targetModelId: string | null
+}) => {
+  const importedSourceModelId = getImportedTargetModelSourceId(targetModelId)
+
+  return importedSourceModelId === sourceModelId ? [targetModelId, sourceModelId] : [targetModelId]
+}
+
 const getProjectTargetId = (payloads: Partial<ProjectTransferPayloadByKey>) => {
   const sourceProjectId = payloads.project?.sourceProjectId
 
@@ -943,12 +961,15 @@ const getJudgmentPlan = async ({
     payloads: input.payloads,
     targetConnections: input.targetConnections,
   })
-  const judgmentKeys = (input.payloads.judgments ?? []).map((judgment) => {
+  const judgmentKeys = (input.payloads.judgments ?? []).flatMap((judgment) => {
+    const sourceModelId = getStringField(judgment, 'sourceModelId')
     const targetArticleId = articleTargetIdBySource[getStringField(judgment, 'sourceArticleId')] ?? null
     const targetPromptId = promptTargetIdBySource[getStringField(judgment, 'sourcePromptId')] ?? null
-    const targetModelId = modelTargetIdBySource[getStringField(judgment, 'sourceModelId')] ?? null
+    const targetModelId = modelTargetIdBySource[sourceModelId] ?? null
 
-    return {targetArticleId, targetModelId, targetPromptId}
+    return getPotentialConcreteTargetModelIds({sourceModelId, targetModelId}).map((candidateTargetModelId) => {
+      return {targetArticleId, targetModelId: candidateTargetModelId, targetPromptId}
+    })
   })
   const targetJudgments = await getTargetJudgmentRows({keys: judgmentKeys, runner: input.runner})
   const targetJudgmentByPhysicalKey = Object.fromEntries(
@@ -997,15 +1018,48 @@ const getJudgmentPlan = async ({
     const targetArticleId = articleTargetIdBySource[sourceArticleId] ?? null
     const targetPromptId = promptTargetIdBySource[sourcePromptId] ?? null
     const targetModelId = modelTargetIdBySource[sourceModelId] ?? null
+    const potentialTargetModelIds = getPotentialConcreteTargetModelIds({sourceModelId, targetModelId})
     const physicalKey = getJudgmentPhysicalKey({judgment, targetArticleId, targetModelId, targetPromptId})
     const reviewVisibleKey = getJudgmentReviewVisibleKey({judgment, targetArticleId, targetModelId, targetPromptId})
-    const targetJudgment = physicalKey ? (targetJudgmentByPhysicalKey[physicalKey] ?? null) : null
-    const visibleConflicts =
-      reviewVisibleKey === null
-        ? []
-        : (targetJudgmentsByVisibleKey[reviewVisibleKey] ?? []).filter((row) => {
-            return getTargetJudgmentPhysicalKey(row) !== physicalKey
-          })
+    const potentialPhysicalKeys = potentialTargetModelIds
+      .map((candidateTargetModelId) => {
+        return getJudgmentPhysicalKey({
+          judgment,
+          targetArticleId,
+          targetModelId: candidateTargetModelId,
+          targetPromptId,
+        })
+      })
+      .filter((candidatePhysicalKey): candidatePhysicalKey is string => {
+        return candidatePhysicalKey !== null
+      })
+    const potentialReviewVisibleKeys = potentialTargetModelIds
+      .map((candidateTargetModelId) => {
+        return getJudgmentReviewVisibleKey({
+          judgment,
+          targetArticleId,
+          targetModelId: candidateTargetModelId,
+          targetPromptId,
+        })
+      })
+      .filter((candidateReviewVisibleKey): candidateReviewVisibleKey is string => {
+        return candidateReviewVisibleKey !== null
+      })
+    const targetJudgment =
+      physicalKey === null
+        ? null
+        : (targetJudgmentByPhysicalKey[physicalKey]
+          ?? potentialPhysicalKeys.flatMap((candidatePhysicalKey) => {
+            const row = targetJudgmentByPhysicalKey[candidatePhysicalKey] ?? null
+
+            return row === null ? [] : [row]
+          })[0]
+          ?? null)
+    const visibleConflicts = potentialReviewVisibleKeys.flatMap((candidateReviewVisibleKey) => {
+      return (targetJudgmentsByVisibleKey[candidateReviewVisibleKey] ?? []).filter((row) => {
+        return !potentialPhysicalKeys.includes(getTargetJudgmentPhysicalKey(row))
+      })
+    })
     const computedSignature = getJudgmentSignature({
       articleInputBySource,
       judgment,
@@ -1042,16 +1096,16 @@ const getJudgmentPlan = async ({
       action,
       conflictCodes,
       inputSignatureMatches,
-      physicalKey,
+      physicalKey: targetJudgment === null ? physicalKey : getTargetJudgmentPhysicalKey(targetJudgment),
       provenanceKind: getProvenanceKind(judgment, 'judgmentInputSignatureProvenance'),
-      reviewVisibleKey,
+      reviewVisibleKey: targetJudgment === null ? reviewVisibleKey : getTargetJudgmentReviewVisibleKey(targetJudgment),
       sourceJudgmentId,
-      targetArticleId,
+      targetArticleId: targetJudgment?.targetArticleId ?? targetArticleId,
       targetJudgmentId:
         targetJudgment?.targetJudgmentId
         ?? (action === 'insert' || action === 'unknown' ? `new:judgment:${sourceJudgmentId}` : null),
-      targetModelId,
-      targetPromptId,
+      targetModelId: targetJudgment?.targetModelId ?? targetModelId,
+      targetPromptId: targetJudgment?.targetPromptId ?? targetPromptId,
     }
   })
 
