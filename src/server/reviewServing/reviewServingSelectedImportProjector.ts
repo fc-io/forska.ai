@@ -69,6 +69,8 @@ export type ProjectReviewServingSelectedImportArticleRangeInput = {
 }
 
 const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'
+const selectedImportCompatibilityTable = 'app.review_selected_article_import_v4'
+const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
 const nullRankKeySort = '~'
 const nullRankNumericSort = 1e308
 
@@ -299,7 +301,7 @@ const getDeleteSelectedImportArticleRangeRowsStatement = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
 ) => {
   return `
-    DELETE FROM app.review_selected_article_import_v4
+    DELETE FROM ${selectedImportPublishedTable}
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
@@ -313,7 +315,7 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
   ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
 ) => {
   return `
-    INSERT INTO app.review_selected_article_import_v4 (
+    INSERT INTO ${selectedImportPublishedTable} (
       project_id,
       project_scope_identity,
       selected_import_snapshot_id,
@@ -452,13 +454,173 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
     FROM selected_import_insert_rows insert_row
     WHERE NOT EXISTS (
       SELECT 1
-      FROM app.review_selected_article_import_v4 existing
+      FROM ${selectedImportPublishedTable} existing
       WHERE existing.project_id = insert_row.project_id
         AND existing.project_scope_identity = insert_row.project_scope_identity
         AND existing.selected_import_snapshot_id = insert_row.selected_import_snapshot_id
         AND existing.article_id = insert_row.article_id
     )
   `
+}
+
+const getDeleteSelectedImportCompatibilityRowsStatement = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+) => {
+  return `
+    DELETE FROM ${selectedImportCompatibilityTable}
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+  `
+}
+
+const getMirrorSelectedImportPublishedRowsToCompatibilityStatement = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+  ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
+) => {
+  return `
+    INSERT INTO ${selectedImportCompatibilityTable} (
+      project_id,
+      project_scope_identity,
+      selected_import_snapshot_id,
+      article_id,
+      import_route_id,
+      source_record_key,
+      selected_rank_key,
+      selected_rank_numeric,
+      tombstone,
+      selected_import_updated_at
+    )
+    WITH ${
+      ranges === undefined
+        ? 'published_range AS'
+        : `${getArticleRangeFilterCte(ranges)},
+    published_range AS`
+    } (
+      SELECT
+        published.project_id,
+        published.project_scope_identity,
+        published.selected_import_snapshot_id,
+        published.article_id,
+        published.import_route_id,
+        published.source_record_key,
+        published.selected_rank_key,
+        published.selected_rank_numeric,
+        published.tombstone,
+        published.selected_import_updated_at
+      FROM ${selectedImportPublishedTable} published
+      ${
+        ranges === undefined
+          ? ''
+          : `INNER JOIN article_range_filter range
+        ON published.article_id >= range.chunk_start_article_id
+        AND published.article_id <= range.chunk_end_article_id`
+      }
+      WHERE published.project_id = ${getSqlLiteral(input.projectId)}
+        AND published.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND published.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        ${
+          ranges === undefined
+            ? `AND published.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+        AND published.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+            : ''
+        }
+    )
+    SELECT
+      published_range.project_id,
+      published_range.project_scope_identity,
+      published_range.selected_import_snapshot_id,
+      published_range.article_id,
+      published_range.import_route_id,
+      published_range.source_record_key,
+      published_range.selected_rank_key,
+      published_range.selected_rank_numeric,
+      published_range.tombstone,
+      published_range.selected_import_updated_at
+    FROM published_range
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${selectedImportCompatibilityTable} existing
+      WHERE existing.project_id = published_range.project_id
+        AND existing.project_scope_identity = published_range.project_scope_identity
+        AND existing.selected_import_snapshot_id = published_range.selected_import_snapshot_id
+        AND existing.article_id = published_range.article_id
+    )
+  `
+}
+
+const getAssertSelectedImportPublishedRowsUniqueStatement = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+  ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
+) => {
+  return `
+    WITH ${
+      ranges === undefined
+        ? 'published_range AS'
+        : `${getArticleRangeFilterCte(ranges)},
+    published_range AS`
+    } (
+      SELECT published.article_id
+      FROM ${selectedImportPublishedTable} published
+      ${
+        ranges === undefined
+          ? ''
+          : `INNER JOIN article_range_filter range
+        ON published.article_id >= range.chunk_start_article_id
+        AND published.article_id <= range.chunk_end_article_id`
+      }
+      WHERE published.project_id = ${getSqlLiteral(input.projectId)}
+        AND published.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND published.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        ${
+          ranges === undefined
+            ? `AND published.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+        AND published.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+            : ''
+        }
+    ), duplicate_article AS (
+      SELECT article_id
+      FROM published_range
+      GROUP BY article_id
+      HAVING COUNT(*) > 1
+    )
+    SELECT
+      CASE
+        WHEN COUNT(*) = 0 THEN 1
+        ELSE error('selected-import published mart contains duplicate current article rows')
+      END AS assertion_passed
+    FROM duplicate_article
+  `
+}
+
+const getMirrorSelectedImportCompatibilityStatements = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+  ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
+) => {
+  const shouldDeleteCompatibilityRows =
+    ranges === undefined
+      ? input.replaceExistingRows !== false
+      : ranges.some((range) => {
+          return range.replaceExistingRows !== false
+        })
+
+  return [
+    getAssertSelectedImportPublishedRowsUniqueStatement(input, ranges),
+    ...(shouldDeleteCompatibilityRows
+      ? ranges === undefined
+        ? [getDeleteSelectedImportCompatibilityRowsStatement(input)]
+        : ranges
+            .filter((range) => {
+              return range.replaceExistingRows !== false
+            })
+            .map((range) => {
+              return getDeleteSelectedImportCompatibilityRowsStatement(range)
+            })
+      : []),
+    getMirrorSelectedImportPublishedRowsToCompatibilityStatement(input, ranges),
+  ]
 }
 
 const canUseSetBasedSelectedImportArticleRangeInsert = (
@@ -490,7 +652,7 @@ const getSelectedImportArticleRangeInsertedRowCount = async (
 ) => {
   const [row] = await database.queryJson<{rowCount: number}>(`
     SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
-    FROM app.review_selected_article_import_v4 selected
+    FROM ${selectedImportPublishedTable} selected
     WHERE selected.project_id = ${getSqlLiteral(input.projectId)}
       AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
@@ -568,7 +730,7 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
      FROM serving_template template
      INNER JOIN scoped_article scoped
        ON TRUE
-     LEFT JOIN app.review_selected_article_import_v4 selected
+     LEFT JOIN ${selectedImportPublishedTable} selected
        ON selected.project_id = template.project_id
        AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
        AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
@@ -694,7 +856,7 @@ const getSelectedImportProjectorRecord = (
 ): ReviewServingProjectorRecord => {
   return {
     keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
-    table: 'app.review_selected_article_import_v4',
+    table: selectedImportPublishedTable,
     values: {
       article_id: row.articleId,
       import_route_id: row.importRouteId,
@@ -708,6 +870,83 @@ const getSelectedImportProjectorRecord = (
       tombstone: row.tombstone,
     },
   }
+}
+
+const getMirrorSelectedImportSnapshotCompatibilityStatements = (input: {
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+}) => {
+  return [
+    `
+    WITH duplicate_article AS (
+      SELECT article_id
+      FROM ${selectedImportPublishedTable}
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      GROUP BY article_id
+      HAVING COUNT(*) > 1
+    )
+    SELECT
+      CASE
+        WHEN COUNT(*) = 0 THEN 1
+        ELSE error('selected-import published mart contains duplicate current article rows')
+      END AS assertion_passed
+    FROM duplicate_article
+  `,
+    `
+    DELETE FROM ${selectedImportCompatibilityTable} compatibility
+    WHERE compatibility.project_id = ${getSqlLiteral(input.projectId)}
+      AND compatibility.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND compatibility.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND EXISTS (
+        SELECT 1
+        FROM ${selectedImportPublishedTable} published
+        WHERE published.project_id = compatibility.project_id
+          AND published.project_scope_identity = compatibility.project_scope_identity
+          AND published.selected_import_snapshot_id = compatibility.selected_import_snapshot_id
+          AND published.article_id = compatibility.article_id
+      )
+  `,
+    `
+    INSERT INTO ${selectedImportCompatibilityTable} (
+      project_id,
+      project_scope_identity,
+      selected_import_snapshot_id,
+      article_id,
+      import_route_id,
+      source_record_key,
+      selected_rank_key,
+      selected_rank_numeric,
+      tombstone,
+      selected_import_updated_at
+    )
+    SELECT
+      published.project_id,
+      published.project_scope_identity,
+      published.selected_import_snapshot_id,
+      published.article_id,
+      published.import_route_id,
+      published.source_record_key,
+      published.selected_rank_key,
+      published.selected_rank_numeric,
+      published.tombstone,
+      published.selected_import_updated_at
+    FROM ${selectedImportPublishedTable} published
+    WHERE published.project_id = ${getSqlLiteral(input.projectId)}
+      AND published.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND published.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ${selectedImportCompatibilityTable} existing
+        WHERE existing.project_id = published.project_id
+          AND existing.project_scope_identity = published.project_scope_identity
+          AND existing.selected_import_snapshot_id = published.selected_import_snapshot_id
+          AND existing.article_id = published.article_id
+      )
+  `,
+  ]
 }
 
 const getSelectedImportProjectionManifest = (input: {
@@ -774,6 +1013,11 @@ export const projectReviewServingSelectedImportBatch = async (
     return writeReviewServingProjectorComponent(
       {
         component: 'selectedImport',
+        postRecordStatements: getMirrorSelectedImportSnapshotCompatibilityStatements({
+          projectId: params.projectId,
+          projectScopeIdentity: params.projectScopeIdentity,
+          selectedImportSnapshotId,
+        }),
         projectionManifests:
           status === 'completed' ? [getSelectedImportProjectionManifest({...params, selectedImportSnapshotId})] : [],
         records,
@@ -811,11 +1055,13 @@ export const projectReviewServingSelectedImportArticleRange = async (
           params.replaceExistingRows === false
             ? [
                 getInsertSelectedImportArticleRangeRowsStatement(params),
+                ...getMirrorSelectedImportCompatibilityStatements(params),
                 ...getRefreshSelectedImportServingArticleRangeStatements(params),
               ]
             : [
                 getDeleteSelectedImportArticleRangeRowsStatement(params),
                 getInsertSelectedImportArticleRangeRowsStatement(params),
+                ...getMirrorSelectedImportCompatibilityStatements(params),
                 ...getRefreshSelectedImportServingArticleRangeStatements(params),
               ],
         selectedImportSnapshotCursor:
@@ -856,16 +1102,21 @@ export const projectReviewServingSelectedImportArticleRanges = async (
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
     const statements = canUseSetBasedSelectedImportArticleRangeInsert(params.ranges)
-      ? [getInsertSelectedImportArticleRangeRowsStatement(firstRange, params.ranges)]
+      ? [
+          getInsertSelectedImportArticleRangeRowsStatement(firstRange, params.ranges),
+          ...getMirrorSelectedImportCompatibilityStatements(firstRange, params.ranges),
+        ]
       : params.ranges.flatMap((range) => {
           return range.replaceExistingRows === false
             ? [
                 getInsertSelectedImportArticleRangeRowsStatement(range),
+                ...getMirrorSelectedImportCompatibilityStatements(range),
                 ...getRefreshSelectedImportServingArticleRangeStatements(range),
               ]
             : [
                 getDeleteSelectedImportArticleRangeRowsStatement(range),
                 getInsertSelectedImportArticleRangeRowsStatement(range),
+                ...getMirrorSelectedImportCompatibilityStatements(range),
                 ...getRefreshSelectedImportServingArticleRangeStatements(range),
               ]
         })
