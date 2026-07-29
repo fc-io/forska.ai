@@ -3679,7 +3679,20 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       return spec.schemaName === 'app' && spec.tableName === 'review_selected_article_import_v4'
     })
     expect(selectedImportProbe?.mutationProbeSql).toContain("projection_component = 'selectedImport'")
+    expect(selectedImportProbe?.mutationProbeSql).toContain('FROM mart.review_selected_article_import_current_v4')
     expect(selectedImportProbe?.mutationProbeSql).toContain('INSERT INTO app.review_selected_article_import_v4 BY NAME')
+    expect(selectedImportProbe?.mutationProbeSql).not.toContain('SET selected_import_updated_at = current_timestamp')
+    expect(selectedImportProbe?.skipGenericDeleteInsertProbe).toBe(true)
+    expect(selectedImportProbe?.schemaRequirements).toContainEqual({
+      schemaName: 'mart',
+      tableName: 'review_selected_article_import_current_v4',
+    })
+    const selectedImportCurrentProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_selected_article_import_current_v4'
+    })
+    expect(selectedImportCurrentProbe?.mutationProbeSql).toContain(
+      'INSERT INTO mart.review_selected_article_import_current_v4 BY NAME',
+    )
     const snapshotManifestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_serving_snapshot_manifest'
     })
