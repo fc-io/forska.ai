@@ -1005,25 +1005,169 @@ const getSelectedImportCursorFromRows = (
 }
 
 const getSelectedImportProjectorRecord = (
-  input: {projectId: string; projectScopeIdentity: string; selectedImportSnapshotId: string},
+  input: {
+    projectId: string
+    projectScopeIdentity: string
+    selectedImportSnapshotId: string
+    sourceDeltaHighWater: number
+  },
   row: SelectedImportProjectionRow,
 ): ReviewServingProjectorRecord => {
+  const projectionIdentity = buildReviewDirtyProjectionIdentity({
+    projectId: input.projectId,
+    projectionComponent: 'selectedImport',
+  })
+  const publishScopeKey = `${input.projectId}|${input.projectScopeIdentity}|${input.selectedImportSnapshotId}`
+
   return {
-    keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
-    table: selectedImportPublishedTable,
+    keyColumns: ['staging_row_id'],
+    table: selectedImportStagingTable,
     values: {
       article_id: row.articleId,
+      created_at: new Date(),
       import_route_id: row.importRouteId,
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,
+      projection_identity: projectionIdentity,
+      publish_scope_key: publishScopeKey,
+      published_at: null,
       selected_import_snapshot_id: input.selectedImportSnapshotId,
       selected_import_updated_at: new Date(),
       selected_rank_key: row.selectedRankKey,
       selected_rank_numeric: row.selectedRankNumeric,
       source_record_key: row.sourceRecordKey,
+      source_delta_high_water: input.sourceDeltaHighWater,
+      source_partition: 'selected-import-batch',
+      staging_row_id: `selectedImportBatch:${input.projectId}:${input.projectScopeIdentity}:${input.selectedImportSnapshotId}:${row.articleId}:${input.sourceDeltaHighWater}`,
       tombstone: row.tombstone,
     },
   }
+}
+
+const getPublishSelectedImportSnapshotStagingRowsStatement = (input: {
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+}) => {
+  return `
+    INSERT INTO ${selectedImportPublishedTable} (
+      project_id,
+      project_scope_identity,
+      selected_import_snapshot_id,
+      article_id,
+      import_route_id,
+      source_record_key,
+      selected_rank_key,
+      selected_rank_numeric,
+      tombstone,
+      selected_import_updated_at
+    )
+    WITH staged_snapshot AS (
+      SELECT
+        staged.project_id,
+        staged.project_scope_identity,
+        staged.selected_import_snapshot_id,
+        staged.article_id,
+        staged.import_route_id,
+        staged.source_record_key,
+        staged.selected_rank_key,
+        staged.selected_rank_numeric,
+        staged.tombstone,
+        staged.selected_import_updated_at,
+        staged.source_delta_high_water
+      FROM ${selectedImportStagingTable} staged
+      WHERE staged.project_id = ${getSqlLiteral(input.projectId)}
+        AND staged.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND staged.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+    ), published_winner AS (
+      SELECT *
+      FROM staged_snapshot
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY article_id
+        ORDER BY
+          source_delta_high_water DESC,
+          selected_import_updated_at DESC,
+          import_route_id ASC NULLS LAST,
+          source_record_key ASC NULLS LAST,
+          selected_rank_key ASC NULLS LAST,
+          selected_rank_numeric ASC NULLS LAST,
+          tombstone ASC
+      ) = 1
+    )
+    SELECT
+      winner.project_id,
+      winner.project_scope_identity,
+      winner.selected_import_snapshot_id,
+      winner.article_id,
+      winner.import_route_id,
+      winner.source_record_key,
+      winner.selected_rank_key,
+      winner.selected_rank_numeric,
+      winner.tombstone,
+      winner.selected_import_updated_at
+    FROM published_winner winner
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${selectedImportPublishedTable} existing
+      WHERE existing.project_id = winner.project_id
+        AND existing.project_scope_identity = winner.project_scope_identity
+        AND existing.selected_import_snapshot_id = winner.selected_import_snapshot_id
+        AND existing.article_id = winner.article_id
+    )
+  `
+}
+
+const getUpdateSelectedImportSnapshotCurrentFromStagingStatement = (input: {
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+}) => {
+  return `
+    UPDATE ${selectedImportPublishedTable} published
+    SET
+      import_route_id = winner.import_route_id,
+      source_record_key = winner.source_record_key,
+      selected_rank_key = winner.selected_rank_key,
+      selected_rank_numeric = winner.selected_rank_numeric,
+      tombstone = winner.tombstone,
+      selected_import_updated_at = winner.selected_import_updated_at
+    FROM (
+      SELECT *
+      FROM ${selectedImportStagingTable} staged
+      WHERE staged.project_id = ${getSqlLiteral(input.projectId)}
+        AND staged.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND staged.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY article_id
+        ORDER BY
+          source_delta_high_water DESC,
+          selected_import_updated_at DESC,
+          import_route_id ASC NULLS LAST,
+          source_record_key ASC NULLS LAST,
+          selected_rank_key ASC NULLS LAST,
+          selected_rank_numeric ASC NULLS LAST,
+          tombstone ASC
+      ) = 1
+    ) winner
+    WHERE published.project_id = winner.project_id
+      AND published.project_scope_identity = winner.project_scope_identity
+      AND published.selected_import_snapshot_id = winner.selected_import_snapshot_id
+      AND published.article_id = winner.article_id
+  `
+}
+
+const getMarkSelectedImportSnapshotStagingPublishedStatement = (input: {
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+}) => {
+  return `
+    UPDATE ${selectedImportStagingTable}
+    SET published_at = COALESCE(published_at, current_timestamp)
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+  `
 }
 
 const getMirrorSelectedImportSnapshotCompatibilityStatements = (input: {
@@ -1167,11 +1311,28 @@ export const projectReviewServingSelectedImportBatch = async (
     return writeReviewServingProjectorComponent(
       {
         component: 'selectedImport',
-        postRecordStatements: getMirrorSelectedImportSnapshotCompatibilityStatements({
-          projectId: params.projectId,
-          projectScopeIdentity: params.projectScopeIdentity,
-          selectedImportSnapshotId,
-        }),
+        postRecordStatements: [
+          getUpdateSelectedImportSnapshotCurrentFromStagingStatement({
+            projectId: params.projectId,
+            projectScopeIdentity: params.projectScopeIdentity,
+            selectedImportSnapshotId,
+          }),
+          getPublishSelectedImportSnapshotStagingRowsStatement({
+            projectId: params.projectId,
+            projectScopeIdentity: params.projectScopeIdentity,
+            selectedImportSnapshotId,
+          }),
+          getMarkSelectedImportSnapshotStagingPublishedStatement({
+            projectId: params.projectId,
+            projectScopeIdentity: params.projectScopeIdentity,
+            selectedImportSnapshotId,
+          }),
+          ...getMirrorSelectedImportSnapshotCompatibilityStatements({
+            projectId: params.projectId,
+            projectScopeIdentity: params.projectScopeIdentity,
+            selectedImportSnapshotId,
+          }),
+        ],
         projectionManifests:
           status === 'completed' ? [getSelectedImportProjectionManifest({...params, selectedImportSnapshotId})] : [],
         records,
