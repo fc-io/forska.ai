@@ -55,6 +55,9 @@ Implemented follow-up slices:
   publishing bounded current rows into
   `mart.review_selected_article_import_current_v4`, then marks staging rows as
   published and refreshes the compatibility mirror.
+- Cursor/batch selected-import projection now writes deterministic staging
+  records and publishes/updates the current mart from staging before refreshing
+  the compatibility mirror.
 
 Build a selected-import staging model where rebuild chunks append deterministic
 candidate/range rows and a bounded compaction step selects the current winner per
