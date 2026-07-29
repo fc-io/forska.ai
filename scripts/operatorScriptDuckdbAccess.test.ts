@@ -75,6 +75,12 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
       'Summary Rebuild Accumulator Lifecycle Evidence',
       'Hot Payload Proxy Evidence',
       'hotPayloadProxyEvidence',
+      'Selected-Import Staging Physical Evidence',
+      'selectedImportStagingPhysicalEvidence',
+      'mart.review_selected_article_import_staging_v4',
+      'staging_row_id',
+      'published_at IS NULL',
+      'published_at IS NOT NULL',
       'Selected-base flag columns may already be retired/dropped; the protected contract is the retained identity plus hot-field/default fallback semantics.',
       'Selected-base duplicate flag column status:',
       'Selected-base/default duplicate false rows without hot fallback source:',
@@ -293,6 +299,32 @@ test('review-serving physical evidence inspector reports proof-only hot payload 
     'Missing required evidence column: ${column}',
     'Table is absent: ${table}',
     'not deletion authorization, field-slimming authorization, migration authorization, or runtime cleanup authorization',
+  ]) {
+    expect(source).toContain(expectedText)
+  }
+})
+
+test('review-serving physical evidence inspector reports selected-import staging evidence', () => {
+  const source = readSource('scripts/inspectReviewServingPhysicalEvidence.ts')
+
+  for (const expectedText of [
+    'SelectedImportStagingPhysicalEvidenceReport',
+    'selectedImportStagingPhysicalEvidence',
+    'mart.review_selected_article_import_staging_v4',
+    "'staging row id'",
+    "'publish identity'",
+    "'staging_row_id'",
+    "'publish_scope_key'",
+    'published_at IS NULL',
+    'published_at IS NOT NULL',
+    'Selected-import staging evidence is read-only.',
+    'Duplicate probes report duplicate key groups',
+    'Selected-Import Staging Physical Evidence',
+    'Global published staging rows:',
+    'Global unpublished staging rows:',
+    'Current-project published staging rows:',
+    'Current-project unpublished staging rows:',
+    'Sample duplicate key rows',
   ]) {
     expect(source).toContain(expectedText)
   }

@@ -497,8 +497,9 @@ test('Phase 3 direct serving and selected-import guard coverage stays inventorie
     {
       filePath: 'src/server/reviewServing/reviewServingSelectedImportProjector.test.ts',
       markers: [
-        'selected-import article range rebuild can refresh final serving rows from hot fields',
-        'app.review_selected_article_import_v4',
+        'selected-import article range rebuild stages selected rows before publishing current rows',
+        'mart.review_selected_article_import_staging_v4',
+        'mart.review_selected_article_import_current_v4',
       ],
     },
     {
