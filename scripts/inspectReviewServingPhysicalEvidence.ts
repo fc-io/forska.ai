@@ -35,6 +35,7 @@ type EvidenceReport = {
   rebuildRequestLifecycleFieldEvidence: RebuildRequestLifecycleFieldReport
   rebuildArtifactDispositionEvidence: RebuildArtifactDispositionEvidenceReport
   retentionCleanupEligibility: RetentionCleanupEligibilityReport
+  selectedImportStagingPhysicalEvidence: SelectedImportStagingPhysicalEvidenceReport
   selectedImportPayloadSlimmingReadiness: SelectedImportPayloadSlimmingReadinessReport
   summaryRebuildAccumulatorLifecycleEvidence: SummaryRebuildAccumulatorLifecycleEvidenceReport
   summaryContributionServingReadiness: SummaryContributionServingReadinessReport
@@ -419,6 +420,40 @@ type SelectedImportDuplicateConflictGlobalStatusRow = {
   snapshotStatus: string
 }
 type SelectedImportPayloadSnapshotStatusRow = {label: string; rowCount: number}
+type SelectedImportStagingDuplicateProbe = {
+  duplicateCount: number | null
+  keyColumns: string[]
+  label: string
+  sampleRows: Record<string, string | number | null>[]
+}
+type SelectedImportStagingPublishStateRow = {
+  currentProjectRows: number
+  publishState: 'published' | 'unpublished'
+  rowCount: number
+}
+type SelectedImportStagingSourcePartitionRow = {
+  currentProjectRows: number
+  publishedRows: number
+  rowCount: number
+  sourcePartition: string
+  unpublishedRows: number
+}
+type SelectedImportStagingPhysicalEvidenceReport = {
+  currentProjectPublishedRows: number | null
+  currentProjectRows: number | null
+  currentProjectUnpublishedRows: number | null
+  duplicateProbes: SelectedImportStagingDuplicateProbe[]
+  error: string | null
+  globalPublishedRows: number | null
+  globalRowCount: number | null
+  globalUnpublishedRows: number | null
+  note: string
+  projectId: string
+  rowsByPublishState: SelectedImportStagingPublishStateRow[]
+  rowsBySourcePartition: SelectedImportStagingSourcePartitionRow[]
+  table: 'mart.review_selected_article_import_staging_v4'
+  verdict: 'not-authorized' | 'blocked'
+}
 type SelectedImportPayloadSlimmingReadinessReport = {
   activeOrLastKnownGoodSelectedImportRows: number | null
   candidateSelectedImportRows: number | null
@@ -547,6 +582,7 @@ const defaultMaxProfileColumns = 18
 
 const hotReviewServingTables = [
   'mart.review_selected_article_import_current_v4',
+  'mart.review_selected_article_import_staging_v4',
   'app.review_selected_import_snapshot',
   'app.review_projection_identity_manifest',
   'app.review_serving_snapshot_manifest',
@@ -613,6 +649,7 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'selected_import_snapshot_id',
     'article_id',
   ],
+  'mart.review_selected_article_import_staging_v4': ['staging_row_id'],
   'app.review_serving_snapshot_manifest': ['project_id', 'snapshot_id'],
   'mart.review_article_count_serving_v4': [
     'project_id',
@@ -3287,6 +3324,203 @@ const getDuplicateCountForColumns = async (
   return Number(rows[0]?.duplicateCount ?? 0)
 }
 
+const getSelectedImportStagingDuplicateProbe = async (
+  runtime: QueryRuntime,
+  table: SelectedImportStagingPhysicalEvidenceReport['table'],
+  label: string,
+  keyColumns: string[],
+  limit: number,
+): Promise<SelectedImportStagingDuplicateProbe> => {
+  const keySql = keyColumns
+    .map((columnName) => {
+      return `"${columnName}"`
+    })
+    .join(', ')
+  const sampleSelectSql = keyColumns
+    .map((columnName) => {
+      return `"${columnName}" AS "${columnName}"`
+    })
+    .join(', ')
+  const rows = await runReadonlyQuery<Record<string, number | string | null>>(
+    runtime,
+    `
+      WITH duplicate_keys AS (
+        SELECT
+          ${keySql},
+          CAST(COUNT(*) AS BIGINT) AS duplicateRows
+        FROM ${table}
+        GROUP BY ${keySql}
+        HAVING COUNT(*) > 1
+      )
+      SELECT
+        ${sampleSelectSql},
+        duplicateRows,
+        CAST(COUNT(*) OVER () AS BIGINT) AS duplicateKeyCount
+      FROM duplicate_keys
+      ORDER BY duplicateRows DESC, ${keySql}
+      LIMIT ${limit}
+    `,
+  )
+
+  return {
+    duplicateCount: Number(rows[0]?.duplicateKeyCount ?? 0),
+    keyColumns,
+    label,
+    sampleRows: rows.map((row) => {
+      return Object.fromEntries(
+        [...keyColumns, 'duplicateRows'].map((columnName) => {
+          const value = row[columnName]
+          return [columnName, value === null || value === undefined ? null : typeof value === 'number' ? value : value]
+        }),
+      ) as Record<string, string | number | null>
+    }),
+  }
+}
+
+const getSelectedImportStagingPhysicalEvidenceReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<SelectedImportStagingPhysicalEvidenceReport> => {
+  const table = 'mart.review_selected_article_import_staging_v4'
+
+  try {
+    if (!(await getTableExists(runtime, table))) {
+      return {
+        currentProjectPublishedRows: null,
+        currentProjectRows: null,
+        currentProjectUnpublishedRows: null,
+        duplicateProbes: [],
+        error: `Table is absent: ${table}`,
+        globalPublishedRows: null,
+        globalRowCount: null,
+        globalUnpublishedRows: null,
+        note: 'Selected-import staging evidence could not be collected because the staging table is absent. Failed evidence collection is not cleanup, migration, or runtime-change authorization.',
+        projectId,
+        rowsByPublishState: [],
+        rowsBySourcePartition: [],
+        table,
+        verdict: 'blocked',
+      }
+    }
+
+    const totalRows = await runReadonlyQuery<Record<string, number | string | null>>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRowCount,
+          CAST(COUNT(*) FILTER (WHERE published_at IS NOT NULL) AS BIGINT) AS globalPublishedRows,
+          CAST(COUNT(*) FILTER (WHERE published_at IS NULL) AS BIGINT) AS globalUnpublishedRows,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (
+            WHERE project_id = ${getSqlLiteral(projectId)}
+              AND published_at IS NOT NULL
+          ) AS BIGINT) AS currentProjectPublishedRows,
+          CAST(COUNT(*) FILTER (
+            WHERE project_id = ${getSqlLiteral(projectId)}
+              AND published_at IS NULL
+          ) AS BIGINT) AS currentProjectUnpublishedRows
+        FROM ${table}
+      `,
+    )
+    const publishStateRows = await runReadonlyQuery<{
+      currentProjectRows: number | string
+      publishState: 'published' | 'unpublished'
+      rowCount: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CASE WHEN published_at IS NULL THEN 'unpublished' ELSE 'published' END AS publishState,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows
+        FROM ${table}
+        GROUP BY 1
+        ORDER BY publishState
+      `,
+    )
+    const sourcePartitionRows = await runReadonlyQuery<{
+      currentProjectRows: number | string
+      publishedRows: number | string
+      rowCount: number | string
+      sourcePartition: string | null
+      unpublishedRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          source_partition AS sourcePartition,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE published_at IS NOT NULL) AS BIGINT) AS publishedRows,
+          CAST(COUNT(*) FILTER (WHERE published_at IS NULL) AS BIGINT) AS unpublishedRows
+        FROM ${table}
+        GROUP BY 1
+        ORDER BY COUNT(*) DESC, source_partition
+        LIMIT ${limit}
+      `,
+    )
+    const row = totalRows[0] ?? {}
+
+    return {
+      currentProjectPublishedRows: getNumberOrNull(row.currentProjectPublishedRows),
+      currentProjectRows: getNumberOrNull(row.currentProjectRows),
+      currentProjectUnpublishedRows: getNumberOrNull(row.currentProjectUnpublishedRows),
+      duplicateProbes: [
+        await getSelectedImportStagingDuplicateProbe(runtime, table, 'staging row id', ['staging_row_id'], limit),
+        await getSelectedImportStagingDuplicateProbe(
+          runtime,
+          table,
+          'publish identity',
+          ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id', 'publish_scope_key'],
+          limit,
+        ),
+      ],
+      error: null,
+      globalPublishedRows: getNumberOrNull(row.globalPublishedRows),
+      globalRowCount: getNumberOrNull(row.globalRowCount),
+      globalUnpublishedRows: getNumberOrNull(row.globalUnpublishedRows),
+      note: 'Selected-import staging evidence is read-only. Duplicate probes report duplicate key groups, not duplicate row totals, and sample rows are capped by --limit. Published/unpublished counts use published_at nullness and do not authorize cleanup or runtime behavior changes.',
+      projectId,
+      rowsByPublishState: publishStateRows.map((stateRow) => {
+        return {
+          currentProjectRows: Number(stateRow.currentProjectRows ?? 0),
+          publishState: stateRow.publishState,
+          rowCount: Number(stateRow.rowCount ?? 0),
+        }
+      }),
+      rowsBySourcePartition: sourcePartitionRows.map((partitionRow) => {
+        return {
+          currentProjectRows: Number(partitionRow.currentProjectRows ?? 0),
+          publishedRows: Number(partitionRow.publishedRows ?? 0),
+          rowCount: Number(partitionRow.rowCount ?? 0),
+          sourcePartition: String(partitionRow.sourcePartition ?? 'NULL'),
+          unpublishedRows: Number(partitionRow.unpublishedRows ?? 0),
+        }
+      }),
+      table,
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      currentProjectPublishedRows: null,
+      currentProjectRows: null,
+      currentProjectUnpublishedRows: null,
+      duplicateProbes: [],
+      error: error instanceof Error ? error.message : String(error),
+      globalPublishedRows: null,
+      globalRowCount: null,
+      globalUnpublishedRows: null,
+      note: 'Selected-import staging evidence collection failed. Failed evidence collection is not cleanup, migration, or runtime-change authorization.',
+      projectId,
+      rowsByPublishState: [],
+      rowsBySourcePartition: [],
+      table,
+      verdict: 'blocked',
+    }
+  }
+}
+
 const getSummaryContributionServingGroupedRows = async (
   runtime: QueryRuntime,
   table: string,
@@ -4658,6 +4892,35 @@ const renderMarkdown = (report: EvidenceReport) => {
         formatValue(row.selectedBaseTrueConflictRowsWithoutHot),
       ]
     })
+  const selectedImportStagingPublishStateRows = report.selectedImportStagingPhysicalEvidence.rowsByPublishState.map(
+    (row) => {
+      return [`\`${row.publishState}\``, formatValue(row.rowCount), formatValue(row.currentProjectRows)]
+    },
+  )
+  const selectedImportStagingSourcePartitionRows =
+    report.selectedImportStagingPhysicalEvidence.rowsBySourcePartition.map((row) => {
+      return [
+        `\`${row.sourcePartition}\``,
+        formatValue(row.rowCount),
+        formatValue(row.currentProjectRows),
+        formatValue(row.publishedRows),
+        formatValue(row.unpublishedRows),
+      ]
+    })
+  const selectedImportStagingDuplicateRows = report.selectedImportStagingPhysicalEvidence.duplicateProbes.map(
+    (probe) => {
+      return [
+        probe.label,
+        probe.keyColumns
+          .map((column) => {
+            return `\`${column}\``
+          })
+          .join(', '),
+        formatValue(probe.duplicateCount),
+        probe.sampleRows.length > 0 ? formatValue(JSON.stringify(probe.sampleRows)) : 'none',
+      ]
+    },
+  )
   const projectorWatermarkNullableColumnRows = report.projectorWatermarkNullableFieldEvidence.columns.map((column) => {
     return [
       `\`${column.column}\``,
@@ -5181,6 +5444,48 @@ const renderMarkdown = (report: EvidenceReport) => {
           rebuildRequestLifecycleReasonRows,
         )
       : '_No rebuild request lifecycle reason/status rows were collected._',
+    '',
+    '## Selected-Import Staging Physical Evidence',
+    '',
+    `Verdict: ${report.selectedImportStagingPhysicalEvidence.verdict === 'not-authorized' ? 'not-authorized (evidence only; not cleanup or runtime-change authorization)' : 'blocked'}`,
+    '',
+    report.selectedImportStagingPhysicalEvidence.note,
+    '',
+    `Table: \`${report.selectedImportStagingPhysicalEvidence.table}\``,
+    '',
+    `Global staging rows: ${formatValue(report.selectedImportStagingPhysicalEvidence.globalRowCount)}`,
+    '',
+    `Global published staging rows: ${formatValue(report.selectedImportStagingPhysicalEvidence.globalPublishedRows)}`,
+    '',
+    `Global unpublished staging rows: ${formatValue(report.selectedImportStagingPhysicalEvidence.globalUnpublishedRows)}`,
+    '',
+    `Current-project staging rows: ${formatValue(report.selectedImportStagingPhysicalEvidence.currentProjectRows)}`,
+    '',
+    `Current-project published staging rows: ${formatValue(report.selectedImportStagingPhysicalEvidence.currentProjectPublishedRows)}`,
+    '',
+    `Current-project unpublished staging rows: ${formatValue(report.selectedImportStagingPhysicalEvidence.currentProjectUnpublishedRows)}`,
+    '',
+    report.selectedImportStagingPhysicalEvidence.error
+      ? `Status: Blocked: ${report.selectedImportStagingPhysicalEvidence.error}`
+      : 'Status: ok',
+    '',
+    selectedImportStagingPublishStateRows.length > 0
+      ? formatMarkdownTable(['Publish state', 'Rows', 'Current-project rows'], selectedImportStagingPublishStateRows)
+      : '_No selected-import staging publish-state rows were collected._',
+    '',
+    selectedImportStagingSourcePartitionRows.length > 0
+      ? formatMarkdownTable(
+          ['Source partition', 'Rows', 'Current-project rows', 'Published rows', 'Unpublished rows'],
+          selectedImportStagingSourcePartitionRows,
+        )
+      : '_No selected-import staging source-partition rows were collected._',
+    '',
+    selectedImportStagingDuplicateRows.length > 0
+      ? formatMarkdownTable(
+          ['Probe', 'Key columns', 'Duplicate keys', 'Sample duplicate key rows'],
+          selectedImportStagingDuplicateRows,
+        )
+      : '_No selected-import staging duplicate probes were collected._',
     '',
     '## Selected-Import Payload Slimming Readiness',
     '',
@@ -5721,6 +6026,11 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
                 options.limit,
               ),
               retentionCleanupEligibility: await getRetentionCleanupEligibilityReport(runtime, options.projectId),
+              selectedImportStagingPhysicalEvidence: await getSelectedImportStagingPhysicalEvidenceReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
               selectedImportPayloadSlimmingReadiness: await getSelectedImportPayloadSlimmingReadinessReport(
                 runtime,
                 options.projectId,
