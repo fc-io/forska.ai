@@ -5945,8 +5945,9 @@ test('DuckDB migration drops retired filter posting stats mart and lookup indexe
 test('DuckDB migration preserves legacy filter state when backfilling list-mode state filters', async () => {
   const duckdbPath = `/tmp/forska-review-filter-state-list-mode-backfill-${Date.now()}.duckdb`
   const targetMigrationFile = '0183_backfillReviewArticleServingListModeStateFilters.sql'
+  const statusBackfillMigrationFile = '0214_backfillReviewArticleServingListModeStateStatuses.sql'
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
-    return fileName !== targetMigrationFile
+    return fileName !== targetMigrationFile && fileName !== statusBackfillMigrationFile
   })
   const result = globalThis.Bun.spawnSync(
     [
@@ -6264,7 +6265,7 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
           "SELECT index_name AS indexName FROM duckdb_indexes() WHERE index_name = 'idx_review_article_serving_list_mode_state_v4_lookup'"
         )
         const migrationRows = await database.queryJson(
-          "SELECT name FROM app_schema_migration WHERE name = '0183_backfillReviewArticleServingListModeStateFilters.sql'"
+          "SELECT name FROM app_schema_migration WHERE name IN ('0183_backfillReviewArticleServingListModeStateFilters.sql', '0214_backfillReviewArticleServingListModeStateStatuses.sql') ORDER BY name"
         )
 
         console.log(JSON.stringify({indexRows, lookupRows, migrationRows, stateRows, tableRows, viewRows}))
@@ -6368,7 +6369,7 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
     expect(parsed.tableRows).toEqual([])
     expect(parsed.indexRows).toEqual([])
     expect(parsed.lookupRows).toEqual([])
-    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}, {name: statusBackfillMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
