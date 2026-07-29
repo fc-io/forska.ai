@@ -78,6 +78,11 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
   {
     keyColumn: 'selected_import_snapshot_id',
     protectedPredicate: 'selected_import_snapshot_id',
+    table: 'mart.review_selected_article_import_staging_v4',
+  },
+  {
+    keyColumn: 'selected_import_snapshot_id',
+    protectedPredicate: 'selected_import_snapshot_id',
     table: 'app.review_selected_article_import_v4',
   },
   {
