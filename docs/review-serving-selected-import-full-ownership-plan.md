@@ -19,6 +19,29 @@ current-DB progress evidence.
 
 ## Remaining Improvements
 
+### 0. Establish a published mart ownership boundary
+
+Status: implemented in the follow-up after PR #320.
+
+Selected-import rebuild and dirty writes now publish first to
+`mart.review_selected_article_import_current_v4`. The legacy
+`app.review_selected_article_import_v4` table remains as a compatibility mirror
+for readers that have not moved yet, but it no longer decides rebuild chunk
+success, output checksum/count validation, or selected-import compaction
+correctness.
+
+Evidence required before treating this slice as done:
+
+- Migration backfills the published mart deterministically when legacy rows
+  contain duplicate logical keys.
+- Range, batch, and dirty writes assert duplicate published keys before mirror
+  refresh.
+- Compatibility mirror refresh updates stale existing rows, not only missing
+  rows.
+- Startup probes check the published mart as well as the legacy compatibility
+  table.
+- Current-DB selected-import rebuild progress completes with mart/mirror parity.
+
 ### 1. Move selected-import writes to append/staging plus compaction
 
 Build a selected-import staging model where rebuild chunks append deterministic

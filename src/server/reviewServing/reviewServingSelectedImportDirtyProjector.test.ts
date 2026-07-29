@@ -78,8 +78,8 @@ const projectDirtyInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
 
 const getInsertTargetSql = (statement: string) => {
   return statement.slice(
-    statement.indexOf('INSERT INTO app.review_selected_article_import_v4 ('),
-    statement.indexOf('\n    )', statement.indexOf('INSERT INTO app.review_selected_article_import_v4 (')),
+    statement.indexOf('INSERT INTO mart.review_selected_article_import_current_v4 ('),
+    statement.indexOf('\n    )', statement.indexOf('INSERT INTO mart.review_selected_article_import_current_v4 (')),
   )
 }
 
@@ -132,7 +132,7 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   })
   const joined = statements.join('\n')
   const baseInsertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+    return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
   })
 
   expect(result).toEqual({dirtyRowCount: 1, dirtyWatermark: 9})
@@ -164,6 +164,7 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).not.toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
   expect(joined).not.toContain('EXCLUDED.')
   expect(joined).not.toContain('list_mode_keys')
+  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expectSelectedImportBaseInsertOmitsDisplayCopyColumns(baseInsertStatement ?? '')
   expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns(baseInsertStatement ?? '')

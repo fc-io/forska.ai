@@ -113,6 +113,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0211_rebuildReviewServingDirtyWorkAckWithoutIndexes.sql',
   '../../db/duckdbMigrations/0212_restoreReviewArticleServingStateConflictIndexes.sql',
   '../../db/duckdbMigrations/0213_dropRemainingReviewServingHotTableIndexes.sql',
+  '../../db/duckdbMigrations/0217_selectedImportPublishedMart.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -352,6 +353,7 @@ const reviewServingPhase1Tables = [
   'app.review_bulk_operation_job',
   'app.review_search_job',
   'app.review_serving_retention_mark',
+  'mart.review_selected_article_import_current_v4',
   'mart.review_title_search_serving_v4',
   'mart.review_article_serving_base_v4',
   'mart.review_article_serving_list_mode_state_v4',
@@ -634,6 +636,19 @@ test('selected import schema drops retired display-copy and selected-base flag c
     'tombstone',
     'selected_import_updated_at',
   ])
+  expect([...getTableColumns('mart.review_selected_article_import_current_v4')]).toEqual([
+    'project_id',
+    'project_scope_identity',
+    'selected_import_snapshot_id',
+    'article_id',
+    'import_route_id',
+    'source_record_key',
+    'selected_rank_key',
+    'selected_rank_numeric',
+    'tombstone',
+    'selected_import_updated_at',
+  ])
+  expect(getTableSql('mart.review_selected_article_import_current_v4')).not.toContain('PRIMARY KEY')
   expect(reviewSelectedImportBaseFlagDropForwardMigrationSql).toContain(
     'CREATE TABLE app.review_selected_article_import_v4_flag_repair',
   )

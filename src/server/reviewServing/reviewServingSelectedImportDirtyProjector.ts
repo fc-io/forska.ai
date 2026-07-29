@@ -55,6 +55,9 @@ export type ResetReviewServingSelectedImportDirtyArticleRangeInput = {
   selectedImportSnapshotId: string
 }
 
+const selectedImportCompatibilityTable = 'app.review_selected_article_import_v4'
+const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
+
 type SelectedImportServingTemplateRow = {baseGeneration: number; reviewConfigHash: string; snapshotId: string}
 
 type SnapshotTemplateRow = {componentStateJson: unknown; reviewConfigHash: string | null; snapshotId: string}
@@ -672,7 +675,7 @@ const getSelectedImportBaseRecord = (
 
   return {
     keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
-    table: 'app.review_selected_article_import_v4',
+    table: selectedImportPublishedTable,
     values: {
       article_id: row.articleId,
       import_route_id: tombstone ? null : row.importRouteId,
@@ -710,6 +713,94 @@ const getSelectedImportDirtyManifest = (
   }
 }
 
+const getMirrorSelectedImportDirtyCompatibilityStatements = (
+  input: Pick<
+    ProjectReviewServingSelectedImportDirtyInput,
+    'projectId' | 'projectScopeIdentity' | 'selectedImportSnapshotId'
+  >,
+  rows: readonly SelectedImportDirtyRow[],
+) => {
+  const articleIds = [
+    ...new Set(
+      rows.map((row) => {
+        return row.articleId
+      }),
+    ),
+  ]
+
+  if (articleIds.length === 0) {
+    return []
+  }
+
+  const articleIdsSql = `${getSqlLiteral(articleIds)}::VARCHAR[]`
+
+  return [
+    `
+    WITH duplicate_article AS (
+      SELECT article_id
+      FROM ${selectedImportPublishedTable}
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        AND list_contains(${articleIdsSql}, article_id)
+      GROUP BY article_id
+      HAVING COUNT(*) > 1
+    )
+    SELECT
+      CASE
+        WHEN COUNT(*) = 0 THEN 1
+        ELSE error('selected-import published mart contains duplicate current article rows')
+      END AS assertion_passed
+    FROM duplicate_article
+  `,
+    `
+    DELETE FROM ${selectedImportCompatibilityTable}
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND list_contains(${articleIdsSql}, article_id)
+  `,
+    `
+    INSERT INTO ${selectedImportCompatibilityTable} (
+      project_id,
+      project_scope_identity,
+      selected_import_snapshot_id,
+      article_id,
+      import_route_id,
+      source_record_key,
+      selected_rank_key,
+      selected_rank_numeric,
+      tombstone,
+      selected_import_updated_at
+    )
+    SELECT
+      published.project_id,
+      published.project_scope_identity,
+      published.selected_import_snapshot_id,
+      published.article_id,
+      published.import_route_id,
+      published.source_record_key,
+      published.selected_rank_key,
+      published.selected_rank_numeric,
+      published.tombstone,
+      published.selected_import_updated_at
+    FROM ${selectedImportPublishedTable} published
+    WHERE published.project_id = ${getSqlLiteral(input.projectId)}
+      AND published.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND published.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND list_contains(${articleIdsSql}, published.article_id)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ${selectedImportCompatibilityTable} existing
+        WHERE existing.project_id = published.project_id
+          AND existing.project_scope_identity = published.project_scope_identity
+          AND existing.selected_import_snapshot_id = published.selected_import_snapshot_id
+          AND existing.article_id = published.article_id
+      )
+  `,
+  ]
+}
+
 export const projectReviewServingSelectedImportDirty = async (
   input: ProjectReviewServingSelectedImportDirtyInput,
   database: ReviewServingSelectedImportDirtyProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportDirtyProjectorDatabase,
@@ -726,6 +817,7 @@ export const projectReviewServingSelectedImportDirty = async (
     {
       acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
       component: 'selectedImport',
+      postRecordStatements: getMirrorSelectedImportDirtyCompatibilityStatements(input, rows),
       projectionManifests: shouldAcknowledgeClaims ? [getSelectedImportDirtyManifest(input)] : [],
       records: baseRecords,
       statements: getApplySelectedImportServingStatements({

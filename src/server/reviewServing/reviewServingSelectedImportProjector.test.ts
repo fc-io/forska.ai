@@ -29,7 +29,10 @@ const createSelectedImportProjectorDatabase = (input?: {
         return [] as T[]
       }
 
-      if (statement.includes('COUNT(*)') && statement.includes('FROM app.review_selected_article_import_v4 selected')) {
+      if (
+        statement.includes('COUNT(*)')
+        && statement.includes('FROM mart.review_selected_article_import_current_v4 selected')
+      ) {
         return [{rowCount: input?.rangeRowCount ?? 0}] as T[]
       }
 
@@ -106,8 +109,8 @@ const selectedImportRow = (input: {articleId: string; rankKeySort: string; rankN
 
 const getInsertTargetSql = (statement: string) => {
   return statement.slice(
-    statement.indexOf('INSERT INTO app.review_selected_article_import_v4 ('),
-    statement.indexOf('\n    )', statement.indexOf('INSERT INTO app.review_selected_article_import_v4 (')),
+    statement.indexOf('INSERT INTO mart.review_selected_article_import_current_v4 ('),
+    statement.indexOf('\n    )', statement.indexOf('INSERT INTO mart.review_selected_article_import_current_v4 (')),
   )
 }
 
@@ -159,22 +162,22 @@ test('selected-import projector creates snapshot cursor and selected article imp
   expect(result.selectedImportSnapshotId).toStartWith('selectedImport:')
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+      return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
     }),
   ).toBe(true)
   expectSelectedImportBaseInsertOmitsDisplayCopyColumns(
     statements.find((statement) => {
-      return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+      return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
     }) ?? '',
   )
   expectSelectedImportBaseInsertKeepsProtectedColumns(
     statements.find((statement) => {
-      return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+      return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
     }) ?? '',
   )
   expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns(
     statements.find((statement) => {
-      return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+      return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
     }) ?? '',
   )
   expect(
@@ -205,6 +208,135 @@ test('selected-import projector creates snapshot cursor and selected article imp
     }),
   ).toBe(true)
   expect(statements.join('\n')).toContain('"processedRowCount":1')
+})
+
+test('selected-import batch mirror updates stale compatibility rows from the published mart in DuckDB', async () => {
+  const {close, database} = await createDuckdbSelectedImportProjectorDatabase()
+
+  try {
+    await database.run('CREATE SCHEMA app')
+    await database.run('CREATE SCHEMA mart')
+    await database.run(`
+      CREATE TABLE app.review_selected_import_snapshot (
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        source_delta_high_water BIGINT NOT NULL,
+        cursor_json JSON,
+        status VARCHAR NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        completed_at TIMESTAMPTZ,
+        last_error VARCHAR,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      )
+    `)
+    await database.run(`
+      CREATE TABLE mart.project_scope_article (
+        project_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        in_curated_scope BOOLEAN NOT NULL,
+        in_route_scope BOOLEAN NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.project_import_route (
+        project_id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.review_import_article_hot_field (
+        import_route_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        publication_year INTEGER,
+        article_title VARCHAR,
+        journal_title VARCHAR,
+        external_id VARCHAR,
+        tombstone BOOLEAN NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.article_import_route (
+        id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE mart.review_selected_article_import_current_v4 (
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR,
+        source_record_key VARCHAR,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        tombstone BOOLEAN NOT NULL,
+        selected_import_updated_at TIMESTAMPTZ NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.review_selected_article_import_v4 (
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR,
+        source_record_key VARCHAR,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        tombstone BOOLEAN NOT NULL,
+        selected_import_updated_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY(project_id, project_scope_identity, selected_import_snapshot_id, article_id)
+      )
+    `)
+    await database.run("INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1', TRUE, FALSE)")
+    await database.run("INSERT INTO app.project_import_route VALUES ('project-1', 'import-route-1')")
+    await database.run(`
+      INSERT INTO app.review_import_article_hot_field
+      VALUES ('import-route-1', 'article-1', 'source-new', 'rank-new', 1, 2026, 'Title', 'Journal', 'external-1', FALSE)
+    `)
+    await database.run(`
+      INSERT INTO mart.review_selected_article_import_current_v4
+      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-1', 'article-1', 'route-old', 'source-old', 'rank-old', 5, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
+    `)
+    await database.run(`
+      INSERT INTO app.review_selected_article_import_v4
+      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-1', 'article-1', 'route-old', 'source-old', 'rank-old', 5, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
+    `)
+
+    await projectReviewServingSelectedImportBatch(
+      {
+        limit: 1,
+        projectId: 'project-1',
+        projectScopeIdentity: 'projectScope:identity-1',
+        selectedImportSnapshotId: 'selected-import-1',
+        sourceDeltaHighWater: 9,
+      },
+      database,
+    )
+
+    const rows = await database.queryJson<{compatibilitySourceRecordKey: string; martSourceRecordKey: string}>(`
+      SELECT
+        compatibility.source_record_key AS compatibilitySourceRecordKey,
+        published.source_record_key AS martSourceRecordKey
+      FROM app.review_selected_article_import_v4 compatibility
+      INNER JOIN mart.review_selected_article_import_current_v4 published
+        ON published.project_id = compatibility.project_id
+        AND published.project_scope_identity = compatibility.project_scope_identity
+        AND published.selected_import_snapshot_id = compatibility.selected_import_snapshot_id
+        AND published.article_id = compatibility.article_id
+    `)
+
+    expect(rows).toEqual([{compatibilitySourceRecordKey: 'source-new', martSourceRecordKey: 'source-new'}])
+  } finally {
+    close()
+  }
 })
 
 test('selected-import projector resumes after snapshot cursor checkpoint', async () => {
@@ -294,10 +426,10 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   )
 
   const deleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM app.review_selected_article_import_v4')
+    return statement.includes('DELETE FROM mart.review_selected_article_import_current_v4')
   })
   const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+    return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
   })
   const sourceQueries = statements.filter((statement) => {
     return statement.includes('WITH selected_import_candidate_source AS') && !statement.includes('INSERT INTO')
@@ -324,7 +456,7 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(insertStatement).toContain('selected_import_duplicate_assertion AS')
   expect(insertStatement).toContain("error('selected-import range insert produced duplicate article keys')")
   expect(insertStatement).toContain('WHERE NOT EXISTS')
-  expect(insertStatement).toContain('FROM app.review_selected_article_import_v4 existing')
+  expect(insertStatement).toContain('FROM mart.review_selected_article_import_current_v4 existing')
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
@@ -351,10 +483,11 @@ test('selected-import article range no-replace mode keeps existing rows', async 
 
   const joined = statements.join('\n')
   const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+    return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
   })
 
   expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_selected_article_import_current_v4')
   expect(insertStatement).toContain('selected_import_duplicate_assertion AS')
   expect(insertStatement).toContain('WHERE NOT EXISTS')
   expect(insertStatement).not.toContain('ON CONFLICT')
@@ -397,13 +530,14 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
 
   const joined = statements.join('\n')
   const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+    return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
   })
   const insertStatements = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+    return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
   })
 
   expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_selected_article_import_current_v4')
   expect(insertStatements).toHaveLength(1)
   expect(insertStatement).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(insertStatement).toContain("('article-1', 'article-9'), ('article-10', 'article-19')")
@@ -457,6 +591,20 @@ test('selected-import article range insert fails duplicate source publication ke
         import_route_id VARCHAR NOT NULL,
         article_id VARCHAR NOT NULL,
         source_record_key VARCHAR NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE mart.review_selected_article_import_current_v4 (
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        tombstone BOOLEAN NOT NULL,
+        selected_import_updated_at TIMESTAMP NOT NULL
       )
     `)
     await database.run(`
@@ -542,7 +690,7 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).toContain('WITH serving_template AS')
   expect(joined).toContain('FROM mart.project_scope_article scope')
   expect(joined).toContain('INNER JOIN scoped_article scoped')
-  expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(joined).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected')
   expect(joined).not.toContain('selected.import_route_id AS selected_import_route_id')
   expect(joined).not.toContain('selected.selected_rank_key,')
   expect(joined).toContain('AND NOT selected.tombstone')
@@ -604,6 +752,7 @@ test('selected-import article range rebuild can skip final serving row refresh',
   )
   const joined = statements.join('\n')
 
+  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expect(joined).not.toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS')
   expect(joined).not.toContain('DELETE FROM mart.review_article_serving_base_v4 serving')

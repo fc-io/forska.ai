@@ -2846,7 +2846,7 @@ const getSelectedImportRebuildChunkOutputChecksum = async (
         COALESCE(CAST(selected_rank_key AS VARCHAR), '') || ':' ||
         COALESCE(CAST(selected_rank_numeric AS VARCHAR), '') || ':' ||
         COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
-      FROM app.review_selected_article_import_v4 base
+      FROM mart.review_selected_article_import_current_v4 base
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
         AND ${getChunkArticleRangePredicate({alias: 'base', chunk: input.chunk})}
@@ -2868,7 +2868,7 @@ const getSelectedImportRebuildChunkOutputCount = async (
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     WITH output_row AS (
       SELECT 1
-      FROM app.review_selected_article_import_v4 base
+      FROM mart.review_selected_article_import_current_v4 base
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
         AND ${getChunkArticleRangePredicate({alias: 'base', chunk: input.chunk})}
@@ -2893,6 +2893,17 @@ const resetSelectedImportSnapshotForRebuild = async (
         selected_import_snapshot_id: input.selectedImportSnapshotId,
       },
       table: 'app.review_selected_article_import_v4',
+    },
+    database,
+  )
+  await deleteReviewServingProjectorRows(
+    {
+      predicates: {
+        project_id: input.projectId,
+        project_scope_identity: input.projectScopeIdentity,
+        selected_import_snapshot_id: input.selectedImportSnapshotId,
+      },
+      table: 'mart.review_selected_article_import_current_v4',
     },
     database,
   )

@@ -5008,6 +5008,11 @@ test('selected import runner releases dirty work while base projection is still 
   expect(result).toEqual({processedCount: 512})
   expect(
     runStatements.some((statement) => {
+      return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
+    }),
+  ).toBe(true)
+  expect(
+    runStatements.some((statement) => {
       return statement.includes('INSERT INTO app.review_selected_article_import_v4')
     }),
   ).toBe(true)
@@ -8246,6 +8251,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
   expect(joined).toContain('projectScope.rebuild')
   expect(joined).toContain('reviewChange')
+  expect(joined).toContain('DELETE FROM mart.review_selected_article_import_current_v4')
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_import_patch_v4')
@@ -8255,7 +8261,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('DELETE FROM app.review_selected_import_snapshot')
   expect(joined).toContain('WITH selected_import_candidates')
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS')
-  expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(joined).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected')
   expect(joined).not.toContain('selectedImport.rebuild')
   expect(joined).toContain("checksum = 'checksum-project-scope'")
   expect(joined).toContain("checksum = 'checksum-selected-import'")
@@ -8368,6 +8374,7 @@ test('selected import bootstrap rebuild chunk writes article range and completed
   expect(result).toEqual({status: 'completed'})
   expect(joined).not.toContain('DELETE FROM mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_import_patch_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_selected_article_import_current_v4')
   expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).not.toContain('article_id IS NOT DISTINCT FROM')
   expect(joined).not.toContain('DELETE FROM app.review_selected_import_snapshot')

@@ -7410,6 +7410,156 @@ test('DuckDB migration drops selected-import display-copy columns while preservi
   }
 })
 
+test('DuckDB migration creates selected-import published mart with deterministic current-row dedupe', async () => {
+  const duckdbPath = `/tmp/forska-selected-import-published-mart-${Date.now()}.duckdb`
+  const targetMigrationFile = '0217_selectedImportPublishedMart.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_selected_article_import_v4 (
+            project_id VARCHAR NOT NULL,
+            project_scope_identity VARCHAR NOT NULL,
+            selected_import_snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            import_route_id VARCHAR,
+            source_record_key VARCHAR,
+            selected_rank_key VARCHAR,
+            selected_rank_numeric DOUBLE,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_selected_article_import_v4 (
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id,
+            import_route_id,
+            source_record_key,
+            selected_rank_key,
+            selected_rank_numeric,
+            tombstone,
+            selected_import_updated_at
+          )
+          VALUES
+            ('project-a', 'scope-a', 'snapshot-a', 'article-a', 'route-old', 'source-old', 'rank-old', 2, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z'),
+            ('project-a', 'scope-a', 'snapshot-a', 'article-a', 'route-new', 'source-new', 'rank-new', 1, TRUE, TIMESTAMPTZ '2026-07-24T08:05:00Z'),
+            ('project-a', 'scope-a', 'snapshot-a', 'article-b', 'route-b', 'source-b', 'rank-b', 3, FALSE, TIMESTAMPTZ '2026-07-24T08:02:00Z')
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            import_route_id AS importRouteId,
+            source_record_key AS sourceRecordKey,
+            selected_rank_key AS selectedRankKey,
+            selected_rank_numeric AS selectedRankNumeric,
+            tombstone
+          FROM mart.review_selected_article_import_current_v4
+          ORDER BY article_id
+        \`)
+        const duplicateRows = await database.queryJson(\`
+          SELECT article_id AS articleId, COUNT(*) AS rowCount
+          FROM mart.review_selected_article_import_current_v4
+          GROUP BY article_id
+          HAVING COUNT(*) > 1
+        \`)
+
+        console.log(JSON.stringify({duplicateRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      duplicateRows: {articleId: string; rowCount: number}[]
+      rows: {
+        articleId: string
+        importRouteId: string
+        selectedRankKey: string
+        selectedRankNumeric: number
+        sourceRecordKey: string
+        tombstone: boolean
+      }[]
+    }
+
+    expect(parsed.duplicateRows).toEqual([])
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-a',
+        importRouteId: 'route-new',
+        selectedRankKey: 'rank-new',
+        selectedRankNumeric: 1,
+        sourceRecordKey: 'source-new',
+        tombstone: true,
+      },
+      {
+        articleId: 'article-b',
+        importRouteId: 'route-b',
+        selectedRankKey: 'rank-b',
+        selectedRankNumeric: 3,
+        sourceRecordKey: 'source-b',
+        tombstone: false,
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift and prompt scalar shape', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFiles = new Set([
