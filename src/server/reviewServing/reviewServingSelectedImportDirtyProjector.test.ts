@@ -1,3 +1,4 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
@@ -43,6 +44,45 @@ const createSelectedImportDirtyDatabase = (input?: {
   return {database, statements}
 }
 
+const createDuckdbSelectedImportDirtyDatabase = async (): Promise<{
+  close: () => void
+  database: ReviewServingSelectedImportDirtyProjectorDatabase
+}> => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingSelectedImportDirtyProjectorDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      await connection.run('BEGIN')
+
+      try {
+        const result = await operation(database)
+        await connection.run('COMMIT')
+
+        return result
+      } catch (error) {
+        await connection.run('ROLLBACK')
+        throw error
+      }
+    },
+  }
+
+  return {
+    close: () => {
+      connection.closeSync()
+      duckdbInstance.closeSync()
+    },
+    database,
+  }
+}
+
 const selectedImportClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): ReviewServingDirtyWorkClaim => {
   return {
     articleId: 'article-1',
@@ -76,15 +116,15 @@ const projectDirtyInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   }
 }
 
-const getInsertTargetSql = (statement: string) => {
+const getInsertTargetSql = (statement: string, table = 'mart.review_selected_article_import_current_v4') => {
   return statement.slice(
-    statement.indexOf('INSERT INTO mart.review_selected_article_import_current_v4 ('),
-    statement.indexOf('\n    )', statement.indexOf('INSERT INTO mart.review_selected_article_import_current_v4 (')),
+    statement.indexOf(`INSERT INTO ${table} (`),
+    statement.indexOf('\n    )', statement.indexOf(`INSERT INTO ${table} (`)),
   )
 }
 
-const expectSelectedImportBaseInsertOmitsDisplayCopyColumns = (statement: string) => {
-  const insertTargetSql = getInsertTargetSql(statement)
+const expectSelectedImportStagingInsertOmitsDisplayCopyColumns = (statement: string) => {
+  const insertTargetSql = getInsertTargetSql(statement, 'mart.review_selected_article_import_staging_v4')
 
   expect(insertTargetSql).not.toContain('publication_year')
   expect(insertTargetSql).not.toContain('article_title')
@@ -92,8 +132,8 @@ const expectSelectedImportBaseInsertOmitsDisplayCopyColumns = (statement: string
   expect(insertTargetSql).not.toContain('external_id')
 }
 
-const expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns = (statement: string) => {
-  const insertTargetSql = getInsertTargetSql(statement)
+const expectSelectedImportStagingInsertOmitsSelectedBaseFlagColumns = (statement: string) => {
+  const insertTargetSql = getInsertTargetSql(statement, 'mart.review_selected_article_import_staging_v4')
 
   expect(insertTargetSql).not.toContain('duplicate_flag')
   expect(insertTargetSql).not.toContain('conflict_flag')
@@ -131,8 +171,17 @@ test('selected-import dirty routine updates only claimed articles', async () => 
     return statement.includes('WITH dirty_article(article_id)')
   })
   const joined = statements.join('\n')
-  const baseInsertStatement = statements.find((statement) => {
+  const stagingInsertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_selected_article_import_staging_v4')
+  })
+  const currentUpdateStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_selected_article_import_current_v4 published')
+  })
+  const currentInsertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
+  })
+  const markPublishedStatement = statements.find((statement) => {
+    return statement.includes('SET published_at = COALESCE(published_at, current_timestamp)')
   })
 
   expect(result).toEqual({dirtyRowCount: 1, dirtyWatermark: 9})
@@ -164,10 +213,35 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).not.toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id)')
   expect(joined).not.toContain('EXCLUDED.')
   expect(joined).not.toContain('list_mode_keys')
+  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_staging_v4')
+  expect(joined).toContain(
+    'selectedImportDirty:project-1:projectScope:identity-1:selected-import-snapshot-1:article-1:9',
+  )
+  expect(joined).toContain("'selected-import-dirty'")
+  expect(joined).toContain('UPDATE mart.review_selected_article_import_current_v4 published')
   expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
+  expect(joined).toContain('FROM mart.review_selected_article_import_staging_v4 staged')
+  expect(joined).toContain("list_contains(['article-1']::VARCHAR[], staged.article_id)")
+  expect(joined).toContain("list_contains(['article-1']::VARCHAR[], article_id)")
+  expect(joined).toContain('SET published_at = COALESCE(published_at, current_timestamp)')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
-  expectSelectedImportBaseInsertOmitsDisplayCopyColumns(baseInsertStatement ?? '')
-  expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns(baseInsertStatement ?? '')
+  expectSelectedImportStagingInsertOmitsDisplayCopyColumns(stagingInsertStatement ?? '')
+  expectSelectedImportStagingInsertOmitsSelectedBaseFlagColumns(stagingInsertStatement ?? '')
+  expect(currentUpdateStatement).toContain('source_delta_high_water DESC')
+  expect(currentUpdateStatement).toContain('selected_import_updated_at DESC')
+  expect(currentUpdateStatement).toContain('tombstone ASC')
+  expect(currentInsertStatement).toContain('published_winner AS')
+  expect(currentInsertStatement).toContain('source_delta_high_water DESC')
+  expect(markPublishedStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(
+    statements.findIndex((statement) => {
+      return statement.includes('INSERT INTO mart.review_selected_article_import_staging_v4')
+    }),
+  ).toBeLessThan(
+    statements.findIndex((statement) => {
+      return statement.includes('UPDATE mart.review_selected_article_import_current_v4')
+    }),
+  )
   expect(joined).toContain('source_record_key')
   expect(joined).toContain('changed_raw(article_id, import_route_id, selected_rank_key')
   expect(joined).toContain('PARTITION BY raw.article_id')
@@ -317,6 +391,19 @@ test('selected-import tombstones replay idempotently with the same dirty waterma
   await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
 
   expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
+  expect(statements.join('\n')).toContain(
+    'selectedImportDirty:project-1:projectScope:identity-1:selected-import-snapshot-1:article-1:9',
+  )
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('UPDATE mart.review_selected_article_import_current_v4 published')
+    }),
+  ).toHaveLength(2)
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('INSERT INTO mart.review_selected_article_import_current_v4')
+    }),
+  ).toHaveLength(2)
 })
 
 test('selected-import tombstones clear selected columns without deleting curated scoped articles', async () => {
@@ -347,6 +434,371 @@ test('selected-import tombstones clear selected columns without deleting curated
   expect(joined).toContain('changed.scope_tombstone = TRUE')
   expect(joined).toContain('changed.scope_tombstone = FALSE')
   expect(joined).not.toContain('changed.import_route_id AS selected_import_route_id')
+  expect(joined).toContain('NULL')
+  expect(joined).toContain('TRUE')
+  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_staging_v4')
+  expect(joined).toContain('UPDATE mart.review_selected_article_import_current_v4 published')
+  expect(joined).toContain('winner.tombstone')
+})
+
+test('selected-import scope tombstones stage and publish current tombstone rows', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
+      {
+        articleId: 'article-1',
+        articleTitle: 'Out of Scope Title',
+        conflictFlag: false,
+        duplicateFlag: false,
+        externalId: 'selected-external-1',
+        importRouteId: 'import-route-1',
+        journalTitle: 'Selected Journal',
+        publicationYear: 2026,
+        selectedRankKey: '0001:article-1',
+        selectedRankNumeric: 1,
+        sourceRecordKey: 'source-record-1',
+        selectedSourceUrl: 'https://selected.example/article-1',
+        scopeTombstone: true,
+        tombstone: false,
+      },
+    ],
+  })
+
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
+
+  const stagingInsertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_selected_article_import_staging_v4')
+  })
+  const joined = statements.join('\n')
+
+  expect(stagingInsertStatement).toContain(
+    'selectedImportDirty:project-1:projectScope:identity-1:selected-import-snapshot-1:article-1:9',
+  )
+  expect(stagingInsertStatement).toContain('NULL')
+  expect(stagingInsertStatement).toContain('TRUE')
+  expect(joined).toContain('UPDATE mart.review_selected_article_import_current_v4 published')
+  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
+  expect(joined).toContain('winner.tombstone')
+  expect(joined).toContain("list_contains(['article-1']::VARCHAR[], staged.article_id)")
+})
+
+test('selected-import dirty staged publish executes in DuckDB and refreshes stale compatibility rows', async () => {
+  const {close, database} = await createDuckdbSelectedImportDirtyDatabase()
+
+  try {
+    await database.run('CREATE SCHEMA app')
+    await database.run('CREATE SCHEMA mart')
+    await database.run(`
+      CREATE TABLE mart.project_scope_article (
+        project_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        in_curated_scope BOOLEAN NOT NULL,
+        in_route_scope BOOLEAN NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.project_import_route (
+        project_id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.review_import_article_hot_field (
+        import_route_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        publication_year INTEGER,
+        article_title VARCHAR,
+        journal_title VARCHAR,
+        external_id VARCHAR,
+        duplicate_flag BOOLEAN,
+        conflict_flag BOOLEAN,
+        tombstone BOOLEAN NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.article_import_route (
+        id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.article_import_route_source_record (
+        import_route_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL,
+        raw_payload JSON,
+        quarantined_at TIMESTAMPTZ
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.article (
+        id VARCHAR NOT NULL,
+        article_created_at TIMESTAMPTZ,
+        article_updated_at TIMESTAMPTZ,
+        article_title VARCHAR,
+        url VARCHAR
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.review_serving_snapshot_manifest (
+        project_id VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        review_config_hash VARCHAR,
+        component_state_json JSON,
+        snapshot_status VARCHAR NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE mart.review_article_serving_base_v4 (
+        project_id VARCHAR NOT NULL,
+        review_config_hash VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        base_generation BIGINT NOT NULL,
+        patch_watermark BIGINT NOT NULL,
+        article_id VARCHAR NOT NULL,
+        article_created_at TIMESTAMPTZ,
+        sort_key TIMESTAMPTZ,
+        activity_sort_at TIMESTAMPTZ
+      )
+    `)
+    await database.run(`
+      CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+        project_id VARCHAR NOT NULL,
+        review_config_hash VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        has_llm_list_mode BOOLEAN NOT NULL,
+        has_human_list_mode BOOLEAN NOT NULL,
+        has_both_list_mode BOOLEAN NOT NULL,
+        has_unassessed_list_mode BOOLEAN NOT NULL,
+        llm_patch_watermark BIGINT,
+        human_patch_watermark BIGINT,
+        both_patch_watermark BIGINT,
+        unassessed_patch_watermark BIGINT
+      )
+    `)
+    await database.run(`
+      CREATE TABLE mart.review_selected_article_import_staging_v4 (
+        staging_row_id VARCHAR NOT NULL,
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR,
+        source_record_key VARCHAR,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        tombstone BOOLEAN NOT NULL,
+        selected_import_updated_at TIMESTAMPTZ NOT NULL,
+        projection_identity VARCHAR NOT NULL,
+        source_delta_high_water BIGINT NOT NULL,
+        source_partition VARCHAR NOT NULL,
+        publish_scope_key VARCHAR NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        published_at TIMESTAMPTZ
+      )
+    `)
+    await database.run(`
+      CREATE TABLE mart.review_selected_article_import_current_v4 (
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR,
+        source_record_key VARCHAR,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        tombstone BOOLEAN NOT NULL,
+        selected_import_updated_at TIMESTAMPTZ NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.review_selected_article_import_v4 (
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR,
+        source_record_key VARCHAR,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        tombstone BOOLEAN NOT NULL,
+        selected_import_updated_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY(project_id, project_scope_identity, selected_import_snapshot_id, article_id)
+      )
+    `)
+    await database.run(`
+      INSERT INTO app.review_serving_snapshot_manifest
+      VALUES (
+        'project-1',
+        'snapshot-1',
+        'selected-import-snapshot-1',
+        'review-config-1',
+        '{"required":[{"component":"selectedImport","projectionIdentity":"selectedImport:identity-1","baseGeneration":"3"}]}'::JSON,
+        'candidate',
+        TIMESTAMPTZ '2026-07-24T09:00:00Z'
+      )
+    `)
+    await database.run("INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1', TRUE, FALSE)")
+    await database.run("INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-2', TRUE, FALSE)")
+    await database.run("INSERT INTO app.project_import_route VALUES ('project-1', 'import-route-1')")
+    await database.run(`
+      INSERT INTO app.review_import_article_hot_field
+      VALUES (
+        'import-route-1',
+        'article-1',
+        'source-new',
+        'rank-new',
+        1,
+        2026,
+        'New Title',
+        'New Journal',
+        'external-new',
+        FALSE,
+        FALSE,
+        FALSE
+      )
+    `)
+    await database.run(
+      "INSERT INTO app.article_import_route VALUES ('current-link-1', 'import-route-1', 'article-1', 'source-new')",
+    )
+    await database.run(`
+      INSERT INTO app.article_import_route_source_record
+      VALUES ('import-route-1', 'article-1', 'source-new', '{"covidence":{"citation":{"url":"https://selected.example/article-1"}}}'::JSON, NULL)
+    `)
+    await database.run(`
+      INSERT INTO app.article
+      VALUES ('article-1', TIMESTAMPTZ '2026-07-24T07:00:00Z', TIMESTAMPTZ '2026-07-24T08:00:00Z', 'Article 1', 'https://article-1.example')
+    `)
+    await database.run(`
+      INSERT INTO mart.review_selected_article_import_current_v4
+      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-snapshot-1', 'article-1', 'route-old', 'source-old', 'rank-old', 5, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
+    `)
+    await database.run(`
+      INSERT INTO mart.review_selected_article_import_current_v4
+      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-snapshot-1', 'article-2', 'route-unchanged', 'source-unchanged', 'rank-unchanged', 2, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
+    `)
+    await database.run(`
+      INSERT INTO app.review_selected_article_import_v4
+      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-snapshot-1', 'article-1', 'route-old', 'source-old', 'rank-old', 5, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
+    `)
+    await database.run(`
+      INSERT INTO app.review_selected_article_import_v4
+      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-snapshot-1', 'article-2', 'route-unchanged', 'source-unchanged', 'rank-unchanged', 2, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
+    `)
+    const projectorDatabase: ReviewServingSelectedImportDirtyProjectorDatabase = {
+      ...database,
+      run: async (statement) => {
+        if (
+          statement.includes('review_article_serving_base_v4')
+          || statement.includes('review_article_serving_list_mode_state_v4')
+        ) {
+          return
+        }
+
+        await database.run(statement)
+      },
+      transaction: async (operation) => {
+        await database.run('BEGIN')
+
+        try {
+          const result = await operation(projectorDatabase)
+          await database.run('COMMIT')
+
+          return result
+        } catch (error) {
+          await database.run('ROLLBACK')
+          throw error
+        }
+      },
+    }
+
+    await projectReviewServingSelectedImportDirty(
+      {...projectDirtyInput([selectedImportClaim()]), acknowledgeClaims: false},
+      projectorDatabase,
+    )
+    await projectReviewServingSelectedImportDirty(
+      {...projectDirtyInput([selectedImportClaim()]), acknowledgeClaims: false},
+      projectorDatabase,
+    )
+
+    const currentRows = await database.queryJson<{
+      articleId: string
+      importRouteId: string | null
+      selectedRankKey: string | null
+      sourceRecordKey: string | null
+      tombstone: boolean
+    }>(`
+      SELECT
+        article_id AS articleId,
+        import_route_id AS importRouteId,
+        source_record_key AS sourceRecordKey,
+        selected_rank_key AS selectedRankKey,
+        tombstone
+      FROM mart.review_selected_article_import_current_v4
+      ORDER BY article_id
+    `)
+    const compatibilityRows = await database.queryJson<{
+      articleId: string
+      importRouteId: string | null
+      selectedRankKey: string | null
+      sourceRecordKey: string | null
+    }>(`
+      SELECT
+        article_id AS articleId,
+        import_route_id AS importRouteId,
+        source_record_key AS sourceRecordKey,
+        selected_rank_key AS selectedRankKey
+      FROM app.review_selected_article_import_v4
+      ORDER BY article_id
+    `)
+    const stagingRows = await database.queryJson<{publishedCount: number; rowCount: number}>(`
+      SELECT
+        COUNT(*)::INTEGER AS rowCount,
+        COUNT(published_at)::INTEGER AS publishedCount
+      FROM mart.review_selected_article_import_staging_v4
+    `)
+
+    expect(currentRows).toEqual([
+      {
+        articleId: 'article-1',
+        importRouteId: 'import-route-1',
+        selectedRankKey: 'rank-new',
+        sourceRecordKey: 'source-new',
+        tombstone: false,
+      },
+      {
+        articleId: 'article-2',
+        importRouteId: 'route-unchanged',
+        selectedRankKey: 'rank-unchanged',
+        sourceRecordKey: 'source-unchanged',
+        tombstone: false,
+      },
+    ])
+    expect(compatibilityRows).toEqual([
+      {
+        articleId: 'article-1',
+        importRouteId: 'import-route-1',
+        selectedRankKey: 'rank-new',
+        sourceRecordKey: 'source-new',
+      },
+      {
+        articleId: 'article-2',
+        importRouteId: 'route-unchanged',
+        selectedRankKey: 'rank-unchanged',
+        sourceRecordKey: 'source-unchanged',
+      },
+    ])
+    expect(stagingRows).toEqual([{publishedCount: 1, rowCount: 1}])
+  } finally {
+    close()
+  }
 })
 
 test('project-scoped selected-import rebuilds include previous serving articles for scope tombstones', async () => {

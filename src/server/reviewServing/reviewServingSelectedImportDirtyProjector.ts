@@ -57,6 +57,7 @@ export type ResetReviewServingSelectedImportDirtyArticleRangeInput = {
 
 const selectedImportCompatibilityTable = 'app.review_selected_article_import_v4'
 const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
+const selectedImportStagingTable = 'mart.review_selected_article_import_staging_v4'
 
 type SelectedImportServingTemplateRow = {baseGeneration: number; reviewConfigHash: string; snapshotId: string}
 
@@ -94,6 +95,16 @@ type SelectedImportDirtyRow = {
 }
 
 const selectedImportDirtyProjectorName = 'selected-import-dirty-projector'
+
+const selectedImportPublishWinnerOrderSql = [
+  'source_delta_high_water DESC',
+  'selected_import_updated_at DESC',
+  'import_route_id ASC NULLS LAST',
+  'source_record_key ASC NULLS LAST',
+  'selected_rank_key ASC NULLS LAST',
+  'selected_rank_numeric ASC NULLS LAST',
+  'tombstone ASC',
+].join(',\n          ')
 
 const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
@@ -664,28 +675,37 @@ const getApplySelectedImportServingStatements = (input: {
       ]
 }
 
-const getSelectedImportBaseRecord = (
+const getSelectedImportStagingRecord = (
   input: Pick<
     ProjectReviewServingSelectedImportDirtyInput,
-    'projectId' | 'projectScopeIdentity' | 'selectedImportSnapshotId'
+    'projectId' | 'projectScopeIdentity' | 'projectionIdentity' | 'selectedImportSnapshotId'
   >,
+  dirtyWatermark: number,
   row: SelectedImportDirtyRow,
 ): ReviewServingProjectorRecord => {
   const tombstone = row.tombstone || row.scopeTombstone
+  const publishScopeKey = `${input.projectId}|${input.projectScopeIdentity}|${input.selectedImportSnapshotId}`
 
   return {
-    keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
-    table: selectedImportPublishedTable,
+    keyColumns: ['staging_row_id'],
+    table: selectedImportStagingTable,
     values: {
       article_id: row.articleId,
+      created_at: new Date(),
       import_route_id: tombstone ? null : row.importRouteId,
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,
+      projection_identity: input.projectionIdentity,
+      publish_scope_key: publishScopeKey,
+      published_at: null,
       selected_import_snapshot_id: input.selectedImportSnapshotId,
       selected_import_updated_at: new Date(),
       selected_rank_key: tombstone ? null : row.selectedRankKey,
       selected_rank_numeric: tombstone ? null : row.selectedRankNumeric,
       source_record_key: tombstone ? null : row.sourceRecordKey,
+      source_delta_high_water: dirtyWatermark,
+      source_partition: 'selected-import-dirty',
+      staging_row_id: `selectedImportDirty:${input.projectId}:${input.projectScopeIdentity}:${input.selectedImportSnapshotId}:${row.articleId}:${dirtyWatermark}`,
       tombstone,
     },
   }
@@ -735,6 +755,102 @@ const getMirrorSelectedImportDirtyCompatibilityStatements = (
   const articleIdsSql = `${getSqlLiteral(articleIds)}::VARCHAR[]`
 
   return [
+    `
+    UPDATE ${selectedImportPublishedTable} published
+    SET
+      import_route_id = winner.import_route_id,
+      source_record_key = winner.source_record_key,
+      selected_rank_key = winner.selected_rank_key,
+      selected_rank_numeric = winner.selected_rank_numeric,
+      tombstone = winner.tombstone,
+      selected_import_updated_at = winner.selected_import_updated_at
+    FROM (
+      SELECT *
+      FROM ${selectedImportStagingTable} staged
+      WHERE staged.project_id = ${getSqlLiteral(input.projectId)}
+        AND staged.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND staged.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        AND list_contains(${articleIdsSql}, staged.article_id)
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY article_id
+        ORDER BY
+          ${selectedImportPublishWinnerOrderSql}
+      ) = 1
+    ) winner
+    WHERE published.project_id = winner.project_id
+      AND published.project_scope_identity = winner.project_scope_identity
+      AND published.selected_import_snapshot_id = winner.selected_import_snapshot_id
+      AND published.article_id = winner.article_id
+  `,
+    `
+    INSERT INTO ${selectedImportPublishedTable} (
+      project_id,
+      project_scope_identity,
+      selected_import_snapshot_id,
+      article_id,
+      import_route_id,
+      source_record_key,
+      selected_rank_key,
+      selected_rank_numeric,
+      tombstone,
+      selected_import_updated_at
+    )
+    WITH staged_dirty AS (
+      SELECT
+        staged.project_id,
+        staged.project_scope_identity,
+        staged.selected_import_snapshot_id,
+        staged.article_id,
+        staged.import_route_id,
+        staged.source_record_key,
+        staged.selected_rank_key,
+        staged.selected_rank_numeric,
+        staged.tombstone,
+        staged.selected_import_updated_at,
+        staged.source_delta_high_water
+      FROM ${selectedImportStagingTable} staged
+      WHERE staged.project_id = ${getSqlLiteral(input.projectId)}
+        AND staged.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND staged.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        AND list_contains(${articleIdsSql}, staged.article_id)
+    ), published_winner AS (
+      SELECT *
+      FROM staged_dirty
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY article_id
+        ORDER BY
+          ${selectedImportPublishWinnerOrderSql}
+      ) = 1
+    )
+    SELECT
+      winner.project_id,
+      winner.project_scope_identity,
+      winner.selected_import_snapshot_id,
+      winner.article_id,
+      winner.import_route_id,
+      winner.source_record_key,
+      winner.selected_rank_key,
+      winner.selected_rank_numeric,
+      winner.tombstone,
+      winner.selected_import_updated_at
+    FROM published_winner winner
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${selectedImportPublishedTable} existing
+      WHERE existing.project_id = winner.project_id
+        AND existing.project_scope_identity = winner.project_scope_identity
+        AND existing.selected_import_snapshot_id = winner.selected_import_snapshot_id
+        AND existing.article_id = winner.article_id
+    )
+  `,
+    `
+    UPDATE ${selectedImportStagingTable}
+    SET published_at = COALESCE(published_at, current_timestamp)
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND list_contains(${articleIdsSql}, article_id)
+  `,
     `
     WITH duplicate_article AS (
       SELECT article_id
@@ -809,8 +925,8 @@ export const projectReviewServingSelectedImportDirty = async (
   const templates = await getSelectedImportServingTemplates(input, database)
   const dirtyWatermark = getDirtyWatermark(input.claims)
   const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
-  const baseRecords = rows.map((row) => {
-    return getSelectedImportBaseRecord(input, row)
+  const stagingRecords = rows.map((row) => {
+    return getSelectedImportStagingRecord(input, dirtyWatermark, row)
   })
 
   await writeReviewServingProjectorComponent(
@@ -819,7 +935,7 @@ export const projectReviewServingSelectedImportDirty = async (
       component: 'selectedImport',
       postRecordStatements: getMirrorSelectedImportDirtyCompatibilityStatements(input, rows),
       projectionManifests: shouldAcknowledgeClaims ? [getSelectedImportDirtyManifest(input)] : [],
-      records: baseRecords,
+      records: stagingRecords,
       statements: getApplySelectedImportServingStatements({
         baseGeneration: input.baseGeneration,
         patchWatermark: dirtyWatermark,
