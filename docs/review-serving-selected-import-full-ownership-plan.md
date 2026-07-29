@@ -58,6 +58,9 @@ Implemented follow-up slices:
 - Cursor/batch selected-import projection now writes deterministic staging
   records and publishes/updates the current mart from staging before refreshing
   the compatibility mirror.
+- Dirty selected-import projection now writes deterministic dirty staging rows,
+  publishes/updates only the dirty article IDs into the current mart, marks
+  staging rows as published, and then refreshes the compatibility mirror.
 
 Build a selected-import staging model where rebuild chunks append deterministic
 candidate/range rows and a bounded compaction step selects the current winner per
