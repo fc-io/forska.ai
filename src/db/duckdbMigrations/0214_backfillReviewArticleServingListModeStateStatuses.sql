@@ -63,6 +63,7 @@ FROM (
     article_status.review_config_hash,
     article_status.snapshot_id,
     article_status.article_id,
+    article_status.has_judgment_detail,
     CASE
       WHEN COALESCE(enabled_prompt_count.prompt_count, 0) = 0 THEN NULL
       WHEN enabled_prompt_count.prompt_count = article_status.llm_answered_prompt_count THEN 'answered'

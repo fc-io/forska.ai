@@ -1,6 +1,7 @@
 import {readFileSync} from 'node:fs'
 import {join} from 'node:path'
 
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {
@@ -43,6 +44,45 @@ const createSelectedImportProjectorDatabase = (input?: {
   }
 
   return {database, statements}
+}
+
+const createDuckdbSelectedImportProjectorDatabase = async (): Promise<{
+  close: () => void
+  database: ReviewServingSelectedImportProjectorDatabase
+}> => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingSelectedImportProjectorDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      await connection.run('BEGIN')
+
+      try {
+        const result = await operation(database)
+        await connection.run('COMMIT')
+
+        return result
+      } catch (error) {
+        await connection.run('ROLLBACK')
+        throw error
+      }
+    },
+  }
+
+  return {
+    close: () => {
+      connection.closeSync()
+      duckdbInstance.closeSync()
+    },
+    database,
+  }
 }
 
 const selectedImportRow = (input: {articleId: string; rankKeySort: string; rankNumericSort: number}) => {
@@ -260,7 +300,7 @@ test('selected-import article range rebuild writes selected rows directly in SQL
     return statement.includes('INSERT INTO app.review_selected_article_import_v4')
   })
   const sourceQueries = statements.filter((statement) => {
-    return statement.includes('WITH selected_import_candidates AS') && !statement.includes('INSERT INTO')
+    return statement.includes('WITH selected_import_candidate_source AS') && !statement.includes('INSERT INTO')
   })
 
   expect(result.insertedRowCount).toBe(7)
@@ -270,7 +310,8 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(deleteStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(deleteStatement).toContain("article_id >= 'article-1'")
   expect(deleteStatement).toContain("article_id <= 'article-9'")
-  expect(insertStatement).toContain('WITH selected_import_candidates AS')
+  expect(insertStatement).toContain('WITH selected_import_candidate_source AS')
+  expect(insertStatement).toContain('selected_import_candidates AS')
   expect(insertStatement).toContain('ROW_NUMBER() OVER')
   expect(insertStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
   expectSelectedImportBaseInsertOmitsDisplayCopyColumns(insertStatement ?? '')
@@ -280,9 +321,11 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(insertStatement).not.toContain('article_title = excluded.article_title')
   expect(insertStatement).not.toContain('journal_title = excluded.journal_title')
   expect(insertStatement).not.toContain('external_id = excluded.external_id')
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
-  )
+  expect(insertStatement).toContain('selected_import_duplicate_assertion AS')
+  expect(insertStatement).toContain("error('selected-import range insert produced duplicate article keys')")
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).toContain('FROM app.review_selected_article_import_v4 existing')
+  expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
   expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')
@@ -312,9 +355,9 @@ test('selected-import article range no-replace mode keeps existing rows', async 
   })
 
   expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
-  )
+  expect(insertStatement).toContain('selected_import_duplicate_assertion AS')
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
   expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')
@@ -364,14 +407,117 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
   expect(insertStatements).toHaveLength(1)
   expect(insertStatement).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(insertStatement).toContain("('article-1', 'article-9'), ('article-10', 'article-19')")
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
-  )
+  expect(insertStatement).toContain('selected_import_duplicate_assertion AS')
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).not.toContain('ON CONFLICT')
   expect(joined).toContain('\'{"importRunArticle":9,"projectScope":11,"reviewChange":13}\'::JSON')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
   expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')
   expect(insertStatement).not.toContain('selected_import_updated_at = excluded.selected_import_updated_at')
+})
+
+test('selected-import article range insert fails duplicate source publication keys in DuckDB', async () => {
+  const {close, database} = await createDuckdbSelectedImportProjectorDatabase()
+
+  try {
+    await database.run('CREATE SCHEMA app')
+    await database.run('CREATE SCHEMA mart')
+    await database.run(`
+      CREATE TABLE mart.project_scope_article (
+        project_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        in_curated_scope BOOLEAN NOT NULL,
+        in_route_scope BOOLEAN NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.project_import_route (
+        project_id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.review_import_article_hot_field (
+        import_route_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        publication_year INTEGER,
+        article_title VARCHAR,
+        journal_title VARCHAR,
+        external_id VARCHAR,
+        tombstone BOOLEAN NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.article_import_route (
+        id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL
+      )
+    `)
+    await database.run(`
+      CREATE TABLE app.review_selected_article_import_v4 (
+        project_id VARCHAR NOT NULL,
+        project_scope_identity VARCHAR NOT NULL,
+        selected_import_snapshot_id VARCHAR NOT NULL,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL,
+        source_record_key VARCHAR NOT NULL,
+        selected_rank_key VARCHAR,
+        selected_rank_numeric DOUBLE,
+        tombstone BOOLEAN NOT NULL,
+        selected_import_updated_at TIMESTAMP NOT NULL
+      )
+    `)
+    await database.run("INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1', TRUE, FALSE)")
+    await database.run("INSERT INTO app.project_import_route VALUES ('project-1', 'import-route-1')")
+    await database.run(`
+      INSERT INTO app.review_import_article_hot_field
+      VALUES ('import-route-1', 'article-1', 'source-1', 'rank-1', 1, 2026, 'Title', 'Journal', 'external-1', FALSE)
+    `)
+
+    let caughtError: unknown
+    try {
+      await projectReviewServingSelectedImportArticleRanges(
+        {
+          ranges: [
+            {
+              chunkEndArticleId: 'article-1',
+              chunkStartArticleId: 'article-1',
+              projectId: 'project-1',
+              projectScopeIdentity: 'projectScope:identity-1',
+              replaceExistingRows: false,
+              selectedImportSnapshotId: 'selected-import-snapshot-1',
+              sourceDeltaHighWater: 9,
+              writeProjectionState: false,
+            },
+            {
+              chunkEndArticleId: 'article-1',
+              chunkStartArticleId: 'article-1',
+              projectId: 'project-1',
+              projectScopeIdentity: 'projectScope:identity-1',
+              replaceExistingRows: false,
+              selectedImportSnapshotId: 'selected-import-snapshot-1',
+              sourceDeltaHighWater: 9,
+              writeProjectionState: false,
+            },
+          ],
+        },
+        database,
+      )
+    } catch (error) {
+      caughtError = error
+    }
+
+    expect(caughtError).toBeInstanceOf(Error)
+    expect(String(caughtError)).toContain('selected-import range insert produced duplicate article keys')
+  } finally {
+    close()
+  }
 })
 
 test('selected-import article range rebuild can refresh final serving rows from hot fields', async () => {

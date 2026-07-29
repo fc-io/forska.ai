@@ -61,6 +61,110 @@ test('DuckDB migrations drop the posting stats index that duplicates the repaire
   expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_lookup;')
 })
 
+test('DuckDB migration clears only requestless rebuild chunk snapshot targets', async () => {
+  const duckdbPath = `/tmp/forska-requestless-rebuild-chunk-snapshot-targets-${Date.now()}.duckdb`
+  const targetMigrationFile = '0216_nullRequestlessRebuildChunkSnapshotTargets.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_rebuild_chunk_manifest (
+            chunk_id VARCHAR PRIMARY KEY,
+            request_id VARCHAR,
+            snapshot_id VARCHAR,
+            updated_at TIMESTAMP
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_rebuild_chunk_manifest
+          VALUES
+            ('requestless-with-snapshot', NULL, 'snapshot-1', TIMESTAMP '2026-07-29 10:00:00'),
+            ('requestless-without-snapshot', NULL, NULL, TIMESTAMP '2026-07-29 10:00:00'),
+            ('requested-with-snapshot', 'request-1', 'snapshot-2', TIMESTAMP '2026-07-29 10:00:00')
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            chunk_id AS chunkId,
+            request_id AS requestId,
+            snapshot_id AS snapshotId,
+            updated_at > TIMESTAMP '2026-07-29 10:00:00' AS updated
+          FROM app.review_rebuild_chunk_manifest
+          ORDER BY chunk_id
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0216_nullRequestlessRebuildChunkSnapshotTargets.sql'"
+        )
+
+        console.log(JSON.stringify({migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39997',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39998',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify requestless chunk target migration',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      migrationRows: Array<{name: string}>
+      rows: Array<{chunkId: string; requestId: string | null; snapshotId: string | null; updated: boolean}>
+    }
+
+    expect(parsed.rows).toEqual([
+      {chunkId: 'requested-with-snapshot', requestId: 'request-1', snapshotId: 'snapshot-2', updated: false},
+      {chunkId: 'requestless-with-snapshot', requestId: null, snapshotId: null, updated: true},
+      {chunkId: 'requestless-without-snapshot', requestId: null, snapshotId: null, updated: false},
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
 test('DuckDB migrations keep projector watermark unindexed after primary-key repair', () => {
   const foundationSql = readFileSync(resolve(migrationsFolder, '0097_reviewServingV4Foundation.sql'), 'utf8')
   const repairSql = readFileSync(
@@ -280,7 +384,9 @@ test('DuckDB migration creates dirty source watermark aggregate with dirty-work 
   expect(migrationSql).toContain('FROM app.review_serving_dirty_work')
   expect(migrationSql).toContain('WHERE project_id IS NOT NULL')
   expect(migrationSql).toContain('GROUP BY project_id, source_partition')
-  expect(migrationSql).toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
+  expect(migrationSql).toContain('UPDATE app.review_serving_project_dirty_source_watermark existing')
+  expect(migrationSql).toContain('WHERE NOT EXISTS')
+  expect(migrationSql).not.toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
   expect(migrationSql).toContain('source_high_water_mark = GREATEST')
 })
 
@@ -295,6 +401,9 @@ test('DuckDB migration refreshes dirty-source watermarks and leaves dirty-work p
   expect(migrationSql).toContain('FROM app.review_serving_dirty_work')
   expect(migrationSql).toContain('MAX(latest_source_high_water_mark) AS source_high_water_mark')
   expect(migrationSql).toContain('source_high_water_mark = GREATEST')
+  expect(migrationSql).toContain('UPDATE app.review_serving_project_dirty_source_watermark existing')
+  expect(migrationSql).toContain('WHERE NOT EXISTS')
+  expect(migrationSql).not.toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
   expect(migrationSql).not.toContain('DELETE FROM app.review_serving_dirty_work')
   expect(migrationSql).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
   expect(migrationSql).not.toContain("status IN ('pending'")
@@ -6368,6 +6477,154 @@ test('DuckDB migration preserves legacy filter state when backfilling list-mode 
     expect(parsed.tableRows).toEqual([])
     expect(parsed.indexRows).toEqual([])
     expect(parsed.lookupRows).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration backfills list-mode statuses without derived-column binder failure', async () => {
+  const duckdbPath = `/tmp/forska-review-list-mode-status-backfill-${Date.now()}.duckdb`
+  const targetMigrationFile = '0214_backfillReviewArticleServingListModeStateStatuses.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run("CREATE TABLE app.project (id VARCHAR PRIMARY KEY, human_judgment_mode VARCHAR)")
+        await database.run("INSERT INTO app.project VALUES ('project-1', 'prompt')")
+        await database.run("CREATE TABLE app.prompt (id VARCHAR PRIMARY KEY, archived BOOLEAN)")
+        await database.run("CREATE TABLE app.project_prompt (project_id VARCHAR NOT NULL, prompt_id VARCHAR NOT NULL, enabled BOOLEAN NOT NULL, archived BOOLEAN NOT NULL)")
+        await database.run("INSERT INTO app.prompt VALUES ('prompt-1', FALSE), ('prompt-2', FALSE)")
+        await database.run("INSERT INTO app.project_prompt VALUES ('project-1', 'prompt-1', TRUE, FALSE), ('project-1', 'prompt-2', TRUE, FALSE)")
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            has_llm_list_mode BOOLEAN NOT NULL DEFAULT FALSE,
+            has_human_list_mode BOOLEAN NOT NULL DEFAULT FALSE,
+            has_both_list_mode BOOLEAN NOT NULL DEFAULT FALSE,
+            has_unassessed_list_mode BOOLEAN NOT NULL DEFAULT FALSE,
+            llm_patch_watermark BIGINT,
+            human_patch_watermark BIGINT,
+            both_patch_watermark BIGINT,
+            unassessed_patch_watermark BIGINT,
+            duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
+            llm_status VARCHAR,
+            human_status VARCHAR,
+            llm_has_judgment BOOLEAN NOT NULL DEFAULT FALSE
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL,
+            is_answered BOOLEAN,
+            placeholder_kind VARCHAR
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_list_mode_state_v4
+          VALUES
+            ('project-1', 'review-config-1', 'snapshot-1', 'article-1', TRUE, TRUE, FALSE, FALSE, 8, 9, NULL, NULL, FALSE, FALSE, 'answered', 'answered', TRUE),
+            ('project-1', 'review-config-1', 'snapshot-1', 'article-2', TRUE, TRUE, FALSE, FALSE, 8, 9, NULL, NULL, FALSE, FALSE, 'answered', 'answered', FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4
+          VALUES
+            ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'article-1', 'prompt-1', 'llm', TRUE, 'placeholder'),
+            ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'article-2', 'prompt-1', 'llm', TRUE, NULL),
+            ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'article-2', 'prompt-2', 'llm', FALSE, NULL),
+            ('project-1', 'review-config-1', 'snapshot-1', 'human', 'article-2', 'prompt-1', 'human', TRUE, NULL)
+        \`)
+
+        await migrateDuckdb()
+
+        const stateRows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            llm_status AS llmStatus,
+            human_status AS humanStatus,
+            llm_has_judgment AS llmHasJudgment
+          FROM mart.review_article_serving_list_mode_state_v4
+          ORDER BY article_id
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0214_backfillReviewArticleServingListModeStateStatuses.sql'"
+        )
+
+        console.log(JSON.stringify({migrationRows, stateRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify list-mode status backfill migration',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      migrationRows: Array<{name: string}>
+      stateRows: Array<{
+        articleId: string
+        humanStatus: string | null
+        llmHasJudgment: boolean
+        llmStatus: string | null
+      }>
+    }
+
+    expect(parsed.stateRows).toEqual([
+      {articleId: 'article-1', humanStatus: 'unanswered', llmHasJudgment: false, llmStatus: 'unanswered'},
+      {articleId: 'article-2', humanStatus: 'unanswered', llmHasJudgment: true, llmStatus: 'unanswered'},
+    ])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)

@@ -183,8 +183,12 @@ export const allocateReviewServingSourceHighWaterMark = async (
 ) => {
   await tx.run(`
     INSERT INTO app.review_delta_reconciliation_cursor (source_partition, source_high_water_mark)
-    VALUES (${getSqlLiteral(sourcePartition)}, 0)
-    ON CONFLICT(source_partition) DO NOTHING
+    SELECT ${getSqlLiteral(sourcePartition)}, 0
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_delta_reconciliation_cursor
+      WHERE source_partition = ${getSqlLiteral(sourcePartition)}
+    )
   `)
   await tx.run(`
     UPDATE app.review_delta_reconciliation_cursor

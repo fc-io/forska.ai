@@ -871,7 +871,10 @@ test('completion advances dirty source watermarks by project and source partitio
 
   await completeReviewServingDirtyWorkClaims(claims, database)
 
-  const aggregateUpsert = statements.find((statement) => {
+  const aggregateUpdate = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_serving_project_dirty_source_watermark')
+  })
+  const aggregateInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_serving_project_dirty_source_watermark')
   })
 
@@ -881,10 +884,11 @@ test('completion advances dirty source watermarks by project and source partitio
     sourceHighWaterMark: 9,
     sourcePartition: 'article:display',
   })
-  expect(aggregateUpsert).toContain('GROUP BY project_id, source_partition')
-  expect(aggregateUpsert).toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
-  expect(aggregateUpsert).toContain('source_high_water_mark = GREATEST')
-  expect(aggregateUpsert).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
+  expect(aggregateUpdate).toContain('GROUP BY project_id, source_partition')
+  expect(aggregateUpdate).toContain('source_high_water_mark = GREATEST')
+  expect(aggregateInsert).toContain('WHERE NOT EXISTS')
+  expect(aggregateInsert).not.toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
+  expect(aggregateInsert).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
 })
 
 test('component acknowledgements skip already completed dirty keys', async () => {
