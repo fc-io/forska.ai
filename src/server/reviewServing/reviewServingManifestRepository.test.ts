@@ -72,7 +72,10 @@ const decodeSqlValue = (value: string | null) => {
 }
 
 const getSqlValueList = (statement: string) => {
-  const valueList = statement.match(/VALUES\s*\(([\s\S]*?)\)\s*$/u)?.[1] ?? ''
+  const valueList =
+    statement.match(/VALUES\s*\(([\s\S]*?)\)\s*$/u)?.[1]
+    ?? statement.match(/\bSELECT\s+([\s\S]*?)\s+WHERE\s+NOT\s+EXISTS\s*\(/u)?.[1]
+    ?? ''
   const values: string[] = []
   let current = ''
   let inString = false
@@ -134,6 +137,14 @@ const getWhereLiteral = (statement: string, columnName: string) => {
   )
 }
 
+const getIsNotDistinctLiteral = (statement: string, columnName: string) => {
+  return decodeSqlValue(
+    statement.match(
+      new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s+IS\\s+NOT\\s+DISTINCT\\s+FROM\\s+(NULL|'(?:''|[^'])*')`, 'u'),
+    )?.[1] ?? null,
+  )
+}
+
 const getNotEqualLiteral = (statement: string, columnName: string) => {
   return (
     statement
@@ -145,6 +156,7 @@ const getNotEqualLiteral = (statement: string, columnName: string) => {
 const createFakeManifestDatabase = (
   initialSnapshots: FakeSnapshotRow[] = [],
   options: {selectedImportSnapshotStatus?: string} = {},
+  initialProjections: FakeProjectionRow[] = [],
 ) => {
   const projections = new Map<string, FakeProjectionRow>()
   const snapshots = new Map<string, FakeSnapshotRow>()
@@ -155,10 +167,22 @@ const createFakeManifestDatabase = (
   const getClock = () => {
     return new Date(2026, 5, 16, 12, statements.length).toISOString()
   }
+  const getProjectionByNaturalKey = (
+    projectId: string | null,
+    projectionComponent: string | null,
+    projectionIdentity: string | null,
+  ) => {
+    return [...projections.values()].find((projection) => {
+      return (
+        projection.projectId === projectId
+        && projection.projectionComponent === projectionComponent
+        && projection.projectionIdentity === projectionIdentity
+      )
+    })
+  }
   const upsertProjection = (statement: string) => {
     const values = getSqlValueList(statement)
     const manifestId = decodeSqlValue(values[0] ?? null) ?? ''
-    const existing = projections.get(manifestId)
     const getNullableNumberValue = (value: string | undefined) => {
       return value === undefined || value === 'NULL' ? null : Number(value)
     }
@@ -179,6 +203,13 @@ const createFakeManifestDatabase = (
       promptConfigHash: decodeSqlValue(values[13] ?? null),
       reviewConfigHash: decodeSqlValue(values[12] ?? null),
       status: (decodeSqlValue(values[14] ?? null) ?? 'candidate') as FakeProjectionRow['status'],
+    }
+    const existing =
+      projections.get(manifestId)
+      ?? getProjectionByNaturalKey(row.projectId, row.projectionComponent, row.projectionIdentity)
+
+    if (statement.includes('WHERE NOT EXISTS') && existing !== undefined) {
+      return
     }
 
     projections.set(manifestId, {...existing, ...row})
@@ -297,7 +328,13 @@ const createFakeManifestDatabase = (
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
       const manifestId = getWhereLiteral(statement, 'manifest_id') ?? ''
-      const projection = projections.get(manifestId)
+      const projection =
+        projections.get(manifestId)
+        ?? getProjectionByNaturalKey(
+          getIsNotDistinctLiteral(statement, 'project_id'),
+          getWhereLiteral(statement, 'projection_component'),
+          getWhereLiteral(statement, 'projection_identity'),
+        )
       return (
         projection === undefined
           ? []
@@ -401,6 +438,9 @@ const createFakeManifestDatabase = (
   initialSnapshots.forEach((snapshot) => {
     snapshots.set(getSnapshotKey(snapshot.projectId, snapshot.snapshotId), snapshot)
   })
+  initialProjections.forEach((projection) => {
+    projections.set(projection.manifestId, projection)
+  })
 
   return {database, projections, snapshots, statements}
 }
@@ -460,6 +500,55 @@ test('projection identity manifest upsert is idempotent for project component id
   expect(manifestWrites[0]).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(manifestWrites[1]).toContain('UPDATE app.review_projection_identity_manifest')
   expect(manifestWrites.join('\n')).not.toContain('ON CONFLICT(manifest_id)')
+})
+
+test('projection identity manifest upsert updates legacy natural-key row without duplicate insert', async () => {
+  const input = {
+    baseGeneration: 2,
+    definitionVersion: 'selected-import-v1',
+    inputDigest: 'selected-import-snapshot-1',
+    inputWatermark: 42,
+    inputWatermarks: {reviewChange: 42},
+    patchRangeEnd: null,
+    patchRangeStart: null,
+    patchWatermark: 7,
+    projectId: 'project-1',
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:identity-1',
+    promptConfigHash: null,
+    reviewConfigHash: 'review-config-1',
+    status: 'active',
+  } as const
+  const legacyProjection: FakeProjectionRow = {
+    ...input,
+    baseGeneration: 1,
+    inputDigest: 'selected-import-snapshot-old',
+    inputWatermark: 12,
+    inputWatermarks: {reviewChange: 12},
+    manifestId: 'legacy-selected-import-manifest',
+    patchWatermark: 3,
+    status: 'candidate',
+  }
+  const {database, projections, statements} = createFakeManifestDatabase([], {}, [legacyProjection])
+  const result = await upsertReviewServingProjectionIdentityManifest(input, database)
+  const manifest = await getReviewServingProjectionIdentityManifest(input, database)
+
+  expect(result.manifestId).toBe('legacy-selected-import-manifest')
+  expect(projections.size).toBe(1)
+  expect(manifest?.manifestId).toBe('legacy-selected-import-manifest')
+  expect(manifest?.inputDigest).toBe('selected-import-snapshot-1')
+  expect(manifest?.patchWatermark).toBe(7)
+  expect(manifest?.status).toBe('active')
+
+  const manifestWrites = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_projection_identity_manifest')
+      || statement.includes('UPDATE app.review_projection_identity_manifest')
+    )
+  })
+  expect(manifestWrites).toHaveLength(1)
+  expect(manifestWrites[0]).toContain('UPDATE app.review_projection_identity_manifest')
+  expect(manifestWrites[0]).toContain("WHERE manifest_id = 'legacy-selected-import-manifest'")
 })
 
 test('projection identity manifest skips unchanged writes', async () => {

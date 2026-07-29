@@ -136,6 +136,19 @@ const getProjectionManifestId = (input: ReviewServingProjectionComponentIdentity
   return getReviewServingProjectionComponentIdentityKey(input)
 }
 
+const getProjectionManifestLookupPredicate = (identity: ReviewServingProjectionComponentIdentity) => {
+  return `
+    (
+      manifest_id = ${getSqlLiteral(getProjectionManifestId(identity))}
+      OR (
+        project_id IS NOT DISTINCT FROM ${getSqlLiteral(identity.projectId)}
+        AND projection_component = ${getSqlLiteral(identity.projectionComponent)}
+        AND projection_identity = ${getSqlLiteral(identity.projectionIdentity)}
+      )
+    )
+  `
+}
+
 const getProjectionManifestFromRow = (row: ProjectionIdentityManifestRow): ReviewServingProjectionIdentityManifest => {
   return {
     baseGeneration: Number(row.baseGeneration),
@@ -232,7 +245,7 @@ export const upsertReviewServingProjectionIdentityManifest = async (
   const current = await getReviewServingProjectionIdentityManifest(input, database)
 
   if (current !== null && isProjectionIdentityManifestUnchanged(current, input)) {
-    return {manifestId}
+    return {manifestId: current.manifestId}
   }
 
   if (current !== null) {
@@ -252,10 +265,10 @@ export const upsertReviewServingProjectionIdentityManifest = async (
         status = ${getSqlLiteral(input.status)},
         invalidation_reason = ${getSqlLiteral(input.invalidationReason ?? null)},
         updated_at = current_timestamp
-      WHERE manifest_id = ${getSqlLiteral(manifestId)}
+      WHERE manifest_id = ${getSqlLiteral(current.manifestId)}
     `)
 
-    return {manifestId}
+    return {manifestId: current.manifestId}
   }
 
   await database.run(`
@@ -277,7 +290,8 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       status,
       invalidation_reason,
       updated_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(manifestId)},
       ${getSqlLiteral(input.projectId)},
       ${getSqlLiteral(input.projectionComponent)},
@@ -295,6 +309,10 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       ${getSqlLiteral(input.status)},
       ${getSqlLiteral(input.invalidationReason ?? null)},
       current_timestamp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_projection_identity_manifest
+      WHERE ${getProjectionManifestLookupPredicate(input)}
     )
   `)
 
@@ -324,7 +342,10 @@ export const getReviewServingProjectionIdentityManifest = async (
       status,
       invalidation_reason AS invalidationReason
     FROM app.review_projection_identity_manifest
-    WHERE manifest_id = ${getSqlLiteral(getProjectionManifestId(identity))}
+    WHERE ${getProjectionManifestLookupPredicate(identity)}
+    ORDER BY
+      CASE WHEN manifest_id = ${getSqlLiteral(getProjectionManifestId(identity))} THEN 0 ELSE 1 END,
+      updated_at DESC
     LIMIT 1
   `)
 
