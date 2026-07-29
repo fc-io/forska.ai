@@ -246,7 +246,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
             records: [
               {
                 keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
-                table: 'app.review_selected_article_import_v4',
+                table: 'mart.review_selected_article_import_current_v4',
                 values: {
                   article_id: 'article-1',
                   project_id: 'project-1',
@@ -341,7 +341,6 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     'posting',
     'summary',
     'display',
-    'payload',
     'posting',
     'summary',
     'search',
@@ -349,7 +348,6 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     'posting',
     'search',
     'summary',
-    'payload',
   ])
   expect(
     result.runs.map((run) => {
@@ -374,7 +372,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).not.toContain('mart.review_article_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
-  expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
+  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).not.toContain('_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
