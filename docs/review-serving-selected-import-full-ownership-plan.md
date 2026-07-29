@@ -59,6 +59,12 @@ Implemented follow-up slices:
 - Dirty selected-import projection now writes deterministic dirty staging rows,
   publishes/updates only the dirty article IDs into the current mart, marks
   staging rows as published.
+- Compatibility view conversion removed the remaining physical
+  `app.review_selected_article_import_v4` runtime write/delete paths.
+- Remaining startup, retention, and rebuild-reset maintenance mutations against
+  `mart.review_selected_article_import_current_v4` are centralized behind the
+  selected-import maintenance helper instead of flowing through generic writer
+  escape hatches.
 
 Build a selected-import staging model where rebuild chunks append deterministic
 candidate/range rows and a bounded compaction step selects the current winner per

@@ -74,7 +74,6 @@ import {
   type WakeReviewServingProjectorServiceResult,
 } from '../reviewServing/reviewServingProjectorService.ts'
 import {
-  deleteReviewServingProjectorRows,
   promoteReviewServingProjectorSnapshot,
   writeReviewServingProjectorComponent,
 } from '../reviewServing/reviewServingProjectorWriter.ts'
@@ -92,6 +91,7 @@ import {
   type ReviewServingRetentionServiceDatabase,
 } from '../reviewServing/reviewServingRetentionService.ts'
 import {projectReviewServingSelectedImportDirty} from '../reviewServing/reviewServingSelectedImportDirtyProjector.ts'
+import {deleteReviewServingSelectedImportSnapshotRows} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
 import {
   projectReviewServingSelectedImportArticleRange,
   type ProjectReviewServingSelectedImportArticleRangeInput,
@@ -2885,28 +2885,7 @@ const resetSelectedImportSnapshotForRebuild = async (
   input: {projectId: string; projectScopeIdentity: string; selectedImportSnapshotId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  await deleteReviewServingProjectorRows(
-    {
-      predicates: {
-        project_id: input.projectId,
-        project_scope_identity: input.projectScopeIdentity,
-        selected_import_snapshot_id: input.selectedImportSnapshotId,
-      },
-      table: 'mart.review_selected_article_import_current_v4',
-    },
-    database,
-  )
-  await deleteReviewServingProjectorRows(
-    {
-      predicates: {
-        project_id: input.projectId,
-        project_scope_identity: input.projectScopeIdentity,
-        selected_import_snapshot_id: input.selectedImportSnapshotId,
-      },
-      table: 'mart.review_selected_article_import_staging_v4',
-    },
-    database,
-  )
+  await deleteReviewServingSelectedImportSnapshotRows(input, database)
   await database.run(`
     DELETE FROM app.review_selected_import_snapshot
     WHERE project_id = ${getSqlLiteral(input.projectId)}

@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getDeleteRetiredSelectedImportPublishedRowsStatement} from './reviewServingSelectedImportMaintenance.ts'
 
 export type ReviewServingRetentionServiceTransaction = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -343,35 +344,16 @@ const deleteSelectedImportPublishedCleanupBatch = async (
   input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
   database: ReviewServingRetentionServiceTransaction,
 ) => {
-  await database.run(`
-    DELETE FROM ${input.spec.table}
-    WHERE rowid IN (
-        SELECT candidate.rowid
-        FROM ${input.spec.table} candidate
-        WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM app.review_serving_snapshot_manifest active_manifest
-            WHERE active_manifest.project_id = candidate.project_id
-              AND active_manifest.snapshot_status = 'active'
-              AND (
-                active_manifest.snapshot_id = candidate.${input.spec.protectedPredicate}
-                OR active_manifest.last_known_good_snapshot_id = candidate.${input.spec.protectedPredicate}
-                OR active_manifest.selected_import_snapshot_id = candidate.${input.spec.protectedPredicate}
-              )
-          )
-          AND NOT (${getSelectedImportProtectedPredicate(input.spec, input.now)})
-          AND NOT EXISTS (
-            SELECT 1
-            FROM app.review_serving_snapshot_pin pin
-            WHERE pin.project_id = candidate.project_id
-              AND pin.snapshot_id = candidate.${input.spec.protectedPredicate}
-              AND ${getActivePinPredicate(input.now)}
-          )
-        ORDER BY ${getCleanupOrderBy(input.spec)}
-        LIMIT ${getSqlLiteral(input.batchSize)}
-      )
-  `)
+  await database.run(
+    getDeleteRetiredSelectedImportPublishedRowsStatement({
+      activePinPredicateSql: getActiveSnapshotPinGuardPredicate(input.spec.protectedPredicate, input.now),
+      activeSnapshotManifestPredicateSql: getActiveSnapshotManifestGuardPredicate(input.spec.protectedPredicate),
+      batchSize: input.batchSize,
+      orderBySql: getCleanupOrderBy(input.spec),
+      projectId: input.projectId,
+      selectedImportProtectedPredicateSql: getSelectedImportProtectedPredicate(input.spec, input.now),
+    }),
+  )
 }
 
 const deleteCleanupBatch = async (
