@@ -21,9 +21,8 @@ const removeFileIfExists = (filePath: string) => {
 }
 
 const runDuckdbSql = (duckdbPath: string, sql: string) => {
-  const result = Bun.spawnSync(['duckdb', duckdbPath], {
-    stdin: new TextEncoder().encode(sql),
-  })
+  // eslint-disable-next-line no-undef
+  const result = Bun.spawnSync(['duckdb', duckdbPath], {stdin: new TextEncoder().encode(sql)})
 
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB command failed')
@@ -647,6 +646,50 @@ test('selected import snapshot cursor writes unchanged rows through update and i
   expect(writeStatements[1]).toContain('INSERT INTO app.review_selected_import_snapshot')
   expect(writeStatements[1]).toContain('WHERE NOT EXISTS')
   expect(writeStatements.join('\n')).not.toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
+})
+
+test('projector writer rejects raw selected-import current mutations outside selected-import owner', async () => {
+  const {database, getTransactionCount} = createWriterDatabase()
+
+  try {
+    await writeReviewServingProjectorComponent(
+      {
+        component: 'summary',
+        statements: [
+          `
+            DELETE FROM mart.review_selected_article_import_current_v4
+            WHERE project_id = 'project-1'
+          `,
+        ],
+      },
+      database,
+    )
+    throw new Error('expected selected-import current mutation guard to reject')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('mutations must go through the selectedImport projector ownership path')
+  }
+  expect(getTransactionCount()).toBe(0)
+})
+
+test('projector writer allows selected-import owner to publish current rows with raw statements', async () => {
+  const {database, getTransactionCount, statements} = createWriterDatabase()
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'selectedImport',
+      postRecordStatements: [
+        `
+          INSERT INTO mart.review_selected_article_import_current_v4 (project_id)
+          SELECT 'project-1'
+        `,
+      ],
+    },
+    database,
+  )
+
+  expect(getTransactionCount()).toBe(1)
+  expect(statements.join('\n')).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
 })
 
 test('projector writer batches same-shape record replacements into update and insert-missing statements', async () => {

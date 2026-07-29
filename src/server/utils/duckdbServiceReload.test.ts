@@ -27,6 +27,7 @@ type StartupRepairSpecJson = {
   repairStrategy?: string
   schemaName: string
   schemaRequirements?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
+  skipGenericDeleteInsertProbe?: boolean
   tableName: string
 }
 
@@ -3690,6 +3691,7 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     expect(selectedImportCurrentProbe?.mutationProbeSql).not.toContain(
       'SET selected_import_updated_at = current_timestamp',
     )
+    expect(selectedImportCurrentProbe?.skipGenericDeleteInsertProbe).toBe(true)
     expect(selectedImportCurrentProbe?.postRepairSql).toBeUndefined()
     expect(selectedImportCurrentProbe?.postRepairSchemaRequirements).toBeUndefined()
     expect(typeof selectedImportCurrentProbe?.mutationProbeSql).toBe('string')

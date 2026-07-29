@@ -15,6 +15,7 @@ import {
   type ReviewServingProjectorWriterDiagnostics,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
+import {selectedImportPublishedTable, selectedImportStagingTable} from './reviewServingSelectedImportMaintenance.ts'
 
 export type ReviewServingSelectedImportProjectorDatabase = ReviewServingProjectorWriterDatabase
 
@@ -69,8 +70,6 @@ export type ProjectReviewServingSelectedImportArticleRangeInput = {
 }
 
 const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'
-const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
-const selectedImportStagingTable = 'mart.review_selected_article_import_staging_v4'
 const nullRankKeySort = '~'
 const nullRankNumericSort = 1e308
 

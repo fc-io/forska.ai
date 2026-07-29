@@ -750,6 +750,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     recreateRepairPrimaryKeyIndex: false,
     recreateSecondaryIndexes: false,
     schemaName: 'mart',
+    skipGenericDeleteInsertProbe: true,
     tableName: 'review_selected_article_import_current_v4',
   },
   {
