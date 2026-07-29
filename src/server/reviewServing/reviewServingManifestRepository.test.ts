@@ -1,3 +1,4 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {
@@ -549,6 +550,191 @@ test('projection identity manifest upsert updates legacy natural-key row without
   expect(manifestWrites).toHaveLength(1)
   expect(manifestWrites[0]).toContain('UPDATE app.review_projection_identity_manifest')
   expect(manifestWrites[0]).toContain("WHERE manifest_id = 'legacy-selected-import-manifest'")
+})
+
+test('projection identity manifest upsert reconciles a guarded insert race', async () => {
+  const input = {
+    baseGeneration: 2,
+    definitionVersion: 'selected-import-v1',
+    inputDigest: 'selected-import-snapshot-2',
+    inputWatermark: 42,
+    inputWatermarks: {reviewChange: 42},
+    invalidationReason: null,
+    patchRangeEnd: null,
+    patchRangeStart: null,
+    patchWatermark: 7,
+    projectId: 'project-1',
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:identity-1',
+    promptConfigHash: null,
+    reviewConfigHash: 'review-config-1',
+    status: 'active',
+  } as const
+  const racedProjection: FakeProjectionRow = {
+    ...input,
+    baseGeneration: 1,
+    inputDigest: 'selected-import-snapshot-1',
+    inputWatermark: 12,
+    inputWatermarks: {reviewChange: 12},
+    invalidationReason: 'stale-race',
+    manifestId: 'raced-selected-import-manifest',
+    patchWatermark: 3,
+    status: 'candidate',
+  }
+  const {database, projections, statements} = createFakeManifestDatabase()
+  const raceState = {injected: false}
+  const racingDatabase: ReviewServingManifestRepositoryTransaction = {
+    queryJson: database.queryJson,
+    run: async (statement) => {
+      if (!raceState.injected && statement.includes('INSERT INTO app.review_projection_identity_manifest')) {
+        projections.set(racedProjection.manifestId, racedProjection)
+        raceState.injected = true
+      }
+
+      await database.run(statement)
+    },
+  }
+
+  const result = await upsertReviewServingProjectionIdentityManifest(input, racingDatabase)
+  const manifest = await getReviewServingProjectionIdentityManifest(input, database)
+  const manifestWrites = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_projection_identity_manifest')
+      || statement.includes('UPDATE app.review_projection_identity_manifest')
+    )
+  })
+
+  expect(result.manifestId).toBe('raced-selected-import-manifest')
+  expect(projections.size).toBe(1)
+  expect(manifest).toEqual({...input, manifestId: 'raced-selected-import-manifest'})
+  expect(manifestWrites).toHaveLength(2)
+  expect(manifestWrites[0]).toContain('WHERE NOT EXISTS')
+  expect(manifestWrites[1]).toContain("WHERE manifest_id = 'raced-selected-import-manifest'")
+})
+
+test('projection identity manifest guarded insert race is reconciled in DuckDB', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', {memory_limit: '256MiB'})
+  const connection = await duckdbInstance.connect()
+  const guardedInsertManifestIds: string[] = []
+  const raceState = {injected: false}
+  const queryJson = async <T>(statement: string) => {
+    const reader = await connection.runAndReadAll(statement)
+
+    return reader.getRowObjectsJson() as T[]
+  }
+  const database: ReviewServingManifestRepositoryTransaction = {
+    queryJson,
+    run: async (statement) => {
+      const isGuardedManifestInsert = statement.includes('INSERT INTO app.review_projection_identity_manifest')
+
+      if (isGuardedManifestInsert && !raceState.injected) {
+        await connection.run(`
+          INSERT INTO app.review_projection_identity_manifest (
+            manifest_id,
+            project_id,
+            projection_component,
+            projection_identity,
+            base_generation,
+            patch_watermark,
+            input_watermark,
+            input_watermarks_json,
+            input_digest,
+            definition_version,
+            status,
+            invalidation_reason
+          ) VALUES (
+            'raced-selected-import-manifest',
+            'project-1',
+            'selectedImport',
+            'selectedImport:identity-1',
+            1,
+            3,
+            12,
+            '{"reviewChange":12}'::JSON,
+            'selected-import-snapshot-1',
+            'selected-import-v1',
+            'candidate',
+            'stale-race'
+          )
+        `)
+        raceState.injected = true
+      }
+
+      await connection.run(statement)
+
+      if (isGuardedManifestInsert) {
+        const rows = await queryJson<{manifestId: string}>(`
+          SELECT manifest_id AS manifestId
+          FROM app.review_projection_identity_manifest
+          ORDER BY manifest_id
+        `)
+        guardedInsertManifestIds.push(
+          ...rows.map((row) => {
+            return row.manifestId
+          }),
+        )
+      }
+    },
+  }
+  const input = {
+    baseGeneration: 2,
+    definitionVersion: 'selected-import-v1',
+    inputDigest: 'selected-import-snapshot-2',
+    inputWatermark: 42,
+    inputWatermarks: {reviewChange: 42},
+    invalidationReason: null,
+    patchRangeEnd: null,
+    patchRangeStart: null,
+    patchWatermark: 7,
+    projectId: 'project-1',
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:identity-1',
+    promptConfigHash: null,
+    reviewConfigHash: 'review-config-1',
+    status: 'active',
+  } as const
+
+  try {
+    await connection.run('CREATE SCHEMA app')
+    await connection.run(`
+      CREATE TABLE app.review_projection_identity_manifest (
+        manifest_id VARCHAR NOT NULL,
+        project_id VARCHAR,
+        projection_component VARCHAR NOT NULL,
+        projection_identity VARCHAR NOT NULL,
+        base_generation BIGINT NOT NULL,
+        patch_watermark BIGINT NOT NULL,
+        patch_range_start BIGINT,
+        patch_range_end BIGINT,
+        input_watermark BIGINT NOT NULL,
+        input_watermarks_json JSON NOT NULL,
+        input_digest VARCHAR,
+        definition_version VARCHAR NOT NULL,
+        review_config_hash VARCHAR,
+        prompt_config_hash VARCHAR,
+        status VARCHAR NOT NULL,
+        invalidation_reason VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      )
+    `)
+
+    const result = await upsertReviewServingProjectionIdentityManifest(input, database)
+    const manifest = await getReviewServingProjectionIdentityManifest(input, database)
+    const manifestRows = await queryJson<{manifestId: string}>(`
+      SELECT manifest_id AS manifestId
+      FROM app.review_projection_identity_manifest
+      ORDER BY manifest_id
+    `)
+
+    expect(guardedInsertManifestIds).toEqual(['raced-selected-import-manifest'])
+    expect(result.manifestId).toBe('raced-selected-import-manifest')
+    expect(manifestRows).toEqual([{manifestId: 'raced-selected-import-manifest'}])
+    expect(manifest).toEqual({...input, manifestId: 'raced-selected-import-manifest'})
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('projection identity manifest skips unchanged writes', async () => {

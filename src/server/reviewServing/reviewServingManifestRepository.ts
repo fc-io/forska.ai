@@ -195,6 +195,52 @@ const isProjectionIdentityManifestUnchanged = (
   )
 }
 
+const updateReviewServingProjectionIdentityManifest = async (
+  manifestId: string,
+  input: ReviewServingProjectionIdentityManifestInput,
+  database: ReviewServingManifestRepositoryTransaction,
+) => {
+  await database.run(`
+    UPDATE app.review_projection_identity_manifest
+    SET
+      base_generation = ${getSqlLiteral(input.baseGeneration)},
+      patch_watermark = ${getSqlLiteral(input.patchWatermark)},
+      patch_range_start = ${getSqlLiteral(input.patchRangeStart ?? null)},
+      patch_range_end = ${getSqlLiteral(input.patchRangeEnd ?? null)},
+      input_watermark = ${getSqlLiteral(input.inputWatermark)},
+      input_watermarks_json = ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(input))},
+      input_digest = ${getSqlLiteral(input.inputDigest ?? null)},
+      definition_version = ${getSqlLiteral(input.definitionVersion)},
+      review_config_hash = ${getSqlLiteral(input.reviewConfigHash ?? null)},
+      prompt_config_hash = ${getSqlLiteral(input.promptConfigHash ?? null)},
+      status = ${getSqlLiteral(input.status)},
+      invalidation_reason = ${getSqlLiteral(input.invalidationReason ?? null)},
+      updated_at = current_timestamp
+    WHERE manifest_id = ${getSqlLiteral(manifestId)}
+  `)
+}
+
+const reconcileReviewServingProjectionIdentityManifestAfterGuardedInsert = async (
+  input: ReviewServingProjectionIdentityManifestInput,
+  database: ReviewServingManifestRepositoryTransaction,
+) => {
+  const persisted = await getReviewServingProjectionIdentityManifest(input, database)
+
+  if (persisted === null) {
+    throw new Error(`review serving projection manifest insert did not persist ${getProjectionManifestId(input)}`)
+  }
+
+  const persistedMatchesInput = isProjectionIdentityManifestUnchanged(persisted, input)
+
+  if (persistedMatchesInput) {
+    return persisted
+  }
+
+  await updateReviewServingProjectionIdentityManifest(persisted.manifestId, input, database)
+
+  return persisted
+}
+
 const getSnapshotManifestFromRow = (row: SnapshotManifestRow): ReviewServingSnapshotManifest => {
   return {
     componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStates,
@@ -249,24 +295,7 @@ export const upsertReviewServingProjectionIdentityManifest = async (
   }
 
   if (current !== null) {
-    await database.run(`
-      UPDATE app.review_projection_identity_manifest
-      SET
-        base_generation = ${getSqlLiteral(input.baseGeneration)},
-        patch_watermark = ${getSqlLiteral(input.patchWatermark)},
-        patch_range_start = ${getSqlLiteral(input.patchRangeStart ?? null)},
-        patch_range_end = ${getSqlLiteral(input.patchRangeEnd ?? null)},
-        input_watermark = ${getSqlLiteral(input.inputWatermark)},
-        input_watermarks_json = ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(input))},
-        input_digest = ${getSqlLiteral(input.inputDigest ?? null)},
-        definition_version = ${getSqlLiteral(input.definitionVersion)},
-        review_config_hash = ${getSqlLiteral(input.reviewConfigHash ?? null)},
-        prompt_config_hash = ${getSqlLiteral(input.promptConfigHash ?? null)},
-        status = ${getSqlLiteral(input.status)},
-        invalidation_reason = ${getSqlLiteral(input.invalidationReason ?? null)},
-        updated_at = current_timestamp
-      WHERE manifest_id = ${getSqlLiteral(current.manifestId)}
-    `)
+    await updateReviewServingProjectionIdentityManifest(current.manifestId, input, database)
 
     return {manifestId: current.manifestId}
   }
@@ -316,7 +345,9 @@ export const upsertReviewServingProjectionIdentityManifest = async (
     )
   `)
 
-  return {manifestId}
+  const reconciled = await reconcileReviewServingProjectionIdentityManifestAfterGuardedInsert(input, database)
+
+  return {manifestId: reconciled.manifestId}
 }
 
 export const getReviewServingProjectionIdentityManifest = async (
