@@ -995,6 +995,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         | 'projectionComponent'
         | 'projectionIdentity'
         | 'requestId'
+        | 'snapshotId'
       >
     >(`
       SELECT
@@ -1008,6 +1009,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         candidate.chunk_start_key AS chunkStartKey,
         candidate.chunk_end_key AS chunkEndKey,
         candidate.output_base_generation AS outputBaseGeneration,
+        candidate.snapshot_id AS snapshotId,
         candidate.checksum AS checksum
       FROM app.review_rebuild_chunk_manifest AS candidate
       WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
@@ -1058,6 +1060,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
           projectionComponent: row.projectionComponent,
           projectionIdentity: row.projectionIdentity,
           requestId: row.requestId ?? null,
+          snapshotId: row.snapshotId ?? null,
         }
   })
 }

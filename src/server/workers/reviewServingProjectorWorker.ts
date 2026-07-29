@@ -125,7 +125,10 @@ type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorSe
 
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
-type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
+type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {
+  checksum?: string | null
+  snapshotId: string | null
+}
 type ReviewServingProjectorWorkerMemoryUsage = {rss: number}
 
 type ClaimedReviewServingProjectorWorkerRebuildChunk = {
@@ -6833,9 +6836,10 @@ type CompatibleStatusRebuildChunkBatchInputRow = {
   projectionComponent: ReviewServingProjectionComponent
   projectionIdentity: string
   requestId: string | null
+  snapshotId: string | null
 }
 
-const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
+export const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
   database: ReviewServingChunkManifestRepositoryTransaction
   excludeChunkIds: readonly string[]
   firstChunk: ReviewServingRebuildChunkManifest
@@ -6862,7 +6866,8 @@ const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
       candidate.project_id AS projectId,
       candidate.projection_component AS projectionComponent,
       candidate.projection_identity AS projectionIdentity,
-      candidate.request_id AS requestId
+      candidate.request_id AS requestId,
+      candidate.snapshot_id AS snapshotId
     FROM app.review_rebuild_chunk_manifest candidate
     WHERE ${getReviewServingRebuildChunkClaimWhere(
       {now: input.now, projectId: input.projectId, projectionComponent: input.firstChunk.projectionComponent},
@@ -6873,6 +6878,7 @@ const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
       AND candidate.projection_identity = ${getSqlLiteral(input.firstChunk.projectionIdentity)}
       AND candidate.output_base_generation = ${getSqlLiteral(input.firstChunk.outputBaseGeneration)}
       AND candidate.input_watermark = ${getSqlLiteral(input.firstChunk.inputWatermark)}
+      AND candidate.snapshot_id IS NOT DISTINCT FROM ${getSqlLiteral(input.firstChunk.snapshotId ?? null)}
       ${excludePredicate}
     ORDER BY
       candidate.chunk_start_key ASC,
@@ -6894,6 +6900,7 @@ const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
       projectionComponent: row.projectionComponent,
       projectionIdentity: row.projectionIdentity,
       requestId: row.requestId ?? null,
+      snapshotId: row.snapshotId ?? null,
     }
   })
 }

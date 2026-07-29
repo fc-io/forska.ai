@@ -13,6 +13,7 @@ import {
   defaultReviewServingProjectorWorkerErrorBackoffMs,
   defaultReviewServingProjectorWorkerPollIntervalMs,
   defaultReviewServingProjectorWorkerProgressYieldMs,
+  getCompatibleStatusRebuildChunkBatchInputs,
   getDefaultReviewServingProjectorRunners,
   getReviewServingProjectorWorkerCompletedChunkRunCharge,
   getReviewServingProjectorWorkerWorkloadContext,
@@ -51,6 +52,7 @@ const chunkInput = {
   projectId: 'project-1',
   projectionComponent: 'display' as const,
   projectionIdentity: 'display:project-1',
+  snapshotId: null,
 }
 
 const chunkManifest = {
@@ -848,6 +850,84 @@ test('worker does not preclaim rebuild chunks targeting different snapshots in o
   expect(harness.getNextChunkInputs).toHaveLength(2)
   expect(harness.claimInputs).toHaveLength(1)
   expect(harness.runChunkInputs).toEqual([firstChunk])
+})
+
+test('worker isolates null and explicit snapshot targets through the production status batch selector', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const requestId = 'rebuild:mixed-snapshot-status'
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'llmStatus' as const,
+    projectionIdentity: 'llmStatus:project-1',
+    requestId,
+    snapshotId: null,
+  }
+  const secondChunkInput = {
+    ...firstChunkInput,
+    chunkEndKey: 'article-099',
+    chunkStartKey: 'article-051',
+    snapshotId: 'snapshot-explicit',
+  }
+  const firstChunk = {
+    ...chunkManifest,
+    ...firstChunkInput,
+    chunkId: 'chunk-null-snapshot-status',
+    requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+  const secondChunk = {
+    ...chunkManifest,
+    ...secondChunkInput,
+    chunkId: 'chunk-explicit-snapshot-status',
+    requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest candidate')) {
+      return [secondChunkInput] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return claimInput.chunkStartKey === firstChunk.chunkStartKey ? firstChunk : secondChunk
+    },
+    getCompatibleStatusChunks: async (input) => {
+      return getCompatibleStatusRebuildChunkBatchInputs(input)
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return firstChunkInput
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {maxCompletedRebuildChunksPerRun: 8, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const statusBatchSelect = statements.find((statement) => {
+    return statement.includes('FROM app.review_rebuild_chunk_manifest candidate')
+  })
+
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, status: 'completed'})
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toEqual([firstChunk])
+  expect(statusBatchSelect).toContain('candidate.snapshot_id AS snapshotId')
+  expect(statusBatchSelect).toContain('candidate.snapshot_id IS NOT DISTINCT FROM NULL')
 })
 
 test('worker excludes requestless summary chunks from component batch preclaiming', async () => {

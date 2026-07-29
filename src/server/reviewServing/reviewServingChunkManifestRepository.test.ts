@@ -817,7 +817,13 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     database,
   )
 
-  expect(next).toEqual({...baseChunkIdentity, checksum: null, chunkId: pending.chunkId, requestId: null})
+  expect(next).toEqual({
+    ...baseChunkIdentity,
+    checksum: null,
+    chunkId: pending.chunkId,
+    requestId: null,
+    snapshotId: null,
+  })
   expect(statements.join('\n')).toContain("candidate.status = 'pending'")
   expect(statements.join('\n')).toContain("candidate.status = 'failed'")
   expect(statements.join('\n')).toContain("request.status IN ('admitted', 'running')")
@@ -876,6 +882,7 @@ test('next claimable chunk discovery selects only preclaim identity fields', asy
   expect(claimSelectStatement).toContain('candidate.chunk_start_key AS chunkStartKey')
   expect(claimSelectStatement).toContain('candidate.chunk_end_key AS chunkEndKey')
   expect(claimSelectStatement).toContain('candidate.output_base_generation AS outputBaseGeneration')
+  expect(claimSelectStatement).toContain('candidate.snapshot_id AS snapshotId')
   expect(claimSelectStatement).toContain('candidate.checksum AS checksum')
   expect(claimSelectStatement).toContain('ORDER BY')
   expect(claimSelectStatement).not.toContain('candidate.diagnostics_json')
@@ -887,6 +894,19 @@ test('next claimable chunk discovery selects only preclaim identity fields', asy
   expect(claimSelectStatement).not.toContain('candidate.lease_owner')
   expect(claimSelectStatement).not.toContain('candidate.started_at')
   expect(claimSelectStatement).not.toContain('candidate.completed_at')
+})
+
+test('next claimable chunk discovery preserves an explicit snapshot target outside chunk identity', async () => {
+  const pending = {...getChunkRowFromIdentity(baseChunkIdentity, []), snapshotId: 'snapshot-target'}
+  const {database} = createFakeChunkManifestDatabase([pending])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:00:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({chunkId: pending.chunkId, snapshotId: 'snapshot-target'})
+  expect(pending.chunkId).toBe(getReviewServingRebuildChunkId(baseChunkIdentity))
 })
 
 test('next claimable chunk discovery does not favor newer pending requests over older pending work', async () => {
