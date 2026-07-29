@@ -359,10 +359,10 @@ const getContractSqlMatch = (
         && containsSql(statement, 'FROM unassessed_queue_page')
         && containsSql(statement, 'INNER JOIN mart.review_article_serving_base_v4 serving')
         && containsSql(statement, 'INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-        && containsSql(statement, 'LEFT JOIN app.review_selected_article_import_v4')
+        && containsSql(statement, 'LEFT JOIN mart.review_selected_article_import_current_v4')
       : containsSql(statement, 'FROM mart.review_article_serving_base_v4 serving')
         && containsSql(statement, 'INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-        && containsSql(statement, 'LEFT JOIN app.review_selected_article_import_v4')
+        && containsSql(statement, 'LEFT JOIN mart.review_selected_article_import_current_v4')
     : contract.servingTable === 'mart.review_article_filter_posting_serving_v4'
       ? containsSql(statement, `FROM ${contract.servingTable}`)
         && containsSql(statement, 'CROSS JOIN UNNEST(mart.review_article_filter_posting_serving_v4.article_ids)')

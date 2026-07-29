@@ -175,7 +175,7 @@ const getScopedSelectedArticleCteSql = (
             list_mode_state.human_status
           ${getDirectServingStateJoinSql()}
           ${options?.searchScoped ? 'LEFT JOIN app.article article\n            ON article.id = serving.article_id' : ''}
-          LEFT JOIN app.review_selected_article_import_v4 selected_base
+          LEFT JOIN mart.review_selected_article_import_current_v4 selected_base
             ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
             AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
             AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}

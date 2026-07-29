@@ -256,7 +256,7 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('GROUP BY\n        CAST(posting.filterKind AS VARCHAR)')
   expect(joined).toContain('CAST(posting.filterValue AS VARCHAR) AS filterValue')
   expect(joined).toContain('CAST(posting.listModeKey AS VARCHAR) AS listModeKey')
-  expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(joined).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(joined).toContain('INNER JOIN list_mode_key_filter list_mode_key_filter ON TRUE')
@@ -422,7 +422,7 @@ test('selected-import rank changes move filter contribution between selected imp
     return statement.includes('FROM posting_union')
   })
 
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected')
   expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('scoped.scope_tombstone AS tombstone')
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
@@ -441,7 +441,7 @@ test('selected-import filter postings prefer hot fields for payload filters whil
     return statement.includes('FROM posting_union')
   })
 
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected')
   expect(selectStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(selectStatement).toContain('selected.import_route_id')
   expect(selectStatement).toContain('selected.selected_rank_key')

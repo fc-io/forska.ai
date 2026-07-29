@@ -122,7 +122,7 @@ export const readReviewServingExportArticles = async (input: {
         ${getListModeFlagExpansionJoinSql('state', 'list_mode')}
         LEFT JOIN app.article article
           ON article.id = s.article_id
-        LEFT JOIN app.review_selected_article_import_v4 selected_base
+        LEFT JOIN mart.review_selected_article_import_current_v4 selected_base
           ON selected_base.project_id = s.project_id
          AND selected_base.project_scope_identity = snapshot_scope.project_scope_identity
          AND selected_base.selected_import_snapshot_id = snapshot_scope.selected_import_snapshot_id

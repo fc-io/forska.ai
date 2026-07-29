@@ -277,7 +277,7 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
     FROM mart.project_scope_article scope
     INNER JOIN app."article" article
       ON article.id = scope.article_id
-    LEFT JOIN app.review_selected_article_import_v4 selected_base
+    LEFT JOIN mart.review_selected_article_import_current_v4 selected_base
       ON selected_base.project_id = scope.project_id
       AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
@@ -383,7 +383,7 @@ const getDisplayPatchRows = async (
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND scope.article_id = dirty.article_id
           AND (scope.in_curated_scope OR scope.in_route_scope)
-        LEFT JOIN app.review_selected_article_import_v4 selected_base
+        LEFT JOIN mart.review_selected_article_import_current_v4 selected_base
           ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
           AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
           AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}

@@ -31,7 +31,7 @@ const createDisplayPayloadDatabase = (input?: {
         return (input?.displayPatchRows ?? []) as T[]
       }
 
-      if (statement.includes('LEFT JOIN app.review_selected_article_import_v4 selected')) {
+      if (statement.includes('LEFT JOIN mart.review_selected_article_import_current_v4 selected')) {
         return (input?.displayBaseRows ?? []) as T[]
       }
 
@@ -132,7 +132,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   )
   expect(selectStatement).toContain('FROM dirty_article dirty')
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(selectStatement).toContain('COALESCE(selected_base.tombstone, FALSE)')
   expect(selectStatement).toContain('selected_base.import_route_id')
@@ -254,7 +254,7 @@ test('display base rows flow through writer with display fields and selected imp
     database,
   )
   const selectStatement = statements.find((statement) => {
-    return statement.includes('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+    return statement.includes('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   })
   const inserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_article_serving_')
