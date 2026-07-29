@@ -402,7 +402,14 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       candidate.tombstone,
       current_timestamp AS selected_import_updated_at
     FROM selected_import_winner candidate
-    ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_selected_article_import_v4 existing
+      WHERE (existing.project_id || '') = (${getSqlLiteral(input.projectId)} || '')
+        AND (existing.project_scope_identity || '') = (${getSqlLiteral(input.projectScopeIdentity)} || '')
+        AND (existing.selected_import_snapshot_id || '') = (${getSqlLiteral(input.selectedImportSnapshotId)} || '')
+        AND (existing.article_id || '') = (candidate.article_id || '')
+    )
   `
 }
 

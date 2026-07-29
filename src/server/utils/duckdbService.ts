@@ -265,6 +265,137 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT manifest_id
+        FROM app.review_projection_identity_manifest
+        GROUP BY manifest_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_projection_identity_manifest;
+      CREATE TEMP TABLE startup_probe_review_projection_identity_manifest AS
+      SELECT *
+      FROM app.review_projection_identity_manifest
+      WHERE projection_component = 'selectedImport'
+      ORDER BY updated_at DESC, manifest_id ASC
+      LIMIT 1;
+      DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
+      CREATE TEMP TABLE startup_probe_review_selected_import_snapshot AS
+      SELECT *
+      FROM app.review_selected_import_snapshot
+      WHERE selected_import_snapshot_id = (
+        SELECT input_digest
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      )
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.review_projection_identity_manifest
+      SET
+        base_generation = base_generation,
+        patch_watermark = patch_watermark,
+        status = status,
+        updated_at = current_timestamp
+      WHERE manifest_id = (
+        SELECT manifest_id
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      );
+      UPDATE app.review_selected_import_snapshot
+      SET
+        project_id = project_id,
+        project_scope_identity = project_scope_identity,
+        source_delta_high_water = source_delta_high_water,
+        status = status,
+        updated_at = current_timestamp
+      WHERE selected_import_snapshot_id = (
+        SELECT selected_import_snapshot_id
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      );
+      INSERT INTO app.review_selected_import_snapshot BY NAME
+      SELECT *
+      FROM startup_probe_review_selected_import_snapshot probe
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM app.review_selected_import_snapshot existing
+        WHERE existing.selected_import_snapshot_id = probe.selected_import_snapshot_id
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_projection_identity_manifest
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      )
+      WHERE manifest_id = (
+        SELECT manifest_id
+        FROM startup_probe_review_projection_identity_manifest
+        LIMIT 1
+      );
+      UPDATE app.review_selected_import_snapshot
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      )
+      WHERE selected_import_snapshot_id = (
+        SELECT selected_import_snapshot_id
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_projection_identity_manifest;
+      DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
+    `,
+    lowMemoryStartupPreflight: true,
+    postRepairDependencySpecs: [{schemaName: 'app', tableName: 'review_selected_import_snapshot'}],
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'active' THEN 0 WHEN status = 'candidate' THEN 1 ELSE 2 END ASC,
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      manifest_id DESC
+    `,
+    repairPrimaryKeyColumns: ['manifest_id'],
+    repairStrategy: 'dedupe-latest',
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: [
+          'manifest_id',
+          'projection_component',
+          'input_digest',
+          'input_watermarks_json',
+          'base_generation',
+          'patch_watermark',
+          'status',
+          'updated_at',
+        ],
+        schemaName: 'app',
+        tableName: 'review_projection_identity_manifest',
+      },
+      {
+        columnNames: [
+          'selected_import_snapshot_id',
+          'project_id',
+          'project_scope_identity',
+          'source_delta_high_water',
+          'status',
+          'updated_at',
+        ],
+        schemaName: 'app',
+        tableName: 'review_selected_import_snapshot',
+      },
+    ],
+    tableName: 'review_projection_identity_manifest',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT watermark_id
         FROM app.review_serving_projector_watermark
         GROUP BY watermark_id
@@ -367,6 +498,17 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work;
     `,
+    lowMemoryStartupPreflight: true,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'running' THEN 0 WHEN status = 'pending' THEN 1 ELSE 2 END ASC,
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      dirty_work_id DESC
+    `,
+    repairPrimaryKeyColumns: ['dirty_work_id'],
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     tableName: 'review_serving_dirty_work',
   },
@@ -668,9 +810,17 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work_ack;
     `,
+    lowMemoryStartupPreflight: true,
     recreateRepairPrimaryKeyIndex: false,
     recreateSecondaryIndexes: false,
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'completed' THEN 0 ELSE 1 END ASC,
+      completed_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      dirty_ack_id DESC
+    `,
     repairPrimaryKeyColumns: ['dirty_ack_id'],
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     tableName: 'review_serving_dirty_work_ack',
   },
@@ -732,6 +882,18 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
     `,
+    lowMemoryStartupPreflight: true,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairDedupeOrderSql: `
+      CASE WHEN status = 'completed' THEN 0 WHEN status = 'running' THEN 1 ELSE 2 END ASC,
+      updated_at DESC NULLS LAST,
+      completed_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      selected_import_snapshot_id DESC
+    `,
+    repairPrimaryKeyColumns: ['selected_import_snapshot_id'],
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     tableName: 'review_selected_import_snapshot',
   },
@@ -825,6 +987,10 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_selected_article_import_v4;
     `,
+    lowMemoryStartupPreflight: true,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairPrimaryKeyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
     schemaName: 'app',
     tableName: 'review_selected_article_import_v4',
   },
@@ -2829,27 +2995,20 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
   lastMutatingTargetTable: string | null,
 ) => {
   const message = error.message
-  const matchedSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
+  const qualifiedMessageSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
     return message.includes(`${spec.schemaName}.${spec.tableName}`)
   })
-
-  if (matchedSpec !== undefined) {
-    return [matchedSpec]
-  }
-
   const unqualifiedMessageSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
     return message.includes(spec.tableName)
   })
-
-  if (unqualifiedMessageSpec !== undefined) {
-    return [unqualifiedMessageSpec]
-  }
-
-  const snapshotManifestSpec = getDuckdbStartupRepairSpecForSnapshotManifestIndexError(message)
-
-  if (snapshotManifestSpec !== undefined) {
-    return [snapshotManifestSpec]
-  }
+  const messageRepairSpec =
+    qualifiedMessageSpec ?? unqualifiedMessageSpec ?? getDuckdbStartupRepairSpecForSnapshotManifestIndexError(message)
+  const transactionRepairSpecs = [
+    ...transactionIndexedMutationTargets.map(getDuckdbStartupRepairSpecForTableName),
+    getDuckdbStartupRepairSpecForTableName(transactionIndexedMutationTarget),
+  ].filter((repairSpec): repairSpec is DuckdbStartupIndexedTableRepairSpec => {
+    return repairSpec !== undefined
+  })
 
   const fallbackSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
     return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_chunk_manifest'
@@ -2859,12 +3018,15 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
     throw new Error('missing DuckDB startup repair fallback spec')
   }
 
-  const repairSpecs = [
-    getDuckdbStartupRepairSpecForTableName(failedMutatingTargetTable),
-    ...transactionIndexedMutationTargets.map(getDuckdbStartupRepairSpecForTableName),
-    getDuckdbStartupRepairSpecForTableName(transactionIndexedMutationTarget),
-    getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable),
-  ].filter((repairSpec): repairSpec is DuckdbStartupIndexedTableRepairSpec => {
+  const repairSpecs = (
+    messageRepairSpec === undefined
+      ? [
+          getDuckdbStartupRepairSpecForTableName(failedMutatingTargetTable),
+          ...transactionRepairSpecs,
+          getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable),
+        ]
+      : [messageRepairSpec, ...transactionRepairSpecs]
+  ).filter((repairSpec): repairSpec is DuckdbStartupIndexedTableRepairSpec => {
     return repairSpec !== undefined
   })
   const uniqueRepairSpecs = repairSpecs.filter((repairSpec, index) => {
@@ -3117,6 +3279,14 @@ const getDuckdbStartupPreflightScript = () => {
       return typeof rows[0]?.sql === 'string' ? rows[0].sql : ''
     }
 
+    const getTableIndexRows = async (spec) => {
+      return getRows(
+        "SELECT sql FROM duckdb_indexes() " +
+          "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+          " AND table_name = " + getSqlLiteral(spec.tableName),
+      )
+    }
+
     const normalizeIndexColumnName = (columnName) => {
       return String(columnName).trim().replace(/^["']|["']$/g, '').toLowerCase()
     }
@@ -3135,7 +3305,7 @@ const getDuckdbStartupPreflightScript = () => {
       return '"' + String(identifier).replaceAll('"', '""') + '"'
     }
 
-    const hasUniqueIndexForColumns = async (spec) => {
+    const hasUniqueIndexForColumns = (spec, rows) => {
       const expectedColumns = Array.isArray(spec.repairPrimaryKeyColumns)
         ? spec.repairPrimaryKeyColumns.map(normalizeIndexColumnName)
         : []
@@ -3143,12 +3313,6 @@ const getDuckdbStartupPreflightScript = () => {
       if (expectedColumns.length === 0) {
         return true
       }
-
-      const rows = await getRows(
-        "SELECT sql FROM duckdb_indexes() " +
-          "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
-          " AND table_name = " + getSqlLiteral(spec.tableName),
-      )
 
       return rows.some((row) => {
         if (typeof row.sql !== 'string' || !/^\\s*CREATE\\s+UNIQUE\\s+INDEX\\b/iu.test(row.sql)) {
@@ -3193,17 +3357,23 @@ const getDuckdbStartupPreflightScript = () => {
       }
     }
 
-    const needsInlinePrimaryKeyRepairBeforeMutation = async (spec) => {
+    const needsIndexedTableShapeRepairBeforeMutation = async (spec) => {
       if (!Array.isArray(spec.repairPrimaryKeyColumns) || spec.repairPrimaryKeyColumns.length === 0) {
         return false
       }
 
       const createSql = await getTableCreateSql(spec.schemaName, spec.tableName)
+      const indexRows = await getTableIndexRows(spec)
 
-      return (
-        createSql.toUpperCase().includes('PRIMARY KEY')
-        || (spec.recreateRepairPrimaryKeyIndex === true && !(await hasUniqueIndexForColumns(spec)))
-      )
+      if (createSql.toUpperCase().includes('PRIMARY KEY')) {
+        return true
+      }
+
+      if (spec.recreateRepairPrimaryKeyIndex === false && spec.recreateSecondaryIndexes === false) {
+        return indexRows.length > 0
+      }
+
+      return spec.recreateRepairPrimaryKeyIndex === true && !hasUniqueIndexForColumns(spec, indexRows)
     }
 
     const schemaRequirementsSatisfied = async (requirements) => {
@@ -3327,21 +3497,21 @@ const getDuckdbStartupPreflightScript = () => {
       connection = await instance.connect()
       await connection.run('SELECT 1')
 
-      const inlinePrimaryKeyRepairSpecs = []
+      const indexedTableShapeRepairSpecs = []
 
       for (const spec of tableRepairSpecs) {
         if (
           await tableExists(spec.schemaName, spec.tableName)
           && await schemaRequirementsSatisfied(spec.schemaRequirements)
-          && await needsInlinePrimaryKeyRepairBeforeMutation(spec)
+          && await needsIndexedTableShapeRepairBeforeMutation(spec)
         ) {
-          inlinePrimaryKeyRepairSpecs.push(spec)
+          indexedTableShapeRepairSpecs.push(spec)
         }
       }
 
-      if (inlinePrimaryKeyRepairSpecs.length > 0) {
-        markActiveRepairSpecs(inlinePrimaryKeyRepairSpecs, 'inline-primary-key-repair')
-        throw new Error('startup repair required before mutating inline primary key tables')
+      if (indexedTableShapeRepairSpecs.length > 0) {
+        markActiveRepairSpecs(indexedTableShapeRepairSpecs, 'indexed-table-shape-repair')
+        throw new Error('startup repair required before mutating tables with unexpected index constraints')
       }
 
       for (const spec of tableRepairSpecs) {
@@ -3684,6 +3854,18 @@ const getDuckdbIndexedTableRepairScript = () => {
 
         if (spec.recreateRepairPrimaryKeyIndex === true && !(await hasUniqueIndexForPrimaryKeyColumns(spec))) {
           throw new Error('repaired table is missing replacement unique index for ' + getQualifiedName(spec.schemaName, spec.tableName))
+        }
+
+        if (spec.recreateRepairPrimaryKeyIndex === false && spec.recreateSecondaryIndexes === false) {
+          const indexRows = await getRows(
+            "SELECT index_name AS indexName FROM duckdb_indexes() " +
+              "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+              " AND table_name = " + getSqlLiteral(spec.tableName),
+          )
+
+          if (indexRows.length > 0) {
+            throw new Error('repaired table still contains indexes for ' + getQualifiedName(spec.schemaName, spec.tableName))
+          }
         }
       }
     }

@@ -80,6 +80,12 @@ const expectSelectedImportBaseInsertOmitsDisplayCopyColumns = (statement: string
   expect(insertTargetSql).not.toContain('external_id')
 }
 
+const expectIndexFreeSelectedImportInsert = (statement: string) => {
+  expect(statement).toContain('WHERE NOT EXISTS')
+  expect(statement).toContain('FROM app.review_selected_article_import_v4 existing')
+  expect(statement).not.toContain('ON CONFLICT')
+}
+
 const expectSelectedImportBaseInsertKeepsProtectedColumns = (statement: string) => {
   const insertTargetSql = getInsertTargetSql(statement)
 
@@ -280,9 +286,7 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(insertStatement).not.toContain('article_title = excluded.article_title')
   expect(insertStatement).not.toContain('journal_title = excluded.journal_title')
   expect(insertStatement).not.toContain('external_id = excluded.external_id')
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
-  )
+  expectIndexFreeSelectedImportInsert(insertStatement ?? '')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
   expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')
@@ -312,9 +316,7 @@ test('selected-import article range no-replace mode keeps existing rows', async 
   })
 
   expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
-  )
+  expectIndexFreeSelectedImportInsert(insertStatement ?? '')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
   expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')
@@ -364,9 +366,7 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
   expect(insertStatements).toHaveLength(1)
   expect(insertStatement).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(insertStatement).toContain("('article-1', 'article-9'), ('article-10', 'article-19')")
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
-  )
+  expectIndexFreeSelectedImportInsert(insertStatement ?? '')
   expect(joined).toContain('\'{"importRunArticle":9,"projectScope":11,"reviewChange":13}\'::JSON')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
