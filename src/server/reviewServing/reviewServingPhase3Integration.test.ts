@@ -245,13 +245,26 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
             component,
             records: [
               {
-                keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
-                table: 'mart.review_selected_article_import_current_v4',
+                keyColumns: ['staging_row_id'],
+                table: 'mart.review_selected_article_import_staging_v4',
                 values: {
                   article_id: 'article-1',
+                  created_at: new Date(),
+                  import_route_id: 'import-route-1',
                   project_id: 'project-1',
                   project_scope_identity: 'projectScope:identity',
+                  projection_identity: 'selectedImport:identity',
+                  publish_scope_key: 'project-1|projectScope:identity|selected-import-1',
+                  published_at: null,
                   selected_import_snapshot_id: 'selected-import-1',
+                  selected_import_updated_at: new Date(),
+                  selected_rank_key: 'rank-1',
+                  selected_rank_numeric: 1,
+                  source_delta_high_water: 1,
+                  source_partition: 'selected-import-integration-test',
+                  source_record_key: 'source-record-1',
+                  staging_row_id: 'selectedImportIntegration:project-1:article-1:1',
+                  tombstone: false,
                 },
               },
             ],
@@ -372,7 +385,8 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).not.toContain('mart.review_article_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
+  expect(joined).toContain('INSERT INTO mart.review_selected_article_import_staging_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).not.toContain('_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
