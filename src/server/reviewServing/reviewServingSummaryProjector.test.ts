@@ -1458,7 +1458,7 @@ test('date range and search-scope SQL stays scoped and explicit unsupported filt
   })
 
   expect(sourceStatement).toContain('selected_hot.publication_year')
-  expect(sourceStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(sourceStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(sourceStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(sourceStatement).not.toContain('serving.publication_year')
   expect(sourceStatement).not.toContain('selected_patch.publication_year')

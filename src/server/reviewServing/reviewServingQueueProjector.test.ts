@@ -337,7 +337,7 @@ test('queue rebuild rows read selected-import base rows without patch overlay', 
     return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
   })
 
-  expect(insertStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(insertStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(insertStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(insertStatement).not.toContain('selected_patch')
 })

@@ -263,7 +263,7 @@ const getFullRebuildSummaryContributionRows = async (
               ELSE COALESCE(serving.conflict_flag, FALSE)
             END AS conflict_flag
           FROM scoped_serving serving
-          LEFT JOIN app.review_selected_article_import_v4 selected_base
+          LEFT JOIN mart.review_selected_article_import_current_v4 selected_base
             ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
             AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
             AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}

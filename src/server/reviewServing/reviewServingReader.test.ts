@@ -158,7 +158,7 @@ test('readReviewServingRows admits ready manifests and executes serving SQL only
   expect(reader.statements[0]).toContain('list_mode_state.has_llm_list_mode IS TRUE')
   expect(reader.statements[0]).not.toContain('FROM mart.review_article_serving_v4')
   expect(reader.statements[0]).toContain('selected_import.import_route_id AS selected_import_route_id')
-  expect(reader.statements[0]).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
+  expect(reader.statements[0]).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_import')
   expect(reader.statements[0]).toContain("selected_import.project_id = 'project-1'")
   expect(reader.statements[0]).toContain('selected_import.project_id = serving.project_id')
   expect(reader.statements[0]).toContain("selected_import.project_scope_identity = 'projectScope-identity'")

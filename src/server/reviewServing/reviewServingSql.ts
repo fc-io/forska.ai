@@ -241,7 +241,7 @@ const isBoundedArticleLookupReference = (sql: string, tableReference: ReviewServ
 
 const hasBoundedSelectedImportLookupJoin = (sql: string) => {
   return (
-    /\bleft\s+join\s+app\.review_selected_article_import_v4\s+selected_import\b/iu.test(sql)
+    /\bleft\s+join\s+mart\.review_selected_article_import_current_v4\s+selected_import\b/iu.test(sql)
     && /\bselected_import\.project_id\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
     && /\bselected_import\.project_id\s*=\s*(?:mart\.review_article_serving_base_v4|serving)\.project_id\b/iu.test(sql)
     && /\bselected_import\.project_scope_identity\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
@@ -253,7 +253,7 @@ const hasBoundedSelectedImportLookupJoin = (sql: string) => {
 
 const isBoundedSelectedImportLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
   return (
-    tableReference.table === 'app.review_selected_article_import_v4'
+    tableReference.table === 'mart.review_selected_article_import_current_v4'
     && tableReference.alias === 'selected_import'
     && hasBoundedSelectedImportLookupJoin(sql)
   )
@@ -352,7 +352,9 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
       return tableReference !== 'app.article' || !hasBoundedArticleLookupJoin(sql)
     })
     .filter((tableReference) => {
-      return tableReference !== 'app.review_selected_article_import_v4' || !hasBoundedSelectedImportLookupJoin(sql)
+      return (
+        tableReference !== 'mart.review_selected_article_import_current_v4' || !hasBoundedSelectedImportLookupJoin(sql)
+      )
     })
     .filter((tableReference) => {
       return (
@@ -503,7 +505,7 @@ const reviewServingUnassessedQueueAlias = 'queue'
 const reviewServingUnassessedQueueCandidateAlias = 'unassessed_queue_candidate'
 const reviewServingUnassessedQueuePageAlias = 'unassessed_queue_page'
 const reviewServingQueueArticleFilterAlias = 'queue_article'
-const reviewServingSelectedImportTable = 'app.review_selected_article_import_v4'
+const reviewServingSelectedImportTable = 'mart.review_selected_article_import_current_v4'
 const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewServingFilterPostingArticleAlias = 'filter_posting_article'
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'

@@ -277,7 +277,7 @@ const getFullRebuildPostingContributionRowsStatement = (
             COALESCE(selected_hot.conflict_flag, FALSE) AS conflict_flag,
             scoped.scope_tombstone AS tombstone
           FROM scoped_article scoped
-          LEFT JOIN app.review_selected_article_import_v4 selected
+          LEFT JOIN mart.review_selected_article_import_current_v4 selected
             ON selected.project_id = ${getSqlLiteral(input.projectId)}
             AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
             AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}

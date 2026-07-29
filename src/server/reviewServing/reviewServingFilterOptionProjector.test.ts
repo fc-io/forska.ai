@@ -204,7 +204,7 @@ test('no-search option projection reuses finalized facet rows for migrated facet
   expect(fallbackStatement).toContain('COALESCE(list_mode_state.conflict_flag, FALSE) AS conflict_flag')
   expect(fallbackStatement).not.toContain('selected.import_route_id')
   expect(fallbackStatement).not.toContain('selected.publication_year')
-  expect(fallbackStatement).not.toContain('LEFT JOIN app.review_selected_article_import_v4')
+  expect(fallbackStatement).not.toContain('LEFT JOIN mart.review_selected_article_import_current_v4')
   expect(fallbackStatement).not.toContain('LEFT JOIN app.review_import_article_hot_field')
   expect(fallbackStatement).not.toContain('active_article AS')
   expect(fallbackStatement).not.toContain('\n        selected_article AS')
@@ -279,7 +279,7 @@ test('source query preserves active search and filter scope without using postin
   expect(sourceStatement).not.toContain("payload.display_identity = 'display:identity-1'")
   expect(sourceStatement).not.toContain("payload.payload_identity = 'payload:identity-1'")
   expect(sourceStatement).toContain('LEFT JOIN app.article article')
-  expect(sourceStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(sourceStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(sourceStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(sourceStatement).toContain(
     "COALESCE(COALESCE(CASE WHEN NOT COALESCE(selected_base.tombstone, FALSE) THEN selected_hot.article_title ELSE NULL END, article.article_title), '')",

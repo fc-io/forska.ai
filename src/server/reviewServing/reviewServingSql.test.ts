@@ -114,7 +114,7 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).toContain('article.full_text_conversion_status AS full_text_conversion_status')
   expect(sql).toContain('selected_import.import_route_id AS selected_import_route_id')
   expect(sql).not.toContain('serving_updated_at')
-  expect(sql).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
+  expect(sql).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_import')
   expect(sql).toContain('selected_import.project_id = $projectId')
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
@@ -575,7 +575,7 @@ test('direct article reads expand list modes from flags instead of stale list ke
         both_patch_watermark INTEGER,
         unassessed_patch_watermark INTEGER
       );
-      CREATE TABLE app.review_selected_article_import_v4 (
+      CREATE TABLE mart.review_selected_article_import_current_v4 (
         project_id VARCHAR,
         project_scope_identity VARCHAR,
         selected_import_snapshot_id VARCHAR,
@@ -1660,7 +1660,7 @@ test('buildReviewServingRowsSql sources article-row selected import route ids fr
 
     expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
     expect(sql).toContain('selected_import.import_route_id AS selected_import_route_id')
-    expect(sql).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
+    expect(sql).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_import')
     expect(sql).toContain('selected_import.project_id = $projectId')
     const articleSqlAlias = 'serving'
 

@@ -87,7 +87,7 @@ test('title search projection writes compact token postings and search-only comp
 
   expect(result).toEqual({patchWatermark: 9, searchRowCount: 2})
   expect(selectStatement).toContain("VALUES ('article-1')")
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
@@ -157,7 +157,7 @@ test('title search direct projection reads selected import base rows without pat
   })
 
   expect(result).toEqual({patchWatermark: 0, searchRowCount: 2})
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(selectStatement).toContain('ELSE COALESCE(selected_hot.article_title, article.article_title)')
   expect(selectStatement).not.toContain('selected_base.article_title')
@@ -237,7 +237,7 @@ test('sql-native title search rebuild inserts chunk tokens with conflict-ignore 
   expect(updateStatement).toContain(
     'SET article_ids = (SELECT LIST(DISTINCT merged_article_id ORDER BY merged_article_id)',
   )
-  expect(insertStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(insertStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(insertStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(insertStatement).toContain('COALESCE(selected_hot.article_title, article.article_title)')
   expect(insertStatement).not.toContain('selected_base.article_title')
