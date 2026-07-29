@@ -15,6 +15,7 @@ import {
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
+import {selectedImportPublishedTable, selectedImportStagingTable} from './reviewServingSelectedImportMaintenance.ts'
 
 export type ReviewServingSelectedImportDirtyProjectorDatabase = ReviewServingProjectorWriterDatabase
 
@@ -54,9 +55,6 @@ export type ResetReviewServingSelectedImportDirtyArticleRangeInput = {
   projectScopeIdentity: string
   selectedImportSnapshotId: string
 }
-
-const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
-const selectedImportStagingTable = 'mart.review_selected_article_import_staging_v4'
 
 type SelectedImportServingTemplateRow = {baseGeneration: number; reviewConfigHash: string; snapshotId: string}
 
