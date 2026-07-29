@@ -327,7 +327,7 @@ const inspectProjectState = async (
       keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
       limit,
       projectId: options.projectId,
-      table: 'app.review_selected_article_import_v4',
+      table: 'mart.review_selected_article_import_current_v4',
     }),
   )
   const filterPostingStatsDuplicateSql = getDuplicateQuery({

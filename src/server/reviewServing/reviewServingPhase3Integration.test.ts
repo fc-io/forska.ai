@@ -574,6 +574,28 @@ test('Phase 3 V4 serving readers are not migrated into product review routes', (
   expect(offenders).toEqual([])
 })
 
+test('selected-import compatibility view stays out of non-migration runtime and operator dependencies', () => {
+  const allowedRuntimeReferences = new Set(['src/server/reviewServing/reviewServingSelectedImportMaintenance.ts'])
+  const sourceFiles = [join(workspaceRoot, 'src/server'), join(workspaceRoot, 'scripts')]
+    .flatMap((directory) => {
+      return getTypeScriptFiles(directory)
+    })
+    .filter((filePath) => {
+      return !filePath.endsWith('.test.ts')
+    })
+  const offenders = sourceFiles.flatMap((filePath) => {
+    const repoPath = relative(workspaceRoot, filePath)
+    if (allowedRuntimeReferences.has(repoPath)) {
+      return []
+    }
+
+    const source = readFileSync(filePath, 'utf8')
+    return source.includes('app.review_selected_article_import_v4') ? [repoPath] : []
+  })
+
+  expect(offenders).toEqual([])
+})
+
 test('warning diagnostics coverage includes maintenance rebuild dirty-work quarantine and optional search states', () => {
   const source = readFileSync(
     join(workspaceRoot, 'src/server/reviewServing/reviewServingDiagnosticsRepository.ts'),

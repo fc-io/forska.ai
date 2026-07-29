@@ -23,7 +23,10 @@ import {
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
-import {selectedImportPublishedTable} from './reviewServingSelectedImportMaintenance.ts'
+import {
+  selectedImportCompatibilityView,
+  selectedImportPublishedTable,
+} from './reviewServingSelectedImportMaintenance.ts'
 import {validateReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
 
 export type ReviewServingProjectorWriterDatabase = {
@@ -122,13 +125,54 @@ const reviewServingDeleteFreeSummaryScanGuardedInsertMissingTables = new Set<str
   'mart.review_filter_option_serving_v4',
 ])
 
-const selectedImportPublishedMutationPattern = new RegExp(
-  String.raw`\b(?:insert\s+into|update|delete\s+from|drop\s+table|truncate\s+table)\s+${selectedImportPublishedTable.replaceAll(
-    '.',
-    String.raw`\s*\.\s*`,
-  )}\b`,
-  'iu',
-)
+const getRelationMutationPattern = (relationName: string) => {
+  return new RegExp(
+    String.raw`\b(?:insert(?:\s+or\s+replace)?\s+into|update|delete\s+from|create(?:\s+or\s+replace)?\s+(?:table|view)(?:\s+if\s+not\s+exists)?|alter\s+(?:table|view)|drop\s+(?:table|view)(?:\s+if\s+exists)?|truncate\s+table)\s+${relationName.replaceAll(
+      '.',
+      String.raw`\s*\.\s*`,
+    )}\b`,
+    'iu',
+  )
+}
+
+const selectedImportCompatibilityMutationPattern = getRelationMutationPattern(selectedImportCompatibilityView)
+const selectedImportPublishedMutationPattern = getRelationMutationPattern(selectedImportPublishedTable)
+
+const assertSelectedImportCompatibilityViewIsReadOnly = (input: WriteReviewServingProjectorComponentInput) => {
+  const guardedStatements = [...(input.statements ?? []), ...(input.postRecordStatements ?? [])]
+  const blockedStatement = guardedStatements.find((statement) => {
+    return selectedImportCompatibilityMutationPattern.test(statement)
+  })
+  const blockedRecord = (input.records ?? []).find((record) => {
+    return (record.table as string) === selectedImportCompatibilityView
+  })
+
+  if (blockedStatement !== undefined || blockedRecord !== undefined) {
+    throw new Error(
+      `${selectedImportCompatibilityView} is a read-only compatibility view over ${selectedImportPublishedTable}`,
+    )
+  }
+}
+
+const assertSelectedImportPublishedMutationsAreOwned = (input: WriteReviewServingProjectorComponentInput) => {
+  if (input.component === 'selectedImport') {
+    return
+  }
+
+  const guardedStatements = [...(input.statements ?? []), ...(input.postRecordStatements ?? [])]
+  const blockedStatement = guardedStatements.find((statement) => {
+    return selectedImportPublishedMutationPattern.test(statement)
+  })
+  const blockedRecord = (input.records ?? []).find((record) => {
+    return (record.table as string) === selectedImportPublishedTable
+  })
+
+  if (blockedStatement !== undefined || blockedRecord !== undefined) {
+    throw new Error(
+      `${selectedImportPublishedTable} mutations must go through the selectedImport projector ownership path`,
+    )
+  }
+}
 
 export type WriteReviewServingQueueRebuildRowsInput = {
   projectId: string
@@ -163,23 +207,6 @@ export type ReviewServingProjectorRecordWriteDiagnostics = {
   inputRecordCount: number
   inputRecordsByTable: Record<string, number>
   writeMsByTable: Record<string, number>
-}
-
-const assertSelectedImportPublishedMutationsAreOwned = (input: WriteReviewServingProjectorComponentInput) => {
-  if (input.component === 'selectedImport') {
-    return
-  }
-
-  const guardedStatements = [...(input.statements ?? []), ...(input.postRecordStatements ?? [])]
-  const blockedStatement = guardedStatements.find((statement) => {
-    return selectedImportPublishedMutationPattern.test(statement)
-  })
-
-  if (blockedStatement !== undefined) {
-    throw new Error(
-      `${selectedImportPublishedTable} mutations must go through the selectedImport projector ownership path`,
-    )
-  }
 }
 
 export type ReviewServingProjectorWriterDiagnostics = {
@@ -1169,6 +1196,7 @@ export const writeReviewServingProjectorComponent = async (
   input: WriteReviewServingProjectorComponentInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
+  assertSelectedImportCompatibilityViewIsReadOnly(input)
   assertSelectedImportPublishedMutationsAreOwned(input)
 
   return database.transaction(async (tx) => {

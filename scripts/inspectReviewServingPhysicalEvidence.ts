@@ -546,7 +546,7 @@ const defaultLimit = 25
 const defaultMaxProfileColumns = 18
 
 const hotReviewServingTables = [
-  'app.review_selected_article_import_v4',
+  'mart.review_selected_article_import_current_v4',
   'app.review_selected_import_snapshot',
   'app.review_projection_identity_manifest',
   'app.review_serving_snapshot_manifest',
@@ -607,7 +607,7 @@ const timestampColumnCandidates = [
 
 const duplicateKeyCandidates: Record<string, string[]> = {
   'app.review_rebuild_chunk_manifest': ['chunk_id'],
-  'app.review_selected_article_import_v4': [
+  'mart.review_selected_article_import_current_v4': [
     'project_id',
     'project_scope_identity',
     'selected_import_snapshot_id',
@@ -2873,7 +2873,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
                 THEN 'candidate'
               ELSE 'other'
             END AS protection_bucket
-          FROM app.review_selected_article_import_v4 raw_selected_base
+          FROM mart.review_selected_article_import_current_v4 raw_selected_base
           LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
             ON selected_import_snapshot.project_id = raw_selected_base.project_id
             AND selected_import_snapshot.project_scope_identity = raw_selected_base.project_scope_identity
@@ -2897,7 +2897,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         SELECT
           COALESCE(selected_import_snapshot.status, 'missing-selected-import-snapshot') AS snapshotStatus,
           CAST(COUNT(*) AS BIGINT) AS rowCount
-        FROM app.review_selected_article_import_v4 selected_base
+        FROM mart.review_selected_article_import_current_v4 selected_base
         LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
           ON selected_import_snapshot.project_id = selected_base.project_id
           AND selected_import_snapshot.project_scope_identity = selected_base.project_scope_identity
@@ -2951,7 +2951,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
             raw_selected_base.*,
             COALESCE(selected_import_snapshot.status, 'missing-selected-import-snapshot') AS snapshot_status,
             protected_selected_import_snapshot.selected_import_snapshot_id IS NOT NULL AS active_or_last_known_good_protected
-          FROM app.review_selected_article_import_v4 raw_selected_base
+          FROM mart.review_selected_article_import_current_v4 raw_selected_base
           LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
             ON selected_import_snapshot.project_id = raw_selected_base.project_id
             AND selected_import_snapshot.project_scope_identity = raw_selected_base.project_scope_identity
@@ -3005,7 +3005,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
             raw_selected_base.*,
             COALESCE(selected_import_snapshot.status, 'missing-selected-import-snapshot') AS snapshot_status,
             protected_selected_import_snapshot.selected_import_snapshot_id IS NOT NULL AS active_or_last_known_good_protected
-          FROM app.review_selected_article_import_v4 raw_selected_base
+          FROM mart.review_selected_article_import_current_v4 raw_selected_base
           LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
             ON selected_import_snapshot.project_id = raw_selected_base.project_id
             AND selected_import_snapshot.project_scope_identity = raw_selected_base.project_scope_identity
