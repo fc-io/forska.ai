@@ -740,99 +740,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       SELECT COUNT(*) AS duplicateCount
       FROM (
         SELECT project_id, project_scope_identity, selected_import_snapshot_id, article_id
-        FROM app.review_selected_article_import_v4
-        GROUP BY project_id, project_scope_identity, selected_import_snapshot_id, article_id
-        HAVING COUNT(*) > 1
-      )
-    `,
-    mutationProbeSql: `
-      DROP TABLE IF EXISTS startup_probe_review_selected_article_import_v4;
-      CREATE TEMP TABLE startup_probe_review_selected_article_import_v4 AS
-      WITH running_selected_import_ranges AS (
-        SELECT
-          project_id,
-          chunk_start_key,
-          chunk_end_key
-        FROM app.review_rebuild_chunk_manifest
-        WHERE projection_component = 'selectedImport'
-          AND (
-            status = 'running'
-            OR COALESCE(last_error, '') LIKE '%Failed to delete all rows from index%'
-            OR COALESCE(last_error, '') LIKE '%DuckDB%'
-          )
-        ORDER BY updated_at DESC, chunk_id ASC
-        LIMIT 8
-      ),
-      running_selected_import_rows AS (
-        SELECT selected_import.*
-        FROM mart.review_selected_article_import_current_v4 selected_import
-        INNER JOIN running_selected_import_ranges running_range
-          ON running_range.project_id = selected_import.project_id
-         AND (
-              running_range.chunk_start_key IS NULL
-              OR selected_import.article_id >= running_range.chunk_start_key
-            )
-         AND (
-              running_range.chunk_end_key IS NULL
-              OR selected_import.article_id <= running_range.chunk_end_key
-            )
-        ORDER BY
-          selected_import.project_id,
-          selected_import.project_scope_identity,
-          selected_import.selected_import_snapshot_id,
-          selected_import.article_id
-        LIMIT 64
-      ),
-      fallback_row AS (
-        SELECT selected_import.*
-        FROM mart.review_selected_article_import_current_v4 selected_import
-        WHERE NOT EXISTS (SELECT 1 FROM running_selected_import_rows)
-        ORDER BY
-          selected_import.project_id,
-          selected_import.project_scope_identity,
-          selected_import.selected_import_snapshot_id,
-          selected_import.article_id
-        LIMIT 1
-      )
-      SELECT *
-      FROM running_selected_import_rows
-      UNION ALL
-      SELECT *
-      FROM fallback_row;
-      BEGIN;
-      DELETE FROM app.review_selected_article_import_v4
-      WHERE EXISTS (
-        SELECT 1
-        FROM startup_probe_review_selected_article_import_v4 probe
-        WHERE app.review_selected_article_import_v4.project_id IS NOT DISTINCT FROM probe.project_id
-          AND app.review_selected_article_import_v4.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
-          AND app.review_selected_article_import_v4.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
-          AND app.review_selected_article_import_v4.article_id IS NOT DISTINCT FROM probe.article_id
-      );
-      INSERT INTO app.review_selected_article_import_v4 BY NAME
-      SELECT *
-      FROM startup_probe_review_selected_article_import_v4 probe
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM app.review_selected_article_import_v4 mirror
-        WHERE mirror.project_id IS NOT DISTINCT FROM probe.project_id
-          AND mirror.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
-          AND mirror.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
-          AND mirror.article_id IS NOT DISTINCT FROM probe.article_id
-      );
-      COMMIT;
-      DROP TABLE IF EXISTS startup_probe_review_selected_article_import_v4;
-    `,
-    schemaName: 'app',
-    schemaRequirements: [{schemaName: 'mart', tableName: 'review_selected_article_import_current_v4'}],
-    skipGenericDeleteInsertProbe: true,
-    tableName: 'review_selected_article_import_v4',
-  },
-  {
-    duplicateKeySelectSql: `
-      SELECT COUNT(*) AS duplicateCount
-      FROM (
-        SELECT project_id, project_scope_identity, selected_import_snapshot_id, article_id
         FROM mart.review_selected_article_import_current_v4
         GROUP BY project_id, project_scope_identity, selected_import_snapshot_id, article_id
         HAVING COUNT(*) > 1
@@ -893,16 +800,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       SELECT *
       FROM fallback_row;
       BEGIN;
-      UPDATE mart.review_selected_article_import_current_v4
-      SET selected_import_updated_at = current_timestamp
-      WHERE EXISTS (
-        SELECT 1
-        FROM startup_probe_review_selected_article_import_current_v4 probe
-        WHERE mart.review_selected_article_import_current_v4.project_id IS NOT DISTINCT FROM probe.project_id
-          AND mart.review_selected_article_import_current_v4.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
-          AND mart.review_selected_article_import_current_v4.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
-          AND mart.review_selected_article_import_current_v4.article_id IS NOT DISTINCT FROM probe.article_id
-      );
       DELETE FROM mart.review_selected_article_import_current_v4
       WHERE EXISTS (
         SELECT 1
@@ -915,9 +812,35 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       INSERT INTO mart.review_selected_article_import_current_v4 BY NAME
       SELECT *
       FROM startup_probe_review_selected_article_import_current_v4;
+      DELETE FROM app.review_selected_article_import_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_selected_article_import_current_v4 probe
+        WHERE app.review_selected_article_import_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND app.review_selected_article_import_v4.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
+          AND app.review_selected_article_import_v4.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
+          AND app.review_selected_article_import_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      INSERT INTO app.review_selected_article_import_v4 BY NAME
+      SELECT current_row.*
+      FROM mart.review_selected_article_import_current_v4 current_row
+      INNER JOIN startup_probe_review_selected_article_import_current_v4 probe
+        ON current_row.project_id IS NOT DISTINCT FROM probe.project_id
+       AND current_row.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
+       AND current_row.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
+       AND current_row.article_id IS NOT DISTINCT FROM probe.article_id;
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_selected_article_import_current_v4;
     `,
+    postRepairSql: `
+      BEGIN;
+      DELETE FROM app.review_selected_article_import_v4;
+      INSERT INTO app.review_selected_article_import_v4 BY NAME
+      SELECT *
+      FROM mart.review_selected_article_import_current_v4;
+      COMMIT;
+    `,
+    postRepairSchemaRequirements: [{schemaName: 'app', tableName: 'review_selected_article_import_v4'}],
     recreateRepairPrimaryKeyIndex: false,
     recreateSecondaryIndexes: false,
     schemaName: 'mart',

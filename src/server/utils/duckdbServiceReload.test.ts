@@ -3365,7 +3365,7 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
   }
 })
 
-test('duckdb service retries transient startup indexed-table repair locks', () => {
+test('duckdb service retries transient startup indexed-table repair locks', async () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
@@ -3678,21 +3678,155 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     const selectedImportProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_selected_article_import_v4'
     })
-    expect(selectedImportProbe?.mutationProbeSql).toContain("projection_component = 'selectedImport'")
-    expect(selectedImportProbe?.mutationProbeSql).toContain('FROM mart.review_selected_article_import_current_v4')
-    expect(selectedImportProbe?.mutationProbeSql).toContain('INSERT INTO app.review_selected_article_import_v4 BY NAME')
-    expect(selectedImportProbe?.mutationProbeSql).not.toContain('SET selected_import_updated_at = current_timestamp')
-    expect(selectedImportProbe?.skipGenericDeleteInsertProbe).toBe(true)
-    expect(selectedImportProbe?.schemaRequirements).toContainEqual({
-      schemaName: 'mart',
-      tableName: 'review_selected_article_import_current_v4',
-    })
+    expect(selectedImportProbe).toBeUndefined()
     const selectedImportCurrentProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_selected_article_import_current_v4'
     })
+    expect(selectedImportCurrentProbe?.mutationProbeSql).toContain("projection_component = 'selectedImport'")
     expect(selectedImportCurrentProbe?.mutationProbeSql).toContain(
       'INSERT INTO mart.review_selected_article_import_current_v4 BY NAME',
     )
+    expect(selectedImportCurrentProbe?.mutationProbeSql).toContain(
+      'INSERT INTO app.review_selected_article_import_v4 BY NAME',
+    )
+    expect(selectedImportCurrentProbe?.mutationProbeSql).not.toContain(
+      'SET selected_import_updated_at = current_timestamp',
+    )
+    expect(selectedImportCurrentProbe?.postRepairSql).toContain('DELETE FROM app.review_selected_article_import_v4')
+    expect(selectedImportCurrentProbe?.postRepairSql).toContain('FROM mart.review_selected_article_import_current_v4')
+    expect(selectedImportCurrentProbe?.postRepairSchemaRequirements).toContainEqual({
+      schemaName: 'app',
+      tableName: 'review_selected_article_import_v4',
+    })
+    expect(typeof selectedImportCurrentProbe?.mutationProbeSql).toBe('string')
+    const selectedImportProbeInstance = await DuckDBInstance.create(':memory:')
+    const selectedImportProbeConnection = await selectedImportProbeInstance.connect()
+
+    try {
+      await selectedImportProbeConnection.run(`
+        CREATE SCHEMA app;
+        CREATE SCHEMA mart;
+        CREATE TABLE app.review_rebuild_chunk_manifest (
+          chunk_id VARCHAR NOT NULL,
+          project_id VARCHAR NOT NULL,
+          projection_component VARCHAR NOT NULL,
+          status VARCHAR NOT NULL,
+          last_error VARCHAR,
+          chunk_start_key VARCHAR,
+          chunk_end_key VARCHAR,
+          updated_at TIMESTAMPTZ NOT NULL
+        );
+        CREATE TABLE mart.review_selected_article_import_current_v4 (
+          project_id VARCHAR NOT NULL,
+          project_scope_identity VARCHAR NOT NULL,
+          selected_import_snapshot_id VARCHAR NOT NULL,
+          article_id VARCHAR NOT NULL,
+          import_route_id VARCHAR,
+          source_record_key VARCHAR,
+          selected_rank_key VARCHAR,
+          selected_rank_numeric DOUBLE,
+          tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+          selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+        );
+        CREATE TABLE app.review_selected_article_import_v4 AS
+        SELECT *
+        FROM mart.review_selected_article_import_current_v4
+        WHERE FALSE;
+        INSERT INTO app.review_rebuild_chunk_manifest (
+          chunk_id,
+          project_id,
+          projection_component,
+          status,
+          last_error,
+          chunk_start_key,
+          chunk_end_key,
+          updated_at
+        )
+        VALUES (
+          'chunk-selected-import',
+          'project-1',
+          'selectedImport',
+          'running',
+          NULL,
+          'article-1',
+          'article-1',
+          TIMESTAMPTZ '2026-06-16T00:00:00Z'
+        );
+        INSERT INTO mart.review_selected_article_import_current_v4 (
+          project_id,
+          project_scope_identity,
+          selected_import_snapshot_id,
+          article_id,
+          import_route_id,
+          source_record_key,
+          selected_rank_key,
+          selected_rank_numeric,
+          tombstone,
+          selected_import_updated_at
+        )
+        VALUES (
+          'project-1',
+          'scope-1',
+          'selected-1',
+          'article-1',
+          'route-current',
+          'source-current',
+          'rank-current',
+          1,
+          FALSE,
+          TIMESTAMPTZ '2026-06-16T00:00:00Z'
+        );
+        INSERT INTO app.review_selected_article_import_v4 (
+          project_id,
+          project_scope_identity,
+          selected_import_snapshot_id,
+          article_id,
+          import_route_id,
+          source_record_key,
+          selected_rank_key,
+          selected_rank_numeric,
+          tombstone,
+          selected_import_updated_at
+        )
+        VALUES (
+          'project-1',
+          'scope-1',
+          'selected-1',
+          'article-1',
+          'route-stale',
+          'source-stale',
+          'rank-stale',
+          99,
+          TRUE,
+          TIMESTAMPTZ '2026-06-15T00:00:00Z'
+        );
+      `)
+      await selectedImportProbeConnection.run(selectedImportCurrentProbe?.mutationProbeSql ?? '')
+      const selectedImportMirrorRows = await selectedImportProbeConnection.runAndReadAll(`
+        SELECT
+          import_route_id AS importRouteId,
+          source_record_key AS sourceRecordKey,
+          selected_rank_key AS selectedRankKey,
+          CAST(selected_rank_numeric AS INTEGER) AS selectedRankNumeric,
+          tombstone,
+          selected_import_updated_at AS selectedImportUpdatedAt
+        FROM app.review_selected_article_import_v4
+      `)
+
+      expect(selectedImportMirrorRows.getRowObjectsJson()).toEqual([
+        {
+          importRouteId: 'route-current',
+          selectedImportUpdatedAt: '2026-06-16 00:00:00+00',
+          selectedRankKey: 'rank-current',
+          selectedRankNumeric: 1,
+          sourceRecordKey: 'source-current',
+          tombstone: false,
+        },
+      ])
+    } finally {
+      selectedImportProbeConnection.closeSync()
+      selectedImportProbeInstance.closeSync()
+    }
     const snapshotManifestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_serving_snapshot_manifest'
     })
