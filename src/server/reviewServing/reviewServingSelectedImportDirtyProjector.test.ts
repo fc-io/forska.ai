@@ -224,7 +224,7 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain("list_contains(['article-1']::VARCHAR[], staged.article_id)")
   expect(joined).toContain("list_contains(['article-1']::VARCHAR[], article_id)")
   expect(joined).toContain('SET published_at = COALESCE(published_at, current_timestamp)')
-  expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
+  expect(joined).not.toContain('INSERT INTO app.review_selected_article_import_v4')
   expectSelectedImportStagingInsertOmitsDisplayCopyColumns(stagingInsertStatement ?? '')
   expectSelectedImportStagingInsertOmitsSelectedBaseFlagColumns(stagingInsertStatement ?? '')
   expect(currentUpdateStatement).toContain('source_delta_high_water DESC')
@@ -481,7 +481,7 @@ test('selected-import scope tombstones stage and publish current tombstone rows'
   expect(joined).toContain("list_contains(['article-1']::VARCHAR[], staged.article_id)")
 })
 
-test('selected-import dirty staged publish executes in DuckDB and refreshes stale compatibility rows', async () => {
+test('selected-import dirty staged publish executes in DuckDB and compatibility view follows current', async () => {
   const {close, database} = await createDuckdbSelectedImportDirtyDatabase()
 
   try {
@@ -619,19 +619,9 @@ test('selected-import dirty staged publish executes in DuckDB and refreshes stal
       )
     `)
     await database.run(`
-      CREATE TABLE app.review_selected_article_import_v4 (
-        project_id VARCHAR NOT NULL,
-        project_scope_identity VARCHAR NOT NULL,
-        selected_import_snapshot_id VARCHAR NOT NULL,
-        article_id VARCHAR NOT NULL,
-        import_route_id VARCHAR,
-        source_record_key VARCHAR,
-        selected_rank_key VARCHAR,
-        selected_rank_numeric DOUBLE,
-        tombstone BOOLEAN NOT NULL,
-        selected_import_updated_at TIMESTAMPTZ NOT NULL,
-        PRIMARY KEY(project_id, project_scope_identity, selected_import_snapshot_id, article_id)
-      )
+      CREATE VIEW app.review_selected_article_import_v4 AS
+      SELECT *
+      FROM mart.review_selected_article_import_current_v4
     `)
     await database.run(`
       INSERT INTO app.review_serving_snapshot_manifest
@@ -682,14 +672,6 @@ test('selected-import dirty staged publish executes in DuckDB and refreshes stal
     `)
     await database.run(`
       INSERT INTO mart.review_selected_article_import_current_v4
-      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-snapshot-1', 'article-2', 'route-unchanged', 'source-unchanged', 'rank-unchanged', 2, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
-    `)
-    await database.run(`
-      INSERT INTO app.review_selected_article_import_v4
-      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-snapshot-1', 'article-1', 'route-old', 'source-old', 'rank-old', 5, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
-    `)
-    await database.run(`
-      INSERT INTO app.review_selected_article_import_v4
       VALUES ('project-1', 'projectScope:identity-1', 'selected-import-snapshot-1', 'article-2', 'route-unchanged', 'source-unchanged', 'rank-unchanged', 2, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
     `)
     const projectorDatabase: ReviewServingSelectedImportDirtyProjectorDatabase = {

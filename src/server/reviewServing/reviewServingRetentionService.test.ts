@@ -84,7 +84,7 @@ const legacyRetentionTables = [
   'mart.review_article_summary_contribution_v4',
 ]
 
-test('retention cleanup cursor prunes selected-import current and compatibility mirror together', async () => {
+test('retention cleanup cursor prunes selected-import current while compatibility is a view', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
   })
@@ -97,17 +97,17 @@ test('retention cleanup cursor prunes selected-import current and compatibility 
 
   expect(result).toEqual({
     cleanupBatchSize: 25,
-    cleanupSpecKind: 'selectedImportPublishedMirror',
+    cleanupSpecKind: 'selectedImportPublished',
     cleanupTable: 'mart.review_selected_article_import_current_v4',
     cleanupTableIndex: 11,
     nextCleanupTableIndex: 12,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
   expect(joined).toContain('DELETE FROM mart.review_selected_article_import_current_v4')
-  expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
-  expect(joined).toContain('CREATE TEMP TABLE review_selected_import_retention_cleanup_candidate AS')
+  expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('review_selected_import_retention_cleanup_candidate')
   expect(joined).toContain("candidate.project_id = 'project-1'")
-  expect(joined).toContain('ORDER BY selected_import_snapshot_id, article_id')
+  expect(joined).toContain('ORDER BY candidate.selected_import_snapshot_id')
   expect(joined).toContain('LIMIT 25')
   expect(joined).toContain('"tableIndex":12')
 })
@@ -263,7 +263,7 @@ test('retention cleanup allowlists chunk manifest cleanup after summary partial 
   expect(joined).toContain('"tableIndex":0')
 })
 
-test('retention cleanup removes selected-import published and mirror rows from one DuckDB keyset', async () => {
+test('retention cleanup removes selected-import published rows and compatibility view follows current', async () => {
   const duckdbInstance = await DuckDBInstance.create(':memory:')
   const connection = await duckdbInstance.connect()
   const database: ReviewServingRetentionServiceDatabase = {
@@ -330,10 +330,9 @@ test('retention cleanup removes selected-import published and mirror rows from o
         tombstone BOOLEAN NOT NULL DEFAULT FALSE,
         selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
       );
-      CREATE TABLE app.review_selected_article_import_v4 AS
+      CREATE VIEW app.review_selected_article_import_v4 AS
       SELECT *
-      FROM mart.review_selected_article_import_current_v4
-      WHERE FALSE;
+      FROM mart.review_selected_article_import_current_v4;
       INSERT INTO app.review_serving_retention_mark (
         retention_scope,
         cutoff_snapshot_id,
@@ -390,23 +389,6 @@ test('retention cleanup removes selected-import published and mirror rows from o
         ('project-1', 'scope-1', 'selected-active', 'article-active', 'route-1', 'source-3', 'rank-3', 3, FALSE, TIMESTAMPTZ '2026-06-16T00:00:00Z'),
         ('project-1', 'scope-1', 'selected-lkg', 'article-lkg', 'route-1', 'source-4', 'rank-4', 4, FALSE, TIMESTAMPTZ '2026-06-16T00:00:00Z'),
         ('project-1', 'scope-1', 'selected-pinned', 'article-pinned', 'route-1', 'source-5', 'rank-5', 5, FALSE, TIMESTAMPTZ '2026-06-16T00:00:00Z');
-      INSERT INTO app.review_selected_article_import_v4
-      SELECT *
-      FROM mart.review_selected_article_import_current_v4
-      WHERE article_id <> 'article-current-only';
-      INSERT INTO app.review_selected_article_import_v4 (
-        project_id,
-        project_scope_identity,
-        selected_import_snapshot_id,
-        article_id,
-        import_route_id,
-        source_record_key,
-        selected_rank_key,
-        selected_rank_numeric,
-        tombstone,
-        selected_import_updated_at
-      )
-      VALUES ('project-1', 'scope-1', 'selected-mirror-only', 'article-mirror-only', 'route-1', 'source-6', 'rank-6', 6, FALSE, TIMESTAMPTZ '2026-06-16T00:00:00Z');
     `)
 
     const result = await cleanupReviewServingRetentionState(
@@ -424,7 +406,7 @@ test('retention cleanup removes selected-import published and mirror rows from o
       ORDER BY article_id
     `)
 
-    expect(result.cleanupSpecKind).toBe('selectedImportPublishedMirror')
+    expect(result.cleanupSpecKind).toBe('selectedImportPublished')
     expect(
       currentRows.map((row) => {
         return row.articleId

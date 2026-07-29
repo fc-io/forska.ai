@@ -228,7 +228,7 @@ test('selected-import projector creates snapshot cursor and selected article imp
   expect(statements.join('\n')).toContain('"processedRowCount":1')
 })
 
-test('selected-import batch mirror updates stale compatibility rows from the published mart in DuckDB', async () => {
+test('selected-import batch compatibility view follows the published mart in DuckDB', async () => {
   const {close, database} = await createDuckdbSelectedImportProjectorDatabase()
 
   try {
@@ -320,19 +320,9 @@ test('selected-import batch mirror updates stale compatibility rows from the pub
       )
     `)
     await database.run(`
-      CREATE TABLE app.review_selected_article_import_v4 (
-        project_id VARCHAR NOT NULL,
-        project_scope_identity VARCHAR NOT NULL,
-        selected_import_snapshot_id VARCHAR NOT NULL,
-        article_id VARCHAR NOT NULL,
-        import_route_id VARCHAR,
-        source_record_key VARCHAR,
-        selected_rank_key VARCHAR,
-        selected_rank_numeric DOUBLE,
-        tombstone BOOLEAN NOT NULL,
-        selected_import_updated_at TIMESTAMPTZ NOT NULL,
-        PRIMARY KEY(project_id, project_scope_identity, selected_import_snapshot_id, article_id)
-      )
+      CREATE VIEW app.review_selected_article_import_v4 AS
+      SELECT *
+      FROM mart.review_selected_article_import_current_v4
     `)
     await database.run("INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1', TRUE, FALSE)")
     await database.run("INSERT INTO app.project_import_route VALUES ('project-1', 'import-route-1')")
@@ -342,10 +332,6 @@ test('selected-import batch mirror updates stale compatibility rows from the pub
     `)
     await database.run(`
       INSERT INTO mart.review_selected_article_import_current_v4
-      VALUES ('project-1', 'projectScope:identity-1', 'selected-import-1', 'article-1', 'route-old', 'source-old', 'rank-old', 5, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
-    `)
-    await database.run(`
-      INSERT INTO app.review_selected_article_import_v4
       VALUES ('project-1', 'projectScope:identity-1', 'selected-import-1', 'article-1', 'route-old', 'source-old', 'rank-old', 5, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
     `)
 
@@ -695,18 +681,9 @@ test('selected-import article range insert fails duplicate source publication ke
       )
     `)
     await database.run(`
-      CREATE TABLE app.review_selected_article_import_v4 (
-        project_id VARCHAR NOT NULL,
-        project_scope_identity VARCHAR NOT NULL,
-        selected_import_snapshot_id VARCHAR NOT NULL,
-        article_id VARCHAR NOT NULL,
-        import_route_id VARCHAR NOT NULL,
-        source_record_key VARCHAR NOT NULL,
-        selected_rank_key VARCHAR,
-        selected_rank_numeric DOUBLE,
-        tombstone BOOLEAN NOT NULL,
-        selected_import_updated_at TIMESTAMP NOT NULL
-      )
+      CREATE VIEW app.review_selected_article_import_v4 AS
+      SELECT *
+      FROM mart.review_selected_article_import_current_v4
     `)
     await database.run("INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1', TRUE, FALSE)")
     await database.run("INSERT INTO app.project_import_route VALUES ('project-1', 'import-route-1')")
@@ -755,7 +732,7 @@ test('selected-import article range insert fails duplicate source publication ke
   }
 })
 
-test('selected-import article range staged publish executes in DuckDB and refreshes compatibility mirror', async () => {
+test('selected-import article range staged publish executes in DuckDB and compatibility view follows current', async () => {
   const {close, database} = await createDuckdbSelectedImportProjectorDatabase()
 
   try {
@@ -833,18 +810,9 @@ test('selected-import article range staged publish executes in DuckDB and refres
       )
     `)
     await database.run(`
-      CREATE TABLE app.review_selected_article_import_v4 (
-        project_id VARCHAR NOT NULL,
-        project_scope_identity VARCHAR NOT NULL,
-        selected_import_snapshot_id VARCHAR NOT NULL,
-        article_id VARCHAR NOT NULL,
-        import_route_id VARCHAR,
-        source_record_key VARCHAR,
-        selected_rank_key VARCHAR,
-        selected_rank_numeric DOUBLE,
-        tombstone BOOLEAN NOT NULL,
-        selected_import_updated_at TIMESTAMP NOT NULL
-      )
+      CREATE VIEW app.review_selected_article_import_v4 AS
+      SELECT *
+      FROM mart.review_selected_article_import_current_v4
     `)
     await database.run(`
       INSERT INTO mart.project_scope_article
@@ -1023,7 +991,7 @@ test('selected-import article range rebuild can skip final serving row refresh',
   const joined = statements.join('\n')
 
   expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
-  expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
+  expect(joined).not.toContain('INSERT INTO app.review_selected_article_import_v4')
   expect(joined).not.toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS')
   expect(joined).not.toContain('DELETE FROM mart.review_article_serving_base_v4 serving')
   expect(joined).not.toContain('INSERT INTO mart.review_article_serving_base_v4')

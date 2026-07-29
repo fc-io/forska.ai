@@ -812,35 +812,9 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       INSERT INTO mart.review_selected_article_import_current_v4 BY NAME
       SELECT *
       FROM startup_probe_review_selected_article_import_current_v4;
-      DELETE FROM app.review_selected_article_import_v4
-      WHERE EXISTS (
-        SELECT 1
-        FROM startup_probe_review_selected_article_import_current_v4 probe
-        WHERE app.review_selected_article_import_v4.project_id IS NOT DISTINCT FROM probe.project_id
-          AND app.review_selected_article_import_v4.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
-          AND app.review_selected_article_import_v4.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
-          AND app.review_selected_article_import_v4.article_id IS NOT DISTINCT FROM probe.article_id
-      );
-      INSERT INTO app.review_selected_article_import_v4 BY NAME
-      SELECT current_row.*
-      FROM mart.review_selected_article_import_current_v4 current_row
-      INNER JOIN startup_probe_review_selected_article_import_current_v4 probe
-        ON current_row.project_id IS NOT DISTINCT FROM probe.project_id
-       AND current_row.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
-       AND current_row.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
-       AND current_row.article_id IS NOT DISTINCT FROM probe.article_id;
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_selected_article_import_current_v4;
     `,
-    postRepairSql: `
-      BEGIN;
-      DELETE FROM app.review_selected_article_import_v4;
-      INSERT INTO app.review_selected_article_import_v4 BY NAME
-      SELECT *
-      FROM mart.review_selected_article_import_current_v4;
-      COMMIT;
-    `,
-    postRepairSchemaRequirements: [{schemaName: 'app', tableName: 'review_selected_article_import_v4'}],
     recreateRepairPrimaryKeyIndex: false,
     recreateSecondaryIndexes: false,
     schemaName: 'mart',

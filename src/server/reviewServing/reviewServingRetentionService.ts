@@ -18,7 +18,7 @@ export type ReviewServingRetentionCleanupInput = {
 }
 
 export type ReviewServingRetentionCleanupSpecKind =
-  | 'selectedImportPublishedMirror'
+  | 'selectedImportPublished'
   | 'snapshot'
   | 'terminalRebuildChunkManifest'
 
@@ -74,7 +74,7 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
   },
   {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_title_search_serving_v4'},
   {
-    kind: 'selectedImportPublishedMirror',
+    kind: 'selectedImportPublished',
     keyColumn: 'selected_import_snapshot_id',
     protectedPredicate: 'selected_import_snapshot_id',
     table: 'mart.review_selected_article_import_current_v4',
@@ -339,98 +339,38 @@ const deleteTerminalRebuildChunkManifestCleanupBatch = async (
   `)
 }
 
-const deleteSelectedImportPublishedMirrorCleanupBatch = async (
+const deleteSelectedImportPublishedCleanupBatch = async (
   input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
   database: ReviewServingRetentionServiceTransaction,
 ) => {
   await database.run(`
-    DROP TABLE IF EXISTS review_selected_import_retention_cleanup_candidate;
-    CREATE TEMP TABLE review_selected_import_retention_cleanup_candidate AS
-      SELECT
-        candidate.project_id,
-        candidate.project_scope_identity,
-        candidate.selected_import_snapshot_id,
-        candidate.article_id
-      FROM ${input.spec.table} candidate
-      WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
-        AND NOT EXISTS (
-          SELECT 1
-          FROM app.review_serving_snapshot_manifest active_manifest
-          WHERE active_manifest.project_id = candidate.project_id
-            AND active_manifest.snapshot_status = 'active'
-            AND (
-              active_manifest.snapshot_id = candidate.${input.spec.protectedPredicate}
-              OR active_manifest.last_known_good_snapshot_id = candidate.${input.spec.protectedPredicate}
-              OR active_manifest.selected_import_snapshot_id = candidate.${input.spec.protectedPredicate}
-            )
-        )
-        AND NOT (${getSelectedImportProtectedPredicate(input.spec, input.now)})
-        AND NOT EXISTS (
-          SELECT 1
-          FROM app.review_serving_snapshot_pin pin
-          WHERE pin.project_id = candidate.project_id
-            AND pin.snapshot_id = candidate.${input.spec.protectedPredicate}
-            AND ${getActivePinPredicate(input.now)}
-        )
-      UNION
-      SELECT
-        candidate.project_id,
-        candidate.project_scope_identity,
-        candidate.selected_import_snapshot_id,
-        candidate.article_id
-      FROM app.review_selected_article_import_v4 candidate
-      WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
-        AND NOT EXISTS (
-          SELECT 1
-          FROM ${input.spec.table} published
-          WHERE published.project_id IS NOT DISTINCT FROM candidate.project_id
-            AND published.project_scope_identity IS NOT DISTINCT FROM candidate.project_scope_identity
-            AND published.selected_import_snapshot_id IS NOT DISTINCT FROM candidate.selected_import_snapshot_id
-            AND published.article_id IS NOT DISTINCT FROM candidate.article_id
-        )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM app.review_serving_snapshot_manifest active_manifest
-          WHERE active_manifest.project_id = candidate.project_id
-            AND active_manifest.snapshot_status = 'active'
-            AND (
-              active_manifest.snapshot_id = candidate.${input.spec.protectedPredicate}
-              OR active_manifest.last_known_good_snapshot_id = candidate.${input.spec.protectedPredicate}
-              OR active_manifest.selected_import_snapshot_id = candidate.${input.spec.protectedPredicate}
-            )
-        )
-        AND NOT (${getSelectedImportProtectedPredicate(input.spec, input.now)})
-        AND NOT EXISTS (
-          SELECT 1
-          FROM app.review_serving_snapshot_pin pin
-          WHERE pin.project_id = candidate.project_id
-            AND pin.snapshot_id = candidate.${input.spec.protectedPredicate}
-            AND ${getActivePinPredicate(input.now)}
-        )
-      ORDER BY selected_import_snapshot_id, article_id
-      LIMIT ${getSqlLiteral(input.batchSize)};
-
-    DELETE FROM app.review_selected_article_import_v4
-    WHERE EXISTS (
-      SELECT 1
-      FROM review_selected_import_retention_cleanup_candidate candidate
-      WHERE app.review_selected_article_import_v4.project_id IS NOT DISTINCT FROM candidate.project_id
-        AND app.review_selected_article_import_v4.project_scope_identity IS NOT DISTINCT FROM candidate.project_scope_identity
-        AND app.review_selected_article_import_v4.selected_import_snapshot_id IS NOT DISTINCT FROM candidate.selected_import_snapshot_id
-        AND app.review_selected_article_import_v4.article_id IS NOT DISTINCT FROM candidate.article_id
-    );
-
     DELETE FROM ${input.spec.table}
-    WHERE EXISTS (
-      SELECT 1
-      FROM review_selected_import_retention_cleanup_candidate candidate
-      WHERE ${input.spec.table}.project_id IS NOT DISTINCT FROM candidate.project_id
-        AND ${input.spec.table}.project_scope_identity IS NOT DISTINCT FROM candidate.project_scope_identity
-        AND ${input.spec.table}.selected_import_snapshot_id IS NOT DISTINCT FROM candidate.selected_import_snapshot_id
-        AND ${input.spec.table}.article_id IS NOT DISTINCT FROM candidate.article_id
-    );
-
-    DROP TABLE IF EXISTS review_selected_import_retention_cleanup_candidate;
+    WHERE rowid IN (
+        SELECT candidate.rowid
+        FROM ${input.spec.table} candidate
+        WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest active_manifest
+            WHERE active_manifest.project_id = candidate.project_id
+              AND active_manifest.snapshot_status = 'active'
+              AND (
+                active_manifest.snapshot_id = candidate.${input.spec.protectedPredicate}
+                OR active_manifest.last_known_good_snapshot_id = candidate.${input.spec.protectedPredicate}
+                OR active_manifest.selected_import_snapshot_id = candidate.${input.spec.protectedPredicate}
+              )
+          )
+          AND NOT (${getSelectedImportProtectedPredicate(input.spec, input.now)})
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_pin pin
+            WHERE pin.project_id = candidate.project_id
+              AND pin.snapshot_id = candidate.${input.spec.protectedPredicate}
+              AND ${getActivePinPredicate(input.now)}
+          )
+        ORDER BY ${getCleanupOrderBy(input.spec)}
+        LIMIT ${getSqlLiteral(input.batchSize)}
+      )
   `)
 }
 
@@ -443,8 +383,8 @@ const deleteCleanupBatch = async (
     return
   }
 
-  if (input.spec.kind === 'selectedImportPublishedMirror') {
-    await deleteSelectedImportPublishedMirrorCleanupBatch(input, database)
+  if (input.spec.kind === 'selectedImportPublished') {
+    await deleteSelectedImportPublishedCleanupBatch(input, database)
     return
   }
 

@@ -5015,7 +5015,7 @@ test('selected import runner releases dirty work while base projection is still 
     runStatements.some((statement) => {
       return statement.includes('INSERT INTO app.review_selected_article_import_v4')
     }),
-  ).toBe(true)
+  ).toBe(false)
   expect(
     runStatements.some((statement) => {
       return (
@@ -8253,7 +8253,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('reviewChange')
   expect(joined).toContain('DELETE FROM mart.review_selected_article_import_current_v4')
   expect(joined).toContain('DELETE FROM mart.review_selected_article_import_staging_v4')
-  expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('article_id IS NOT DISTINCT FROM')

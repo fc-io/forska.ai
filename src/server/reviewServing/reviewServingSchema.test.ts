@@ -115,6 +115,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0213_dropRemainingReviewServingHotTableIndexes.sql',
   '../../db/duckdbMigrations/0217_selectedImportPublishedMart.sql',
   '../../db/duckdbMigrations/0218_reviewSelectedImportAppendStaging.sql',
+  '../../db/duckdbMigrations/0219_selectedImportCompatibilityView.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -347,7 +348,6 @@ const reviewServingPhase1Tables = [
   'app.review_rebuild_request',
   'app.review_rebuild_chunk_manifest',
   'app.review_selected_import_snapshot',
-  'app.review_selected_article_import_v4',
   'app.review_serving_snapshot_manifest',
   'app.review_serving_snapshot_pin',
   'app.review_write_overlay',
@@ -390,6 +390,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_serving_detail',
   'app.review_rebuild_partial_cleanup_authorization',
 ])
+const reviewServingTablesConvertedToViews = new Set<string>(['app.review_selected_article_import_v4'])
 
 const deltaEnvelopeColumns = [
   'delta_id',
@@ -469,9 +470,20 @@ const getTableSql = (tableName: string) => {
     return ''
   }
 
-  const lastDropIndex = retiredReviewServingTables.has(tableName) ? getLastDropTableIndex(tableName) : -1
+  const lastDropIndex =
+    retiredReviewServingTables.has(tableName) || reviewServingTablesConvertedToViews.has(tableName)
+      ? getLastDropTableIndex(tableName)
+      : -1
 
   return lastDropIndex > (lastMatch.index ?? -1) ? '' : lastMatch[0]
+}
+
+const getViewSql = (viewName: string) => {
+  const matches = [
+    ...schemaMigrationSql.matchAll(new RegExp(`CREATE VIEW ${escapeRegex(viewName)} AS[\\s\\S]*?;`, 'g')),
+  ]
+
+  return matches.at(-1)?.[0] ?? ''
 }
 
 const getTableColumnSql = (tableName: string) => {
@@ -560,6 +572,15 @@ test('Phase 1 schema migration creates every review-serving table', () => {
   expect(missingTables).toEqual([])
 })
 
+test('selected-import compatibility surface is a view over the published mart', () => {
+  const compatibilityViewSql = getViewSql('app.review_selected_article_import_v4')
+
+  expect(reviewServingPhase1Tables).not.toContain('app.review_selected_article_import_v4')
+  expect(getTableSql('app.review_selected_article_import_v4')).toBe('')
+  expect(compatibilityViewSql).toContain('CREATE VIEW app.review_selected_article_import_v4 AS')
+  expect(compatibilityViewSql).toContain('FROM mart.review_selected_article_import_current_v4')
+})
+
 test('retired patch tables are absent from the active review-serving schema', () => {
   expect(getTableSql('mart.review_queue_patch_v4')).toBe('')
   expect(reviewQueuePatchRetirementForwardMigrationSql.trim()).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
@@ -625,18 +646,7 @@ test('selected import schema drops retired display-copy and selected-base flag c
   expect(reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql).toContain(
     'ALTER TABLE app.review_selected_article_import_v4_repair RENAME TO review_selected_article_import_v4;',
   )
-  expect([...getTableColumns('app.review_selected_article_import_v4')]).toEqual([
-    'project_id',
-    'project_scope_identity',
-    'selected_import_snapshot_id',
-    'article_id',
-    'import_route_id',
-    'source_record_key',
-    'selected_rank_key',
-    'selected_rank_numeric',
-    'tombstone',
-    'selected_import_updated_at',
-  ])
+  expect(getViewSql('app.review_selected_article_import_v4')).toContain('selected_import_updated_at')
   expect([...getTableColumns('mart.review_selected_article_import_current_v4')]).toEqual([
     'project_id',
     'project_scope_identity',
