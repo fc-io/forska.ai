@@ -3686,18 +3686,12 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     expect(selectedImportCurrentProbe?.mutationProbeSql).toContain(
       'INSERT INTO mart.review_selected_article_import_current_v4 BY NAME',
     )
-    expect(selectedImportCurrentProbe?.mutationProbeSql).toContain(
-      'INSERT INTO app.review_selected_article_import_v4 BY NAME',
-    )
+    expect(selectedImportCurrentProbe?.mutationProbeSql).not.toContain('app.review_selected_article_import_v4')
     expect(selectedImportCurrentProbe?.mutationProbeSql).not.toContain(
       'SET selected_import_updated_at = current_timestamp',
     )
-    expect(selectedImportCurrentProbe?.postRepairSql).toContain('DELETE FROM app.review_selected_article_import_v4')
-    expect(selectedImportCurrentProbe?.postRepairSql).toContain('FROM mart.review_selected_article_import_current_v4')
-    expect(selectedImportCurrentProbe?.postRepairSchemaRequirements).toContainEqual({
-      schemaName: 'app',
-      tableName: 'review_selected_article_import_v4',
-    })
+    expect(selectedImportCurrentProbe?.postRepairSql).toBeUndefined()
+    expect(selectedImportCurrentProbe?.postRepairSchemaRequirements).toBeUndefined()
     expect(typeof selectedImportCurrentProbe?.mutationProbeSql).toBe('string')
     const selectedImportProbeInstance = await DuckDBInstance.create(':memory:')
     const selectedImportProbeConnection = await selectedImportProbeInstance.connect()
@@ -3728,10 +3722,9 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
           tombstone BOOLEAN NOT NULL DEFAULT FALSE,
           selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
         );
-        CREATE TABLE app.review_selected_article_import_v4 AS
+        CREATE VIEW app.review_selected_article_import_v4 AS
         SELECT *
-        FROM mart.review_selected_article_import_current_v4
-        WHERE FALSE;
+        FROM mart.review_selected_article_import_current_v4;
         INSERT INTO app.review_rebuild_chunk_manifest (
           chunk_id,
           project_id,
@@ -3775,30 +3768,6 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
           1,
           FALSE,
           TIMESTAMPTZ '2026-06-16T00:00:00Z'
-        );
-        INSERT INTO app.review_selected_article_import_v4 (
-          project_id,
-          project_scope_identity,
-          selected_import_snapshot_id,
-          article_id,
-          import_route_id,
-          source_record_key,
-          selected_rank_key,
-          selected_rank_numeric,
-          tombstone,
-          selected_import_updated_at
-        )
-        VALUES (
-          'project-1',
-          'scope-1',
-          'selected-1',
-          'article-1',
-          'route-stale',
-          'source-stale',
-          'rank-stale',
-          99,
-          TRUE,
-          TIMESTAMPTZ '2026-06-15T00:00:00Z'
         );
       `)
       await selectedImportProbeConnection.run(selectedImportCurrentProbe?.mutationProbeSql ?? '')

@@ -9954,6 +9954,161 @@ test('migrateDuckdb skips checkpoint when no migration files are applied', async
   }
 })
 
+test('DuckDB migration converts selected-import compatibility mirror to a view over current mart', async () => {
+  const duckdbPath = `/tmp/forska-selected-import-compatibility-view-${Date.now()}.duckdb`
+  const targetMigrationFile = '0219_selectedImportCompatibilityView.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_selected_article_import_current_v4 (
+            project_id VARCHAR NOT NULL,
+            project_scope_identity VARCHAR NOT NULL,
+            selected_import_snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            import_route_id VARCHAR,
+            source_record_key VARCHAR,
+            selected_rank_key VARCHAR,
+            selected_rank_numeric DOUBLE,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_selected_article_import_v4 (
+            project_id VARCHAR NOT NULL,
+            project_scope_identity VARCHAR NOT NULL,
+            selected_import_snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            import_route_id VARCHAR,
+            source_record_key VARCHAR,
+            selected_rank_key VARCHAR,
+            selected_rank_numeric DOUBLE,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_selected_article_import_current_v4
+          VALUES ('project-a', 'scope-a', 'snapshot-a', 'article-a', 'route-current', 'source-current', 'rank-current', 1, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z')
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_selected_article_import_v4
+          VALUES ('project-a', 'scope-a', 'snapshot-a', 'article-a', 'route-stale', 'source-stale', 'rank-stale', 99, TRUE, TIMESTAMPTZ '2026-07-23T08:00:00Z')
+        \`)
+
+        await migrateDuckdb()
+
+        const tableRows = await database.queryJson(\`
+          SELECT table_type AS tableType
+          FROM information_schema.tables
+          WHERE table_schema = 'app'
+            AND table_name = 'review_selected_article_import_v4'
+        \`)
+        const viewRows = await database.queryJson(\`
+          SELECT view_name AS viewName
+          FROM duckdb_views()
+          WHERE schema_name = 'app'
+            AND view_name = 'review_selected_article_import_v4'
+        \`)
+        const rows = await database.queryJson(\`
+          SELECT
+            import_route_id AS importRouteId,
+            source_record_key AS sourceRecordKey,
+            selected_rank_key AS selectedRankKey,
+            selected_rank_numeric AS selectedRankNumeric,
+            tombstone
+          FROM app.review_selected_article_import_v4
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0219_selectedImportCompatibilityView.sql'"
+        )
+
+        console.log(JSON.stringify({migrationRows, rows, tableRows, viewRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      migrationRows: {name: string}[]
+      rows: {
+        importRouteId: string
+        selectedRankKey: string
+        selectedRankNumeric: number
+        sourceRecordKey: string
+        tombstone: boolean
+      }[]
+      tableRows: {tableType: string}[]
+      viewRows: {viewName: string}[]
+    }
+
+    expect(parsed.migrationRows).toEqual([{name: '0219_selectedImportCompatibilityView.sql'}])
+    expect(parsed.tableRows).toEqual([{tableType: 'VIEW'}])
+    expect(parsed.viewRows).toEqual([{viewName: 'review_selected_article_import_v4'}])
+    expect(parsed.rows).toEqual([
+      {
+        importRouteId: 'route-current',
+        selectedRankKey: 'rank-current',
+        selectedRankNumeric: 1,
+        sourceRecordKey: 'source-current',
+        tombstone: false,
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
 test('migrateDuckdb skips post-migration checkpoint under low-memory DuckDB profile', async () => {
   process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-low-memory-checkpoint-skip-test.duckdb'

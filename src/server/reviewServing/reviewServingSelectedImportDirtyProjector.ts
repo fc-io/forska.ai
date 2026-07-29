@@ -55,7 +55,6 @@ export type ResetReviewServingSelectedImportDirtyArticleRangeInput = {
   selectedImportSnapshotId: string
 }
 
-const selectedImportCompatibilityTable = 'app.review_selected_article_import_v4'
 const selectedImportPublishedTable = 'mart.review_selected_article_import_current_v4'
 const selectedImportStagingTable = 'mart.review_selected_article_import_staging_v4'
 
@@ -733,7 +732,7 @@ const getSelectedImportDirtyManifest = (
   }
 }
 
-const getMirrorSelectedImportDirtyCompatibilityStatements = (
+const getPublishSelectedImportDirtyStatements = (
   input: Pick<
     ProjectReviewServingSelectedImportDirtyInput,
     'projectId' | 'projectScopeIdentity' | 'selectedImportSnapshotId'
@@ -869,51 +868,6 @@ const getMirrorSelectedImportDirtyCompatibilityStatements = (
       END AS assertion_passed
     FROM duplicate_article
   `,
-    `
-    DELETE FROM ${selectedImportCompatibilityTable}
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND list_contains(${articleIdsSql}, article_id)
-  `,
-    `
-    INSERT INTO ${selectedImportCompatibilityTable} (
-      project_id,
-      project_scope_identity,
-      selected_import_snapshot_id,
-      article_id,
-      import_route_id,
-      source_record_key,
-      selected_rank_key,
-      selected_rank_numeric,
-      tombstone,
-      selected_import_updated_at
-    )
-    SELECT
-      published.project_id,
-      published.project_scope_identity,
-      published.selected_import_snapshot_id,
-      published.article_id,
-      published.import_route_id,
-      published.source_record_key,
-      published.selected_rank_key,
-      published.selected_rank_numeric,
-      published.tombstone,
-      published.selected_import_updated_at
-    FROM ${selectedImportPublishedTable} published
-    WHERE published.project_id = ${getSqlLiteral(input.projectId)}
-      AND published.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND published.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND list_contains(${articleIdsSql}, published.article_id)
-      AND NOT EXISTS (
-        SELECT 1
-        FROM ${selectedImportCompatibilityTable} existing
-        WHERE existing.project_id = published.project_id
-          AND existing.project_scope_identity = published.project_scope_identity
-          AND existing.selected_import_snapshot_id = published.selected_import_snapshot_id
-          AND existing.article_id = published.article_id
-      )
-  `,
   ]
 }
 
@@ -933,7 +887,7 @@ export const projectReviewServingSelectedImportDirty = async (
     {
       acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
       component: 'selectedImport',
-      postRecordStatements: getMirrorSelectedImportDirtyCompatibilityStatements(input, rows),
+      postRecordStatements: getPublishSelectedImportDirtyStatements(input, rows),
       projectionManifests: shouldAcknowledgeClaims ? [getSelectedImportDirtyManifest(input)] : [],
       records: stagingRecords,
       statements: getApplySelectedImportServingStatements({

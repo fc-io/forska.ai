@@ -25,26 +25,25 @@ Status: implemented in the follow-up after PR #320.
 
 Selected-import rebuild and dirty writes now publish first to
 `mart.review_selected_article_import_current_v4`. The legacy
-`app.review_selected_article_import_v4` table remains as a compatibility mirror
-for readers that have not moved yet, but it no longer decides rebuild chunk
-success, output checksum/count validation, or selected-import compaction
-correctness.
+`app.review_selected_article_import_v4` compatibility surface is now a read-only
+view over the published mart, so it no longer has independent physical rows or
+runtime write/delete paths.
 
 Evidence required before treating this slice as done:
 
 - Migration backfills the published mart deterministically when legacy rows
   contain duplicate logical keys.
-- Range, batch, and dirty writes assert duplicate published keys before mirror
-  refresh.
-- Compatibility mirror refresh updates stale existing rows, not only missing
-  rows.
-- Startup probes check the published mart as well as the legacy compatibility
-  table.
-- Current-DB selected-import rebuild progress completes with mart/mirror parity.
+- Range, batch, and dirty writes assert duplicate published keys before
+  publication.
+- Compatibility reads follow the published mart through a view instead of a
+  refreshed physical mirror.
+- Startup probes check and repair the published mart only; compatibility follows
+  it through the view.
+- Current-DB selected-import rebuild progress completes with mart/view parity.
 
 ### 1. Move selected-import writes to append/staging plus compaction
 
-Status: in progress.
+Status: implemented in follow-up slices.
 
 Implemented follow-up slices:
 
@@ -54,13 +53,12 @@ Implemented follow-up slices:
 - Article-range rebuild publication now stages deterministic winner rows before
   publishing bounded current rows into
   `mart.review_selected_article_import_current_v4`, then marks staging rows as
-  published and refreshes the compatibility mirror.
+  published.
 - Cursor/batch selected-import projection now writes deterministic staging
-  records and publishes/updates the current mart from staging before refreshing
-  the compatibility mirror.
+  records and publishes/updates the current mart from staging.
 - Dirty selected-import projection now writes deterministic dirty staging rows,
   publishes/updates only the dirty article IDs into the current mart, marks
-  staging rows as published, and then refreshes the compatibility mirror.
+  staging rows as published.
 
 Build a selected-import staging model where rebuild chunks append deterministic
 candidate/range rows and a bounded compaction step selects the current winner per
@@ -86,6 +84,8 @@ Likely touchpoints:
 
 ### 2. Make the mart component the only selected-import serving contract
 
+Status: implemented for runtime serving/projector readers.
+
 Route readers and downstream projectors should consume the published
 selected-import mart/component state, not the mutable `app.review_selected_article_import_v4`
 table as a de facto source of truth.
@@ -109,13 +109,17 @@ Likely touchpoints:
 
 ### 3. Retire the legacy mutable table and its compatibility guards
 
+Status: implemented as a compatibility-view slice; keep the view only as a
+temporary compatibility surface for diagnostics and older tooling.
+
 After staging, compaction, and mart-owned consumers are proven, remove the old
 selected-import mutable serving table as a long-term write/read dependency.
 
 Acceptance criteria:
 
 - `app.review_selected_article_import_v4` is no longer written by runtime
-  projectors.
+  projectors and is represented as a view over
+  `mart.review_selected_article_import_current_v4`.
 - Its unique/index backstop can be dropped because publication validation proves
   there is only one current selected row per logical key.
 - Retention cleans obsolete selected-import staging/legacy rows only after no

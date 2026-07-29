@@ -64,10 +64,7 @@ export type ReviewServingProjectorRecord = {
 
 export type DeleteReviewServingProjectorRowsInput = {
   predicates: Record<string, ReviewServingProjectorRecordValue | readonly string[]>
-  table:
-    | ReviewServingProjectorWritableTable
-    | 'app.review_selected_article_import_v4'
-    | 'mart.review_selected_article_import_current_v4'
+  table: ReviewServingProjectorWritableTable | 'mart.review_selected_article_import_current_v4'
 }
 
 export type RemoveReviewServingTitleSearchArticleIdsInput = {
