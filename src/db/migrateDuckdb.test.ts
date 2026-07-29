@@ -7560,6 +7560,273 @@ test('DuckDB migration creates selected-import published mart with deterministic
   }
 })
 
+test('DuckDB migration creates selected-import staging mart for replay-safe deterministic appends', async () => {
+  const duckdbPath = `/tmp/forska-selected-import-staging-mart-${Date.now()}.duckdb`
+  const targetMigrationFile = '0218_reviewSelectedImportAppendStaging.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+
+        await migrateDuckdb()
+
+        const replayStagingAppendSql = \`
+          INSERT INTO mart.review_selected_article_import_staging_v4 (
+            staging_row_id,
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id,
+            import_route_id,
+            source_record_key,
+            selected_rank_key,
+            selected_rank_numeric,
+            tombstone,
+            selected_import_updated_at,
+            projection_identity,
+            source_delta_high_water,
+            source_partition,
+            publish_scope_key,
+            created_at,
+            published_at
+          )
+          WITH candidate_rows(
+            staging_row_id,
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id,
+            import_route_id,
+            source_record_key,
+            selected_rank_key,
+            selected_rank_numeric,
+            tombstone,
+            selected_import_updated_at,
+            projection_identity,
+            source_delta_high_water,
+            source_partition,
+            publish_scope_key,
+            created_at,
+            published_at
+          ) AS (
+            VALUES
+              ('owner-a:project-a:scope-a:snapshot-a:article-a', 'project-a', 'scope-a', 'snapshot-a', 'article-a', 'route-old', 'source-old', 'rank-old', 2, FALSE, TIMESTAMPTZ '2026-07-24T08:00:00Z', 'owner-a', 10, 'import-route:route-old', 'project-a:scope-a:snapshot-a', TIMESTAMPTZ '2026-07-24T08:10:00Z', NULL),
+              ('owner-a:project-a:scope-a:snapshot-a:article-a', 'project-a', 'scope-a', 'snapshot-a', 'article-a', 'route-new', 'source-new', 'rank-new', 1, TRUE, TIMESTAMPTZ '2026-07-24T08:05:00Z', 'owner-a', 11, 'import-route:route-new', 'project-a:scope-a:snapshot-a', TIMESTAMPTZ '2026-07-24T08:10:00Z', NULL),
+              ('owner-a:project-a:scope-a:snapshot-a:article-b', 'project-a', 'scope-a', 'snapshot-a', 'article-b', 'route-b', 'source-b', 'rank-b', 3, FALSE, TIMESTAMPTZ '2026-07-24T08:02:00Z', 'owner-a', 12, 'import-route:route-b', 'project-a:scope-a:snapshot-a', TIMESTAMPTZ '2026-07-24T08:10:00Z', NULL)
+          ),
+          deterministic_rows AS (
+            SELECT *
+            FROM candidate_rows
+            QUALIFY ROW_NUMBER() OVER (
+              PARTITION BY staging_row_id
+              ORDER BY
+                source_delta_high_water DESC,
+                selected_import_updated_at DESC,
+                import_route_id ASC NULLS LAST,
+                source_record_key ASC NULLS LAST,
+                selected_rank_key ASC NULLS LAST,
+                selected_rank_numeric ASC NULLS LAST,
+                tombstone ASC
+            ) = 1
+          )
+          SELECT
+            insert_row.staging_row_id,
+            insert_row.project_id,
+            insert_row.project_scope_identity,
+            insert_row.selected_import_snapshot_id,
+            insert_row.article_id,
+            insert_row.import_route_id,
+            insert_row.source_record_key,
+            insert_row.selected_rank_key,
+            insert_row.selected_rank_numeric,
+            insert_row.tombstone,
+            insert_row.selected_import_updated_at,
+            insert_row.projection_identity,
+            insert_row.source_delta_high_water,
+            insert_row.source_partition,
+            insert_row.publish_scope_key,
+            insert_row.created_at,
+            insert_row.published_at
+          FROM deterministic_rows insert_row
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM mart.review_selected_article_import_staging_v4 existing
+            WHERE existing.staging_row_id = insert_row.staging_row_id
+          )
+        \`
+
+        await database.run(replayStagingAppendSql)
+        await database.run(replayStagingAppendSql)
+
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_selected_article_import_staging_v4'
+          ORDER BY ordinal_position
+        \`)
+        const duplicateRows = await database.queryJson(\`
+          SELECT staging_row_id AS stagingRowId, COUNT(*) AS rowCount
+          FROM mart.review_selected_article_import_staging_v4
+          GROUP BY staging_row_id
+          HAVING COUNT(*) > 1
+        \`)
+        const rows = await database.queryJson(\`
+          SELECT
+            staging_row_id AS stagingRowId,
+            article_id AS articleId,
+            import_route_id AS importRouteId,
+            source_record_key AS sourceRecordKey,
+            selected_rank_key AS selectedRankKey,
+            selected_rank_numeric AS selectedRankNumeric,
+            tombstone,
+            projection_identity AS projectionIdentity,
+            CAST(source_delta_high_water AS INTEGER) AS sourceDeltaHighWater,
+            source_partition AS sourcePartition,
+            publish_scope_key AS publishScopeKey,
+            published_at AS publishedAt
+          FROM mart.review_selected_article_import_staging_v4
+          ORDER BY staging_row_id
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0218_reviewSelectedImportAppendStaging.sql'"
+        )
+
+        console.log(JSON.stringify({columns, duplicateRows, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      duplicateRows: {stagingRowId: string; rowCount: number}[]
+      migrationRows: {name: string}[]
+      rows: {
+        articleId: string
+        importRouteId: string
+        projectionIdentity: string
+        publishedAt: string | null
+        publishScopeKey: string
+        selectedRankKey: string
+        selectedRankNumeric: number
+        sourceDeltaHighWater: number
+        sourcePartition: string
+        sourceRecordKey: string
+        stagingRowId: string
+        tombstone: boolean
+      }[]
+    }
+
+    expect(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    ).toEqual([
+      'staging_row_id',
+      'project_id',
+      'project_scope_identity',
+      'selected_import_snapshot_id',
+      'article_id',
+      'import_route_id',
+      'source_record_key',
+      'selected_rank_key',
+      'selected_rank_numeric',
+      'tombstone',
+      'selected_import_updated_at',
+      'projection_identity',
+      'source_delta_high_water',
+      'source_partition',
+      'publish_scope_key',
+      'created_at',
+      'published_at',
+    ])
+    expect(parsed.duplicateRows).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-a',
+        importRouteId: 'route-new',
+        projectionIdentity: 'owner-a',
+        publishedAt: null,
+        publishScopeKey: 'project-a:scope-a:snapshot-a',
+        selectedRankKey: 'rank-new',
+        selectedRankNumeric: 1,
+        sourceDeltaHighWater: 11,
+        sourcePartition: 'import-route:route-new',
+        sourceRecordKey: 'source-new',
+        stagingRowId: 'owner-a:project-a:scope-a:snapshot-a:article-a',
+        tombstone: true,
+      },
+      {
+        articleId: 'article-b',
+        importRouteId: 'route-b',
+        projectionIdentity: 'owner-a',
+        publishedAt: null,
+        publishScopeKey: 'project-a:scope-a:snapshot-a',
+        selectedRankKey: 'rank-b',
+        selectedRankNumeric: 3,
+        sourceDeltaHighWater: 12,
+        sourcePartition: 'import-route:route-b',
+        sourceRecordKey: 'source-b',
+        stagingRowId: 'owner-a:project-a:scope-a:snapshot-a:article-b',
+        tombstone: false,
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift and prompt scalar shape', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFiles = new Set([
