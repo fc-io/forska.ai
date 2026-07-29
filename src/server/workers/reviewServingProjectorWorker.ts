@@ -949,7 +949,13 @@ const getRebuildChunkSnapshots = async (
     database,
   )
   const matchingSnapshots = snapshots.filter((snapshot) => {
-    return getSnapshotComponentBaseGeneration(snapshot, chunk.projectionComponent) === chunk.outputBaseGeneration
+    const matchesTargetSnapshot =
+      chunk.snapshotId === null || chunk.snapshotId === undefined || snapshot.snapshotId === chunk.snapshotId
+
+    return (
+      matchesTargetSnapshot
+      && getSnapshotComponentBaseGeneration(snapshot, chunk.projectionComponent) === chunk.outputBaseGeneration
+    )
   })
 
   if (matchingSnapshots.length === 0) {
@@ -1685,19 +1691,12 @@ const runDisplayRebuildChunk = async (
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
               chunkStartArticleId: input.chunk.chunkStartKey,
-              displayIdentity: input.chunk.projectionIdentity,
-              humanStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'humanStatus'),
               listModeKeys: reviewServingListModes,
-              llmStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'llmStatus'),
-              payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
-              postingIdentity: requireSnapshotComponentIdentity(snapshot, 'posting'),
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               reviewConfigHash: requireReviewConfigHash(snapshot),
-              selectedImportIdentity: requireSnapshotComponentIdentity(snapshot, 'selectedImport'),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
-              summaryIdentity: requireSnapshotComponentIdentity(snapshot, 'summary'),
             },
             chunkDatabase,
           )
@@ -3392,19 +3391,12 @@ const runDisplayRebuildChunkBatch = async (
               baseGeneration: chunk.outputBaseGeneration,
               chunkEndArticleId: chunk.chunkEndKey,
               chunkStartArticleId: chunk.chunkStartKey,
-              displayIdentity: chunk.projectionIdentity,
-              humanStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'humanStatus'),
               listModeKeys: reviewServingListModes,
-              llmStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'llmStatus'),
-              payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
-              postingIdentity: requireSnapshotComponentIdentity(snapshot, 'posting'),
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               reviewConfigHash: requireReviewConfigHash(snapshot),
-              selectedImportIdentity: requireSnapshotComponentIdentity(snapshot, 'selectedImport'),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
-              summaryIdentity: requireSnapshotComponentIdentity(snapshot, 'summary'),
             }
           }),
         },

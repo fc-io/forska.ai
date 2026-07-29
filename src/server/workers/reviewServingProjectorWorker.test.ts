@@ -4938,7 +4938,7 @@ test('request snapshot targets match null-snapshot chunks by component generatio
   expect(targetSource).not.toContain('json_extract_string(posting_state.value')
 })
 
-test('display rebuild chunk executor writes bounded base rows and completes the chunk', async () => {
+test('display rebuild chunk executor writes only its target snapshot when a stale candidate shares its identity', async () => {
   const statements: string[] = []
   const displayChunk = {
     ...chunkManifest,
@@ -4947,6 +4947,7 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
     outputBaseGeneration: 7,
     projectionComponent: 'display' as const,
     projectionIdentity: 'display:project-1',
+    snapshotId: 'snapshot-display-target',
   }
   const componentState = {
     optional: [],
@@ -4972,10 +4973,23 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
       if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
         return [
           {
+            componentStateJson: {
+              optional: [],
+              required: [
+                {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+                {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+                {baseGeneration: '7', component: 'display', projectionIdentity: 'display:project-1'},
+              ],
+            },
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-stale',
+            snapshotId: 'snapshot-display-stale',
+          },
+          {
             componentStateJson: componentState,
             reviewConfigHash: 'review-config-1',
             selectedImportSnapshotId: 'selected-import-snapshot-1',
-            snapshotId: 'snapshot-display-1',
+            snapshotId: 'snapshot-display-target',
           },
         ] as T[]
       }
@@ -5044,6 +5058,8 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
   expect(joined).toContain('actual_output_rows = 4')
   expect(joined).toContain('duration_ms =')
   expect(joined).toContain('"validationMode":"cheap-count"')
+  expect(joined).toContain("'snapshot-display-target'")
+  expect(joined).not.toContain("'snapshot-display-stale'")
 })
 
 test('debug rebuild validation mode forces full checksum for chunks without expected checksums', async () => {
