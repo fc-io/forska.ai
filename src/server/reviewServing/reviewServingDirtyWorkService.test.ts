@@ -1,3 +1,4 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {
@@ -9,6 +10,7 @@ import {
   failReviewServingDirtyWorkClaims,
   getReviewServingDirtyWork,
   releaseReviewServingDirtyWorkClaims,
+  type ReviewServingDirtyWorkClaim,
   type ReviewServingDirtyWorkDatabase,
   type ReviewServingDirtyWorkRecord,
   upsertReviewServingDirtyWork,
@@ -594,7 +596,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       upsertWatermark(statement)
     }
 
-    if (statement.includes('INSERT INTO app.review_serving_project_dirty_source_watermark')) {
+    if (
+      statement.includes('INSERT INTO app.review_serving_project_dirty_source_watermark')
+      || statement.includes('UPDATE app.review_serving_project_dirty_source_watermark')
+    ) {
       upsertDirtySourceWatermarks(statement)
     }
 
@@ -871,8 +876,11 @@ test('completion advances dirty source watermarks by project and source partitio
 
   await completeReviewServingDirtyWorkClaims(claims, database)
 
-  const aggregateUpsert = statements.find((statement) => {
+  const aggregateInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_serving_project_dirty_source_watermark')
+  })
+  const aggregateUpdate = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_serving_project_dirty_source_watermark')
   })
 
   expect(acks.size).toBe(2)
@@ -881,10 +889,187 @@ test('completion advances dirty source watermarks by project and source partitio
     sourceHighWaterMark: 9,
     sourcePartition: 'article:display',
   })
-  expect(aggregateUpsert).toContain('GROUP BY project_id, source_partition')
-  expect(aggregateUpsert).toContain('ON CONFLICT(project_id, source_partition) DO UPDATE SET')
-  expect(aggregateUpsert).toContain('source_high_water_mark = GREATEST')
-  expect(aggregateUpsert).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
+  expect(aggregateUpdate).toContain('GROUP BY project_id, source_partition')
+  expect(aggregateUpdate).toContain('source_high_water_mark = GREATEST')
+  expect(aggregateInsert).toContain('GROUP BY project_id, source_partition')
+  expect(aggregateInsert).toContain('WHERE NOT EXISTS')
+  expect(`${aggregateUpdate}\n${aggregateInsert}`).not.toContain('ON CONFLICT')
+  expect(aggregateInsert).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
+})
+
+test('completion advances dirty source watermarks monotonically in DuckDB without conflict updates', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+  const run = async (statement: string) => {
+    await connection.run(statement)
+  }
+  const queryJson = async <T>(statement: string) => {
+    const reader = await connection.runAndReadAll(statement)
+
+    return reader.getRowObjectsJson() as T[]
+  }
+
+  try {
+    await run('CREATE SCHEMA app')
+    await run(`
+      CREATE TABLE app.review_serving_dirty_work_ack (
+        dirty_ack_id VARCHAR PRIMARY KEY,
+        dirty_work_id VARCHAR,
+        projection_component VARCHAR,
+        projection_identity VARCHAR,
+        source_partition VARCHAR,
+        completed_source_high_water_mark BIGINT,
+        dirty_range_start VARCHAR,
+        dirty_range_end VARCHAR,
+        status VARCHAR,
+        completed_at TIMESTAMPTZ
+      )
+    `)
+    await run(`
+      CREATE TABLE app.review_serving_project_dirty_source_watermark (
+        project_id VARCHAR,
+        source_partition VARCHAR,
+        source_high_water_mark BIGINT,
+        updated_at TIMESTAMPTZ,
+        PRIMARY KEY (project_id, source_partition)
+      )
+    `)
+    await run(`
+      CREATE TABLE app.review_serving_dirty_work (
+        dirty_work_id VARCHAR PRIMARY KEY,
+        status VARCHAR,
+        updated_at TIMESTAMPTZ
+      )
+    `)
+
+    const getClaim = (dirtyWorkId: string, latestSourceHighWaterMark: number): ReviewServingDirtyWorkClaim => {
+      return {
+        articleId: 'article-1',
+        dirtyKind: 'article.display.updated',
+        dirtyRangeEnd: 'article-1',
+        dirtyRangeStart: 'article-1',
+        dirtyWorkId,
+        firstSourceHighWaterMark: latestSourceHighWaterMark,
+        latestDeltaId: `delta-${latestSourceHighWaterMark}`,
+        latestSourceHighWaterMark,
+        projectId: 'project-1',
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+        scopeId: 'project-1:article-1',
+        scopeKind: 'article',
+        sourcePartition: 'article:display',
+        status: 'running',
+      }
+    }
+    const database = {queryJson, run}
+
+    await completeReviewServingDirtyWorkClaims([getClaim('dirty-work-5', 5)], database)
+    await completeReviewServingDirtyWorkClaims([getClaim('dirty-work-3', 3)], database)
+    await completeReviewServingDirtyWorkClaims([getClaim('dirty-work-9', 9)], database)
+
+    const rows = await queryJson<{sourceHighWaterMark: number}>(`
+      SELECT CAST(source_high_water_mark AS INTEGER) AS sourceHighWaterMark
+      FROM app.review_serving_project_dirty_source_watermark
+      WHERE project_id = 'project-1'
+        AND source_partition = 'article:display'
+    `)
+
+    expect(rows).toEqual([{sourceHighWaterMark: 9}])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('concurrent dirty source watermark completion cannot lose the higher watermark', async () => {
+  let dirtySourceWatermark: number | null = null
+  let resolveHighWatermarkStatement = () => {}
+  let resolveLowInsert = () => {}
+  const highWatermarkStatement = new Promise<void>((resolve) => {
+    resolveHighWatermarkStatement = resolve
+  })
+  const lowInsert = new Promise<void>((resolve) => {
+    resolveLowInsert = resolve
+  })
+  const getClaim = (dirtyWorkId: string, latestSourceHighWaterMark: number): ReviewServingDirtyWorkClaim => {
+    return {
+      articleId: 'article-1',
+      dirtyKind: 'article.display.updated',
+      dirtyRangeEnd: 'article-1',
+      dirtyRangeStart: 'article-1',
+      dirtyWorkId,
+      firstSourceHighWaterMark: latestSourceHighWaterMark,
+      latestDeltaId: `delta-${latestSourceHighWaterMark}`,
+      latestSourceHighWaterMark,
+      projectId: 'project-1',
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      scopeId: 'project-1:article-1',
+      scopeKind: 'article',
+      sourcePartition: 'article:display',
+      status: 'running',
+    }
+  }
+  const run = async (statement: string) => {
+    if (statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('dirty-work-low')) {
+      await highWatermarkStatement
+
+      return
+    }
+
+    const isInsert = statement.includes('INSERT INTO app.review_serving_project_dirty_source_watermark')
+    const isUpdate = statement.includes('UPDATE app.review_serving_project_dirty_source_watermark')
+
+    if (!isInsert && !isUpdate) {
+      return
+    }
+
+    const sourceHighWaterMark = Number(statement.match(/\('project-1',\s*'article:display',\s*(\d+)\)/u)?.[1] ?? 0)
+
+    if (sourceHighWaterMark === 9) {
+      resolveHighWatermarkStatement()
+    }
+
+    if (isInsert) {
+      if (sourceHighWaterMark === 9 && dirtySourceWatermark === null) {
+        // Force the lower insert to land before the higher caller reaches its final monotonic update.
+        await lowInsert
+      }
+
+      if (dirtySourceWatermark === null) {
+        dirtySourceWatermark = sourceHighWaterMark
+
+        if (sourceHighWaterMark === 5) {
+          resolveLowInsert()
+        }
+      }
+
+      return
+    }
+
+    const rowExistedWhenUpdateStarted = dirtySourceWatermark !== null
+
+    if (sourceHighWaterMark === 9 && !rowExistedWhenUpdateStarted) {
+      await lowInsert
+    }
+
+    if (rowExistedWhenUpdateStarted) {
+      dirtySourceWatermark = Math.max(dirtySourceWatermark ?? 0, sourceHighWaterMark)
+    }
+  }
+  const database = {
+    queryJson: async <T>() => {
+      return [] as T[]
+    },
+    run,
+  }
+
+  await Promise.all([
+    completeReviewServingDirtyWorkClaims([getClaim('dirty-work-high', 9)], database),
+    completeReviewServingDirtyWorkClaims([getClaim('dirty-work-low', 5)], database),
+  ])
+
+  expect(dirtySourceWatermark).toBe(9)
 })
 
 test('component acknowledgements skip already completed dirty keys', async () => {

@@ -6,6 +6,7 @@ import {
   projectReviewServingHumanStatusRanges,
   type ReviewServingHumanStatusProjectorDatabase,
 } from './reviewServingHumanStatusProjector.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {
   getReviewServingReviewConfigHash,
   type ReviewServingProjectReviewSettingsRow,
@@ -19,9 +20,15 @@ const createHumanStatusDatabase = (input?: {
   projectSettingsRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
+  const manifestStore = createReviewServingManifestTestStore()
   const database: ReviewServingHumanStatusProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
 
       if (statement.includes('FROM app.review_source_change_outbox')) {
         return [] as T[]
@@ -51,6 +58,7 @@ const createHumanStatusDatabase = (input?: {
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

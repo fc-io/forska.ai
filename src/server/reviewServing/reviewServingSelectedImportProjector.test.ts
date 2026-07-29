@@ -3,6 +3,7 @@ import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {
   projectReviewServingSelectedImportArticleRange,
   projectReviewServingSelectedImportArticleRanges,
@@ -15,17 +16,20 @@ const createSelectedImportProjectorDatabase = (input?: {
   cursorJson?: unknown
   rangeRowCount?: number
 }) => {
+  const manifestStore = createReviewServingManifestTestStore()
   const statements: string[] = []
   const database: ReviewServingSelectedImportProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
-      if (statement.includes('FROM app.review_selected_import_snapshot')) {
-        return input?.cursorJson === undefined ? [] : ([{cursorJson: input.cursorJson, status: 'candidate'}] as T[])
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
       }
 
-      if (statement.includes('FROM app.review_projection_identity_manifest')) {
-        return [] as T[]
+      if (statement.includes('FROM app.review_selected_import_snapshot')) {
+        return input?.cursorJson === undefined ? [] : ([{cursorJson: input.cursorJson, status: 'candidate'}] as T[])
       }
 
       if (statement.includes('COUNT(*)') && statement.includes('FROM app.review_selected_article_import_v4 selected')) {
@@ -36,6 +40,7 @@ const createSelectedImportProjectorDatabase = (input?: {
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

@@ -4,6 +4,7 @@ import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {
   projectReviewServingSummaries,
   reduceReviewServingSummaryRebuildPartialsForRequestSnapshots,
@@ -94,10 +95,17 @@ const createSummaryDatabase = (input?: {
   facetRows?: readonly Record<string, unknown>[]
   sourceRows?: readonly Record<string, unknown>[]
 }) => {
+  const manifestStore = createReviewServingManifestTestStore()
   const statements: string[] = []
   const database: ReviewServingSummaryProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
 
       if (statement.includes('FROM summary_union')) {
         return (input?.sourceRows ?? []) as T[]
@@ -115,6 +123,7 @@ const createSummaryDatabase = (input?: {
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

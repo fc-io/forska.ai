@@ -369,7 +369,12 @@ type RebuildChunkOutputChecksumRow = {
   actualPayloadBytes?: number | null
 }
 type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
-type SummaryFilterOptionProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
+type SummaryFilterOptionProjectionRow = {
+  outputBaseGeneration: number
+  projectId: string
+  projectionIdentity: string
+  snapshotId: string | null
+}
 type RebuildRequestSnapshotPromotionRow = {
   hasPostingRebuildChunks: boolean
   hasSummaryRebuildChunks: boolean
@@ -5615,13 +5620,14 @@ const getRebuildRequestSummaryFilterOptionProjections = async (
     SELECT DISTINCT
       output_base_generation AS outputBaseGeneration,
       project_id AS projectId,
-      projection_identity AS projectionIdentity
+      projection_identity AS projectionIdentity,
+      snapshot_id AS snapshotId
     FROM app.review_rebuild_chunk_manifest
     WHERE request_id = ${getSqlLiteral(requestId)}
       AND project_id IS NOT NULL
       AND projection_component = 'summary'
       AND status = 'completed'
-    ORDER BY project_id ASC, projection_identity ASC, output_base_generation ASC
+    ORDER BY project_id ASC, projection_identity ASC, output_base_generation ASC, snapshot_id ASC
   `)
 }
 
@@ -5651,7 +5657,12 @@ const refreshSummaryFilterOptionsForProjections = async (
       database,
     )
     const matchingSnapshots = snapshots.filter((snapshot) => {
-      return getSnapshotComponentBaseGeneration(snapshot, 'summary') === Number(row.outputBaseGeneration)
+      const matchesTargetSnapshot = row.snapshotId === null || snapshot.snapshotId === row.snapshotId
+
+      return (
+        matchesTargetSnapshot
+        && getSnapshotComponentBaseGeneration(snapshot, 'summary') === Number(row.outputBaseGeneration)
+      )
     })
 
     if (matchingSnapshots.length === 0) {
@@ -6767,6 +6778,7 @@ const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
     && nextChunk.projectionIdentity === firstChunk.projectionIdentity
     && nextChunk.outputBaseGeneration === firstChunk.outputBaseGeneration
     && nextChunk.inputWatermark === firstChunk.inputWatermark
+    && (nextChunk.snapshotId ?? null) === (firstChunk.snapshotId ?? null)
     && claimedChunks.every((claimedChunk) => {
       return isBatchableBoundaryRequest
         ? isRangeBatchableStatusBoundaryReviewServingProjectorWorkerRebuildChunk(claimedChunk, nextChunk)
@@ -8849,12 +8861,17 @@ export const runReviewServingProjectorWorker = async (
     return {reason: 'completedChunkLimit'}
   }
 
+  const shouldBackOffReleasedProjectorClaims =
+    cycleResult.projector.status === 'partial'
+    && cycleResult.projector.releasedClaimIds.length > 0
+    && cycleResult.projector.failures.length === 0
+    && cycleResult.projector.runs.length === 0
   const delayMs =
     cycleResult.status === 'failed'
       ? (options.errorBackoffMs ?? defaultReviewServingProjectorWorkerErrorBackoffMs)
       : shouldYieldToForegroundRebuildReader({chunk: cycleResult.chunk, nowMs, options})
         ? getReviewServingProjectorWorkerProgressYieldMs({chunk: cycleResult.chunk, dependencies, options})
-        : cycleResult.status === 'idle'
+        : cycleResult.status === 'idle' || shouldBackOffReleasedProjectorClaims
           ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
           : defaultReviewServingProjectorWorkerActiveYieldMs
   const nextOptions = {

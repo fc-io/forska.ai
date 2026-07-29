@@ -3,6 +3,7 @@ import {Effect} from 'effect'
 
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim, ReviewServingDirtyWorkInput} from './reviewServingDirtyWorkService.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {
   getReviewServingDirtyWorkScopeForChange,
   type ReviewServingDirtyWorkScope,
@@ -91,11 +92,20 @@ const createDependencyHarness = (
   const releasedClaimIds: string[] = []
   const completedClaimIds: string[] = []
   const claimedComponents: ReviewServingProjectionComponent[] = []
+  const manifestStore = createReviewServingManifestTestStore()
   const database = {
-    queryJson: async <T>(_statement: string) => {
+    queryJson: async <T>(statement: string) => {
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
+
       return [] as T[]
     },
-    run: async (_statement: string) => {},
+    run: async (statement: string) => {
+      manifestStore.run(statement)
+    },
     transaction: async <T>(
       operation: (tx: {
         queryJson: <T>(statement: string) => Promise<T[]>
@@ -473,6 +483,45 @@ test('wake routes broad search dirty work through chunked rebuilds instead of di
   expect(completedClaimIds).toEqual(['search-project-1'])
   expect(failedClaimIds).toEqual([])
   expect(releasedClaimIds).toEqual([])
+})
+
+test('wake releases broad search dirty work when its rebuild is temporarily blocked', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    search: [
+      {
+        ...getClaim({component: 'search', dirtyWorkId: 'search-project-1'}),
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+        sourcePartition: 'projectReviewConfig:project-1',
+      },
+    ],
+  })
+
+  dependencies.requestRebuild = () => {
+    return Effect.succeed({
+      overBudgetReason: 'snapshot count: estimated 2 > max 1',
+      status: 'blocked_over_budget',
+    } as never)
+  }
+  dependencies.runners = {
+    search: async () => {
+      throw new Error('broad search work must use a rebuild request')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['search'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(result.failures).toEqual([])
+  expect(completedClaimIds).toEqual([])
+  expect(failedClaimIds).toEqual([])
+  expect(result.releasedClaimIds).toEqual(['search-project-1'])
+  expect(releasedClaimIds).toEqual(['search-project-1'])
 })
 
 test('wake fails claimed work when missing-snapshot rebuild request is blocked', async () => {

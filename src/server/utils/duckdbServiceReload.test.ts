@@ -23,6 +23,7 @@ type StartupRepairSpecJson = {
   postRepairSchemaRequirements?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
   recreateRepairPrimaryKeyIndex?: boolean
   recreateSecondaryIndexes?: boolean
+  repairDedupeColumnAggregates?: Array<{aggregate: string; columnName: string}>
   repairPrimaryKeyColumns?: string[]
   repairStrategy?: string
   schemaName: string
@@ -1637,7 +1638,7 @@ test('duckdb service startup repair strips table primary key constraints once', 
   }
 })
 
-test('duckdb service removes repaired dirty-work and selected-import indexes before mutation', () => {
+test('duckdb service merges duplicate dirty-work spans and removes repaired indexes before mutation', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-dirty-work-index-removal-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
   const recoveryDirectory = `${duckdbPath}.startup-recovery`
@@ -1695,7 +1696,7 @@ test('duckdb service removes repaired dirty-work and selected-import indexes bef
           )
         \`)
         await connection.run(
-          'CREATE UNIQUE INDEX idx_review_serving_dirty_work_repaired_pk_legacy ON app.review_serving_dirty_work(dirty_work_id)',
+          'CREATE INDEX idx_review_serving_dirty_work_repaired_pk_legacy ON app.review_serving_dirty_work(dirty_work_id)',
         )
         await connection.run(
           'CREATE INDEX idx_review_serving_dirty_work_lookup ON app.review_serving_dirty_work(project_id, dirty_kind, latest_source_high_water_mark)',
@@ -1760,8 +1761,11 @@ test('duckdb service removes repaired dirty-work and selected-import indexes bef
             latest_delta_id,
             dirty_range_start,
             dirty_range_end,
-            status
-          ) VALUES (
+            status,
+            created_at,
+            updated_at
+          ) VALUES
+          (
             'dirty-work-1',
             'project-1',
             'article',
@@ -1770,12 +1774,32 @@ test('duckdb service removes repaired dirty-work and selected-import indexes bef
             '{"projectionComponent":"selectedImport","projectionIdentity":"selectedImport:1"}',
             'source-change',
             'import-run-article',
-            1,
-            2,
-            'delta-1',
+            10,
+            20,
+            'delta-20',
+            'article-010',
+            'article-020',
+            'running',
+            TIMESTAMPTZ '2026-07-29T06:24:00Z',
+            TIMESTAMPTZ '2026-07-29T06:34:00Z'
+          ),
+          (
+            'dirty-work-1',
+            'project-1',
+            'article',
+            'article:1',
             'article-1',
-            'article-1',
-            'failed'
+            '{"projectionComponent":"selectedImport","projectionIdentity":"selectedImport:1"}',
+            'source-change',
+            'import-run-article',
+            5,
+            30,
+            'delta-30',
+            'article-005',
+            'article-030',
+            'pending',
+            TIMESTAMPTZ '2026-07-29T06:25:00Z',
+            TIMESTAMPTZ '2026-07-29T06:35:00Z'
           )
         \`)
         await connection.run(\`
@@ -1815,7 +1839,13 @@ test('duckdb service removes repaired dirty-work and selected-import indexes bef
           ORDER BY index_name
         \`)
         const rows = await duckdbService.runDuckdbJsonQuery(\`
-          SELECT dirty_work_id AS dirtyWorkId, status
+          SELECT
+            dirty_work_id AS dirtyWorkId,
+            CAST(first_source_high_water_mark AS INTEGER) AS firstSourceHighWaterMark,
+            CAST(latest_source_high_water_mark AS INTEGER) AS latestSourceHighWaterMark,
+            dirty_range_start AS dirtyRangeStart,
+            dirty_range_end AS dirtyRangeEnd,
+            status
           FROM app.review_serving_dirty_work
         \`)
         const selectedImportConstraints = await duckdbService.runDuckdbJsonQuery(\`
@@ -1880,7 +1910,14 @@ test('duckdb service removes repaired dirty-work and selected-import indexes bef
       constraints: Array<{columnNames: string[]; constraintType: string}>
       indexes: Array<{indexName: string}>
       recoveryManifestCount: number
-      rows: Array<{dirtyWorkId: string; status: string}>
+      rows: Array<{
+        dirtyRangeEnd: string
+        dirtyRangeStart: string
+        dirtyWorkId: string
+        firstSourceHighWaterMark: number
+        latestSourceHighWaterMark: number
+        status: string
+      }>
       selectedImportConstraints: Array<{columnNames: string[]; constraintType: string}>
       selectedImportIndexes: Array<{indexName: string}>
       selectedImportRows: Array<{articleId: string; projectId: string}>
@@ -1889,7 +1926,16 @@ test('duckdb service removes repaired dirty-work and selected-import indexes bef
     expect(parsed.constraints).toEqual([])
     expect(parsed.indexes).toEqual([])
     expect(parsed.recoveryManifestCount).toBe(1)
-    expect(parsed.rows).toEqual([{dirtyWorkId: 'dirty-work-1', status: 'failed'}])
+    expect(parsed.rows).toEqual([
+      {
+        dirtyRangeEnd: 'article-030',
+        dirtyRangeStart: 'article-005',
+        dirtyWorkId: 'dirty-work-1',
+        firstSourceHighWaterMark: 5,
+        latestSourceHighWaterMark: 30,
+        status: 'running',
+      },
+    ])
     expect(parsed.selectedImportConstraints).toEqual([])
     expect(parsed.selectedImportIndexes).toEqual([])
     expect(parsed.selectedImportRows).toEqual([{articleId: 'article-1', projectId: 'project-1'}])
@@ -3901,6 +3947,12 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(dirtyWorkProbe?.lowMemoryStartupPreflight).toBe(true)
     expect(dirtyWorkProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
     expect(dirtyWorkProbe?.recreateSecondaryIndexes).toBe(false)
+    expect(dirtyWorkProbe?.repairDedupeColumnAggregates).toEqual([
+      {aggregate: 'min', columnName: 'first_source_high_water_mark'},
+      {aggregate: 'max', columnName: 'latest_source_high_water_mark'},
+      {aggregate: 'min', columnName: 'dirty_range_start'},
+      {aggregate: 'max', columnName: 'dirty_range_end'},
+    ])
     expect(dirtyWorkProbe?.repairPrimaryKeyColumns).toEqual(['dirty_work_id'])
     expect(dirtyWorkProbe?.repairStrategy).toBe('dedupe-latest')
     const dirtyWorkAckProbe = parsed.firstPreflightSpecs.find((spec) => {

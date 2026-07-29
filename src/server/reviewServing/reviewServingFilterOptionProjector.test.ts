@@ -6,6 +6,7 @@ import {
   projectReviewServingFilterOptions,
   type ReviewServingFilterOptionProjectorDatabase,
 } from './reviewServingFilterOptionProjector.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 
 const optionClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): ReviewServingDirtyWorkClaim => {
   return {
@@ -72,10 +73,17 @@ const sourceRow = (input?: Record<string, unknown>) => {
 }
 
 const createFilterOptionDatabase = (input?: {sourceRows?: readonly Record<string, unknown>[]}) => {
+  const manifestStore = createReviewServingManifestTestStore()
   const statements: string[] = []
   const database: ReviewServingFilterOptionProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
 
       if (statement.includes('finalized_facet_options') || statement.includes('review_facet_options')) {
         return (input?.sourceRows ?? []) as T[]
@@ -85,6 +93,7 @@ const createFilterOptionDatabase = (input?: {sourceRows?: readonly Record<string
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

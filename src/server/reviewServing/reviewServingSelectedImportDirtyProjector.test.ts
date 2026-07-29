@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {
   checkReviewServingSelectedImportDirtyBudget,
   projectReviewServingSelectedImportDirty,
@@ -13,10 +14,17 @@ const createSelectedImportDirtyDatabase = (input?: {
   dirtyRows?: readonly Record<string, unknown>[]
   snapshotRows?: readonly Record<string, unknown>[]
 }) => {
+  const manifestStore = createReviewServingManifestTestStore()
   const statements: string[] = []
   const database: ReviewServingSelectedImportDirtyProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
 
       if (statement.includes('FROM app.review_source_change_outbox')) {
         return [] as T[]
@@ -34,6 +42,7 @@ const createSelectedImportDirtyDatabase = (input?: {
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

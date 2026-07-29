@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {
   projectReviewServingQueuePatches,
   projectReviewServingQueueRebuildRows,
@@ -12,9 +13,15 @@ const createQueueDatabase = (input?: {
   reviewConfigHash?: string | null
 }) => {
   const statements: string[] = []
+  const manifestStore = createReviewServingManifestTestStore()
   const database: ReviewServingQueueProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
 
       if (statement.includes('FROM app.review_source_change_outbox')) {
         return [] as T[]
@@ -34,6 +41,7 @@ const createQueueDatabase = (input?: {
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

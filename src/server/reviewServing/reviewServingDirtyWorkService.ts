@@ -384,6 +384,17 @@ const advanceReviewServingDirtySourceWatermark = async (
       )})`
     })
     .join(',\n      ')
+  const completedSourceWatermarksSql = `
+    SELECT
+      project_id,
+      source_partition,
+      MAX(source_high_water_mark) AS source_high_water_mark
+    FROM (
+      VALUES
+      ${valuesSql}
+    ) AS completed(project_id, source_partition, source_high_water_mark)
+    GROUP BY project_id, source_partition
+  `
 
   await database.run(`
     INSERT INTO app.review_serving_project_dirty_source_watermark (
@@ -395,23 +406,37 @@ const advanceReviewServingDirtySourceWatermark = async (
     SELECT
       project_id,
       source_partition,
-      MAX(source_high_water_mark) AS source_high_water_mark,
+      source_high_water_mark,
       current_timestamp AS updated_at
     FROM (
-      VALUES
-      ${valuesSql}
-    ) AS completed(project_id, source_partition, source_high_water_mark)
-    GROUP BY project_id, source_partition
-    ON CONFLICT(project_id, source_partition) DO UPDATE SET
+      ${completedSourceWatermarksSql}
+    ) completed
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_project_dirty_source_watermark existing
+      WHERE existing.project_id = completed.project_id
+        AND existing.source_partition = completed.source_partition
+    )
+  `)
+
+  await database.run(`
+    UPDATE app.review_serving_project_dirty_source_watermark
+    SET
       source_high_water_mark = GREATEST(
         app.review_serving_project_dirty_source_watermark.source_high_water_mark,
-        excluded.source_high_water_mark
+        completed.source_high_water_mark
       ),
       updated_at = CASE
-        WHEN excluded.source_high_water_mark > app.review_serving_project_dirty_source_watermark.source_high_water_mark
-          THEN excluded.updated_at
+        WHEN completed.source_high_water_mark
+          > app.review_serving_project_dirty_source_watermark.source_high_water_mark
+          THEN current_timestamp
         ELSE app.review_serving_project_dirty_source_watermark.updated_at
       END
+    FROM (
+      ${completedSourceWatermarksSql}
+    ) completed
+    WHERE app.review_serving_project_dirty_source_watermark.project_id = completed.project_id
+      AND app.review_serving_project_dirty_source_watermark.source_partition = completed.source_partition
   `)
 }
 

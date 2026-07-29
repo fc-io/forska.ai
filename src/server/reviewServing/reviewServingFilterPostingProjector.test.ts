@@ -6,6 +6,7 @@ import {
   projectReviewServingFilterPostings,
   type ReviewServingFilterPostingProjectorDatabase,
 } from './reviewServingFilterPostingProjector.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 
 const postingRow = (input?: Record<string, unknown>) => {
   return {
@@ -67,9 +68,15 @@ const createPostingDatabase = (input?: {
   totalRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
+  const manifestStore = createReviewServingManifestTestStore()
   const database: ReviewServingFilterPostingProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
 
       if (statement.includes('FROM app.review_source_change_outbox')) {
         return [] as T[]
@@ -104,6 +111,7 @@ const createPostingDatabase = (input?: {
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

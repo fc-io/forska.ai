@@ -111,7 +111,7 @@ test('retention cleanup cursor includes selected-import cleanup and wraps over c
 
 test('retention cleanup includes dynamic filtered count serving rows', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 6}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 5}, patchWatermark: 0, snapshotId: null},
   })
 
   const result = await cleanupReviewServingRetentionState(
@@ -124,15 +124,15 @@ test('retention cleanup includes dynamic filtered count serving rows', async () 
     cleanupBatchSize: 25,
     cleanupSpecKind: 'snapshot',
     cleanupTable: 'mart.review_filtered_count_serving_v4',
-    cleanupTableIndex: 6,
-    nextCleanupTableIndex: 7,
+    cleanupTableIndex: 5,
+    nextCleanupTableIndex: 6,
     retentionScope: 'reviewServing:project-1:review-config-1',
   })
   expect(joined).toContain('DELETE FROM mart.review_filtered_count_serving_v4')
   expect(joined).toContain("candidate.project_id = 'project-1'")
   expect(joined).toContain('ORDER BY candidate.snapshot_id')
   expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":7')
+  expect(joined).toContain('"tableIndex":6')
 })
 
 test('retention cleanup no longer references legacy patch or contribution tables at runtime', async () => {

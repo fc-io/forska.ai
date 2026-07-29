@@ -6,6 +6,7 @@ import {
   projectReviewServingJudgmentPayloadRows,
   type ReviewServingJudgmentPayloadProjectorDatabase,
 } from './reviewServingJudgmentPayloadProjector.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {getReviewServingReadContract} from './reviewServingReadContracts.ts'
 import {buildReviewServingRowsSql} from './reviewServingSql.ts'
 
@@ -32,9 +33,15 @@ const judgmentClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): ReviewServ
 
 const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: number}) => {
   const statements: string[] = []
+  const manifestStore = createReviewServingManifestTestStore()
   const database: ReviewServingJudgmentPayloadProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
 
       if (statement.includes('COUNT(*)') && statement.includes("payload_kind = 'llm'")) {
         return [{rowCount: input?.llmCount ?? 0}] as T[]
@@ -48,6 +55,7 @@ const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: 
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

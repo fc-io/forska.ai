@@ -5,6 +5,7 @@ import {expect, test} from 'bun:test'
 
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkInput, ReviewServingDirtyWorkRecord} from './reviewServingDirtyWorkService.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {getReviewServingDirtyWorkScopeForChange} from './reviewServingProjectorDomain.ts'
 import {
   intakeReviewServingProjectorDirtyWork,
@@ -31,15 +32,23 @@ const getTypeScriptFiles = (directory: string): readonly string[] => {
 }
 
 const createDatabase = () => {
+  const manifestStore = createReviewServingManifestTestStore()
   const statements: string[] = []
   const database: ReviewServingProjectorWriterDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
+
       return [] as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       statements.push('BEGIN review-serving-writer')
@@ -341,7 +350,6 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     'posting',
     'summary',
     'display',
-    'payload',
     'posting',
     'summary',
     'search',
@@ -349,7 +357,6 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     'posting',
     'search',
     'summary',
-    'payload',
   ])
   expect(
     result.runs.map((run) => {

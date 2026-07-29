@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {createReviewServingManifestTestStore} from './reviewServingManifestTestStore.ts'
 import {
   projectReviewServingProjectScopePatches,
   type ReviewServingProjectScopeProjectorDatabase,
@@ -27,13 +28,21 @@ const projectScopeClaim = (): ReviewServingDirtyWorkClaim => {
 }
 
 test('project scope projector writes manifest and acknowledges scoped article work', async () => {
+  const manifestStore = createReviewServingManifestTestStore()
   const statements: string[] = []
   const database: ReviewServingProjectScopeProjectorDatabase = {
-    queryJson: async <T>(_statement: string) => {
+    queryJson: async <T>(statement: string) => {
+      const manifestResult = manifestStore.getQueryResult<T>(statement)
+
+      if (manifestResult !== null) {
+        return manifestResult
+      }
+
       return [] as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
+      manifestStore.run(statement)
     },
     transaction: async (operation) => {
       return operation(database)

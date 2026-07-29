@@ -515,18 +515,9 @@ export const wakeReviewServingProjectorService = async (
         const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
 
         if (blockedRebuildRequests.length > 0) {
-          const blockedDiagnostic = getBlockedRebuildRequestDiagnostic(blockedRebuildRequests)
-          await failDirtyWork(claimIds, database)
-          logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: blockedDiagnostic})
+          await releaseDirtyWork(claimIds, database)
 
-          return {
-            ...state,
-            failures: [
-              ...state.failures,
-              {attempts: 1, claimIds, component, diagnostic: blockedDiagnostic, status: 'failed' as const},
-            ],
-            processedRows: state.processedRows + claims.length,
-          }
+          return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
         }
 
         await completeDirtyWork(claims, database)

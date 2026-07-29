@@ -237,6 +237,7 @@ type DuckdbStartupIndexedTableRepairSpec = {
   postRepairSchemaRequirements?: DuckdbStartupSchemaRequirement[]
   recreateRepairPrimaryKeyIndex?: boolean
   recreateSecondaryIndexes?: boolean
+  repairDedupeColumnAggregates?: Array<{aggregate: 'max' | 'min'; columnName: string}>
   repairDedupeOrderSql?: string
   repairPrimaryKeyColumns?: string[]
   repairStrategy?: 'copy' | 'dedupe-latest' | 'empty-derived'
@@ -501,6 +502,12 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     lowMemoryStartupPreflight: true,
     recreateRepairPrimaryKeyIndex: false,
     recreateSecondaryIndexes: false,
+    repairDedupeColumnAggregates: [
+      {aggregate: 'min', columnName: 'first_source_high_water_mark'},
+      {aggregate: 'max', columnName: 'latest_source_high_water_mark'},
+      {aggregate: 'min', columnName: 'dirty_range_start'},
+      {aggregate: 'max', columnName: 'dirty_range_end'},
+    ],
     repairDedupeOrderSql: `
       CASE WHEN status = 'running' THEN 0 WHEN status = 'pending' THEN 1 ELSE 2 END ASC,
       updated_at DESC NULLS LAST,
@@ -3935,15 +3942,40 @@ const getDuckdbIndexedTableRepairScript = () => {
       }
 
       const columnList = columnNames.join(', ')
+      const partitionSql = primaryKeyColumns.join(', ')
       const dedupeOrderSql =
         typeof spec.repairDedupeOrderSql === 'string' && spec.repairDedupeOrderSql.trim().length > 0
           ? spec.repairDedupeOrderSql
-          : primaryKeyColumns.join(', ')
+          : partitionSql
+      const dedupeColumnAggregates = new Map(
+        (Array.isArray(spec.repairDedupeColumnAggregates) ? spec.repairDedupeColumnAggregates : [])
+          .filter((columnAggregate) => {
+            return (
+              columnAggregate !== null
+              && typeof columnAggregate === 'object'
+              && (columnAggregate.aggregate === 'max' || columnAggregate.aggregate === 'min')
+              && typeof columnAggregate.columnName === 'string'
+              && columnNames.includes(columnAggregate.columnName)
+            )
+          })
+          .map((columnAggregate) => {
+            return [columnAggregate.columnName, columnAggregate.aggregate]
+          }),
+      )
+      const dedupeColumnList = columnNames
+        .map((columnName) => {
+          const aggregate = dedupeColumnAggregates.get(columnName)
+
+          return aggregate === undefined
+            ? columnName
+            : aggregate.toUpperCase() + '(' + columnName + ') OVER (PARTITION BY ' + partitionSql + ') AS ' + columnName
+        })
+        .join(', ')
 
       return (
         'INSERT INTO ' + repairName + ' (' + columnList + ') ' +
         'SELECT ' + columnList + ' FROM (' +
-        'SELECT ' + columnList + ', ROW_NUMBER() OVER (PARTITION BY ' + primaryKeyColumns.join(', ') +
+        'SELECT ' + dedupeColumnList + ', ROW_NUMBER() OVER (PARTITION BY ' + partitionSql +
         ' ORDER BY ' + dedupeOrderSql + ') AS startup_repair_row_number ' +
         'FROM ' + sourceName +
         ') WHERE startup_repair_row_number = 1'

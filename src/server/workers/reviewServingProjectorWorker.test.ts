@@ -4,13 +4,14 @@ import {join} from 'node:path'
 
 import {expect, mock, test} from 'bun:test'
 
-import {buildReviewConfigHash} from '../reviewServing/reviewProjectionIdentity.ts'
+import {buildReviewConfigHash, buildReviewDirtyProjectionIdentity} from '../reviewServing/reviewProjectionIdentity.ts'
 import type {ReviewServingRebuildChunkManifest} from '../reviewServing/reviewServingChunkManifestRepository.ts'
 import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   defaultReviewServingProjectorWorkerActiveYieldMs,
   defaultReviewServingProjectorWorkerErrorBackoffMs,
+  defaultReviewServingProjectorWorkerPollIntervalMs,
   defaultReviewServingProjectorWorkerProgressYieldMs,
   getDefaultReviewServingProjectorRunners,
   getReviewServingProjectorWorkerCompletedChunkRunCharge,
@@ -800,6 +801,55 @@ test('worker does not preclaim incompatible rebuild chunks in one batch', async 
   expect(harness.runChunkInputs).toEqual([firstChunk])
 })
 
+test('worker does not preclaim rebuild chunks targeting different snapshots in one batch', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    snapshotId: 'snapshot-1',
+  }
+  const secondChunkInput = {
+    ...firstChunkInput,
+    chunkEndKey: 'article-099',
+    chunkStartKey: 'article-051',
+    snapshotId: 'snapshot-2',
+  }
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-snapshot-batch-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-snapshot-batch-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, status: 'completed'})
+  expect(result.chunkBatchCount).toBe(1)
+  expect(harness.getNextChunkInputs).toHaveLength(2)
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toEqual([firstChunk])
+})
+
 test('worker excludes requestless summary chunks from component batch preclaiming', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
@@ -1028,6 +1078,7 @@ test('worker writes compatible selected import rebuild chunks through one batch 
     ],
   }
   let nextIndex = 0
+  let projectionManifestInserted = false
 
   harness.database.queryJson = async <T>(statement: string) => {
     statements.push(statement)
@@ -1055,6 +1106,36 @@ test('worker writes compatible selected import rebuild chunks through one batch 
       return [{cursorJson: null, sourceDeltaHighWater: 9, status: 'completed'}] as T[]
     }
 
+    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      if (!projectionManifestInserted) {
+        return [] as T[]
+      }
+
+      return [
+        {
+          baseGeneration: 0,
+          definitionVersion: 'review-serving-selected-import-v2',
+          inputDigest: 'selected-import-snapshot-1',
+          inputWatermark: 42,
+          inputWatermarksJson: {importRunArticle: 42},
+          invalidationReason: 'selectedImport.base.completed',
+          manifestId: statement.match(/manifest_id = '([^']+)'/u)?.[1] ?? '',
+          patchRangeEnd: 42,
+          patchRangeStart: 9,
+          patchWatermark: 9,
+          projectId: 'project-1',
+          projectionComponent: 'selectedImport',
+          projectionIdentity: buildReviewDirtyProjectionIdentity({
+            projectId: 'project-1',
+            projectionComponent: 'selectedImport',
+          }),
+          promptConfigHash: null,
+          reviewConfigHash: null,
+          status: 'candidate',
+        },
+      ] as T[]
+    }
+
     if (statement.includes('WITH output_row')) {
       return [{actualChecksum: 'checksum-selected-import-batch', actualCount: 1}] as T[]
     }
@@ -1063,6 +1144,10 @@ test('worker writes compatible selected import rebuild chunks through one batch 
   }
   harness.database.run = async (statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('INSERT INTO app.review_projection_identity_manifest')) {
+      projectionManifestInserted = true
+    }
   }
   harness.dependencies.rebuildChunkService = {
     ...harness.dependencies.rebuildChunkService,
@@ -4532,6 +4617,30 @@ test('worker yields briefly after active projector work before continuing mainte
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerActiveYieldMs])
 })
 
+test('worker polls after projectors only release temporarily blocked claims', async () => {
+  const harness = createWorkerHarness()
+  const controller = new AbortController()
+  const sleepCalls: number[] = []
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async () => {
+      return null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = mock(async (delayMs: number) => {
+    sleepCalls.push(delayMs)
+    controller.abort()
+  })
+  harness.dependencies.wakeProjectors = async () => {
+    return {failures: [], promotions: [], releasedClaimIds: ['search-project-1'], runs: [], status: 'partial'}
+  }
+
+  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerPollIntervalMs])
+})
+
 test('worker keeps yielding while foreground rebuild chunks stay isolated', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const controller = new AbortController()
@@ -5826,6 +5935,7 @@ test('worker refreshes summary filter options when an active-snapshot summary re
     projectionComponent: 'summary' as const,
     projectionIdentity: 'summary:project-1',
     requestId,
+    snapshotId: 'snapshot-summary-finalize',
   }
   const summaryChunk = {
     ...chunkManifest,
@@ -5875,6 +5985,7 @@ test('worker refreshes summary filter options when an active-snapshot summary re
           outputBaseGeneration: summaryChunk.outputBaseGeneration,
           projectId: summaryChunk.projectId,
           projectionIdentity: summaryChunk.projectionIdentity,
+          snapshotId: summaryChunk.snapshotId,
         },
       ] as T[]
     }
@@ -5915,6 +6026,19 @@ test('worker refreshes summary filter options when an active-snapshot summary re
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
       return [
         {
+          componentStateJson: {
+            optional: [],
+            required: [
+              {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+              {baseGeneration: '7', component: 'display', projectionIdentity: 'display:project-1'},
+              {baseGeneration: '7', component: 'summary', projectionIdentity: 'summary:project-1'},
+            ],
+          },
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-stale',
+          snapshotId: 'snapshot-summary-stale',
+        },
+        {
           componentStateJson: componentState,
           reviewConfigHash: 'review-config-1',
           selectedImportSnapshotId: 'selected-import-snapshot-1',
@@ -5944,6 +6068,7 @@ test('worker refreshes summary filter options when an active-snapshot summary re
   expect(statements.join('\n')).toContain('FROM mart.review_article_summary_rebuild_accumulator_v4')
   expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
   expect(statements.join('\n')).toContain("status = 'completed'")
+  expect(statements.join('\n')).not.toContain('selected-import-snapshot-stale')
 })
 
 test('worker refreshes summary filter options before promoting request snapshots', () => {
