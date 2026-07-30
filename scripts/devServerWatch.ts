@@ -134,6 +134,24 @@ const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + stackSh
   return waitForProcessExit(pid, deadlineMs)
 }
 
+const getStackLockReleaseTimeoutMessage = (currentLock: ServerStackLockMetadata) => {
+  const judgePort = currentLock.judgePort ?? stackConfig.judgePort
+
+  return [
+    'Dev server restart is waiting for the previous server stack to finish shutting down.',
+    `The previous stack is still alive after ${Math.round(stackShutdownTimeoutMs / 1_000)}s, so this restart stopped instead of reusing busy ports.`,
+    `Still-held stack: pid=${currentLock.pid}, ports api=${currentLock.apiPort}, maintenance=${currentLock.maintenancePort}, judge=${judgePort}.`,
+    'This usually means another terminal/screen still has `bun run dev:server` running, or DuckDB is busy checkpointing during shutdown.',
+    'Next step: wait a few seconds and run `bun run dev:server` again. If it repeats, stop the listed pid or start from one terminal with `FORSKA_DEV_SERVER_WATCH_ACTION=restart bun run dev:server`.',
+  ].join('\n')
+}
+
+const logDevServerFatalError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  console.error(`[dev:server] ${message}`)
+}
+
 const readServerStackLock = async () => {
   try {
     return JSON.parse(await readFile(serverStackLockPath, 'utf8')) as ServerStackLockMetadata
@@ -612,9 +630,7 @@ const waitForStackLockRelease = async (deadlineMs = Date.now() + stackShutdownTi
   }
 
   if (Date.now() >= deadlineMs) {
-    throw new Error(
-      `Timed out waiting for server stack pid=${currentLock.pid} to release lock for ports ${currentLock.apiPort}/${currentLock.maintenancePort}`,
-    )
+    throw new Error(getStackLockReleaseTimeoutMessage(currentLock))
   }
 
   await waitFor(250)
@@ -706,7 +722,10 @@ const restartServer = () => {
       log('change detected, restarting')
       await stopServer()
       await startServer()
-    })()
+    })().catch((error) => {
+      logDevServerFatalError(error)
+      process.exit(1)
+    })
   }, restartDelayMs)
 }
 
@@ -820,4 +839,7 @@ await (async () => {
   }
 
   void startServer()
-})()
+})().catch((error) => {
+  logDevServerFatalError(error)
+  process.exit(1)
+})

@@ -144,6 +144,17 @@ test('stacked server allows DuckDB startup recovery to finish before maintenance
   expect(source).not.toContain('currentLease.apiServerPort !== config.maintenancePort')
 })
 
+test('dev server watcher explains busy stack restart timeouts without raw source-frame failures', () => {
+  const source = readFileSync(new URL('./devServerWatch.ts', import.meta.url), 'utf8')
+
+  expect(source).toContain('getStackLockReleaseTimeoutMessage')
+  expect(source).toContain('The previous stack is still alive after')
+  expect(source).toContain('another terminal/screen still has `bun run dev:server` running')
+  expect(source).toContain('FORSKA_DEV_SERVER_WATCH_ACTION=restart bun run dev:server')
+  expect(source).toContain('logDevServerFatalError(error)')
+  expect(source).not.toContain('Timed out waiting for server stack pid=${currentLock.pid} to release lock')
+})
+
 const removePathIfExists = (path: string) => {
   if (existsSync(path)) {
     rmSync(path, {force: true, recursive: true})
@@ -643,12 +654,15 @@ const fetchJsonWithTransientOwnerRetries = async <T>(
 }
 
 const postReviewWarnings = async (apiPort: number, projectId: string) => {
-  return fetchJsonWithTransientOwnerRetries<ReviewsWarningsBody>(`http://127.0.0.1:${apiPort}/api/projectsreviewswarnings`, {
-    body: JSON.stringify({projectId}),
-    headers: {'content-type': 'application/json'},
-    method: 'POST',
-    signal: AbortSignal.timeout(reviewServingWarningFetchTimeoutMs),
-  })
+  return fetchJsonWithTransientOwnerRetries<ReviewsWarningsBody>(
+    `http://127.0.0.1:${apiPort}/api/projectsreviewswarnings`,
+    {
+      body: JSON.stringify({projectId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+      signal: AbortSignal.timeout(reviewServingWarningFetchTimeoutMs),
+    },
+  )
 }
 
 const getReviewServingWarningProbe = async (
@@ -999,28 +1013,25 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (
   }
 
   const deadlineMs = now() + timeoutMs
-  let latestDetails: Awaited<ReturnType<typeof getCurrentDbReviewServingQueuedWorkProbeResult>>['details'] = []
 
   while (true) {
     const result = await getCurrentDbReviewServingQueuedWorkProbeResult(apiPort, beforeSnapshots, postWarnings)
-    latestDetails = result.details
 
     if (result.passed) {
       return
     }
 
     if (now() >= deadlineMs) {
-      break
+      expect(
+        false,
+        'Review serving work stayed refreshing without a maintenance-worker progress signal. '
+          + `candidates=${JSON.stringify(result.details)}`,
+      ).toBe(true)
+      return
     }
 
     await wait(Math.min(pollIntervalMs, Math.max(deadlineMs - now(), 0)))
   }
-
-  expect(
-    false,
-    'Review serving work stayed refreshing without a maintenance-worker progress signal. '
-      + `candidates=${JSON.stringify(latestDetails)}`,
-  ).toBe(true)
 }
 
 const createReviewServingProgressCandidateBody = (
@@ -1052,9 +1063,7 @@ test('current-db review-serving smoke polls until original queued work progresse
   const initialBody = createReviewServingProgressCandidateBody()
   const progressedBody = createReviewServingProgressCandidateBody({
     pendingRefreshCount: 8,
-    serving: {
-      diagnostics: {rebuildChunks: {pendingCount: 7, runningCount: 1, updatedAt: '2026-07-07T11:30:00.000Z'}},
-    },
+    serving: {diagnostics: {rebuildChunks: {pendingCount: 7, runningCount: 1, updatedAt: '2026-07-07T11:30:00.000Z'}}},
   })
   let probeCount = 0
   const waits: number[] = []
@@ -1092,9 +1101,7 @@ test('current-db review-serving smoke accepts original queued work becoming non-
     pendingRefreshCount: 0,
     progressState: 'ready',
     queuedRefreshCount: 0,
-    serving: {
-      diagnostics: {rebuildChunks: {pendingCount: 0, runningCount: 0, updatedAt: '2026-07-07T11:30:00.000Z'}},
-    },
+    serving: {diagnostics: {rebuildChunks: {pendingCount: 0, runningCount: 0, updatedAt: '2026-07-07T11:30:00.000Z'}}},
     status: 'ready',
   })
   let probeCount = 0
@@ -1120,9 +1127,7 @@ test('current-db review-serving smoke accepts original queued work becoming non-
   const initialBody = createReviewServingProgressCandidateBody()
   const nonStaleBody = createReviewServingProgressCandidateBody({
     lastProgressedAt: '2026-07-24T10:00:00.000Z',
-    serving: {
-      diagnostics: {rebuildChunks: {pendingCount: 8, runningCount: 1, updatedAt: '2026-07-24T10:00:00.000Z'}},
-    },
+    serving: {diagnostics: {rebuildChunks: {pendingCount: 8, runningCount: 1, updatedAt: '2026-07-24T10:00:00.000Z'}}},
   })
   const nowMs = Date.parse('2026-07-24T10:00:01.000Z')
   let probeCount = 0
