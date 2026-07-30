@@ -949,13 +949,11 @@ const getReusableImportedSnapshotProviderConnectionId = async ({
 const getReusableImportedSnapshotModelId = async ({
   importedModel,
   importedProvider,
-  judgmentModelSignaturesBySourceId,
   providerConnectionId,
   runner,
 }: {
   importedModel: ImportedModel
   importedProvider: ImportedProviderConnection
-  judgmentModelSignaturesBySourceId: Record<string, unknown[]>
   providerConnectionId: string
   runner: ProjectTransferAnalyzeTargetRunner | null
 }) => {
@@ -991,10 +989,9 @@ const getReusableImportedSnapshotModelId = async ({
     ORDER BY model.created_at ASC, model.id ASC
   `)
   const candidates = rows.filter((row) => {
-    return targetModelEquivalentForImportedJudgments({
-      judgmentModelSignaturesBySourceId,
-      sourceModel: importedModel,
-      sourceProvider: importedProvider,
+    return hiddenImportedSnapshotModelMatches({
+      importedModel,
+      importedProvider,
       targetModel: row,
       targetProvider: getProviderConnectionFromModelSnapshotRow(row),
     })
@@ -1060,7 +1057,7 @@ const getResolvedProviderMappings = ({
       && providerFingerprintsMatch(importedProvider, existingTargetProviderConnection)
         ? existingTargetId
         : existingTargetId && isImportedTargetProviderConnectionId(existingTargetId)
-          ? (equivalentTargetProviderConnection?.id ?? reusableSnapshotProviderConnectionId ?? existingTargetId)
+          ? (reusableSnapshotProviderConnectionId ?? equivalentTargetProviderConnection?.id ?? existingTargetId)
           : null
     const targetProviderConnectionId = resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       ? null
@@ -1068,8 +1065,8 @@ const getResolvedProviderMappings = ({
         ? reusableExistingTargetId
         : !autoResolve
           ? null
-          : (equivalentTargetProviderConnection?.id
-            ?? reusableSnapshotProviderConnectionId
+          : (reusableSnapshotProviderConnectionId
+            ?? equivalentTargetProviderConnection?.id
             ?? getImportedTargetProviderConnectionId(sourceProviderConnectionId))
 
     if (targetProviderConnectionId === reusableSnapshotProviderConnectionId) {
@@ -1126,7 +1123,6 @@ const getResolvedModelMappings = ({
         ? await getReusableImportedSnapshotModelId({
             importedModel,
             importedProvider,
-            judgmentModelSignaturesBySourceId,
             providerConnectionId: targetProviderConnectionId,
             runner,
           })
@@ -1145,7 +1141,7 @@ const getResolvedModelMappings = ({
       })
         ? existingTargetId
         : existingTargetId && isImportedTargetModelId(existingTargetId)
-          ? (equivalentTargetModel?.id ?? reusableSnapshotModelId ?? existingTargetId)
+          ? (reusableSnapshotModelId ?? equivalentTargetModel?.id ?? existingTargetId)
           : null
     const targetModelId = resolutionState.unresolvedModelSourceIds.includes(sourceModelId)
       ? null
@@ -1159,7 +1155,7 @@ const getResolvedModelMappings = ({
               ? (reusableSnapshotModelId ?? null)
               : importedProvider === null
                 ? getImportedTargetModelId(sourceModelId)
-                : (equivalentTargetModel?.id ?? reusableSnapshotModelId ?? getImportedTargetModelId(sourceModelId))
+                : (reusableSnapshotModelId ?? equivalentTargetModel?.id ?? getImportedTargetModelId(sourceModelId))
 
     if (targetModelId === reusableSnapshotModelId) {
       hiddenResolvedModelTargetIds.add(targetModelId)
@@ -1289,6 +1285,34 @@ const getModelStatus = ({
   }
 
   return 'blocked'
+}
+
+const hiddenImportedSnapshotModelMatches = ({
+  importedModel,
+  importedProvider,
+  targetModel,
+  targetProvider,
+}: {
+  importedModel: ImportedModel
+  importedProvider: ImportedProviderConnection
+  targetModel: ProviderModelRecord
+  targetProvider: ProviderConnectionForAdmin
+}) => {
+  const targetFingerprint = getTargetModelFingerprint({targetModel, targetProvider})
+  const marker = getImportedSnapshotMarker(targetModel.metadataJson)
+
+  return (
+    modelHasImportedSnapshotMarker({sourceModelId: importedModel.sourceModelId, targetModel})
+    && targetModel.name === importedModel.name
+    && targetModel.remoteModelId === (importedModel.remoteModelId ?? importedModel.modelName)
+    && targetModel.displayName === importedModel.displayName
+    && modelVariantMatches(importedModel, targetModel)
+    && importedSnapshotMarkerFingerprintMatches({fingerprint: targetFingerprint, marker})
+    && projectTransferSnapshotFingerprintsEqual(
+      getSourceModelFingerprint({sourceModel: importedModel, sourceProvider: importedProvider}),
+      targetFingerprint,
+    )
+  )
 }
 
 const getModelStatusesAndBlockers = ({
