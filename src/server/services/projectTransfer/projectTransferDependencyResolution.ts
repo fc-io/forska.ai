@@ -888,17 +888,17 @@ const getResolvedProviderMappings = ({
     const sourceProviderConnectionId = importedProvider.sourceProviderConnectionId
     const existingTargetId = resolutionState.providerTargetBySourceId[sourceProviderConnectionId]
     const existingTargetProviderConnection = existingTargetId ? (connectionById[existingTargetId] ?? null) : null
-    const reusableExistingTargetId =
-      existingTargetId && isImportedTargetProviderConnectionId(existingTargetId)
-        ? existingTargetId
-        : existingTargetProviderConnection !== null
-            && providerFingerprintsMatch(importedProvider, existingTargetProviderConnection)
-          ? existingTargetId
-          : null
     const equivalentTargetProviderConnection = getUniqueEquivalentTargetProviderConnection({
       connections,
       importedProvider,
     })
+    const reusableExistingTargetId =
+      existingTargetProviderConnection !== null
+      && providerFingerprintsMatch(importedProvider, existingTargetProviderConnection)
+        ? existingTargetId
+        : existingTargetId && isImportedTargetProviderConnectionId(existingTargetId)
+          ? (equivalentTargetProviderConnection?.id ?? existingTargetId)
+          : null
     const targetProviderConnectionId = resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       ? null
       : reusableExistingTargetId
@@ -939,21 +939,30 @@ const getResolvedModelMappings = ({
     const existingTargetProvider = existingTargetModel?.providerConnectionId
       ? (connectionById[existingTargetModel.providerConnectionId] ?? null)
       : null
+    const equivalentTargetModel =
+      connection !== null && importedProvider !== null
+        ? getUniqueEquivalentTargetModel({
+            connection,
+            judgmentModelSignaturesBySourceId,
+            sourceModel: importedModel,
+            sourceProvider: importedProvider,
+          })
+        : null
     const reusableExistingTargetId =
-      existingTargetId && isImportedTargetModelId(existingTargetId)
+      existingTargetModel !== null
+      && existingTargetProvider !== null
+      && importedProvider !== null
+      && targetProviderConnectionId === existingTargetModel.providerConnectionId
+      && targetModelEquivalentForImportedJudgments({
+        judgmentModelSignaturesBySourceId,
+        sourceModel: importedModel,
+        sourceProvider: importedProvider,
+        targetModel: existingTargetModel,
+        targetProvider: existingTargetProvider,
+      })
         ? existingTargetId
-        : existingTargetModel !== null
-            && existingTargetProvider !== null
-            && importedProvider !== null
-            && targetProviderConnectionId === existingTargetModel.providerConnectionId
-            && targetModelEquivalentForImportedJudgments({
-              judgmentModelSignaturesBySourceId,
-              sourceModel: importedModel,
-              sourceProvider: importedProvider,
-              targetModel: existingTargetModel,
-              targetProvider: existingTargetProvider,
-            })
-          ? existingTargetId
+        : existingTargetId && isImportedTargetModelId(existingTargetId)
+          ? (equivalentTargetModel?.id ?? existingTargetId)
           : null
     const targetModelId = resolutionState.unresolvedModelSourceIds.includes(sourceModelId)
       ? null
@@ -967,12 +976,7 @@ const getResolvedModelMappings = ({
               ? null
               : importedProvider === null
                 ? getImportedTargetModelId(sourceModelId)
-                : (getUniqueEquivalentTargetModel({
-                    connection,
-                    judgmentModelSignaturesBySourceId,
-                    sourceModel: importedModel,
-                    sourceProvider: importedProvider,
-                  })?.id ?? getImportedTargetModelId(sourceModelId))
+                : (equivalentTargetModel?.id ?? getImportedTargetModelId(sourceModelId))
 
     return targetModelId ? {...mapped, [sourceModelId]: targetModelId} : mapped
   }, {})

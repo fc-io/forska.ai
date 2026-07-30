@@ -371,8 +371,18 @@ test('project transfer dependency resolution revalidates judgments against reuse
     }
 
     const concreteReusableModelId = 'reusable-imported-snapshot-model-1'
+    const concreteReusableProviderId = 'reusable-imported-snapshot-provider-1'
     const plan = {
       ...getBasePlan(),
+      dependencyResolution: {
+        acceptedSubstituteModelSourceIds: [],
+        codexSetupState: null,
+        modelMaterializationRequests: [],
+        modelTargetBySourceId: {'model-1': 'new:model:model-1'},
+        providerTargetBySourceId: {'provider-connection-1': 'new:provider:provider-connection-1'},
+        unresolvedModelSourceIds: [],
+        unresolvedProviderSourceIds: [],
+      },
       targetPlan: {
         ...getBasePlan().targetPlan,
         articleMatches: [
@@ -400,8 +410,8 @@ test('project transfer dependency resolution revalidates judgments against reuse
         }),
       },
     }
-    const targetModel = getTargetModel({id: concreteReusableModelId})
-    const targetConnection = getTargetConnection({}, [targetModel])
+    const targetModel = getTargetModel({id: concreteReusableModelId, providerConnectionId: concreteReusableProviderId})
+    const targetConnection = getTargetConnection({id: concreteReusableProviderId}, [targetModel])
     const layout = await writeProjectTransferArtifacts({cwd, payloads, plan})
 
     const result = await resolveProjectTransferDependencies({
@@ -411,6 +421,12 @@ test('project transfer dependency resolution revalidates judgments against reuse
       repositories: {
         analyzeTargetRunner: {
           queryJson: async <T>(statement: string): Promise<T[]> => {
+            if (statement.includes('FROM app.judgment') && !statement.includes('FROM app.judgment_assessment')) {
+              expect(statement).toContain(concreteReusableModelId)
+              expect(statement).not.toContain('new:model:model-1')
+              expect(statement).not.toContain("'model-1'")
+            }
+
             const rows = statement.includes('FROM app.judgment_assessment')
               ? []
               : statement.includes('FROM app.judgment')
@@ -446,12 +462,18 @@ test('project transfer dependency resolution revalidates judgments against reuse
     })
 
     const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {
-      dependencyResolution: {modelTargetBySourceId: Record<string, string>}
+      dependencyResolution: {
+        modelTargetBySourceId: Record<string, string>
+        providerTargetBySourceId: Record<string, string>
+      }
       targetPlan: {judgmentPlan: {action: string; targetJudgmentId: string | null; targetModelId: string | null}[]}
     }
 
     expect(result.status).toBe('ok')
     expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(persistedPlan.dependencyResolution.providerTargetBySourceId).toEqual({
+      'provider-connection-1': concreteReusableProviderId,
+    })
     expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': concreteReusableModelId})
     expect(persistedPlan.targetPlan.judgmentPlan).toMatchObject([
       {action: 'reuse', targetJudgmentId: 'target-judgment-1', targetModelId: concreteReusableModelId},
