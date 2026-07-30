@@ -485,6 +485,96 @@ test('project transfer dependency resolution revalidates judgments against reuse
   }
 })
 
+test('project transfer dependency resolution does not reuse source-model current rows for imported placeholders', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const [article] = payloads.articles
+    const [importedJudgment] = payloads.judgments
+    const sourceJudgmentId =
+      typeof importedJudgment?.sourceJudgmentId === 'string' ? importedJudgment.sourceJudgmentId : null
+
+    if (!article || !importedJudgment || sourceJudgmentId === null) {
+      throw new Error('Expected article and judgment fixtures')
+    }
+
+    const plan = {
+      ...getBasePlan(),
+      dependencyResolution: {
+        acceptedSubstituteModelSourceIds: [],
+        codexSetupState: null,
+        modelMaterializationRequests: [],
+        modelTargetBySourceId: {'model-1': 'new:model:model-1'},
+        providerTargetBySourceId: {'provider-connection-1': 'new:provider:provider-connection-1'},
+        unresolvedModelSourceIds: [],
+        unresolvedProviderSourceIds: [],
+      },
+      targetPlan: {
+        ...getBasePlan().targetPlan,
+        articleMatches: [
+          {
+            action: 'reuse' as const,
+            candidates: [
+              {
+                matchedIdentifiers: [],
+                targetArticle: {...article, targetArticleId: 'target-article-1'},
+                targetArticleId: 'target-article-1',
+              },
+            ],
+            conflicts: [],
+            identifierKeys: ['doi:10.1101/2024.01.01.123456'],
+            packageArticleId: null,
+            selectedTargetArticleId: 'target-article-1',
+            sourceArticleId: 'article-1',
+          },
+        ],
+        projectPromptPlan: getBasePlan().targetPlan.projectPromptPlan.map((projectPrompt) => {
+          return {...projectPrompt, targetPromptId: 'target-prompt-1'}
+        }),
+        promptPlan: getBasePlan().targetPlan.promptPlan.map((prompt) => {
+          return {...prompt, action: 'reuse' as const, targetPromptId: 'target-prompt-1'}
+        }),
+      },
+    }
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        analyzeTargetRunner: {
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            if (statement.includes('FROM app.judgment') && !statement.includes('FROM app.judgment_assessment')) {
+              throw new Error('source-model current judgments must not be queried for imported model placeholders')
+            }
+
+            return [] as T[]
+          },
+        },
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      request: {planRevision: 1},
+    })
+
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {
+      targetPlan: {judgmentPlan: {action: string; targetJudgmentId: string | null; targetModelId: string | null}[]}
+    }
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(persistedPlan.targetPlan.judgmentPlan).toMatchObject([
+      {action: 'insert', targetJudgmentId: `new:judgment:${sourceJudgmentId}`, targetModelId: 'new:model:model-1'},
+    ])
+    expect(persistedPlan.targetPlan.judgmentPlan[0]?.targetModelId).not.toBe('model-1')
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer dependency resolution fast auto-copies published provider and model dependencies', async () => {
   const cwd = getRuntimeRoot()
 

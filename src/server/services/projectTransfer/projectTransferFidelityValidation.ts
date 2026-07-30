@@ -251,22 +251,8 @@ const getNonNewTargetIds = (values: readonly (string | null)[]) => {
   ]
 }
 
-const getImportedTargetModelSourceId = (targetModelId: string | null) => {
-  const prefix = 'new:model:'
-
-  return targetModelId?.startsWith(prefix) === true ? targetModelId.slice(prefix.length) : null
-}
-
-const getPotentialConcreteTargetModelIds = ({
-  sourceModelId,
-  targetModelId,
-}: {
-  sourceModelId: string
-  targetModelId: string | null
-}) => {
-  const importedSourceModelId = getImportedTargetModelSourceId(targetModelId)
-
-  return importedSourceModelId === sourceModelId ? [targetModelId, sourceModelId] : [targetModelId]
+const getPotentialConcreteTargetModelIds = ({targetModelId}: {targetModelId: string | null}) => {
+  return [targetModelId]
 }
 
 const getProjectTargetId = (payloads: Partial<ProjectTransferPayloadByKey>) => {
@@ -967,7 +953,7 @@ const getJudgmentPlan = async ({
     const targetPromptId = promptTargetIdBySource[getStringField(judgment, 'sourcePromptId')] ?? null
     const targetModelId = modelTargetIdBySource[sourceModelId] ?? null
 
-    return getPotentialConcreteTargetModelIds({sourceModelId, targetModelId}).map((candidateTargetModelId) => {
+    return getPotentialConcreteTargetModelIds({targetModelId}).map((candidateTargetModelId) => {
       return {targetArticleId, targetModelId: candidateTargetModelId, targetPromptId}
     })
   })
@@ -1018,7 +1004,7 @@ const getJudgmentPlan = async ({
     const targetArticleId = articleTargetIdBySource[sourceArticleId] ?? null
     const targetPromptId = promptTargetIdBySource[sourcePromptId] ?? null
     const targetModelId = modelTargetIdBySource[sourceModelId] ?? null
-    const potentialTargetModelIds = getPotentialConcreteTargetModelIds({sourceModelId, targetModelId})
+    const potentialTargetModelIds = getPotentialConcreteTargetModelIds({targetModelId})
     const physicalKey = getJudgmentPhysicalKey({judgment, targetArticleId, targetModelId, targetPromptId})
     const reviewVisibleKey = getJudgmentReviewVisibleKey({judgment, targetArticleId, targetModelId, targetPromptId})
     const potentialPhysicalKeys = potentialTargetModelIds
