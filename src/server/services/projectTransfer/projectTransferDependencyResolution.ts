@@ -968,7 +968,7 @@ const getReusableImportedSnapshotModelId = async ({
       model.id,
       provider.id AS providerConnectionId,
       model.name,
-      model.model_name AS modelName,
+      model.name AS modelName,
       model.remote_model_id AS remoteModelId,
       model.display_name AS displayName,
       model.variant,
