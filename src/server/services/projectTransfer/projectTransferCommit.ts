@@ -3,6 +3,11 @@ import {mkdir, rm} from 'node:fs/promises'
 import {dirname} from 'node:path'
 
 import type {ProjectTransferHistoryRecord, ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
+import {
+  postImportReviewServingBuildPriority,
+  requestReviewServingV4Rebuild,
+  type RequestReviewServingV4RebuildInput,
+} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import type {
@@ -98,6 +103,7 @@ type ProjectTransferCommitRepositories = {
     'getCompletedImportHistoryBySessionId'
   >
   revalidate?: (input: ProjectTransferCommitRevalidationInput) => Promise<ProjectTransferCommitRevalidationResult>
+  requestReviewServingBuild?: (input: RequestReviewServingV4RebuildInput) => Promise<unknown>
   runAppTableWrites?: (input: ProjectTransferCommitAppTableWriteInput) => Promise<ProjectTransferCommitAppWriteResult>
   startBackgroundCommit?: (operation: () => Promise<void>) => void
   sessionRepository?: Pick<
@@ -1224,6 +1230,7 @@ const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
     getOwnerToken: repositories?.getOwnerToken ?? randomUUID,
     historyRepository: repositories?.historyRepository ?? getProjectTransferHistoryRepository(),
     revalidate: repositories?.revalidate ?? revalidateProjectTransferCommitPlan,
+    requestReviewServingBuild: repositories?.requestReviewServingBuild ?? requestReviewServingV4Rebuild,
     runAppTableWrites: repositories?.runAppTableWrites ?? runProjectTransferCommitAppTableWrites,
     sessionRepository: repositories?.sessionRepository ?? getProjectTransferSessionRepository(),
     startBackgroundCommit: repositories?.startBackgroundCommit ?? startDetachedProjectTransferImportCommit,
@@ -1471,6 +1478,20 @@ const settleCompletionSideEffect = async <TValue>(operation: Promise<TValue>) =>
 }
 
 type ProjectTransferCommitRepositorySet = ReturnType<typeof getRepositorySet>
+
+const requestPostImportReviewServingBuild = ({
+  completion,
+  repositories,
+}: {
+  completion: ProjectTransferImportCompletionPayload
+  repositories: ProjectTransferCommitRepositorySet
+}) => {
+  return repositories.requestReviewServingBuild({
+    priority: postImportReviewServingBuildPriority,
+    projectId: completion.projectId,
+    reason: 'missingReviewServingSnapshot',
+  })
+}
 
 const updateClaimedCommitProgress = async ({
   ownerToken,
@@ -1727,6 +1748,9 @@ const runClaimedProjectTransferImportCommit = async ({
     )
     await settleCompletionSideEffect(
       writeCompletionArtifact({completion: writeResult.completion, layout: artifacts.layout, runtimeOptions}),
+    )
+    await settleCompletionSideEffect(
+      requestPostImportReviewServingBuild({completion: writeResult.completion, repositories}),
     )
     await settleCompletionSideEffect(
       cleanupCompletedImportArtifacts({layout: artifacts.layout, repositories, runtimeOptions, sessionId}),

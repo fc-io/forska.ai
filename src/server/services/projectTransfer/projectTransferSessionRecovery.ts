@@ -6,6 +6,11 @@ import type {
   ProjectTransferHistoryRecord,
   ProjectTransferSessionState,
 } from '../../../db/schemaTypes.ts'
+import {
+  postImportReviewServingBuildPriority,
+  requestReviewServingV4Rebuild,
+  type RequestReviewServingV4RebuildInput,
+} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
@@ -55,6 +60,7 @@ type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntim
   isActiveWriter?: () => boolean
   now?: Date
   ownerToken?: string
+  requestReviewServingBuild?: (input: RequestReviewServingV4RebuildInput) => Promise<unknown>
   runner?: ProjectTransferSessionRecoveryRunner
 }
 
@@ -78,6 +84,7 @@ type ProjectTransferRecoveryCleanupPlan = ProjectTransferRecoveryCandidate & {
   deletePromotedAssets: boolean
   deleteTempArtifacts: boolean
   recoveredAnalyzedPlan?: boolean
+  recoveredCompletionProjectId?: string | null
   recoveredFromHistory: boolean
   transitionedToFailed: boolean
   transitionedToExpired: boolean
@@ -752,6 +759,7 @@ const getCleanupPlanForSession = async ({
           ...session,
           deletePromotedAssets: false,
           deleteTempArtifacts: true,
+          recoveredCompletionProjectId: history.targetProjectId,
           recoveredFromHistory: true,
           transitionedToFailed: false,
           transitionedToExpired: false,
@@ -1077,6 +1085,38 @@ const getRecoveryCounts = (
   )
 }
 
+const requestRecoveredImportReviewServingBuilds = async ({
+  plans,
+  requestReviewServingBuild,
+}: {
+  plans: readonly ProjectTransferRecoveryCleanupPlan[]
+  requestReviewServingBuild: (input: RequestReviewServingV4RebuildInput) => Promise<unknown>
+}) => {
+  const projectIds = [
+    ...new Set(
+      plans
+        .filter((plan) => {
+          return plan.recoveredFromHistory && typeof plan.recoveredCompletionProjectId === 'string'
+        })
+        .map((plan) => {
+          return plan.recoveredCompletionProjectId as string
+        }),
+    ),
+  ]
+
+  await Promise.all(
+    projectIds.map((projectId) => {
+      return requestReviewServingBuild({
+        priority: postImportReviewServingBuildPriority,
+        projectId,
+        reason: 'missingReviewServingSnapshot',
+      }).catch(() => {
+        return null
+      })
+    }),
+  )
+}
+
 const getRecoveryCommitEventState = (plan: ProjectTransferRecoveryCleanupPlan) => {
   return plan.recoveredFromHistory
     ? 'completed'
@@ -1338,6 +1378,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const now = params.now ?? new Date()
   const ownerToken = getRecoveryOwnerToken(params.ownerToken)
   const runner = getRunner(params.runner)
+  const requestReviewServingBuild = params.requestReviewServingBuild ?? requestReviewServingV4Rebuild
   const batchSize = getRecoveryBatchSize(params.batchSize)
   const exportOwnerHeartbeatStaleMs = params.exportOwnerHeartbeatStaleMs ?? defaultExportOwnerHeartbeatStaleMs
   const exportQueuedSessionStaleMs = params.exportQueuedSessionStaleMs ?? defaultExportQueuedSessionStaleMs
@@ -1380,6 +1421,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
         staleImportCommitHeartbeatBefore,
       })
   writeProjectTransferRecoveryRuntimeEvents({now, ownerToken, plans})
+  await requestRecoveredImportReviewServingBuilds({plans, requestReviewServingBuild})
   const recoveryCounts = getRecoveryCounts(plans)
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions})
   const {failedPlans, successfulPlans, ...cleanupResultCounts} = cleanupCounts

@@ -377,7 +377,7 @@ Current progress:
   current/staging rows, and summary accumulator string-key payload estimates.
 - The physical-shape section tolerates absent tables and older table shapes
   where an optional array column is not present.
-- A first posting-shape implementation is in progress: batched/ranged full
+- PR #348 merged the first posting-shape implementation. Batched/ranged full
   rebuild writes now append segmented posting rows instead of merging large
   `article_ids` arrays back into one physical row per posting key, and cheap
   posting validation counts array lengths instead of unnesting arrays only to
@@ -387,13 +387,15 @@ Current progress:
   `3f97a7738e0b65489391c688bd4da9608e1b667a02ff2db5e54022f730eb356b`,
   creating project `9e25a18e-ad15-4d34-b999-608902e6d7a1` with `18,784`
   articles, `67,463` judgments, and `18,784` human judgment summaries.
-- Live current-DB gate started a foreground missing-snapshot rebuild for that
-  imported project. API, maintenance/DuckDB-owner, and judge readiness stayed
-  healthy; progress was visible in rebuild counters (`projectScope` completed,
-  then `selectedImport`, `judgmentInputContent`, and `payload` chunks advanced).
-- Remaining gap: capture a posting-specific post-change timing artifact once
-  the existing heavy rebuild reaches the posting component, or run a narrower
-  posting-only gate against a clean/current project state.
+- Live current-DB gate reached the changed `posting` component for that imported
+  project. API, maintenance/DuckDB-owner, and judge readiness stayed healthy; 9
+  posting parent chunks completed and the remaining posting work split into 577
+  child chunks.
+- Post-merge timing retention was insufficient to produce a durable
+  posting-specific before/after artifact for that project. The inspector
+  returned valid JSON, but the project-scoped mart rows/chunk timing rows were
+  already empty. Treat PR #348 as correctness/live-progress proven, not as a
+  quantified posting-duration win.
 
 ### Slice 2: Optimize `posting.article_ids` Physical Shape
 
@@ -512,6 +514,23 @@ Quality gates:
 If shape work is not the bottleneck, or if Slice 1 also shows rebuild admission
 waits for route discovery or normal dirty work intake, wire import completion to
 request or boost the imported project's missing-snapshot rebuild.
+
+Current implementation direction:
+
+- Use the existing `requestReviewServingV4Rebuild` API with
+  `reason: 'missingReviewServingSnapshot'` and the shared post-import foreground
+  priority. Do not invent a new reason; the missing-snapshot reason already has
+  active-request reuse, priority boosting, bounded bootstrap chunks, and
+  selected-import/project-scope/summary seeding.
+- Request the build as a best-effort side effect after the import app-table
+  transaction and transfer history have committed, not inside the commit
+  transaction.
+- Also request the build when startup/TTL recovery restores a stale committing
+  import from durable transfer history. This closes the crash window where
+  app-table writes and history committed but the normal post-commit side effect
+  did not run.
+- Hook failure must not fail a completed import; warnings/readiness routes can
+  still request/boost foreground repair later.
 
 Constraints:
 

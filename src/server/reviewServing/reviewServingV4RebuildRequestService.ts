@@ -62,6 +62,8 @@ export const defaultJudgmentRepairV4RebuildComponents = [
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
+export const postImportReviewServingBuildPriority = 1_000
+
 const defaultRequestBudget = {
   maxInputRows: 250_000,
   maxOutputBytes: 128 * 1024 * 1024,
