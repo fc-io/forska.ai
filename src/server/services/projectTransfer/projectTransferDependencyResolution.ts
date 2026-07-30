@@ -977,7 +977,7 @@ const getReusableImportedSnapshotModelId = async ({
       COALESCE(model.enabled, FALSE) AS enabled,
       model.source,
       provider.provider_kind AS provider,
-      model.base_url AS baseURL,
+      NULL AS baseURL,
       TO_JSON(model.metadata_json) AS metadataJson,
       provider.provider_kind AS providerKind,
       provider.auth_mode AS providerAuthMode,
