@@ -6,6 +6,7 @@ import {dirname, join} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import type {ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
+import type {RequestReviewServingV4RebuildInput} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import type {
   ProjectTransferImportAnalysisArtifact,
   ProjectTransferImportPlanArtifact,
@@ -553,12 +554,16 @@ const getNoopHistoryRepository = () => {
 const runCommit = async ({
   cwd,
   repository,
+  requestReviewServingBuild = async () => {
+    return undefined
+  },
   request = {planRevision: 1},
   revalidate,
   sessionId = 'commit-session',
 }: {
   cwd: string
   repository: MutableSessionRepository
+  requestReviewServingBuild?: NonNullable<ProjectTransferCommitInput['repositories']>['requestReviewServingBuild']
   request?: ProjectTransferCommitInput['request']
   revalidate: NonNullable<ProjectTransferCommitInput['repositories']>['revalidate']
   sessionId?: string
@@ -575,6 +580,7 @@ const runCommit = async ({
       },
       historyRepository: getNoopHistoryRepository(),
       revalidate,
+      requestReviewServingBuild,
       runAppTableWrites: async () => {
         const completion = {
           finalCounts: {articles: 0, judgments: 0, prompts: 0, reviews: 0, routes: 0, warnings: 0},
@@ -674,6 +680,65 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(fake.calls.updatePlan).toHaveLength(0)
     expect(revalidationInputs).toHaveLength(2)
     expect(tempRootExists).toBe(false)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit requests review-serving build after successful app-table commit', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const rebuildRequests: RequestReviewServingV4RebuildInput[] = []
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      requestReviewServingBuild: async (input) => {
+        rebuildRequests.push(input)
+      },
+      revalidate: async () => {
+        return {changed: false, plan, ready: true}
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(rebuildRequests).toEqual([
+      {priority: 1_000, projectId: 'target-project', reason: 'missingReviewServingSnapshot'},
+    ])
+    expect(fake.calls.persist).toHaveLength(1)
+    expect(fake.calls.cleanup).toHaveLength(1)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit keeps completion successful when post-import review-serving request fails', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      requestReviewServingBuild: async () => {
+        throw new Error('review-serving request unavailable')
+      },
+      revalidate: async () => {
+        return {changed: false, plan, ready: true}
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.statusCode).toBe(200)
+    expect(fake.getSession()).toMatchObject({state: 'completed'})
+    expect(fake.calls.cleanup).toHaveLength(1)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

@@ -290,6 +290,7 @@ test('project transfer stale committing recovery restores history-backed imports
     historyBackedState: string | null
     orphanErrorReason: string | null
     orphanState: string | null
+    rebuildRequests: unknown[]
     recoveryResult: {expiredSessionCount: number; recoveredCompletionCount: number; scannedSessionCount: number}
   }>(`
     await sessionRepository.createProjectTransferSession({
@@ -350,12 +351,16 @@ test('project transfer stale committing recovery restores history-backed imports
       targetProjectName: 'Target Project History Backed',
     })
 
+    const rebuildRequests = []
     const recoveryResult = await recovery.runProjectTransferStartupRecovery({
       batchSize: 10,
       cwd: '/tmp/f2-project-transfer-commit-recovery-artifacts',
       isActiveWriter: () => true,
       now: new Date('2026-05-28T12:00:00.000Z'),
       ownerToken: 'recovery-owner',
+      requestReviewServingBuild: async (input) => {
+        rebuildRequests.push(input)
+      },
     })
     const historyBacked = await sessionRepository.getProjectTransferSession({sessionId: 'committing-history-backed'})
     const orphan = await sessionRepository.getProjectTransferSession({sessionId: 'committing-orphan'})
@@ -365,6 +370,7 @@ test('project transfer stale committing recovery restores history-backed imports
       historyBackedState: historyBacked?.state ?? null,
       orphanErrorReason: orphan?.errorJson?.reason ?? null,
       orphanState: orphan?.state ?? null,
+      rebuildRequests,
       recoveryResult,
     }))
   `)
@@ -374,6 +380,9 @@ test('project transfer stale committing recovery restores history-backed imports
   expect(result.recoveryResult.expiredSessionCount).toBe(1)
   expect(result.historyBackedState).toBe('completed')
   expect(result.historyBackedCompletionProjectId).toBe('target-project-history-backed')
+  expect(result.rebuildRequests).toEqual([
+    {priority: 1_000, projectId: 'target-project-history-backed', reason: 'missingReviewServingSnapshot'},
+  ])
   expect(result.orphanState).toBe('expired')
   expect(result.orphanErrorReason).toBe('project_transfer_session_recovery_expired')
 })
