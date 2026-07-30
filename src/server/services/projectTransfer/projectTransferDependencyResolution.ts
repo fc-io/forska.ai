@@ -226,6 +226,10 @@ const getNullableStringValue = (value: unknown): string | null => {
   return value === null ? null : getStringValue(value)
 }
 
+const getSqlLiteral = (value: string) => {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
 const getBooleanValue = (value: unknown): boolean => {
   return typeof value === 'boolean' ? value : false
 }
@@ -849,6 +853,156 @@ const getUniqueEquivalentTargetProviderConnection = ({
   return candidates.length === 1 ? candidates[0] : null
 }
 
+type ImportedSnapshotProviderTargetRow = {
+  authMode: string | null
+  baseURL: string | null
+  config: unknown
+  enabled?: boolean | null
+  id: string
+  label?: string | null
+  maxInflightRequests?: number | null
+  providerKind: ProviderConnectionForAdmin['providerKind']
+  secretRef?: string | null
+}
+
+type ImportedSnapshotModelTargetRow = ProviderModelRecord & {
+  providerAuthMode: string | null
+  providerBaseURL: string | null
+  providerConfig: unknown
+  providerKind: ProviderConnectionForAdmin['providerKind']
+}
+
+const getProviderConnectionFromSnapshotRow = (row: ImportedSnapshotProviderTargetRow): ProviderConnectionForAdmin => {
+  return {
+    authMode: row.authMode,
+    baseURL: row.baseURL,
+    config: getConfigRecord(row.config) as ProviderConnectionForAdmin['config'],
+    createdAt: null,
+    enabled: row.enabled ?? false,
+    hasSecret: row.secretRef !== null && row.secretRef !== undefined,
+    id: row.id,
+    label: row.label ?? row.id,
+    lastCheckedAt: null,
+    lastError: null,
+    maxInflightRequests: row.maxInflightRequests ?? null,
+    models: [],
+    providerKind: row.providerKind,
+    secretRef: row.secretRef ?? null,
+    updatedAt: null,
+  }
+}
+
+const getProviderConnectionFromModelSnapshotRow = (row: ImportedSnapshotModelTargetRow): ProviderConnectionForAdmin => {
+  return {
+    authMode: row.providerAuthMode,
+    baseURL: row.providerBaseURL,
+    config: getConfigRecord(row.providerConfig) as ProviderConnectionForAdmin['config'],
+    createdAt: null,
+    enabled: false,
+    hasSecret: false,
+    id: row.providerConnectionId ?? '',
+    label: row.providerConnectionId ?? '',
+    lastCheckedAt: null,
+    lastError: null,
+    maxInflightRequests: null,
+    models: [],
+    providerKind: row.providerKind,
+    secretRef: null,
+    updatedAt: null,
+  }
+}
+
+const getReusableImportedSnapshotProviderConnectionId = async ({
+  importedProvider,
+  runner,
+}: {
+  importedProvider: ImportedProviderConnection
+  runner: ProjectTransferAnalyzeTargetRunner | null
+}) => {
+  if (runner === null) {
+    return null
+  }
+
+  const rows = await runner.queryJson<ImportedSnapshotProviderTargetRow>(`
+    SELECT
+      id,
+      provider_kind AS providerKind,
+      label,
+      COALESCE(enabled, FALSE) AS enabled,
+      auth_mode AS authMode,
+      base_url AS baseURL,
+      max_inflight_requests AS maxInflightRequests,
+      TO_JSON(config_json) AS config,
+      secret_ref AS secretRef
+    FROM app.provider_connection
+    WHERE json_extract_string(config_json, '$.${importedSnapshotMarker}.sourceProviderConnectionId')
+      = ${getSqlLiteral(importedProvider.sourceProviderConnectionId)}
+    ORDER BY created_at ASC, id ASC
+  `)
+  const candidates = rows.map(getProviderConnectionFromSnapshotRow).filter((connection) => {
+    return providerFingerprintsMatch(importedProvider, connection)
+  })
+
+  return candidates.length === 1 ? (candidates[0]?.id ?? null) : null
+}
+
+const getReusableImportedSnapshotModelId = async ({
+  importedModel,
+  importedProvider,
+  judgmentModelSignaturesBySourceId,
+  providerConnectionId,
+  runner,
+}: {
+  importedModel: ImportedModel
+  importedProvider: ImportedProviderConnection
+  judgmentModelSignaturesBySourceId: Record<string, unknown[]>
+  providerConnectionId: string
+  runner: ProjectTransferAnalyzeTargetRunner | null
+}) => {
+  if (runner === null || isImportedTargetProviderConnectionId(providerConnectionId)) {
+    return null
+  }
+
+  const rows = await runner.queryJson<ImportedSnapshotModelTargetRow>(`
+    SELECT
+      model.id,
+      provider.id AS providerConnectionId,
+      model.name,
+      model.model_name AS modelName,
+      model.remote_model_id AS remoteModelId,
+      model.display_name AS displayName,
+      model.variant,
+      json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.snapshotFingerprint.model.version')
+        AS version,
+      COALESCE(model.enabled, FALSE) AS enabled,
+      model.source,
+      provider.provider_kind AS provider,
+      model.base_url AS baseURL,
+      TO_JSON(model.metadata_json) AS metadataJson,
+      provider.provider_kind AS providerKind,
+      provider.auth_mode AS providerAuthMode,
+      provider.base_url AS providerBaseURL,
+      TO_JSON(provider.config_json) AS providerConfig
+    FROM app.model model
+    INNER JOIN app.provider_connection provider ON provider.id = model.provider_connection_id
+    WHERE model.provider_connection_id = ${getSqlLiteral(providerConnectionId)}
+      AND json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.sourceModelId')
+        = ${getSqlLiteral(importedModel.sourceModelId)}
+    ORDER BY model.created_at ASC, model.id ASC
+  `)
+  const candidates = rows.filter((row) => {
+    return targetModelEquivalentForImportedJudgments({
+      judgmentModelSignaturesBySourceId,
+      sourceModel: importedModel,
+      sourceProvider: importedProvider,
+      targetModel: row,
+      targetProvider: getProviderConnectionFromModelSnapshotRow(row),
+    })
+  })
+
+  return candidates.length === 1 ? (candidates[0]?.id ?? null) : null
+}
+
 const validateExplicitProviderSelections = async ({
   connectionById: _connectionById,
   getProviderConnectionById: _getProviderConnectionById,
@@ -874,17 +1028,22 @@ const validateExplicitModelSelections = async ({
 const getResolvedProviderMappings = ({
   autoResolve,
   connections,
+  hiddenResolvedProviderTargetIds,
   importedProviders,
   resolutionState,
+  runner,
 }: {
   autoResolve: boolean
   connections: ProviderConnectionForAdmin[]
+  hiddenResolvedProviderTargetIds: Set<string>
   importedProviders: ImportedProviderConnection[]
   resolutionState: ProjectTransferDependencyResolutionState
+  runner: ProjectTransferAnalyzeTargetRunner | null
 }) => {
   const connectionById = getConnectionById(connections)
 
-  return importedProviders.reduce<Record<string, string>>((mapped, importedProvider) => {
+  return importedProviders.reduce<Promise<Record<string, string>>>(async (previous, importedProvider) => {
+    const mapped = await previous
     const sourceProviderConnectionId = importedProvider.sourceProviderConnectionId
     const existingTargetId = resolutionState.providerTargetBySourceId[sourceProviderConnectionId]
     const existingTargetProviderConnection = existingTargetId ? (connectionById[existingTargetId] ?? null) : null
@@ -892,12 +1051,16 @@ const getResolvedProviderMappings = ({
       connections,
       importedProvider,
     })
+    const reusableSnapshotProviderConnectionId = await getReusableImportedSnapshotProviderConnectionId({
+      importedProvider,
+      runner,
+    })
     const reusableExistingTargetId =
       existingTargetProviderConnection !== null
       && providerFingerprintsMatch(importedProvider, existingTargetProviderConnection)
         ? existingTargetId
         : existingTargetId && isImportedTargetProviderConnectionId(existingTargetId)
-          ? (equivalentTargetProviderConnection?.id ?? existingTargetId)
+          ? (equivalentTargetProviderConnection?.id ?? reusableSnapshotProviderConnectionId ?? existingTargetId)
           : null
     const targetProviderConnectionId = resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       ? null
@@ -906,30 +1069,40 @@ const getResolvedProviderMappings = ({
         : !autoResolve
           ? null
           : (equivalentTargetProviderConnection?.id
+            ?? reusableSnapshotProviderConnectionId
             ?? getImportedTargetProviderConnectionId(sourceProviderConnectionId))
 
+    if (targetProviderConnectionId === reusableSnapshotProviderConnectionId) {
+      hiddenResolvedProviderTargetIds.add(targetProviderConnectionId)
+    }
+
     return targetProviderConnectionId ? {...mapped, [sourceProviderConnectionId]: targetProviderConnectionId} : mapped
-  }, {})
+  }, Promise.resolve({}))
 }
 
 const getResolvedModelMappings = ({
   connectionById,
+  hiddenResolvedModelTargetIds,
   importedModels,
   importedProvidersBySourceId,
   judgmentModelSignaturesBySourceId,
   providerTargetBySourceId,
   resolutionState,
+  runner,
 }: {
   connectionById: Record<string, ProviderConnectionForAdmin>
+  hiddenResolvedModelTargetIds: Set<string>
   importedModels: ImportedModel[]
   importedProvidersBySourceId: Record<string, ImportedProviderConnection>
   judgmentModelSignaturesBySourceId: Record<string, unknown[]>
   providerTargetBySourceId: Record<string, string>
   resolutionState: ProjectTransferDependencyResolutionState
+  runner: ProjectTransferAnalyzeTargetRunner | null
 }) => {
   const targetModelById = getTargetModelById(Object.values(connectionById))
 
-  return importedModels.reduce<Record<string, string>>((mapped, importedModel) => {
+  return importedModels.reduce<Promise<Record<string, string>>>(async (previous, importedModel) => {
+    const mapped = await previous
     const sourceModelId = importedModel.sourceModelId
     const existingTargetId = resolutionState.modelTargetBySourceId[sourceModelId]
     const existingTargetModel = existingTargetId ? (targetModelById[existingTargetId] ?? null) : null
@@ -948,6 +1121,16 @@ const getResolvedModelMappings = ({
             sourceProvider: importedProvider,
           })
         : null
+    const reusableSnapshotModelId =
+      targetProviderConnectionId !== undefined && importedProvider !== null
+        ? await getReusableImportedSnapshotModelId({
+            importedModel,
+            importedProvider,
+            judgmentModelSignaturesBySourceId,
+            providerConnectionId: targetProviderConnectionId,
+            runner,
+          })
+        : null
     const reusableExistingTargetId =
       existingTargetModel !== null
       && existingTargetProvider !== null
@@ -962,7 +1145,7 @@ const getResolvedModelMappings = ({
       })
         ? existingTargetId
         : existingTargetId && isImportedTargetModelId(existingTargetId)
-          ? (equivalentTargetModel?.id ?? existingTargetId)
+          ? (equivalentTargetModel?.id ?? reusableSnapshotModelId ?? existingTargetId)
           : null
     const targetModelId = resolutionState.unresolvedModelSourceIds.includes(sourceModelId)
       ? null
@@ -973,22 +1156,28 @@ const getResolvedModelMappings = ({
           : isImportedTargetProviderConnectionId(targetProviderConnectionId)
             ? getImportedTargetModelId(sourceModelId)
             : connection === null
-              ? null
+              ? (reusableSnapshotModelId ?? null)
               : importedProvider === null
                 ? getImportedTargetModelId(sourceModelId)
-                : (equivalentTargetModel?.id ?? getImportedTargetModelId(sourceModelId))
+                : (equivalentTargetModel?.id ?? reusableSnapshotModelId ?? getImportedTargetModelId(sourceModelId))
+
+    if (targetModelId === reusableSnapshotModelId) {
+      hiddenResolvedModelTargetIds.add(targetModelId)
+    }
 
     return targetModelId ? {...mapped, [sourceModelId]: targetModelId} : mapped
-  }, {})
+  }, Promise.resolve({}))
 }
 
 const getProviderStatusesAndBlockers = ({
   connectionById,
+  hiddenResolvedProviderTargetIds,
   importedProviders,
   providerTargetBySourceId,
   resolutionState,
 }: {
   connectionById: Record<string, ProviderConnectionForAdmin>
+  hiddenResolvedProviderTargetIds: Set<string>
   importedProviders: ImportedProviderConnection[]
   providerTargetBySourceId: Record<string, string>
   resolutionState: ProjectTransferDependencyResolutionState
@@ -1003,13 +1192,15 @@ const getProviderStatusesAndBlockers = ({
       const explicitUnresolved = resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       const importedTarget =
         targetProviderConnectionId !== undefined && isImportedTargetProviderConnectionId(targetProviderConnectionId)
+      const hiddenResolvedTarget =
+        targetProviderConnectionId !== undefined && hiddenResolvedProviderTargetIds.has(targetProviderConnectionId)
       const targetConnection = targetProviderConnectionId ? (connectionById[targetProviderConnectionId] ?? null) : null
       const equivalentConnection = targetConnection
         ? providerFingerprintsMatch(importedProvider, targetConnection)
         : false
       const status: ProjectTransferDependencyStatus = importedTarget
         ? 'resolved'
-        : targetConnection && equivalentConnection
+        : hiddenResolvedTarget || (targetConnection && equivalentConnection)
           ? 'resolved'
           : targetConnection
             ? 'blocked'
@@ -1048,6 +1239,7 @@ const getTargetModelById = (connections: ProviderConnectionForAdmin[]) => {
 }
 
 const getModelStatus = ({
+  hiddenResolvedModelTargetIds,
   importedModel,
   importedProvider,
   judgmentModelSignaturesBySourceId,
@@ -1056,6 +1248,7 @@ const getModelStatus = ({
   targetModel,
   targetProvider,
 }: {
+  hiddenResolvedModelTargetIds: Set<string>
   importedModel: ImportedModel
   importedProvider: ImportedProviderConnection | null
   judgmentModelSignaturesBySourceId: Record<string, unknown[]>
@@ -1066,6 +1259,10 @@ const getModelStatus = ({
 }): ProjectTransferDependencyStatus => {
   if (targetModelId !== null && isImportedTargetModelId(targetModelId)) {
     return providerTargetBySourceId[importedModel.sourceProviderConnectionId] ? 'resolved' : 'missing'
+  }
+
+  if (targetModelId !== null && hiddenResolvedModelTargetIds.has(targetModelId)) {
+    return 'resolved'
   }
 
   if (!targetModel || !targetModel.providerConnectionId || importedProvider === null) {
@@ -1096,6 +1293,7 @@ const getModelStatus = ({
 
 const getModelStatusesAndBlockers = ({
   connectionById,
+  hiddenResolvedModelTargetIds,
   importedModels,
   importedProvidersBySourceId,
   judgmentModelSignaturesBySourceId,
@@ -1104,6 +1302,7 @@ const getModelStatusesAndBlockers = ({
   targetModelById,
 }: {
   connectionById: Record<string, ProviderConnectionForAdmin>
+  hiddenResolvedModelTargetIds: Set<string>
   importedModels: ImportedModel[]
   importedProvidersBySourceId: Record<string, ImportedProviderConnection>
   judgmentModelSignaturesBySourceId: Record<string, unknown[]>
@@ -1124,6 +1323,7 @@ const getModelStatusesAndBlockers = ({
         ? (connectionById[targetModel.providerConnectionId] ?? null)
         : null
       const status = getModelStatus({
+        hiddenResolvedModelTargetIds,
         importedModel,
         importedProvider,
         judgmentModelSignaturesBySourceId,
@@ -1536,19 +1736,25 @@ export const revalidateProjectTransferResolvedDependencies = async (
     return {error: explicitModelError, status: 'error', statusCode: 400}
   }
 
-  const providerTargetBySourceId = getResolvedProviderMappings({
+  const hiddenResolvedProviderTargetIds = new Set<string>()
+  const hiddenResolvedModelTargetIds = new Set<string>()
+  const providerTargetBySourceId = await getResolvedProviderMappings({
     autoResolve: input.request.autoResolve !== false,
     connections,
+    hiddenResolvedProviderTargetIds,
     importedProviders,
     resolutionState: requestedResolutionState,
+    runner: repositories.analyzeTargetRunner,
   })
-  const modelTargetBySourceId = getResolvedModelMappings({
+  const modelTargetBySourceId = await getResolvedModelMappings({
     connectionById,
+    hiddenResolvedModelTargetIds,
     importedModels,
     importedProvidersBySourceId,
     judgmentModelSignaturesBySourceId,
     providerTargetBySourceId,
     resolutionState: requestedResolutionState,
+    runner: repositories.analyzeTargetRunner,
   })
   const dependencyResolution: ProjectTransferDependencyResolutionState = {
     ...requestedResolutionState,
@@ -1557,12 +1763,14 @@ export const revalidateProjectTransferResolvedDependencies = async (
   }
   const providerResolution = getProviderStatusesAndBlockers({
     connectionById,
+    hiddenResolvedProviderTargetIds,
     importedProviders,
     providerTargetBySourceId,
     resolutionState: dependencyResolution,
   })
   const modelResolution = getModelStatusesAndBlockers({
     connectionById,
+    hiddenResolvedModelTargetIds,
     importedModels,
     importedProvidersBySourceId,
     judgmentModelSignaturesBySourceId,
