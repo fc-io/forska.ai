@@ -358,6 +358,111 @@ test('project transfer dependency resolution auto-resolves exact imported provid
   }
 })
 
+test('project transfer dependency resolution revalidates judgments against reused imported snapshot model ids', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const [article] = payloads.articles
+    const [importedJudgment] = payloads.judgments
+
+    if (!article || !importedJudgment) {
+      throw new Error('Expected article and judgment fixtures')
+    }
+
+    const concreteReusableModelId = 'reusable-imported-snapshot-model-1'
+    const plan = {
+      ...getBasePlan(),
+      targetPlan: {
+        ...getBasePlan().targetPlan,
+        articleMatches: [
+          {
+            action: 'reuse' as const,
+            candidates: [
+              {
+                matchedIdentifiers: [],
+                targetArticle: {...article, targetArticleId: 'target-article-1'},
+                targetArticleId: 'target-article-1',
+              },
+            ],
+            conflicts: [],
+            identifierKeys: ['doi:10.1101/2024.01.01.123456'],
+            packageArticleId: null,
+            selectedTargetArticleId: 'target-article-1',
+            sourceArticleId: 'article-1',
+          },
+        ],
+        projectPromptPlan: getBasePlan().targetPlan.projectPromptPlan.map((projectPrompt) => {
+          return {...projectPrompt, targetPromptId: 'target-prompt-1'}
+        }),
+        promptPlan: getBasePlan().targetPlan.promptPlan.map((prompt) => {
+          return {...prompt, action: 'reuse' as const, targetPromptId: 'target-prompt-1'}
+        }),
+      },
+    }
+    const targetModel = getTargetModel({id: concreteReusableModelId})
+    const targetConnection = getTargetConnection({}, [targetModel])
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        analyzeTargetRunner: {
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            const rows = statement.includes('FROM app.judgment_assessment')
+              ? []
+              : statement.includes('FROM app.judgment')
+                ? [
+                    {
+                      answeredOriginal: importedJudgment.answeredOriginal,
+                      answeredOriginalAsArray: JSON.stringify(importedJudgment.answeredOriginalAsArray ?? []),
+                      confidenceOriginal: importedJudgment.confidenceOriginal,
+                      deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
+                      explanation: importedJudgment.explanation,
+                      isAnswered: importedJudgment.isAnswered,
+                      quotes: JSON.stringify(importedJudgment.quotes ?? []),
+                      targetArticleId: 'target-article-1',
+                      targetJudgmentId: 'target-judgment-1',
+                      targetModelId: concreteReusableModelId,
+                      targetPromptId: 'target-prompt-1',
+                      useAbstract: true,
+                      useFulltext: false,
+                      useFulltextNoImages: false,
+                      useTitle: true,
+                    },
+                  ]
+                : []
+
+            return rows as T[]
+          },
+        },
+        listProviderConnections: async () => {
+          return [targetConnection]
+        },
+      },
+      request: {planRevision: 1},
+    })
+
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {
+      dependencyResolution: {modelTargetBySourceId: Record<string, string>}
+      targetPlan: {judgmentPlan: {action: string; targetJudgmentId: string | null; targetModelId: string | null}[]}
+    }
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': concreteReusableModelId})
+    expect(persistedPlan.targetPlan.judgmentPlan).toMatchObject([
+      {action: 'reuse', targetJudgmentId: 'target-judgment-1', targetModelId: concreteReusableModelId},
+    ])
+    expect(persistedPlan.targetPlan.judgmentPlan[0]?.targetModelId).not.toBe('new:model:model-1')
+    expect(persistedPlan.targetPlan.judgmentPlan[0]?.targetModelId).not.toBe('model-1')
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer dependency resolution fast auto-copies published provider and model dependencies', async () => {
   const cwd = getRuntimeRoot()
 

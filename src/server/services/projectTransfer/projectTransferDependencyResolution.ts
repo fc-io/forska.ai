@@ -1280,6 +1280,18 @@ const hasNoFidelityConflicts = (plan: ProjectTransferResolvedDependencyPlanArtif
   )
 }
 
+const hasPackageFidelityRows = (plan: ProjectTransferResolvedDependencyPlanArtifact) => {
+  return [
+    plan.packageCounts.judgmentAssessments,
+    plan.packageCounts.judgments,
+    plan.packageCounts.humanJudgmentSummaries,
+    plan.packageCounts.humanJudgments,
+    plan.packageCounts.reviews,
+  ].some((count) => {
+    return count > 0
+  })
+}
+
 const getFastAutoResolvedDependencyResolution = ({
   modelSourceIds,
   plan,
@@ -1437,6 +1449,7 @@ const getFastAutoResolvedDependencyResult = ({
     || hasExplicitDependencyRequest(request)
     || !hasOnlyProviderModelDependencies(plan.summary.dependencyStatuses)
     || !hasNoFidelityConflicts(plan)
+    || hasPackageFidelityRows(plan)
   ) {
     return null
   }
