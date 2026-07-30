@@ -118,7 +118,13 @@ export type ReviewServingRebuildTimingSummaryRow = {
   requestId: string | null
   runningCount: number
   status: ReviewServingRebuildChunkStatus
+  totalActualOutputBytes: number | null
   totalActualOutputRows: number | null
+  totalActualPayloadBytes: number | null
+  totalActualTempBytes: number | null
+  totalEstimatedOutputBytes: number | null
+  totalEstimatedPayloadBytes: number | null
+  totalEstimatedTempBytes: number | null
 }
 
 export type ReviewServingRebuildClaimableChunkRow = {
@@ -583,7 +589,13 @@ export const getReviewServingRebuildTimingDiagnostics = async (
       MAX(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE)) AS maxWriteOutputMs,
       AVG(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs') AS DOUBLE)) AS avgValidationMs,
       MAX(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs') AS DOUBLE)) AS maxValidationMs,
-      SUM(chunk.actual_output_rows) AS totalActualOutputRows
+      SUM(chunk.estimated_output_bytes) AS totalEstimatedOutputBytes,
+      SUM(chunk.actual_output_bytes) AS totalActualOutputBytes,
+      SUM(chunk.actual_output_rows) AS totalActualOutputRows,
+      SUM(chunk.estimated_payload_bytes) AS totalEstimatedPayloadBytes,
+      SUM(chunk.actual_payload_bytes) AS totalActualPayloadBytes,
+      SUM(chunk.estimated_temp_bytes) AS totalEstimatedTempBytes,
+      SUM(chunk.actual_temp_bytes) AS totalActualTempBytes
     FROM app.review_rebuild_chunk_manifest chunk
     WHERE ${scopePredicate}
     GROUP BY

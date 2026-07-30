@@ -53,6 +53,8 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
       'withDuckdbMaintenanceAccess',
       "getMaintenanceDuckdbWorkloadContext('inspectReviewServingRebuildTimings')",
       'getReviewServingRebuildTimingDiagnostics',
+      'getReviewServingPhysicalShapeDiagnostics',
+      'physicalShape',
     ],
     path: 'scripts/inspectReviewServingRebuildTimings.ts',
   },
@@ -327,6 +329,39 @@ test('review-serving physical evidence inspector reports selected-import staging
     'Sample duplicate key rows',
   ]) {
     expect(source).toContain(expectedText)
+  }
+})
+
+test('review-serving rebuild timing inspector reports optional hot table physical shape JSON', () => {
+  const source = readSource('scripts/inspectReviewServingRebuildTimings.ts')
+  const helperSource = readSource('src/server/reviewServing/reviewServingPhysicalShapeDiagnostics.ts')
+
+  for (const expectedText of [
+    'getReviewServingPhysicalShapeDiagnostics',
+    'physicalShape',
+    'options.projectId',
+    'physicalShape ? {...diagnostics, physicalShape} : diagnostics',
+  ]) {
+    expect(source).toContain(expectedText)
+  }
+
+  for (const expectedText of [
+    'mart.review_article_filter_posting_serving_v4',
+    'mart.review_unassessed_queue_serving_v4',
+    'mart.review_article_judgment_detail_serving_v4',
+    'mart.review_selected_article_import_current_v4',
+    'mart.review_selected_article_import_staging_v4',
+    'mart.review_article_summary_rebuild_accumulator_v4',
+    'FROM information_schema.tables',
+    'array_length(${column})',
+    "'article_ids'",
+    "'prompt_ids'",
+    'answered_original',
+    'human_comment',
+    'source_chunk_ids_key',
+    'Approximate byte values are string-cast payload proxies',
+  ]) {
+    expect(helperSource).toContain(expectedText)
   }
 })
 
