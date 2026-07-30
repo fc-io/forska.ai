@@ -966,7 +966,7 @@ const getReusableImportedSnapshotModelId = async ({
       model.id,
       provider.id AS providerConnectionId,
       model.name,
-      model.name AS modelName,
+      json_extract_string(model.metadata_json, '$.discovery.identity.modelName') AS modelName,
       model.remote_model_id AS remoteModelId,
       model.display_name AS displayName,
       model.variant,
