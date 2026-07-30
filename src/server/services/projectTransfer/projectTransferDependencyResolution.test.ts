@@ -569,6 +569,7 @@ test('project transfer dependency resolution reuses hidden imported snapshot row
             }
 
             if (statement.includes('FROM app.model model')) {
+              expect(statement).toContain('$.discovery.identity.modelName')
               expect(statement).not.toContain('model.model_name')
               expect(statement).not.toContain('model.base_url')
 
