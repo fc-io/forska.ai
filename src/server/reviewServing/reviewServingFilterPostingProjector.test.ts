@@ -170,7 +170,10 @@ test('answer changes update serving postings without derived stats writes', asyn
   expect(joined).not.toContain('sort_key')
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
+  expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(joined).toContain('WHERE NOT EXISTS')
 })
 
 test('posting no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -330,7 +333,7 @@ test('chunked full posting rebuilds skip retired stats refresh', async () => {
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
 })
 
-test('posting range rebuilds write compatible chunks through one range-aware serving statement', async () => {
+test('posting range rebuilds append segmented serving rows without merging existing posting arrays', async () => {
   const {database, statements} = createPostingDatabase()
 
   const result = await projectReviewServingFilterPostingRanges(
@@ -354,6 +357,7 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
   expect(joined).toContain("('article-1', 'article-3'), ('article-4', 'article-9')")
   expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('SET article_ids = list_filter')
+  expect(joined).not.toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
   expect(joined).toContain('SELECT DISTINCT scope.article_id')
   expect(countOccurrences(joined, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
   expect(joined).toContain('judgment_detail_source AS')
@@ -361,8 +365,10 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
   expect(joined).toContain('range.chunk_start_article_id IS NULL OR scope.article_id >= range.chunk_start_article_id')
   expect(joined).toContain('range.chunk_end_article_id IS NULL OR scope.article_id <= range.chunk_end_article_id')
   expect(servingInserts[0]).not.toContain('posting_identity')
+  expect(servingInserts[0]).not.toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+  expect(joined).not.toContain('WHERE NOT EXISTS')
   expectNoLegacyPostingSourcePatchTables(joined)
 })
 

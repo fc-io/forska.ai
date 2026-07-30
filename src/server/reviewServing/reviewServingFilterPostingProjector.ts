@@ -56,6 +56,7 @@ type FilterStateServingRow = {
 
 type PostingValidationCountRow = {actualChecksum: string | null; actualCount: number | string | null}
 type CompactPostingRow = {articleIds: readonly string[]; filterKind: string; filterValue: string; listModeKey: string}
+type FullRebuildServingRowsWriteOptions = {appendSegmentedFullRebuildPostingRows?: boolean}
 
 const filterPostingProjectorName = 'filter-posting-projector'
 const stateFilterKinds = new Set(['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus', 'llmHasJudgment'])
@@ -146,6 +147,23 @@ const getArticleRangePredicate = (input: {
 
   return `${startPredicate}
           ${endPredicate}`
+}
+
+const getArticleRangeExpression = (input: {
+  articleIdSql: string
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const startExpression =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? 'TRUE'
+      : `${input.articleIdSql} >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endExpression =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? 'TRUE'
+      : `${input.articleIdSql} <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startExpression} AND ${endExpression}`
 }
 
 const getListModeCte = (listModeKeys: readonly string[]) => {
@@ -710,6 +728,7 @@ const getInsertFullRebuildServingRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   ranges?: readonly ProjectReviewServingFilterPostingsInput[],
   postingSourceSql = getFullRebuildPostingContributionRowsStatement(input, ranges),
+  options: FullRebuildServingRowsWriteOptions = {},
 ) => {
   const servingSourceCteSql = `WITH posting_source AS (${postingSourceSql}),
     serving_source AS (
@@ -726,21 +745,7 @@ const getInsertFullRebuildServingRowsStatement = (
         CAST(posting.filterValue AS VARCHAR),
         CAST(posting.listModeKey AS VARCHAR)
     )`
-
-  return [
-    `UPDATE mart.review_article_filter_posting_serving_v4 serving
-    SET article_ids = ${getMergePostingArticleIdsSql('source.articleIds', 'serving.article_ids')}
-    FROM (
-      ${servingSourceCteSql}
-      SELECT * FROM serving_source
-    ) source
-    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND serving.filter_kind = source.filterKind
-      AND serving.filter_value = source.filterValue
-      AND serving.list_mode_key = source.listModeKey`,
-    `INSERT INTO mart.review_article_filter_posting_serving_v4 (
+  const insertStatement = `INSERT INTO mart.review_article_filter_posting_serving_v4 (
       project_id,
       review_config_hash,
       snapshot_id,
@@ -758,7 +763,10 @@ const getInsertFullRebuildServingRowsStatement = (
       posting.filterValue AS filter_value,
       posting.listModeKey AS list_mode_key,
       posting.articleIds AS article_ids
-    FROM serving_source posting
+    FROM serving_source posting${
+      options.appendSegmentedFullRebuildPostingRows === true
+        ? ''
+        : `
     WHERE NOT EXISTS (
       SELECT 1
       FROM mart.review_article_filter_posting_serving_v4 serving
@@ -768,7 +776,27 @@ const getInsertFullRebuildServingRowsStatement = (
         AND serving.filter_kind = posting.filterKind
         AND serving.filter_value = posting.filterValue
         AND serving.list_mode_key = posting.listModeKey
-    )`,
+    )`
+    }`
+
+  if (options.appendSegmentedFullRebuildPostingRows === true) {
+    return [insertStatement]
+  }
+
+  return [
+    `UPDATE mart.review_article_filter_posting_serving_v4 serving
+    SET article_ids = ${getMergePostingArticleIdsSql('source.articleIds', 'serving.article_ids')}
+    FROM (
+      ${servingSourceCteSql}
+      SELECT * FROM serving_source
+    ) source
+    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND serving.filter_kind = source.filterKind
+      AND serving.filter_value = source.filterValue
+      AND serving.list_mode_key = source.listModeKey`,
+    insertStatement,
   ]
 }
 
@@ -927,7 +955,9 @@ const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPos
     : [
         getCreateFullRebuildPostingSourceStatement(firstRange, input.ranges),
         getSubtractFullRebuildServingRowsStatement(firstRange, input.ranges),
-        ...getInsertFullRebuildServingRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
+        ...getInsertFullRebuildServingRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql(), {
+          appendSegmentedFullRebuildPostingRows: true,
+        }),
         getResetListModeStateRangeRowsStatement(firstRange, input.ranges),
         getUpdateFullRebuildListModeStateRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
         getDropFullRebuildPostingSourceStatement(),
@@ -974,16 +1004,17 @@ const getFullPostingRebuildOutputValidationResult = async (
   input: ProjectReviewServingFilterPostingsInput,
   database: ReviewServingFilterPostingProjectorDatabase,
 ) => {
+  const postingArticleCountExpression = hasChunkArticleRange(input)
+    ? `array_length(list_filter(serving.article_ids, article_id -> ${getArticleRangeExpression({articleIdSql: 'article_id', ...input})}))`
+    : 'array_length(serving.article_ids)'
   const [row] = await database.queryJson<PostingValidationCountRow>(`
     SELECT
-      CAST(COUNT(*) AS INTEGER) AS actualCount,
-      sha256('cheap-count:' || CAST(COUNT(*) AS VARCHAR)) AS actualChecksum
+      CAST(COALESCE(SUM(${postingArticleCountExpression}), 0) AS INTEGER) AS actualCount,
+      sha256('cheap-count:' || CAST(COALESCE(SUM(${postingArticleCountExpression}), 0) AS VARCHAR)) AS actualChecksum
     FROM mart.review_article_filter_posting_serving_v4 serving
-    CROSS JOIN UNNEST(serving.article_ids) AS serving_article(article_id)
     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
       AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      ${getArticleRangePredicate({alias: 'serving_article', ...input})}
   `)
   const [stateRow] = await database.queryJson<PostingValidationCountRow>(`
     SELECT

@@ -1739,7 +1739,13 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
             requestId: 'rebuild:timing',
             runningCount: 0,
             status: 'completed',
+            totalActualOutputBytes: 2048,
             totalActualOutputRows: 25,
+            totalActualPayloadBytes: 1536,
+            totalActualTempBytes: 512,
+            totalEstimatedOutputBytes: 4096,
+            totalEstimatedPayloadBytes: 3072,
+            totalEstimatedTempBytes: 1024,
           },
         ] as T[]
       }
@@ -1774,11 +1780,25 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
 
   expect(diagnostics.filters).toEqual({limit: 7, projectId: 'project-1', requestId: 'rebuild:timing'})
   expect(diagnostics.phaseTimings).toHaveLength(1)
+  expect(diagnostics.phaseTimings[0]).toMatchObject({
+    totalActualOutputBytes: 2048,
+    totalActualPayloadBytes: 1536,
+    totalActualTempBytes: 512,
+    totalEstimatedOutputBytes: 4096,
+    totalEstimatedPayloadBytes: 3072,
+    totalEstimatedTempBytes: 1024,
+  })
   expect(diagnostics.claimablePendingChunks).toHaveLength(1)
   expect(statements[0]).toContain("chunk.request_id = 'rebuild:timing'")
   expect(statements[0]).toContain("chunk.project_id = 'project-1'")
   expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs')")
   expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs')")
+  expect(statements[0]).toContain('SUM(chunk.actual_output_bytes) AS totalActualOutputBytes')
+  expect(statements[0]).toContain('SUM(chunk.actual_payload_bytes) AS totalActualPayloadBytes')
+  expect(statements[0]).toContain('SUM(chunk.actual_temp_bytes) AS totalActualTempBytes')
+  expect(statements[0]).toContain('SUM(chunk.estimated_output_bytes) AS totalEstimatedOutputBytes')
+  expect(statements[0]).toContain('SUM(chunk.estimated_payload_bytes) AS totalEstimatedPayloadBytes')
+  expect(statements[0]).toContain('SUM(chunk.estimated_temp_bytes) AS totalEstimatedTempBytes')
   expect(statements[1]).toContain("chunk.admission_state = 'admitted'")
   expect(statements[1]).toContain("request.status IN ('admitted', 'running')")
   expect(statements[1]).toContain("request.admission_state = 'admitted'")

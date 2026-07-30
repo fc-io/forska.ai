@@ -1,4 +1,5 @@
 import {getReviewServingRebuildTimingDiagnostics} from '../src/server/reviewServing/reviewServingChunkManifestRepository.ts'
+import {getReviewServingPhysicalShapeDiagnostics} from '../src/server/reviewServing/reviewServingPhysicalShapeDiagnostics.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
@@ -36,28 +37,29 @@ const inspectReviewServingRebuildTimingsCli = async () => {
 
   await withDuckdbMaintenanceAccess('inspect review-serving rebuild timings', async () => {
     const database = getAppDatabaseService()
-    const diagnostics = await getReviewServingRebuildTimingDiagnostics(
-      options,
-      {
-        ...database,
-        queryJson: <T>(statement: string) => {
-          return database.queryJson<T>(statement, workloadContext)
-        },
-        run: (statement: string) => {
-          return database.run(statement, workloadContext)
-        },
-        transaction: <T>(
-          operation: (tx: {
-            queryJson: <R>(statement: string) => Promise<R[]>
-            run: (statement: string) => Promise<void>
-          }) => Promise<T>,
-        ) => {
-          return database.transaction(operation, workloadContext)
-        },
+    const databaseAccess = {
+      ...database,
+      queryJson: <T>(statement: string) => {
+        return database.queryJson<T>(statement, workloadContext)
       },
-    )
+      run: (statement: string) => {
+        return database.run(statement, workloadContext)
+      },
+      transaction: <T>(
+        operation: (tx: {
+          queryJson: <R>(statement: string) => Promise<R[]>
+          run: (statement: string) => Promise<void>
+        }) => Promise<T>,
+      ) => {
+        return database.transaction(operation, workloadContext)
+      },
+    }
+    const diagnostics = await getReviewServingRebuildTimingDiagnostics(options, databaseAccess)
+    const physicalShape = options.projectId
+      ? await getReviewServingPhysicalShapeDiagnostics(options.projectId, {queryJson: databaseAccess.queryJson})
+      : null
 
-    console.log(JSON.stringify(diagnostics, null, 2))
+    console.log(JSON.stringify(physicalShape ? {...diagnostics, physicalShape} : diagnostics, null, 2))
   })
 }
 

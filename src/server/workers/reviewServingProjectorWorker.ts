@@ -569,6 +569,11 @@ const getChunkArticleRangePredicate = (input: {alias: string; chunk: ReviewServi
     AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}`
 }
 
+const getChunkArticleRangeExpression = (input: {articleIdSql: string; chunk: ReviewServingRebuildChunkManifest}) => {
+  return `${input.articleIdSql} >= ${getSqlLiteral(input.chunk.chunkStartKey)}
+    AND ${input.articleIdSql} <= ${getSqlLiteral(input.chunk.chunkEndKey)}`
+}
+
 const isDuckDbOutOfMemoryError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error)
 
@@ -1438,24 +1443,24 @@ const getPostingRebuildChunkOutputCount = async (
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
+  const postingArticleCountExpression = `array_length(list_filter(serving.article_ids, article_id -> ${getChunkArticleRangeExpression({articleIdSql: 'article_id', chunk: input.chunk})}))`
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
-    WITH output_row AS (
-      SELECT serving_article.article_id
+    SELECT
+      CAST(posting_count.actual_count + state_count.actual_count AS INTEGER) AS actualCount,
+      sha256('cheap-count:' || CAST(posting_count.actual_count + state_count.actual_count AS VARCHAR)) AS actualChecksum
+    FROM (
+      SELECT CAST(COALESCE(SUM(${postingArticleCountExpression}), 0) AS INTEGER) AS actual_count
       FROM mart.review_article_filter_posting_serving_v4 serving
-      CROSS JOIN UNNEST(serving.article_ids) AS serving_article(article_id)
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSnapshotIdPredicate(input.snapshotIds)}
-        AND ${getChunkArticleRangePredicate({alias: 'serving_article', chunk: input.chunk})}
-      UNION ALL
-      SELECT article_id
+    ) posting_count
+    CROSS JOIN (
+      SELECT CAST(COUNT(*) AS INTEGER) AS actual_count
       FROM mart.review_article_serving_list_mode_state_v4 state
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSnapshotIdPredicate(input.snapshotIds)}
         AND ${getChunkArticleRangePredicate({alias: 'state', chunk: input.chunk})}
-    )
-    SELECT
-      ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM output_row
+    ) state_count
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}

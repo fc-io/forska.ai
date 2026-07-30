@@ -1058,10 +1058,12 @@ test('posting filter intersection CTE matches legacy group-by semantics in DuckD
         article_ids VARCHAR[]
       );
       INSERT INTO mart.review_article_filter_posting_serving_v4 VALUES
-        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-1', 'article-2', 'article-3', 'article-4']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-1', 'article-2']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-3', 'article-4']),
         ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'population', 'adult', ['article-2', 'article-3']),
         ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'population', 'pediatric', ['article-3', 'article-4', 'article-5']),
-        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'promptAnswer', 'yes', ['article-3', 'article-4']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'promptAnswer', 'yes', ['article-3']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'promptAnswer', 'yes', ['article-4']),
         ('project-1', 'review-config-1', 'snapshot-1', 'human', 'importRoute', 'import-route-1', ['article-3']),
         ('project-1', 'review-config-1', 'snapshot-other', 'llm', 'importRoute', 'import-route-1', ['article-5']);
     `)
