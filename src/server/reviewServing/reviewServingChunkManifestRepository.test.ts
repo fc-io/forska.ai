@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {
   claimReviewServingRebuildChunk,
+  claimReviewServingRebuildChunks,
   getNextClaimableReviewServingRebuildChunk,
   getReviewServingRebuildChunkId,
   getReviewServingRebuildChunkWorkloadClass,
@@ -59,6 +60,7 @@ const getAssignmentLiteral = (statement: string, columnName: string) => {
 const hasChunkIdLiteralPredicate = (statement: string) => {
   return (
     statement.match(/chunk_id\s*=\s*'/u) !== null
+    || statement.match(/chunk_id\s+IN\s+\('/u) !== null
     || statement.match(/\(chunk_id\s*\|\|\s*''\)\s*=\s*'/u) !== null
     || statement.match(/\([A-Za-z0-9_]+\.chunk_id\s*\|\|\s*''\)\s*=\s*'/u) !== null
   )
@@ -316,17 +318,26 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     rows.set(chunkId, row)
   }
   const claimChunk = (statement: string) => {
-    const chunkId = getChunkIdLiteral(statement)
-    const existing = rows.get(chunkId)
+    const chunkIds = statement.includes('FROM (VALUES')
+      ? getSqlStrings(statement).filter((value) => {
+          return value.startsWith('chunk:')
+        })
+      : [getChunkIdLiteral(statement)]
     const strings = getSqlStrings(statement)
     const leaseOwner = getAssignmentLiteral(statement, 'lease_owner') ?? strings[1] ?? ''
     const leaseExpiresAt =
       statement.match(/lease_expires_at\s*=\s*TIMESTAMPTZ\s*'((?:''|[^'])*)'/u)?.[1] ?? strings[2] ?? null
-    const canClaim =
-      existing?.admissionState === 'admitted'
-      && (existing.status === 'pending' || existing.status === 'failed' || existing.status === 'running')
 
-    if (existing !== undefined && canClaim) {
+    chunkIds.forEach((chunkId) => {
+      const existing = rows.get(chunkId)
+      const canClaim =
+        existing?.admissionState === 'admitted'
+        && (existing.status === 'pending' || existing.status === 'failed' || existing.status === 'running')
+
+      if (existing === undefined || !canClaim) {
+        return
+      }
+
       const claimed = {
         ...existing,
         lastError: null,
@@ -339,7 +350,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
 
       rows.set(chunkId, claimed)
       claimedRows.set(chunkId, claimed)
-    }
+    })
   }
   const failChunk = (statement: string) => {
     const chunkId = getChunkIdLiteral(statement)
@@ -505,9 +516,31 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest') && hasChunkIdLiteralPredicate(statement)) {
-      const chunkId = getChunkIdLiteral(statement)
-      const row = claimedRows.get(chunkId) ?? rows.get(chunkId)
-      return (row === undefined ? [] : [row]) as T[]
+      const chunkIds = statement.includes('chunk_id IN')
+        ? getSqlStrings(statement).filter((value) => {
+            return value.startsWith('chunk:')
+          })
+        : [getChunkIdLiteral(statement)]
+      const matches = chunkIds.flatMap((chunkId) => {
+        const row = claimedRows.get(chunkId) ?? rows.get(chunkId)
+
+        if (row === undefined) {
+          return []
+        }
+
+        if (statement.includes("status = 'running'") && row.status !== 'running') {
+          return []
+        }
+
+        const leaseOwner = getWhereLiteral(statement, 'lease_owner')
+        if (leaseOwner !== null && row.leaseOwner !== leaseOwner) {
+          return []
+        }
+
+        return [row]
+      })
+
+      return matches as T[]
     }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
@@ -2130,6 +2163,51 @@ test('expired running rebuild chunk leases are reclaimed without retry delay', a
   expect(claimStatement).toContain("manifest.status = 'running'")
   expect(claimStatement).toContain('manifest.lease_expires_at IS NULL')
   expect(claimStatement).not.toContain('FROM app.review_rebuild_chunk_manifest prerequisite')
+})
+
+test('bulk rebuild chunk claim leases multiple selected chunks in one update', async () => {
+  const firstIdentity = {
+    ...baseChunkIdentity,
+    chunkEndKey: 'article:050',
+    chunkStartKey: 'article:001',
+    requestId: 'rebuild:bulk-claim',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const secondIdentity = {
+    ...firstIdentity,
+    chunkEndKey: 'article:099',
+    chunkStartKey: 'article:051',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const blockedIdentity = {
+    ...firstIdentity,
+    chunkEndKey: 'article:150',
+    chunkStartKey: 'article:100',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const first = getChunkRowFromIdentity(firstIdentity, [])
+  const second = getChunkRowFromIdentity(secondIdentity, [])
+  const blocked = {...getChunkRowFromIdentity(blockedIdentity, []), admissionState: 'blocked_over_budget' as const}
+  const {database, rows, statements} = createFakeChunkManifestDatabase([first, second, blocked])
+
+  const claimed = await claimReviewServingRebuildChunks(
+    [firstIdentity, secondIdentity, blockedIdentity],
+    {leaseExpiresAt: '2026-06-16T14:05:00.000Z', leaseOwner: 'worker-bulk', now: '2026-06-16T14:00:00.000Z'},
+    database,
+  )
+
+  expect(
+    claimed.map((chunk) => {
+      return chunk.chunkId
+    }),
+  ).toEqual([first.chunkId, second.chunkId])
+  expect(rows.get(first.chunkId)).toMatchObject({leaseOwner: 'worker-bulk', status: 'running'})
+  expect(rows.get(second.chunkId)).toMatchObject({leaseOwner: 'worker-bulk', status: 'running'})
+  expect(rows.get(blocked.chunkId)).toMatchObject({leaseOwner: null, status: 'pending'})
+  const claimStatement = statements.find((statement) => {
+    return statement.includes('FROM (VALUES') && statement.includes('selected.projection_component')
+  })
+
+  expect(claimStatement).toContain(first.chunkId)
+  expect(claimStatement).toContain(second.chunkId)
+  expect(claimStatement).toContain(blocked.chunkId)
 })
 
 test('failed rebuild chunk retry claims tolerate duplicate request policy rows', async () => {

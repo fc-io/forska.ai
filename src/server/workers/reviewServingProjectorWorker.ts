@@ -11,6 +11,7 @@ import {
 } from '../reviewServing/reviewProjectionIdentity.ts'
 import {
   claimReviewServingRebuildChunk,
+  claimReviewServingRebuildChunks,
   getNextClaimableReviewServingRebuildChunk,
   getReviewServingRebuildChunkClaimWhere,
   getReviewServingRebuildChunkManifest,
@@ -155,6 +156,7 @@ type DeltaIntakePartitionRow = {
 
 type ReviewServingProjectorWorkerRebuildChunkService = {
   claimChunk: typeof claimReviewServingRebuildChunk
+  claimChunks?: typeof claimReviewServingRebuildChunks
   failChunk: typeof markReviewServingRebuildChunkFailed
   getNextChunk: (input: {
     database: ReviewServingChunkManifestRepositoryDatabase
@@ -5094,6 +5096,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   },
   rebuildChunkService: {
     claimChunk: claimReviewServingRebuildChunk,
+    claimChunks: claimReviewServingRebuildChunks,
     failChunk: markReviewServingRebuildChunkFailed,
     getNextChunk: ({database, now, projectId, timings}) => {
       return getNextClaimableReviewServingRebuildChunk({now, projectId, timings}, database)
@@ -6670,14 +6673,14 @@ const logReviewServingProjectorWorkerRebuildChunkProgress = (input: {
 }
 
 const isRangeDisjointReviewServingProjectorWorkerRebuildChunk = (
-  claimedChunk: ReviewServingRebuildChunkManifest,
+  claimedChunk: ReviewServingProjectorWorkerChunkInput,
   nextChunk: ReviewServingProjectorWorkerChunkInput,
 ) => {
   return nextChunk.chunkEndKey < claimedChunk.chunkStartKey || nextChunk.chunkStartKey > claimedChunk.chunkEndKey
 }
 
 const isRangeBatchableStatusBoundaryReviewServingProjectorWorkerRebuildChunk = (
-  claimedChunk: ReviewServingRebuildChunkManifest,
+  claimedChunk: ReviewServingProjectorWorkerChunkInput,
   nextChunk: ReviewServingProjectorWorkerChunkInput,
 ) => {
   return nextChunk.chunkEndKey <= claimedChunk.chunkStartKey || nextChunk.chunkStartKey >= claimedChunk.chunkEndKey
@@ -6738,7 +6741,7 @@ const getForegroundRebuildChunkBatchSize = (chunk: {
 }
 
 const isCompatibleReviewServingProjectorWorkerRebuildRequestBatch = (
-  firstChunk: ReviewServingRebuildChunkManifest,
+  firstChunk: ReviewServingProjectorWorkerChunkInput,
   nextChunk: ReviewServingProjectorWorkerChunkInput,
 ) => {
   const firstRequestId = firstChunk.requestId ?? null
@@ -6754,7 +6757,7 @@ const isCompatibleReviewServingProjectorWorkerRebuildRequestBatch = (
 }
 
 const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
-  claimedChunks: readonly ReviewServingRebuildChunkManifest[],
+  claimedChunks: readonly ReviewServingProjectorWorkerChunkInput[],
   nextChunk: ReviewServingProjectorWorkerChunkInput,
 ) => {
   const firstChunk = claimedChunks[0]
@@ -6900,7 +6903,7 @@ const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
 }
 
 const shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch = (
-  claimedChunks: readonly ReviewServingRebuildChunkManifest[],
+  claimedChunks: readonly ReviewServingProjectorWorkerChunkInput[],
   nextChunk: ReviewServingProjectorWorkerChunkInput,
 ) => {
   return (
@@ -7376,6 +7379,67 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
     projectId: input.options.rebuildProjectId,
   })
   const exhaustedCandidateSearch = candidateChunks.length < remainingLimit
+
+  if (input.service.claimChunks !== undefined) {
+    const compatibleCandidateChunks: ReviewServingProjectorWorkerChunkInput[] = []
+    const preclaimLimit = getReviewServingProjectorWorkerRebuildChunkPreclaimLimit({
+      batchSize: input.batchSize,
+      claimedChunks: input.claimedChunks,
+      options: input.options,
+    })
+
+    for (const chunkInput of candidateChunks) {
+      if (
+        input.claimedChunks.length + compatibleCandidateChunks.length >= preclaimLimit
+        || !shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch(
+          [
+            ...input.claimedChunks.map((claimed) => {
+              return claimed.chunk
+            }),
+            ...compatibleCandidateChunks,
+          ],
+          chunkInput,
+        )
+      ) {
+        break
+      }
+
+      compatibleCandidateChunks.push(chunkInput)
+    }
+
+    const timings: Record<string, number> = {claimSelectMs: 0}
+    const claimedChunks =
+      compatibleCandidateChunks.length === 0
+        ? []
+        : await measureReviewServingProjectorWorkerPhase(timings, 'claimUpdateMs', async () => {
+            return input.service.claimChunks?.(
+              compatibleCandidateChunks,
+              {
+                leaseExpiresAt: getLeaseExpiresAt(input.options),
+                leaseOwner: input.workerId,
+                now: getWorkerNow(input.options),
+              },
+              input.database,
+            )
+          })
+
+    for (const claimedChunk of claimedChunks ?? []) {
+      if (
+        !shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch(
+          input.claimedChunks.map((claimed) => {
+            return claimed.chunk
+          }),
+          claimedChunk,
+        )
+      ) {
+        break
+      }
+
+      input.claimedChunks.push({chunk: claimedChunk, service: input.service, timings: {...timings}})
+    }
+
+    return exhaustedCandidateSearch
+  }
 
   for (const chunkInput of candidateChunks) {
     if (
