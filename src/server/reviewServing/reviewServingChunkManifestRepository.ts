@@ -1334,6 +1334,72 @@ export const claimReviewServingRebuildChunk = async (
   return claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner ? claimed : null
 }
 
+export const claimReviewServingRebuildChunks = async (
+  inputs: readonly (ReviewServingRebuildChunkIdentity & {chunkId?: string})[],
+  options: {leaseExpiresAt: Date | string; leaseOwner: string; now: Date | string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
+) => {
+  const uniqueClaimInputs = [
+    ...new Map(
+      inputs.map((input) => {
+        const chunkId = input.chunkId ?? getReviewServingRebuildChunkId(input)
+
+        return [chunkId, {...input, chunkId}]
+      }),
+    ).values(),
+  ]
+
+  if (uniqueClaimInputs.length === 0) {
+    return []
+  }
+
+  const candidateValues = uniqueClaimInputs
+    .map((input) => {
+      return `(${getSqlLiteral(input.chunkId)}, ${getSqlLiteral(input.projectionComponent)})`
+    })
+    .join(',\n      ')
+
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest AS manifest
+    SET
+      status = 'running',
+      lease_owner = ${getSqlLiteral(options.leaseOwner)},
+      lease_expires_at = ${getReviewServingChunkTimestampLiteral(options.leaseExpiresAt)},
+      retry_after = NULL,
+      last_error = NULL,
+      started_at = COALESCE(started_at, current_timestamp),
+      updated_at = current_timestamp
+    FROM (VALUES
+      ${candidateValues}
+    ) AS selected(chunk_id, projection_component)
+    WHERE (manifest.chunk_id || '') = (selected.chunk_id || '')
+      AND manifest.projection_component = selected.projection_component
+      AND (${getReviewServingRebuildChunkClaimPredicate({now: options.now}, 'manifest')})
+  `)
+
+  const claimedRows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
+    ${getReviewServingRebuildChunkSelect({tableAlias: 'manifest'})}
+    WHERE manifest.chunk_id IN (${uniqueClaimInputs
+      .map((input) => {
+        return getSqlLiteral(input.chunkId)
+      })
+      .join(', ')})
+      AND manifest.status = 'running'
+      AND manifest.lease_owner = ${getSqlLiteral(options.leaseOwner)}
+  `)
+  const claimedById = new Map(
+    claimedRows.map((row) => {
+      return [row.chunkId, getReviewServingRebuildChunkManifestFromRow(row)]
+    }),
+  )
+
+  return uniqueClaimInputs.flatMap((input) => {
+    const claimed = claimedById.get(input.chunkId)
+
+    return claimed === undefined ? [] : [claimed]
+  })
+}
+
 export const heartbeatReviewServingRebuildChunkLease = async (
   input: {chunkId: string; leaseExpiresAt: Date | string; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
