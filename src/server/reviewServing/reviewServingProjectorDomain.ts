@@ -143,7 +143,7 @@ const sourcePartitionAliases: Record<string, string> = {
   'review-change': 'reviewChange',
 }
 
-const getReviewServingSourceWatermarkKeys = (sourcePartition: string) => {
+export const getReviewServingSourceWatermarkKeys = (sourcePartition: string) => {
   const sourceKey = sourcePartition.split(':')[0] ?? sourcePartition
   const alias = sourcePartitionAliases[sourceKey]
 
@@ -154,7 +154,7 @@ export const getReviewServingSourcePartitionWatermarks = (
   claims: readonly {latestSourceHighWaterMark: number; sourcePartition: string}[],
 ): ReviewServingSourcePartitionWatermarks => {
   return claims.reduce<ReviewServingSourcePartitionWatermarks>((watermarks, claim) => {
-    const sourceKeys = getReviewServingSourceWatermarkKeys(claim.sourcePartition)
+    const sourceKeys = [claim.sourcePartition, ...getReviewServingSourceWatermarkKeys(claim.sourcePartition)]
 
     return sourceKeys.reduce<ReviewServingSourcePartitionWatermarks>((nextWatermarks, sourceKey) => {
       const previous = nextWatermarks[sourceKey] ?? 0

@@ -21,15 +21,60 @@ const getTimestampSuffix = (label: string, value: string | null) => {
 }
 
 const getSpeedLabel = (speedPerMinute: number | null) => {
-  return speedPerMinute === null ? '0/min' : speedPerMinute < 1 ? '0/min' : `${Math.round(speedPerMinute)}/min`
+  return speedPerMinute === null ? null : speedPerMinute < 1 ? '<1/min' : `${Math.round(speedPerMinute)}/min`
 }
 
 const getCountLabel = (count: number) => {
   return count.toLocaleString()
 }
 
+const formatCountNoun = (count: number, singular: string, plural: string) => {
+  return `${getCountLabel(count)} ${count === 1 ? singular : plural}`
+}
+
 const getLaneDescription = (processingCount: number, queuedCount: number, speedPerMinute: number | null) => {
-  return `processing ${processingCount}, queued ${queuedCount}, ${getSpeedLabel(speedPerMinute)}`
+  return joinLabelParts([`processing ${processingCount}`, `queued ${queuedCount}`, getSpeedLabel(speedPerMinute)])
+}
+
+const getProjectDiagnosticsCounts = (indexing: ReviewsIndexing) => {
+  const dirtyWork = indexing.serving.diagnostics.dirtyWork
+  const rebuildChunks = indexing.serving.diagnostics.rebuildChunks
+
+  if (dirtyWork === undefined && rebuildChunks === undefined) {
+    return null
+  }
+
+  const expiredRebuildChunkLeaseCount = Math.min(
+    rebuildChunks?.runningCount ?? 0,
+    rebuildChunks?.expiredLeaseCount ?? 0,
+  )
+  const runningRebuildChunkCount = Math.max(0, (rebuildChunks?.runningCount ?? 0) - expiredRebuildChunkLeaseCount)
+  const queuedRebuildChunkCount = rebuildChunks?.claimableCount ?? 0
+  const dirtyBacklogCount =
+    (dirtyWork?.pendingCount ?? 0) + (dirtyWork?.runningCount ?? 0) + (dirtyWork?.failedCount ?? 0)
+
+  return {dirtyBacklogCount, queuedRebuildChunkCount, runningRebuildChunkCount}
+}
+
+const getProjectDiagnosticsDescription = (indexing: ReviewsIndexing) => {
+  const counts = getProjectDiagnosticsCounts(indexing)
+
+  if (counts === null) {
+    return getLaneDescription(
+      indexing.inFlightProjectRefreshCount,
+      indexing.queuedProjectRefreshCount,
+      indexing.projectRefreshesPerMinute,
+    )
+  }
+
+  return joinLabelParts([
+    `${formatCountNoun(counts.runningRebuildChunkCount, 'rebuild chunk', 'rebuild chunks')} running`,
+    `${formatCountNoun(counts.queuedRebuildChunkCount, 'rebuild chunk', 'rebuild chunks')} queued`,
+    counts.dirtyBacklogCount === 0
+      ? null
+      : `${formatCountNoun(counts.dirtyBacklogCount, 'dirty-work item', 'dirty-work items')} in backlog`,
+    getSpeedLabel(indexing.projectRefreshesPerMinute),
+  ])
 }
 
 const joinLabelParts = (parts: Array<string | null>) => {
@@ -42,11 +87,7 @@ const joinLabelParts = (parts: Array<string | null>) => {
 
 export const getProjectRefreshLabel = (indexing: ReviewsIndexing) => {
   return joinLabelParts([
-    getLaneDescription(
-      indexing.inFlightProjectRefreshCount,
-      indexing.queuedProjectRefreshCount,
-      indexing.projectRefreshesPerMinute,
-    ),
+    getProjectDiagnosticsDescription(indexing),
     getTimestampSuffix('last progress', indexing.lastProgressedAt),
     getTimestampSuffix('started', indexing.lastStartedAt),
   ])

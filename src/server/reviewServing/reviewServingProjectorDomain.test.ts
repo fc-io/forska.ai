@@ -92,7 +92,16 @@ test('source partition watermarks map dirty partitions to promotion source keys'
       {latestSourceHighWaterMark: 12, sourcePartition: 'projectScope:project-a'},
       {latestSourceHighWaterMark: 14, sourcePartition: 'importRoute:route-a'},
     ]),
-  ).toEqual({importRoute: 14, importRunArticle: 14, projectReviewConfig: 10, projectScope: 12, reviewChange: 10})
+  ).toEqual({
+    'importRoute:route-a': 14,
+    importRoute: 14,
+    importRunArticle: 14,
+    'projectReviewConfig:project-a': 10,
+    'projectScope:project-a': 12,
+    projectReviewConfig: 10,
+    projectScope: 12,
+    reviewChange: 10,
+  })
 })
 
 test('lease owner values are non-empty strings', () => {

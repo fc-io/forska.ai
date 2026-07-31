@@ -66,6 +66,16 @@ export type CleanupReviewServingDirtyWorkRetentionResult = {
   deletedDirtyWorkCount: number
 }
 
+export type ReviewServingDirtyWorkCoverage = {
+  completedSourceHighWaterMark: number
+  projectId: string
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+  sourcePartition: string
+}
+
+export type CompleteReviewServingDirtyWorkCoverageResult = {completedCount: number}
+
 export type ReviewServingDirtyWorkClaim = {
   articleId: string | null
   dirtyKind: string
@@ -108,6 +118,12 @@ type DirtyWorkRow = {
   sourcePartition: string
   status: ReviewServingDirtyWorkStatus
   updatedAt: unknown
+}
+
+type DirtyWorkSourceWatermarkCompletion = {
+  projectId: string | null
+  sourceHighWaterMark: number
+  sourcePartition: string
 }
 
 const getReviewServingHash = (label: string, value: ReviewServingIdentityValue) => {
@@ -202,6 +218,47 @@ const getNormalizedCleanupLimit = (value: number | undefined, fallback: number) 
   return Math.max(0, Math.floor(value ?? fallback))
 }
 
+const getNormalizedDirtyWorkCoverages = (coverages: readonly ReviewServingDirtyWorkCoverage[]) => {
+  const normalized = coverages
+    .map((coverage) => {
+      return {...coverage, completedSourceHighWaterMark: Math.max(0, Math.floor(coverage.completedSourceHighWaterMark))}
+    })
+    .filter((coverage) => {
+      return (
+        coverage.projectId.trim().length > 0
+        && coverage.projectionIdentity.trim().length > 0
+        && coverage.sourcePartition.trim().length > 0
+      )
+    })
+
+  return [...normalized.values()].reduce<ReviewServingDirtyWorkCoverage[]>((merged, coverage) => {
+    const existingIndex = merged.findIndex((candidate) => {
+      return (
+        candidate.projectId === coverage.projectId
+        && candidate.projectionComponent === coverage.projectionComponent
+        && candidate.projectionIdentity === coverage.projectionIdentity
+        && candidate.sourcePartition === coverage.sourcePartition
+      )
+    })
+
+    if (existingIndex === -1) {
+      return [...merged, coverage]
+    }
+
+    return merged.map((candidate, index) => {
+      return index === existingIndex
+        ? {
+            ...candidate,
+            completedSourceHighWaterMark: Math.max(
+              candidate.completedSourceHighWaterMark,
+              coverage.completedSourceHighWaterMark,
+            ),
+          }
+        : candidate
+    })
+  }, [])
+}
+
 const getStaleRunningClaimSeconds = (params: ClaimReviewServingDirtyWorkParams) => {
   return Math.max(0, Math.floor(params.staleRunningClaimSeconds ?? defaultReviewServingDirtyWorkStaleClaimSeconds))
 }
@@ -277,6 +334,29 @@ const getDirtyWorkSelect = () => {
       created_at AS createdAt,
       updated_at AS updatedAt
     FROM app.review_serving_dirty_work
+  `
+}
+
+const getQualifiedDirtyWorkSelect = (dirtyWorkSql: string) => {
+  return `
+    SELECT
+      ${dirtyWorkSql}.dirty_work_id AS dirtyWorkId,
+      ${dirtyWorkSql}.project_id AS projectId,
+      ${dirtyWorkSql}.scope_kind AS scopeKind,
+      ${dirtyWorkSql}.scope_id AS scopeId,
+      ${dirtyWorkSql}.article_id AS articleId,
+      ${dirtyWorkSql}.projection_key AS projectionKey,
+      ${dirtyWorkSql}.dirty_kind AS dirtyKind,
+      ${dirtyWorkSql}.source_partition AS sourcePartition,
+      ${dirtyWorkSql}.first_source_high_water_mark AS firstSourceHighWaterMark,
+      ${dirtyWorkSql}.latest_source_high_water_mark AS latestSourceHighWaterMark,
+      ${dirtyWorkSql}.latest_delta_id AS latestDeltaId,
+      ${dirtyWorkSql}.dirty_range_start AS dirtyRangeStart,
+      ${dirtyWorkSql}.dirty_range_end AS dirtyRangeEnd,
+      ${dirtyWorkSql}.status,
+      ${dirtyWorkSql}.created_at AS createdAt,
+      ${dirtyWorkSql}.updated_at AS updatedAt
+    FROM app.review_serving_dirty_work ${dirtyWorkSql}
   `
 }
 
@@ -365,22 +445,22 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
   `)
 }
 
-const advanceReviewServingDirtySourceWatermark = async (
-  claims: readonly ReviewServingDirtyWorkClaim[],
+const advanceReviewServingDirtySourceWatermarkEntries = async (
+  entries: readonly DirtyWorkSourceWatermarkCompletion[],
   database: ReviewServingDirtyWorkTransaction,
 ) => {
-  const projectClaims = claims.filter((claim) => {
-    return claim.projectId !== null
+  const projectEntries = entries.filter((entry): entry is DirtyWorkSourceWatermarkCompletion & {projectId: string} => {
+    return entry.projectId !== null
   })
 
-  if (projectClaims.length === 0) {
+  if (projectEntries.length === 0) {
     return
   }
 
-  const valuesSql = projectClaims
-    .map((claim) => {
-      return `(${getSqlLiteral(claim.projectId)}, ${getSqlLiteral(claim.sourcePartition)}, ${getSqlLiteral(
-        claim.latestSourceHighWaterMark,
+  const valuesSql = projectEntries
+    .map((entry) => {
+      return `(${getSqlLiteral(entry.projectId)}, ${getSqlLiteral(entry.sourcePartition)}, ${getSqlLiteral(
+        entry.sourceHighWaterMark,
       )})`
     })
     .join(',\n      ')
@@ -434,6 +514,188 @@ const advanceReviewServingDirtySourceWatermark = async (
       FROM app.review_serving_project_dirty_source_watermark existing
       WHERE existing.project_id = completed.project_id
         AND existing.source_partition = completed.source_partition
+    )
+  `)
+}
+
+const advanceReviewServingDirtySourceWatermark = async (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  await advanceReviewServingDirtySourceWatermarkEntries(
+    claims.map((claim) => {
+      return {
+        projectId: claim.projectId,
+        sourceHighWaterMark: claim.latestSourceHighWaterMark,
+        sourcePartition: claim.sourcePartition,
+      }
+    }),
+    database,
+  )
+}
+
+const getDirtyWorkCoverageValuesSql = (coverages: readonly ReviewServingDirtyWorkCoverage[]) => {
+  return coverages
+    .map((coverage) => {
+      return `(
+        ${getSqlLiteral(coverage.projectId)},
+        ${getSqlLiteral(
+          getProjectionKey({
+            projectionComponent: coverage.projectionComponent,
+            projectionIdentity: coverage.projectionIdentity,
+          }),
+        )},
+        ${getSqlLiteral(coverage.projectionComponent)},
+        ${getSqlLiteral(coverage.projectionIdentity)},
+        ${getSqlLiteral(coverage.sourcePartition)},
+        ${getSqlLiteral(coverage.completedSourceHighWaterMark)}
+      )`
+    })
+    .join(',\n      ')
+}
+
+const getDirtyWorkCoverageCteSql = (coverages: readonly ReviewServingDirtyWorkCoverage[]) => {
+  return `
+    SELECT
+      project_id,
+      projection_key,
+      projection_component,
+      projection_identity,
+      source_partition,
+      MAX(completed_source_high_water_mark) AS completed_source_high_water_mark
+    FROM (
+      VALUES
+      ${getDirtyWorkCoverageValuesSql(coverages)}
+    ) AS coverage(
+      project_id,
+      projection_key,
+      projection_component,
+      projection_identity,
+      source_partition,
+      completed_source_high_water_mark
+    )
+    GROUP BY project_id, projection_key, projection_component, projection_identity, source_partition
+  `
+}
+
+const getDirtyWorkSourceWatermarkKeySql = (sourcePartitionSql: string) => {
+  const sourceKeySql = `split_part(${sourcePartitionSql}, ':', 1)`
+
+  return `CASE ${sourceKeySql}
+    WHEN 'article' THEN 'reviewChange'
+    WHEN 'humanJudgment' THEN 'reviewChange'
+    WHEN 'import-run-article' THEN 'importRunArticle'
+    WHEN 'importRoute' THEN 'importRunArticle'
+    WHEN 'llmJudgment' THEN 'reviewChange'
+    WHEN 'projectReviewConfig' THEN 'reviewChange'
+    WHEN 'project-scope' THEN 'projectScope'
+    WHEN 'promptConfig' THEN 'reviewChange'
+    WHEN 'review-change' THEN 'reviewChange'
+    ELSE ${sourceKeySql}
+  END`
+}
+
+const getDirtyWorkCoverageMatchSql = (dirtyWorkSql: string) => {
+  const sourceKeySql = `split_part(${dirtyWorkSql}.source_partition, ':', 1)`
+
+  return `
+    ${dirtyWorkSql}.project_id = coverage.project_id
+    AND ${dirtyWorkSql}.projection_key = coverage.projection_key
+    AND (
+      ${dirtyWorkSql}.source_partition = coverage.source_partition
+      OR ${sourceKeySql} = coverage.source_partition
+      OR ${getDirtyWorkSourceWatermarkKeySql(`${dirtyWorkSql}.source_partition`)} = coverage.source_partition
+    )
+    AND ${dirtyWorkSql}.latest_source_high_water_mark <= coverage.completed_source_high_water_mark
+  `
+}
+
+const getHighWaterAckCoverages = (coverages: readonly ReviewServingDirtyWorkCoverage[]) => {
+  return coverages.filter((coverage) => {
+    return coverage.sourcePartition.includes(':')
+  })
+}
+
+const isClaimCoveredByHighWaterAckCoverage = (
+  claim: ReviewServingDirtyWorkClaim,
+  coverages: readonly ReviewServingDirtyWorkCoverage[],
+) => {
+  return coverages.some((coverage) => {
+    return (
+      claim.projectId === coverage.projectId
+      && claim.projectionComponent === coverage.projectionComponent
+      && claim.projectionIdentity === coverage.projectionIdentity
+      && claim.sourcePartition === coverage.sourcePartition
+      && claim.latestSourceHighWaterMark <= coverage.completedSourceHighWaterMark
+    )
+  })
+}
+
+const insertReviewServingDirtyWorkCoverageAcknowledgements = async (
+  coverages: readonly ReviewServingDirtyWorkCoverage[],
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  if (coverages.length === 0) {
+    return
+  }
+
+  const valuesSql = coverages
+    .map((coverage) => {
+      return `(
+        ${getSqlLiteral(
+          getDirtyAckHighWaterId({
+            completedSourceHighWaterMark: coverage.completedSourceHighWaterMark,
+            projectionComponent: coverage.projectionComponent,
+            projectionIdentity: coverage.projectionIdentity,
+            sourcePartition: coverage.sourcePartition,
+          }),
+        )},
+        NULL,
+        ${getSqlLiteral(coverage.projectionComponent)},
+        ${getSqlLiteral(coverage.projectionIdentity)},
+        ${getSqlLiteral(coverage.sourcePartition)},
+        ${coverage.completedSourceHighWaterMark},
+        NULL,
+        NULL,
+        'completed',
+        current_timestamp
+      )`
+    })
+    .join(',\n      ')
+
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work_ack (
+      dirty_ack_id,
+      dirty_work_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      completed_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end,
+      status,
+      completed_at
+    )
+    SELECT *
+    FROM (
+      VALUES
+      ${valuesSql}
+    ) AS incoming(
+      dirty_ack_id,
+      dirty_work_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      completed_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end,
+      status,
+      completed_at
+    )
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_ack existing
+      WHERE existing.dirty_ack_id = incoming.dirty_ack_id
     )
   `)
 }
@@ -676,6 +938,74 @@ export const completeReviewServingDirtyWorkClaims = async (
   }
 
   return {completedCount: uniqueClaims.length}
+}
+
+export const completeReviewServingDirtyWorkCoveredByRebuild = async (
+  coverages: readonly ReviewServingDirtyWorkCoverage[],
+  database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
+): Promise<CompleteReviewServingDirtyWorkCoverageResult> => {
+  const normalizedCoverages = getNormalizedDirtyWorkCoverages(coverages)
+
+  if (normalizedCoverages.length === 0) {
+    return {completedCount: 0}
+  }
+
+  const coverageCteSql = getDirtyWorkCoverageCteSql(normalizedCoverages)
+  const rows = await database.queryJson<DirtyWorkRow>(`
+    WITH rebuild_dirty_work_coverage AS (
+      ${coverageCteSql}
+    )
+    ${getQualifiedDirtyWorkSelect('dirty_work')}
+    INNER JOIN rebuild_dirty_work_coverage coverage
+      ON ${getDirtyWorkCoverageMatchSql('dirty_work')}
+    WHERE dirty_work.status <> 'completed'
+  `)
+  const coveredClaims = rows.map(getDirtyWorkRecordFromRow)
+  const highWaterAckCoverages = getHighWaterAckCoverages(normalizedCoverages)
+  const pointAckClaims = coveredClaims.filter((claim) => {
+    return !isClaimCoveredByHighWaterAckCoverage(claim, highWaterAckCoverages)
+  })
+
+  await pointAckClaims.reduce<Promise<void>>((previousCompletion, claim) => {
+    return previousCompletion.then(async () => {
+      await acknowledgeReviewServingDirtyWorkClaim(claim, database)
+    })
+  }, Promise.resolve())
+
+  await insertReviewServingDirtyWorkCoverageAcknowledgements(highWaterAckCoverages, database)
+
+  await advanceReviewServingDirtySourceWatermarkEntries(
+    [
+      ...coveredClaims.map((claim) => {
+        return {
+          projectId: claim.projectId,
+          sourceHighWaterMark: claim.latestSourceHighWaterMark,
+          sourcePartition: claim.sourcePartition,
+        }
+      }),
+      ...highWaterAckCoverages.map((coverage) => {
+        return {
+          projectId: coverage.projectId,
+          sourceHighWaterMark: coverage.completedSourceHighWaterMark,
+          sourcePartition: coverage.sourcePartition,
+        }
+      }),
+    ],
+    database,
+  )
+
+  await database.run(`
+    WITH rebuild_dirty_work_coverage AS (
+      ${coverageCteSql}
+    )
+    UPDATE app.review_serving_dirty_work
+    SET status = 'completed', updated_at = current_timestamp
+    FROM rebuild_dirty_work_coverage coverage
+    WHERE ${getDirtyWorkCoverageMatchSql('app.review_serving_dirty_work')}
+      AND app.review_serving_dirty_work.status <> 'completed'
+  `)
+
+  return {completedCount: coveredClaims.length}
 }
 
 export const completeReviewServingDirtyWorkClaimsAndAdvanceWatermark = async (

@@ -12,14 +12,18 @@ import {
 } from './reviewServingDeltaReconciliation.ts'
 import {
   completeReviewServingDirtyWorkClaims,
+  completeReviewServingDirtyWorkCoveredByRebuild,
   type ReviewServingDirtyWorkClaim,
+  type ReviewServingDirtyWorkCoverage,
   type ReviewServingDirtyWorkInput,
   upsertReviewServingDirtyWork,
 } from './reviewServingDirtyWorkService.ts'
 import {
   getActiveReviewServingSnapshotManifest,
+  getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingProjectionIdentityManifestInput,
+  type ReviewServingSnapshotManifest,
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
@@ -96,6 +100,48 @@ export type ReviewServingSelectedImportSnapshotCursorInput = {
   selectedImportSnapshotId: string
   sourceDeltaHighWater: number
   status: 'candidate' | 'completed'
+}
+
+const getPromotedSnapshotDirtyWorkCoverages = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingProjectorWriterTransaction,
+): Promise<ReviewServingDirtyWorkCoverage[]> => {
+  const componentStates = [...candidate.componentState.required, ...candidate.componentState.optional]
+  const coverages = await componentStates.reduce<Promise<ReviewServingDirtyWorkCoverage[]>>(async (previous, state) => {
+    const accumulated = await previous
+    const manifest = await getReviewServingProjectionIdentityManifest(
+      {
+        projectId: candidate.projectId,
+        projectionComponent: state.component,
+        projectionIdentity: state.projectionIdentity,
+      },
+      database,
+    )
+
+    if (manifest === null) {
+      return accumulated
+    }
+
+    const manifestCoverages = Object.entries(manifest.inputWatermarks).flatMap(
+      ([sourcePartition, completedSourceHighWaterMark]) => {
+        return Number.isFinite(completedSourceHighWaterMark)
+          ? [
+              {
+                completedSourceHighWaterMark,
+                projectId: candidate.projectId,
+                projectionComponent: state.component,
+                projectionIdentity: state.projectionIdentity,
+                sourcePartition,
+              },
+            ]
+          : []
+      },
+    )
+
+    return [...accumulated, ...manifestCoverages]
+  }, Promise.resolve([]))
+
+  return coverages
 }
 
 export type WriteReviewServingTitleSearchRebuildRowsInput = {
@@ -751,6 +797,8 @@ export const promoteReviewServingProjectorSnapshot = async (
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
         AND snapshot_status = 'candidate'
     `)
+
+    await completeReviewServingDirtyWorkCoveredByRebuild(await getPromotedSnapshotDirtyWorkCoverages(candidate, tx), tx)
 
     return {promoted: true, snapshotId: input.snapshotId}
   }, getReviewServingProjectorWriterWorkloadContext('snapshotPromotion'))

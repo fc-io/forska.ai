@@ -14,19 +14,15 @@ const formatQueuedAt = (value: string | null) => {
     : new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'}).format(parsed)
 }
 
-const getPendingRefreshLabel = (pendingRefreshCount: number) => {
-  return pendingRefreshCount === 1 ? '1 refresh job outstanding' : `${pendingRefreshCount} refresh jobs outstanding`
-}
-
 const getPendingRefreshMetaLabel = (params: {
   pendingArticleRefreshCount: number
   pendingProjectRefreshCount: number
 }) => {
   const segments = [
     params.pendingProjectRefreshCount > 0
-      ? getPendingRefreshLabel(params.pendingProjectRefreshCount)
-          .replace('refresh job', 'project refresh')
-          .replace('refresh jobs', 'project refreshes')
+      ? params.pendingProjectRefreshCount === 1
+        ? '1 project refresh outstanding'
+        : `${params.pendingProjectRefreshCount} project refreshes outstanding`
       : null,
     params.pendingArticleRefreshCount > 0
       ? params.pendingArticleRefreshCount === 1
