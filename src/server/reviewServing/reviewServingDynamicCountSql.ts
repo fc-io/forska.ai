@@ -381,13 +381,11 @@ export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDyna
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
         ${getSqlLiteral(input.listModeKey)} AS list_mode_key
     )
-    SELECT COUNT(DISTINCT list_mode_state.article_id) AS totalCount
-    FROM mart.review_article_serving_list_mode_state_v4 list_mode_state
-    CROSS JOIN scoped
-    WHERE list_mode_state.project_id = scoped.project_id
-      AND list_mode_state.review_config_hash = scoped.review_config_hash
-      AND list_mode_state.snapshot_id = scoped.snapshot_id
-      AND ${getListModeMembershipPredicate('list_mode_state', 'scoped.list_mode_key')}
+    SELECT COUNT(DISTINCT serving.article_id) AS totalCount
+    FROM ${getDirectServingStateJoinSql()}
+    WHERE serving.project_id = scoped.project_id
+      AND serving.review_config_hash = scoped.review_config_hash
+      AND serving.snapshot_id = scoped.snapshot_id
         ${statePredicates}
   `
   }

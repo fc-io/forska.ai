@@ -411,7 +411,7 @@ test('dynamic filtered counts read fixed list modes from base and list-mode stat
   expect(sql).not.toContain('state_filtered_article_ids')
 })
 
-test('dynamic filtered counts use state-only fast path for list-mode-state filters', () => {
+test('dynamic filtered counts use base-scoped fast path for list-mode-state filters', () => {
   const sql = getReviewServingDynamicFilteredCountSql({
     listModeKey: 'both',
     postingFilterGroups: [
@@ -426,7 +426,9 @@ test('dynamic filtered counts use state-only fast path for list-mode-state filte
     snapshotId: 'snapshot-1',
   })
 
-  expect(sql).toContain('FROM mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('list_mode_state.article_id = serving.article_id')
   expect(sql).toContain('list_mode_state.project_id = scoped.project_id')
   expect(sql).toContain('list_mode_state.review_config_hash = scoped.review_config_hash')
   expect(sql).toContain('list_mode_state.snapshot_id = scoped.snapshot_id')
@@ -437,10 +439,74 @@ test('dynamic filtered counts use state-only fast path for list-mode-state filte
   expect(sql).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(sql).toContain("list_mode_state.human_status IN (SELECT unnest(['included']::VARCHAR[]))")
   expect(sql).toContain('list_mode_state.llm_has_judgment IS TRUE')
-  expect(sql).toContain('SELECT COUNT(DISTINCT list_mode_state.article_id) AS totalCount')
-  expect(sql).not.toContain('review_article_serving_base_v4')
+  expect(sql).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
   expect(sql).not.toContain('scoped_serving AS')
   expect(sql).not.toContain('review_article_filter_posting_serving_v4')
+})
+
+test('dynamic state-only counts ignore orphan list-mode-state rows without base rows', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA mart;
+      CREATE TABLE mart.review_article_serving_base_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        article_id VARCHAR
+      );
+      CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        article_id VARCHAR,
+        has_llm_list_mode BOOLEAN DEFAULT FALSE,
+        has_human_list_mode BOOLEAN DEFAULT FALSE,
+        has_both_list_mode BOOLEAN DEFAULT FALSE,
+        has_unassessed_list_mode BOOLEAN DEFAULT FALSE,
+        duplicate_flag BOOLEAN DEFAULT FALSE,
+        conflict_flag BOOLEAN DEFAULT FALSE,
+        llm_status VARCHAR,
+        human_status VARCHAR,
+        llm_has_judgment BOOLEAN DEFAULT FALSE
+      );
+      INSERT INTO mart.review_article_serving_base_v4 VALUES
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-real');
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-real', FALSE, TRUE, TRUE, FALSE, FALSE, FALSE, 'answered', 'answered', TRUE),
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-orphan', FALSE, TRUE, TRUE, FALSE, FALSE, FALSE, 'answered', 'answered', TRUE);
+    `)
+
+    const humanReader = await connection.runAndReadAll(
+      getReviewServingDynamicFilteredCountSql({
+        listModeKey: 'human',
+        postingFilterGroups: [{filterKind: 'humanStatus', filterValues: ['answered']}],
+        projectId: 'project-1',
+        reviewConfigHash: 'review-config-1',
+        snapshotId: 'snapshot-1',
+      }),
+    )
+    const bothReader = await connection.runAndReadAll(
+      getReviewServingDynamicFilteredCountSql({
+        listModeKey: 'both',
+        postingFilterGroups: [
+          {filterKind: 'llmStatus', filterValues: ['answered']},
+          {filterKind: 'humanStatus', filterValues: ['answered']},
+        ],
+        projectId: 'project-1',
+        reviewConfigHash: 'review-config-1',
+        snapshotId: 'snapshot-1',
+      }),
+    )
+
+    expect(humanReader.getRowObjectsJson()).toEqual([{totalCount: '1'}])
+    expect(bothReader.getRowObjectsJson()).toEqual([{totalCount: '1'}])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('dynamic filtered counts keep authoritative scoped path when state filters mix with article predicates', () => {
@@ -710,8 +776,9 @@ test('dynamic filtered counts require LLM judgment through list-mode state', () 
   })
 
   expect(sql).toContain('list_mode_state.llm_has_judgment IS TRUE')
-  expect(sql).toContain('FROM mart.review_article_serving_list_mode_state_v4 list_mode_state')
-  expect(sql).not.toContain('review_article_serving_base_v4')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('list_mode_state.article_id = serving.article_id')
   expect(sql).not.toContain('llm_judged_article_ids AS')
   expect(sql).not.toContain('JOIN llm_judged_article_ids')
   expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4')

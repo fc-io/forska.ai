@@ -111,6 +111,10 @@ const createReaderDatabase = () => {
         return [{promptCount: 1}] as T[]
       }
 
+      if (statement.includes(' AS totalCount')) {
+        return [{totalCount: 1}] as T[]
+      }
+
       if (hasArticleServingRowSource(statement)) {
         return [
           {
@@ -306,6 +310,46 @@ test('human review prompt-filtered count intersects through one posting CTE with
   expect(countStatement).not.toContain("serving.human_status_key = 'answered'")
 })
 
+test('human and both unfiltered tab counts stay scoped to served base rows', async () => {
+  const humanReader = createReaderDatabase()
+  const bothReader = createReaderDatabase()
+
+  await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: humanReader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  await getBothReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: bothReader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const humanCountStatement = humanReader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  })
+  const bothCountStatement = bothReader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  })
+
+  for (const statement of [humanCountStatement, bothCountStatement]) {
+    expect(statement).toContain('FROM mart.review_article_serving_base_v4 serving')
+    expect(statement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+    expect(statement).toContain('list_mode_state.article_id = serving.article_id')
+    expect(statement).not.toContain(
+      'FROM mart.review_article_serving_list_mode_state_v4 list_mode_state\n    CROSS JOIN scoped',
+    )
+  }
+  expect(humanCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(bothCountStatement).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(bothCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+})
+
 test('human review route service retries transient filtered count read failures', async () => {
   const reader = createReaderDatabase()
   let countAttempts = 0
@@ -346,7 +390,7 @@ test('human review route service retries transient filtered row read failures', 
       if (
         statement.includes('FROM mart.review_article_serving_base_v4 serving')
         && statement.includes('list_mode_state.duplicate_flag IS TRUE')
-        && !statement.includes('COUNT(DISTINCT filtered_article_ids.article_id)')
+        && !statement.includes('COUNT(DISTINCT')
       ) {
         rowAttempts += 1
         rowStatements.push(statement)
