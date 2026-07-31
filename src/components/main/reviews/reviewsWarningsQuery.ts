@@ -44,7 +44,15 @@ export type ReviewsWarningsData = {
     requiredConsumerRole: 'maintenance-worker'
     retryAfterAt: string | null
     serving: {
-      diagnostics: Record<string, unknown>
+      diagnostics: {
+        dirtyWork?: {failedCount?: number; pendingCount?: number; runningCount?: number}
+        rebuildChunks?: {
+          claimableCount?: number
+          expiredLeaseCount?: number
+          pendingCount?: number
+          runningCount?: number
+        }
+      } & Record<string, unknown>
       manifest: Record<string, unknown>
       readable: boolean
       usable: boolean

@@ -176,7 +176,55 @@ test('does not render retired large rebuild product warning copy', async () => {
     expect(container.textContent).not.toContain('Current phase articles')
     expect(container.textContent).not.toContain('Dirty article ACKs')
     expect(container.textContent).not.toContain('Large rebuild')
-    expect(container.textContent).toContain('Article refreshes: processing 0, queued 148, 0/min')
+    expect(container.textContent).toContain('Article refreshes: processing 0, queued 148')
+    expect(container.textContent).not.toContain('0/min')
+  } finally {
+    dispose()
+  }
+})
+
+test('renders unmeasured review indexing rates without implying zero throughput', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({progressState: 'processing', projectRefreshesPerMinute: null, queuedProjectRefreshCount: 1}),
+  )
+
+  try {
+    expect(container.textContent).toContain('Project refreshes: processing 0, queued 1')
+    expect(container.textContent).not.toContain('0/min')
+  } finally {
+    dispose()
+  }
+})
+
+test('separates rebuild chunk progress from dirty-work backlog diagnostics', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      activeWorkCount: 2,
+      inFlightProjectRefreshCount: 5,
+      inFlightRefreshCount: 5,
+      pendingProjectRefreshCount: 11,
+      pendingRefreshCount: 11,
+      progressState: 'processing',
+      queuedProjectRefreshCount: 9,
+      queuedRefreshCount: 9,
+      serving: {
+        diagnostics: {
+          dirtyWork: {failedCount: 1, pendingCount: 2, runningCount: 1},
+          rebuildChunks: {claimableCount: 3, expiredLeaseCount: 1, pendingCount: 7, runningCount: 3},
+        },
+        manifest: {},
+        readable: true,
+        usable: true,
+      },
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain(
+      'Project refreshes: 2 rebuild chunks running, 3 rebuild chunks queued, 4 dirty-work items in backlog',
+    )
+    expect(container.textContent).not.toContain('Project refreshes: processing 5, queued 9')
+    expect(container.textContent).not.toContain('refreshs')
   } finally {
     dispose()
   }

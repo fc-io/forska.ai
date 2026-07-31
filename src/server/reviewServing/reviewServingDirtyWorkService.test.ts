@@ -6,6 +6,7 @@ import {
   compactReviewServingDirtyWorkAcknowledgements,
   completeReviewServingDirtyWorkClaims,
   completeReviewServingDirtyWorkClaimsAndAdvanceWatermark,
+  completeReviewServingDirtyWorkCoveredByRebuild,
   failReviewServingDirtyWorkClaims,
   getReviewServingDirtyWork,
   releaseReviewServingDirtyWorkClaims,
@@ -15,6 +16,7 @@ import {
 } from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingDirtyWorkScopeForChange,
+  getReviewServingSourceWatermarkKeys,
   type ReviewServingDirtyWorkScope,
 } from './reviewServingProjectorDomain.ts'
 
@@ -69,6 +71,10 @@ const getStartsWithLiteral = (statement: string, columnName: string) => {
 
 const getLimit = (statement: string) => {
   return Number([...statement.matchAll(/LIMIT\s+(\d+)/gu)].at(-1)?.[1] ?? 0)
+}
+
+const getProjectionFromKey = (projectionKey: string) => {
+  return JSON.parse(projectionKey) as {projectionComponent: 'display' | 'search'; projectionIdentity: string}
 }
 
 const getNumbers = (statement: string) => {
@@ -137,6 +143,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     }
 
     const now = getClock(statements)
+    const projection = getProjectionFromKey(strings[5] ?? '{}')
     const row = {
       articleId: strings[4] ?? null,
       createdAt: now,
@@ -148,8 +155,8 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       latestDeltaId: strings[8] ?? null,
       latestSourceHighWaterMark: numbers[1] ?? 0,
       projectId: strings[1] ?? null,
-      projectionComponent: 'display' as const,
-      projectionIdentity: 'display:identity-1',
+      projectionComponent: projection.projectionComponent,
+      projectionIdentity: projection.projectionIdentity,
       projectionKey: strings[5] ?? '',
       scopeId: strings[3] ?? '',
       scopeKind: strings[2] ?? 'article',
@@ -211,8 +218,32 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
   const insertAck = (statement: string) => {
     const strings = getSqlStrings(statement)
     const numbers = getNumbers(statement)
-    const dirtyAckId = strings[0] ?? ''
     const compacted = statement.includes('NULL,')
+
+    if (compacted) {
+      for (let index = 0; index < strings.length; index += 5) {
+        const dirtyAckId = strings[index] ?? ''
+        const projectionComponent = strings[index + 1] ?? ''
+        const projectionIdentity = strings[index + 2] ?? ''
+        const sourcePartition = strings[index + 3] ?? ''
+
+        acks.set(dirtyAckId, {
+          completedSourceHighWaterMark: numbers[Math.floor(index / 5)] ?? 0,
+          dirtyAckId,
+          dirtyRangeEnd: null,
+          dirtyRangeStart: null,
+          dirtyWorkId: null,
+          projectionComponent,
+          projectionIdentity,
+          sourcePartition,
+          status: 'completed',
+        })
+      }
+
+      return
+    }
+
+    const dirtyAckId = strings[0] ?? ''
     const dirtyWorkId = compacted ? null : (strings[1] ?? '')
     const projectionComponent = strings[compacted ? 1 : 2] ?? ''
     const projectionIdentity = strings[compacted ? 2 : 3] ?? ''
@@ -278,6 +309,47 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         projectId,
         sourceHighWaterMark: Math.max(existing?.sourceHighWaterMark ?? 0, sourceHighWaterMark),
         sourcePartition,
+      })
+    })
+  }
+  const getCoverageRows = (statement: string) => {
+    const strings = getSqlStrings(statement)
+    const numbers = getNumbers(statement)
+    const coverages = new Map<
+      string,
+      {completedSourceHighWaterMark: number; projectId: string; projectionKey: string; sourcePartition: string}
+    >()
+
+    for (let index = 0; index < strings.length; index += 5) {
+      const projectId = strings[index] ?? ''
+      const projectionKey = strings[index + 1] ?? ''
+      const sourcePartition = strings[index + 4] ?? ''
+      const completedSourceHighWaterMark = numbers[Math.floor(index / 5)] ?? 0
+      const key = `${projectId}:${projectionKey}:${sourcePartition}`
+      const existing = coverages.get(key)
+
+      coverages.set(key, {
+        completedSourceHighWaterMark: Math.max(
+          existing?.completedSourceHighWaterMark ?? 0,
+          completedSourceHighWaterMark,
+        ),
+        projectId,
+        projectionKey,
+        sourcePartition,
+      })
+    }
+
+    return [...dirtyWork.values()].filter((row) => {
+      const sourceWatermarkKeys = [row.sourcePartition, ...getReviewServingSourceWatermarkKeys(row.sourcePartition)]
+
+      return sourceWatermarkKeys.some((sourceWatermarkKey) => {
+        const coverage = coverages.get(`${row.projectId}:${row.projectionKey}:${sourceWatermarkKey}`)
+
+        return (
+          coverage !== undefined
+          && row.status !== 'completed'
+          && row.latestSourceHighWaterMark <= coverage.completedSourceHighWaterMark
+        )
       })
     })
   }
@@ -467,6 +539,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       return getRetentionReadyLanes(statement) as T[]
     }
 
+    if (statement.includes('WITH rebuild_dirty_work_coverage AS')) {
+      return getCoverageRows(statement).map(getQueryRow) as T[]
+    }
+
     if (
       statement.includes('DELETE FROM app.review_serving_dirty_work_ack')
       && statement.includes('RETURNING dirty_ack_id AS dirtyAckId')
@@ -600,6 +676,12 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     if (statement.includes("SET status = 'completed'")) {
       updateStatus(statement, 'completed', 'running')
+
+      if (statement.includes('WITH rebuild_dirty_work_coverage AS')) {
+        getCoverageRows(statement).forEach((row) => {
+          dirtyWork.set(row.dirtyWorkId, {...row, status: 'completed', updatedAt: getClock(statements)})
+        })
+      }
     }
   }
   const database: ReviewServingDirtyWorkDatabase = {
@@ -905,6 +987,201 @@ test('component acknowledgements skip already completed dirty keys', async () =>
   expect(acks.size).toBe(1)
   expect(dirtyWork.size).toBe(1)
   expect(claims).toHaveLength(0)
+})
+
+test('rebuild coverage completion only acknowledges matching project component identity partition and watermark', async () => {
+  const {acks, database, dirtySourceWatermarks, dirtyWork, statements} = createFakeDirtyWorkDatabase()
+
+  const covered = await upsertDisplayWork(
+    database,
+    {...getBaseScope(5, '5', '5'), sourcePartition: 'reviewChange:project-1'},
+    'delta-covered',
+  )
+  const newer = await upsertDisplayWork(
+    database,
+    {...getBaseScope(9, '9', '9'), scopeId: 'project-1:article-newer', sourcePartition: 'reviewChange:project-1'},
+    'delta-newer',
+  )
+  const otherSource = await upsertDisplayWork(
+    database,
+    {...getBaseScope(4, '4', '4'), scopeId: 'project-1:article-source', sourcePartition: 'projectScope:project-1'},
+    'delta-source',
+  )
+  const otherProject = await upsertReviewServingDirtyWork(
+    {
+      latestDeltaId: 'delta-project',
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      scope: {
+        ...getBaseScope(4, '4', '4'),
+        projectId: 'project-2',
+        scopeId: 'project-2:article-project',
+        sourcePartition: 'reviewChange:project-1',
+      },
+    },
+    database,
+  )
+  const otherIdentity = await upsertReviewServingDirtyWork(
+    {
+      latestDeltaId: 'delta-identity',
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-2',
+      scope: {
+        ...getBaseScope(4, '4', '4'),
+        scopeId: 'project-1:article-identity',
+        sourcePartition: 'reviewChange:project-1',
+      },
+    },
+    database,
+  )
+
+  const result = await completeReviewServingDirtyWorkCoveredByRebuild(
+    [
+      {
+        completedSourceHighWaterMark: 5,
+        projectId: 'project-1',
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+        sourcePartition: 'reviewChange:project-1',
+      },
+    ],
+    database,
+  )
+
+  expect(result.completedCount).toBe(1)
+  expect((await getReviewServingDirtyWork(covered.dirtyWorkId, database))?.status).toBe('completed')
+  expect((await getReviewServingDirtyWork(newer.dirtyWorkId, database))?.status).toBe('pending')
+  expect((await getReviewServingDirtyWork(otherSource.dirtyWorkId, database))?.status).toBe('pending')
+  expect((await getReviewServingDirtyWork(otherProject.dirtyWorkId, database))?.status).toBe('pending')
+  expect((await getReviewServingDirtyWork(otherIdentity.dirtyWorkId, database))?.status).toBe('pending')
+  expect(acks.size).toBe(1)
+  expect(dirtySourceWatermarks.get('project-1:reviewChange:project-1')).toMatchObject({
+    projectId: 'project-1',
+    sourceHighWaterMark: 5,
+    sourcePartition: 'reviewChange:project-1',
+  })
+  expect(dirtyWork.size).toBe(5)
+  expect(statements.join('\n')).toContain('WITH rebuild_dirty_work_coverage AS')
+  expect(statements.join('\n')).toContain('latest_source_high_water_mark <= coverage.completed_source_high_water_mark')
+})
+
+test('rebuild coverage completion matches promotion source watermark aliases', async () => {
+  const {database, dirtyWork, statements} = createFakeDirtyWorkDatabase()
+
+  const reviewChange = await upsertDisplayWork(
+    database,
+    {...getBaseScope(5, '5', '5'), sourcePartition: 'reviewChange:project-1'},
+    'delta-review-change',
+  )
+  const humanJudgment = await upsertDisplayWork(
+    database,
+    {...getBaseScope(4, '4', '4'), scopeId: 'project-1:article-human', sourcePartition: 'humanJudgment:project-1:a'},
+    'delta-human',
+  )
+  const projectScope = await upsertDisplayWork(
+    database,
+    {...getBaseScope(7, '7', '7'), scopeId: 'project-1:article-scope', sourcePartition: 'projectScope:project-1'},
+    'delta-project-scope',
+  )
+  const newerReviewChange = await upsertDisplayWork(
+    database,
+    {...getBaseScope(9, '9', '9'), scopeId: 'project-1:article-newer', sourcePartition: 'reviewChange:project-1'},
+    'delta-newer',
+  )
+
+  const result = await completeReviewServingDirtyWorkCoveredByRebuild(
+    [
+      {
+        completedSourceHighWaterMark: 5,
+        projectId: 'project-1',
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+        sourcePartition: 'reviewChange',
+      },
+      {
+        completedSourceHighWaterMark: 7,
+        projectId: 'project-1',
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+        sourcePartition: 'projectScope',
+      },
+    ],
+    database,
+  )
+
+  expect(result.completedCount).toBe(3)
+  expect((await getReviewServingDirtyWork(reviewChange.dirtyWorkId, database))?.status).toBe('completed')
+  expect((await getReviewServingDirtyWork(humanJudgment.dirtyWorkId, database))?.status).toBe('completed')
+  expect((await getReviewServingDirtyWork(projectScope.dirtyWorkId, database))?.status).toBe('completed')
+  expect((await getReviewServingDirtyWork(newerReviewChange.dirtyWorkId, database))?.status).toBe('pending')
+  expect(dirtyWork.size).toBe(4)
+  expect(statements.join('\n')).toContain("WHEN 'humanJudgment' THEN 'reviewChange'")
+  expect(statements.join('\n')).toContain("WHEN 'project-scope' THEN 'projectScope'")
+})
+
+test('rebuild coverage completion records exact high-water acks before dirty work is re-intaken', async () => {
+  const {acks, database, dirtySourceWatermarks, dirtyWork, statements} = createFakeDirtyWorkDatabase()
+
+  const result = await completeReviewServingDirtyWorkCoveredByRebuild(
+    [
+      {
+        completedSourceHighWaterMark: 5,
+        projectId: 'project-1',
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+        sourcePartition: 'reviewChange:project-1',
+      },
+      {
+        completedSourceHighWaterMark: 5,
+        projectId: 'project-2',
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+        sourcePartition: 'reviewChange:project-2',
+      },
+      {
+        completedSourceHighWaterMark: 999,
+        projectId: 'project-1',
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+        sourcePartition: 'reviewChange',
+      },
+    ],
+    database,
+  )
+
+  const skipped = await upsertDisplayWork(
+    database,
+    {...getBaseScope(5, '5', '5'), sourcePartition: 'reviewChange:project-1'},
+    'delta-covered-late',
+  )
+  const notSkipped = await upsertDisplayWork(
+    database,
+    {...getBaseScope(6, '6', '6'), scopeId: 'project-1:article-newer', sourcePartition: 'reviewChange:project-1'},
+    'delta-newer-late',
+  )
+
+  expect(result.completedCount).toBe(0)
+  expect(skipped.skipped).toBe(true)
+  expect(notSkipped.skipped).toBe(false)
+  expect(acks.size).toBe(2)
+  expect(
+    [...acks.values()]
+      .map((ack) => {
+        return ack.sourcePartition
+      })
+      .sort(),
+  ).toEqual(['reviewChange:project-1', 'reviewChange:project-2'])
+  expect(dirtyWork.size).toBe(1)
+  expect(dirtySourceWatermarks.get('project-1:reviewChange:project-1')).toMatchObject({
+    projectId: 'project-1',
+    sourceHighWaterMark: 5,
+    sourcePartition: 'reviewChange:project-1',
+  })
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('NULL')
+    }),
+  ).toHaveLength(1)
 })
 
 test('dirty-work completion and watermark advance are blocked atomically by source barriers', async () => {

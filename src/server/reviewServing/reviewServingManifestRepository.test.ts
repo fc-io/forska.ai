@@ -676,7 +676,7 @@ test('promotion retires previous active and preserves it as last-known-good', as
     updatedAt: '2026-06-16T10:00:00.000Z',
     validationResult: null,
   }
-  const {database} = createFakeManifestDatabase([activeSnapshot])
+  const {database, statements} = createFakeManifestDatabase([activeSnapshot])
 
   await createCandidateReviewServingSnapshotManifest(
     {...baseSnapshotInput, lastKnownGoodSnapshotId: 'snapshot-active', snapshotId: 'snapshot-next'},
@@ -717,6 +717,11 @@ test('promotion retires previous active and preserves it as last-known-good', as
   expect(active?.lastKnownGoodSnapshotId).toBe('snapshot-active')
   expect(lastKnownGood?.snapshotId).toBe('snapshot-active')
   expect(lastKnownGood?.status).toBe('retired')
+  expect(statements.join('\n')).toContain('WITH rebuild_dirty_work_coverage AS')
+  expect(statements.join('\n')).toContain("'display'")
+  expect(statements.join('\n')).toContain("'display:identity-1'")
+  expect(statements.join('\n')).toContain("'reviewChange'")
+  expect(statements.join('\n')).toContain('latest_source_high_water_mark <= coverage.completed_source_high_water_mark')
 })
 
 test('retire obsolete manifests updates status without deleting snapshot rows', async () => {
