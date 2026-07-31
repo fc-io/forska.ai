@@ -21,13 +21,13 @@ optimization workflows. Correctness, smoke, and regression tests live in
 
 ## Current Commands
 
-| Command | What It Measures | Notes |
-| --- | --- | --- |
-| `bun run bench:articlesreviews` | `/api/articlesreviews` latency and response size | Requires a running server at `--base-url`, defaulting to `http://localhost:3004`. Supports filtered/unfiltered modes, iterations, warmup runs, project id, limit, page, and cursor steps. |
-| `bun run bench:duckdb-append-lanes` | DuckDB append-lane throughput | Uses a temp DuckDB file and compares lane counts. Useful for write-lane throughput and queue-depth experiments. |
-| `bun run bench:project-transfer` | Project transfer package/export/import performance | Supports single fixtures or `--fixture=matrix`, repeated runs, metrics output, progress output, and baseline files. |
-| `bun run bench:review-serving-smoke` | Review-serving benchmark contract smoke | Uses mocked benchmark observations. It validates workload/report shape and does not claim a physical synthetic DuckDB run. |
-| `bun run bench:review-serving-release-gate` | Review-serving benchmark test plus smoke report | Runs `reviewServingBenchmark.test.ts` and `bench:review-serving-smoke`; this is still a repo-native contract gate, not the planned physical release-scale DuckDB benchmark. |
+| Command                                     | What It Measures                                   | Notes                                                                                                                                                                                     |
+| ------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run bench:articlesreviews`             | `/api/articlesreviews` latency and response size   | Requires a running server at `--base-url`, defaulting to `http://localhost:3004`. Supports filtered/unfiltered modes, iterations, warmup runs, project id, limit, page, and cursor steps. |
+| `bun run bench:duckdb-append-lanes`         | DuckDB append-lane throughput                      | Uses a temp DuckDB file and compares lane counts. Useful for write-lane throughput and queue-depth experiments.                                                                           |
+| `bun run bench:project-transfer`            | Project transfer package/export/import performance | Supports single fixtures or `--fixture=matrix`, repeated runs, metrics output, progress output, and baseline files.                                                                       |
+| `bun run bench:review-serving-smoke`        | Review-serving benchmark contract smoke            | Uses mocked benchmark observations. It validates workload/report shape and does not claim a physical synthetic DuckDB run.                                                                |
+| `bun run bench:review-serving-release-gate` | Review-serving benchmark test plus smoke report    | Runs `reviewServingBenchmark.test.ts` and `bench:review-serving-smoke`; this is still a repo-native contract gate, not the planned physical release-scale DuckDB benchmark.               |
 
 Additional review-serving benchmark context lives in
 [src/server/reviewServing/reviewServingBenchmark.md](src/server/reviewServing/reviewServingBenchmark.md).
@@ -35,16 +35,16 @@ Additional review-serving benchmark context lives in
 ## Planned Review-Serving Synthetic Benchmarks
 
 The planned physical DuckDB benchmark work is tracked in
-[PERF_BENCH_PLAN.md](plans/old/PERF_BENCH_PLAN.md).
+[review-serving storage and performance](docs/review-serving-storage-performance.md).
 
 Target commands:
 
-| Command | Purpose | Status |
-| --- | --- | --- |
-| `bun run bench:review-serving-synthetic-check` | Medium synthetic DuckDB PR gate with pass/fail shape budgets | Planned |
-| `bun run bench:review-serving-synthetic -- --mode=measure --scale=medium` | Measure-only before/after artifact generation | Planned |
-| `bun run bench:review-serving-compare -- --before old.json --after new.json` | Compare benchmark artifacts and report deltas | Planned |
-| `bun run bench:review-serving-release-scale` | Manual long-running synthetic release-scale gate | Planned |
+| Command                                                                      | Purpose                                                      | Status  |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------ | ------- |
+| `bun run bench:review-serving-synthetic-check`                               | Medium synthetic DuckDB PR gate with pass/fail shape budgets | Planned |
+| `bun run bench:review-serving-synthetic -- --mode=measure --scale=medium`    | Measure-only before/after artifact generation                | Planned |
+| `bun run bench:review-serving-compare -- --before old.json --after new.json` | Compare benchmark artifacts and report deltas                | Planned |
+| `bun run bench:review-serving-release-scale`                                 | Manual long-running synthetic release-scale gate             | Planned |
 
 The synthetic benchmark should use temp DuckDB files by default, not Fredrik's
 current primary DB.
