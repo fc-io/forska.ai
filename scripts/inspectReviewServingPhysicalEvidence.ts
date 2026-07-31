@@ -5169,7 +5169,7 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     `Snapshot path used during collection: \`${report.snapshotPath}\``,
     '',
-    'This file is a small follow-up evidence artifact for the storage-shape audit. It does not update `STORAGE_SHAPE_AUDIT_PLAN.md` and does not authorize deletion, slimming, or migration work by itself.',
+    'This file is a physical evidence artifact for the review-serving storage/performance plan. It does not authorize deletion, slimming, or migration work by itself; see `docs/review-serving-storage-performance.md` for the current decision boundary.',
     '',
     '## Table Summary',
     '',
