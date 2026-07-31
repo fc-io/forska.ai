@@ -328,6 +328,17 @@ const getFullRebuildSummaryContributionRows = async (
             AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND queue.queue_kind = 'unassessed'
         ),
+        queue_article_source AS (
+          SELECT
+            queue.article_id
+          FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
+          INNER JOIN article_id_filter dirty
+            ON dirty.article_id = queue.article_id
+          WHERE queue.project_id = ${getSqlLiteral(input.projectId)}
+            AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND queue.queue_kind = 'unassessed'
+        ),
         queue_prompt_source AS (
           SELECT
             queue.article_id,
@@ -365,9 +376,11 @@ const getFullRebuildSummaryContributionRows = async (
           WHERE queue.prompt_id IS NOT NULL
           UNION ALL
           SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.queue.unassessedReady' AS countKind, 'queue:ready' AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.queue.unassessedReady' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
-          FROM queue_source queue
+          FROM queue_article_source queue
           INNER JOIN selected_article selected ON selected.article_id = queue.article_id
-          INNER JOIN scoped_serving list_mode_key ON list_mode_key.article_id = queue.article_id
+          INNER JOIN scoped_serving list_mode_key
+            ON list_mode_key.article_id = queue.article_id
+            AND list_mode_key.list_mode_key = 'unassessed'
         ),
         human_counts AS (
           SELECT human.article_id AS articleId, 'count' AS summaryKind, 'review.human.reviewedByPrompt' AS countKind, concat('prompt:', human.prompt_id) AS filterKey, human.list_mode_key AS listModeKey, 'review.human.reviewedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, human.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason

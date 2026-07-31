@@ -479,9 +479,11 @@ test('summary source SQL shares bounded detail and queue scans across derived br
   expect(selectStatement).toContain("WHERE detail.payload_kind = 'llm'")
   expect(selectStatement).toContain("WHERE detail.payload_kind = 'human'")
   expect(selectStatement).toContain('queue_source AS')
+  expect(selectStatement).toContain('queue_article_source AS')
   expect(selectStatement).toContain('queue_prompt_source AS')
   expect(selectStatement).toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
-  expect(countOccurrences(selectStatement ?? '', 'FROM queue_source queue')).toBe(2)
+  expect(countOccurrences(selectStatement ?? '', 'FROM queue_source queue')).toBe(1)
+  expect(countOccurrences(selectStatement ?? '', 'FROM queue_article_source queue')).toBe(1)
   expect(countOccurrences(selectStatement ?? '', 'FROM queue_prompt_source queue')).toBe(1)
   expect(selectStatement).toContain('WHERE queue.prompt_id IS NOT NULL')
 })
@@ -1501,6 +1503,21 @@ test('direct summary recompute aggregates shared count keys before writing', asy
     }),
   ).toHaveLength(1)
   expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.queue.unassessedReady', count_value: 2})).toBe(true)
+})
+
+test('unassessed ready summary counts the deduped queue article-rank source', async () => {
+  const {database, statements} = createSummaryDatabase()
+
+  await projectReviewServingSummaries(projectInput([summaryClaim()], ['unassessed']), database)
+
+  const sourceStatement = statements.find((statement) => {
+    return statement.includes('FROM summary_union')
+  })
+
+  expect(sourceStatement).toContain('queue_article_source AS')
+  expect(sourceStatement).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
+  expect(sourceStatement).toContain('FROM queue_article_source queue')
+  expect(sourceStatement).toContain("AND list_mode_key.list_mode_key = 'unassessed'")
 })
 
 test('prompt badge counts flow through direct summary recompute used by review.prompt.badges', async () => {
