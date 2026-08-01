@@ -187,9 +187,9 @@ test('prompt config changes rebuild prompt-scoped and summary queue rows', async
   expect(queueSelect?.match(/queue_union AS/g) ?? []).toHaveLength(1)
 })
 
-test('summary-mode queue rebuild tombstones imported Covidence summary decisions with empty answers', async () => {
+test('summary-mode queue rebuild keeps imported Covidence summary rows with empty answers reviewable', async () => {
   const {database, statements} = createQueueDatabase({
-    queueRows: [queueRow({promptId: 'summary', queueKind: 'human-unreviewed', tombstone: true})],
+    queueRows: [queueRow({promptId: 'summary', queueKind: 'human-unreviewed'})],
     reviewConfigHash: 'review-config-1',
   })
 
@@ -208,8 +208,11 @@ test('summary-mode queue rebuild tombstones imported Covidence summary decisions
     return statement.includes('FROM queue_union queue')
   })
 
-  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
-  expect(queueSelect).toContain("judgment_human_summary.origin = 'covidence_import'")
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 1})
+  expect(queueSelect).not.toContain("judgment_human_summary.origin = 'covidence_import'")
+  expect(queueSelect).toContain(
+    "NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NOT NULL AS tombstone",
+  )
 })
 
 test('summary-mode human rows join queue work through article-level summary prompt', async () => {

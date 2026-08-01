@@ -225,8 +225,9 @@ test('human payload projection filters rows by active human judgment mode', asyn
   expect(humanSelect).not.toContain('payload.prompt_original_text')
   expect(statements.join('\n')).not.toContain('review_article_judgment_detail_hydration_serving_v4')
   expect(humanSelect).toContain(
-    "judgment_human_summary.answer IS NOT NULL OR judgment_human_summary.origin = 'covidence_import' AS is_answered",
+    "NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL AS is_answered",
   )
+  expect(humanSelect).not.toContain('origin = ')
 })
 
 test('judgment payload projection replaces broad project detail rows', async () => {
