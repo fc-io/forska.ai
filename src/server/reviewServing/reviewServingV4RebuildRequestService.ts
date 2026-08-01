@@ -175,12 +175,12 @@ const promptScaledComponentFanOut = {
   judgmentInputContent: 0,
   llmStatus: llmStatusListModeFanOut,
   payload: 0,
-  posting: listModeFanOut,
+  posting: 0,
   projectScope: 0,
   queue: queuePayloadFanOut,
   search: 0,
   selectedImport: 0,
-  summary: listModeFanOut,
+  summary: 0,
 } satisfies Record<ReviewServingProjectionComponent, number>
 
 const getArticleScaledComponentFanOut = (components: readonly ReviewServingProjectionComponent[]) => {

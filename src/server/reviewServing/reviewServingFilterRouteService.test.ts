@@ -154,6 +154,15 @@ const createReaderDatabase = () => {
           prompt_id: 'prompt-1',
           summary_identity: 'review.filter.promptAnswer',
         },
+        {
+          availability: 'async',
+          count_value: null,
+          facet_key: 'promptAnswer',
+          facet_kind: 'review',
+          facet_value: 'no',
+          prompt_id: 'prompt-1',
+          summary_identity: 'review.filter.promptAnswer',
+        },
       ] as T[]
     },
   }
@@ -192,6 +201,12 @@ test('review filter route service reads facet and option contracts without raw f
     },
   ])
   expect(response.facets[0]).toMatchObject({facet_key: 'promptAnswer', summary_identity: 'review.filter.promptAnswer'})
+  expect(response.facets[1]).toMatchObject({
+    availability: 'async',
+    count_value: null,
+    facet_key: 'promptAnswer',
+    facet_value: 'no',
+  })
   expect(response.filterOptions[0]).toMatchObject({
     optionPayload: {filterType: 'enum', promptId: 'prompt-1', value: 'yes'},
     optionValueKey: 'review:promptAnswer:prompt-1:yes',

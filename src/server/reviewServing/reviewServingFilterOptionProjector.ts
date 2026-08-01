@@ -462,14 +462,16 @@ const getFilterOptionSourceRows = async (
   input: ProjectReviewServingFilterOptionsInput,
   database: ReviewServingFilterOptionProjectorDatabase,
 ) => {
-  if (isSearchScopedFilterOptionProjection(input)) {
-    return getReconstructedFilterOptionSourceRows(input, database)
-  }
+  const rows = isSearchScopedFilterOptionProjection(input)
+    ? await getReconstructedFilterOptionSourceRows(input, database)
+    : [
+        ...(await getFinalizedFacetOptionSourceRows(input, database)),
+        ...(await getNoSearchFallbackOptionSourceRows(input, database)),
+      ]
 
-  const finalizedFacetRows = await getFinalizedFacetOptionSourceRows(input, database)
-  const fallbackRows = await getNoSearchFallbackOptionSourceRows(input, database)
-
-  return [...finalizedFacetRows, ...fallbackRows]
+  return rows.filter((row) => {
+    return row.countValue !== null
+  })
 }
 
 const getFilterOptionRecord = (input: {

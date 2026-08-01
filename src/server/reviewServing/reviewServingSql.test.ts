@@ -33,6 +33,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingDynamicCountSql.ts'),
   join(reviewServingSourceRoot, 'reviewServingFilteredCountService.ts'),
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
+  join(reviewServingSourceRoot, 'reviewServingLazyPromptAnswerPostingSql.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
   join(reviewServingSourceRoot, 'reviewServingSql.ts'),
@@ -51,6 +52,7 @@ const reviewServingBoundedForegroundAggregationFiles = [
   'reviewServingDynamicCountSql.ts',
   'reviewServingFilteredCountService.ts',
   'reviewServingHumanAssessmentCompletedCount.ts',
+  'reviewServingLazyPromptAnswerPostingSql.ts',
   'reviewServingSql.ts',
 ] as const
 const workspaceRoot = process.cwd()
@@ -312,6 +314,9 @@ test('buildReviewServingRowsSql separates review and human facet rows', () => {
   expect(assertReviewServingSqlShape(reviewSql)).toEqual({ok: true, violations: []})
   expect(assertReviewServingSqlShape(humanSql)).toEqual({ok: true, violations: []})
   expect(reviewSql).toContain("AND facet_kind = 'review'")
+  expect(reviewSql).toContain(
+    "CASE WHEN mart.review_filter_facet_serving_v4.availability = 'ready' THEN mart.review_filter_facet_serving_v4.count_value ELSE NULL END AS count_value",
+  )
   expect(reviewSql).toContain('AND summary_definition_version IN (')
   expect(reviewSql).toContain("'review-filter-duplicate-flag:v1'")
   expect(reviewSql).toContain("'review-filter-import-route:v1'")
@@ -319,6 +324,9 @@ test('buildReviewServingRowsSql separates review and human facet rows', () => {
   expect(reviewSql).toContain("'review-filter-publication-year:v1'")
   expect(reviewSql).toContain('AND summary_identity = $filterKey')
   expect(humanSql).toContain("AND facet_kind = 'human'")
+  expect(humanSql).toContain(
+    "CASE WHEN mart.review_filter_facet_serving_v4.availability = 'ready' THEN mart.review_filter_facet_serving_v4.count_value ELSE NULL END AS count_value",
+  )
   expect(humanSql).toContain('AND summary_definition_version IN (')
   expect(humanSql).toContain("'review-human-filter-prompt-answer:v1'")
   expect(humanSql).toContain("'review-human-filter-summary-answer:v1'")

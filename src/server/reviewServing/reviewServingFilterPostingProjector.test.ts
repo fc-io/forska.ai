@@ -285,6 +285,34 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expectNoLegacyPostingSourcePatchTables(joined)
 })
 
+test('full posting rebuilds skip lazy prompt-answer buckets', async () => {
+  const {database, statements} = createPostingDatabase({
+    newRows: [postingRow({filterKind: 'importRoute', filterValue: 'route-1'})],
+  })
+
+  await projectReviewServingFilterPostings(projectInput([], ['llm', 'human', 'both']), database)
+  const sourceStatement = statements.find((statement) => {
+    return statement.includes('FROM posting_union')
+  })
+
+  expect(sourceStatement).toContain('SELECT * FROM selected_postings')
+  expect(sourceStatement).toContain('UNION ALL SELECT * FROM serving_status_postings')
+  expect(sourceStatement).not.toContain('UNION ALL SELECT * FROM llm_postings')
+  expect(sourceStatement).not.toContain('UNION ALL SELECT * FROM human_postings')
+})
+
+test('full posting rebuilds delete stale lazy prompt-answer cache rows', async () => {
+  const {database, statements} = createPostingDatabase({
+    newRows: [postingRow({filterKind: 'importRoute', filterValue: 'route-1'})],
+  })
+
+  await projectReviewServingFilterPostings(projectInput([], ['llm', 'human', 'both']), database)
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(joined).toContain("AND filter_kind = 'promptAnswer'")
+})
+
 test('full posting rebuilds scope set-based serving upserts to article ranges', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [],
@@ -298,6 +326,7 @@ test('full posting rebuilds scope set-based serving upserts to article ranges', 
 
   const joined = statements.join('\n')
 
+  expect(joined).toContain("AND filter_kind = 'promptAnswer'")
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('scope.article_id >=')
   expect(joined).toContain('scope.article_id <=')

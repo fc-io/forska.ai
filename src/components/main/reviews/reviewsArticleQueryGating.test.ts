@@ -12,6 +12,11 @@ const reviewArticleContainerFiles = [
   'src/components/main/reviews/reviewsArticlesTable/reviewsArticlesUnassessedTableContainer.tsx',
 ] as const
 
+const llmReviewFirstLoadFiles = [
+  'src/app/routes/+projects/+$id/+reviews-llm/+index.tsx',
+  'src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTableContainer.tsx',
+] as const
+
 const readSource = (path: string) => {
   return readFileSync(join(projectRoot, path), 'utf8')
 }
@@ -37,4 +42,42 @@ test('review article query gates stay tied to V4 serving readability', () => {
   })
 
   expect(missingReadableGate).toEqual([])
+})
+
+test('LLM review prompt answer facets are lazy until prompt filter workflow is opened', () => {
+  const source = readSource('src/components/main/reviews/reviewsFilterControls.tsx')
+
+  expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
+  expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
+  expect(source).toContain('setPromptFiltersRequested(true)')
+  expect(source).toContain('apiClient.api.articlesreviewsfilters.get')
+})
+
+test('Human/Both review prompt answer facets are lazy until prompt filter workflow is opened', () => {
+  const source = readSource('src/components/main/reviews/reviewsHumanFilterControls.tsx')
+
+  expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
+  expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
+  expect(source).toContain('open={hasSelectedPromptFilters() || undefined}')
+  expect(source).toContain('setPromptFiltersRequested(true)')
+  expect(source).toContain('apiClient.api.articlesreviewshumanfilters.get')
+})
+
+test('LLM review list first load does not hydrate article detail payloads', () => {
+  const violatingFiles = llmReviewFirstLoadFiles.filter((path) => {
+    const source = readSource(path)
+
+    return source.includes('apiClient.api.projectsreview.post') || source.includes("['article-review-details'")
+  })
+
+  expect(violatingFiles).toEqual([])
+})
+
+test('review bulk action target projects query is lazy until action menu is opened', () => {
+  const source = readSource('src/components/main/reviews/reviewsPaginationControls.tsx')
+
+  expect(source).toContain('const [addToProjectMenuOpened, setAddToProjectMenuOpened] = createSignal(false)')
+  expect(source).toContain('enabled: addToProjectMenuOpened()')
+  expect(source).toContain('setAddToProjectMenuOpened(true)')
+  expect(source).toContain("apiClient.api['projects-without-jobs'].get()")
 })

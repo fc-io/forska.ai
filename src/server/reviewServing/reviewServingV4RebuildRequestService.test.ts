@@ -914,8 +914,8 @@ test('V4 missing snapshot bootstrap bounds large project-scope request estimates
 
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
-  expect(statements.join('\n')).toContain('"bootstrapChunkCount":107')
-  expect(projectScopeChunkInserts.length).toBeGreaterThan(100)
+  expect(statements.join('\n')).toContain('"bootstrapChunkCount":90')
+  expect(projectScopeChunkInserts).toHaveLength(90)
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {
@@ -1003,6 +1003,50 @@ test('V4 rebuild request service includes selected-import posting facets in admi
 
   expect(request.status).toBe('blocked_over_budget')
   expect(request.overBudgetReason).toBe('input rows: estimated 640000 > max 250000')
+})
+
+test('V4 rebuild request service excludes lazy prompt-answer posting fan-out from admission budgets', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 10,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 10,
+    scopedArticleCount: 10_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['posting'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+})
+
+test('V4 rebuild request service excludes lazy prompt-derived summary fan-out from admission budgets', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 10,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 10,
+    scopedArticleCount: 40_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
 })
 
 test('V4 rebuild request service includes placeholder detail rows in payload bytes', async () => {

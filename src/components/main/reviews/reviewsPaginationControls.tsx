@@ -77,6 +77,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
   const queryClient = useQueryClient()
   const [lastPdfJobId, setLastPdfJobId] = createSignal<string | null>(null)
   const [lastAddArticlesJob, setLastAddArticlesJob] = createSignal<LastAddArticlesJob | null>(null)
+  const [addToProjectMenuOpened, setAddToProjectMenuOpened] = createSignal(false)
 
   const handlePageChange = (newPage: number) => {
     props.setCurrentPage(newPage)
@@ -119,6 +120,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
 
   const projectsWithoutJobsQuery = useQuery(() => {
     return {
+      enabled: addToProjectMenuOpened(),
       queryKey: ['projects-without-jobs'],
       queryFn: async () => {
         const response = await apiClient.api['projects-without-jobs'].get()
@@ -286,7 +288,9 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                         typeof e === 'object' && e !== null && 'open' in e
                           ? Boolean((e as {open?: unknown}).open)
                           : Boolean(e)
-                      if (!isOpen) {
+                      if (isOpen) {
+                        setAddToProjectMenuOpened(true)
+                      } else {
                         void queryClient.invalidateQueries({queryKey: ['projects-without-jobs']})
                       }
                     }}

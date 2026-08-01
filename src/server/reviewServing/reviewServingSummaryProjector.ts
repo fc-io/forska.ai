@@ -66,6 +66,8 @@ type SummaryContributionIdentity = Omit<SummaryContributionSourceRow, 'articleId
 
 const summaryProjectorName = 'summary-projector'
 const dynamicFilteredTotalFilterKey = 'filter:dynamic'
+const promptDerivedSummaryStaleReason =
+  'prompt-derived summary/facet buckets are built lazily by the matching filtered read'
 
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
@@ -129,6 +131,10 @@ const isPartialFullSummarySnapshotInput = (input: ProjectReviewServingSummariesI
     && input.chunkId !== null
     && input.chunkId !== undefined
   )
+}
+
+const shouldProjectPromptDerivedSummaryBuckets = (input: ProjectReviewServingSummariesInput) => {
+  return !isDirectFullSummarySnapshotInput(input) && !isPartialFullSummarySnapshotInput(input)
 }
 
 const getArticleRangePredicate = (input: {
@@ -409,27 +415,40 @@ const getFullRebuildSummaryContributionRows = async (
           SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, llm.answered_original AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, llm.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM llm_detail llm
           INNER JOIN selected_article selected ON selected.article_id = llm.article_id
-          WHERE llm.list_mode_key = 'llm' AND llm.answered_original IS NOT NULL AND llm.answered_original_as_array IS NULL
+          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+            AND llm.list_mode_key = 'llm' AND llm.answered_original IS NOT NULL AND llm.answered_original_as_array IS NULL
           UNION ALL
           SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, answer.answer_value AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, answer.answer_value AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM llm_detail llm
           INNER JOIN selected_article selected ON selected.article_id = llm.article_id
           CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
-          WHERE llm.list_mode_key = 'llm' AND llm.answered_original_as_array IS NOT NULL
+          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+            AND llm.list_mode_key = 'llm' AND llm.answered_original_as_array IS NOT NULL
           UNION ALL
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, human.answered_original AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM human_detail human
           INNER JOIN selected_article selected ON selected.article_id = human.article_id
           CROSS JOIN project_settings
-          WHERE human.list_mode_key = 'human' AND human.prompt_id <> 'summary' AND human.answered_original IS NOT NULL
+          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+            AND human.list_mode_key = 'human' AND human.prompt_id <> 'summary' AND human.answered_original IS NOT NULL
             AND project_settings.human_judgment_mode <> 'summary'
           UNION ALL
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.summaryAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.summaryAnswer' AS summaryIdentity, 'human' AS facetKind, 'summaryAnswer' AS facetKey, human.answered_original AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM human_detail human
           INNER JOIN selected_article selected ON selected.article_id = human.article_id
           CROSS JOIN project_settings
-          WHERE human.list_mode_key = 'human' AND human.prompt_id = 'summary' AND human.answered_original IS NOT NULL
+          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+            AND human.list_mode_key = 'human' AND human.prompt_id = 'summary' AND human.answered_original IS NOT NULL
             AND project_settings.human_judgment_mode = 'summary'
+          UNION ALL
+          SELECT NULL AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, '__lazy_prompt_answer__' AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'unavailable' AS availability, ${getSqlLiteral(promptDerivedSummaryStaleReason)} AS staleReason
+          WHERE NOT ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          UNION ALL
+          SELECT NULL AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, '__lazy_prompt_answer__' AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'unavailable' AS availability, ${getSqlLiteral(promptDerivedSummaryStaleReason)} AS staleReason
+          WHERE NOT ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          UNION ALL
+          SELECT NULL AS articleId, 'facet' AS summaryKind, 'review.human.filter.summaryAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.summaryAnswer' AS summaryIdentity, 'human' AS facetKind, 'summaryAnswer' AS facetKey, '__lazy_prompt_answer__' AS facetValue, 'summary' AS promptId, NULL AS answerId, NULL AS answerValue, 'unavailable' AS availability, ${getSqlLiteral(promptDerivedSummaryStaleReason)} AS staleReason
+          WHERE NOT ${shouldProjectPromptDerivedSummaryBuckets(input)}
         ),
         summary_union AS (
           SELECT * FROM base_counts

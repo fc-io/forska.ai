@@ -26,6 +26,10 @@ import {
 } from './reviewServingCursor.ts'
 import {getReviewServingDiagnostics, type ReviewServingDiagnostics} from './reviewServingDiagnosticsRepository.ts'
 import {
+  ensureReviewServingLazyPromptAnswerPostingBuckets,
+  hasReviewServingPromptAnswerFilterGroup,
+} from './reviewServingLazyPromptAnswerPostingSql.ts'
+import {
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingManifestReaderDatabase,
@@ -42,6 +46,7 @@ import {
 
 export type ReviewServingReaderDatabase = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run?: (statement: string) => Promise<void>
 }
 
 export type ReviewServingReaderFilterInput = Partial<Record<string, ReviewServingFilterSignatureValue>>
@@ -534,7 +539,6 @@ const getPostingFilterArticleCtes = (input: {
   return postingArticleFilterGroups.map((filterValues) => {
     const filterAlias = `filter_${filterValues.index}`
     const articleAlias = `${filterAlias}_article`
-
     return [
       `filter_${filterValues.index}_articles AS (SELECT ${articleAlias}.article_id`,
       ` FROM mart.review_article_filter_posting_serving_v4 ${filterAlias}`,
@@ -547,6 +551,16 @@ const getPostingFilterArticleCtes = (input: {
       ` AND ${filterAlias}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues.filterValues)})))`,
     ].join('')
   })
+}
+
+const getPromptAnswerPostingFilterValues = (request: ReviewServingReaderRequest) => {
+  return getPostingArticleFilterGroups(request)
+    .filter((group) => {
+      return hasReviewServingPromptAnswerFilterGroup([group])
+    })
+    .flatMap((group) => {
+      return group.filterValues
+    })
 }
 
 const getSearchCandidateArticleIdsCte = (postingFilterArticleCtes: readonly string[]) => {
@@ -1176,6 +1190,19 @@ export const readReviewServingRows = async <T>(
   }
 
   const database = dependencies?.database ?? getReaderDatabase()
+  const promptAnswerFilterValues = getPromptAnswerPostingFilterValues(request)
+
+  if (promptAnswerFilterValues.length > 0) {
+    await ensureReviewServingLazyPromptAnswerPostingBuckets({
+      database,
+      filterValues: promptAnswerFilterValues,
+      listModeKey: request.listMode ?? contract.listMode,
+      projectId: request.projectId as string,
+      reviewConfigHash: manifest.reviewConfigHash,
+      snapshotId: manifest.snapshotId,
+    })
+  }
+
   const executableSql = bindReviewServingRowsSql(
     sql,
     request,

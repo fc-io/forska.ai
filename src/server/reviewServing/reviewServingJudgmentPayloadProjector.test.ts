@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
+  ensureReviewServingJudgmentPayloadRowsForArticleSet,
   projectReviewServingJudgmentPayloadArticleRanges,
   projectReviewServingJudgmentPayloadRows,
   type ReviewServingJudgmentPayloadProjectorDatabase,
@@ -42,6 +43,12 @@ const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: 
 
       if (statement.includes('COUNT(*)') && statement.includes("payload_kind = 'human'")) {
         return [{rowCount: input?.humanCount ?? 0}] as T[]
+      }
+
+      if (statement.includes('FROM app.project')) {
+        return [
+          {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+        ] as T[]
       }
 
       return [] as T[]
@@ -367,4 +374,32 @@ test('article-set judgment hydration reads bounded payload rows with stable orde
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
   expect(sql).toContain('ORDER BY article_id ASC, prompt_order ASC NULLS LAST, prompt_id ASC')
   expect(sql).toContain('LIMIT $limit')
+})
+
+test('lazy article-set judgment payload ensure builds only requested visible articles', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase({humanCount: 2, llmCount: 2})
+
+  const result = await ensureReviewServingJudgmentPayloadRowsForArticleSet(
+    {
+      articleIds: ['article-2', 'article-1', 'article-2'],
+      listModeKeys: ['both'],
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+  const inserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(result.status).toBe('completed')
+  expect(result.articleCount).toBe(2)
+  expect(inserts).toHaveLength(2)
+  expect(joined).toContain("('article-2'), ('article-1')")
+  expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain("article_id IN ('article-2', 'article-1')")
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain('WHERE NOT EXISTS')
 })

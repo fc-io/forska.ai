@@ -105,7 +105,8 @@ export const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
       if (
         forbiddenPattern.label === 'foreground aggregation'
         && (hasOnlyBoundedPostingFilterIntersectionAggregation(sql)
-          || hasOnlyBoundedUnassessedQueueArticleAnchorAggregation(sql))
+          || hasOnlyBoundedUnassessedQueueArticleAnchorAggregation(sql)
+          || hasOnlyBoundedLazyPromptAnswerPostingCacheAggregation(sql))
       ) {
         return false
       }
@@ -233,6 +234,22 @@ const hasOnlyBoundedUnassessedQueueArticleAnchorAggregation = (sql: string) => {
   )
 }
 
+const hasOnlyBoundedLazyPromptAnswerPostingCacheAggregation = (sql: string) => {
+  return (
+    /\binsert\s+into\s+mart\.review_article_filter_posting_serving_v4\b/iu.test(sql)
+    && /\bfrom\s*\(\s*select\s+distinct\s+unnest\s*\(\s*\$\{input\.filterValuesSql\}::varchar\[\]\s*\)\s+as\s+filter_value\s*\)\s+requested\b/iu.test(
+      sql,
+    )
+    && /\bleft\s+join\s*\(\s*\$\{getReviewServingLazyPromptAnswerPostingSourceSql\(input\)\}\s*\)\s+source\b/iu.test(
+      sql,
+    )
+    && /\bsource\.filter_value\s*=\s*requested\.filter_value\b/iu.test(sql)
+    && /\bwhere\s+requested\.filter_value\s+is\s+not\s+null\b/iu.test(sql)
+    && /\brequested\.filter_value\s*<>\s*''\b/iu.test(sql)
+    && /\bgroup\s+by\s+requested\.filter_value\b/iu.test(sql)
+  )
+}
+
 const isBoundedArticleLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
   return (
     tableReference.table === 'app.article' && tableReference.alias === 'article' && hasBoundedArticleLookupJoin(sql)
@@ -324,6 +341,22 @@ const isBoundedJudgmentAuthoritativeHydrationReference = (
   )
 }
 
+const hasBoundedPromptAnswerProjectSettingsLookup = (sql: string) => {
+  return (
+    /\bselect\s+coalesce\s*\(\s*\(\s*select\s+project\.human_judgment_mode\s+from\s+app\.project\s+project\s+where\s+project\.id\s*=\s*[$:@?][\w.]+\s*\)\s*,\s*'prompt'\s*\)\s+as\s+human_judgment_mode\b/iu.test(
+      sql,
+    ) && /\bproject_settings\s+as\s*\(/iu.test(sql)
+  )
+}
+
+const isBoundedPromptAnswerProjectSettingsReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
+  return (
+    tableReference.table === 'app.project'
+    && tableReference.alias === 'project'
+    && hasBoundedPromptAnswerProjectSettingsLookup(sql)
+  )
+}
+
 const isBoundedTableFunctionReference = (tableReference: ReviewServingSqlTableReference) => {
   return tableReference.table === 'unnest'
 }
@@ -380,6 +413,9 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
           'app.judgment_human_summary',
         ].includes(tableReference) || !hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
       )
+    })
+    .filter((tableReference) => {
+      return tableReference !== 'app.project' || !hasBoundedPromptAnswerProjectSettingsLookup(sql)
     })
     .filter((tableReference) => {
       return tableReference !== 'unnest'
@@ -440,6 +476,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
               || isBoundedSelectedHotFieldLookupReference(sql, tableReference)
               || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
               || isBoundedJudgmentAuthoritativeHydrationReference(sql, tableReference)
+              || isBoundedPromptAnswerProjectSettingsReference(sql, tableReference)
               || isBoundedTableFunctionReference(tableReference)
             ) {
               return false
@@ -1459,6 +1496,24 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
 
   if (contract.servingTable === reviewServingTitleSearchTable) {
     return `SELECT ${reviewServingTitleSearchTable}.project_id, ${reviewServingTitleSearchTable}.search_identity, ${reviewServingTitleSearchTable}.project_scope_identity, ${reviewServingTitleSearchTable}.snapshot_id, ${reviewServingTitleSearchTable}.token, unnest(${reviewServingTitleSearchTable}.article_ids) AS article_id`
+  }
+
+  if (contract.servingTable === reviewServingFilterFacetTable) {
+    return [
+      `SELECT ${reviewServingFilterFacetTable}.project_id`,
+      `${reviewServingFilterFacetTable}.review_config_hash`,
+      `${reviewServingFilterFacetTable}.snapshot_id`,
+      `${reviewServingFilterFacetTable}.summary_identity`,
+      `${reviewServingFilterFacetTable}.facet_kind`,
+      `${reviewServingFilterFacetTable}.facet_key`,
+      `${reviewServingFilterFacetTable}.facet_value`,
+      `${reviewServingFilterFacetTable}.prompt_id`,
+      `${reviewServingFilterFacetTable}.answer_id`,
+      `${reviewServingFilterFacetTable}.answer_value`,
+      `${reviewServingFilterFacetTable}.summary_definition_version`,
+      `CASE WHEN ${reviewServingFilterFacetTable}.availability = 'ready' THEN ${reviewServingFilterFacetTable}.count_value ELSE NULL END AS count_value`,
+      `${reviewServingFilterFacetTable}.availability`,
+    ].join(', ')
   }
 
   return contract.sort.fields.some((field) => {

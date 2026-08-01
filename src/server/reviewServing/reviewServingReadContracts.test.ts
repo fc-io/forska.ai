@@ -325,11 +325,12 @@ test('unassessed row contract requires only base list-mode dependencies', () => 
     'display',
     'projectScope',
     'selectedImport',
-    'judgmentInputContent',
     'llmStatus',
     'queue',
     'summary',
   ])
+  expect(unassessedRows?.requiredComponents).not.toContain('judgmentInputContent')
+  expect(unassessedRows?.requiredComponents).not.toContain('payload')
 })
 
 test('detail row contract does not pin article lookups to a list mode', () => {
@@ -494,11 +495,15 @@ test('human payload contracts cover list and detail response judgments', () => {
   const bothListHumanJudgments = getReviewServingReadContract('review.both.list.humanJudgments')
   const detailHumanJudgments = getReviewServingReadContract('review.detail.humanJudgments')
 
-  expect(llmListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary', 'payload'])
-  expect(humanListJudgments?.requiredComponents).toEqual(['humanStatus', 'summary', 'payload'])
-  expect(bothListJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary', 'payload'])
-  expect(bothListHumanJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary', 'payload'])
+  expect(llmListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary'])
+  expect(humanListJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
+  expect(bothListJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary'])
+  expect(bothListHumanJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary'])
   expect(detailHumanJudgments?.requiredComponents).toEqual(['humanStatus', 'summary', 'payload'])
+  expect(llmListJudgments?.requiredComponents).not.toContain('payload')
+  expect(humanListJudgments?.requiredComponents).not.toContain('payload')
+  expect(bothListJudgments?.requiredComponents).not.toContain('payload')
+  expect(bothListHumanJudgments?.requiredComponents).not.toContain('payload')
   expect(llmListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
   expect(humanListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
   expect(bothListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
