@@ -79,8 +79,8 @@ const getPostingFilteredArticleIdsCte = (groups: readonly ReviewServingDynamicCo
     return `,
 posting_filtered_article_ids AS (
   SELECT DISTINCT posting_article.article_id
-  FROM (
-    SELECT posting.article_ids
+    FROM (
+      SELECT posting.article_ids
     FROM mart.review_article_filter_posting_serving_v4 posting
     CROSS JOIN scoped
     WHERE posting.project_id = scoped.project_id

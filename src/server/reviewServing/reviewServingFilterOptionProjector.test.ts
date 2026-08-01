@@ -213,6 +213,45 @@ test('no-search option projection reuses finalized facet rows for migrated facet
   expect(fallbackStatement).not.toContain('answered_original')
 })
 
+test('filter options do not publish unavailable prompt-derived lazy bucket rows as exact counts', async () => {
+  const {database, statements} = createFilterOptionDatabase({
+    sourceRows: [
+      sourceRow({
+        countValue: null,
+        facetKey: 'promptAnswer',
+        facetValue: '__lazy_prompt_answer__',
+        optionValueKey: 'review:promptAnswer:null:__lazy_prompt_answer__',
+        promptId: null,
+      }),
+      sourceRow({
+        countValue: 2,
+        facetKey: 'duplicateFlag',
+        facetValue: 'false',
+        optionValueKey: 'review:duplicateFlag:false',
+        promptId: null,
+      }),
+    ],
+  })
+
+  const result = await projectReviewServingFilterOptions(projectInput(), database)
+  const finalizedFacetStatement = statements.find((statement) => {
+    return statement.includes('finalized_facet_options')
+  })
+
+  expect(finalizedFacetStatement).toContain("facet.availability = 'ready'")
+  expect(result.optionRowCount).toBe(1)
+  expect(
+    hasOptionValue(result.optionValues, {
+      count_value: 2,
+      facet_key: 'duplicateFlag',
+      option_value_key: 'review:duplicateFlag:false',
+    }),
+  ).toBe(true)
+  expect(hasOptionValue(result.optionValues, {facet_key: 'promptAnswer', facet_value: '__lazy_prompt_answer__'})).toBe(
+    false,
+  )
+})
+
 test('filter-option no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
   const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
 

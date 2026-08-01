@@ -50,7 +50,7 @@ const baseComponents = ['display', 'projectScope', 'selectedImport'] as const
 const llmComponents = [...baseComponents, 'llmStatus', 'posting', 'summary'] as const
 const humanComponents = [...baseComponents, 'humanStatus', 'posting', 'summary'] as const
 const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting', 'summary'] as const
-const queueComponents = [...baseComponents, 'judgmentInputContent', 'llmStatus', 'queue', 'summary'] as const
+const queueComponents = [...baseComponents, 'llmStatus', 'queue', 'summary'] as const
 const articleDateRangeFilters = ['articleCreatedAtFrom', 'articleCreatedAtTo'] as const
 const defaultRowFilters = [
   'duplicateFlag',
@@ -558,7 +558,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'articleSetLookup',
-    requiredComponents: ['llmStatus', 'summary', 'payload'],
+    requiredComponents: ['llmStatus', 'summary'],
     searchMode: 'none',
     servingTable: reviewJudgmentDetailServingTable,
     sort: {direction: 'asc', fields: ['article_id', 'prompt_order ASC NULLS LAST', 'prompt_id']},
@@ -576,7 +576,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'articleSetLookup',
-    requiredComponents: ['humanStatus', 'summary', 'payload'],
+    requiredComponents: ['humanStatus', 'summary'],
     searchMode: 'none',
     servingTable: reviewJudgmentDetailServingTable,
     sort: {direction: 'asc', fields: ['article_id', 'prompt_order ASC NULLS LAST', 'prompt_id']},
@@ -594,7 +594,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'articleSetLookup',
-    requiredComponents: ['llmStatus', 'humanStatus', 'summary', 'payload'],
+    requiredComponents: ['llmStatus', 'humanStatus', 'summary'],
     searchMode: 'none',
     servingTable: reviewJudgmentDetailServingTable,
     sort: {direction: 'asc', fields: ['article_id', 'prompt_order ASC NULLS LAST', 'prompt_id']},
@@ -612,7 +612,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'articleSetLookup',
-    requiredComponents: ['llmStatus', 'humanStatus', 'summary', 'payload'],
+    requiredComponents: ['llmStatus', 'humanStatus', 'summary'],
     searchMode: 'none',
     servingTable: reviewJudgmentDetailServingTable,
     sort: {direction: 'asc', fields: ['article_id', 'prompt_order ASC NULLS LAST', 'prompt_id']},

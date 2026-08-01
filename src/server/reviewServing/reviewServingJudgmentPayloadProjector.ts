@@ -23,6 +23,7 @@ export type ProjectReviewServingJudgmentPayloadInput = {
   projectId: string
   projectionIdentity?: string
   reviewConfigHash: string
+  skipReplacementDeletes?: boolean
   snapshotId: string
   useAbstract: boolean
   useFulltext: boolean
@@ -36,6 +37,13 @@ export type ProjectReviewServingJudgmentPayloadArticleRangeInput = ProjectReview
 }
 
 type JudgmentPayloadKind = 'human' | 'llm'
+type ProjectReviewServingJudgmentPayloadProjectSettings = {
+  modelId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
 
 const rowNumberSql = ['row', 'number'].join('_')
 
@@ -51,6 +59,36 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[] = [])
         }) as string[],
     ),
   ]
+}
+
+const getArticleIdClaims = (input: {
+  articleIds: readonly string[]
+  projectId: string
+  projectionIdentity: string
+}): ReviewServingDirtyWorkClaim[] => {
+  return [...new Set(input.articleIds)]
+    .filter((articleId) => {
+      return articleId.trim().length > 0
+    })
+    .map((articleId, index) => {
+      return {
+        articleId,
+        dirtyKind: 'lazy-detail-hydration',
+        dirtyRangeEnd: null,
+        dirtyRangeStart: null,
+        dirtyWorkId: `lazy-detail-hydration:${input.projectId}:${articleId}:${index}`,
+        firstSourceHighWaterMark: 0,
+        latestDeltaId: null,
+        latestSourceHighWaterMark: 0,
+        projectId: input.projectId,
+        projectionComponent: 'payload',
+        projectionIdentity: input.projectionIdentity,
+        scopeId: `article:${articleId}`,
+        scopeKind: 'article',
+        sourcePartition: 'lazy-detail-hydration',
+        status: 'running',
+      }
+    })
 }
 
 const getValuesCte = (columnName: string, values: readonly string[]) => {
@@ -213,6 +251,10 @@ const getReplacementDeleteStatements = (
   input: ProjectReviewServingJudgmentPayloadInput,
   payloadKinds: readonly JudgmentPayloadKind[],
 ) => {
+  if (input.skipReplacementDeletes) {
+    return []
+  }
+
   if (hasChunkArticleRange(input)) {
     return []
   }
@@ -603,6 +645,69 @@ export const projectReviewServingJudgmentPayloadRows = async (
     humanRowCount: result.humanRowCount,
     llmRowCount: result.llmRowCount,
   }
+}
+
+const getProjectReviewServingJudgmentPayloadProjectSettings = async (
+  projectId: string,
+  database: Pick<ReviewServingJudgmentPayloadProjectorDatabase, 'queryJson'>,
+) => {
+  const [project] = await database.queryJson<ProjectReviewServingJudgmentPayloadProjectSettings>(`
+    SELECT
+      model_id AS modelId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  return project ?? null
+}
+
+export const ensureReviewServingJudgmentPayloadRowsForArticleSet = async (
+  input: {
+    articleIds: readonly string[]
+    listModeKeys: readonly ReviewServingListMode[]
+    projectId: string
+    reviewConfigHash: string
+    snapshotId: string
+  },
+  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingJudgmentPayloadProjectorDatabase,
+) => {
+  const articleIds = [...new Set(input.articleIds)].filter((articleId) => {
+    return articleId.trim().length > 0
+  })
+
+  if (articleIds.length === 0) {
+    return {articleCount: 0, humanRowCount: 0, llmRowCount: 0, status: 'skipped' as const}
+  }
+
+  const project = await getProjectReviewServingJudgmentPayloadProjectSettings(input.projectId, database)
+
+  if (project === null) {
+    return {articleCount: articleIds.length, humanRowCount: 0, llmRowCount: 0, status: 'missingProject' as const}
+  }
+
+  const result = await projectReviewServingJudgmentPayloadRows(
+    {
+      acknowledgeClaims: false,
+      claims: getArticleIdClaims({articleIds, projectId: input.projectId, projectionIdentity: 'lazy-detail-hydration'}),
+      listModeKeys: input.listModeKeys,
+      modelId: project.modelId,
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+      useAbstract: project.useAbstract,
+      useFulltext: project.useFulltext,
+      useFulltextNoImages: project.useFulltextNoImages,
+      useTitle: project.useTitle,
+    },
+    database,
+  )
+
+  return {articleCount: articleIds.length, ...result, status: 'completed' as const}
 }
 
 const canUseSetBasedJudgmentPayloadRangeInsert = (

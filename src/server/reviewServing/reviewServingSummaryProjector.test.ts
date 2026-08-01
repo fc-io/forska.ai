@@ -1477,6 +1477,46 @@ test('date range and search-scope SQL stays scoped and explicit unsupported filt
   ).toBe(true)
 })
 
+test('full summary rebuild marks prompt-derived facet buckets unavailable instead of precise', async () => {
+  const unavailablePromptFacet = sourceFacetRow({
+    answerValue: null,
+    articleId: null,
+    availability: 'unavailable',
+    countKind: 'review.filter.promptAnswer',
+    facetKind: 'review',
+    facetKey: 'promptAnswer',
+    facetValue: '__lazy_prompt_answer__',
+    promptId: null,
+    staleReason: 'prompt-derived summary/facet buckets are built lazily by the matching filtered read',
+    summaryIdentity: 'review.filter.promptAnswer',
+  })
+  const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), unavailablePromptFacet]})
+
+  const result = await projectReviewServingSummaries(projectInput([]), database)
+  const sourceStatement = statements.find((statement) => {
+    return statement.includes('FROM summary_union')
+  })
+
+  expect(sourceStatement).toContain('prompt-derived summary/facet buckets are built lazily')
+  expect(sourceStatement).toContain('review.filter.promptAnswer')
+  expect(sourceStatement).toContain('WHERE NOT false')
+  expect(
+    hasSummaryValue(result.summaryValues, {
+      availability: 'ready',
+      count_kind: 'review.llm.assessedByPrompt',
+      count_value: 1,
+    }),
+  ).toBe(true)
+  expect(
+    hasSummaryValue(result.summaryValues, {
+      availability: 'unavailable',
+      count_value: null,
+      facet_key: 'promptAnswer',
+      facet_value: '__lazy_prompt_answer__',
+    }),
+  ).toBe(true)
+})
+
 test('direct summary recompute aggregates shared count keys before writing', async () => {
   const {database} = createSummaryDatabase({
     sourceRows: [

@@ -23,7 +23,6 @@ const hydratedListComponents: readonly ReviewServingProjectionComponent[] = [
   'display',
   'projectScope',
   'selectedImport',
-  'payload',
   'llmStatus',
   'humanStatus',
   'posting',
@@ -397,9 +396,16 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
     },
     {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
   )
-  const sql = reader.statements[0] ?? ''
+  const sql =
+    reader.statements.find((statement) => {
+      return statement.includes('FROM mart.review_article_serving_base_v4 serving')
+    }) ?? ''
 
   expect(result.status).toBe('accepted')
+  expect(reader.statements[0]).toContain('SELECT requested.filter_value AS filterValue')
+  expect(reader.statements[0]).toContain(
+    "['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no']::VARCHAR[]",
+  )
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).not.toContain('FROM mart.review_article_serving_v4')
@@ -768,6 +774,35 @@ test('readReviewServingRows hydrates filtered lists through postings and article
   expect(reader.statements[2]).toContain('ORDER BY article_id ASC, prompt_order ASC NULLS LAST, prompt_id ASC')
   expect(reader.statements.join('\n')).not.toContain('article_id = $articleId')
   expect(reader.statements.join('\n')).not.toContain('selected_scoped_article_import')
+})
+
+test('readReviewServingRows accepts visible-page judgment hydration without payload manifest readiness', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'posting', 'summary'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const result = await readReviewServingRows(
+    {
+      ...readyRequest,
+      articleIds: ['article-1', 'article-2'],
+      contractKey: 'review.both.list.judgments',
+      estimatedHydratedPayloadBytes: 120_000,
+      estimatedResultBytes: 200_000,
+      limit: 100,
+    },
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+
+  expect(result.status).toBe('accepted')
+  expect(reader.statements).toHaveLength(1)
+  expect(reader.statements[0]).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(reader.statements[0]).toContain("payload_kind = 'llm'")
 })
 
 test('readReviewServingRows rejects article-set hydration over article ID and payload byte caps', async () => {

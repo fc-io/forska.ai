@@ -300,7 +300,8 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
-  expect(reader.statements).toHaveLength(9)
+  expect(reader.statements).toHaveLength(11)
+  expect(sql).toContain('SELECT requested.filter_value AS filterValue')
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).toContain('list_mode_state.has_llm_list_mode IS TRUE')
@@ -404,6 +405,8 @@ test('LLM review prompt-filtered count intersects through one posting CTE', asyn
   expect(countStatement).toContain('list_mode_state.llm_has_judgment IS TRUE')
   expect(countStatement).not.toContain('llm_judged_article_ids AS')
   expect(countStatement).not.toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
+  expect(countStatement).not.toContain("posting.filter_kind <> 'promptAnswer'")
+  expect(reader.statements.join('\n')).toContain('SELECT requested.filter_value AS filterValue')
   expect(countStatement).not.toContain('serving.llm_judged_prompt_count > 0')
 })
 

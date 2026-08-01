@@ -18,6 +18,8 @@ import {
   getReviewServingFilteredCountValue,
   type ReviewServingFilteredCountDatabase,
 } from './reviewServingFilteredCountService.ts'
+import {ensureReviewServingJudgmentPayloadRowsForArticleSet} from './reviewServingJudgmentPayloadProjector.ts'
+import {ensureReviewServingLazyPromptAnswerPostingBuckets} from './reviewServingLazyPromptAnswerPostingSql.ts'
 import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
@@ -426,6 +428,10 @@ const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, c
   })?.projectionIdentity
 }
 
+const hasManifestComponent = (manifest: ReviewServingSnapshotManifest, component: string) => {
+  return getManifestComponentIdentity(manifest, component) !== undefined
+}
+
 const sleep = (delayMs: number) => {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs)
@@ -477,6 +483,7 @@ const getFilteredCountValue = async (
 ): Promise<number> => {
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingFilteredCountDatabase)
   const filters = getRouteFilters(params, mode)
+  const promptAnswerPostingFilterGroups = getPromptAnswerPostingFilterGroups(params, mode)
   const searchTokenPrefixes = filters.searchTokenPrefix ? getSearchTokenPrefixes(params.search) : []
 
   return getReviewServingFilteredCountValue({
@@ -489,6 +496,21 @@ const getFilteredCountValue = async (
           : ['display', 'projectScope', 'selectedImport', 'queue', 'posting', 'search'],
     ),
     computeCount: async () => {
+      const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
+        return group.filterValues
+      })
+
+      if (promptAnswerFilterValues.length > 0) {
+        await ensureReviewServingLazyPromptAnswerPostingBuckets({
+          database,
+          filterValues: promptAnswerFilterValues,
+          listModeKey: mode,
+          projectId: params.projectId,
+          reviewConfigHash: manifest.reviewConfigHash,
+          snapshotId: manifest.snapshotId,
+        })
+      }
+
       const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
         database,
         `
@@ -496,7 +518,7 @@ const getFilteredCountValue = async (
           includeUnassessedQueue: mode === 'unassessed',
           listModeKey: mode,
           postingFilterGroups: [
-            ...getPromptAnswerPostingFilterGroups(params, mode),
+            ...promptAnswerPostingFilterGroups,
             ...getFlagPostingFilterGroups(filters),
             ...getStatusPostingFilterGroups(filters),
           ],
@@ -650,6 +672,20 @@ const readJudgmentChunk = async (
   dependencies?: ReviewServingRouteDependencies,
 ) => {
   const limit = Math.min(articleIds.length * promptCount, maxJudgmentHydrationRows)
+  const listModeKeys = mode === 'both' ? (['both'] as const) : (['human'] as const)
+
+  if (!hasManifestComponent(manifest, 'payload')) {
+    await ensureReviewServingJudgmentPayloadRowsForArticleSet(
+      {
+        articleIds,
+        listModeKeys,
+        projectId: params.projectId,
+        reviewConfigHash: manifest.reviewConfigHash,
+        snapshotId: manifest.snapshotId,
+      },
+      dependencies?.database as Parameters<typeof ensureReviewServingJudgmentPayloadRowsForArticleSet>[1],
+    )
+  }
 
   return readReviewServingRows<ReviewServingJudgmentRow>(
     {

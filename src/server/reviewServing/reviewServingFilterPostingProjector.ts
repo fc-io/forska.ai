@@ -273,6 +273,11 @@ const getFullRebuildPostingContributionRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   ranges?: readonly ProjectReviewServingFilterPostingsInput[],
 ) => {
+  const promptAnswerPostingsSql = isFullPostingRebuildInput(input)
+    ? ''
+    : `UNION ALL SELECT * FROM llm_postings
+          UNION ALL SELECT * FROM human_postings`
+
   return `
         WITH ${getDirtyArticleCte(input, getClaimArticleIds(input.claims), ranges)},
         ${getListModeCte(input.listModeKeys)},
@@ -503,8 +508,7 @@ const getFullRebuildPostingContributionRowsStatement = (
         posting_union AS (
           SELECT * FROM selected_postings
           UNION ALL SELECT * FROM serving_status_postings
-          UNION ALL SELECT * FROM llm_postings
-          UNION ALL SELECT * FROM human_postings
+          ${promptAnswerPostingsSql}
         )
         SELECT articleId, filterKind, filterValue, listModeKey, tombstone
         FROM posting_union
@@ -654,6 +658,14 @@ const getSubtractFullRebuildServingRowsStatement = (
     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
       AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
+}
+
+const getDeleteLazyPromptAnswerPostingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  return `DELETE FROM mart.review_article_filter_posting_serving_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND filter_kind = 'promptAnswer'`
 }
 
 const getResetListModeStateRowsStatement = (
@@ -935,6 +947,7 @@ const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostings
     ? []
     : [
         getCreateFullRebuildPostingSourceStatement(input),
+        getDeleteLazyPromptAnswerPostingRowsStatement(input),
         getSubtractFullRebuildServingRowsStatement(input),
         ...getInsertFullRebuildServingRowsStatement(input, undefined, getFullRebuildPostingSourceSelectSql()),
         getResetListModeStateRowsStatement(input, {resetAllWhenUnscoped: true}),
@@ -954,6 +967,7 @@ const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPos
     ? []
     : [
         getCreateFullRebuildPostingSourceStatement(firstRange, input.ranges),
+        getDeleteLazyPromptAnswerPostingRowsStatement(firstRange),
         getSubtractFullRebuildServingRowsStatement(firstRange, input.ranges),
         ...getInsertFullRebuildServingRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql(), {
           appendSegmentedFullRebuildPostingRows: true,
