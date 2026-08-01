@@ -245,7 +245,7 @@ const getQueueServingRangePredicate = (input: {
           ${endPredicate}`
 }
 
-const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput) => {
+export const getReviewServingQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput) => {
   return `scoped_article AS (
       SELECT
         scope.article_id,
@@ -409,23 +409,17 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
   const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
   const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
   const dirtyArticleCte = getQueueDirtyArticleCte(input, articleIds, promptIds)
-  const dirtyPromptCte = getValuesCte('prompt_id', promptIds)
-  const ctes = [dirtyArticleCte, dirtyPromptCte].filter((cte) => {
+  const ctes = [dirtyArticleCte].filter((cte) => {
     return cte.length > 0
   })
 
   const reviewConfigHash = await getSnapshotReviewConfigHash(input, database)
 
-  const promptPredicate =
-    promptIds.length === 0
-      ? ''
-      : `INNER JOIN prompt_id_filter dirty_prompt ON dirty_prompt.prompt_id = queue.prompt_id OR queue.prompt_id = 'summary'`
-
   return ctes.length === 0 || input.snapshotId === null || input.snapshotId === undefined || reviewConfigHash === null
     ? []
     : database.queryJson<QueueSourceRow>(`
         WITH ${ctes.join(',\n        ')},
-        ${getQueueRebuildSourceCtes({...input, reviewConfigHash, snapshotId: input.snapshotId})}
+        ${getReviewServingQueueRebuildSourceCtes({...input, reviewConfigHash, snapshotId: input.snapshotId})}
         SELECT
           queue.article_id AS articleId,
           queue.prompt_id AS promptId,
@@ -437,20 +431,15 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
         FROM queue_union queue
         INNER JOIN article_id_filter dirty
           ON dirty.article_id = queue.article_id
-        ${promptPredicate}
         ORDER BY articleId ASC, promptId ASC, queueKind ASC, reviewConfigHash ASC
       `)
 }
 
-const getQueuePromptDeletePredicate = (promptIds: readonly string[]) => {
-  return `${getSqlLiteral([...promptIds, 'summary'])}::VARCHAR[]`
-}
-
-const getUnassessedQueueServingRecords = (
+const getUnassessedQueueArticleRankRecords = (
   input: ProjectReviewServingQueueInput,
   rows: readonly QueueSourceRow[],
 ): ReviewServingProjectorRecord[] => {
-  const groupedRows = new Map<string, {promptIds: Set<string>; row: QueueSourceRow}>()
+  const groupedRows = new Map<string, QueueSourceRow>()
 
   rows.forEach((row) => {
     const activitySortAt = row.activitySortAt ?? staleQueueSortAt
@@ -463,45 +452,41 @@ const getUnassessedQueueServingRecords = (
       return
     }
 
-    const key = [
-      input.projectId,
-      row.reviewConfigHash,
-      input.snapshotId,
-      row.queueKind,
-      row.priorityBucket ?? 0,
-      activitySortAt instanceof Date ? activitySortAt.toISOString() : activitySortAt,
-      row.articleId,
-    ].join('\t')
-    const group = groupedRows.get(key)
+    const key = [input.projectId, row.reviewConfigHash, input.snapshotId, row.queueKind, row.articleId].join('\t')
+    const existing = groupedRows.get(key)
 
-    if (group === undefined) {
-      groupedRows.set(key, {promptIds: new Set([row.promptId]), row: {...row, activitySortAt}})
+    if (existing === undefined) {
+      groupedRows.set(key, {...row, activitySortAt})
       return
     }
 
-    group.promptIds.add(row.promptId)
+    const existingPriorityBucket = existing.priorityBucket ?? 0
+    const nextPriorityBucket = row.priorityBucket ?? 0
+    const existingActivitySortAt =
+      existing.activitySortAt instanceof Date
+        ? existing.activitySortAt.toISOString()
+        : (existing.activitySortAt ?? staleQueueSortAt)
+    const nextActivitySortAt = activitySortAt instanceof Date ? activitySortAt.toISOString() : activitySortAt
+
+    if (
+      nextPriorityBucket > existingPriorityBucket
+      || (nextPriorityBucket === existingPriorityBucket && nextActivitySortAt > existingActivitySortAt)
+    ) {
+      groupedRows.set(key, {...row, activitySortAt})
+    }
   })
 
-  return [...groupedRows.values()].map(({promptIds, row}) => {
+  return [...groupedRows.values()].map((row) => {
     const activitySortAt = row.activitySortAt ?? staleQueueSortAt
 
     return {
-      keyColumns: [
-        'project_id',
-        'review_config_hash',
-        'snapshot_id',
-        'queue_kind',
-        'priority_bucket',
-        'activity_sort_at',
-        'article_id',
-      ],
-      table: 'mart.review_unassessed_queue_serving_v4',
+      keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'queue_kind', 'article_id'],
+      table: 'mart.review_unassessed_queue_article_rank_serving_v4',
       values: {
         activity_sort_at: activitySortAt,
         article_id: row.articleId,
         priority_bucket: row.priorityBucket ?? 0,
         project_id: input.projectId,
-        prompt_ids: [...promptIds].sort(),
         queue_kind: row.queueKind,
         queue_updated_at: new Date(),
         review_config_hash: row.reviewConfigHash,
@@ -529,61 +514,6 @@ const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewSer
     projectionIdentity: input.projectionIdentity,
     status: input.status ?? 'candidate',
   }
-}
-
-const getDeleteReplacedQueueServingStatement = (
-  input: ProjectReviewServingQueueInput,
-  rows: readonly QueueSourceRow[],
-) => {
-  const broadProjectClaim = hasProjectScopedClaim(input.claims)
-  const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
-  const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
-  const reviewConfigHashes = getQueueReviewConfigHashes(rows)
-  const reviewConfigPredicate =
-    reviewConfigHashes.length === 0
-      ? ''
-      : `AND review_config_hash IN (${reviewConfigHashes.map(getSqlLiteral).join(', ')})`
-  const rangePredicate = getQueueServingRangePredicate(input)
-
-  return input.snapshotId === null
-    || input.snapshotId === undefined
-    || (!broadProjectClaim
-      && !hasChunkArticleRange(input)
-      && articleIds.length === 0
-      && promptIds.length === 0
-      && reviewConfigHashes.length === 0)
-    ? []
-    : articleIds.length > 0
-      ? [
-          `DELETE FROM mart.review_unassessed_queue_serving_v4
-        WHERE project_id = ${getSqlLiteral(input.projectId)}
-          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${reviewConfigPredicate}
-          AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})`,
-        ]
-      : promptIds.length > 0
-        ? [
-            `UPDATE mart.review_unassessed_queue_serving_v4
-        SET prompt_ids = list_filter(prompt_ids, prompt_id -> NOT list_contains(${getQueuePromptDeletePredicate(
-          promptIds,
-        )}, prompt_id))
-        WHERE project_id = ${getSqlLiteral(input.projectId)}
-          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${reviewConfigPredicate}
-          AND list_has_any(prompt_ids, ${getQueuePromptDeletePredicate(promptIds)})`,
-            `DELETE FROM mart.review_unassessed_queue_serving_v4
-        WHERE project_id = ${getSqlLiteral(input.projectId)}
-          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${reviewConfigPredicate}
-          AND length(prompt_ids) = 0`,
-          ]
-        : [
-            `DELETE FROM mart.review_unassessed_queue_serving_v4
-        WHERE project_id = ${getSqlLiteral(input.projectId)}
-          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${rangePredicate}
-          ${reviewConfigPredicate}`,
-          ]
 }
 
 const getRefreshUnassessedQueueArticleRankStatements = (
@@ -620,48 +550,6 @@ const getRefreshUnassessedQueueArticleRankStatements = (
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${reviewConfigPredicate}
           ${scopePredicate}`,
-        `INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
-          project_id,
-          review_config_hash,
-          snapshot_id,
-          queue_kind,
-          priority_bucket,
-          article_id,
-          activity_sort_at,
-          queue_updated_at
-        )
-        SELECT
-          project_id,
-          review_config_hash,
-          snapshot_id,
-          queue_kind,
-          priority_bucket,
-          article_id,
-          activity_sort_at,
-          queue_updated_at
-        FROM (
-          SELECT
-            project_id,
-            review_config_hash,
-            snapshot_id,
-            queue_kind,
-            priority_bucket,
-            article_id,
-            activity_sort_at,
-            MAX(queue_updated_at) OVER (
-              PARTITION BY project_id, review_config_hash, snapshot_id, queue_kind, article_id
-            ) AS queue_updated_at,
-            ROW_NUMBER() OVER (
-              PARTITION BY project_id, review_config_hash, snapshot_id, queue_kind, article_id
-              ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC
-            ) AS article_rank
-          FROM mart.review_unassessed_queue_serving_v4
-          WHERE project_id = ${getSqlLiteral(input.projectId)}
-            AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            ${reviewConfigPredicate}
-            ${scopePredicate}
-        ) ranked_queue
-        WHERE article_rank = 1`,
       ]
 }
 
@@ -673,14 +561,11 @@ export const projectReviewServingQueuePatches = async (
   const rows = await measure('sourceQueryMs', async () => {
     return getQueueRows(input, database)
   })
-  const servingRecords = measureSync('recordTransformMs', () => {
-    return getUnassessedQueueServingRecords(input, rows)
+  const articleRankRecords = measureSync('recordTransformMs', () => {
+    return getUnassessedQueueArticleRankRecords(input, rows)
   })
   const patchWatermark = getPatchWatermark(input.claims)
   const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
-  const deleteReplacedQueueServingStatements = measureSync('deleteStatementBuildMs', () => {
-    return getDeleteReplacedQueueServingStatement(input, rows)
-  })
   const refreshArticleRankStatements = measureSync('articleRankStatementBuildMs', () => {
     return getRefreshUnassessedQueueArticleRankStatements(input, rows)
   })
@@ -690,10 +575,9 @@ export const projectReviewServingQueuePatches = async (
       {
         acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'queue',
-        postRecordStatements: refreshArticleRankStatements,
         projectionManifests: shouldAcknowledgeClaims ? [getQueuePatchManifest(input)] : [],
-        records: servingRecords,
-        statements: deleteReplacedQueueServingStatements,
+        records: articleRankRecords,
+        statements: refreshArticleRankStatements,
         watermark: !shouldAcknowledgeClaims
           ? undefined
           : {
@@ -709,7 +593,7 @@ export const projectReviewServingQueuePatches = async (
   })
 
   return withDiagnosticsJson(
-    {patchRowCount: 0, patchWatermark, servingRowCount: servingRecords.length},
+    {patchRowCount: 0, patchWatermark, servingRowCount: articleRankRecords.length},
     getQueueDiagnosticsJson({phaseTimings, sourceRowCount: rows.length, writer: writer.diagnostics}),
   )
 }
@@ -730,7 +614,7 @@ const getReviewServingQueueRebuildWriterInput = (input: ProjectReviewServingQueu
   return {
     projectId: input.projectId,
     rangePredicateSql: getQueueServingRangePredicate(input),
-    rebuildSourceCtesSql: getQueueRebuildSourceCtes(input),
+    rebuildSourceCtesSql: getReviewServingQueueRebuildSourceCtes(input),
     reviewConfigHash: input.reviewConfigHash,
     snapshotId: input.snapshotId,
   }

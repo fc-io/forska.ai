@@ -103,16 +103,16 @@ const createReaderDatabase = () => {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
-      if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4')) {
-        return [{activity_sort_at: '2026-01-04T00:00:00.000Z', article_id: 'article-1', priority_bucket: 1}] as T[]
-      }
-
       if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
         return [{promptCount: 1}] as T[]
       }
 
       if (statement.includes(' AS totalCount')) {
         return [{totalCount: 1}] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4')) {
+        return [{activity_sort_at: '2026-01-04T00:00:00.000Z', article_id: 'article-1', priority_bucket: 1}] as T[]
       }
 
       if (hasArticleServingRowSource(statement)) {
@@ -256,8 +256,9 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(firstRow?.judgments[0]?.answer).toBe('yes')
   expect(firstRow?.articleCreatedAt).toBeNull()
   expect(firstRow?.sourceMetadata).toEqual({covidence: {studyId: 'study-1'}})
-  expect(reader.statements).toHaveLength(11)
-  expect(sql).toContain('SELECT requested.filter_value AS filterValue')
+  expect(reader.statements).toHaveLength(13)
+  expect(sql).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(sql).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).toContain('list_mode_state.has_human_list_mode IS TRUE')
@@ -450,8 +451,9 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.humanAnswersByPrompt?.['prompt-1']).toEqual(['yes'])
-  expect(reader.statements).toHaveLength(12)
-  expect(sql).toContain('SELECT requested.filter_value AS filterValue')
+  expect(reader.statements).toHaveLength(14)
+  expect(sql).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(sql).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
   expect(sql).toContain('list_mode_state.has_both_list_mode IS TRUE')
   expect(sql).toContain("llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
@@ -594,7 +596,7 @@ test('human, both, and unassessed routes read one cursor page for numeric direct
   expect(unassessedResult.page).toBe(1)
   expect(humanReader.statements).toHaveLength(9)
   expect(bothReader.statements).toHaveLength(10)
-  expect(unassessedReader.statements).toHaveLength(3)
+  expect(unassessedReader.statements).toHaveLength(7)
 })
 
 test('human, both, and unassessed services surface stale and unavailable freshness without raw fallback', async () => {

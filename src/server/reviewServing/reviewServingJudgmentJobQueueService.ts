@@ -4,13 +4,14 @@ import type {
   UnassessedPairsCursor,
   UnassessedPairsResult,
 } from '../../services/olap/olapTypes.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
   type AppReadOnlyDatabaseService,
   getApiReadOnlyAppDatabaseService,
   getJudgeWorkerReadOnlyAppDatabaseService,
 } from '../services/appReadOnlyDatabaseService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {getReviewServingQueueRebuildSourceCtes} from './reviewServingQueueProjector.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 
 type JudgmentJobServingArticleRow = {
@@ -30,6 +31,14 @@ type JudgmentJobServingCursorRow = {
 type JudgmentJobServingPromptRow = JudgmentJobServingCursorRow
 
 type JudgmentJobServingScope = {projectId: string; reviewConfigHash: string; snapshotId: string}
+type JudgmentJobServingScopeRow = JudgmentJobServingScope & {
+  componentStateJson: unknown
+  selectedImportSnapshotId: string | null
+}
+type JudgmentJobServingActiveScope = JudgmentJobServingScope & {
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+}
 
 const getJudgmentJobQueueWorkloadContext = (
   routeOrJobKey: string,
@@ -80,20 +89,62 @@ const getNextUtcDay = (value: Date) => {
   return nextDay
 }
 
+const getSnapshotProjectScopeIdentity = (componentStateJson: unknown) => {
+  const componentState = getJsonValue(componentStateJson)
+
+  if (componentState === null || typeof componentState !== 'object' || Array.isArray(componentState)) {
+    return null
+  }
+
+  const componentStateRecord = componentState as {optional?: unknown; required?: unknown}
+  const requiredStates: unknown[] = []
+  const optionalStates: unknown[] = []
+  if (Array.isArray(componentStateRecord.required)) {
+    for (const state of componentStateRecord.required as unknown[]) {
+      requiredStates.push(state)
+    }
+  }
+  if (Array.isArray(componentStateRecord.optional)) {
+    for (const state of componentStateRecord.optional as unknown[]) {
+      optionalStates.push(state)
+    }
+  }
+  const states: unknown[] = [...requiredStates, ...optionalStates]
+  const projectScopeState = states.find((state) => {
+    return (
+      state !== null
+      && typeof state === 'object'
+      && !Array.isArray(state)
+      && (state as {component?: unknown}).component === 'projectScope'
+    )
+  })
+  const projectionIdentity =
+    projectScopeState !== undefined && projectScopeState !== null && typeof projectScopeState === 'object'
+      ? (projectScopeState as {projectionIdentity?: unknown}).projectionIdentity
+      : null
+
+  return typeof projectionIdentity === 'string' && projectionIdentity.trim().length > 0 ? projectionIdentity : null
+}
+
 const getActiveServingScope = async (
   projectId: string,
   routeOrJobKey: string,
   database: AppReadOnlyDatabaseService,
-) => {
+): Promise<JudgmentJobServingActiveScope | null> => {
   const currentReviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, database)
 
   if (currentReviewConfigHash === null) {
     return null
   }
 
-  const [scope] = await database.queryJson<JudgmentJobServingScope>(
+  const [scope] = await database.queryJson<JudgmentJobServingScopeRow>(
     `
-    SELECT project_id AS projectId, review_config_hash AS reviewConfigHash, snapshot_id AS snapshotId
+    SELECT
+      project_id AS projectId,
+      review_config_hash AS reviewConfigHash,
+      snapshot_id AS snapshotId,
+      selected_import_snapshot_id AS selectedImportSnapshotId,
+      component_state_json AS componentStateJson
     FROM app.review_serving_snapshot_manifest
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND review_config_hash = ${getSqlLiteral(currentReviewConfigHash)}
@@ -104,7 +155,19 @@ const getActiveServingScope = async (
     getJudgmentJobQueueWorkloadContext(routeOrJobKey, projectId, 1),
   )
 
-  return scope ?? null
+  const projectScopeIdentity = getSnapshotProjectScopeIdentity(scope?.componentStateJson ?? null)
+
+  if (scope === undefined || scope.selectedImportSnapshotId === null || projectScopeIdentity === null) {
+    return null
+  }
+
+  return {
+    projectId: scope.projectId,
+    projectScopeIdentity,
+    reviewConfigHash: scope.reviewConfigHash,
+    selectedImportSnapshotId: scope.selectedImportSnapshotId,
+    snapshotId: scope.snapshotId,
+  }
 }
 
 const getCursorPredicate = (cursor: UnassessedPairsCursor | null, promptIdExpression = 'queue.prompt_id') => {
@@ -150,10 +213,10 @@ const getDatePredicate = (column: string, from: Date | null | undefined, to: Dat
   return `${fromPredicate}\n${toPredicate}`
 }
 
-const getCurrentPromptJoin = (promptIdExpression = 'queue.prompt_id') => {
+const getCurrentPromptJoin = (promptIdExpression = 'queue.prompt_id', projectIdExpression = 'queue.project_id') => {
   return `
     INNER JOIN app.project_prompt current_prompt
-      ON current_prompt.project_id = queue.project_id
+      ON current_prompt.project_id = ${projectIdExpression}
       AND current_prompt.prompt_id = ${promptIdExpression}
       AND current_prompt.enabled = TRUE
       AND NOT current_prompt.archived
@@ -236,16 +299,16 @@ const getCurrentProjectScopeJoin = () => {
   `
 }
 
-const getCurrentProjectDateScopePredicate = () => {
+const getCurrentProjectDateScopePredicate = (articleAlias = 'article') => {
   const dateToIsDateOnlyExpression = "current_project.date_to = date_trunc('day', current_project.date_to)"
   const dateToHasTimeExpression = "current_project.date_to != date_trunc('day', current_project.date_to)"
 
   return `
-      AND (current_project.date_from IS NULL OR article.article_created_at >= current_project.date_from)
+      AND (current_project.date_from IS NULL OR ${articleAlias}.article_created_at >= current_project.date_from)
       AND (
         current_project.date_to IS NULL
-        OR (${dateToIsDateOnlyExpression} AND article.article_created_at < current_project.date_to + INTERVAL 1 DAY)
-        OR (${dateToHasTimeExpression} AND article.article_created_at <= current_project.date_to)
+        OR (${dateToIsDateOnlyExpression} AND ${articleAlias}.article_created_at < current_project.date_to + INTERVAL 1 DAY)
+        OR (${dateToHasTimeExpression} AND ${articleAlias}.article_created_at <= current_project.date_to)
       )
   `
 }
@@ -378,44 +441,49 @@ export const getJudgmentJobUnassessedPairsFromServing = async (params: {
 
   const rows = await database.queryJson<JudgmentJobServingPromptRow>(
     `
-    WITH filtered_queue AS (
+    WITH ${getReviewServingQueueRebuildSourceCtes({
+      baseGeneration: 0,
+      projectId: scope.projectId,
+      projectScopeIdentity: scope.projectScopeIdentity,
+      reviewConfigHash: scope.reviewConfigHash,
+      selectedImportSnapshotId: scope.selectedImportSnapshotId,
+      snapshotId: scope.snapshotId,
+    })},
+    filtered_queue AS (
       SELECT
-        queue.project_id,
-        queue.review_config_hash,
-        queue.snapshot_id,
+        ${getSqlLiteral(scope.projectId)} AS project_id,
+        ${getSqlLiteral(scope.reviewConfigHash)} AS review_config_hash,
+        ${getSqlLiteral(scope.snapshotId)} AS snapshot_id,
         queue.article_id,
-        queue.prompt_ids,
+        queue.prompt_id,
         queue.priority_bucket,
         queue.activity_sort_at
-      FROM mart.review_unassessed_queue_serving_v4 queue
+      FROM (
+        SELECT
+          ${getSqlLiteral(scope.projectId)} AS project_id,
+          ${getSqlLiteral(scope.reviewConfigHash)} AS review_config_hash,
+          ${getSqlLiteral(scope.snapshotId)} AS snapshot_id,
+          source_queue.*
+        FROM queue_union source_queue
+      ) queue
       ${getUnassessedServingArticleJoin()}
       INNER JOIN app.judgment_job job
         ON job.id = ${getSqlLiteral(params.jobId)}
         AND job.project_id = queue.project_id
       ${getCurrentProjectScopeJoin()}
-      WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
-        AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
-        AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
-        AND queue.queue_kind = 'unassessed'
-        ${getCurrentProjectDateScopePredicate()}
+      ${getCurrentPromptJoin()}
+      WHERE queue.queue_kind = 'unassessed'
+        AND NOT queue.tombstone
+        AND queue.prompt_id IS NOT NULL
+        ${getCurrentProjectDateScopePredicate('current_article')}
         ${getCurrentProjectArticleScopePredicate()}
-    ), expanded_queue AS (
-      SELECT
-        queue.project_id,
-        queue.article_id,
-        expanded_prompt.prompt_id,
-        queue.priority_bucket,
-        date_trunc('millisecond', queue.activity_sort_at) AS activity_sort_at
-      FROM filtered_queue queue
-      CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)
-      ${getCurrentPromptJoin('expanded_prompt.prompt_id')}
     )
     SELECT
       queue.article_id AS articleId,
       queue.prompt_id AS promptId,
       queue.priority_bucket AS priorityBucket,
       queue.activity_sort_at AS activitySortAt
-    FROM expanded_queue queue
+    FROM filtered_queue queue
     WHERE TRUE
       ${getCursorPredicate(params.cursor)}
     ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC

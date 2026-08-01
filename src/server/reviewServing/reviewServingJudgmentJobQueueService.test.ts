@@ -16,7 +16,16 @@ const reviewServingReviewConfigModulePath = new URL('./reviewServingReviewConfig
 const serviceModulePath = new URL('./reviewServingJudgmentJobQueueService.ts', import.meta.url).pathname
 
 const getScopeRow = () => {
-  return {projectId: 'project-1', reviewConfigHash: 'config-1', snapshotId: 'snapshot-1'}
+  return {
+    componentStateJson: JSON.stringify({
+      optional: [],
+      required: [{component: 'projectScope', projectionIdentity: 'project-scope-1'}],
+    }),
+    projectId: 'project-1',
+    reviewConfigHash: 'config-1',
+    selectedImportSnapshotId: 'selected-import-snapshot-1',
+    snapshotId: 'snapshot-1',
+  }
 }
 
 const getArticleRow = () => {
@@ -104,8 +113,10 @@ const expectArticleRankQueueRead = (statement: string) => {
 }
 
 const expectPromptQueueRead = (statement: string) => {
-  expect(statement).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
-  expect(statement).toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
+  expect(statement).toContain('queue_union AS')
+  expect(statement).toContain('FROM queue_union source_queue')
+  expect(statement).not.toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(statement).not.toContain('CROSS JOIN UNNEST(queue.prompt_ids)')
   expect(statement).not.toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
 }
 
@@ -204,8 +215,10 @@ test('judgment job refill scope rechecks current project dates routes and curate
   expectPromptQueueRead(refillStatement ?? '')
   expect(refillStatement ?? '').toContain('INNER JOIN app.project current_project')
   expect(refillStatement ?? '').toContain('INNER JOIN app.article current_article')
-  expect(refillStatement ?? '').toContain('article.article_created_at >= current_project.date_from')
-  expect(refillStatement ?? '').toContain('article.article_created_at < current_project.date_to + INTERVAL 1 DAY')
+  expect(refillStatement ?? '').toContain('current_article.article_created_at >= current_project.date_from')
+  expect(refillStatement ?? '').toContain(
+    'current_article.article_created_at < current_project.date_to + INTERVAL 1 DAY',
+  )
   expect(refillStatement ?? '').toContain('FROM app.project_import_route current_project_route_scope')
   expect(refillStatement ?? '').toContain('INNER JOIN app.article_import_route current_article_route_scope')
   expect(refillStatement ?? '').toContain('FROM app.project_article current_project_article_scope')

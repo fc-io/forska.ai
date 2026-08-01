@@ -85,6 +85,10 @@ const createWorkerHarness = (input?: {
         ] as T[]
       }
 
+      if (statement.includes('project_id AS projectId') && statement.includes('FROM snapshot_scope')) {
+        return [{projectId: 'project-1', reviewConfigHash: 'config-1', snapshotId: 'snapshot-1'}] as T[]
+      }
+
       return (input?.batchRows ?? [{articleId: 'article-002'}, {articleId: 'article-003'}]) as T[]
     },
     run: async (statement: string, workloadContext?: DuckdbWorkloadContext) => {
@@ -214,6 +218,9 @@ test('review bulk operation worker selects add-to-project batches from persisted
   expect(joined).not.toContain('llmStatusFilter.article_ids')
   expect(joined).not.toContain('s.human_status_key')
   expect(joined).not.toContain('s.llm_status_key')
+  expect(joined).toContain('SELECT\n        project_id AS projectId')
+  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('list_mode_state.duplicate_flag IS TRUE')
   expect(joined).toContain('list_mode_state.conflict_flag IS TRUE')
   expect(joined).toContain("s.article_created_at >= TIMESTAMPTZ '2010'")

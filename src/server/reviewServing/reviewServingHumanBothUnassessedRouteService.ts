@@ -19,7 +19,10 @@ import {
   type ReviewServingFilteredCountDatabase,
 } from './reviewServingFilteredCountService.ts'
 import {ensureReviewServingJudgmentPayloadRowsForArticleSet} from './reviewServingJudgmentPayloadProjector.ts'
-import {ensureReviewServingLazyPromptAnswerPostingBuckets} from './reviewServingLazyPromptAnswerPostingSql.ts'
+import {
+  ensureReviewServingLazyPromptAnswerPostingBuckets,
+  type ReviewServingLazyPromptAnswerPostingDatabase,
+} from './reviewServingLazyPromptAnswerPostingSql.ts'
 import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
@@ -264,6 +267,9 @@ const getManifest = async (projectId: string, dependencies?: ReviewServingRouteD
 const getReaderDependencies = (dependencies?: ReviewServingRouteDependencies) => {
   return {
     ...(dependencies?.database ? {database: dependencies.database} : {}),
+    ...(dependencies?.database
+      ? {lazyPromptAnswerPostingDatabase: dependencies.database as ReviewServingLazyPromptAnswerPostingDatabase}
+      : {}),
     ...(dependencies?.manifestDatabase
       ? {diagnosticsDatabase: dependencies.manifestDatabase, manifestDatabase: dependencies.manifestDatabase}
       : {}),
@@ -327,7 +333,7 @@ const getCountValue = async (
   mode: ReviewServingReviewMode,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<number> => {
-  if (hasDynamicFilters(params, mode)) {
+  if (mode === 'unassessed' || hasDynamicFilters(params, mode)) {
     return getFilteredCountValue(params, manifest, mode, dependencies)
   }
 

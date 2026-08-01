@@ -150,7 +150,6 @@ type PreparedReviewServingV4Bootstrap = {
 const listModeFanOut = reviewServingListModes.length
 const llmStatusListModeFanOut = 2
 const humanStatusListModeFanOut = 2
-const queuePayloadFanOut = 2
 const selectedImportPostingFilterFanOut = 4
 const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
 const syntheticHumanStatusPromptCount = 1
@@ -177,7 +176,7 @@ const promptScaledComponentFanOut = {
   payload: 0,
   posting: 0,
   projectScope: 0,
-  queue: queuePayloadFanOut,
+  queue: 0,
   search: 0,
   selectedImport: 0,
   summary: 0,

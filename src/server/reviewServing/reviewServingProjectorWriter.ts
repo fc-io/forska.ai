@@ -1022,54 +1022,6 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
 }
 
 const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQueueRebuildRowsInput) => {
-  const queueRowsCteSql = `WITH ${input.rebuildSourceCtesSql},
-    queue_rows AS (
-      SELECT
-        ${getSqlLiteral(input.projectId)} AS project_id,
-        queue.review_config_hash,
-        ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        queue.queue_kind,
-        queue.priority_bucket,
-        queue.activity_sort_at,
-        queue.article_id,
-        LIST(DISTINCT queue.prompt_id ORDER BY queue.prompt_id) AS prompt_ids,
-        current_timestamp AS queue_updated_at
-      FROM queue_union queue
-      WHERE NOT queue.tombstone
-        AND queue.prompt_id IS NOT NULL
-      GROUP BY
-        project_id,
-        queue.review_config_hash,
-        snapshot_id,
-        queue.queue_kind,
-        queue.priority_bucket,
-        queue.activity_sort_at,
-        queue.article_id
-    ),
-    final_queue_rows AS (
-      SELECT
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        queue_kind,
-        priority_bucket,
-        activity_sort_at,
-        article_id,
-        prompt_ids,
-        queue_updated_at
-      FROM queue_rows
-      QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY
-          project_id,
-          review_config_hash,
-          snapshot_id,
-          queue_kind,
-          priority_bucket,
-          activity_sort_at,
-          article_id
-        ORDER BY queue_updated_at DESC
-      ) = 1
-    )`
   const articleRankRowsCteSql = `WITH ${input.rebuildSourceCtesSql},
     queue_rows AS (
       SELECT
@@ -1109,59 +1061,6 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
     )`
 
   return [
-    `
-    UPDATE mart.review_unassessed_queue_serving_v4 existing
-    SET
-      prompt_ids = ${mergeReviewServingQueuePromptIdsSql('final_queue_rows.prompt_ids', 'existing.prompt_ids')},
-      queue_updated_at = final_queue_rows.queue_updated_at
-    FROM (
-      ${queueRowsCteSql}
-      SELECT * FROM final_queue_rows
-    ) final_queue_rows
-    WHERE existing.project_id IS NOT DISTINCT FROM final_queue_rows.project_id
-      AND existing.review_config_hash IS NOT DISTINCT FROM final_queue_rows.review_config_hash
-      AND existing.snapshot_id IS NOT DISTINCT FROM final_queue_rows.snapshot_id
-      AND existing.queue_kind IS NOT DISTINCT FROM final_queue_rows.queue_kind
-      AND existing.priority_bucket IS NOT DISTINCT FROM final_queue_rows.priority_bucket
-      AND existing.activity_sort_at IS NOT DISTINCT FROM final_queue_rows.activity_sort_at
-      AND existing.article_id IS NOT DISTINCT FROM final_queue_rows.article_id
-  `,
-    `
-    INSERT INTO mart.review_unassessed_queue_serving_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      queue_kind,
-      priority_bucket,
-      activity_sort_at,
-      article_id,
-      prompt_ids,
-      queue_updated_at
-    )
-    ${queueRowsCteSql}
-    SELECT
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      queue_kind,
-      priority_bucket,
-      activity_sort_at,
-      article_id,
-      prompt_ids,
-      queue_updated_at
-    FROM final_queue_rows
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM mart.review_unassessed_queue_serving_v4 existing
-      WHERE existing.project_id IS NOT DISTINCT FROM final_queue_rows.project_id
-        AND existing.review_config_hash IS NOT DISTINCT FROM final_queue_rows.review_config_hash
-        AND existing.snapshot_id IS NOT DISTINCT FROM final_queue_rows.snapshot_id
-        AND existing.queue_kind IS NOT DISTINCT FROM final_queue_rows.queue_kind
-        AND existing.priority_bucket IS NOT DISTINCT FROM final_queue_rows.priority_bucket
-        AND existing.activity_sort_at IS NOT DISTINCT FROM final_queue_rows.activity_sort_at
-        AND existing.article_id IS NOT DISTINCT FROM final_queue_rows.article_id
-    )
-  `,
     `
     UPDATE mart.review_unassessed_queue_article_rank_serving_v4 existing
     SET

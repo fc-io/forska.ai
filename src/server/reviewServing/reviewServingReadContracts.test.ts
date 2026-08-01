@@ -812,7 +812,7 @@ test('review serving read contracts use planned Phase 1 physical table names', (
     'mart.review_filter_facet_serving_v4',
     'mart.review_filter_option_serving_v4',
     'mart.review_title_search_serving_v4',
-    'mart.review_unassessed_queue_serving_v4',
+    'mart.review_unassessed_queue_article_rank_serving_v4',
   ])
   const unexpectedTables = reviewServingReadContractList
     .map((contract) => {

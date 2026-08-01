@@ -65,15 +65,13 @@ test('lazy prompt-answer cache write targets only requested missing buckets', ()
   expect(insertSql).not.toContain('prompt-2')
 })
 
-test('lazy prompt-answer cache ensure writes only missing requested values', async () => {
+test('lazy prompt-answer cache ensure refreshes all requested values', async () => {
   const statements: string[] = []
   const database = {
     queryJson: async <T>(statement: string): Promise<T[]> => {
       statements.push(statement)
 
-      return statement.includes('SELECT requested.filter_value AS filterValue')
-        ? ([{filterValue: 'review:promptAnswer:prompt-1:yes'}] as T[])
-        : []
+      return []
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -91,18 +89,19 @@ test('lazy prompt-answer cache ensure writes only missing requested values', asy
   const joined = statements.join('\n')
 
   expect(result).toMatchObject({
-    missingFilterValues: ['review:promptAnswer:prompt-1:yes'],
+    missingFilterValues: ['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no'],
     requestedFilterValues: ['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no'],
     status: 'cacheWritten',
-    writtenBucketCount: 1,
+    writtenBucketCount: 2,
   })
-  expect(statements).toHaveLength(3)
+  expect(statements).toHaveLength(2)
   expect(joined).toContain("['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no']")
-  expect(joined).toContain("['review:promptAnswer:prompt-1:yes']")
-  expect(joined).not.toContain("['review:promptAnswer:prompt-2:no'] AS filter_value")
+  expect(joined).toContain(
+    "SELECT DISTINCT unnest(['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no']::VARCHAR[])",
+  )
 })
 
-test('lazy prompt-answer cache ensure skips writes when requested buckets exist', async () => {
+test('lazy prompt-answer cache ensure does not treat existing requested buckets as fresh', async () => {
   const statements: string[] = []
   const database = {
     queryJson: async <T>(statement: string): Promise<T[]> => {
@@ -124,7 +123,9 @@ test('lazy prompt-answer cache ensure skips writes when requested buckets exist'
     snapshotId: 'snapshot-1',
   })
 
-  expect(result.status).toBe('cacheHit')
-  expect(result.writtenBucketCount).toBe(0)
-  expect(statements).toHaveLength(1)
+  expect(result.status).toBe('cacheWritten')
+  expect(result.writtenBucketCount).toBe(1)
+  expect(statements).toHaveLength(2)
+  expect(statements[0]).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(statements[1]).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
 })

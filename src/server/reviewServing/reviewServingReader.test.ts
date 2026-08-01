@@ -128,6 +128,22 @@ const createReaderDatabase = (rows: readonly unknown[] = [{article_id: 'article-
   return {database, statements, workloads}
 }
 
+const createLazyPromptAnswerPostingDatabase = () => {
+  const statements: string[] = []
+  const database = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+  }
+
+  return {database, statements}
+}
+
 const readyRequest = {
   contractKey: 'review.llm.rows',
   limit: 25,
@@ -343,6 +359,7 @@ test('readReviewServingRows validates cursors and filter signatures before DuckD
 
 test('readReviewServingRows applies ordered-prefix filters and mixed-direction cursor predicates', async () => {
   const reader = createReaderDatabase([{article_id: 'article-2', sort_key: '2026-01-02'}])
+  const lazyPosting = createLazyPromptAnswerPostingDatabase()
   const manifestDatabase = createManifestDatabase({
     bySnapshot: {
       'active-snapshot': getSnapshotRow({
@@ -394,18 +411,25 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
       searchMode: 'tokenPrefix',
       searchState: {availability: 'ready' as const, snapshotId: 'active-snapshot'},
     },
-    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+    {
+      database: reader.database,
+      diagnosticsDatabase: manifestDatabase,
+      lazyPromptAnswerPostingDatabase: lazyPosting.database,
+      manifestDatabase,
+    },
   )
   const sql =
     reader.statements.find((statement) => {
       return statement.includes('FROM mart.review_article_serving_base_v4 serving')
     }) ?? ''
+  const lazyPostingSql = lazyPosting.statements.join('\n')
 
   expect(result.status).toBe('accepted')
-  expect(reader.statements[0]).toContain('SELECT requested.filter_value AS filterValue')
-  expect(reader.statements[0]).toContain(
-    "['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no']::VARCHAR[]",
-  )
+  expect(reader.statements).toHaveLength(1)
+  expect(lazyPosting.statements).toHaveLength(2)
+  expect(lazyPosting.statements[0]).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(lazyPosting.statements[1]).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(lazyPostingSql).toContain("['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no']::VARCHAR[]")
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).not.toContain('FROM mart.review_article_serving_v4')
