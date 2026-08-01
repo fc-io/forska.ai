@@ -346,11 +346,7 @@ export const getReviewServingQueueRebuildSourceCtes = (input: ProjectReviewServi
         COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at, scoped.activity_sort_at) AS activity_sort_at,
         selected.selected_tombstone
           OR scoped.scope_tombstone
-          OR NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NOT NULL
-          OR (
-            project_settings.human_judgment_mode = 'summary'
-            AND judgment_human_summary.origin = 'covidence_import'
-          ) AS tombstone
+          OR NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NOT NULL AS tombstone
       FROM scoped_article scoped
       INNER JOIN selected_import_state selected
         ON selected.article_id = scoped.article_id
