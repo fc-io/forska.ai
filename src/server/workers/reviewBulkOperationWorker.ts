@@ -1,6 +1,7 @@
 import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
+import {ensureReviewServingLazyPromptAnswerPostingBuckets} from '../reviewServing/reviewServingLazyPromptAnswerPostingSql.ts'
 import {getReviewServingTitleSearchTokens} from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
@@ -64,6 +65,14 @@ type ReviewBulkOperationCriteria = {
 type ReviewBulkOperationCursor = {cursor?: string | null; limit?: number}
 
 type ReviewBulkOperationBatchRow = {articleId: string}
+type ReviewBulkOperationPromptAnswerPostingScopeRow = {
+  projectId?: string
+  project_id?: string
+  reviewConfigHash?: string | null
+  review_config_hash?: string | null
+  snapshotId?: string
+  snapshot_id?: string
+}
 
 type ReviewBulkOperationWorkerOptions = {batchSize?: number; maxRetries?: number; now?: Date; workerId?: string}
 
@@ -331,6 +340,12 @@ const getPromptAnswerFilterEntries = (criteria: ReviewBulkOperationCriteria) => 
     })
 }
 
+const getPromptAnswerFilterValues = (criteria: ReviewBulkOperationCriteria) => {
+  return getPromptAnswerFilterEntries(criteria).flatMap((entry) => {
+    return entry.filterValues
+  })
+}
+
 const getPromptFilteredArticleIdsCteSql = (input: {
   criteria: ReviewBulkOperationCriteria
   sourceProjectIds: readonly string[]
@@ -435,6 +450,67 @@ const getServingSnapshotScopeCteSql = (
         ON json_extract_string(search_component.value, '$.component') = 'search'
       ${latestSnapshotQualifier}
     )`
+}
+
+const getPromptAnswerPostingScopeRows = async (input: {
+  criteria: ReviewBulkOperationCriteria
+  database: ReviewBulkOperationWorkerDatabase
+  job: ReviewBulkOperationJobRow
+  sourceProjectIds: readonly string[]
+  workerId: string
+}) => {
+  return input.database.queryJson<ReviewBulkOperationPromptAnswerPostingScopeRow>(
+    `
+      WITH ${getServingSnapshotScopeCteSql(input.job, input.criteria, input.sourceProjectIds)}
+      SELECT
+        project_id AS projectId,
+        review_config_hash AS reviewConfigHash,
+        snapshot_id AS snapshotId
+      FROM snapshot_scope
+      ORDER BY project_id ASC, review_config_hash ASC NULLS LAST, snapshot_id ASC
+    `,
+    getWorkloadContext(input.workerId),
+  )
+}
+
+const ensurePromptAnswerPostingBucketsForJob = async (input: {
+  criteria: ReviewBulkOperationCriteria
+  database: ReviewBulkOperationWorkerDatabase
+  job: ReviewBulkOperationJobRow
+  workerId: string
+}) => {
+  const filterValues = getPromptAnswerFilterValues(input.criteria)
+
+  if (filterValues.length === 0 || Array.isArray(input.criteria.articleIds)) {
+    return
+  }
+
+  const sourceProjectIds = getSourceProjectIds(input.job, input.criteria)
+  const scopes = await getPromptAnswerPostingScopeRows({
+    criteria: input.criteria,
+    database: input.database,
+    job: input.job,
+    sourceProjectIds,
+    workerId: input.workerId,
+  })
+
+  for (const scope of scopes) {
+    const projectId = scope.projectId ?? scope.project_id
+    const snapshotId = scope.snapshotId ?? scope.snapshot_id
+
+    if (!projectId || !snapshotId) {
+      continue
+    }
+
+    await ensureReviewServingLazyPromptAnswerPostingBuckets({
+      database: input.database,
+      filterValues,
+      listModeKey: getListModeKey(input.criteria),
+      projectId,
+      reviewConfigHash: scope.reviewConfigHash ?? scope.review_config_hash ?? null,
+      snapshotId,
+    })
+  }
 }
 
 const shouldUseSearchCandidateArticleIds = (input: {
@@ -670,6 +746,8 @@ const getArticleBatch = async (
   if (job.jobKind === 'review.bulk.substringSelection') {
     throw new Error('Substring bulk selection is waiting for async search results')
   }
+
+  await ensurePromptAnswerPostingBucketsForJob({criteria, database, job, workerId})
 
   const sql = Array.isArray(criteria.articleIds)
     ? getExplicitArticleBatchSql(job, cursor, limit)

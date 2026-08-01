@@ -414,7 +414,7 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE mart.review_unassessed_queue_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_unassessed_queue_serving_v4.snapshot_id = $snapshotId',
+    'WHERE mart.review_unassessed_queue_article_rank_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_unassessed_queue_article_rank_serving_v4.snapshot_id = $snapshotId',
   )
   expect(sql).not.toContain('list_mode_key')
   expect(sql).toContain('AND queue_kind = $queueKind')
@@ -445,7 +445,7 @@ test('buildReviewServingRowsSql applies queue article date filters through artic
   expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 queue_article')
   expect(sql).toContain('queue_article.article_created_at >= TIMESTAMPTZ $articleCreatedAtFrom')
   expect(sql).toContain('queue_article.article_created_at <= TIMESTAMPTZ $articleCreatedAtTo')
-  expect(sql).not.toContain('mart.review_unassessed_queue_serving_v4.article_created_at')
+  expect(sql).not.toContain('mart.review_unassessed_queue_article_rank_serving_v4.article_created_at')
 })
 
 test('buildReviewServingRowsSql requires all token prefixes for queue search', () => {
@@ -470,7 +470,7 @@ test('buildReviewServingRowsSql requires all token prefixes for queue search', (
   expect(sql).toContain('AND queue_kind = $queueKind')
   expect(sql).toContain('search_prefixes AS')
   expect(sql).toContain('search_candidate_article_ids AS')
-  expect(sql).toContain('FROM mart.review_unassessed_queue_serving_v4 search_candidate_queue')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 search_candidate_queue')
   expect(sql).toContain('search_candidate_queue.queue_kind = $queueKind')
   expect(sql).toContain('expanded_search_article_ids AS')
   expect(sql).toContain('search_filtered_article_ids AS')
@@ -1989,12 +1989,12 @@ test('judgment job serving queue SQL keeps current config and stable keyset sema
   expect(serviceText).toContain("articleRouteAlias: 'article_route_scope'")
   expect(serviceText).toContain("projectRouteAlias: 'current_project_route_scope'")
   expect(serviceText).toContain("projectArticleAlias: 'current_project_article_scope'")
-  expect(serviceText).toContain('article.article_created_at >= current_project.date_from')
-  expect(serviceText).toContain('article.article_created_at < current_project.date_to + INTERVAL 1 DAY')
+  expect(serviceText).toContain('${articleAlias}.article_created_at >= current_project.date_from')
+  expect(serviceText).toContain('${articleAlias}.article_created_at < current_project.date_to + INTERVAL 1 DAY')
   expect(serviceText).toContain("date_trunc('millisecond', queue.activity_sort_at)")
   expect(serviceText).toContain('queue.priority_bucket < ${priorityBucket}')
   expect(serviceText).toContain('AND ${promptIdExpression} < ${getSqlLiteral(cursor.lastPromptId)}')
-  expect(serviceText).toContain('CROSS JOIN UNNEST(queue.prompt_ids) AS expanded_prompt(prompt_id)')
+  expect(serviceText).toContain('FROM queue_union source_queue')
   expect(serviceText).toContain('ORDER BY queue.priority_bucket DESC')
   expect(serviceText).toContain('queue.prompt_id DESC')
   expect(serviceText).not.toContain('AND article.selected_import_route_id IN')

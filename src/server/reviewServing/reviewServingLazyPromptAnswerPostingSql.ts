@@ -249,7 +249,11 @@ export const getReviewServingPromptAnswerPostingCacheWriteSqls = (input: {
   ]
 }
 
-const getSqlLiteral = (value: readonly string[] | string) => {
+const getSqlLiteral = (value: readonly string[] | string | null) => {
+  if (value === null) {
+    return 'NULL'
+  }
+
   if (typeof value === 'string') {
     return `'${value.replaceAll("'", "''")}'`
   }
@@ -275,7 +279,7 @@ export const ensureReviewServingLazyPromptAnswerPostingBuckets = async (input: {
   filterValues: readonly string[]
   listModeKey: string
   projectId: string
-  reviewConfigHash: string
+  reviewConfigHash: string | null
   snapshotId: string
 }): Promise<ReviewServingLazyPromptAnswerPostingEnsureResult> => {
   const requestedFilterValues = [...new Set(input.filterValues)]
@@ -303,38 +307,15 @@ export const ensureReviewServingLazyPromptAnswerPostingBuckets = async (input: {
     reviewConfigHashSql: getSqlLiteral(input.reviewConfigHash),
     snapshotIdSql: getSqlLiteral(input.snapshotId),
   }
-  const missingRows = await input.database.queryJson<{filterValue?: string; filter_value?: string}>(
-    getReviewServingPromptAnswerPostingMissingValuesSql(sqlInput),
-  )
-  const missingFilterValues = missingRows
-    .map((row) => {
-      return row.filterValue ?? row.filter_value ?? ''
-    })
-    .filter((value) => {
-      return value.length > 0
-    })
-
-  if (missingFilterValues.length === 0) {
-    return {
-      diagnostics: reviewServingLazyPromptAnswerPostingDiagnostics,
-      missingFilterValues,
-      requestedFilterValues,
-      status: 'cacheHit',
-      writtenBucketCount: 0,
-    }
-  }
-
-  const missingSqlInput = {...sqlInput, filterValuesSql: getSqlLiteral(missingFilterValues)}
-
-  for (const statement of getReviewServingPromptAnswerPostingCacheWriteSqls(missingSqlInput)) {
+  for (const statement of getReviewServingPromptAnswerPostingCacheWriteSqls(sqlInput)) {
     await executeStatement(input.database, statement)
   }
 
   return {
     diagnostics: reviewServingLazyPromptAnswerPostingDiagnostics,
-    missingFilterValues,
+    missingFilterValues: requestedFilterValues,
     requestedFilterValues,
     status: 'cacheWritten',
-    writtenBucketCount: missingFilterValues.length,
+    writtenBucketCount: requestedFilterValues.length,
   }
 }

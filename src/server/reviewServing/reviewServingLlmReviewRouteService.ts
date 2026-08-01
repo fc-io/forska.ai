@@ -17,7 +17,10 @@ import {
   type ReviewServingFilteredCountDatabase,
 } from './reviewServingFilteredCountService.ts'
 import {ensureReviewServingJudgmentPayloadRowsForArticleSet} from './reviewServingJudgmentPayloadProjector.ts'
-import {ensureReviewServingLazyPromptAnswerPostingBuckets} from './reviewServingLazyPromptAnswerPostingSql.ts'
+import {
+  ensureReviewServingLazyPromptAnswerPostingBuckets,
+  type ReviewServingLazyPromptAnswerPostingDatabase,
+} from './reviewServingLazyPromptAnswerPostingSql.ts'
 import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
@@ -223,6 +226,9 @@ const getCountFilterKey = (params: ArticlesReviewsParams) => {
 const getReaderDependencies = (dependencies?: ReviewServingLlmReviewRouteDependencies) => {
   return {
     ...(dependencies?.database ? {database: dependencies.database} : {}),
+    ...(dependencies?.database
+      ? {lazyPromptAnswerPostingDatabase: dependencies.database as ReviewServingLazyPromptAnswerPostingDatabase}
+      : {}),
     ...(dependencies?.manifestDatabase
       ? {diagnosticsDatabase: dependencies.manifestDatabase, manifestDatabase: dependencies.manifestDatabase}
       : {}),

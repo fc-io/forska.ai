@@ -914,8 +914,8 @@ test('V4 missing snapshot bootstrap bounds large project-scope request estimates
 
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
-  expect(statements.join('\n')).toContain('"bootstrapChunkCount":90')
-  expect(projectScopeChunkInserts).toHaveLength(90)
+  expect(statements.join('\n')).toContain('"bootstrapChunkCount":85')
+  expect(projectScopeChunkInserts).toHaveLength(85)
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {
@@ -1046,6 +1046,30 @@ test('V4 rebuild request service excludes lazy prompt-derived summary fan-out fr
   )
 
   expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+})
+
+test('V4 rebuild request service charges queue readiness as article-level output only', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 10,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 10,
+    scopedArticleCount: 100_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['queue'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('admitted')
+  expect(statements.join('\n')).toContain('"estimatedInputRows":100000')
+  expect(statements.join('\n')).toContain('"estimatedOutputRows":100000')
   expect(request.overBudgetReason).toBeNull()
 })
 

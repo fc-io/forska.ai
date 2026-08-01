@@ -1,5 +1,5 @@
-import {existsSync, readdirSync, readFileSync, rmSync} from 'node:fs'
-import {join, relative} from 'node:path'
+import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync} from 'node:fs'
+import {dirname, join, relative} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -195,23 +195,14 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
     database,
   )
 
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
-  })
   const articleRankInsertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
-  })
-  const updateStatement = statements.find((statement) => {
-    return statement.includes('UPDATE mart.review_unassessed_queue_serving_v4 existing')
   })
   const articleRankUpdateStatement = statements.find((statement) => {
     return statement.includes('UPDATE mart.review_unassessed_queue_article_rank_serving_v4 existing')
   })
 
-  expect(updateStatement).toContain('prompt_ids = list_sort(list_distinct(list_concat(')
-  expect(updateStatement).toContain('queue_updated_at = final_queue_rows.queue_updated_at')
-  expect(insertStatement).toContain('WHERE NOT EXISTS')
-  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(statements.join('\n')).not.toContain('mart.review_unassessed_queue_serving_v4')
   expect(articleRankUpdateStatement).toContain('priority_bucket = final_article_rank_rows.priority_bucket')
   expect(articleRankInsertStatement).toContain('WHERE NOT EXISTS')
   expect(articleRankInsertStatement).not.toContain('ON CONFLICT')
@@ -280,6 +271,7 @@ test('title search rebuild ranges merge rows with bounded update and insert-miss
 test('title search rebuild range merge executes against compact DuckDB token postings', async () => {
   const {database, statements} = createWriterDatabase()
   const duckdbPath = join(workspaceRoot, '.tmp', `title-search-rebuild-merge-${Date.now()}.duckdb`)
+  mkdirSync(dirname(duckdbPath), {recursive: true})
   removeFileIfExists(duckdbPath)
 
   try {
@@ -1262,7 +1254,10 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
   ])
   const testSupportFixtureFiles = new Set(['src/server/test/seedHumanAssessmentServingArticle.ts'])
   const operationalRecoveryFiles = new Set(['src/server/utils/duckdbService.ts'])
-  const foregroundCacheWriterFiles = new Set(['src/server/reviewServing/reviewServingFilteredCountService.ts'])
+  const foregroundCacheWriterFiles = new Set([
+    'src/server/reviewServing/reviewServingFilteredCountService.ts',
+    'src/server/reviewServing/reviewServingLazyPromptAnswerPostingSql.ts',
+  ])
   const offenders = getTypeScriptFiles(join(workspaceRoot, 'src/server'))
     .filter((filePath) => {
       const repoPath = relative(workspaceRoot, filePath)

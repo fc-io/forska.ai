@@ -1,3 +1,4 @@
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {admitReviewServingDuckdbWorkload, type ReviewServingAdmissionDiagnostics} from './reviewServingAdmission.ts'
@@ -28,6 +29,7 @@ import {getReviewServingDiagnostics, type ReviewServingDiagnostics} from './revi
 import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
   hasReviewServingPromptAnswerFilterGroup,
+  type ReviewServingLazyPromptAnswerPostingDatabase,
 } from './reviewServingLazyPromptAnswerPostingSql.ts'
 import {
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
@@ -144,6 +146,10 @@ const reviewServingPostingArticleSortAlias = 'serving_order'
 
 const getReaderDatabase = () => {
   return getApiReadOnlyAppDatabaseService()
+}
+
+const getLazyPromptAnswerPostingDatabase = () => {
+  return getAppDatabaseService() as ReviewServingLazyPromptAnswerPostingDatabase
 }
 
 const hasText = (value: string | null | undefined) => {
@@ -996,6 +1002,7 @@ export const readReviewServingRows = async <T>(
   dependencies?: {
     database?: ReviewServingReaderDatabase
     diagnosticsDatabase?: ReviewServingManifestReaderDatabase
+    lazyPromptAnswerPostingDatabase?: ReviewServingLazyPromptAnswerPostingDatabase
     manifestDatabase?: ReviewServingManifestReaderDatabase
   },
 ): Promise<ReviewServingReaderResult<T>> => {
@@ -1189,20 +1196,24 @@ export const readReviewServingRows = async <T>(
     })
   }
 
-  const database = dependencies?.database ?? getReaderDatabase()
   const promptAnswerFilterValues = getPromptAnswerPostingFilterValues(request)
+  const lazyPromptAnswerPostingDatabase =
+    promptAnswerFilterValues.length > 0
+      ? (dependencies?.lazyPromptAnswerPostingDatabase ?? getLazyPromptAnswerPostingDatabase())
+      : null
 
   if (promptAnswerFilterValues.length > 0) {
     await ensureReviewServingLazyPromptAnswerPostingBuckets({
-      database,
+      database: lazyPromptAnswerPostingDatabase as ReviewServingLazyPromptAnswerPostingDatabase,
       filterValues: promptAnswerFilterValues,
-      listModeKey: request.listMode ?? contract.listMode,
+      listModeKey: (request.listMode ?? contract.listMode) as string,
       projectId: request.projectId as string,
       reviewConfigHash: manifest.reviewConfigHash,
       snapshotId: manifest.snapshotId,
     })
   }
 
+  const database = dependencies?.database ?? lazyPromptAnswerPostingDatabase ?? getReaderDatabase()
   const executableSql = bindReviewServingRowsSql(
     sql,
     request,

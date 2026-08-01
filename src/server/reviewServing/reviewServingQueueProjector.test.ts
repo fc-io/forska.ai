@@ -95,14 +95,8 @@ test('LLM answer changes acknowledge queue work without legacy patch rows', asyn
 
   const result = await projectReviewServingQueuePatches(projectInput([queueClaim()]), database)
   const joined = statements.join('\n')
-  const servingDelete = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
-  })
   const articleRankDelete = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
-  })
-  const articleRankInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
@@ -110,11 +104,8 @@ test('LLM answer changes acknowledge queue work without legacy patch rows', asyn
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
-  expect(servingDelete).toContain('snapshot_id =')
-  expect(servingDelete).toContain("article_id IN ('article-1')")
+  expect(joined).not.toContain('mart.review_unassessed_queue_serving_v4')
   expect(articleRankDelete).toContain("article_id IN ('article-1')")
-  expect(articleRankInsert).toContain('FROM mart.review_unassessed_queue_serving_v4')
-  expect(statements.indexOf(servingDelete ?? '')).toBeLessThan(statements.indexOf(articleRankDelete ?? ''))
 })
 
 test('queue no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -181,9 +172,6 @@ test('prompt config changes rebuild prompt-scoped and summary queue rows', async
     ]),
     database,
   )
-  const servingUpdate = statements.find((statement) => {
-    return statement.includes('UPDATE mart.review_unassessed_queue_serving_v4')
-  })
   const articleRankInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   })
@@ -193,10 +181,9 @@ test('prompt config changes rebuild prompt-scoped and summary queue rows', async
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 1})
   expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
-  expect(servingUpdate).toContain('SET prompt_ids = list_filter(prompt_ids')
-  expect(servingUpdate).toContain("['prompt-1', 'summary']::VARCHAR[]")
-  expect(articleRankInsert).toContain('FROM mart.review_unassessed_queue_serving_v4')
-  expect(queueSelect).toContain("OR queue.prompt_id = 'summary'")
+  expect(statements.join('\n')).not.toContain('mart.review_unassessed_queue_serving_v4')
+  expect(articleRankInsert).toContain('mart.review_unassessed_queue_article_rank_serving_v4')
+  expect(queueSelect).not.toContain("OR queue.prompt_id = 'summary'")
   expect(queueSelect?.match(/queue_union AS/g) ?? []).toHaveLength(1)
 })
 
@@ -273,7 +260,7 @@ test('summary-mode queue rebuild uses a synthetic human summary prompt without e
     database,
   )
   const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   })
 
   expect(insertStatement).toContain('human_prompt AS')
@@ -309,14 +296,15 @@ test('project review config changes rebuild queue rows for all scoped project ar
     ]),
     database,
   )
-  const servingDelete = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  const articleRankDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
   expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
-  expect(servingDelete).not.toContain('article_id IN')
-  expect(servingDelete).not.toContain('prompt_ids')
+  expect(statements.join('\n')).not.toContain('mart.review_unassessed_queue_serving_v4')
+  expect(articleRankDelete).not.toContain('article_id IN')
+  expect(articleRankDelete).not.toContain('prompt_ids')
 })
 
 test('queue rebuild rows read selected-import base rows without patch overlay', async () => {
@@ -334,7 +322,7 @@ test('queue rebuild rows read selected-import base rows without patch overlay', 
     database,
   )
   const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   })
 
   expect(insertStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
@@ -366,12 +354,13 @@ test('queue serving replacement deletes only projected review configs', async ()
   })
 
   await projectReviewServingQueuePatches(projectInput([queueClaim()]), database)
-  const servingDelete = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  const articleRankDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
   })
 
-  expect(servingDelete).not.toContain('review_config_hash IN')
-  expect(servingDelete).toContain("article_id IN ('article-1')")
+  expect(statements.join('\n')).not.toContain('mart.review_unassessed_queue_serving_v4')
+  expect(articleRankDelete).not.toContain('review_config_hash IN')
+  expect(articleRankDelete).toContain("article_id IN ('article-1')")
 })
 
 test('missing article-scoped queue inputs clear optional unassessed state without raw aggregation', async () => {
@@ -384,7 +373,8 @@ test('missing article-scoped queue inputs clear optional unassessed state withou
   expect(joined).not.toContain('mart.judgment_fact')
   expect(joined).not.toContain('app."judgment"')
   expect(joined).not.toContain('GROUP BY judgment')
-  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).not.toContain('mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
   expect(joined).toContain("article_id IN ('article-1')")
   expect(joined).not.toContain('review_config_hash IN')
 })
@@ -406,9 +396,8 @@ test('missing prompt-scoped queue inputs clear stale prompt serving rows', async
   const joined = statements.join('\n')
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
-  expect(joined).toContain('UPDATE mart.review_unassessed_queue_serving_v4')
-  expect(joined).toContain("['prompt-1', 'summary']::VARCHAR[]")
-  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).not.toContain('mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
   expect(joined).not.toContain('review_config_hash IN')
 })
 
@@ -426,14 +415,15 @@ test('project-scoped empty queue rebuild clears snapshot serving rows', async ()
     ]),
     database,
   )
-  const servingDelete = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  const articleRankDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
-  expect(servingDelete).toContain("project_id = 'project-1'")
-  expect(servingDelete).toContain("snapshot_id = 'snapshot-1'")
-  expect(servingDelete).not.toContain('review_config_hash IN')
-  expect(servingDelete).not.toContain('article_id IN')
-  expect(servingDelete).not.toContain('prompt_ids')
+  expect(statements.join('\n')).not.toContain('mart.review_unassessed_queue_serving_v4')
+  expect(articleRankDelete).toContain("project_id = 'project-1'")
+  expect(articleRankDelete).toContain("snapshot_id = 'snapshot-1'")
+  expect(articleRankDelete).not.toContain('review_config_hash IN')
+  expect(articleRankDelete).not.toContain('article_id IN')
+  expect(articleRankDelete).not.toContain('prompt_ids')
 })
