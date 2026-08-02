@@ -1365,12 +1365,72 @@ const getReviewServingRebuildChunkProjectPredicate = (input: {projectId?: string
     : `AND ${source}project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}`
 }
 
+const getReviewServingRebuildChunkForegroundBackpressurePredicate = (
+  input: {now: Date | string},
+  tableAlias?: string,
+) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+  const pressureAlias = 'foreground_pressure'
+  const retryMaxAttemptsSql = getReviewServingRebuildChunkRetryMaxAttemptsSql(`${pressureAlias}.request_id`)
+
+  return `
+    AND (
+      ${getRebuildChunkEffectiveWorkloadClassSql(tableAlias ?? 'app.review_rebuild_chunk_manifest')} = ${getSqlLiteral(
+        rebuildChunkWorkloadClasses.critical,
+      )}
+      OR NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest ${pressureAlias}
+        WHERE ${pressureAlias}.project_id IS NOT DISTINCT FROM ${source}project_id
+          AND ${getRebuildChunkEffectiveWorkloadClassSql(pressureAlias)} = ${getSqlLiteral(
+            rebuildChunkWorkloadClasses.critical,
+          )}
+          AND COALESCE(${getRebuildChunkClaimRequestPrioritySql(pressureAlias)}, 0) >= COALESCE(${getRebuildChunkClaimRequestPrioritySql(
+            tableAlias ?? 'app.review_rebuild_chunk_manifest',
+          )}, 0)
+          AND ${pressureAlias}.admission_state = 'admitted'
+          AND (
+            ${pressureAlias}.status = 'pending'
+            OR ${pressureAlias}.status = 'running'
+            OR (
+              ${pressureAlias}.status = 'failed'
+              AND COALESCE(${pressureAlias}.retry_count, 0) < CASE
+                WHEN ${pressureAlias}.request_id IS NULL
+                THEN ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)}
+                ELSE ${retryMaxAttemptsSql}
+              END
+              AND (
+                ${pressureAlias}.retry_after IS NULL
+                OR ${pressureAlias}.retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
+              )
+            )
+          )
+          AND (
+            ${pressureAlias}.request_id IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM app.review_rebuild_request request
+              WHERE (request.request_id || '') = ${pressureAlias}.request_id
+                AND request.status IN ('admitted', 'running')
+                AND request.admission_state = 'admitted'
+                AND (
+                  request.retry_after IS NULL
+                  OR request.retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
+                )
+            )
+          )
+      )
+    )
+  `
+}
+
 export const getReviewServingRebuildChunkClaimWhere = (
   input: {now: Date | string; projectId?: string | null; projectionComponent?: ReviewServingProjectionComponent},
   tableAlias?: string,
 ) => {
   return `
     (${getReviewServingRebuildChunkClaimPredicate(input, tableAlias)})
+    ${getReviewServingRebuildChunkForegroundBackpressurePredicate(input, tableAlias)}
     ${getReviewServingRebuildChunkProjectPredicate(input, tableAlias)}
   `
 }
