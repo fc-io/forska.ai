@@ -426,9 +426,10 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
 
   expect(result.status).toBe('accepted')
   expect(reader.statements).toHaveLength(1)
-  expect(lazyPosting.statements).toHaveLength(2)
-  expect(lazyPosting.statements[0]).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
-  expect(lazyPosting.statements[1]).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(lazyPosting.statements).toHaveLength(1)
+  expect(lazyPosting.statements[0]).toContain('SELECT requested.filter_value AS filterValue')
+  expect(lazyPostingSql).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(lazyPostingSql).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(lazyPostingSql).toContain("['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-2:no']::VARCHAR[]")
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
@@ -499,6 +500,59 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   expect(sql).not.toContain('search.activity_sort_at')
   expect(sql).not.toContain('(sort_key DESC')
   expect(sql).not.toContain('$cursor0')
+})
+
+test('readReviewServingRows falls back to canonical prompt answers when lazy posting publication fails', async () => {
+  const reader = createReaderDatabase([{article_id: 'article-2', sort_key: '2026-01-02'}])
+  const lazyPostingStatements: string[] = []
+  const lazyPosting = {
+    database: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        lazyPostingStatements.push(statement)
+
+        return [{filterValue: 'review:promptAnswer:prompt-1:yes'}] as T[]
+      },
+      run: async (statement: string) => {
+        lazyPostingStatements.push(statement)
+        if (statement.includes('INSERT INTO mart.review_article_filter_posting_serving_v4')) {
+          throw new Error('publication failed')
+        }
+      },
+    },
+  }
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: hydratedListComponents,
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const result = await readReviewServingRows(
+    {...readyRequest, filters: {promptAnswer: ['prompt-1:yes']}},
+    {
+      database: reader.database,
+      diagnosticsDatabase: manifestDatabase,
+      lazyPromptAnswerPostingDatabase: lazyPosting.database,
+      manifestDatabase,
+    },
+  )
+  const sql = reader.statements[0] ?? ''
+
+  expect(result.status).toBe('accepted')
+  expect(lazyPostingStatements.join('\n')).toContain('BEGIN TRANSACTION')
+  expect(lazyPostingStatements.join('\n')).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(lazyPostingStatements.join('\n')).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(lazyPostingStatements.join('\n')).toContain('ROLLBACK')
+  expect(lazyPostingStatements.join('\n')).not.toContain('COMMIT')
+  expect(sql).toContain('canonical_prompt_answer_posting_rows AS')
+  expect(sql).toContain('posting_filter_rows AS')
+  expect(sql).toContain('FROM app."judgment" judgment')
+  expect(sql).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
+  expect(sql).toContain("['review:promptAnswer:prompt-1:yes']::VARCHAR[]")
+  expect(sql).toContain('FROM posting_filter_rows filter_5')
+  expect(sql).not.toContain('FROM mart.review_article_filter_posting_serving_v4 filter_5')
 })
 
 test('readReviewServingRows serializes aliased detail list-mode priority cursors', async () => {

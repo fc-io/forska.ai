@@ -66,6 +66,7 @@ export type ProjectTransferFidelityValidationInput = {
     providerTargetBySourceId: Record<string, string>
   } | null
   payloads: Partial<ProjectTransferPayloadByKey>
+  resolveImportedModelPlaceholders?: boolean
   runner?: ProjectTransferAnalyzeTargetRunner | null
   targetConnections?: ProviderConnectionForAdmin[]
   targetPlan: ProjectTransferTargetPlan
@@ -251,7 +252,22 @@ const getNonNewTargetIds = (values: readonly (string | null)[]) => {
   ]
 }
 
-const getPotentialConcreteTargetModelIds = ({targetModelId}: {targetModelId: string | null}) => {
+const getPotentialConcreteTargetModelIds = ({
+  resolveImportedModelPlaceholders,
+  targetModelId,
+}: {
+  resolveImportedModelPlaceholders: boolean
+  targetModelId: string | null
+}) => {
+  if (targetModelId === null) {
+    return [targetModelId]
+  }
+
+  const importedModelPrefix = 'new:model:'
+  if (resolveImportedModelPlaceholders && targetModelId.startsWith(importedModelPrefix)) {
+    return [targetModelId, targetModelId.slice(importedModelPrefix.length)]
+  }
+
   return [targetModelId]
 }
 
@@ -953,7 +969,10 @@ const getJudgmentPlan = async ({
     const targetPromptId = promptTargetIdBySource[getStringField(judgment, 'sourcePromptId')] ?? null
     const targetModelId = modelTargetIdBySource[sourceModelId] ?? null
 
-    return getPotentialConcreteTargetModelIds({targetModelId}).map((candidateTargetModelId) => {
+    return getPotentialConcreteTargetModelIds({
+      resolveImportedModelPlaceholders: input.resolveImportedModelPlaceholders !== false,
+      targetModelId,
+    }).map((candidateTargetModelId) => {
       return {targetArticleId, targetModelId: candidateTargetModelId, targetPromptId}
     })
   })
@@ -1004,7 +1023,10 @@ const getJudgmentPlan = async ({
     const targetArticleId = articleTargetIdBySource[sourceArticleId] ?? null
     const targetPromptId = promptTargetIdBySource[sourcePromptId] ?? null
     const targetModelId = modelTargetIdBySource[sourceModelId] ?? null
-    const potentialTargetModelIds = getPotentialConcreteTargetModelIds({targetModelId})
+    const potentialTargetModelIds = getPotentialConcreteTargetModelIds({
+      resolveImportedModelPlaceholders: input.resolveImportedModelPlaceholders !== false,
+      targetModelId,
+    })
     const physicalKey = getJudgmentPhysicalKey({judgment, targetArticleId, targetModelId, targetPromptId})
     const reviewVisibleKey = getJudgmentReviewVisibleKey({judgment, targetArticleId, targetModelId, targetPromptId})
     const potentialPhysicalKeys = potentialTargetModelIds

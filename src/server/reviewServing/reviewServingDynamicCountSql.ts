@@ -1,4 +1,9 @@
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {
+  getReviewServingLazyPromptAnswerPostingRowsSql,
+  isReviewServingPromptAnswerFilterGroup,
+  reviewServingPromptAnswerFilterKind,
+} from './reviewServingLazyPromptAnswerPostingSql.ts'
 
 export type ReviewServingDynamicCountPostingFilterGroup = {filterKind: string; filterValues: readonly string[]}
 
@@ -10,6 +15,7 @@ export type ReviewServingDynamicCountSqlInput = {
   projectScopeIdentity?: string | null
   reviewConfigHash: string
   requireLlmJudgment?: boolean
+  useCanonicalPromptAnswerPostings?: boolean
   searchIdentity?: string | null
   searchTokenPrefixes?: readonly string[]
   servingPredicates?: readonly string[]
@@ -66,22 +72,105 @@ const getListModeMembershipPredicate = (stateAlias: string, listModeExpression: 
       END IS TRUE`
 }
 
-const getPostingFilteredArticleIdsCte = (groups: readonly ReviewServingDynamicCountPostingFilterGroup[]) => {
+const getPromptAnswerFilterValues = (groups: readonly ReviewServingDynamicCountPostingFilterGroup[]) => {
+  return [
+    ...new Set(
+      groups
+        .filter(isReviewServingPromptAnswerFilterGroup)
+        .flatMap((group) => {
+          return group.filterValues
+        })
+        .filter((value) => {
+          return value.length > 0
+        }),
+    ),
+  ]
+}
+
+const getPostingRowsTableSql = (input: {
+  groups: readonly ReviewServingDynamicCountPostingFilterGroup[]
+  listModeKey: string
+  projectId: string
+  reviewConfigHash: string
+  snapshotId: string
+  useCanonicalPromptAnswerPostings?: boolean
+}) => {
+  const promptAnswerFilterValues = getPromptAnswerFilterValues(input.groups)
+
+  if (!input.useCanonicalPromptAnswerPostings || promptAnswerFilterValues.length === 0) {
+    return {cteSql: '', tableSql: 'mart.review_article_filter_posting_serving_v4'}
+  }
+
+  const nonPromptPostingPredicate = input.groups.some((group) => {
+    return !isReviewServingPromptAnswerFilterGroup(group)
+  })
+    ? `SELECT
+        posting.project_id,
+        posting.review_config_hash,
+        posting.snapshot_id,
+        posting.article_ids,
+        posting.filter_kind,
+        posting.filter_value,
+        posting.list_mode_key
+      FROM mart.review_article_filter_posting_serving_v4 posting
+      WHERE posting.project_id = ${getSqlLiteral(input.projectId)}
+        AND posting.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND posting.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND posting.list_mode_key = ${getSqlLiteral(input.listModeKey)}
+        AND posting.filter_kind <> '${reviewServingPromptAnswerFilterKind}'`
+    : ''
+  const canonicalPromptRowsSql = getReviewServingLazyPromptAnswerPostingRowsSql({
+    filterValuesSql: getSqlLiteral(promptAnswerFilterValues),
+    listModeSql: getSqlLiteral(input.listModeKey),
+    projectIdSql: getSqlLiteral(input.projectId),
+    reviewConfigHashSql: getSqlLiteral(input.reviewConfigHash),
+    snapshotIdSql: getSqlLiteral(input.snapshotId),
+  })
+
+  return {
+    cteSql: `,
+canonical_prompt_answer_posting_rows AS (
+  ${canonicalPromptRowsSql}
+),
+posting_filter_rows AS (
+  ${[nonPromptPostingPredicate, 'SELECT * FROM canonical_prompt_answer_posting_rows'].filter(Boolean).join('\n  UNION ALL\n  ')}
+)`,
+    tableSql: 'posting_filter_rows',
+  }
+}
+
+const getPostingFilteredArticleIdsCte = (input: {
+  groups: readonly ReviewServingDynamicCountPostingFilterGroup[]
+  listModeKey: string
+  projectId: string
+  reviewConfigHash: string
+  snapshotId: string
+  useCanonicalPromptAnswerPostings?: boolean
+}) => {
+  const groups = input.groups
   if (groups.length === 0) {
     return ''
   }
 
+  const postingRowsTable = getPostingRowsTableSql({
+    groups,
+    listModeKey: input.listModeKey,
+    projectId: input.projectId,
+    reviewConfigHash: input.reviewConfigHash,
+    snapshotId: input.snapshotId,
+    useCanonicalPromptAnswerPostings: input.useCanonicalPromptAnswerPostings,
+  })
   const groupPredicates = groups.map((group) => {
     return `(${getPostingFilterGroupPredicate(group)})`
   })
 
   if (groups.length === 1) {
-    return `,
+    return `${postingRowsTable.cteSql},
 posting_filtered_article_ids AS (
   SELECT DISTINCT posting_article.article_id
     FROM (
       SELECT posting.article_ids
-    FROM mart.review_article_filter_posting_serving_v4 posting
+    FROM ${postingRowsTable.tableSql} posting
     CROSS JOIN scoped
     WHERE posting.project_id = scoped.project_id
       AND posting.review_config_hash = scoped.review_config_hash
@@ -100,7 +189,7 @@ posting_filtered_article_ids AS (
     return `(${index})`
   })
 
-  return `,
+  return `${postingRowsTable.cteSql},
 matched_posting_rows AS (
   SELECT
     posting.article_ids,
@@ -110,7 +199,7 @@ matched_posting_rows AS (
     SUM(array_length(posting.article_ids)) OVER (
       PARTITION BY CASE ${matchedGroupCases.join(' ')} END
     ) AS matched_group_article_id_count
-  FROM mart.review_article_filter_posting_serving_v4 posting
+  FROM ${postingRowsTable.tableSql} posting
   CROSS JOIN scoped
   WHERE posting.project_id = scoped.project_id
     AND posting.review_config_hash = scoped.review_config_hash
@@ -364,7 +453,14 @@ export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDyna
         ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
         ${getSqlLiteral(input.listModeKey)} AS list_mode_key
-    )${getPostingFilteredArticleIdsCte(postingGroups)}
+    )${getPostingFilteredArticleIdsCte({
+      groups: postingGroups,
+      listModeKey: input.listModeKey,
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+      useCanonicalPromptAnswerPostings: input.useCanonicalPromptAnswerPostings,
+    })}
     SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount
     FROM posting_filtered_article_ids filtered_article_ids
   `
@@ -409,7 +505,14 @@ export const getReviewServingDynamicFilteredCountSql = (input: ReviewServingDyna
         ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
         ${getSqlLiteral(input.listModeKey)} AS list_mode_key
-    ),${scopedServingCte}${getPostingFilteredArticleIdsCte(postingGroups)}${getUnassessedQueueArticleIdsCte(input)}${getSearchCandidateArticleIdsCte(input)}${getSearchFilteredArticleIdsCte(input)}
+    ),${scopedServingCte}${getPostingFilteredArticleIdsCte({
+      groups: postingGroups,
+      listModeKey: input.listModeKey,
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+      useCanonicalPromptAnswerPostings: input.useCanonicalPromptAnswerPostings,
+    })}${getUnassessedQueueArticleIdsCte(input)}${getSearchCandidateArticleIdsCte(input)}${getSearchFilteredArticleIdsCte(input)}
     SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount
     FROM scoped_serving filtered_article_ids
     ${getFilteredJoinClauses(input)}

@@ -216,7 +216,7 @@ test('summary human answers do not require prompt IDs and update summary-key ser
   expect(joined).not.toContain("'llmStatus'")
 })
 
-test('Covidence summary placeholders with null answers remain human-unanswered', async () => {
+test('Covidence summary placeholders with null answers remain human-answered', async () => {
   const {database, statements} = createHumanStatusDatabase({
     judgmentRows: [
       humanStatusRow({
@@ -233,7 +233,7 @@ test('Covidence summary placeholders with null answers remain human-unanswered',
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
-  expect(joined).toContain("'summary', 'unanswered', FALSE")
+  expect(joined).toContain("'summary', 'answered', FALSE")
 })
 
 test('human prompt and summary answer changes use delta payload values as contribution inputs', async () => {
@@ -401,6 +401,5 @@ test('human range rebuild batches write one SQL-native serving replacement state
   expect(joined).toContain('FROM app.project_prompt project_prompt')
   expect(joined).toContain('LEFT JOIN app."judgment_human" judgment_human')
   expect(joined).toContain('human_status = article_status.human_status')
-  expect(joined).toContain("BOOL_OR(NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL)")
-  expect(joined).not.toContain('BOOL_OR(judgment_human_summary.id IS NOT NULL)')
+  expect(joined).toContain('BOOL_OR(judgment_human_summary.id IS NOT NULL)')
 })

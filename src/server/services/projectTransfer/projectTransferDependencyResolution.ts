@@ -1810,6 +1810,7 @@ export const revalidateProjectTransferResolvedDependencies = async (
   const fidelityValidation = await getProjectTransferFidelityValidation({
     dependencyResolution,
     payloads: input.payloads,
+    resolveImportedModelPlaceholders: false,
     runner: repositories.analyzeTargetRunner,
     targetConnections: connections,
     targetPlan: input.plan.targetPlan,

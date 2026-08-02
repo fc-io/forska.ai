@@ -106,6 +106,55 @@ test('lazy prompt-answer cache ensure writes only missing requested values in a 
   expect(statements[3]).not.toContain('review:promptAnswer:prompt-1:yes')
 })
 
+test('lazy prompt-answer cache ensure uses the database transaction API when available', async () => {
+  const statements: string[] = []
+  let transactionCount = 0
+  const database = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return [{filterValue: 'review:promptAnswer:prompt-1:yes'}] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(`outside:${statement}`)
+    },
+    transaction: async <T>(operation: (tx: {run: (statement: string) => Promise<void>}) => Promise<T>) => {
+      transactionCount += 1
+
+      return operation({
+        run: async (statement: string) => {
+          statements.push(`tx:${statement}`)
+        },
+      })
+    },
+  }
+
+  const result = await ensureReviewServingLazyPromptAnswerPostingBuckets({
+    database,
+    filterValues: ['review:promptAnswer:prompt-1:yes'],
+    listModeKey: 'llm',
+    projectId: 'project-1',
+    reviewConfigHash: 'review-config-1',
+    snapshotId: 'snapshot-1',
+  })
+
+  expect(result.status).toBe('cacheWritten')
+  expect(transactionCount).toBe(1)
+  expect(statements).not.toContain('BEGIN TRANSACTION')
+  expect(statements).not.toContain('COMMIT')
+  expect(statements).not.toContain('ROLLBACK')
+  expect(
+    statements.filter((statement) => {
+      return statement.startsWith('tx:')
+    }),
+  ).toHaveLength(2)
+  expect(
+    statements.filter((statement) => {
+      return statement.startsWith('outside:')
+    }),
+  ).toHaveLength(0)
+})
+
 test('lazy prompt-answer cache ensure treats existing requested buckets as fresh', async () => {
   const statements: string[] = []
   const database = {

@@ -5,6 +5,10 @@ import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {reviewServingAdjacentRouteClassifications} from './reviewServingAdjacentRouteSurfaces.ts'
+import {
+  getReviewServingLazyPromptAnswerPostingRowsSql,
+  reviewServingPromptAnswerFilterKind,
+} from './reviewServingLazyPromptAnswerPostingSql.ts'
 import {getReviewServingReadContract} from './reviewServingReadContracts.ts'
 import {
   getReviewServingResidualReadMarkers,
@@ -1724,6 +1728,54 @@ test('assertReviewServingSqlShape rejects raw fallback query patterns', () => {
   expect(violations).toContain('raw article table scan')
   expect(violations).toContain('raw judgment table scan')
   expect(violations).toContain('json extraction')
+  expect(violations).toContain('foreground aggregation')
+})
+
+test('assertReviewServingSqlShape does not let canonical prompt fallback launder unrelated unsafe SQL', () => {
+  const canonicalRowsSql = getReviewServingLazyPromptAnswerPostingRowsSql({
+    filterValuesSql: "['review:promptAnswer:prompt-1:yes']",
+    listModeSql: "'llm'",
+    projectIdSql: "'project-1'",
+    reviewConfigHashSql: "'config-1'",
+    snapshotIdSql: "'snapshot-1'",
+  })
+  const sql = `
+    WITH canonical_prompt_answer_posting_rows AS (
+      ${canonicalRowsSql}
+    ),
+    posting_filter_rows AS (
+      SELECT * FROM canonical_prompt_answer_posting_rows
+    ),
+    unrelated_unsafe AS (
+      SELECT ROW_NUMBER() OVER () AS unsafe_rank
+      FROM mart.review_article_serving_base_v4 unsafe_serving
+      WHERE unsafe_serving.project_id = 'project-1'
+        AND unsafe_serving.review_config_hash = 'config-1'
+        AND unsafe_serving.snapshot_id = 'snapshot-1'
+      GROUP BY unsafe_serving.article_id
+    )
+    SELECT serving.article_id
+    FROM mart.review_article_serving_base_v4 serving
+    WHERE serving.project_id = 'project-1'
+      AND serving.review_config_hash = 'config-1'
+      AND serving.snapshot_id = 'snapshot-1'
+      AND EXISTS (
+        SELECT 1
+        FROM posting_filter_rows posting
+        CROSS JOIN UNNEST(posting.article_ids) AS posting_article(article_id)
+        WHERE posting.filter_kind = '${reviewServingPromptAnswerFilterKind}'
+          AND posting_article.article_id = serving.article_id
+      )
+    ORDER BY serving.article_id
+    LIMIT 1
+  `
+  const violations = getReviewServingSqlShapeViolations(sql, {allowCanonicalPromptAnswerFallback: true}).map(
+    (violation) => {
+      return violation.label
+    },
+  )
+
+  expect(violations).toContain('window row number')
   expect(violations).toContain('foreground aggregation')
 })
 

@@ -217,6 +217,7 @@ const getSearchTokenPrefix = (search: string | null | undefined) => {
 const getRouteFilters = (params: ArticlesReviewsBothParams | ArticlesReviewsParams, mode: ReviewServingReviewMode) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
+  const shouldFilterAnsweredHumanRows = (mode === 'human' || mode === 'both') && promptAnswer.length > 0
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
@@ -224,7 +225,7 @@ const getRouteFilters = (params: ArticlesReviewsBothParams | ArticlesReviewsPara
     ...(params.hasDuplicateStudyRecords ? {duplicateFlag: 'true'} : {}),
     ...(params.hasStudyDecisionConflict ? {conflictFlag: 'true'} : {}),
     ...(mode === 'both' ? {llmStatus: 'complete'} : {}),
-    ...(mode === 'human' || mode === 'both' ? {humanStatus: 'answered'} : {}),
+    ...(shouldFilterAnsweredHumanRows ? {humanStatus: 'answered'} : {}),
     ...(mode === 'unassessed' ? {queueKind: 'unassessed'} : {}),
     ...(promptAnswer.length > 0 ? {promptAnswer} : {}),
     ...(searchTokenPrefixes.length > 0 ? {searchTokenPrefix: searchTokenPrefixes[0]} : {}),
@@ -500,16 +501,21 @@ const getFilteredCountValue = async (
       const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
         return group.filterValues
       })
+      let useCanonicalPromptAnswerPostings = false
 
       if (promptAnswerFilterValues.length > 0) {
-        await ensureReviewServingLazyPromptAnswerPostingBuckets({
-          database,
-          filterValues: promptAnswerFilterValues,
-          listModeKey: mode,
-          projectId: params.projectId,
-          reviewConfigHash: manifest.reviewConfigHash,
-          snapshotId: manifest.snapshotId,
-        })
+        try {
+          await ensureReviewServingLazyPromptAnswerPostingBuckets({
+            database,
+            filterValues: promptAnswerFilterValues,
+            listModeKey: mode,
+            projectId: params.projectId,
+            reviewConfigHash: manifest.reviewConfigHash,
+            snapshotId: manifest.snapshotId,
+          })
+        } catch (_error) {
+          useCanonicalPromptAnswerPostings = true
+        }
       }
 
       const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
@@ -535,6 +541,7 @@ const getFilteredCountValue = async (
             getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
           ],
           snapshotId: manifest.snapshotId,
+          useCanonicalPromptAnswerPostings,
         })}
       `,
       )

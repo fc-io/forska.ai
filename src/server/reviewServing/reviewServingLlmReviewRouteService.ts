@@ -376,16 +376,21 @@ const getFilteredCountValue = async (
       const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
         return group.filterValues
       })
+      let useCanonicalPromptAnswerPostings = false
 
       if (promptAnswerFilterValues.length > 0) {
-        await ensureReviewServingLazyPromptAnswerPostingBuckets({
-          database,
-          filterValues: promptAnswerFilterValues,
-          listModeKey: 'llm',
-          projectId: params.projectId,
-          reviewConfigHash: manifest.reviewConfigHash,
-          snapshotId: manifest.snapshotId,
-        })
+        try {
+          await ensureReviewServingLazyPromptAnswerPostingBuckets({
+            database,
+            filterValues: promptAnswerFilterValues,
+            listModeKey: 'llm',
+            projectId: params.projectId,
+            reviewConfigHash: manifest.reviewConfigHash,
+            snapshotId: manifest.snapshotId,
+          })
+        } catch (_error) {
+          useCanonicalPromptAnswerPostings = true
+        }
       }
 
       const [row] = await database.queryJson<{totalCount: number}>(`
@@ -409,6 +414,7 @@ const getFilteredCountValue = async (
             getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
           ],
           snapshotId: manifest.snapshotId,
+          useCanonicalPromptAnswerPostings,
         })}
       `)
 

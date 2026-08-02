@@ -269,6 +269,10 @@ const getPostingContributionRowsStatement = (input: ProjectReviewServingFilterPo
   return getFullRebuildPostingContributionRowsStatement(input)
 }
 
+const isLazyPromptAnswerPostingRow = (row: {filterKind: string}) => {
+  return row.filterKind === 'promptAnswer'
+}
+
 const getFullRebuildPostingContributionRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   ranges?: readonly ProjectReviewServingFilterPostingsInput[],
@@ -1187,7 +1191,7 @@ export const projectReviewServingFilterPostings = async (
   })
   const {contributionRows, liveRows} = measureSync('diffInputTransformMs', () => {
     const genericNewRows = newRows.filter((row) => {
-      return !isStateFilterKind(row.filterKind)
+      return !isStateFilterKind(row.filterKind) && !isLazyPromptAnswerPostingRow(row)
     })
     const transformedContributionRows = [
       ...genericNewRows,

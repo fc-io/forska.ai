@@ -149,7 +149,7 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[], listModeKe
   }
 }
 
-test('answer changes update serving postings without derived stats writes', async () => {
+test('answer changes invalidate lazy prompt-answer postings without derived stats writes', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:no'})],
     newRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:yes'})],
@@ -159,7 +159,7 @@ test('answer changes update serving postings without derived stats writes', asyn
   const joined = statements.join('\n')
 
   expect(result.patchRowCount).toBe(0)
-  expect(result.servingRowCount).toBe(1)
+  expect(result.servingRowCount).toBe(0)
   expect(result.validationResult).toBeUndefined()
   expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
@@ -171,9 +171,8 @@ test('answer changes update serving postings without derived stats writes', asyn
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
-  expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
-  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain('list_filter(article_ids')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
 })
 
 test('posting no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -713,7 +712,10 @@ test('project-scoped posting rebuilds delete tombstoned serving rows without pro
 test('list modes keep serving rows scoped without derived stats rows', async () => {
   const {database} = createPostingDatabase({
     existingRows: [],
-    newRows: [postingRow({listModeKey: 'llm'}), postingRow({listModeKey: 'human'})],
+    newRows: [
+      postingRow({filterKind: 'importRoute', filterValue: 'route-1', listModeKey: 'llm'}),
+      postingRow({filterKind: 'importRoute', filterValue: 'route-1', listModeKey: 'human'}),
+    ],
     totalRows: [
       {listModeKey: 'llm', totalArticleCount: 10},
       {listModeKey: 'human', totalArticleCount: 5},

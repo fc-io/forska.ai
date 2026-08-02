@@ -329,7 +329,89 @@ test('human review prompt-filtered count intersects through one posting CTE with
   expect(countStatement).not.toContain("serving.human_status_key = 'answered'")
 })
 
-test('human and both unfiltered tab counts stay scoped to served base rows', async () => {
+test('human review prompt-filtered count falls back to canonical prompt answers when publication fails', async () => {
+  const reader = createReaderDatabase()
+  const database = {
+    ...reader.database,
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (/\binsert\s+into\s+mart\.review_article_filter_posting_serving_v4\b/iu.test(statement)) {
+        reader.statements.push(statement)
+        throw new Error('publication failed')
+      }
+
+      if (statement.includes('SELECT requested.filter_value AS filterValue')) {
+        reader.statements.push(statement)
+
+        return [{filterValue: 'human:promptAnswer:prompt-1:yes'}] as T[]
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+    run: async (statement: string) => {
+      reader.statements.push(statement)
+      if (/\binsert\s+into\s+mart\.review_article_filter_posting_serving_v4\b/iu.test(statement)) {
+        throw new Error('publication failed')
+      }
+    },
+  }
+
+  await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, prompts: {'prompt-1': ['yes']}},
+    {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+  )
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  })
+
+  expect(reader.statements.join('\n')).toContain('ROLLBACK')
+  expect(countStatement).toContain('canonical_prompt_answer_posting_rows AS')
+  expect(countStatement).toContain('posting_filter_rows AS')
+  expect(countStatement).toContain('FROM app."judgment_human" judgment_human')
+  expect(countStatement).toContain('human:promptAnswer:prompt-1:yes')
+  expect(countStatement).toContain('FROM posting_filter_rows posting')
+})
+
+test('both review prompt-filtered count fallback keeps LLM prompt-answer semantics', async () => {
+  const reader = createReaderDatabase()
+  const database = {
+    ...reader.database,
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (/\binsert\s+into\s+mart\.review_article_filter_posting_serving_v4\b/iu.test(statement)) {
+        reader.statements.push(statement)
+        throw new Error('publication failed')
+      }
+
+      if (statement.includes('SELECT requested.filter_value AS filterValue')) {
+        reader.statements.push(statement)
+
+        return [{filterValue: 'review:promptAnswer:prompt-1:yes'}] as T[]
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+    run: async (statement: string) => {
+      reader.statements.push(statement)
+      if (/\binsert\s+into\s+mart\.review_article_filter_posting_serving_v4\b/iu.test(statement)) {
+        throw new Error('publication failed')
+      }
+    },
+  }
+
+  await getBothReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, prompts: {'prompt-1': ['yes']}},
+    {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+  )
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  })
+
+  expect(reader.statements.join('\n')).toContain('ROLLBACK')
+  expect(countStatement).toContain('canonical_prompt_answer_posting_rows AS')
+  expect(countStatement).toContain('review:promptAnswer:prompt-1:yes')
+  expect(countStatement).not.toContain('human:promptAnswer:prompt-1:yes')
+})
+
+test('human and both unfiltered tab counts do not require answered human prompts', async () => {
   const humanReader = createReaderDatabase()
   const bothReader = createReaderDatabase()
 
@@ -350,23 +432,24 @@ test('human and both unfiltered tab counts stay scoped to served base rows', asy
     },
   )
   const humanCountStatement = humanReader.statements.find((statement) => {
-    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+    return statement.includes('FROM mart.review_article_count_serving_v4')
   })
   const bothCountStatement = bothReader.statements.find((statement) => {
     return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
   })
 
-  for (const statement of [humanCountStatement, bothCountStatement]) {
-    expect(statement).toContain('FROM mart.review_article_serving_base_v4 serving')
-    expect(statement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
-    expect(statement).toContain('list_mode_state.article_id = serving.article_id')
-    expect(statement).not.toContain(
-      'FROM mart.review_article_serving_list_mode_state_v4 list_mode_state\n    CROSS JOIN scoped',
-    )
-  }
-  expect(humanCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(humanCountStatement).toContain('FROM mart.review_article_count_serving_v4')
+  expect(humanCountStatement).toContain("count_kind = 'review.list.total'")
+  expect(humanCountStatement).toContain("filter_key = 'list:all'")
+  expect(humanCountStatement).not.toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  expect(humanCountStatement).not.toContain('list_mode_state.human_status')
+  expect(humanCountStatement).toContain("list_mode_key = 'human'")
+
+  expect(bothCountStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(bothCountStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(bothCountStatement).toContain("WHEN 'both' THEN list_mode_state.has_both_list_mode")
   expect(bothCountStatement).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
-  expect(bothCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(bothCountStatement).not.toContain('list_mode_state.human_status')
 })
 
 test('Human, Both, and Unassessed default routes stay foreground-readable without search or payload enrichment', async () => {
@@ -646,7 +729,7 @@ test('human, both, and unassessed routes read one cursor page for numeric direct
   expect(humanResult.page).toBe(1)
   expect(bothResult.page).toBe(1)
   expect(unassessedResult.page).toBe(1)
-  expect(humanReader.statements).toHaveLength(9)
+  expect(humanReader.statements).toHaveLength(5)
   expect(bothReader.statements).toHaveLength(10)
   expect(unassessedReader.statements).toHaveLength(7)
 })

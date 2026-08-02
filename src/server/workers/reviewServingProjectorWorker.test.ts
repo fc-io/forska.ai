@@ -1826,7 +1826,7 @@ test('worker writes compatible queue rebuild chunks through one batch writer', a
   expect(joined).toContain("serving.article_id <= 'article-050'")
   expect(joined).toContain("serving.article_id >= 'article-051'")
   expect(joined).toContain("serving.article_id <= 'article-099'")
-  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   expect(joined).toContain('queueBatchWriter')
 })
 
@@ -8095,8 +8095,8 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
   const joined = statements.join('\n')
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   expect(joined).toContain('WITH scoped_article AS')
   expect(joined).toContain('LEFT JOIN latest_judgment judgment')
   expect(joined).toContain('LEFT JOIN app."judgment_human" judgment_human')
