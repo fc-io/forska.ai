@@ -1,9 +1,14 @@
 import * as Select from '@kobalte/core/select'
 import {useQuery} from '@tanstack/solid-query'
 import type {Setter} from 'solid-js'
-import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+import {
+  getPromptFilterControls,
+  getPromptFilterLabel,
+  reconcileSchemaEnumSelections,
+} from './reviewPromptFilterControls.ts'
 
 const getSelectedPromptValues = (value: string[] | null | undefined): string[] => {
   return Array.isArray(value) ? value : []
@@ -32,7 +37,6 @@ interface ReviewsHumanFilterControlsProps {
 }
 
 export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProps) => {
-  const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)
   const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
   const validFrom = () => {
     const s = (props.fromDate || '').trim()
@@ -46,18 +50,6 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
     props.setPageLimit(newLimit)
     props.setCurrentPage(1)
   }
-  const hasSelectedPromptFilters = createMemo(() => {
-    return Object.values(props.promptFilters()).some((value) => {
-      return Array.isArray(value) && value.length > 0
-    })
-  })
-
-  createEffect(() => {
-    if (hasSelectedPromptFilters()) {
-      setPromptFiltersRequested(true)
-    }
-  })
-
   const filtersQuery = useQuery(() => {
     return {
       queryKey: [
@@ -89,12 +81,9 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
           throw new Error('Failed to fetch filters')
         }
 
-        return response.data as {
-          filters: Array<{promptId: string; promptName: string; answeredOriginalValues: string[]}>
-          humanJudgmentMode: 'prompt' | 'summary'
-        }
+        return getPromptFilterControls(response.data)
       },
-      enabled: !props.hidePromptSelectors && promptFiltersRequested(),
+      enabled: !props.hidePromptSelectors,
     }
   })
 
@@ -109,61 +98,12 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
     if (props.hidePromptSelectors) {
       return
     }
-    const maybe = (filtersQuery as unknown as {data?: unknown}).data
-    const filtersResponse =
-      typeof maybe === 'function'
-        ? (
-            maybe as () => {
-              filters: Array<{promptId: string; answeredOriginalValues: string[]}>
-              humanJudgmentMode: 'prompt' | 'summary'
-            }
-          )()
-        : (maybe as
-            | {
-                filters: Array<{promptId: string; answeredOriginalValues: string[]}>
-                humanJudgmentMode: 'prompt' | 'summary'
-              }
-            | undefined)
-    if (!filtersResponse) {
+    const controls = filtersQuery.data?.controls
+    if (!controls) {
       return
     }
-    const filters = filtersResponse.filters
-    const allowedByPrompt: Record<string, Set<string>> = filters.reduce(
-      (acc, f) => {
-        return {...acc, [f.promptId]: new Set(f.answeredOriginalValues)}
-      },
-      {} as Record<string, Set<string>>,
-    )
     props.setPromptFilters((prev) => {
-      const previous = prev ?? {}
-      let changed = false
-      const next: Record<string, string[] | null> = {}
-      for (const [promptId, value] of Object.entries(previous)) {
-        if (value === null) {
-          next[promptId] = null
-        } else {
-          const allowed = allowedByPrompt[promptId]
-          const selectedValues = getSelectedPromptValues(value)
-          next[promptId] = allowed
-            ? selectedValues.filter((v) => {
-                return allowed.has(v)
-              })
-            : null
-          if (next[promptId] && next[promptId].length === 0) {
-            next[promptId] = null
-          }
-        }
-        const previousValues = getSelectedPromptValues(value)
-        const nextValues = getSelectedPromptValues(next[promptId])
-        changed =
-          changed
-          || (value === null && next[promptId] !== null)
-          || previousValues.length !== nextValues.length
-          || previousValues.some((previousValue, index) => {
-            return previousValue !== nextValues[index]
-          })
-      }
-      return changed ? next : prev
+      return reconcileSchemaEnumSelections(prev ?? {}, controls)
     })
   })
 
@@ -270,188 +210,171 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
           <div class="pt-4 space-y-3">
             <div class="flex flex-wrap items-center gap-3">
               <div class="text-sm font-medium text-gray-700">Prompt answer filters</div>
-              <Show when={!promptFiltersRequested() && !hasSelectedPromptFilters()}>
-                <button
-                  type="button"
-                  class="inline-flex h-8 items-center rounded-md border border-input bg-white px-3 text-sm font-medium text-gray-700 shadow-sm hover:bg-muted"
-                  onClick={() => {
-                    setPromptFiltersRequested(true)
-                  }}
-                >
-                  Load options
-                </button>
-              </Show>
             </div>
-            <Show when={!promptFiltersRequested() && !hasSelectedPromptFilters()}>
-              <div class="inline-flex min-h-11 items-center rounded-md border border-dashed border-input bg-muted/30 px-3 text-sm text-gray-500">
-                All prompt answers
-              </div>
-            </Show>
-            <Show when={promptFiltersRequested() || hasSelectedPromptFilters()}>
-              <Show when={filtersQuery.data}>
-                {(data) => {
-                  const filtersResponse = data()
-                  const filters = filtersResponse.filters
-                  return (
-                    <div class="mt-4 space-y-4">
-                      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <For each={filters}>
-                          {(promptFilter) => {
-                            const current = createMemo(() => {
-                              return getSelectedPromptValues(props.promptFilters()[promptFilter.promptId])
-                            })
-                            const options = createMemo(() => {
-                              return promptFilter.answeredOriginalValues
-                            })
-                            return (
-                              <div class="flex flex-col gap-2">
-                                <label
-                                  class="font-medium text-sm truncate"
-                                  title={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
+            <Show when={filtersQuery.data}>
+              {(data) => {
+                const filters = data().controls
+                return (
+                  <div class="mt-4 space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <For each={filters}>
+                        {(promptFilter) => {
+                          const promptLabel = getPromptFilterLabel(promptFilter)
+                          const current = createMemo(() => {
+                            return getSelectedPromptValues(props.promptFilters()[promptFilter.promptId])
+                          })
+                          const options = createMemo(() => {
+                            return promptFilter.options
+                          })
+                          return (
+                            <div class="flex flex-col gap-2">
+                              <label class="font-medium text-sm truncate" title={promptLabel}>
+                                {promptLabel}:
+                              </label>
+                              <Select.Root<{value: string; label: string}>
+                                multiple
+                                value={options().filter((option) => {
+                                  return current().includes(option.value)
+                                })}
+                                onChange={(vals) => {
+                                  const values = vals.map((value) => {
+                                    return value.value
+                                  })
+                                  return setPromptMulti(promptFilter.promptId, values.length ? values : null)
+                                }}
+                                options={options()}
+                                optionValue="value"
+                                optionTextValue="label"
+                                placeholder="All"
+                                itemComponent={(itemProps) => {
+                                  return (
+                                    <Select.Item
+                                      item={itemProps.item}
+                                      class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-gray-900 outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-gray-100 data-[disabled]:opacity-50"
+                                    >
+                                      <Select.ItemLabel class="truncate">
+                                        {itemProps.item.rawValue.label}
+                                      </Select.ItemLabel>
+                                      <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="3"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                          class="size-3"
+                                        >
+                                          <path d="M5 12l5 5l10 -10" />
+                                        </svg>
+                                      </Select.ItemIndicator>
+                                    </Select.Item>
+                                  )
+                                }}
+                              >
+                                <Select.Trigger
+                                  class="group min-h-11 w-full rounded-md border border-input bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
+                                  aria-label={promptLabel}
                                 >
-                                  {promptFilter.promptName || `Prompt ${promptFilter.promptId}`}:
-                                </label>
-                                <Select.Root<string>
-                                  multiple
-                                  value={current()}
-                                  onChange={(vals: string[]) => {
-                                    return setPromptMulti(promptFilter.promptId, vals.length ? vals : null)
-                                  }}
-                                  options={options()}
-                                  optionValue={(v: string) => {
-                                    return v
-                                  }}
-                                  optionTextValue={(v: string) => {
-                                    return v
-                                  }}
-                                  placeholder="All"
-                                  itemComponent={(itemProps) => {
-                                    return (
-                                      <Select.Item
-                                        item={itemProps.item}
-                                        class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-gray-900 outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-gray-100 data-[disabled]:opacity-50"
-                                      >
-                                        <Select.ItemLabel class="truncate">{itemProps.item.rawValue}</Select.ItemLabel>
-                                        <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
-                                          <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="3"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            class="size-3"
-                                          >
-                                            <path d="M5 12l5 5l10 -10" />
-                                          </svg>
-                                        </Select.ItemIndicator>
-                                      </Select.Item>
-                                    )
-                                  }}
-                                >
-                                  <Select.Trigger
-                                    class="group min-h-11 w-full rounded-md border border-input bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
-                                    aria-label={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
-                                  >
-                                    <div class="flex flex-wrap gap-2 grow">
-                                      <Show
-                                        when={current().length > 0}
-                                        fallback={<span class="text-gray-500">All</span>}
-                                      >
-                                        <For each={current()}>
-                                          {(val) => {
-                                            return (
-                                              <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
-                                                <span class="truncate max-w-[10rem]" title={val}>
-                                                  {val}
-                                                </span>
-                                                <button
-                                                  type="button"
-                                                  class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
-                                                  aria-label={`Remove ${val}`}
-                                                  onClick={() => {
-                                                    const next = current().filter((v) => {
-                                                      return v !== val
-                                                    })
-                                                    setPromptMulti(promptFilter.promptId, next.length ? next : null)
-                                                  }}
-                                                >
-                                                  <svg
-                                                    xmlns="http://www.w3.org/2000/svg"
-                                                    viewBox="0 0 24 24"
-                                                    fill="none"
-                                                    stroke="currentColor"
-                                                    stroke-width="2"
-                                                    stroke-linecap="round"
-                                                    stroke-linejoin="round"
-                                                    class="size-3"
-                                                  >
-                                                    <path d="M18 6L6 18" />
-                                                    <path d="M6 6l12 12" />
-                                                  </svg>
-                                                </button>
+                                  <div class="flex flex-wrap gap-2 grow">
+                                    <Show when={current().length > 0} fallback={<span class="text-gray-500">All</span>}>
+                                      <For each={current()}>
+                                        {(val) => {
+                                          const displayLabel =
+                                            options().find((option) => {
+                                              return option.value === val
+                                            })?.label ?? val
+                                          return (
+                                            <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
+                                              <span class="truncate max-w-[10rem]" title={displayLabel}>
+                                                {displayLabel}
                                               </span>
-                                            )
-                                          }}
-                                        </For>
-                                      </Show>
-                                    </div>
-                                    <div class="ml-auto flex items-center gap-1">
-                                      <button
-                                        type="button"
-                                        class="inline-flex size-6 items-center justify-center rounded hover:bg-muted-foreground/10"
-                                        title="Clear selection"
-                                        aria-label="Clear selection"
-                                        onClick={() => {
-                                          return setPromptMulti(promptFilter.promptId, null)
+                                              <button
+                                                type="button"
+                                                class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
+                                                aria-label={`Remove ${displayLabel}`}
+                                                onClick={() => {
+                                                  const next = current().filter((v) => {
+                                                    return v !== val
+                                                  })
+                                                  setPromptMulti(promptFilter.promptId, next.length ? next : null)
+                                                }}
+                                              >
+                                                <svg
+                                                  xmlns="http://www.w3.org/2000/svg"
+                                                  viewBox="0 0 24 24"
+                                                  fill="none"
+                                                  stroke="currentColor"
+                                                  stroke-width="2"
+                                                  stroke-linecap="round"
+                                                  stroke-linejoin="round"
+                                                  class="size-3"
+                                                >
+                                                  <path d="M18 6L6 18" />
+                                                  <path d="M6 6l12 12" />
+                                                </svg>
+                                              </button>
+                                            </span>
+                                          )
                                         }}
+                                      </For>
+                                    </Show>
+                                  </div>
+                                  <div class="ml-auto flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      class="inline-flex size-6 items-center justify-center rounded hover:bg-muted-foreground/10"
+                                      title="Clear selection"
+                                      aria-label="Clear selection"
+                                      onClick={() => {
+                                        return setPromptMulti(promptFilter.promptId, null)
+                                      }}
+                                    >
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        class="size-4 opacity-70"
                                       >
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          viewBox="0 0 24 24"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                          class="size-4 opacity-70"
-                                        >
-                                          <path d="M18 6L6 18" />
-                                          <path d="M6 6l12 12" />
-                                        </svg>
-                                      </button>
-                                      <Select.Icon>
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          viewBox="0 0 24 24"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                          class="size-4 opacity-60"
-                                        >
-                                          <path d="M6 9l6 6l6 -6" />
-                                        </svg>
-                                      </Select.Icon>
-                                    </div>
-                                  </Select.Trigger>
-                                  <Select.Portal>
-                                    <Select.Content class="z-50 min-w-56 rounded-md border border-input bg-white p-1 text-gray-900 shadow-xl outline-none">
-                                      <Select.Listbox class="max-h-60 overflow-auto outline-none" />
-                                    </Select.Content>
-                                  </Select.Portal>
-                                </Select.Root>
-                              </div>
-                            )
-                          }}
-                        </For>
-                      </div>
+                                        <path d="M18 6L6 18" />
+                                        <path d="M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                    <Select.Icon>
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        class="size-4 opacity-60"
+                                      >
+                                        <path d="M6 9l6 6l6 -6" />
+                                      </svg>
+                                    </Select.Icon>
+                                  </div>
+                                </Select.Trigger>
+                                <Select.Portal>
+                                  <Select.Content class="z-50 min-w-56 rounded-md border border-input bg-white p-1 text-gray-900 shadow-xl outline-none">
+                                    <Select.Listbox class="max-h-60 overflow-auto outline-none" />
+                                  </Select.Content>
+                                </Select.Portal>
+                              </Select.Root>
+                            </div>
+                          )
+                        }}
+                      </For>
                     </div>
-                  )
-                }}
-              </Show>
+                  </div>
+                )
+              }}
             </Show>
           </div>
         </Show>

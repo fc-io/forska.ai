@@ -39,9 +39,12 @@ type ReviewServingFacetRow = {
   answer_value?: string | null
   availability?: string | null
   count_value?: number | null
+  facetKey?: string | null
+  facetKind?: string | null
   facet_key?: string | null
   facet_kind?: string | null
   facet_value?: string | null
+  promptId?: string | null
   prompt_id?: string | null
   stale_reason?: string | null
   summary_definition_version?: string | null
@@ -67,11 +70,24 @@ type PromptFilterResponse =
       promptName: string
       specialValues: string[]
     }
+type PromptFilterDefinition = {
+  articleReadinessState: 'fast' | 'slow'
+  debugDisplayState: 'mart/fast' | 'mart/slow' | 'project/fast' | 'project/slow'
+  kind: 'numeric' | 'openString' | 'schemaEnum'
+  label: string
+  optionSourceState: 'fast' | 'schema' | 'slow' | 'unavailable'
+  options: Array<{label: string; value: string}>
+  promptId: string
+  selectedValues: string[]
+  source: 'mart' | 'project'
+  surface: 'both' | 'human' | 'llm' | 'summary'
+}
 type ReviewFilterRouteResponse = {
   diagnostics: ReviewServingReaderDiagnostics[]
   facets: ReviewServingFacetRow[]
   filterOptions: Array<ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>; optionValueKey: string}>
   filters: PromptFilterResponse[]
+  promptFilterDefinitions: PromptFilterDefinition[]
   searchScope: {
     availability: 'ready' | 'unavailable'
     mode: 'none' | 'tokenPrefix'
@@ -215,6 +231,25 @@ const getNumericValuesByPrompt = (
   }, {})
 }
 
+const getPromptAnswerAvailabilityByPrompt = (
+  facetRows: readonly ReviewServingFacetRow[],
+  mode: ReviewServingFilterMode,
+) => {
+  return facetRows.reduce<Record<string, string>>((acc, row) => {
+    const facetKey = row.facet_key ?? row.facetKey
+    const facetKind = row.facet_kind ?? row.facetKind
+    const isPromptAnswer = facetKey === 'promptAnswer'
+    const isModeMatch = mode === 'human' ? facetKind === 'human' : facetKind === 'review'
+    const promptId = row.prompt_id ?? row.promptId ?? null
+
+    return isPromptAnswer && isModeMatch && promptId ? {...acc, [promptId]: row.availability ?? 'unavailable'} : acc
+  }, {})
+}
+
+const getArticleReadinessState = (availability: string | undefined): 'fast' | 'slow' => {
+  return availability === 'ready' ? 'fast' : 'slow'
+}
+
 const getPromptFilters = (
   promptRows: readonly PromptRow[],
   optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[],
@@ -247,6 +282,15 @@ const getPromptFilters = (
       )
     }
 
+    if (promptStrategy?.strategy === 'enum' && promptStrategy.enumOptions) {
+      return {
+        answeredOriginalValues: promptStrategy.enumOptions,
+        filterType: 'enum' as const,
+        promptId: prompt.id,
+        promptName: getPromptName(prompt),
+      }
+    }
+
     return {
       answeredOriginalValues: [...new Set(valuesByPrompt[prompt.id] ?? [])],
       filterType: 'enum' as const,
@@ -264,6 +308,106 @@ const getPromptFilters = (
   ]
 
   return mode === 'human' && humanJudgmentMode === 'summary' ? summaryFilter : promptFilters
+}
+
+const getSelectedValuesByPrompt = (params: ReviewServingFilterRouteParams) => {
+  const promptParams = params as ReviewServingFilterRouteParams & {prompts?: unknown}
+
+  if (!promptParams.prompts || typeof promptParams.prompts !== 'object') {
+    return {}
+  }
+
+  return Object.entries(promptParams.prompts as Record<string, unknown>).reduce<Record<string, string[]>>(
+    (acc, [key, value]) => {
+      if (Array.isArray(value)) {
+        return {
+          ...acc,
+          [key]: value.filter((entry): entry is string => {
+            return typeof entry === 'string'
+          }),
+        }
+      }
+
+      return typeof value === 'string' ? {...acc, [key]: [value]} : acc
+    },
+    {},
+  )
+}
+
+const getPromptFilterDefinitions = (input: {
+  facetRows: readonly ReviewServingFacetRow[]
+  humanJudgmentMode: HumanJudgmentMode
+  mode: ReviewServingFilterMode
+  optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[]
+  params: ReviewServingFilterRouteParams
+  promptRows: readonly PromptRow[]
+}): PromptFilterDefinition[] => {
+  const selectedValuesByPrompt = getSelectedValuesByPrompt(input.params)
+  const valuesByPrompt = input.optionRows.reduce<Record<string, string[]>>((acc, row) => {
+    const promptId = typeof row.optionPayload.promptId === 'string' ? row.optionPayload.promptId : row.prompt_id
+    const value = typeof row.optionPayload.value === 'string' ? row.optionPayload.value : row.facet_value
+    const isPromptAnswer = row.facet_key === 'promptAnswer'
+    const isModeMatch = input.mode === 'human' ? row.filter_kind === 'human' : row.filter_kind === 'review'
+
+    return isPromptAnswer && isModeMatch && promptId && value
+      ? {...acc, [promptId]: [...(acc[promptId] ?? []), value]}
+      : acc
+  }, {})
+  const promptAnswerAvailabilityByPrompt = getPromptAnswerAvailabilityByPrompt(input.facetRows, input.mode)
+
+  if (input.mode === 'human' && input.humanJudgmentMode === 'summary') {
+    const articleReadinessState = getArticleReadinessState(promptAnswerAvailabilityByPrompt.summary)
+    const options = [...new Set(valuesByPrompt.summary ?? [])].map((value) => {
+      return {label: value, value}
+    })
+
+    return [
+      {
+        articleReadinessState,
+        debugDisplayState: `mart/${articleReadinessState}`,
+        kind: 'schemaEnum',
+        label: 'Overall human screening decision',
+        optionSourceState: options.length > 0 ? 'fast' : 'unavailable',
+        options,
+        promptId: 'summary',
+        selectedValues: selectedValuesByPrompt.summary ?? [],
+        source: 'mart',
+        surface: 'summary',
+      },
+    ]
+  }
+
+  const promptStrategies = analyzePromptTypes([...input.promptRows])
+
+  return input.promptRows.map((prompt) => {
+    const strategy = promptStrategies.find((candidate) => {
+      return candidate.promptId === prompt.id
+    })
+    const label = getPromptName(prompt)
+    const kind =
+      strategy?.strategy === 'enum' ? 'schemaEnum' : strategy?.strategy === 'numeric' ? 'numeric' : 'openString'
+    const source = kind === 'schemaEnum' ? 'project' : 'mart'
+    const articleReadinessState = getArticleReadinessState(promptAnswerAvailabilityByPrompt[prompt.id])
+    const schemaOptions = strategy?.strategy === 'enum' ? (strategy.enumOptions ?? []) : []
+    const martOptions = [...new Set(valuesByPrompt[prompt.id] ?? [])]
+    const optionValues = schemaOptions.length > 0 ? schemaOptions : martOptions
+    const optionSourceState = source === 'project' ? 'schema' : martOptions.length > 0 ? 'fast' : 'unavailable'
+
+    return {
+      articleReadinessState,
+      debugDisplayState: `${source}/${articleReadinessState}`,
+      kind,
+      label,
+      optionSourceState,
+      options: optionValues.map((value) => {
+        return {label: value, value}
+      }),
+      promptId: prompt.id,
+      selectedValues: selectedValuesByPrompt[prompt.id] ?? [],
+      source,
+      surface: input.mode === 'human' ? 'human' : 'llm',
+    }
+  })
 }
 
 const readFacetRows = async (
@@ -334,6 +478,7 @@ export const getReviewFiltersFromServing = async (input: {
       facets: [],
       filterOptions: [],
       filters: [],
+      promptFilterDefinitions: [],
       searchScope: {availability: 'unavailable', mode: 'none', searchIdentity: '$missingIdentity', text: null},
     }
   }
@@ -350,6 +495,14 @@ export const getReviewFiltersFromServing = async (input: {
     facets,
     filterOptions: optionResult.filterOptions,
     filters: getPromptFilters(input.promptRows, optionResult.filterOptions, input.mode, input.humanJudgmentMode),
+    promptFilterDefinitions: getPromptFilterDefinitions({
+      facetRows: facets,
+      humanJudgmentMode: input.humanJudgmentMode ?? 'summary',
+      mode: input.mode,
+      optionRows: optionResult.filterOptions,
+      params: input.params,
+      promptRows: input.promptRows,
+    }),
     searchScope: {
       availability: 'ready',
       mode: searchText ? 'tokenPrefix' : 'none',

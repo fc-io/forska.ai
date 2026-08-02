@@ -66,9 +66,9 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
     duckdbPath,
     `
       CREATE SCHEMA app;
-      CREATE TABLE app.prompt (id VARCHAR PRIMARY KEY, original_text VARCHAR NOT NULL, prompt_heading VARCHAR, type VARCHAR, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp);
+      CREATE TABLE app.prompt (id VARCHAR PRIMARY KEY, original_text VARCHAR NOT NULL, prompt_heading VARCHAR, type VARCHAR, archived BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp);
       CREATE TABLE app.project (id VARCHAR PRIMARY KEY, model_id VARCHAR, use_title BOOLEAN NOT NULL DEFAULT TRUE, use_abstract BOOLEAN NOT NULL DEFAULT TRUE, use_fulltext BOOLEAN NOT NULL DEFAULT FALSE, use_fulltext_no_images BOOLEAN NOT NULL DEFAULT FALSE, date_from TIMESTAMPTZ, date_to TIMESTAMPTZ);
-      CREATE TABLE app.project_prompt (id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, prompt_id VARCHAR NOT NULL, prompt_order INTEGER, enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp);
+      CREATE TABLE app.project_prompt (id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, prompt_id VARCHAR NOT NULL, prompt_order INTEGER, enabled BOOLEAN NOT NULL DEFAULT TRUE, archived BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp);
       CREATE TABLE app.project_import_route (id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, import_route_id VARCHAR NOT NULL);
       CREATE TABLE app.import_route (id VARCHAR PRIMARY KEY, route VARCHAR NOT NULL, name VARCHAR, description VARCHAR, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp);
       CREATE TABLE app.article (
