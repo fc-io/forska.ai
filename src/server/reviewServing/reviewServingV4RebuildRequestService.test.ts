@@ -914,7 +914,15 @@ test('V4 missing snapshot bootstrap bounds large project-scope request estimates
 
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
-  expect(statements.join('\n')).toContain('"bootstrapChunkCount":85')
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('"bootstrapChunkCount":85')
+  expect(joined).toContain('"bootstrapExecutableChunkCount":935')
+  expect(joined).toContain('"bootstrapSnapshot":true')
+  expect(joined).toContain('"childAdmissionBudget"')
+  expect(joined).toContain('"childAdmissionEstimate"')
+  expect(joined).toContain('"coldBootstrap":true')
+  expect(joined).toContain('"totalEstimate"')
   expect(projectScopeChunkInserts).toHaveLength(85)
 })
 

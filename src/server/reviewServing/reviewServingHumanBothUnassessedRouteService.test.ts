@@ -25,15 +25,25 @@ const components: readonly ReviewServingProjectionComponent[] = [
   'search',
   'judgmentInputContent',
 ]
+const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
+  'display',
+  'projectScope',
+  'selectedImport',
+  'llmStatus',
+  'humanStatus',
+  'posting',
+  'summary',
+  'queue',
+]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
 const hasArticleServingRowSource = (statement: string) => {
   return statement.includes('FROM mart.review_article_serving_base_v4 serving')
 }
 
-const getComponentState = () => {
+const getComponentState = (inputComponents: readonly ReviewServingProjectionComponent[] = components) => {
   return {
     optional: [],
-    required: components.map((component) => {
+    required: inputComponents.map((component) => {
       return {
         baseGeneration: '1',
         component,
@@ -45,15 +55,18 @@ const getComponentState = () => {
   }
 }
 
-const getSnapshotRow = (status: ReviewServingSnapshotStatus) => {
+const getSnapshotRow = (
+  status: ReviewServingSnapshotStatus,
+  inputComponents: readonly ReviewServingProjectionComponent[] = components,
+) => {
   return {
-    componentStateJson: getComponentState(),
+    componentStateJson: getComponentState(inputComponents),
     composedIdentityJson: {snapshot: `${status}-snapshot`},
     lastError: status === 'failed' ? 'projection failed' : null,
     lastKnownGoodSnapshotId: status === 'active' ? 'retired-snapshot' : null,
     optionalComponentsJson: [],
     projectId: 'project-1',
-    requiredComponentsJson: components,
+    requiredComponentsJson: inputComponents,
     reviewConfigHash: 'config-1',
     selectedImportSnapshotId: 'selected-import-snapshot-1',
     snapshotId: `${status}-snapshot`,
@@ -67,7 +80,10 @@ const getDiagnosticsRows = (statement: string) => {
   return statement.includes('GROUP BY snapshot_status') ? [{snapshotCount: 1, snapshotStatus: 'active'}] : []
 }
 
-const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing') => {
+const createManifestDatabase = (
+  status: ReviewServingSnapshotStatus | 'missing',
+  inputComponents: readonly ReviewServingProjectionComponent[] = components,
+) => {
   const database: ReviewServingManifestRepositoryDatabase = {
     queryJson: async <T>(statement: string): Promise<T[]> => {
       if (!statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -79,14 +95,14 @@ const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing')
       }
 
       if (statement.includes("snapshot_status = 'active'")) {
-        return status === 'active' ? ([getSnapshotRow('active')] as T[]) : []
+        return status === 'active' ? ([getSnapshotRow('active', inputComponents)] as T[]) : []
       }
 
       if (statement.includes("snapshot_status = 'retired'")) {
-        return status === 'retired' ? ([getSnapshotRow('retired')] as T[]) : []
+        return status === 'retired' ? ([getSnapshotRow('retired', inputComponents)] as T[]) : []
       }
 
-      return [getSnapshotRow(status)] as T[]
+      return [getSnapshotRow(status, inputComponents)] as T[]
     },
     run: async () => {},
     transaction: async (operation) => {
@@ -350,6 +366,40 @@ test('human and both unfiltered tab counts stay scoped to served base rows', asy
   expect(humanCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(bothCountStatement).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
   expect(bothCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+})
+
+test('Human, Both, and Unassessed default routes stay foreground-readable without search or payload enrichment', async () => {
+  const humanReader = createReaderDatabase()
+  const bothReader = createReaderDatabase()
+  const unassessedReader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase('active', defaultReadableComponents)
+
+  const [humanResult, bothResult, unassessedResult] = await Promise.all([
+    getHumanReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {currentReviewConfigHash: 'config-1', database: humanReader.database, manifestDatabase},
+    ),
+    getBothReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {currentReviewConfigHash: 'config-1', database: bothReader.database, manifestDatabase},
+    ),
+    getUnassessedReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {currentReviewConfigHash: 'config-1', database: unassessedReader.database, manifestDatabase},
+    ),
+  ])
+  const sql = [...humanReader.statements, ...bothReader.statements, ...unassessedReader.statements].join('\n')
+
+  expect(humanResult.data).toHaveLength(1)
+  expect(bothResult.data).toHaveLength(1)
+  expect(unassessedResult.data).toHaveLength(1)
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
+  expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(sql).not.toContain('mart.review_title_search_serving_v4')
+  expect(sql).not.toContain('search_identity')
+  expect(sql).not.toContain('lazy-detail-hydration')
+  expect(sql).not.toContain('model_id AS modelId')
 })
 
 test('human review route service retries transient filtered count read failures', async () => {

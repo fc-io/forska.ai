@@ -55,6 +55,9 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
       'getReviewServingRebuildTimingDiagnostics',
       'getReviewServingPhysicalShapeDiagnostics',
       'physicalShape',
+      'timeline',
+      'defaultReadableAt',
+      'fullyEnrichedAt',
     ],
     path: 'scripts/inspectReviewServingRebuildTimings.ts',
   },
@@ -340,7 +343,10 @@ test('review-serving rebuild timing inspector reports optional hot table physica
     'getReviewServingPhysicalShapeDiagnostics',
     'physicalShape',
     'options.projectId',
-    'physicalShape ? {...diagnostics, physicalShape} : diagnostics',
+    'operatorReadout',
+    'const output = physicalShape',
+    '{...diagnostics, operatorReadout, physicalShape}',
+    '{...diagnostics, operatorReadout}',
   ]) {
     expect(source).toContain(expectedText)
   }

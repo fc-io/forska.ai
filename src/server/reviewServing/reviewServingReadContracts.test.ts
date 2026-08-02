@@ -297,6 +297,59 @@ test('title-search row contracts keep ordering and cursors on primary article se
   ])
 })
 
+test('default tab row and count contracts stay within default-readable components', () => {
+  const defaultContractKeys = [
+    'review.llm.rows',
+    'review.llm.count',
+    'review.human.rows',
+    'review.human.count',
+    'review.both.rows',
+    'review.both.count',
+    'review.unassessed.rows',
+    'review.unassessed.count',
+  ] as const
+  const secondaryComponents = new Set(['judgmentInputContent', 'payload', 'search'])
+
+  expect(
+    defaultContractKeys.map((contractKey) => {
+      const contract = getReviewServingReadContract(contractKey)
+
+      return [
+        contractKey,
+        contract?.searchMode,
+        contract?.requiredComponents.filter((component) => {
+          return secondaryComponents.has(component)
+        }),
+      ]
+    }),
+  ).toEqual([
+    ['review.llm.rows', 'tokenPrefix', []],
+    ['review.llm.count', 'none', []],
+    ['review.human.rows', 'tokenPrefix', []],
+    ['review.human.count', 'none', []],
+    ['review.both.rows', 'tokenPrefix', []],
+    ['review.both.count', 'none', []],
+    ['review.unassessed.rows', 'tokenPrefix', []],
+    ['review.unassessed.count', 'none', []],
+  ])
+})
+
+test('search-specific contracts explicitly require or report search readiness', () => {
+  const tokenPrefix = getReviewServingReadContract('review.search.tokenPrefix')
+  const substringAsync = getReviewServingReadContract('review.search.substringAsync')
+
+  expect(tokenPrefix?.workloadClass).toBe('foregroundReviewSearch')
+  expect(tokenPrefix?.searchMode).toBe('tokenPrefix')
+  expect(tokenPrefix?.requiredComponents).toEqual(['projectScope', 'search'])
+  expect(tokenPrefix?.freshnessBehavior).toBe('requireReadySnapshot')
+  expect(substringAsync?.workloadClass).toBe('bulkReviewJob')
+  expect(substringAsync?.searchMode).toBe('substringAsync')
+  expect(substringAsync?.freshnessBehavior).toBe('asyncUnavailable')
+  expect(substringAsync?.servingTable).toBe('app.review_search_job')
+  expect(substringAsync?.requiredComponents).toEqual(['projectScope'])
+  expect(substringAsync?.requiredComponents).not.toContain('search')
+})
+
 test('prompt preview contract orders article serving rows without judgment detail payload readiness', () => {
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 

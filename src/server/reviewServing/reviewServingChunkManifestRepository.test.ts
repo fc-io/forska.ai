@@ -1660,6 +1660,97 @@ test('failed chunks can be claimed again and completed transactionally with outp
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toBeNull()
 })
 
+test('completed rebuild chunks finalize their root request only after all request chunks complete', async () => {
+  const requestId = 'rebuild:completed-root'
+  const completedSibling = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-completed-sibling', projectionComponent: 'projectScope', requestId},
+      [],
+    ),
+    status: 'completed' as const,
+  }
+  const running = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-final-child', requestId}, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-final-child',
+    status: 'running' as const,
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([completedSibling, running])
+
+  const completed = await writeReviewServingRebuildChunkOutput(
+    {
+      ...baseChunkIdentity,
+      inputDigest: 'digest-final-child',
+      leaseOwner: 'worker-final-child',
+      requestId,
+      validateOutput: async () => {
+        return {actualChecksum: 'checksum-final-child', actualCount: 1, expectedChecksum: 'checksum-final-child'}
+      },
+      writeOutput: async () => {},
+    },
+    database,
+  )
+  const requestUpdate = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_rebuild_request') && statement.includes("status = 'completed'")
+  })
+
+  expect(completed).toMatchObject({requestId, status: 'completed'})
+  expect(requestUpdate).toBeDefined()
+  expect(requestUpdate).toContain("request_id = 'rebuild:completed-root'")
+  expect(requestUpdate).toContain("status IN ('admitted', 'running')")
+  expect(requestUpdate).toContain('EXISTS')
+  expect(requestUpdate).toContain('NOT EXISTS')
+  expect(requestUpdate).toContain("chunk.status <> 'completed'")
+  expect(requestUpdate).toContain('chunk.project_id IS DISTINCT FROM app.review_rebuild_request.project_id')
+})
+
+test('root request completion preserves blocked or quarantined chunk evidence', async () => {
+  const requestId = 'rebuild:blocked-root'
+  const blockedSibling = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-blocked-sibling', projectionComponent: 'posting', requestId},
+      [],
+    ),
+    admissionState: 'blocked_over_budget' as const,
+    overBudgetReason: 'input rows: estimated 99 > max 10',
+    status: 'blocked_over_budget' as const,
+  }
+  const running = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-blocked-final-child', requestId}, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-blocked-final-child',
+    status: 'running' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([blockedSibling, running])
+
+  await writeReviewServingRebuildChunkOutput(
+    {
+      ...baseChunkIdentity,
+      inputDigest: 'digest-blocked-final-child',
+      leaseOwner: 'worker-blocked-final-child',
+      requestId,
+      validateOutput: async () => {
+        return {actualChecksum: 'checksum-blocked-final-child', expectedChecksum: 'checksum-blocked-final-child'}
+      },
+      writeOutput: async () => {},
+    },
+    database,
+  )
+  const requestUpdate = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_rebuild_request') && statement.includes("status = 'completed'")
+  })
+
+  expect(rows.get(blockedSibling.chunkId)).toMatchObject({
+    admissionState: 'blocked_over_budget',
+    overBudgetReason: 'input rows: estimated 99 > max 10',
+    requestId,
+    status: 'blocked_over_budget',
+  })
+  expect(requestUpdate).toBeDefined()
+  expect(requestUpdate).toContain('NOT EXISTS')
+  expect(requestUpdate).toContain("chunk.status <> 'completed'")
+})
+
 test('completed rebuild chunks persist write and validation timing diagnostics', async () => {
   const running = {
     ...getChunkRowFromIdentity(baseChunkIdentity, []),
@@ -1754,7 +1845,56 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
-      if (statement.includes('GROUP BY')) {
+      if (statement.includes('request.request_id AS rootRequestId')) {
+        return [
+          {
+            activeSnapshotPromotedAt: '2026-06-16T14:10:00.000Z',
+            admittedAt: '2026-06-16T14:00:05.000Z',
+            blockedOverBudgetCount: 0,
+            completedAt: '2026-06-16T14:09:00.000Z',
+            completedCount: 1,
+            createdAt: '2026-06-16T14:00:00.000Z',
+            failedCount: 0,
+            firstChunkStartedAt: '2026-06-16T14:00:30.000Z',
+            identityJson: {reviewConfigHash: 'review-config-1'},
+            pendingCount: 1,
+            projectId: 'project-1',
+            quarantinedCount: 0,
+            reason: 'operator_cold_bootstrap',
+            requestedComponentsJson: ['summary'],
+            requestlessAdoptableChunkCount: 2,
+            reviewConfigHash: 'review-config-1',
+            rootRequestId: 'rebuild:timing',
+            runningCount: 0,
+            selectedImportSnapshotId: 'selected-import-1',
+            snapshotId: 'snapshot-1',
+            status: 'completed',
+            supersededRequestCount: 1,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('AS wallClockMs')) {
+        return [
+          {
+            blockedOverBudgetCount: 0,
+            completedAt: '2026-06-16T14:09:00.000Z',
+            completedCount: 1,
+            failedCount: 0,
+            firstChunkStartedAt: '2026-06-16T14:00:30.000Z',
+            lastUpdatedAt: '2026-06-16T14:09:00.000Z',
+            pendingCount: 1,
+            projectionComponent: 'summary',
+            quarantinedCount: 0,
+            rootRequestId: 'rebuild:timing',
+            runningCount: 0,
+            totalCount: 2,
+            wallClockMs: 510000,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('AVG(chunk.duration_ms)')) {
         return [
           {
             avgDurationMs: 42,
@@ -1812,6 +1952,32 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
   )
 
   expect(diagnostics.filters).toEqual({limit: 7, projectId: 'project-1', requestId: 'rebuild:timing'})
+  expect(diagnostics.timeline).toHaveLength(1)
+  expect(diagnostics.timeline[0]).toMatchObject({
+    activeSnapshotPromotedAt: {status: 'known', value: '2026-06-16T14:10:00.000Z'},
+    admittedAt: {status: 'known', value: '2026-06-16T14:00:05.000Z'},
+    componentCounts: {completed: 1, pending: 1, total: 2},
+    defaultReadableAt: {status: 'unknown', value: null},
+    firstChunkStartedAt: {status: 'known', value: '2026-06-16T14:00:30.000Z'},
+    fullyEnrichedAt: {status: 'unknown', value: null},
+    projectId: 'project-1',
+    relationships: {requestlessAdoptableChunkCount: 2, supersededRequestCount: 1},
+    requestedComponents: ['summary'],
+    reviewConfigHash: 'review-config-1',
+    rootRequestId: 'rebuild:timing',
+    selectedImportSnapshotId: 'selected-import-1',
+    snapshotId: 'snapshot-1',
+  })
+  expect(diagnostics.timeline[0]?.componentSpans).toEqual([
+    {
+      completedAt: '2026-06-16T14:09:00.000Z',
+      counts: {blockedOverBudget: 0, completed: 1, failed: 0, pending: 1, quarantined: 0, running: 0, total: 2},
+      firstChunkStartedAt: '2026-06-16T14:00:30.000Z',
+      lastUpdatedAt: '2026-06-16T14:09:00.000Z',
+      projectionComponent: 'summary',
+      wallClockMs: 510000,
+    },
+  ])
   expect(diagnostics.phaseTimings).toHaveLength(1)
   expect(diagnostics.phaseTimings[0]).toMatchObject({
     totalActualOutputBytes: 2048,
@@ -1822,21 +1988,28 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
     totalEstimatedTempBytes: 1024,
   })
   expect(diagnostics.claimablePendingChunks).toHaveLength(1)
-  expect(statements[0]).toContain("chunk.request_id = 'rebuild:timing'")
-  expect(statements[0]).toContain("chunk.project_id = 'project-1'")
-  expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs')")
-  expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs')")
-  expect(statements[0]).toContain('SUM(chunk.actual_output_bytes) AS totalActualOutputBytes')
-  expect(statements[0]).toContain('SUM(chunk.actual_payload_bytes) AS totalActualPayloadBytes')
-  expect(statements[0]).toContain('SUM(chunk.actual_temp_bytes) AS totalActualTempBytes')
-  expect(statements[0]).toContain('SUM(chunk.estimated_output_bytes) AS totalEstimatedOutputBytes')
-  expect(statements[0]).toContain('SUM(chunk.estimated_payload_bytes) AS totalEstimatedPayloadBytes')
-  expect(statements[0]).toContain('SUM(chunk.estimated_temp_bytes) AS totalEstimatedTempBytes')
-  expect(statements[1]).toContain("chunk.admission_state = 'admitted'")
-  expect(statements[1]).toContain("request.status IN ('admitted', 'running')")
-  expect(statements[1]).toContain("request.admission_state = 'admitted'")
-  expect(statements[1]).toContain('prerequisite.request_id IS NOT DISTINCT FROM chunk.request_id')
-  expect(statements[1]).toContain('LIMIT 7')
+  expect(statements[0]).toContain("request.request_id = 'rebuild:timing'")
+  expect(statements[0]).toContain("request.project_id = 'project-1'")
+  expect(statements[0]).toContain('request.request_id AS rootRequestId')
+  expect(statements[0]).toContain("snapshot.snapshot_status = 'active'")
+  expect(statements[0]).toContain("json_extract_string(request.identity_json, '$.reviewConfigHash')")
+  expect(statements[0]).toContain("lower(COALESCE(superseded.last_error, '')) LIKE '%superseded%'")
+  expect(statements[1]).toContain("date_diff('millisecond', MIN(chunk.started_at), MAX(chunk.completed_at))")
+  expect(statements[2]).toContain("chunk.request_id = 'rebuild:timing'")
+  expect(statements[2]).toContain("chunk.project_id = 'project-1'")
+  expect(statements[2]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs')")
+  expect(statements[2]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs')")
+  expect(statements[2]).toContain('SUM(chunk.actual_output_bytes) AS totalActualOutputBytes')
+  expect(statements[2]).toContain('SUM(chunk.actual_payload_bytes) AS totalActualPayloadBytes')
+  expect(statements[2]).toContain('SUM(chunk.actual_temp_bytes) AS totalActualTempBytes')
+  expect(statements[2]).toContain('SUM(chunk.estimated_output_bytes) AS totalEstimatedOutputBytes')
+  expect(statements[2]).toContain('SUM(chunk.estimated_payload_bytes) AS totalEstimatedPayloadBytes')
+  expect(statements[2]).toContain('SUM(chunk.estimated_temp_bytes) AS totalEstimatedTempBytes')
+  expect(statements[3]).toContain("chunk.admission_state = 'admitted'")
+  expect(statements[3]).toContain("request.status IN ('admitted', 'running')")
+  expect(statements[3]).toContain("request.admission_state = 'admitted'")
+  expect(statements[3]).toContain('prerequisite.request_id IS NOT DISTINCT FROM chunk.request_id')
+  expect(statements[3]).toContain('LIMIT 7')
 })
 
 test('rebuild chunk heartbeat extends only the current owner lease', async () => {
