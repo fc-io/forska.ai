@@ -1,4 +1,8 @@
-import {getReviewServingRebuildTimingDiagnostics} from '../src/server/reviewServing/reviewServingChunkManifestRepository.ts'
+import {
+  getReviewServingRebuildTimingDiagnostics,
+  type ReviewServingChunkManifestRepositoryDatabase,
+  type ReviewServingChunkManifestRepositoryTransaction,
+} from '../src/server/reviewServing/reviewServingChunkManifestRepository.ts'
 import {getReviewServingPhysicalShapeDiagnostics} from '../src/server/reviewServing/reviewServingPhysicalShapeDiagnostics.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
@@ -32,12 +36,55 @@ const getCliOptions = (): CliOptions => {
   }
 }
 
+const getTimestampDurationMs = (start: string | null, end: string | null) => {
+  if (!start || !end) {
+    return null
+  }
+
+  const startMs = new Date(start).getTime()
+  const endMs = new Date(end).getTime()
+
+  return Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : null
+}
+
+const getOperatorTimelineReadout = (
+  diagnostics: Awaited<ReturnType<typeof getReviewServingRebuildTimingDiagnostics>>,
+) => {
+  return diagnostics.timeline.map((timeline) => {
+    return {
+      activeSnapshotPromotedAt: timeline.activeSnapshotPromotedAt,
+      admittedAt: timeline.admittedAt,
+      componentCounts: timeline.componentCounts,
+      createdAt: timeline.createdAt,
+      defaultReadableAt: timeline.defaultReadableAt,
+      durationsMs: {
+        admittedToFirstChunk: getTimestampDurationMs(timeline.admittedAt.value, timeline.firstChunkStartedAt.value),
+        admittedToPromotion: getTimestampDurationMs(timeline.admittedAt.value, timeline.activeSnapshotPromotedAt.value),
+        createdToAdmitted: getTimestampDurationMs(timeline.createdAt.value, timeline.admittedAt.value),
+        createdToPromotion: getTimestampDurationMs(timeline.createdAt.value, timeline.activeSnapshotPromotedAt.value),
+        firstChunkToPromotion: getTimestampDurationMs(
+          timeline.firstChunkStartedAt.value,
+          timeline.activeSnapshotPromotedAt.value,
+        ),
+      },
+      firstChunkStartedAt: timeline.firstChunkStartedAt,
+      fullyEnrichedAt: timeline.fullyEnrichedAt,
+      projectId: timeline.projectId,
+      relationships: timeline.relationships,
+      reviewConfigHash: timeline.reviewConfigHash,
+      rootRequestId: timeline.rootRequestId,
+      snapshotId: timeline.snapshotId,
+      status: timeline.status,
+    }
+  })
+}
+
 const inspectReviewServingRebuildTimingsCli = async () => {
   const options = getCliOptions()
 
   await withDuckdbMaintenanceAccess('inspect review-serving rebuild timings', async () => {
     const database = getAppDatabaseService()
-    const databaseAccess = {
+    const databaseAccess: ReviewServingChunkManifestRepositoryDatabase = {
       ...database,
       queryJson: <T>(statement: string) => {
         return database.queryJson<T>(statement, workloadContext)
@@ -45,21 +92,21 @@ const inspectReviewServingRebuildTimingsCli = async () => {
       run: (statement: string) => {
         return database.run(statement, workloadContext)
       },
-      transaction: <T>(
-        operation: (tx: {
-          queryJson: <R>(statement: string) => Promise<R[]>
-          run: (statement: string) => Promise<void>
-        }) => Promise<T>,
-      ) => {
-        return database.transaction(operation, workloadContext)
+      transaction: async <T>(
+        operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+      ): Promise<T> => {
+        return database.transaction(operation, workloadContext) as Promise<T>
       },
     }
     const diagnostics = await getReviewServingRebuildTimingDiagnostics(options, databaseAccess)
     const physicalShape = options.projectId
       ? await getReviewServingPhysicalShapeDiagnostics(options.projectId, {queryJson: databaseAccess.queryJson})
       : null
+    const operatorReadout = getOperatorTimelineReadout(diagnostics)
 
-    console.log(JSON.stringify(physicalShape ? {...diagnostics, physicalShape} : diagnostics, null, 2))
+    const output = physicalShape ? {...diagnostics, operatorReadout, physicalShape} : {...diagnostics, operatorReadout}
+
+    console.log(JSON.stringify(output, null, 2))
   })
 }
 

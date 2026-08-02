@@ -16,7 +16,6 @@ import {
   getReviewServingFilteredCountValue,
   type ReviewServingFilteredCountDatabase,
 } from './reviewServingFilteredCountService.ts'
-import {ensureReviewServingJudgmentPayloadRowsForArticleSet} from './reviewServingJudgmentPayloadProjector.ts'
 import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
   type ReviewServingLazyPromptAnswerPostingDatabase,
@@ -133,10 +132,6 @@ const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, c
   return [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
     return entry.component === component
   })?.projectionIdentity
-}
-
-const hasManifestComponent = (manifest: ReviewServingSnapshotManifest, component: string) => {
-  return getManifestComponentIdentity(manifest, component) !== undefined
 }
 
 const getManifest = async (projectId: string, dependencies?: ReviewServingLlmReviewRouteDependencies) => {
@@ -522,19 +517,6 @@ const readJudgmentChunk = async (
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ) => {
   const limit = Math.min(articleIds.length * promptCount, maxJudgmentHydrationRows)
-
-  if (!hasManifestComponent(manifest, 'payload')) {
-    await ensureReviewServingJudgmentPayloadRowsForArticleSet(
-      {
-        articleIds,
-        listModeKeys: ['llm'],
-        projectId: params.projectId,
-        reviewConfigHash: manifest.reviewConfigHash,
-        snapshotId: manifest.snapshotId,
-      },
-      dependencies?.database as Parameters<typeof ensureReviewServingJudgmentPayloadRowsForArticleSet>[1],
-    )
-  }
 
   const result = await readReviewServingRows<ReviewServingJudgmentRow>(
     {

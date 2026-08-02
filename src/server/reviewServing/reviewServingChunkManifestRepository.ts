@@ -4,7 +4,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {isReviewServingProjectionComponent, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 
 export type ReviewServingChunkManifestRepositoryTransaction = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -142,10 +142,64 @@ export type ReviewServingRebuildClaimableChunkRow = {
   updatedAt: string
 }
 
+export type ReviewServingRebuildTimelineTimestamp = {
+  note: string | null
+  status: 'known' | 'unknown'
+  value: string | null
+}
+
+export type ReviewServingRebuildTimelineStatusCounts = {
+  blockedOverBudget: number
+  completed: number
+  failed: number
+  pending: number
+  quarantined: number
+  running: number
+  total: number
+}
+
+export type ReviewServingRebuildComponentSpan = {
+  completedAt: string | null
+  counts: ReviewServingRebuildTimelineStatusCounts
+  firstChunkStartedAt: string | null
+  lastUpdatedAt: string | null
+  projectionComponent: ReviewServingProjectionComponent
+  wallClockMs: number | null
+}
+
+export type ReviewServingRebuildTimelineRelationshipSummary = {
+  adoptedFromRequestId: string | null
+  requestlessAdoptableChunkCount: number
+  supersededByRequestId: string | null
+  supersededRequestCount: number
+}
+
+export type ReviewServingRebuildTimeline = {
+  activeSnapshotPromotedAt: ReviewServingRebuildTimelineTimestamp
+  admittedAt: ReviewServingRebuildTimelineTimestamp
+  componentCounts: ReviewServingRebuildTimelineStatusCounts
+  componentSpans: ReviewServingRebuildComponentSpan[]
+  completedAt: ReviewServingRebuildTimelineTimestamp
+  createdAt: ReviewServingRebuildTimelineTimestamp
+  defaultReadableAt: ReviewServingRebuildTimelineTimestamp
+  firstChunkStartedAt: ReviewServingRebuildTimelineTimestamp
+  fullyEnrichedAt: ReviewServingRebuildTimelineTimestamp
+  projectId: string
+  reason: string
+  relationships: ReviewServingRebuildTimelineRelationshipSummary
+  requestedComponents: ReviewServingProjectionComponent[]
+  reviewConfigHash: string | null
+  rootRequestId: string
+  selectedImportSnapshotId: string | null
+  snapshotId: string | null
+  status: string
+}
+
 export type ReviewServingRebuildTimingDiagnostics = {
   claimablePendingChunks: ReviewServingRebuildClaimableChunkRow[]
   filters: {limit: number; projectId: string | null; requestId: string | null}
   phaseTimings: ReviewServingRebuildTimingSummaryRow[]
+  timeline: ReviewServingRebuildTimeline[]
 }
 
 export type ReviewServingRebuildChunkValidationResult = {
@@ -211,6 +265,47 @@ type ReviewServingRebuildChunkManifestRow = {
   status: ReviewServingRebuildChunkStatus
   updatedAt: string
   workloadClass: string | null
+}
+
+type ReviewServingRebuildTimelineRow = {
+  activeSnapshotPromotedAt: string | null
+  admittedAt: string | null
+  blockedOverBudgetCount: number | null
+  completedAt: string | null
+  completedCount: number | null
+  createdAt: string
+  failedCount: number | null
+  firstChunkStartedAt: string | null
+  identityJson: unknown
+  pendingCount: number | null
+  projectId: string
+  quarantinedCount: number | null
+  reason: string
+  requestedComponentsJson: unknown
+  requestlessAdoptableChunkCount: number | null
+  reviewConfigHash: string | null
+  rootRequestId: string
+  runningCount: number | null
+  selectedImportSnapshotId: string | null
+  snapshotId: string | null
+  status: string
+  supersededRequestCount: number | null
+}
+
+type ReviewServingRebuildTimelineComponentSpanRow = {
+  blockedOverBudgetCount: number | null
+  completedAt: string | null
+  completedCount: number | null
+  failedCount: number | null
+  firstChunkStartedAt: string | null
+  lastUpdatedAt: string | null
+  pendingCount: number | null
+  projectionComponent: ReviewServingProjectionComponent
+  quarantinedCount: number | null
+  rootRequestId: string
+  runningCount: number | null
+  totalCount: number | null
+  wallClockMs: number | null
 }
 
 type ReviewServingRebuildRequestRetryPolicyRow = {retryPolicyJson: unknown}
@@ -565,6 +660,130 @@ const getReviewServingRebuildTimingDiagnosticsPredicate = (input: ReviewServingR
   `
 }
 
+const getReviewServingRebuildTimelineRequestPredicate = (input: ReviewServingRebuildTimingDiagnosticsInput) => {
+  const filters = [
+    input.requestId ? `request.request_id = ${getSqlLiteral(input.requestId)}` : null,
+    input.projectId ? `request.project_id = ${getSqlLiteral(input.projectId)}` : null,
+  ].filter((filter): filter is string => {
+    return filter !== null
+  })
+
+  return filters.length > 0 ? filters.join('\n      AND ') : 'TRUE'
+}
+
+const getReviewServingRebuildTimelineLimitPredicate = (
+  input: ReviewServingRebuildTimingDiagnosticsInput,
+  limit: number,
+) => {
+  return input.requestId || input.projectId
+    ? ''
+    : `
+      ORDER BY request.updated_at DESC, request.request_id DESC
+      LIMIT ${limit}
+    `
+}
+
+const getReviewServingTimelineTimestamp = (
+  value: string | null,
+  unknownNote: string | null = null,
+): ReviewServingRebuildTimelineTimestamp => {
+  return value === null ? {note: unknownNote, status: 'unknown', value: null} : {note: null, status: 'known', value}
+}
+
+const getReviewServingTimelineCount = (value: number | string | null | undefined) => {
+  return value === null || value === undefined ? 0 : Number(value)
+}
+
+const getReviewServingTimelineStatusCounts = (row: {
+  blockedOverBudgetCount?: number | string | null
+  completedCount?: number | string | null
+  failedCount?: number | string | null
+  pendingCount?: number | string | null
+  quarantinedCount?: number | string | null
+  runningCount?: number | string | null
+  totalCount?: number | string | null
+}): ReviewServingRebuildTimelineStatusCounts => {
+  const blockedOverBudget = getReviewServingTimelineCount(row.blockedOverBudgetCount)
+  const completed = getReviewServingTimelineCount(row.completedCount)
+  const failed = getReviewServingTimelineCount(row.failedCount)
+  const pending = getReviewServingTimelineCount(row.pendingCount)
+  const quarantined = getReviewServingTimelineCount(row.quarantinedCount)
+  const running = getReviewServingTimelineCount(row.runningCount)
+  const total =
+    row.totalCount === undefined
+      ? blockedOverBudget + completed + failed + pending + quarantined + running
+      : getReviewServingTimelineCount(row.totalCount)
+
+  return {blockedOverBudget, completed, failed, pending, quarantined, running, total}
+}
+
+const getReviewServingTimelineRequestedComponents = (value: unknown): ReviewServingProjectionComponent[] => {
+  const requestedComponents = getJsonValue(value)
+
+  return Array.isArray(requestedComponents)
+    ? requestedComponents.filter((component): component is ReviewServingProjectionComponent => {
+        return typeof component === 'string' && isReviewServingProjectionComponent(component)
+      })
+    : []
+}
+
+const getReviewServingRebuildTimelineFromRows = (
+  timelineRows: ReviewServingRebuildTimelineRow[],
+  componentSpanRows: ReviewServingRebuildTimelineComponentSpanRow[],
+): ReviewServingRebuildTimeline[] => {
+  const componentSpansByRequestId = new Map<string, ReviewServingRebuildComponentSpan[]>()
+
+  for (const row of componentSpanRows) {
+    const rows = componentSpansByRequestId.get(row.rootRequestId) ?? []
+    rows.push({
+      completedAt: row.completedAt,
+      counts: getReviewServingTimelineStatusCounts(row),
+      firstChunkStartedAt: row.firstChunkStartedAt,
+      lastUpdatedAt: row.lastUpdatedAt,
+      projectionComponent: row.projectionComponent,
+      wallClockMs: row.wallClockMs === null ? null : Number(row.wallClockMs),
+    })
+    componentSpansByRequestId.set(row.rootRequestId, rows)
+  }
+
+  return timelineRows.map((row) => {
+    return {
+      activeSnapshotPromotedAt: getReviewServingTimelineTimestamp(
+        row.activeSnapshotPromotedAt,
+        'No active snapshot promotion was found for the request chunk snapshot ids.',
+      ),
+      admittedAt: getReviewServingTimelineTimestamp(row.admittedAt),
+      componentCounts: getReviewServingTimelineStatusCounts(row),
+      componentSpans: componentSpansByRequestId.get(row.rootRequestId) ?? [],
+      completedAt: getReviewServingTimelineTimestamp(row.completedAt),
+      createdAt: getReviewServingTimelineTimestamp(row.createdAt),
+      defaultReadableAt: getReviewServingTimelineTimestamp(
+        null,
+        'defaultReadableAt is not schema-backed for this rebuild timeline yet.',
+      ),
+      firstChunkStartedAt: getReviewServingTimelineTimestamp(row.firstChunkStartedAt),
+      fullyEnrichedAt: getReviewServingTimelineTimestamp(
+        null,
+        'fullyEnrichedAt is not schema-backed for this rebuild timeline yet.',
+      ),
+      projectId: row.projectId,
+      reason: row.reason,
+      relationships: {
+        adoptedFromRequestId: null,
+        requestlessAdoptableChunkCount: getReviewServingTimelineCount(row.requestlessAdoptableChunkCount),
+        supersededByRequestId: null,
+        supersededRequestCount: getReviewServingTimelineCount(row.supersededRequestCount),
+      },
+      requestedComponents: getReviewServingTimelineRequestedComponents(row.requestedComponentsJson),
+      reviewConfigHash: row.reviewConfigHash,
+      rootRequestId: row.rootRequestId,
+      selectedImportSnapshotId: row.selectedImportSnapshotId,
+      snapshotId: row.snapshotId,
+      status: row.status,
+    }
+  })
+}
+
 export const getReviewServingRebuildTimingDiagnostics = async (
   input: ReviewServingRebuildTimingDiagnosticsInput = {},
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
@@ -572,6 +791,152 @@ export const getReviewServingRebuildTimingDiagnostics = async (
   const limit = getReviewServingRebuildTimingDiagnosticsLimit(input.limit)
   const claimNow = new Date().toISOString()
   const scopePredicate = getReviewServingRebuildTimingDiagnosticsPredicate(input)
+  const requestScopePredicate = getReviewServingRebuildTimelineRequestPredicate(input)
+  const requestLimitPredicate = getReviewServingRebuildTimelineLimitPredicate(input, limit)
+  const timelineRows = await database.queryJson<ReviewServingRebuildTimelineRow>(`
+    WITH request_scope AS (
+      SELECT
+        request.request_id,
+        request.project_id,
+        request.reason,
+        request.requested_components_json,
+        request.identity_json,
+        request.status,
+        request.created_at,
+        request.admitted_at,
+        request.completed_at,
+        request.updated_at
+      FROM app.review_rebuild_request request
+      WHERE ${requestScopePredicate}
+      ${requestLimitPredicate}
+    ), chunk_rollup AS (
+      SELECT
+        chunk.request_id,
+        MIN(chunk.started_at) AS firstChunkStartedAt,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'pending') AS INTEGER) AS pendingCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'running') AS INTEGER) AS runningCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'failed') AS INTEGER) AS failedCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'quarantined') AS INTEGER) AS quarantinedCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'blocked_over_budget') AS INTEGER) AS blockedOverBudgetCount,
+        MIN(chunk.snapshot_id) FILTER (WHERE chunk.snapshot_id IS NOT NULL) AS snapshotId
+      FROM app.review_rebuild_chunk_manifest chunk
+      INNER JOIN request_scope request
+        ON request.request_id = chunk.request_id
+      GROUP BY chunk.request_id
+    ), promotion_rollup AS (
+      SELECT
+        chunk.request_id,
+        MIN(snapshot.activated_at) AS activeSnapshotPromotedAt,
+        MIN(snapshot.review_config_hash) FILTER (WHERE snapshot.review_config_hash IS NOT NULL) AS reviewConfigHash,
+        MIN(snapshot.selected_import_snapshot_id) FILTER (
+          WHERE snapshot.selected_import_snapshot_id IS NOT NULL
+        ) AS selectedImportSnapshotId
+      FROM app.review_rebuild_chunk_manifest chunk
+      INNER JOIN request_scope request
+        ON request.request_id = chunk.request_id
+      INNER JOIN app.review_serving_snapshot_manifest snapshot
+        ON snapshot.project_id = request.project_id
+       AND snapshot.snapshot_id = chunk.snapshot_id
+       AND snapshot.snapshot_status = 'active'
+      GROUP BY chunk.request_id
+    ), relationship_rollup AS (
+      SELECT
+        request.request_id,
+        CAST((
+          SELECT COUNT(*)
+          FROM app.review_rebuild_request superseded
+          WHERE superseded.project_id = request.project_id
+            AND superseded.request_id <> request.request_id
+            AND superseded.created_at < request.created_at
+            AND lower(COALESCE(superseded.last_error, '')) LIKE '%superseded%'
+        ) AS INTEGER) AS supersededRequestCount,
+        CAST((
+          SELECT COUNT(*)
+          FROM app.review_rebuild_chunk_manifest requestless
+          WHERE requestless.project_id = request.project_id
+            AND requestless.request_id IS NULL
+            AND EXISTS (
+              SELECT 1
+              FROM app.review_rebuild_chunk_manifest requested
+              WHERE requested.request_id = request.request_id
+                AND requested.project_id IS NOT DISTINCT FROM requestless.project_id
+                AND requested.projection_component = requestless.projection_component
+                AND requested.projection_identity = requestless.projection_identity
+                AND requested.chunk_start_key = requestless.chunk_start_key
+                AND requested.chunk_end_key = requestless.chunk_end_key
+            )
+        ) AS INTEGER) AS requestlessAdoptableChunkCount
+      FROM request_scope request
+    )
+    SELECT
+      request.request_id AS rootRequestId,
+      request.project_id AS projectId,
+      request.reason,
+      request.requested_components_json AS requestedComponentsJson,
+      request.identity_json AS identityJson,
+      request.status,
+      request.created_at AS createdAt,
+      request.admitted_at AS admittedAt,
+      request.completed_at AS completedAt,
+      chunk_rollup.firstChunkStartedAt AS firstChunkStartedAt,
+      chunk_rollup.pendingCount AS pendingCount,
+      chunk_rollup.runningCount AS runningCount,
+      chunk_rollup.completedCount AS completedCount,
+      chunk_rollup.failedCount AS failedCount,
+      chunk_rollup.quarantinedCount AS quarantinedCount,
+      chunk_rollup.blockedOverBudgetCount AS blockedOverBudgetCount,
+      chunk_rollup.snapshotId AS snapshotId,
+      COALESCE(
+        json_extract_string(request.identity_json, '$.reviewConfigHash'),
+        promotion_rollup.reviewConfigHash
+      ) AS reviewConfigHash,
+      promotion_rollup.selectedImportSnapshotId AS selectedImportSnapshotId,
+      promotion_rollup.activeSnapshotPromotedAt AS activeSnapshotPromotedAt,
+      relationship_rollup.supersededRequestCount AS supersededRequestCount,
+      relationship_rollup.requestlessAdoptableChunkCount AS requestlessAdoptableChunkCount
+    FROM request_scope request
+    LEFT JOIN chunk_rollup
+      ON chunk_rollup.request_id = request.request_id
+    LEFT JOIN promotion_rollup
+      ON promotion_rollup.request_id = request.request_id
+    LEFT JOIN relationship_rollup
+      ON relationship_rollup.request_id = request.request_id
+    ORDER BY request.updated_at DESC, request.request_id DESC
+  `)
+  const componentSpanRows = await database.queryJson<ReviewServingRebuildTimelineComponentSpanRow>(`
+    WITH request_scope AS (
+      SELECT request.request_id
+      FROM app.review_rebuild_request request
+      WHERE ${requestScopePredicate}
+      ${requestLimitPredicate}
+    )
+    SELECT
+      chunk.request_id AS rootRequestId,
+      chunk.projection_component AS projectionComponent,
+      MIN(chunk.started_at) AS firstChunkStartedAt,
+      MAX(chunk.completed_at) AS completedAt,
+      MAX(chunk.updated_at) AS lastUpdatedAt,
+      CASE
+        WHEN MIN(chunk.started_at) IS NULL OR MAX(chunk.completed_at) IS NULL THEN NULL
+        ELSE date_diff('millisecond', MIN(chunk.started_at), MAX(chunk.completed_at))
+      END AS wallClockMs,
+      CAST(COUNT(*) AS INTEGER) AS totalCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'pending') AS INTEGER) AS pendingCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'running') AS INTEGER) AS runningCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'failed') AS INTEGER) AS failedCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'quarantined') AS INTEGER) AS quarantinedCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'blocked_over_budget') AS INTEGER) AS blockedOverBudgetCount
+    FROM app.review_rebuild_chunk_manifest chunk
+    INNER JOIN request_scope request
+      ON request.request_id = chunk.request_id
+    GROUP BY chunk.request_id, chunk.projection_component
+    ORDER BY
+      chunk.request_id DESC NULLS LAST,
+      ${getRebuildChunkClaimPrioritySql('chunk')} ASC,
+      chunk.projection_component ASC
+  `)
   const phaseTimings = await database.queryJson<ReviewServingRebuildTimingSummaryRow>(`
     SELECT
       chunk.request_id AS requestId,
@@ -639,6 +1004,7 @@ export const getReviewServingRebuildTimingDiagnostics = async (
     claimablePendingChunks,
     filters: {limit, projectId: input.projectId ?? null, requestId: input.requestId ?? null},
     phaseTimings,
+    timeline: getReviewServingRebuildTimelineFromRows(timelineRows, componentSpanRows),
   }
 }
 
@@ -812,6 +1178,41 @@ const getReviewServingRebuildChunkIdPredicate = (chunkId: string, tableAlias?: s
   const source = tableAlias ? `${tableAlias}.` : ''
 
   return `(${source}chunk_id || '') = ${getSqlLiteral(chunkId)}`
+}
+
+const completeFinishedReviewServingRebuildRequest = async (
+  input: {requestId: string | null | undefined},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  if (input.requestId === null || input.requestId === undefined) {
+    return
+  }
+
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET status = 'completed',
+        completed_at = current_timestamp,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = current_timestamp
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND admission_state = 'admitted'
+      AND status IN ('admitted', 'running')
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE (chunk.request_id || '') = (${getSqlLiteral(input.requestId)} || '')
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE (chunk.request_id || '') = (${getSqlLiteral(input.requestId)} || '')
+          AND (
+            chunk.status <> 'completed'
+            OR chunk.project_id IS DISTINCT FROM app.review_rebuild_request.project_id
+          )
+      )
+  `)
 }
 
 export const getReviewServingRebuildChunkClaimPredicate = (
@@ -1579,8 +1980,10 @@ export const writeReviewServingRebuildChunkOutput = async (
         AND status = 'running'
         AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
     `)
+    const completed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
+    await completeFinishedReviewServingRebuildRequest({requestId: completed?.requestId ?? input.requestId}, tx)
 
-    return getReviewServingRebuildChunkManifest({chunkId}, tx)
+    return completed
   }
 
   try {

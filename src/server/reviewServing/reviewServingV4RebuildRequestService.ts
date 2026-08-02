@@ -1182,7 +1182,11 @@ export const requestReviewServingV4RebuildEffect = (
           chunks,
           diagnostics: {
             bootstrapSnapshot: isFreshBootstrap,
+            childAdmissionBudget: defaultRequestBudget,
+            childAdmissionEstimate: requestEstimate,
+            coldBootstrap: isFreshBootstrap && input.reason === 'missingReviewServingSnapshot',
             bootstrapChunkCount: bootstrap?.chunkCount ?? null,
+            bootstrapExecutableChunkCount: chunks?.length ?? null,
             source: 'phase5b-v4-rebuild-request-service',
             totalEstimate,
             v4Cutover: true,

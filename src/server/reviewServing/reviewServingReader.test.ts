@@ -720,6 +720,118 @@ test('readReviewServingRows rejects mismatched and missing token-prefix search m
   expect(reader.statements).toHaveLength(0)
 })
 
+test('readReviewServingRows accepts default tab rows and counts without search readiness', async () => {
+  const reader = createReaderDatabase([{article_id: 'article-1'}])
+  const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
+    'display',
+    'humanStatus',
+    'llmStatus',
+    'posting',
+    'projectScope',
+    'queue',
+    'selectedImport',
+    'summary',
+  ]
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: defaultReadableComponents,
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const dependencies = {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase}
+  const defaultReads = [
+    readReviewServingRows({...readyRequest, contractKey: 'review.llm.rows'}, dependencies),
+    readReviewServingRows(
+      {
+        ...readyRequest,
+        contractKey: 'review.llm.count',
+        countFilterKey: 'all',
+        countState: {
+          availability: 'ready' as const,
+          filterKey: 'all',
+          key: 'review.list.total' as const,
+          snapshotId: 'active-snapshot',
+          value: 1,
+        },
+        limit: 1,
+        namedCountKey: 'review.list.total' as const,
+      },
+      dependencies,
+    ),
+    readReviewServingRows({...readyRequest, contractKey: 'review.human.rows', listMode: 'human'}, dependencies),
+    readReviewServingRows(
+      {
+        ...readyRequest,
+        contractKey: 'review.human.count',
+        countFilterKey: 'all',
+        countState: {
+          availability: 'ready' as const,
+          filterKey: 'all',
+          key: 'review.list.total' as const,
+          snapshotId: 'active-snapshot',
+          value: 1,
+        },
+        limit: 1,
+        namedCountKey: 'review.list.total' as const,
+      },
+      dependencies,
+    ),
+    readReviewServingRows({...readyRequest, contractKey: 'review.both.rows', listMode: 'both'}, dependencies),
+    readReviewServingRows(
+      {
+        ...readyRequest,
+        contractKey: 'review.both.count',
+        countFilterKey: 'all',
+        countState: {
+          availability: 'ready' as const,
+          filterKey: 'all',
+          key: 'review.list.total' as const,
+          snapshotId: 'active-snapshot',
+          value: 1,
+        },
+        limit: 1,
+        namedCountKey: 'review.list.total' as const,
+      },
+      dependencies,
+    ),
+    readReviewServingRows(
+      {...readyRequest, contractKey: 'review.unassessed.rows', listMode: 'unassessed', queueKind: 'unassessed'},
+      dependencies,
+    ),
+    readReviewServingRows(
+      {
+        ...readyRequest,
+        contractKey: 'review.unassessed.count',
+        countFilterKey: 'queueReady',
+        countState: {
+          availability: 'ready' as const,
+          filterKey: 'queueReady',
+          key: 'review.queue.unassessedReady' as const,
+          snapshotId: 'active-snapshot',
+          value: 1,
+        },
+        limit: 1,
+        namedCountKey: 'review.queue.unassessedReady' as const,
+      },
+      dependencies,
+    ),
+  ]
+  const results = await Promise.all(defaultReads)
+  const sql = reader.statements.join('\n')
+
+  expect(
+    results.map((result) => {
+      return result.status
+    }),
+  ).toEqual(['accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted'])
+  expect(sql).not.toContain('mart.review_title_search_serving_v4')
+  expect(sql).not.toContain('search_identity')
+  expect(sql).not.toContain('starts_with(search.token')
+})
+
 test('readReviewServingRows hydrates filtered lists through postings and article-set contracts without single-article lookups', async () => {
   const reader = createReaderDatabase([{article_id: 'article-1'}, {article_id: 'article-2'}])
   const manifestDatabase = createManifestDatabase({

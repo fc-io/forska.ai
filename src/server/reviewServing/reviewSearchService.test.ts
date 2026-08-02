@@ -162,6 +162,22 @@ test('searchReviewServing returns indexing substring state before DuckDB when sn
   expect(searchDatabase.statements).toHaveLength(0)
 })
 
+test('searchReviewServing returns explicit indexing state when active snapshot lacks token-prefix search readiness', async () => {
+  const searchDatabase = createSearchDatabase()
+  const manifestDatabase = createManifestDatabase({
+    'active-snapshot': getSnapshotRow({
+      components: ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'posting', 'summary'],
+      snapshotId: 'active-snapshot',
+      status: 'active',
+    }),
+  })
+  const result = await searchReviewServing(readySearchRequest, {database: searchDatabase.database, manifestDatabase})
+
+  expect(result).toMatchObject({diagnostics: {reason: 'search projection identity is not ready'}, status: 'indexing'})
+  expect(searchDatabase.runs).toHaveLength(0)
+  expect(searchDatabase.statements).toHaveLength(0)
+})
+
 test('searchReviewServing returns unavailable substring state when async work is not requested and no job exists', async () => {
   const searchDatabase = createSearchDatabase([])
   const manifestDatabase = createManifestDatabase({

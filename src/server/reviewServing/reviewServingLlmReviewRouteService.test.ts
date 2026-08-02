@@ -23,23 +23,34 @@ const components: readonly ReviewServingProjectionComponent[] = [
   'queue',
   'search',
 ]
+const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
+  'display',
+  'projectScope',
+  'selectedImport',
+  'llmStatus',
+  'posting',
+  'summary',
+  'queue',
+]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
 const hasArticleServingRowSource = (statement: string) => {
   return statement.includes('FROM mart.review_article_serving_base_v4 serving')
 }
 
-const getComponentState = () => {
+const getComponentState = (inputComponents: readonly ReviewServingProjectionComponent[] = components) => {
   return {
-    optional: [
-      {
-        baseGeneration: '1',
-        component: 'search' as const,
-        patchWatermark: '2',
-        projectionIdentity: 'search-identity',
-        requirement: 'optional' as const,
-      },
-    ],
-    required: components
+    optional: inputComponents.includes('search')
+      ? [
+          {
+            baseGeneration: '1',
+            component: 'search' as const,
+            patchWatermark: '2',
+            projectionIdentity: 'search-identity',
+            requirement: 'optional' as const,
+          },
+        ]
+      : [],
+    required: inputComponents
       .filter((component) => {
         return component !== 'search'
       })
@@ -55,15 +66,18 @@ const getComponentState = () => {
   }
 }
 
-const getSnapshotRow = (status: ReviewServingSnapshotStatus) => {
+const getSnapshotRow = (
+  status: ReviewServingSnapshotStatus,
+  inputComponents: readonly ReviewServingProjectionComponent[] = components,
+) => {
   return {
-    componentStateJson: getComponentState(),
+    componentStateJson: getComponentState(inputComponents),
     composedIdentityJson: {snapshot: `${status}-snapshot`},
     lastError: status === 'failed' ? 'projection failed' : null,
     lastKnownGoodSnapshotId: status === 'active' ? 'retired-snapshot' : null,
     optionalComponentsJson: [],
     projectId: 'project-1',
-    requiredComponentsJson: components,
+    requiredComponentsJson: inputComponents,
     reviewConfigHash: 'config-1',
     selectedImportSnapshotId: 'selected-import-snapshot-1',
     snapshotId: `${status}-snapshot`,
@@ -77,7 +91,10 @@ const getDiagnosticsRows = (statement: string) => {
   return statement.includes('GROUP BY snapshot_status') ? [{snapshotCount: 1, snapshotStatus: 'active'}] : []
 }
 
-const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing') => {
+const createManifestDatabase = (
+  status: ReviewServingSnapshotStatus | 'missing',
+  inputComponents: readonly ReviewServingProjectionComponent[] = components,
+) => {
   const database: ReviewServingManifestRepositoryDatabase = {
     queryJson: async <T>(statement: string): Promise<T[]> => {
       if (!statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -89,14 +106,14 @@ const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing')
       }
 
       if (statement.includes("snapshot_status = 'active'")) {
-        return status === 'active' ? ([getSnapshotRow('active')] as T[]) : []
+        return status === 'active' ? ([getSnapshotRow('active', inputComponents)] as T[]) : []
       }
 
       if (statement.includes("snapshot_status = 'retired'")) {
-        return status === 'retired' ? ([getSnapshotRow('retired')] as T[]) : []
+        return status === 'retired' ? ([getSnapshotRow('retired', inputComponents)] as T[]) : []
       }
 
-      return [getSnapshotRow(status)] as T[]
+      return [getSnapshotRow(status, inputComponents)] as T[]
     },
     run: async () => {},
     transaction: async (operation) => {
@@ -218,6 +235,28 @@ test('LLM review route honors the largest offered page size', async () => {
   expect(result.limit).toBe(500)
   expect(result.totalPages).toBe(3)
   expect(reader.statements.join('\n')).toContain('LIMIT 501')
+})
+
+test('LLM default list remains foreground-readable while search and payload enrichment are pending', async () => {
+  const reader = createReaderDatabase(1, 1)
+  const result = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
+    },
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result.data).toHaveLength(1)
+  expect(result.totalCount).toBe(1)
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(sql).not.toContain('mart.review_title_search_serving_v4')
+  expect(sql).not.toContain('search_identity')
+  expect(sql).not.toContain('lazy-detail-hydration')
+  expect(sql).not.toContain('model_id AS modelId')
 })
 
 test('LLM review route chunks judgment hydration above the reader article-set cap', async () => {
