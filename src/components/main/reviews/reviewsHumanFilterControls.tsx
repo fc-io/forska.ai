@@ -267,20 +267,27 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
           </label>
         </div>
         <Show when={!props.hidePromptSelectors}>
-          <div class="pt-4">
+          <div class="pt-4 space-y-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <div class="text-sm font-medium text-gray-700">Prompt answer filters</div>
+              <Show when={!promptFiltersRequested() && !hasSelectedPromptFilters()}>
+                <button
+                  type="button"
+                  class="inline-flex h-8 items-center rounded-md border border-input bg-white px-3 text-sm font-medium text-gray-700 shadow-sm hover:bg-muted"
+                  onClick={() => {
+                    setPromptFiltersRequested(true)
+                  }}
+                >
+                  Load options
+                </button>
+              </Show>
+            </div>
             <Show when={!promptFiltersRequested() && !hasSelectedPromptFilters()}>
-              <button
-                type="button"
-                class="text-sm font-medium text-blue-700 hover:text-blue-800"
-                onClick={() => {
-                  setPromptFiltersRequested(true)
-                }}
-              >
-                Show prompt answer filters
-              </button>
+              <div class="inline-flex min-h-11 items-center rounded-md border border-dashed border-input bg-muted/30 px-3 text-sm text-gray-500">
+                All prompt answers
+              </div>
             </Show>
             <Show when={promptFiltersRequested() || hasSelectedPromptFilters()}>
-              <div class="text-sm font-medium text-gray-700">Prompt answer filters</div>
               <Show when={filtersQuery.data}>
                 {(data) => {
                   const filtersResponse = data()

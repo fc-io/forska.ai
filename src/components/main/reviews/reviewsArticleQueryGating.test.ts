@@ -57,23 +57,27 @@ test('review article tables render current query rows before pagination cache ef
   expect(missingCurrentQueryFallback).toEqual([])
 })
 
-test('LLM review prompt answer facets are lazy until prompt filter workflow is opened', () => {
+test('LLM review prompt answer facets load from a stable inline filter shell', () => {
   const source = readSource('src/components/main/reviews/reviewsFilterControls.tsx')
 
   expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
   expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
   expect(source).toContain('setPromptFiltersRequested(true)')
-  expect(source).toContain('Show prompt answer filters')
+  expect(source).toContain('Prompt answer filters')
+  expect(source).toContain('Load options')
+  expect(source).toContain('All prompt answers')
   expect(source).toContain('apiClient.api.articlesreviewsfilters.get')
 })
 
-test('Human/Both review prompt answer facets are lazy until prompt filter workflow is opened', () => {
+test('Human/Both review prompt answer facets load from a stable inline filter shell', () => {
   const source = readSource('src/components/main/reviews/reviewsHumanFilterControls.tsx')
 
   expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
   expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
   expect(source).toContain('setPromptFiltersRequested(true)')
-  expect(source).toContain('Show prompt answer filters')
+  expect(source).toContain('Prompt answer filters')
+  expect(source).toContain('Load options')
+  expect(source).toContain('All prompt answers')
   expect(source).toContain('apiClient.api.articlesreviewshumanfilters.get')
 })
 
