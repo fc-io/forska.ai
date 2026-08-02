@@ -135,8 +135,10 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
       {} as Record<string, Set<string>>,
     )
     props.setPromptFilters((prev) => {
+      const previous = prev ?? {}
+      let changed = false
       const next: Record<string, string[] | null> = {}
-      for (const [promptId, value] of Object.entries(prev ?? {})) {
+      for (const [promptId, value] of Object.entries(previous)) {
         if (value === null) {
           next[promptId] = null
         } else {
@@ -151,8 +153,17 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
             next[promptId] = null
           }
         }
+        const previousValues = getSelectedPromptValues(value)
+        const nextValues = getSelectedPromptValues(next[promptId])
+        changed =
+          changed
+          || (value === null && next[promptId] !== null)
+          || previousValues.length !== nextValues.length
+          || previousValues.some((previousValue, index) => {
+            return previousValue !== nextValues[index]
+          })
       }
-      return next
+      return changed ? next : prev
     })
   })
 
