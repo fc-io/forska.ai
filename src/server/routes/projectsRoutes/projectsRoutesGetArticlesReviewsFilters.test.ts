@@ -114,3 +114,40 @@ test('articles reviews filters route passes both mode and project human mode to 
     promptRows: [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Prompt 1', type: "'yes' | 'no' | 'maybe'"}],
   })
 })
+
+test('articles reviews filters route passes selected prompt filters to serving filters', async () => {
+  projectPromptRowsRef.current = async () => {
+    return []
+  }
+  reviewFiltersRef.current = async (input) => {
+    return {
+      diagnostics: [],
+      facets: [],
+      filterOptions: [],
+      filters: [],
+      promptFilterDefinitions: [],
+      searchScope: {mode: 'none'},
+      serviceInput: input,
+    }
+  }
+
+  const promptFilters = encodeURIComponent(JSON.stringify({'prompt-1': ['yes'], 'prompt-2': []}))
+  const {projectsRoutesGetArticlesReviewsFilters} = await loadHandler()
+  const app = new Elysia().use(projectsRoutesGetArticlesReviewsFilters)
+  const response = await app.handle(
+    new Request(`http://localhost/api/articlesreviewsfilters?projectId=project-1&promptFilters=${promptFilters}`),
+  )
+  const body = (await response.json()) as Record<string, unknown>
+
+  expect(response.status).toBe(200)
+  expect(body.serviceInput).toEqual({
+    humanJudgmentMode: 'prompt',
+    mode: 'review',
+    params: {
+      projectId: 'project-1',
+      promptFilters: JSON.stringify({'prompt-1': ['yes'], 'prompt-2': []}),
+      prompts: {'prompt-1': ['yes']},
+    },
+    promptRows: [],
+  })
+})
