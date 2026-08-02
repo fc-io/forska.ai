@@ -44,6 +44,19 @@ test('review article query gates stay tied to V4 serving readability', () => {
   expect(missingReadableGate).toEqual([])
 })
 
+test('review article tables render current query rows before pagination cache effect settles', () => {
+  const missingCurrentQueryFallback = reviewArticleContainerFiles.filter((path) => {
+    const source = readSource(path)
+
+    return (
+      !source.includes('const currentPageData = Array.isArray(articlesQuery.data?.data)')
+      || !source.includes('page === currentPage ? currentPageData : []')
+    )
+  })
+
+  expect(missingCurrentQueryFallback).toEqual([])
+})
+
 test('LLM review prompt answer facets are lazy until prompt filter workflow is opened', () => {
   const source = readSource('src/components/main/reviews/reviewsFilterControls.tsx')
 

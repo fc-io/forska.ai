@@ -119,10 +119,17 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
   })
   const loadedArticles = () => {
     const pages = loadedPages()
+    const currentPage = props.currentPage()
+    const currentPageData = Array.isArray(articlesQuery.data?.data)
+      ? (articlesQuery.data.data as ArticleWithJudgments[])
+      : []
+    const articlePages: ArticleWithJudgments[][] = []
 
-    return Array.from({length: props.currentPage()}, (_, index) => {
-      return pages[index + 1]?.data ?? []
-    }).flat()
+    for (let page = 1; page <= currentPage; page += 1) {
+      articlePages.push(pages[page]?.data ?? (page === currentPage ? currentPageData : []))
+    }
+
+    return articlePages.flat()
   }
 
   return (
