@@ -76,6 +76,20 @@ test('Human/Both review prompt answer facets are lazy until prompt filter workfl
   expect(source).toContain('apiClient.api.articlesreviewshumanfilters.get')
 })
 
+test('prompt facet normalization preserves prompt filter state identity when values did not change', () => {
+  const filterControlFiles = [
+    'src/components/main/reviews/reviewsFilterControls.tsx',
+    'src/components/main/reviews/reviewsHumanFilterControls.tsx',
+  ] as const
+  const missingNoopGuard = filterControlFiles.filter((path) => {
+    const source = readSource(path)
+
+    return !source.includes('let changed = false') || !source.includes('return changed ? next : prev')
+  })
+
+  expect(missingNoopGuard).toEqual([])
+})
+
 test('LLM review list first load does not hydrate article detail payloads', () => {
   const violatingFiles = llmReviewFirstLoadFiles.filter((path) => {
     const source = readSource(path)
