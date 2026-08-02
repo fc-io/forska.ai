@@ -127,6 +127,28 @@ export type ReviewServingRebuildTimingSummaryRow = {
   totalEstimatedTempBytes: number | null
 }
 
+export type ReviewServingSearchTitleCostDiagnosticsRow = {
+  avgDurationMs: number | null
+  avgRowsPerChunk: number | null
+  avgWriteOutputMs: number | null
+  chunkCount: number
+  completedCount: number
+  failedCount: number
+  maxDurationMs: number | null
+  maxRowsPerChunk: number | null
+  maxSplitDepth: number | null
+  maxWriteOutputMs: number | null
+  pendingCount: number
+  presplitChunkCount: number
+  projectId: string | null
+  requestId: string | null
+  runningCount: number
+  splitChildChunkCount: number
+  totalActualInputRows: number | null
+  totalActualOutputRows: number | null
+  totalEstimatedInputRows: number | null
+}
+
 export type ReviewServingRebuildClaimableChunkRow = {
   chunkEndKey: string
   chunkId: string
@@ -199,6 +221,7 @@ export type ReviewServingRebuildTimingDiagnostics = {
   claimablePendingChunks: ReviewServingRebuildClaimableChunkRow[]
   filters: {limit: number; projectId: string | null; requestId: string | null}
   phaseTimings: ReviewServingRebuildTimingSummaryRow[]
+  searchTitleCost: ReviewServingSearchTitleCostDiagnosticsRow[]
   timeline: ReviewServingRebuildTimeline[]
 }
 
@@ -1060,6 +1083,37 @@ export const getReviewServingRebuildTimingDiagnostics = async (
       ${getRebuildChunkClaimPrioritySql('chunk')} ASC,
       chunk.status ASC
   `)
+  const searchTitleCost = await database.queryJson<ReviewServingSearchTitleCostDiagnosticsRow>(`
+    SELECT
+      chunk.request_id AS requestId,
+      chunk.project_id AS projectId,
+      CAST(COUNT(*) AS INTEGER) AS chunkCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'running') AS INTEGER) AS runningCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'pending') AS INTEGER) AS pendingCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.status = 'failed') AS INTEGER) AS failedCount,
+      AVG(COALESCE(chunk.actual_input_rows, chunk.estimated_input_rows)) AS avgRowsPerChunk,
+      MAX(COALESCE(chunk.actual_input_rows, chunk.estimated_input_rows)) AS maxRowsPerChunk,
+      SUM(chunk.estimated_input_rows) AS totalEstimatedInputRows,
+      SUM(chunk.actual_input_rows) AS totalActualInputRows,
+      SUM(chunk.actual_output_rows) AS totalActualOutputRows,
+      AVG(chunk.duration_ms) AS avgDurationMs,
+      MAX(chunk.duration_ms) AS maxDurationMs,
+      AVG(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE)) AS avgWriteOutputMs,
+      MAX(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE)) AS maxWriteOutputMs,
+      MAX(chunk.split_depth) AS maxSplitDepth,
+      CAST(COUNT(*) FILTER (WHERE COALESCE(chunk.split_depth, 0) > 0) AS INTEGER) AS presplitChunkCount,
+      CAST(COUNT(*) FILTER (WHERE chunk.parent_chunk_id IS NOT NULL) AS INTEGER) AS splitChildChunkCount
+    FROM app.review_rebuild_chunk_manifest chunk
+    WHERE ${scopePredicate}
+      AND chunk.projection_component = 'search'
+    GROUP BY
+      chunk.request_id,
+      chunk.project_id
+    ORDER BY
+      chunk.request_id DESC NULLS LAST,
+      chunk.project_id ASC NULLS LAST
+  `)
   const claimablePendingChunks = await database.queryJson<ReviewServingRebuildClaimableChunkRow>(`
     SELECT
       chunk.chunk_id AS chunkId,
@@ -1090,6 +1144,7 @@ export const getReviewServingRebuildTimingDiagnostics = async (
     claimablePendingChunks,
     filters: {limit, projectId: input.projectId ?? null, requestId: input.requestId ?? null},
     phaseTimings,
+    searchTitleCost,
     timeline: getReviewServingRebuildTimelineFromRows(timelineRows, componentSpanRows),
   }
 }

@@ -2016,6 +2016,32 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
         ] as T[]
       }
 
+      if (statement.includes('AS avgRowsPerChunk')) {
+        return [
+          {
+            avgDurationMs: 58,
+            avgRowsPerChunk: 125,
+            avgWriteOutputMs: 45,
+            chunkCount: 4,
+            completedCount: 2,
+            failedCount: 0,
+            maxDurationMs: 80,
+            maxRowsPerChunk: 150,
+            maxSplitDepth: 2,
+            maxWriteOutputMs: 60,
+            pendingCount: 1,
+            presplitChunkCount: 4,
+            projectId: 'project-1',
+            requestId: 'rebuild:timing',
+            runningCount: 1,
+            splitChildChunkCount: 1,
+            totalActualInputRows: 250,
+            totalActualOutputRows: 1200,
+            totalEstimatedInputRows: 500,
+          },
+        ] as T[]
+      }
+
       if (statement.includes('AVG(chunk.duration_ms)')) {
         return [
           {
@@ -2109,6 +2135,29 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
     totalEstimatedPayloadBytes: 3072,
     totalEstimatedTempBytes: 1024,
   })
+  expect(diagnostics.searchTitleCost).toEqual([
+    {
+      avgDurationMs: 58,
+      avgRowsPerChunk: 125,
+      avgWriteOutputMs: 45,
+      chunkCount: 4,
+      completedCount: 2,
+      failedCount: 0,
+      maxDurationMs: 80,
+      maxRowsPerChunk: 150,
+      maxSplitDepth: 2,
+      maxWriteOutputMs: 60,
+      pendingCount: 1,
+      presplitChunkCount: 4,
+      projectId: 'project-1',
+      requestId: 'rebuild:timing',
+      runningCount: 1,
+      splitChildChunkCount: 1,
+      totalActualInputRows: 250,
+      totalActualOutputRows: 1200,
+      totalEstimatedInputRows: 500,
+    },
+  ])
   expect(diagnostics.claimablePendingChunks).toHaveLength(1)
   expect(statements[0]).toContain("request.request_id = 'rebuild:timing'")
   expect(statements[0]).toContain("request.project_id = 'project-1'")
@@ -2127,11 +2176,15 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
   expect(statements[2]).toContain('SUM(chunk.estimated_output_bytes) AS totalEstimatedOutputBytes')
   expect(statements[2]).toContain('SUM(chunk.estimated_payload_bytes) AS totalEstimatedPayloadBytes')
   expect(statements[2]).toContain('SUM(chunk.estimated_temp_bytes) AS totalEstimatedTempBytes')
-  expect(statements[3]).toContain("chunk.admission_state = 'admitted'")
-  expect(statements[3]).toContain("request.status IN ('admitted', 'running')")
-  expect(statements[3]).toContain("request.admission_state = 'admitted'")
-  expect(statements[3]).toContain('prerequisite.request_id IS NOT DISTINCT FROM chunk.request_id')
-  expect(statements[3]).toContain('LIMIT 7')
+  expect(statements[3]).toContain("chunk.projection_component = 'search'")
+  expect(statements[3]).toContain('AS avgRowsPerChunk')
+  expect(statements[3]).toContain('MAX(chunk.split_depth) AS maxSplitDepth')
+  expect(statements[3]).toContain('COUNT(*) FILTER (WHERE COALESCE(chunk.split_depth, 0) > 0)')
+  expect(statements[4]).toContain("chunk.admission_state = 'admitted'")
+  expect(statements[4]).toContain("request.status IN ('admitted', 'running')")
+  expect(statements[4]).toContain("request.admission_state = 'admitted'")
+  expect(statements[4]).toContain('prerequisite.request_id IS NOT DISTINCT FROM chunk.request_id')
+  expect(statements[4]).toContain('LIMIT 7')
 })
 
 const defaultReadableTimingComponents = [
