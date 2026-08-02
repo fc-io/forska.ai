@@ -8,22 +8,13 @@ import type {LlmStatus} from '../../../services/olap/olapTypes.ts'
 import {
   getPromptFilterControls,
   getPromptFilterLabel,
+  getPromptFilterTitle,
   type PromptFilterControl,
   reconcileSchemaEnumSelections,
 } from './reviewPromptFilterControls.ts'
 
 const getSelectedPromptValues = (value: string[] | null | undefined): string[] => {
   return Array.isArray(value) ? value : []
-}
-
-const getPromptFiltersQueryValue = (promptFilters: Record<string, string[] | null | undefined>) => {
-  const compact = Object.entries(promptFilters).reduce<Record<string, string[]>>((acc, [promptId, values]) => {
-    const selectedValues = getSelectedPromptValues(values)
-
-    return selectedValues.length > 0 ? {...acc, [promptId]: selectedValues} : acc
-  }, {})
-
-  return Object.keys(compact).length > 0 ? JSON.stringify(compact) : undefined
 }
 
 interface ReviewsFilterControlsProps {
@@ -77,13 +68,11 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
         validTo(),
         (props.appliedSearchTitle || '').trim() || null,
         props.filterMode ?? 'review',
-        getPromptFiltersQueryValue(props.promptFilters()),
       ],
       queryFn: async () => {
         const from = validFrom()
         const to = validTo()
         const search = (props.appliedSearchTitle || '').trim()
-        const promptFilters = getPromptFiltersQueryValue(props.promptFilters())
 
         const response = await apiClient.api.articlesreviewsfilters.get({
           query: {
@@ -94,7 +83,6 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
             to: to ?? undefined,
             search: search || undefined,
             mode: props.filterMode,
-            promptFilters,
           },
         })
 
@@ -305,6 +293,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                       <For each={filters}>
                         {(promptFilter) => {
                           const promptLabel = getPromptFilterLabel(promptFilter)
+                          const promptTitle = getPromptFilterTitle(promptFilter)
                           const current = createMemo(() => {
                             return getSelectedPromptValues(props.promptFilters()[promptFilter.promptId])
                           })
@@ -313,7 +302,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                           })
                           return (
                             <div class="flex flex-col gap-2">
-                              <label class="font-medium text-sm truncate" title={promptLabel}>
+                              <label class="font-medium text-sm truncate" title={promptTitle}>
                                 {promptLabel}:
                               </label>
                               <Select.Root<{value: string; label: string}>

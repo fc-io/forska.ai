@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {
   getPromptFilterControls,
   getPromptFilterLabel,
+  getPromptFilterTitle,
   reconcileSchemaEnumSelections,
 } from './reviewPromptFilterControls.ts'
 
@@ -50,7 +51,77 @@ test('getPromptFilterControls prefers server promptFilterDefinitions with debug 
   if (!populationControl) {
     throw new Error('Expected population prompt control')
   }
-  expect(getPromptFilterLabel(populationControl)).toBe('Population Criteria (project/slow)')
+  expect(getPromptFilterLabel(populationControl)).toBe('Population Criteria (project prompt)')
+  expect(getPromptFilterTitle(populationControl)).toBe('Population Criteria (project prompt; Project schema options)')
+})
+
+test('getPromptFilterLabel and getPromptFilterTitle stay stable when prompt read readiness changes', () => {
+  const slowControl = {
+    articleReadinessState: 'slow',
+    debugDisplayState: 'project/slow',
+    kind: 'schemaEnum',
+    label: 'Population Criteria',
+    optionSourceState: 'schema',
+    options: [{label: 'yes', value: 'yes'}],
+    promptId: 'population',
+    source: 'project',
+  }
+  const fastControl = {...slowControl, articleReadinessState: 'fast', debugDisplayState: 'project/fast'}
+
+  const slowResult = getPromptFilterControls({promptFilterDefinitions: [slowControl]})
+  const fastResult = getPromptFilterControls({promptFilterDefinitions: [fastControl]})
+  const slowResultControl = slowResult.controls[0]
+  const fastResultControl = fastResult.controls[0]
+
+  if (!slowResultControl || !fastResultControl) {
+    throw new Error('Expected schema prompt controls')
+  }
+
+  expect(getPromptFilterLabel(slowResultControl)).toBe('Population Criteria (project prompt)')
+  expect(getPromptFilterLabel(fastResultControl)).toBe('Population Criteria (project prompt)')
+  expect(getPromptFilterTitle(slowResultControl)).toBe('Population Criteria (project prompt; Project schema options)')
+  expect(getPromptFilterTitle(fastResultControl)).toBe('Population Criteria (project prompt; Project schema options)')
+
+  const slowIndexedControl = {
+    ...slowControl,
+    articleReadinessState: 'slow',
+    debugDisplayState: 'mart/slow',
+    optionSourceState: 'slow',
+    source: 'mart',
+  }
+  const fastIndexedControl = {
+    ...slowIndexedControl,
+    articleReadinessState: 'fast',
+    debugDisplayState: 'mart/fast',
+    optionSourceState: 'fast',
+  }
+  const slowIndexedResult = getPromptFilterControls({promptFilterDefinitions: [slowIndexedControl]})
+  const fastIndexedResult = getPromptFilterControls({promptFilterDefinitions: [fastIndexedControl]})
+  const slowIndexedResultControl = slowIndexedResult.controls[0]
+  const fastIndexedResultControl = fastIndexedResult.controls[0]
+
+  if (!slowIndexedResultControl || !fastIndexedResultControl) {
+    throw new Error('Expected indexed prompt controls')
+  }
+
+  expect(getPromptFilterLabel(slowIndexedResultControl)).toBe('Population Criteria (review index)')
+  expect(getPromptFilterLabel(fastIndexedResultControl)).toBe('Population Criteria (review index)')
+  expect(getPromptFilterTitle(slowIndexedResultControl)).toBe(
+    'Population Criteria (review index; Indexed answer options)',
+  )
+  expect(getPromptFilterTitle(fastIndexedResultControl)).toBe(
+    'Population Criteria (review index; Indexed answer options)',
+  )
+
+  const renderedText = [
+    getPromptFilterLabel(slowResultControl),
+    getPromptFilterTitle(slowResultControl),
+    getPromptFilterLabel(slowIndexedResultControl),
+    getPromptFilterTitle(slowIndexedResultControl),
+  ].join(' ')
+
+  expect(renderedText).not.toContain('fast')
+  expect(renderedText).not.toContain('slow')
 })
 
 test('getPromptFilterControls keeps legacy enum and numeric filter compatibility', () => {
