@@ -296,6 +296,28 @@ Each control should include:
 - option source state: `schema`, `fast`, `slowLoading`, `slow`, `unavailable`
 - surface/mode eligibility, such as LLM, Both, Human prompt-mode, or Human
   summary-mode
+- debug display state for observability while using or debugging the UI. In the
+  development/debug view, append the state in parentheses after the prompt label,
+  such as `Population Criteria (project/fast):`, `Population Criteria
+  (project/slow):`, `Population Criteria (mart/fast):`, or `Population Criteria
+  (mart/slow):`.
+
+Debug state semantics:
+
+- The first segment names the option definition source:
+  - `project`: options are derived from authoritative project prompt
+    definitions/schema.
+  - `mart`: options are derived from materialized review-serving option/facet
+    data.
+- The second segment names the article filtering/read path readiness for the
+  current prompt/filter identity:
+  - `fast`: applying the prompt filter can use a ready prompt-answer posting or
+    equivalent materialized read path.
+  - `slow`: applying the prompt filter will use exact canonical read-through
+    and warm or enqueue the fast path.
+- The suffix is an observability aid, not the primary product copy. It should be
+  easy to remove, hide behind an existing debug flag, or keep in development
+  builds without changing the filter behavior.
 
 Acceptance:
 
@@ -304,6 +326,9 @@ Acceptance:
 - Open-ended/numeric controls render with `All` before any facet request.
 - The active project produces exactly six ordered enum controls for LLM/Both.
 - Importable-but-unlinked prompts never become controls.
+- When debug labels are enabled, each prompt control label includes the
+  `(project|mart)/(fast|slow)` state suffix so frontend/backend option-source
+  and article-read readiness issues are visible during manual debugging.
 
 ### Stage 2. Enum Path
 

@@ -181,14 +181,14 @@ test('review filter route service reads facet and option contracts without raw f
     mode: 'review',
     params: {covidenceConflicts: '1', covidenceDuplicates: '1', projectId: 'project-1', search: 'heart'},
     promptRows: [
-      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: 'string'},
+      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: "'yes' | 'no' | 'maybe'"},
       {id: 'prompt-2', promptHeading: 'Prompt 2', originalText: 'Prompt two', type: "string.integer | 'unknown'"},
     ],
   })
   const sql = reader.statements.join('\n')
 
   expect(response.filters).toEqual([
-    {answeredOriginalValues: ['yes'], filterType: 'enum', promptId: 'prompt-1', promptName: 'Prompt 1'},
+    {answeredOriginalValues: ['yes', 'no', 'maybe'], filterType: 'enum', promptId: 'prompt-1', promptName: 'Prompt 1'},
     {
       bins: [
         {label: '5', max: 5, min: 5},
@@ -198,6 +198,39 @@ test('review filter route service reads facet and option contracts without raw f
       promptId: 'prompt-2',
       promptName: 'Prompt 2',
       specialValues: ['unknown'],
+    },
+  ])
+  expect(response.promptFilterDefinitions).toEqual([
+    {
+      articleReadinessState: 'slow',
+      debugDisplayState: 'project/slow',
+      kind: 'schemaEnum',
+      label: 'Prompt 1',
+      optionSourceState: 'schema',
+      options: [
+        {label: 'yes', value: 'yes'},
+        {label: 'no', value: 'no'},
+        {label: 'maybe', value: 'maybe'},
+      ],
+      promptId: 'prompt-1',
+      selectedValues: [],
+      source: 'project',
+      surface: 'llm',
+    },
+    {
+      articleReadinessState: 'slow',
+      debugDisplayState: 'mart/slow',
+      kind: 'numeric',
+      label: 'Prompt 2',
+      optionSourceState: 'fast',
+      options: [
+        {label: '5', value: '5'},
+        {label: '10', value: '10'},
+      ],
+      promptId: 'prompt-2',
+      selectedValues: [],
+      source: 'mart',
+      surface: 'llm',
     },
   ])
   expect(response.facets[0]).toMatchObject({facet_key: 'promptAnswer', summary_identity: 'review.filter.promptAnswer'})
@@ -285,6 +318,20 @@ test('human filter route service keeps summary-mode answer scope from serving op
       filterType: 'enum',
       promptId: 'summary',
       promptName: 'Overall human screening decision',
+    },
+  ])
+  expect(response.promptFilterDefinitions).toEqual([
+    {
+      articleReadinessState: 'slow',
+      debugDisplayState: 'mart/slow',
+      kind: 'schemaEnum',
+      label: 'Overall human screening decision',
+      optionSourceState: 'fast',
+      options: [{label: 'include', value: 'include'}],
+      promptId: 'summary',
+      selectedValues: [],
+      source: 'mart',
+      surface: 'summary',
     },
   ])
   expect(response.filterOptions[0]?.optionPayload).toEqual({

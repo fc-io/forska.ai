@@ -1,5 +1,5 @@
-import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
 import {
   getDuckdbAppendRuntimeMetrics,
   getDuckdbQueueRuntimeMetricsSnapshot,

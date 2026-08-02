@@ -12,31 +12,82 @@
  * - If type contains 'string' or 'string[]' or is null/empty: use "database" strategy
  */
 
-/**
- * Parse arktype definition to extract possible enum options.
- * Handles:
- * - `'yes' | 'no' | 'unsure'` -> ['yes', 'no', 'unsure']
- * - `('yes' | 'no')[]` -> ['yes', 'no']
- * - `string` -> null (open-ended, use database)
- * - `string[]` -> null (open-ended, use database)
- */
+const quotedLiteralPattern = /'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"/g
+const fixedLiteralPattern = /'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|\bboolean\b|\btrue\b|\bfalse\b/gi
+const ignoredFixedTypeTokens = new Set(['boolean', 'false', 'null', 'true', 'undefined'])
+
+const getDecodedEscapeSequence = (escapeSequence: string) => {
+  const simpleEscapes: Record<string, string> = {'0': '\0', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v'}
+  const unicodeCodePoint = escapeSequence.startsWith('u')
+    ? Number.parseInt(escapeSequence.slice(1), 16)
+    : escapeSequence.startsWith('x')
+      ? Number.parseInt(escapeSequence.slice(1), 16)
+      : Number.NaN
+
+  return Number.isNaN(unicodeCodePoint)
+    ? (simpleEscapes[escapeSequence] ?? escapeSequence)
+    : String.fromCodePoint(unicodeCodePoint)
+}
+
+const decodeQuotedLiteral = (literal: string) => {
+  const rawValue = literal.slice(1, -1)
+
+  return rawValue.replace(/\\(u[0-9a-f]{4}|x[0-9a-f]{2}|.)/gi, (_match, escapeSequence: string) => {
+    return getDecodedEscapeSequence(escapeSequence)
+  })
+}
+
+const getQuotedLiteralValues = (typeStr: string) => {
+  return [...typeStr.matchAll(quotedLiteralPattern)].map((match) => {
+    return decodeQuotedLiteral(match[0])
+  })
+}
+
+const getTypeWithoutQuotedLiterals = (typeStr: string) => {
+  return typeStr.replace(quotedLiteralPattern, ' ')
+}
+
+const hasOnlyFixedTypeSyntax = (typeStr: string) => {
+  const typeWithoutQuotedLiterals = getTypeWithoutQuotedLiterals(typeStr)
+  const unsupportedTokens = (typeWithoutQuotedLiterals.match(/[a-z_][a-z0-9_.]*/gi) ?? []).filter((token) => {
+    return !ignoredFixedTypeTokens.has(token.toLowerCase())
+  })
+  const remainingSyntax = typeWithoutQuotedLiterals
+    .replace(/\b(?:boolean|false|null|true|undefined)\b/gi, '')
+    .replace(/[\s|()[\],?]/g, '')
+
+  return unsupportedTokens.length === 0 && remainingSyntax.length === 0
+}
+
+const getFixedLiteralValues = (typeStr: string) => {
+  return [...typeStr.matchAll(fixedLiteralPattern)].flatMap((match) => {
+    const literal = match[0]
+    const normalizedLiteral = literal.toLowerCase()
+
+    return literal.startsWith("'") || literal.startsWith('"')
+      ? [decodeQuotedLiteral(literal)]
+      : normalizedLiteral === 'boolean'
+        ? ['true', 'false']
+        : [normalizedLiteral]
+  })
+}
+
+const getUniqueValues = (values: string[]) => {
+  return [...new Set(values)]
+}
+
 export const parseArktypeOptions = (typeStr: string | null): string[] | null => {
   if (!typeStr) return null
 
   const trimmed = typeStr.trim()
 
-  // Check for open-ended types that should fall back to database query
-  if (isOpenEndedType(trimmed)) {
+  if (isOpenEndedType(trimmed) || isNumericType(trimmed) || !hasOnlyFixedTypeSyntax(trimmed)) {
     return null
   }
 
-  // Match quoted strings: 'value' or "value"
-  const matches = trimmed.match(/['"]([^'"]+)['"]/g)
-  if (!matches || matches.length === 0) return null
+  const values = getUniqueValues(getFixedLiteralValues(trimmed))
 
-  return matches.map((m) => {
-    return m.slice(1, -1) // Remove quotes
-  })
+  return values.length > 0 ? values : null
 }
 
 /**
@@ -44,8 +95,11 @@ export const parseArktypeOptions = (typeStr: string | null): string[] | null => 
  * These types should use the numeric bin-based filter strategy.
  */
 export const isNumericType = (typeStr: string): boolean => {
-  const normalized = typeStr.trim().toLowerCase()
-  return /string\.integer|(?<!\.)number(?!\.)|\binteger\b/.test(normalized)
+  const normalized = getTypeWithoutQuotedLiterals(typeStr).trim().toLowerCase()
+  const hasNamedNumericType = /string\.integer|(?<!\.)number(?!\.)|\binteger\b/.test(normalized)
+  const hasNumericLiteral = /(^|[|([\s])[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?=$|[|)\]\s])/u.test(normalized)
+
+  return hasNamedNumericType || hasNumericLiteral
 }
 
 /**
@@ -53,12 +107,7 @@ export const isNumericType = (typeStr: string): boolean => {
  * E.g., "string.integer | 'not applicable' | 'unsure'" -> ['not applicable', 'unsure']
  */
 export const extractSpecialValues = (typeStr: string): string[] => {
-  const matches = typeStr.match(/['"]([^'"]+)['"]/g)
-  return matches
-    ? matches.map((m) => {
-        return m.slice(1, -1)
-      })
-    : []
+  return getUniqueValues(getQuotedLiteralValues(typeStr))
 }
 
 /**

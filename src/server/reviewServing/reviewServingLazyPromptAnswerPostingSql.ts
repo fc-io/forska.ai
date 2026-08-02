@@ -19,6 +19,8 @@ export type ReviewServingLazyPromptAnswerPostingEnsureResult = {
   writtenBucketCount: number
 }
 
+const inflightEnsurePromises = new Map<string, Promise<ReviewServingLazyPromptAnswerPostingEnsureResult>>()
+
 export const isReviewServingPromptAnswerFilterGroup = (group: {filterKind: string}) => {
   return group.filterKind === reviewServingPromptAnswerFilterKind
 }
@@ -231,7 +233,8 @@ export const getReviewServingPromptAnswerPostingCacheWriteSqls = (input: {
         ${input.reviewConfigHashSql} AS review_config_hash,
         ${input.snapshotIdSql} AS snapshot_id,
         COALESCE(
-          list(DISTINCT source.article_id ORDER BY source.article_id) FILTER (WHERE source.article_id IS NOT NULL),
+          list(DISTINCT source_article.article_id ORDER BY source_article.article_id)
+            FILTER (WHERE source_article.article_id IS NOT NULL),
           []::VARCHAR[]
         ) AS article_ids,
         '${reviewServingPromptAnswerFilterKind}' AS filter_kind,
@@ -242,6 +245,8 @@ export const getReviewServingPromptAnswerPostingCacheWriteSqls = (input: {
         ${getReviewServingLazyPromptAnswerPostingSourceSql(input)}
       ) source
         ON source.filter_value = requested.filter_value
+      LEFT JOIN UNNEST(COALESCE(source.article_ids, []::VARCHAR[])) AS source_article(article_id)
+        ON TRUE
       WHERE requested.filter_value IS NOT NULL
         AND requested.filter_value <> ''
       GROUP BY requested.filter_value
@@ -274,7 +279,41 @@ const executeStatement = async (database: ReviewServingLazyPromptAnswerPostingDa
   await database.queryJson<unknown>(statement)
 }
 
-export const ensureReviewServingLazyPromptAnswerPostingBuckets = async (input: {
+const executeTransaction = async (
+  database: ReviewServingLazyPromptAnswerPostingDatabase,
+  statements: readonly string[],
+) => {
+  await executeStatement(database, 'BEGIN TRANSACTION')
+
+  try {
+    for (const statement of statements) {
+      await executeStatement(database, statement)
+    }
+
+    await executeStatement(database, 'COMMIT')
+  } catch (error) {
+    await executeStatement(database, 'ROLLBACK')
+    throw error
+  }
+}
+
+const getEnsureKey = (input: {
+  filterValues: readonly string[]
+  listModeKey: string
+  projectId: string
+  reviewConfigHash: string | null
+  snapshotId: string
+}) => {
+  return JSON.stringify({
+    filterValues: input.filterValues,
+    listModeKey: input.listModeKey,
+    projectId: input.projectId,
+    reviewConfigHash: input.reviewConfigHash,
+    snapshotId: input.snapshotId,
+  })
+}
+
+const ensureReviewServingLazyPromptAnswerPostingBucketsUncoalesced = async (input: {
   database: ReviewServingLazyPromptAnswerPostingDatabase
   filterValues: readonly string[]
   listModeKey: string
@@ -307,15 +346,74 @@ export const ensureReviewServingLazyPromptAnswerPostingBuckets = async (input: {
     reviewConfigHashSql: getSqlLiteral(input.reviewConfigHash),
     snapshotIdSql: getSqlLiteral(input.snapshotId),
   }
-  for (const statement of getReviewServingPromptAnswerPostingCacheWriteSqls(sqlInput)) {
-    await executeStatement(input.database, statement)
+  const missingRows = await input.database.queryJson<{filterValue: string}>(
+    getReviewServingPromptAnswerPostingMissingValuesSql(sqlInput),
+  )
+  const missingFilterValues = missingRows
+    .map((row) => {
+      return row.filterValue
+    })
+    .filter((value) => {
+      return requestedFilterValues.includes(value)
+    })
+
+  if (missingFilterValues.length === 0) {
+    return {
+      diagnostics: reviewServingLazyPromptAnswerPostingDiagnostics,
+      missingFilterValues,
+      requestedFilterValues,
+      status: 'cacheHit',
+      writtenBucketCount: 0,
+    }
   }
+
+  await executeTransaction(
+    input.database,
+    getReviewServingPromptAnswerPostingCacheWriteSqls({
+      ...sqlInput,
+      filterValuesSql: getSqlLiteral(missingFilterValues),
+    }),
+  )
 
   return {
     diagnostics: reviewServingLazyPromptAnswerPostingDiagnostics,
-    missingFilterValues: requestedFilterValues,
+    missingFilterValues,
     requestedFilterValues,
     status: 'cacheWritten',
-    writtenBucketCount: requestedFilterValues.length,
+    writtenBucketCount: missingFilterValues.length,
   }
+}
+
+export const ensureReviewServingLazyPromptAnswerPostingBuckets = async (input: {
+  database: ReviewServingLazyPromptAnswerPostingDatabase
+  filterValues: readonly string[]
+  listModeKey: string
+  projectId: string
+  reviewConfigHash: string | null
+  snapshotId: string
+}): Promise<ReviewServingLazyPromptAnswerPostingEnsureResult> => {
+  const requestedFilterValues = [...new Set(input.filterValues)]
+    .filter((value) => {
+      return value.length > 0
+    })
+    .sort((left, right) => {
+      return left.localeCompare(right)
+    })
+  const ensureKey = getEnsureKey({...input, filterValues: requestedFilterValues})
+  const inflight = inflightEnsurePromises.get(ensureKey)
+
+  if (inflight) {
+    return inflight
+  }
+
+  const promise = ensureReviewServingLazyPromptAnswerPostingBucketsUncoalesced({
+    ...input,
+    filterValues: requestedFilterValues,
+  }).finally(() => {
+    inflightEnsurePromises.delete(ensureKey)
+  })
+
+  inflightEnsurePromises.set(ensureKey, promise)
+
+  return promise
 }

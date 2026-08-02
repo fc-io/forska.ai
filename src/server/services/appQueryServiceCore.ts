@@ -605,6 +605,8 @@ const getProjectPromptRows = (database: AppQueryDatabaseService) => {
       INNER JOIN app.prompt p ON p.id = pp.prompt_id
       WHERE pp.project_id = '${escapeSqlString(projectId)}'
         AND pp.enabled = TRUE
+        AND COALESCE(pp.archived, FALSE) = FALSE
+        AND COALESCE(p.archived, FALSE) = FALSE
       ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
     `,
       getAppQueryWorkloadContext({maxResultRows: 1_000, projectId, routeOrJobKey: 'projectPromptRows'}),

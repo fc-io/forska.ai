@@ -57,42 +57,51 @@ test('review article tables render current query rows before pagination cache ef
   expect(missingCurrentQueryFallback).toEqual([])
 })
 
-test('LLM review prompt answer facets load from a stable inline filter shell', () => {
+test('LLM review prompt controls load immediately from server-owned definitions', () => {
   const source = readSource('src/components/main/reviews/reviewsFilterControls.tsx')
 
-  expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
-  expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
-  expect(source).toContain('setPromptFiltersRequested(true)')
+  expect(source).toContain('enabled: !props.hidePromptSelectors')
+  expect(source).toContain('getPromptFilterControls(response.data)')
+  expect(source).toContain('getPromptFilterLabel(promptFilter)')
+  expect(source).toContain('reconcileSchemaEnumSelections(prev ?? {}, controls)')
   expect(source).toContain('Prompt answer filters')
-  expect(source).toContain('Load options')
-  expect(source).toContain('All prompt answers')
   expect(source).toContain('apiClient.api.articlesreviewsfilters.get')
+  expect(source).not.toContain('promptFiltersRequested')
+  expect(source).not.toContain('Load options')
 })
 
-test('Human/Both review prompt answer facets load from a stable inline filter shell', () => {
+test('Human/Both review prompt controls load immediately from server-owned definitions', () => {
   const source = readSource('src/components/main/reviews/reviewsHumanFilterControls.tsx')
 
-  expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
-  expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
-  expect(source).toContain('setPromptFiltersRequested(true)')
+  expect(source).toContain('enabled: !props.hidePromptSelectors')
+  expect(source).toContain('getPromptFilterControls(response.data)')
+  expect(source).toContain('getPromptFilterLabel(promptFilter)')
+  expect(source).toContain('reconcileSchemaEnumSelections(prev ?? {}, controls)')
   expect(source).toContain('Prompt answer filters')
-  expect(source).toContain('Load options')
-  expect(source).toContain('All prompt answers')
   expect(source).toContain('apiClient.api.articlesreviewshumanfilters.get')
+  expect(source).not.toContain('promptFiltersRequested')
+  expect(source).not.toContain('Load options')
 })
 
-test('prompt facet normalization preserves prompt filter state identity when values did not change', () => {
+test('opening prompt controls has no option-query dependency or filter-state handler', () => {
   const filterControlFiles = [
     'src/components/main/reviews/reviewsFilterControls.tsx',
     'src/components/main/reviews/reviewsHumanFilterControls.tsx',
   ] as const
-  const missingNoopGuard = filterControlFiles.filter((path) => {
+  const violations = filterControlFiles.flatMap((path) => {
     const source = readSource(path)
+    const optionQuery = source.slice(source.indexOf('const filtersQuery'), source.indexOf('const setPromptMulti'))
 
-    return !source.includes('let changed = false') || !source.includes('return changed ? next : prev')
+    return [
+      optionQuery.includes('props.promptFilters') ? `${path}: option query uses prompt filter state` : null,
+      source.includes('onOpenChange=') ? `${path}: opening has a state handler` : null,
+      source.includes('onFocus=') ? `${path}: focusing has a state handler` : null,
+    ].filter((violation): violation is string => {
+      return violation !== null
+    })
   })
 
-  expect(missingNoopGuard).toEqual([])
+  expect(violations).toEqual([])
 })
 
 test('LLM review list first load does not hydrate article detail payloads', () => {
