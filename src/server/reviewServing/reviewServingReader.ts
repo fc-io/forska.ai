@@ -381,6 +381,16 @@ const getPostingFilterPrefix = (listMode: ReviewServingListMode | null | undefin
   return listMode === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
 }
 
+const promptAnswerFilterValuePrefixPattern = /^(?:human|review):promptAnswer:/
+
+const getQualifiedPromptAnswerFilterValue = (value: string, prefix: string) => {
+  return promptAnswerFilterValuePrefixPattern.test(value) ? value : `${prefix}${value}`
+}
+
+const getPromptAnswerFilterGroupKey = (qualifiedValue: string) => {
+  return qualifiedValue.split(':').slice(0, 3).join(':')
+}
+
 const getFilterValues = (value: ReviewServingFilterSignatureValue | undefined) => {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => {
@@ -407,18 +417,19 @@ const getPromptAnswerValueGroups = (request: ReviewServingReaderRequest) => {
   const prefix = getPostingFilterPrefix(request.listMode)
 
   return getFilterValues(request.filters?.promptAnswer).reduce<string[][]>((groups, value) => {
-    const [promptId] = value.split(':')
+    const qualifiedValue = getQualifiedPromptAnswerFilterValue(value, prefix)
+    const groupKey = getPromptAnswerFilterGroupKey(qualifiedValue)
     const currentGroup = groups.find((group) => {
       return group.some((entry) => {
-        return entry.startsWith(`${prefix}${promptId}:`)
+        return getPromptAnswerFilterGroupKey(entry) === groupKey
       })
     })
 
     return currentGroup
       ? groups.map((group) => {
-          return group === currentGroup ? [...group, `${prefix}${value}`] : group
+          return group === currentGroup ? [...group, qualifiedValue] : group
         })
-      : [...groups, [`${prefix}${value}`]]
+      : [...groups, [qualifiedValue]]
   }, [])
 }
 

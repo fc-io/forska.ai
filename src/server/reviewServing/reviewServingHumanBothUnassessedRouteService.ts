@@ -1,3 +1,4 @@
+import type {ProjectPromptCriteriaDisposition} from '../../db/schemaTypes.ts'
 import type {
   ArticlesReviewsBothParams,
   ArticlesReviewsBothResponse,
@@ -6,7 +7,7 @@ import type {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
-import {normalizeSummaryAnswerValue} from '../utils/judgmentAnswers.ts'
+import {deriveStrictSummaryAnswer, getNormalizedSummaryAnswer} from '../utils/judgmentAnswers.ts'
 import type {NamedReviewFastCountKey} from './reviewServingContracts.ts'
 import {
   getReviewServingDynamicFilteredCountSql,
@@ -88,8 +89,13 @@ type ReviewServingJudgmentRow = {
   judgment_model_id?: string | null
   placeholder_kind?: string | null
   placeholderKind?: string | null
+  prompt_criteria_disposition?: ProjectPromptCriteriaDisposition | null
   prompt_id?: string
   quotes?: unknown
+}
+
+type BothLlmJudgmentWithCriteria = ArticlesReviewsBothResponse['data'][number]['judgments'][number] & {
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null
 }
 
 type ReviewServingCountRow = {
@@ -180,6 +186,14 @@ const getPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) =
   })
 }
 
+const promptAnswerFilterValuePrefixPattern = /^(?:human|review):promptAnswer:/
+
+const getQualifiedPromptAnswerFilterValue = (promptId: string, value: string, prefix: string) => {
+  const promptValue = `${promptId}:${value}`
+
+  return promptAnswerFilterValuePrefixPattern.test(promptValue) ? promptValue : `${prefix}${promptValue}`
+}
+
 const getPromptAnswerFilterGroups = (
   prompts: Record<string, string[]> | undefined,
   mode: ReviewServingReviewMode,
@@ -200,7 +214,7 @@ const getPromptAnswerFilterGroups = (
             return leftValue.localeCompare(rightValue)
           })
           .map((value) => {
-            return `${promptPrefix}${promptId}:${value}`
+            return getQualifiedPromptAnswerFilterValue(promptId, value, promptPrefix)
           }),
       }
     })
@@ -576,13 +590,14 @@ const getLlmJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) =
         modelId: row.judgment_model_id ?? '',
         answeredOriginal: row.answered_original ?? null,
         answeredOriginalAsArray: row.answered_original_as_array ?? [],
+        criteriaDisposition: row.prompt_criteria_disposition ?? null,
         explanation: row.explanation ?? null,
         quotes: getJsonValue(row.quotes ?? null),
       }
       const existing = acc.get(articleId) ?? []
 
       return acc.set(articleId, [...existing, judgment])
-    }, new Map<string, ArticlesReviewsBothResponse['data'][number]['judgments']>())
+    }, new Map<string, BothLlmJudgmentWithCriteria[]>())
 }
 
 const getHumanJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) => {
@@ -617,18 +632,31 @@ const getSummaryAnswer = (value: string | null | undefined): 'maybe' | 'no' | 'y
   return value === 'yes' || value === 'no' || value === 'maybe' ? value : null
 }
 
-const getLlmSummaryAnswer = (
-  judgments: ArticlesReviewsBothResponse['data'][number]['judgments'],
-): 'maybe' | 'no' | 'yes' | null => {
-  const answers = judgments
-    .map((judgment) => {
-      return normalizeSummaryAnswerValue(judgment.answeredOriginal)
-    })
-    .filter((answer): answer is 'maybe' | 'no' | 'yes' => {
-      return answer !== null
-    })
+const getLlmSummaryAnswer = (judgments: readonly BothLlmJudgmentWithCriteria[]): 'maybe' | 'no' | 'yes' | null => {
+  const latestJudgmentByPrompt = judgments.reduce<Map<string, BothLlmJudgmentWithCriteria>>((acc, judgment) => {
+    const existing = acc.get(judgment.promptId)
 
-  return answers.length === 0 ? null : answers.includes('no') ? 'no' : answers.includes('maybe') ? 'maybe' : 'yes'
+    return !existing || judgment.createdAt >= existing.createdAt ? acc.set(judgment.promptId, judgment) : acc
+  }, new Map<string, BothLlmJudgmentWithCriteria>())
+  const latestJudgments = Array.from(latestJudgmentByPrompt.values())
+
+  return deriveStrictSummaryAnswer(
+    latestJudgments.map((judgment) => {
+      return {criteriaDisposition: judgment.criteriaDisposition, promptId: judgment.promptId}
+    }),
+    latestJudgments.reduce<Record<string, 'maybe' | 'no' | 'yes' | null>>((acc, judgment) => {
+      return {...acc, [judgment.promptId]: getNormalizedSummaryAnswer(judgment)}
+    }, {}),
+    () => {},
+  )
+}
+
+const withoutInternalLlmJudgmentFields = (
+  judgments: readonly BothLlmJudgmentWithCriteria[],
+): ArticlesReviewsBothResponse['data'][number]['judgments'] => {
+  return judgments.map(({criteriaDisposition: _criteriaDisposition, ...judgment}) => {
+    return judgment
+  })
 }
 
 const getEnabledPromptCount = async (
@@ -882,7 +910,7 @@ export const getBothReviewArticlesFromServing = async (
 
     return {
       ...getArticleResponseBase(row),
-      judgments,
+      judgments: withoutInternalLlmJudgmentFields(judgments),
       humanJudgmentMode: summaryJudgment ? ('summary' as const) : ('prompt' as const),
       humanSummaryAnswer: getSummaryAnswer(summaryJudgment?.answer),
       llmSummaryAnswer: getLlmSummaryAnswer(judgments),

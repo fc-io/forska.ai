@@ -129,6 +129,7 @@ const ReviewsBoth = () => {
             setSearchTitle={filters.setSearchTitle}
             appliedSearchTitle={filters.appliedSearchTitle()}
             onSubmitSearch={filters.onSubmitSearch}
+            filterMode="both"
           />
 
           <ReviewsArticlesBothTableContainer

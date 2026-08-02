@@ -303,7 +303,8 @@ test('dynamic filtered counts execute canonical prompt-answer fallback with mixe
         project_id VARCHAR,
         prompt_id VARCHAR,
         enabled BOOLEAN,
-        archived BOOLEAN
+        archived BOOLEAN,
+        criteria_disposition VARCHAR
       );
       CREATE TABLE app.prompt (
         id VARCHAR,
@@ -363,8 +364,8 @@ test('dynamic filtered counts execute canonical prompt-answer fallback with mixe
       );
       INSERT INTO app.project VALUES ('project-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'prompt');
       INSERT INTO app.project_prompt VALUES
-        ('project-1', 'prompt-1', TRUE, FALSE),
-        ('project-1', 'prompt-2', TRUE, FALSE);
+        ('project-1', 'prompt-1', TRUE, FALSE, 'include'),
+        ('project-1', 'prompt-2', TRUE, FALSE, 'include');
       INSERT INTO app.prompt VALUES ('prompt-1', FALSE), ('prompt-2', FALSE);
       INSERT INTO app."judgment" VALUES
         ('judgment-1', 'article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMP '2026-01-01 00:00:00', NULL),

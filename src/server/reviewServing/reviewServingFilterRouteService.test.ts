@@ -422,6 +422,84 @@ test('human filter route service keeps summary-mode filter when scoped options a
   ])
 })
 
+test('both filter route service returns human and LLM screening decisions for summary-mode projects', async () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.review_filter_option_serving_v4')) {
+        return [] as T[]
+      }
+
+      if (statement.includes("AND facet_kind = 'human'")) {
+        return [
+          {
+            availability: 'ready',
+            count_value: 2,
+            facet_key: 'promptAnswer',
+            facet_kind: 'human',
+            facet_value: 'yes',
+            prompt_id: 'summary',
+            summary_identity: 'review.human.filter.summaryAnswer',
+          },
+        ] as T[]
+      }
+
+      return [
+        {
+          availability: 'ready',
+          count_value: 3,
+          facet_key: 'promptAnswer',
+          facet_kind: 'review',
+          facet_value: 'yes',
+          prompt_id: 'prompt-1',
+          summary_identity: 'review.filter.promptAnswer',
+        },
+      ] as T[]
+    },
+  }
+
+  const response = await getReviewFiltersFromServing({
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+    humanJudgmentMode: 'summary',
+    mode: 'both',
+    params: {projectId: 'project-1'},
+    promptRows: [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Prompt 1', type: "'yes' | 'no' | 'maybe'"}],
+  })
+
+  expect(response.filters).toEqual([
+    {
+      answeredOriginalValues: ['yes', 'no', 'maybe'],
+      filterType: 'enum',
+      promptId: 'human:promptAnswer:summary',
+      promptName: 'Overall human screening decision',
+    },
+    {
+      answeredOriginalValues: ['yes', 'no', 'maybe'],
+      filterType: 'enum',
+      promptId: 'review:promptAnswer:summary',
+      promptName: 'LLM screening decision',
+    },
+  ])
+  expect(response.promptFilterDefinitions).toMatchObject([
+    {
+      debugDisplayState: 'project/fast',
+      label: 'Overall human screening decision',
+      promptId: 'human:promptAnswer:summary',
+      surface: 'summary',
+    },
+    {
+      debugDisplayState: 'project/fast',
+      label: 'LLM screening decision',
+      promptId: 'review:promptAnswer:summary',
+      surface: 'llm',
+    },
+  ])
+  expect(statements.join('\n')).toContain("AND facet_kind = 'review'")
+  expect(statements.join('\n')).toContain("AND facet_kind = 'human'")
+})
+
 test('human filter route service keeps prompt filters for prompt-mode projects', async () => {
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string): Promise<T[]> => {

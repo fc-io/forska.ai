@@ -113,14 +113,18 @@ const createManifestDatabase = (
   return database
 }
 
-const createReaderDatabase = () => {
+const createReaderDatabase = (input?: {
+  humanRows?: readonly Record<string, unknown>[]
+  llmRows?: readonly Record<string, unknown>[]
+  promptCount?: number
+}) => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
       if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
-        return [{promptCount: 1}] as T[]
+        return [{promptCount: input?.promptCount ?? 1}] as T[]
       }
 
       if (statement.includes(' AS totalCount')) {
@@ -151,7 +155,7 @@ const createReaderDatabase = () => {
         statement.includes('FROM mart.review_article_judgment_detail_serving_v4')
         && statement.includes("payload_kind = 'human'")
       ) {
-        return [
+        return (input?.humanRows ?? [
           {
             article_id: 'article-1',
             prompt_id: 'prompt-1',
@@ -162,11 +166,11 @@ const createReaderDatabase = () => {
             human_comment: 'human note',
             judgment_created_at: '2026-01-03T00:00:00.000Z',
           },
-        ] as T[]
+        ]) as T[]
       }
 
       if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
-        return [
+        return (input?.llmRows ?? [
           {
             article_id: 'article-1',
             prompt_id: 'prompt-1',
@@ -186,7 +190,7 @@ const createReaderDatabase = () => {
             answered_original_as_array: [],
             placeholder_kind: 'llm.unanswered',
           },
-        ] as T[]
+        ]) as T[]
       }
 
       return [{availability: 'ready', count_value: 1}] as T[]
@@ -398,7 +402,12 @@ test('both review prompt-filtered count fallback keeps LLM prompt-answer semanti
   }
 
   await getBothReviewArticlesFromServing(
-    {projectId: 'project-1', page: 1, limit: 100, prompts: {'prompt-1': ['yes']}},
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 100,
+      prompts: {'human:promptAnswer:summary': ['yes'], 'prompt-1': ['yes'], 'review:promptAnswer:summary': ['maybe']},
+    },
     {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
   )
   const countStatement = reader.statements.find((statement) => {
@@ -408,6 +417,8 @@ test('both review prompt-filtered count fallback keeps LLM prompt-answer semanti
   expect(reader.statements.join('\n')).toContain('ROLLBACK')
   expect(countStatement).toContain('canonical_prompt_answer_posting_rows AS')
   expect(countStatement).toContain('review:promptAnswer:prompt-1:yes')
+  expect(countStatement).toContain('review:promptAnswer:summary:maybe')
+  expect(countStatement).toContain('human:promptAnswer:summary:yes')
   expect(countStatement).not.toContain('human:promptAnswer:prompt-1:yes')
 })
 
@@ -600,6 +611,62 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('both review route service derives displayed LLM summaries with criteria semantics', async () => {
+  const reader = createReaderDatabase({
+    humanRows: [
+      {
+        article_id: 'article-1',
+        prompt_id: 'summary',
+        judgment_id: 'human-summary-1',
+        answered_original: 'yes',
+        answered_original_as_array: [],
+        detail_updated_at: '2026-01-04T00:00:00.000Z',
+        judgment_created_at: '2026-01-03T00:00:00.000Z',
+      },
+    ],
+    llmRows: [
+      {
+        article_id: 'article-1',
+        prompt_id: 'include-prompt',
+        judgment_id: 'llm-include',
+        answered_original: 'yes',
+        answered_original_as_array: [' yes '],
+        detail_updated_at: '2026-01-03T00:00:00.000Z',
+        explanation: 'because',
+        judgment_model_id: 'model-1',
+        prompt_criteria_disposition: 'include',
+        quotes: [],
+      },
+      {
+        article_id: 'article-1',
+        prompt_id: 'exclude-prompt',
+        judgment_id: 'llm-exclude',
+        answered_original: 'no',
+        answered_original_as_array: [' no '],
+        detail_updated_at: '2026-01-03T00:00:00.000Z',
+        explanation: 'because',
+        judgment_model_id: 'model-1',
+        prompt_criteria_disposition: 'exclude',
+        quotes: [],
+      },
+    ],
+    promptCount: 2,
+  })
+
+  const result = await getBothReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 50, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  expect(result.data[0]?.humanJudgmentMode).toBe('summary')
+  expect(result.data[0]?.llmSummaryAnswer).toBe('yes')
+  expect(result.data[0]?.judgments[0]).not.toHaveProperty('criteriaDisposition')
 })
 
 test('both review route service chunks judgment hydration at reader article-set bounds', async () => {

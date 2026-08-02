@@ -85,7 +85,9 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
           END IS TRUE
       ),
       active_prompt AS (
-        SELECT project_prompt.prompt_id
+        SELECT
+          project_prompt.prompt_id,
+          project_prompt.criteria_disposition
         FROM app.project_prompt project_prompt
         INNER JOIN app.prompt prompt
           ON prompt.id = project_prompt.prompt_id
@@ -121,6 +123,63 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
           WHERE judgment.deleted_at IS NULL
         ) ranked_judgment
         WHERE ranked_judgment.judgment_rank = 1
+      ),
+      latest_llm_summary_answer AS (
+        SELECT
+          summary_answer_value.*,
+          CASE
+            WHEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10)))) IN ('yes', 'no', 'maybe')
+              THEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10))))
+            WHEN NULLIF(trim(array_to_string(summary_answer_value.answer_values, chr(10))), '') IS NOT NULL
+              THEN 'maybe'
+            ELSE NULL
+          END AS normalized_summary_answer
+        FROM (
+          SELECT
+            json_answer.*,
+            CASE
+              WHEN ARRAY_LENGTH(json_answer.array_answer_values) > 0 THEN json_answer.array_answer_values
+              WHEN ARRAY_LENGTH(json_answer.json_answer_values) > 0 THEN json_answer.json_answer_values
+              ELSE CASE
+                WHEN NULLIF(TRIM(COALESCE(json_answer.answered_original, '')), '') IS NULL THEN []::VARCHAR[]
+                ELSE [TRIM(json_answer.answered_original)]
+              END
+            END AS answer_values
+          FROM (
+            SELECT
+              array_answer.*,
+              CASE
+                WHEN ARRAY_LENGTH(array_answer.array_answer_values) > 0 THEN []::VARCHAR[]
+                WHEN NOT STARTS_WITH(TRIM(COALESCE(array_answer.answered_original, '')), '[') THEN []::VARCHAR[]
+                ELSE COALESCE(
+                  (
+                    SELECT ARRAY_AGG(json_answer_value ORDER BY json_answer_order)
+                    FROM (
+                      SELECT
+                        CAST(json_value.key AS BIGINT) AS json_answer_order,
+                        NULLIF(TRIM(json_extract_string(json_value.value, '$')), '') AS json_answer_value
+                      FROM json_each(TRY_CAST(array_answer.answered_original AS JSON)) json_value
+                      WHERE json_value.type = 'VARCHAR'
+                    ) json_answer_values
+                    WHERE json_answer_value IS NOT NULL
+                  ),
+                  []::VARCHAR[]
+                )
+              END AS json_answer_values
+            FROM (
+              SELECT
+                latest_llm_judgment.*,
+                list_filter(
+                  list_transform(
+                    COALESCE(latest_llm_judgment.answered_original_as_array, []::VARCHAR[]),
+                    lambda answer_value : NULLIF(TRIM(answer_value), '')
+                  ),
+                  lambda answer_value : answer_value IS NOT NULL
+                ) AS array_answer_values
+              FROM latest_llm_judgment
+            ) array_answer
+          ) json_answer
+        ) summary_answer_value
       )
       SELECT
         llm.article_id,
@@ -144,6 +203,46 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
       CROSS JOIN UNNEST(COALESCE(llm.answered_original_as_array, []::VARCHAR[])) AS answer(answer_value)
       WHERE llm.answered_original_as_array IS NOT NULL
         AND answer.answer_value IS NOT NULL
+      UNION ALL
+      SELECT
+        summary.article_id,
+        summary.list_mode_key,
+        concat('review:promptAnswer:summary:', summary.summary_answer) AS filter_value
+      FROM (
+        SELECT
+          serving.article_id,
+          serving.list_mode_key,
+          CASE
+            WHEN bool_or(prompt.criteria_disposition IS NULL) THEN NULL
+            WHEN bool_or(
+              CASE
+                WHEN llm.normalized_summary_answer IS NOT NULL THEN FALSE
+                ELSE TRUE
+              END
+            ) THEN NULL
+            WHEN bool_or(
+              CASE
+                WHEN prompt.criteria_disposition = 'exclude'
+                  THEN llm.normalized_summary_answer = 'yes'
+                WHEN prompt.criteria_disposition = 'include'
+                  THEN llm.normalized_summary_answer = 'no'
+                ELSE llm.normalized_summary_answer = 'no'
+              END
+            ) THEN 'no'
+            WHEN bool_or(
+              llm.normalized_summary_answer = 'maybe'
+            ) THEN 'maybe'
+            ELSE 'yes'
+          END AS summary_answer
+        FROM scoped_serving serving
+        CROSS JOIN active_prompt prompt
+        LEFT JOIN latest_llm_summary_answer llm
+          ON llm.article_id = serving.article_id
+          AND llm.prompt_id = prompt.prompt_id
+        WHERE serving.list_mode_key IN ('llm', 'both')
+        GROUP BY serving.article_id, serving.list_mode_key
+      ) summary
+      WHERE summary.summary_answer IS NOT NULL
       UNION ALL
       SELECT
         judgment_human.article_id,

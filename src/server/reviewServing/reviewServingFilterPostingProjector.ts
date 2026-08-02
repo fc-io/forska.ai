@@ -280,6 +280,7 @@ const getFullRebuildPostingContributionRowsStatement = (
   const promptAnswerPostingsSql = isFullPostingRebuildInput(input)
     ? ''
     : `UNION ALL SELECT * FROM llm_postings
+          UNION ALL SELECT * FROM llm_summary_postings
           UNION ALL SELECT * FROM human_postings`
 
   return `
@@ -350,6 +351,18 @@ const getFullRebuildPostingContributionRowsStatement = (
         ),
         enabled_prompt_count AS (
           SELECT COUNT(*) AS prompt_count
+          FROM app.project_prompt project_prompt
+          INNER JOIN app.prompt prompt
+            ON prompt.id = project_prompt.prompt_id
+          WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
+            AND project_prompt.enabled
+            AND NOT project_prompt.archived
+            AND COALESCE(prompt.archived, FALSE) = FALSE
+        ),
+        enabled_prompt AS (
+          SELECT
+            project_prompt.prompt_id,
+            project_prompt.criteria_disposition
           FROM app.project_prompt project_prompt
           INNER JOIN app.prompt prompt
             ON prompt.id = project_prompt.prompt_id
@@ -458,6 +471,63 @@ const getFullRebuildPostingContributionRowsStatement = (
             ON list_mode_key.list_mode_key IN ('llm', 'both')
           WHERE detail.payload_kind = 'llm'
         ),
+        llm_summary_detail AS (
+          SELECT
+            summary_answer_value.*,
+            CASE
+              WHEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10)))) IN ('yes', 'no', 'maybe')
+                THEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10))))
+              WHEN NULLIF(trim(array_to_string(summary_answer_value.answer_values, chr(10))), '') IS NOT NULL
+                THEN 'maybe'
+              ELSE NULL
+            END AS normalized_summary_answer
+          FROM (
+            SELECT
+              json_answer.*,
+              CASE
+                WHEN ARRAY_LENGTH(json_answer.array_answer_values) > 0 THEN json_answer.array_answer_values
+                WHEN ARRAY_LENGTH(json_answer.json_answer_values) > 0 THEN json_answer.json_answer_values
+                ELSE CASE
+                  WHEN NULLIF(TRIM(COALESCE(json_answer.answered_original, '')), '') IS NULL THEN []::VARCHAR[]
+                  ELSE [TRIM(json_answer.answered_original)]
+                END
+              END AS answer_values
+            FROM (
+              SELECT
+                array_answer.*,
+                CASE
+                  WHEN ARRAY_LENGTH(array_answer.array_answer_values) > 0 THEN []::VARCHAR[]
+                  WHEN NOT STARTS_WITH(TRIM(COALESCE(array_answer.answered_original, '')), '[') THEN []::VARCHAR[]
+                  ELSE COALESCE(
+                    (
+                      SELECT ARRAY_AGG(json_answer_value ORDER BY json_answer_order)
+                      FROM (
+                        SELECT
+                          CAST(json_value.key AS BIGINT) AS json_answer_order,
+                          NULLIF(TRIM(json_extract_string(json_value.value, '$')), '') AS json_answer_value
+                        FROM json_each(TRY_CAST(array_answer.answered_original AS JSON)) json_value
+                        WHERE json_value.type = 'VARCHAR'
+                      ) json_answer_values
+                      WHERE json_answer_value IS NOT NULL
+                    ),
+                    []::VARCHAR[]
+                  )
+                END AS json_answer_values
+              FROM (
+                SELECT
+                  llm_detail.*,
+                  list_filter(
+                    list_transform(
+                      COALESCE(llm_detail.answered_original_as_array, []::VARCHAR[]),
+                      lambda answer_value : NULLIF(TRIM(answer_value), '')
+                    ),
+                    lambda answer_value : answer_value IS NOT NULL
+                  ) AS array_answer_values
+                FROM llm_detail
+              ) array_answer
+            ) json_answer
+          ) summary_answer_value
+        ),
         human_detail AS (
           SELECT
             detail.article_id,
@@ -490,6 +560,50 @@ const getFullRebuildPostingContributionRowsStatement = (
             AND serving.list_mode_key = llm.list_mode_key
           CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
           WHERE answer.answer_value IS NOT NULL
+        ),
+        llm_summary_postings AS (
+          SELECT
+            summary.article_id AS articleId,
+            summary.list_mode_key AS listModeKey,
+            FALSE AS tombstone,
+            'promptAnswer' AS filterKind,
+            concat('review:promptAnswer:summary:', summary.summary_answer) AS filterValue
+          FROM (
+            SELECT
+              serving.article_id,
+              serving.list_mode_key,
+              CASE
+                WHEN bool_or(prompt.criteria_disposition IS NULL) THEN NULL
+                WHEN bool_or(
+                  CASE
+                    WHEN llm.normalized_summary_answer IS NOT NULL THEN FALSE
+                    ELSE TRUE
+                  END
+                ) THEN NULL
+                WHEN bool_or(
+                  CASE
+                    WHEN prompt.criteria_disposition = 'exclude'
+                      THEN llm.normalized_summary_answer = 'yes'
+                    WHEN prompt.criteria_disposition = 'include'
+                      THEN llm.normalized_summary_answer = 'no'
+                    ELSE llm.normalized_summary_answer = 'no'
+                  END
+                ) THEN 'no'
+                WHEN bool_or(
+                  llm.normalized_summary_answer = 'maybe'
+                ) THEN 'maybe'
+                ELSE 'yes'
+              END AS summary_answer
+            FROM scoped_serving serving
+            CROSS JOIN enabled_prompt prompt
+            LEFT JOIN llm_summary_detail llm
+              ON llm.article_id = serving.article_id
+              AND llm.list_mode_key = serving.list_mode_key
+              AND llm.prompt_id = prompt.prompt_id
+            WHERE serving.list_mode_key IN ('llm', 'both')
+            GROUP BY serving.article_id, serving.list_mode_key
+          ) summary
+          WHERE summary.summary_answer IS NOT NULL
         ),
         human_postings AS (
           SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original) AS filterValue

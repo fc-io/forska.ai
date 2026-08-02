@@ -25,11 +25,18 @@ test('lazy prompt-answer fallback reads eager judgment sources and preserves lis
   expect(sql).toContain("WHEN 'both' THEN list_mode_state.has_both_list_mode")
   expect(sql).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
   expect(sql).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value)")
+  expect(sql).toContain("concat('review:promptAnswer:summary:', summary.summary_answer)")
   expect(sql).toContain("concat('human:promptAnswer:', judgment_human.prompt_id, ':', judgment_human.answer)")
   expect(sql).toContain("concat('human:promptAnswer:summary:', judgment_human_summary.answer)")
   expect(sql).toContain(
     'CROSS JOIN UNNEST(COALESCE(llm.answered_original_as_array, []::VARCHAR[])) AS answer(answer_value)',
   )
+  expect(sql).toContain('project_prompt.criteria_disposition')
+  expect(sql).toContain("WHEN prompt.criteria_disposition = 'exclude'")
+  expect(sql).toContain("THEN llm.normalized_summary_answer = 'yes'")
+  expect(sql).toContain("WHEN prompt.criteria_disposition = 'include'")
+  expect(sql).toContain("THEN llm.normalized_summary_answer = 'no'")
+  expect(sql).toContain('json_each(TRY_CAST(array_answer.answered_original AS JSON))')
 })
 
 test('lazy prompt-answer fallback preserves human prompt-vs-summary semantics', () => {
@@ -303,7 +310,8 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
         project_id VARCHAR,
         prompt_id VARCHAR,
         enabled BOOLEAN,
-        archived BOOLEAN
+        archived BOOLEAN,
+        criteria_disposition VARCHAR
       );
       CREATE TABLE app."judgment" (
         id VARCHAR,
@@ -349,21 +357,32 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
         list_mode_key VARCHAR
       );
       INSERT INTO app.project VALUES ('project-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'prompt');
-      INSERT INTO app.prompt VALUES ('prompt-1', FALSE);
-      INSERT INTO app.project_prompt VALUES ('project-1', 'prompt-1', TRUE, FALSE);
+      INSERT INTO app.prompt VALUES ('prompt-1', FALSE), ('prompt-2', FALSE);
+      INSERT INTO app.project_prompt VALUES
+        ('project-1', 'prompt-1', TRUE, FALSE, 'include'),
+        ('project-1', 'prompt-2', TRUE, FALSE, 'exclude');
       INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
         ('project-1', 'review-config-1', 'snapshot-1', 'article-1', TRUE, FALSE, FALSE),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-2', TRUE, FALSE, FALSE),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3', TRUE, FALSE, FALSE);
       INSERT INTO app."judgment" VALUES
         ('judgment-1', 'article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', NULL),
+        ('judgment-1b', 'article-1', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, NULL, [' no '], TIMESTAMPTZ '2026-01-01T00:00:00Z', NULL),
         ('judgment-2', 'article-2', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMPTZ '2026-01-02T00:00:00Z', NULL),
-        ('judgment-3', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z', NULL);
+        ('judgment-2b', 'article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, '["yes"]', NULL, TIMESTAMPTZ '2026-01-02T00:00:00Z', NULL),
+        ('judgment-3', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z', NULL),
+        ('judgment-3b', 'article-3', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z', NULL);
     `)
 
     const firstResult = await ensureReviewServingLazyPromptAnswerPostingBuckets({
       database,
-      filterValues: ['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-1:maybe'],
+      filterValues: [
+        'review:promptAnswer:prompt-1:yes',
+        'review:promptAnswer:prompt-1:maybe',
+        'review:promptAnswer:summary:yes',
+        'review:promptAnswer:summary:no',
+        'review:promptAnswer:summary:maybe',
+      ],
       listModeKey: 'llm',
       projectId: 'project-1',
       reviewConfigHash: 'review-config-1',
@@ -376,17 +395,26 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
     `)
     const secondResult = await ensureReviewServingLazyPromptAnswerPostingBuckets({
       database,
-      filterValues: ['review:promptAnswer:prompt-1:yes', 'review:promptAnswer:prompt-1:maybe'],
+      filterValues: [
+        'review:promptAnswer:prompt-1:yes',
+        'review:promptAnswer:prompt-1:maybe',
+        'review:promptAnswer:summary:yes',
+        'review:promptAnswer:summary:no',
+        'review:promptAnswer:summary:maybe',
+      ],
       listModeKey: 'llm',
       projectId: 'project-1',
       reviewConfigHash: 'review-config-1',
       snapshotId: 'snapshot-1',
     })
 
-    expect(firstResult).toMatchObject({status: 'cacheWritten', writtenBucketCount: 2})
+    expect(firstResult).toMatchObject({status: 'cacheWritten', writtenBucketCount: 5})
     expect(postingReader.getRowObjectsJson()).toEqual([
       {articleIds: [], filterValue: 'review:promptAnswer:prompt-1:maybe'},
       {articleIds: ['article-1', 'article-2'], filterValue: 'review:promptAnswer:prompt-1:yes'},
+      {articleIds: [], filterValue: 'review:promptAnswer:summary:maybe'},
+      {articleIds: ['article-2', 'article-3'], filterValue: 'review:promptAnswer:summary:no'},
+      {articleIds: ['article-1'], filterValue: 'review:promptAnswer:summary:yes'},
     ])
     expect(secondResult).toMatchObject({missingFilterValues: [], status: 'cacheHit', writtenBucketCount: 0})
   } finally {

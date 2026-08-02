@@ -19,7 +19,7 @@ import {
 import {getReviewServingTitleSearchTokens} from './reviewServingTitleSearchProjector.ts'
 
 type PromptRow = {id: string; originalText: string; promptHeading: string | null; type: string | null}
-type ReviewServingFilterMode = 'human' | 'review'
+type ReviewServingFilterMode = 'both' | 'human' | 'review'
 type HumanJudgmentMode = 'prompt' | 'summary'
 type ReviewServingFilterRouteParams = {
   covidenceConflicts?: string
@@ -104,6 +104,8 @@ const reviewFacetSummaryIdentities = [
 ] as const
 const humanFacetSummaryIdentities = ['review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer'] as const
 const humanSummaryAnswerOptions = ['yes', 'no', 'maybe'] as const
+const bothHumanSummaryPromptId = 'human:promptAnswer:summary'
+const bothLlmSummaryPromptId = 'review:promptAnswer:summary'
 const filterOptionRouteLimit = 512
 const filterFacetRouteLimit = 128
 const defaultReviewFilterOptionKeys = [
@@ -209,6 +211,10 @@ const getOptionPayload = (row: ReviewServingFilterOptionRow): Record<string, unk
 
 const getFacetSummaryIdentities = (mode: ReviewServingFilterMode) => {
   return mode === 'human' ? humanFacetSummaryIdentities : reviewFacetSummaryIdentities
+}
+
+const getServingFilterReadMode = (mode: ReviewServingFilterMode): 'human' | 'review' => {
+  return mode === 'human' ? 'human' : 'review'
 }
 
 const getPromptName = (prompt: PromptRow) => {
@@ -320,8 +326,26 @@ const getPromptFilters = (
       promptName: 'Overall human screening decision',
     },
   ]
+  const bothSummaryFilters = [
+    {
+      answeredOriginalValues: [...humanSummaryAnswerOptions],
+      filterType: 'enum' as const,
+      promptId: bothHumanSummaryPromptId,
+      promptName: 'Overall human screening decision',
+    },
+    {
+      answeredOriginalValues: [...humanSummaryAnswerOptions],
+      filterType: 'enum' as const,
+      promptId: bothLlmSummaryPromptId,
+      promptName: 'LLM screening decision',
+    },
+  ]
 
-  return mode === 'human' && humanJudgmentMode === 'summary' ? summaryFilter : promptFilters
+  return mode === 'human' && humanJudgmentMode === 'summary'
+    ? summaryFilter
+    : mode === 'both' && humanJudgmentMode === 'summary'
+      ? bothSummaryFilters
+      : promptFilters
 }
 
 const getSelectedValuesByPrompt = (params: ReviewServingFilterRouteParams) => {
@@ -391,6 +415,47 @@ const getPromptFilterDefinitions = (input: {
     ]
   }
 
+  if (input.mode === 'both' && input.humanJudgmentMode === 'summary') {
+    const humanAvailabilityByPrompt = getPromptAnswerAvailabilityByPrompt(input.facetRows, 'human')
+    const humanArticleReadinessState = getArticleReadinessState(humanAvailabilityByPrompt.summary)
+    const hasReadyLlmPromptPostings =
+      input.promptRows.length > 0
+      && input.promptRows.every((prompt) => {
+        return promptAnswerAvailabilityByPrompt[prompt.id] === 'ready'
+      })
+    const llmArticleReadinessState = hasReadyLlmPromptPostings ? 'fast' : 'slow'
+    const options = humanSummaryAnswerOptions.map((value) => {
+      return {label: value, value}
+    })
+
+    return [
+      {
+        articleReadinessState: humanArticleReadinessState,
+        debugDisplayState: `project/${humanArticleReadinessState}`,
+        kind: 'schemaEnum',
+        label: 'Overall human screening decision',
+        optionSourceState: 'schema',
+        options,
+        promptId: bothHumanSummaryPromptId,
+        selectedValues: selectedValuesByPrompt[bothHumanSummaryPromptId] ?? [],
+        source: 'project',
+        surface: 'summary',
+      },
+      {
+        articleReadinessState: llmArticleReadinessState,
+        debugDisplayState: `project/${llmArticleReadinessState}`,
+        kind: 'schemaEnum',
+        label: 'LLM screening decision',
+        optionSourceState: 'schema',
+        options,
+        promptId: bothLlmSummaryPromptId,
+        selectedValues: selectedValuesByPrompt[bothLlmSummaryPromptId] ?? [],
+        source: 'project',
+        surface: 'llm',
+      },
+    ]
+  }
+
   const promptStrategies = analyzePromptTypes([...input.promptRows])
 
   return input.promptRows.map((prompt) => {
@@ -430,11 +495,12 @@ const readFacetRows = async (
   mode: ReviewServingFilterMode,
   dependencies?: ReviewServingFilterRouteDependencies,
 ) => {
-  const summaryIdentities = getFacetSummaryIdentities(mode)
+  const readMode = getServingFilterReadMode(mode)
+  const summaryIdentities = getFacetSummaryIdentities(readMode)
   const result = await readReviewServingRows<ReviewServingFacetRow>(
     {
       ...getBaseReaderRequest(params, manifest, filterFacetRouteLimit),
-      contractKey: mode === 'human' ? 'review.human.filters.facets' : 'review.filters.facets',
+      contractKey: readMode === 'human' ? 'review.human.filters.facets' : 'review.filters.facets',
       countFilterKey: summaryIdentities[0] ?? null,
       countFilterKeys: summaryIdentities,
     },
@@ -451,17 +517,18 @@ const readOptionRows = async (
   mode: ReviewServingFilterMode,
   dependencies?: ReviewServingFilterRouteDependencies,
 ) => {
+  const readMode = getServingFilterReadMode(mode)
   const searchIdentity = getComponentIdentity(manifest, 'search')
   const filterOptionIdentity = getReviewServingFilterOptionIdentity({
-    filterKeys: mode === 'human' ? defaultHumanFilterOptionKeys : defaultReviewFilterOptionKeys,
-    listModeKeys: mode === 'human' ? defaultHumanListModeKeys : defaultReviewListModeKeys,
-    optionMode: mode,
+    filterKeys: readMode === 'human' ? defaultHumanFilterOptionKeys : defaultReviewFilterOptionKeys,
+    listModeKeys: readMode === 'human' ? defaultHumanListModeKeys : defaultReviewListModeKeys,
+    optionMode: readMode,
     searchIdentity,
   })
   const result = await readReviewServingRows<ReviewServingFilterOptionRow>(
     {
       ...getBaseReaderRequest(params, manifest, filterOptionRouteLimit),
-      contractKey: mode === 'human' ? 'review.human.filters.options' : 'review.filters.options',
+      contractKey: readMode === 'human' ? 'review.human.filters.options' : 'review.filters.options',
       filterOptionIdentity,
       searchIdentity,
     },
@@ -497,10 +564,33 @@ export const getReviewFiltersFromServing = async (input: {
     }
   }
 
-  const [{diagnostics: facetDiagnostics, facets}, optionResult] = await Promise.all([
-    readFacetRows(input.params, manifest, input.mode, input.dependencies),
-    readOptionRows(input.params, manifest, input.mode, input.dependencies),
-  ])
+  const shouldReadBothSummarySources = input.mode === 'both' && input.humanJudgmentMode === 'summary'
+  const [{diagnostics: facetDiagnostics, facets}, optionResult] = shouldReadBothSummarySources
+    ? await Promise.all([
+        Promise.all([
+          readFacetRows(input.params, manifest, 'review', input.dependencies),
+          readFacetRows(input.params, manifest, 'human', input.dependencies),
+        ]).then(([reviewResult, humanResult]) => {
+          return {
+            diagnostics: [...reviewResult.diagnostics, ...humanResult.diagnostics],
+            facets: [...reviewResult.facets, ...humanResult.facets],
+          }
+        }),
+        Promise.all([
+          readOptionRows(input.params, manifest, 'review', input.dependencies),
+          readOptionRows(input.params, manifest, 'human', input.dependencies),
+        ]).then(([reviewResult, humanResult]) => {
+          return {
+            diagnostics: [...reviewResult.diagnostics, ...humanResult.diagnostics],
+            filterOptions: [...reviewResult.filterOptions, ...humanResult.filterOptions],
+            searchIdentity: reviewResult.searchIdentity || humanResult.searchIdentity,
+          }
+        }),
+      ])
+    : await Promise.all([
+        readFacetRows(input.params, manifest, input.mode, input.dependencies),
+        readOptionRows(input.params, manifest, input.mode, input.dependencies),
+      ])
   const searchText =
     typeof input.params.search === 'string' && input.params.search.trim() ? input.params.search.trim() : null
 
