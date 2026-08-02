@@ -422,7 +422,7 @@ test('both review prompt-filtered count fallback keeps LLM prompt-answer semanti
   expect(countStatement).not.toContain('human:promptAnswer:prompt-1:yes')
 })
 
-test('human and both unfiltered tab counts do not require answered human prompts', async () => {
+test('human and both unfiltered tab counts require answered human rows', async () => {
   const humanReader = createReaderDatabase()
   const bothReader = createReaderDatabase()
 
@@ -443,24 +443,22 @@ test('human and both unfiltered tab counts do not require answered human prompts
     },
   )
   const humanCountStatement = humanReader.statements.find((statement) => {
-    return statement.includes('FROM mart.review_article_count_serving_v4')
+    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
   })
   const bothCountStatement = bothReader.statements.find((statement) => {
     return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
   })
 
-  expect(humanCountStatement).toContain('FROM mart.review_article_count_serving_v4')
-  expect(humanCountStatement).toContain("count_kind = 'review.list.total'")
-  expect(humanCountStatement).toContain("filter_key = 'list:all'")
-  expect(humanCountStatement).not.toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
-  expect(humanCountStatement).not.toContain('list_mode_state.human_status')
-  expect(humanCountStatement).toContain("list_mode_key = 'human'")
+  expect(humanCountStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(humanCountStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(humanCountStatement).toContain("WHEN 'human' THEN list_mode_state.has_human_list_mode")
+  expect(humanCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
 
   expect(bothCountStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(bothCountStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(bothCountStatement).toContain("WHEN 'both' THEN list_mode_state.has_both_list_mode")
   expect(bothCountStatement).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
-  expect(bothCountStatement).not.toContain('list_mode_state.human_status')
+  expect(bothCountStatement).toContain("list_mode_state.human_status IN (SELECT unnest(['answered']::VARCHAR[]))")
 })
 
 test('Human, Both, and Unassessed default routes stay foreground-readable without search or payload enrichment', async () => {
@@ -796,7 +794,7 @@ test('human, both, and unassessed routes read one cursor page for numeric direct
   expect(humanResult.page).toBe(1)
   expect(bothResult.page).toBe(1)
   expect(unassessedResult.page).toBe(1)
-  expect(humanReader.statements).toHaveLength(5)
+  expect(humanReader.statements).toHaveLength(9)
   expect(bothReader.statements).toHaveLength(10)
   expect(unassessedReader.statements).toHaveLength(7)
 })

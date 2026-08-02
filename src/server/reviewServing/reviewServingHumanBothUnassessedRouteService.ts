@@ -231,7 +231,6 @@ const getSearchTokenPrefix = (search: string | null | undefined) => {
 const getRouteFilters = (params: ArticlesReviewsBothParams | ArticlesReviewsParams, mode: ReviewServingReviewMode) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
-  const shouldFilterAnsweredHumanRows = (mode === 'human' || mode === 'both') && promptAnswer.length > 0
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
@@ -239,7 +238,7 @@ const getRouteFilters = (params: ArticlesReviewsBothParams | ArticlesReviewsPara
     ...(params.hasDuplicateStudyRecords ? {duplicateFlag: 'true'} : {}),
     ...(params.hasStudyDecisionConflict ? {conflictFlag: 'true'} : {}),
     ...(mode === 'both' ? {llmStatus: 'complete'} : {}),
-    ...(shouldFilterAnsweredHumanRows ? {humanStatus: 'answered'} : {}),
+    ...(mode === 'human' || mode === 'both' ? {humanStatus: 'answered'} : {}),
     ...(mode === 'unassessed' ? {queueKind: 'unassessed'} : {}),
     ...(promptAnswer.length > 0 ? {promptAnswer} : {}),
     ...(searchTokenPrefixes.length > 0 ? {searchTokenPrefix: searchTokenPrefixes[0]} : {}),
