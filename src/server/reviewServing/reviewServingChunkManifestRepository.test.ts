@@ -176,6 +176,32 @@ const getFakeClaimPriority = (row: FakeChunkRow) => {
   return componentOrder.indexOf(row.projectionComponent)
 }
 
+const fakeClaimNow = '2026-06-16T14:05:00.000Z'
+
+const isFakeChunkClaimableStatus = (row: FakeChunkRow) => {
+  return (
+    row.status === 'pending'
+    || row.status === 'failed'
+    || (row.status === 'running' && (row.leaseExpiresAt === null || row.leaseExpiresAt <= fakeClaimNow))
+  )
+}
+
+const hasFakeForegroundClaimPressure = (row: FakeChunkRow, rows: Iterable<FakeChunkRow>) => {
+  if (getFakeClaimLane(row) === 0) {
+    return false
+  }
+
+  return [...rows].some((candidate) => {
+    return (
+      candidate.projectId === row.projectId
+      && candidate.admissionState === 'admitted'
+      && getFakeClaimLane(candidate) === 0
+      && getFakeRequestPriority(candidate) >= getFakeRequestPriority(row)
+      && (candidate.status === 'pending' || candidate.status === 'failed' || candidate.status === 'running')
+    )
+  })
+}
+
 const isFakeChunkReady = (row: FakeChunkRow, rows: Iterable<FakeChunkRow>) => {
   const prerequisites = fakeComponentPrerequisites[row.projectionComponent]
 
@@ -549,8 +575,9 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
           .filter((row) => {
             return (
               row.admissionState === 'admitted'
-              && (row.status === 'pending' || row.status === 'failed' || row.status === 'running')
+              && isFakeChunkClaimableStatus(row)
               && isFakeChunkReady(row, rows.values())
+              && !hasFakeForegroundClaimPressure(row, rows.values())
             )
           })
           .toSorted((left, right) => {
@@ -1406,6 +1433,101 @@ test('next claimable chunk discovery lets freshly requested stalled foreground w
     projectionComponent: 'judgmentInputContent',
     requestId: 'rebuild:stalled-foreground-freshly-requested',
   })
+})
+
+test('next claimable chunk discovery defers background chunks while same-project foreground work is running', async () => {
+  const completedProjectScope = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-project-scope', projectionComponent: 'projectScope'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    status: 'completed' as const,
+  }
+  const completedSelectedImport = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-selected-import', projectionComponent: 'selectedImport'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    status: 'completed' as const,
+  }
+  const runningPayload = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-running-payload', projectionComponent: 'payload'},
+      [],
+    ),
+    leaseExpiresAt: '2026-06-16T14:30:00.000Z',
+    leaseOwner: 'foreground-worker',
+    requestId: 'rebuild:foreground',
+    status: 'running' as const,
+  }
+  const pendingSearch = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-search', projectionComponent: 'search'}, []),
+    requestId: 'rebuild:foreground',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([
+    completedProjectScope,
+    completedSelectedImport,
+    runningPayload,
+    pendingSearch,
+  ])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toBeNull()
+  expect(statements.join('\n')).toContain('FROM app.review_rebuild_chunk_manifest foreground_pressure')
+  expect(statements.join('\n')).toContain("foreground_pressure.status = 'running'")
+  expect(statements.join('\n')).toContain('COALESCE(\n    candidate.workload_class')
+})
+
+test('next claimable chunk discovery allows background chunks after same-project foreground pressure clears', async () => {
+  const completedProjectScope = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-project-scope', projectionComponent: 'projectScope'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    status: 'completed' as const,
+  }
+  const completedSelectedImport = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-selected-import', projectionComponent: 'selectedImport'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    status: 'completed' as const,
+  }
+  const completedPayload = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-completed-payload', projectionComponent: 'payload'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    status: 'completed' as const,
+  }
+  const pendingSearch = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-search', projectionComponent: 'search'}, []),
+    requestId: 'rebuild:foreground',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const {database} = createFakeChunkManifestDatabase([
+    completedProjectScope,
+    completedSelectedImport,
+    completedPayload,
+    pendingSearch,
+  ])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-search', projectionComponent: 'search'})
 })
 
 test('next claimable chunk discovery preserves component order before expired lease priority', async () => {

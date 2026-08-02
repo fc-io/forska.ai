@@ -375,10 +375,16 @@ test('review-serving rebuild request terminalization CLI is opt-in and dry-run f
   const source = readSource('scripts/terminalizeReviewServingRebuildRequest.ts')
 
   expect(source).toContain("apply: hasFlag('--apply')")
+  expect(source).toContain('applyAcknowledgements')
+  expect(source).toContain(
+    "superseded_project_scoped: 'cancel-superseded-project-scoped-review-rebuild-request-preserve-evidence'",
+  )
   expect(source).toContain('if (options.apply && options.acknowledgement !== requiredApplyAcknowledgement)')
   expect(source).toContain('Refusing --apply without --ack=')
   expect(source).toContain('acknowledgementRequiredForApply')
-  expect(source).toContain("mode: 'zero_chunks'")
+  expect(source).toContain("zero_chunks: 'fail-stale-zero-chunk-review-rebuild-request-no-cleanup-authorized'")
+  expect(source).toContain("value === 'superseded_project_scoped' ? 'superseded_project_scoped' : 'zero_chunks'")
+  expect(source).toContain('terminalizeSupersededProjectScopedReviewServingRebuildRequest')
   expect(source).toContain('minimumAgeMinutes')
   expect(source).toContain('Missing required --project-id=<project-id>')
   expect(source).toContain('Missing required --request-id=<request-id>')

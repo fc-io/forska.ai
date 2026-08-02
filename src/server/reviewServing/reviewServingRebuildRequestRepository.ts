@@ -185,6 +185,43 @@ export type ReleaseFailedRequestlessReviewServingRebuildChunksResult = {
   status: 'not_found' | 'refused' | 'dry_run' | 'released'
 }
 
+export type TerminalizeSupersededProjectScopedReviewServingRebuildRequestInput = {
+  apply?: boolean
+  minimumAgeMinutes?: number
+  now?: Date
+  projectId: string
+  requestId: string
+}
+
+export type TerminalizeSupersededProjectScopedReviewServingRebuildRequestGuardCounts = {
+  adoptedBlockedOverBudgetCount: number
+  adoptedCompletedCount: number
+  adoptedFailedCount: number
+  adoptedLeaseCount: number
+  adoptedPendingCount: number
+  adoptedQuarantinedCount: number
+  adoptedRunningCount: number
+  ownedBlockedOverBudgetCount: number
+  ownedCompletedCount: number
+  ownedFailedCount: number
+  ownedLeaseCount: number
+  ownedOtherProjectCount: number
+  ownedPendingCount: number
+  ownedQuarantinedCount: number
+  ownedRunningCount: number
+  ownedTotalCount: number
+  replacementCompletedCount: number
+}
+
+export type TerminalizeSupersededProjectScopedReviewServingRebuildRequestResult = {
+  applied: boolean
+  currentRequest: ReviewServingRebuildRequest | null
+  guardCounts: TerminalizeSupersededProjectScopedReviewServingRebuildRequestGuardCounts | null
+  minimumAgeMinutes: number
+  refusalReasons: string[]
+  status: 'not_found' | 'refused' | 'dry_run' | 'terminalized'
+}
+
 const requestBudgetPairs = [
   ['estimatedInputRows', 'maxInputRows', 'input rows'],
   ['estimatedOutputRows', 'maxOutputRows', 'output rows'],
@@ -369,6 +406,8 @@ const defaultRebuildPresplitInputRowLimits = {
 const defaultTerminalizeMinimumAgeMinutes = 60
 const staleZeroChunkTerminalizationLastError =
   'Operator terminalized stale malformed V4 review rebuild request: admitted/running request has no rebuild chunks; no cleanup authorized.'
+const supersededProjectScopedTerminalizationLastError =
+  'Operator terminalized superseded project-scoped V4 review rebuild request: replacement/adopted project chunks are complete; diagnostic evidence was preserved.'
 const requestlessRebuildRequestPrefixes = ['requestless-bootstrap:', 'requestless-summary:'] as const
 const isRequestlessRebuildRequestId = (requestId: string) => {
   return requestlessRebuildRequestPrefixes.some((prefix) => {
@@ -1102,6 +1141,161 @@ const getFailedRequestlessRebuildChunkReleaseRefusalReasons = (input: {
   return reasons
 }
 
+const getSupersededProjectScopedRebuildRequestGuardCounts = async (
+  input: {projectId: string; request: ReviewServingRebuildRequest},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+): Promise<TerminalizeSupersededProjectScopedReviewServingRebuildRequestGuardCounts> => {
+  const componentListSql = getSqlStringList(input.request.requestedComponents)
+  const componentPredicate =
+    input.request.requestedComponents.length === 0 ? 'FALSE' : `projection_component IN (${componentListSql})`
+  const [ownedRow] = await database.queryJson<{
+    blockedOverBudgetCount: number | string
+    completedCount: number | string
+    failedCount: number | string
+    leaseCount: number | string
+    otherProjectCount: number | string
+    pendingCount: number | string
+    quarantinedCount: number | string
+    runningCount: number | string
+    totalCount: number | string
+  }>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS totalCount,
+      CAST(COUNT(*) FILTER (WHERE project_id IS DISTINCT FROM ${getSqlLiteral(input.projectId)}) AS INTEGER) AS otherProjectCount,
+      CAST(COUNT(*) FILTER (WHERE lease_owner IS NOT NULL OR lease_expires_at IS NOT NULL) AS INTEGER) AS leaseCount,
+      CAST(COUNT(*) FILTER (WHERE status = 'pending') AS INTEGER) AS pendingCount,
+      CAST(COUNT(*) FILTER (WHERE status = 'running') AS INTEGER) AS runningCount,
+      CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
+      CAST(COUNT(*) FILTER (WHERE status = 'failed') AS INTEGER) AS failedCount,
+      CAST(COUNT(*) FILTER (WHERE status = 'blocked_over_budget') AS INTEGER) AS blockedOverBudgetCount,
+      CAST(COUNT(*) FILTER (WHERE status = 'quarantined') AS INTEGER) AS quarantinedCount
+    FROM app.review_rebuild_chunk_manifest
+    WHERE (request_id || '') = ${getSqlLiteral(input.request.requestId)}
+  `)
+  const [adoptedRow] = await database.queryJson<{
+    blockedOverBudgetCount: number | string
+    completedCount: number | string
+    failedCount: number | string
+    leaseCount: number | string
+    pendingCount: number | string
+    quarantinedCount: number | string
+    replacementCompletedCount: number | string
+    runningCount: number | string
+  }>(`
+    SELECT
+      CAST(COUNT(*) FILTER (WHERE request_id IS NULL AND status = 'pending') AS INTEGER) AS pendingCount,
+      CAST(COUNT(*) FILTER (WHERE request_id IS NULL AND status = 'running') AS INTEGER) AS runningCount,
+      CAST(COUNT(*) FILTER (WHERE request_id IS NULL AND status = 'completed') AS INTEGER) AS completedCount,
+      CAST(COUNT(*) FILTER (WHERE request_id IS NULL AND status = 'failed') AS INTEGER) AS failedCount,
+      CAST(COUNT(*) FILTER (WHERE request_id IS NULL AND status = 'blocked_over_budget') AS INTEGER) AS blockedOverBudgetCount,
+      CAST(COUNT(*) FILTER (WHERE request_id IS NULL AND status = 'quarantined') AS INTEGER) AS quarantinedCount,
+      CAST(COUNT(*) FILTER (
+        WHERE request_id IS NULL
+          AND (lease_owner IS NOT NULL OR lease_expires_at IS NOT NULL)
+      ) AS INTEGER) AS leaseCount,
+      CAST(COUNT(*) FILTER (
+        WHERE status = 'completed'
+          AND (request_id IS NULL OR (request_id || '') <> ${getSqlLiteral(input.request.requestId)})
+      ) AS INTEGER) AS replacementCompletedCount
+    FROM app.review_rebuild_chunk_manifest
+    WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+      AND ${componentPredicate}
+      AND updated_at >= ${getSqlLiteral(input.request.createdAt)}
+  `)
+
+  return {
+    adoptedBlockedOverBudgetCount: Number(adoptedRow?.blockedOverBudgetCount ?? 0),
+    adoptedCompletedCount: Number(adoptedRow?.completedCount ?? 0),
+    adoptedFailedCount: Number(adoptedRow?.failedCount ?? 0),
+    adoptedLeaseCount: Number(adoptedRow?.leaseCount ?? 0),
+    adoptedPendingCount: Number(adoptedRow?.pendingCount ?? 0),
+    adoptedQuarantinedCount: Number(adoptedRow?.quarantinedCount ?? 0),
+    adoptedRunningCount: Number(adoptedRow?.runningCount ?? 0),
+    ownedBlockedOverBudgetCount: Number(ownedRow?.blockedOverBudgetCount ?? 0),
+    ownedCompletedCount: Number(ownedRow?.completedCount ?? 0),
+    ownedFailedCount: Number(ownedRow?.failedCount ?? 0),
+    ownedLeaseCount: Number(ownedRow?.leaseCount ?? 0),
+    ownedOtherProjectCount: Number(ownedRow?.otherProjectCount ?? 0),
+    ownedPendingCount: Number(ownedRow?.pendingCount ?? 0),
+    ownedQuarantinedCount: Number(ownedRow?.quarantinedCount ?? 0),
+    ownedRunningCount: Number(ownedRow?.runningCount ?? 0),
+    ownedTotalCount: Number(ownedRow?.totalCount ?? 0),
+    replacementCompletedCount: Number(adoptedRow?.replacementCompletedCount ?? 0),
+  }
+}
+
+const getSupersededProjectScopedTerminalizationRefusalReasons = (input: {
+  guardCounts: TerminalizeSupersededProjectScopedReviewServingRebuildRequestGuardCounts
+  minimumAgeMinutes: number
+  now: Date
+  projectId: string
+  request: ReviewServingRebuildRequest
+}) => {
+  const reasons: string[] = []
+
+  if (input.request.projectId !== input.projectId) {
+    reasons.push('wrong_project')
+  }
+
+  if (input.request.admissionState !== 'admitted') {
+    reasons.push('non_admitted_admission_state')
+  }
+
+  if (input.request.status !== 'admitted' && input.request.status !== 'running') {
+    reasons.push('non_active_request_status')
+  }
+
+  if (input.request.requestedComponents.length === 0) {
+    reasons.push('no_requested_components')
+  }
+
+  if (input.request.leaseOwner !== null || input.request.leaseExpiresAt !== null) {
+    reasons.push('request_has_lease')
+  }
+
+  if (input.guardCounts.ownedOtherProjectCount > 0) {
+    reasons.push('owned_chunk_project_mismatch')
+  }
+
+  if (input.guardCounts.ownedLeaseCount > 0 || input.guardCounts.adoptedLeaseCount > 0) {
+    reasons.push('chunk_has_lease')
+  }
+
+  if (input.guardCounts.ownedPendingCount > 0 || input.guardCounts.adoptedPendingCount > 0) {
+    reasons.push('pending_chunks_remain')
+  }
+
+  if (input.guardCounts.ownedRunningCount > 0 || input.guardCounts.adoptedRunningCount > 0) {
+    reasons.push('running_chunks_remain')
+  }
+
+  if (input.guardCounts.ownedFailedCount > 0 || input.guardCounts.adoptedFailedCount > 0) {
+    reasons.push('failed_evidence_remains')
+  }
+
+  if (
+    input.guardCounts.ownedBlockedOverBudgetCount > 0
+    || input.guardCounts.ownedQuarantinedCount > 0
+    || input.guardCounts.adoptedBlockedOverBudgetCount > 0
+    || input.guardCounts.adoptedQuarantinedCount > 0
+  ) {
+    reasons.push('blocked_or_quarantined_evidence_remains')
+  }
+
+  if (input.guardCounts.replacementCompletedCount === 0) {
+    reasons.push('no_completed_replacement_work')
+  }
+
+  const createdAtMillis = getTimestampMillis(input.request.createdAt)
+  const minimumAgeMillis = input.minimumAgeMinutes * 60 * 1000
+
+  if (!Number.isFinite(createdAtMillis) || input.now.getTime() - createdAtMillis < minimumAgeMillis) {
+    reasons.push('request_too_new')
+  }
+
+  return reasons
+}
+
 const releaseFailedRequestlessRebuildChunks = async (
   input: {projectId: string; requestId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -1334,6 +1528,129 @@ export const boostActiveReviewServingRebuildRequestForProject = async (
   `)
 
   return true
+}
+
+export const terminalizeSupersededProjectScopedReviewServingRebuildRequest = async (
+  input: TerminalizeSupersededProjectScopedReviewServingRebuildRequestInput,
+  database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingRebuildRequestDatabase(),
+): Promise<TerminalizeSupersededProjectScopedReviewServingRebuildRequestResult> => {
+  const minimumAgeMinutes = getMinimumAgeMinutes(input.minimumAgeMinutes)
+  const now = input.now ?? new Date()
+
+  return database.transaction(async (tx) => {
+    const request = await getReviewServingRebuildRequest({requestId: input.requestId}, tx)
+
+    if (request === null) {
+      return {
+        applied: false,
+        currentRequest: null,
+        guardCounts: null,
+        minimumAgeMinutes,
+        refusalReasons: ['request_not_found'],
+        status: 'not_found',
+      }
+    }
+
+    const guardCounts = await getSupersededProjectScopedRebuildRequestGuardCounts(
+      {projectId: input.projectId, request},
+      tx,
+    )
+    const refusalReasons = getSupersededProjectScopedTerminalizationRefusalReasons({
+      guardCounts,
+      minimumAgeMinutes,
+      now,
+      projectId: input.projectId,
+      request,
+    })
+
+    if (refusalReasons.length > 0) {
+      return {
+        applied: false,
+        currentRequest: request,
+        guardCounts,
+        minimumAgeMinutes,
+        refusalReasons,
+        status: 'refused',
+      }
+    }
+
+    if (input.apply !== true) {
+      return {
+        applied: false,
+        currentRequest: request,
+        guardCounts,
+        minimumAgeMinutes,
+        refusalReasons: [],
+        status: 'dry_run',
+      }
+    }
+
+    await tx.run(`
+      UPDATE app.review_rebuild_request
+      SET status = 'cancelled',
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          updated_at = current_timestamp,
+          last_error = ${getSqlLiteral(supersededProjectScopedTerminalizationLastError)}
+      WHERE request_id = ${getSqlLiteral(input.requestId)}
+        AND project_id = ${getSqlLiteral(input.projectId)}
+        AND admission_state = 'admitted'
+        AND status IN ('admitted', 'running')
+        AND lease_owner IS NULL
+        AND lease_expires_at IS NULL
+        AND created_at <= ${getSqlLiteral(now)} - INTERVAL ${minimumAgeMinutes} MINUTE
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest chunk
+          WHERE (chunk.request_id || '') = (${getSqlLiteral(input.requestId)} || '')
+            AND (
+              chunk.project_id IS DISTINCT FROM app.review_rebuild_request.project_id
+              OR chunk.status <> 'completed'
+              OR chunk.lease_owner IS NOT NULL
+              OR chunk.lease_expires_at IS NOT NULL
+            )
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest replacement
+          WHERE replacement.project_id IS NOT DISTINCT FROM app.review_rebuild_request.project_id
+            AND replacement.status = 'completed'
+            AND replacement.updated_at >= app.review_rebuild_request.created_at
+            AND (
+              replacement.request_id IS NULL
+              OR (replacement.request_id || '') <> (app.review_rebuild_request.request_id || '')
+            )
+            AND replacement.projection_component IN (${getSqlStringList(request.requestedComponents)})
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest adopted
+          WHERE adopted.project_id IS NOT DISTINCT FROM app.review_rebuild_request.project_id
+            AND adopted.request_id IS NULL
+            AND adopted.updated_at >= app.review_rebuild_request.created_at
+            AND adopted.projection_component IN (${getSqlStringList(request.requestedComponents)})
+            AND (
+              adopted.status <> 'completed'
+              OR adopted.lease_owner IS NOT NULL
+              OR adopted.lease_expires_at IS NOT NULL
+            )
+        )
+    `)
+
+    const currentRequest = await getReviewServingRebuildRequest({requestId: input.requestId}, tx)
+    const applied =
+      currentRequest?.status === 'cancelled'
+      && currentRequest.lastError === supersededProjectScopedTerminalizationLastError
+
+    return {
+      applied,
+      currentRequest,
+      guardCounts,
+      minimumAgeMinutes,
+      refusalReasons: applied ? [] : ['terminalization_update_not_applied'],
+      status: applied ? 'terminalized' : 'refused',
+    }
+  })
 }
 
 export const terminalizeStaleZeroChunkReviewServingRebuildRequest = async (

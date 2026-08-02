@@ -11,6 +11,7 @@ import {
   releaseFailedRequestlessReviewServingRebuildChunks,
   type ReviewServingRebuildRequestStatus,
   terminalizeStaleZeroChunkReviewServingRebuildRequest,
+  terminalizeSupersededProjectScopedReviewServingRebuildRequest,
 } from './reviewServingRebuildRequestRepository.ts'
 
 type FakeRequestRow = {
@@ -56,6 +57,7 @@ type FakeReleaseChunkRow = {
   lastError: string | null
   leaseExpiresAt: string | null
   leaseOwner: string | null
+  overBudgetReason: string | null
   projectId: string
   projectionComponent: string
   requestId: string | null
@@ -520,6 +522,197 @@ const createFakeReleaseRequestlessChunksDatabase = (input: {
   }
 }
 
+const createFakeSupersededProjectScopedRequestDatabase = (input: {
+  chunks?: readonly FakeReleaseChunkRow[]
+  request?: FakeRequestRow | null
+}) => {
+  const statements: string[] = []
+  const chunks = new Map<string, FakeReleaseChunkRow>()
+  let request =
+    input.request === undefined
+      ? createFakeTerminalizationRequest({
+          reason: 'missingReviewServingSnapshot',
+          requestedComponentsJson: '["summary","posting"]',
+          requestId: 'rebuild:superseded-root',
+          status: 'admitted',
+        })
+      : input.request
+
+  for (const chunk of input.chunks ?? []) {
+    chunks.set(chunk.chunkId, chunk)
+  }
+
+  const getRequestedComponents = () => {
+    return request?.requestedComponentsJson === '["summary","posting"]' ? ['summary', 'posting'] : ['summary']
+  }
+
+  const getOwnedChunks = () => {
+    return [...chunks.values()].filter((chunk) => {
+      return chunk.requestId === request?.requestId
+    })
+  }
+
+  const getAdoptedChunks = () => {
+    const requestedComponents = new Set(getRequestedComponents())
+
+    return [...chunks.values()].filter((chunk) => {
+      return (
+        chunk.projectId === 'project-v4'
+        && chunk.requestId === null
+        && requestedComponents.has(chunk.projectionComponent)
+        && chunk.updatedAt >= (request?.createdAt ?? '')
+      )
+    })
+  }
+
+  const getReplacementCompletedCount = () => {
+    const requestedComponents = new Set(getRequestedComponents())
+
+    return [...chunks.values()].filter((chunk) => {
+      return (
+        chunk.projectId === 'project-v4'
+        && chunk.status === 'completed'
+        && chunk.updatedAt >= (request?.createdAt ?? '')
+        && chunk.requestId !== request?.requestId
+        && requestedComponents.has(chunk.projectionComponent)
+      )
+    }).length
+  }
+
+  const queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && statement.includes('totalCount')) {
+      const ownedChunks = getOwnedChunks()
+
+      return [
+        {
+          blockedOverBudgetCount: ownedChunks.filter((chunk) => {
+            return chunk.status === 'blocked_over_budget'
+          }).length,
+          completedCount: ownedChunks.filter((chunk) => {
+            return chunk.status === 'completed'
+          }).length,
+          failedCount: ownedChunks.filter((chunk) => {
+            return chunk.status === 'failed'
+          }).length,
+          leaseCount: ownedChunks.filter((chunk) => {
+            return chunk.leaseOwner !== null || chunk.leaseExpiresAt !== null
+          }).length,
+          otherProjectCount: ownedChunks.filter((chunk) => {
+            return chunk.projectId !== 'project-v4'
+          }).length,
+          pendingCount: ownedChunks.filter((chunk) => {
+            return chunk.status === 'pending'
+          }).length,
+          quarantinedCount: ownedChunks.filter((chunk) => {
+            return chunk.status === 'quarantined'
+          }).length,
+          runningCount: ownedChunks.filter((chunk) => {
+            return chunk.status === 'running'
+          }).length,
+          totalCount: ownedChunks.length,
+        },
+      ] as T[]
+    }
+
+    if (
+      statement.includes('FROM app.review_rebuild_chunk_manifest')
+      && statement.includes('replacementCompletedCount')
+    ) {
+      const adoptedChunks = getAdoptedChunks()
+
+      return [
+        {
+          blockedOverBudgetCount: adoptedChunks.filter((chunk) => {
+            return chunk.status === 'blocked_over_budget'
+          }).length,
+          completedCount: adoptedChunks.filter((chunk) => {
+            return chunk.status === 'completed'
+          }).length,
+          failedCount: adoptedChunks.filter((chunk) => {
+            return chunk.status === 'failed'
+          }).length,
+          leaseCount: adoptedChunks.filter((chunk) => {
+            return chunk.leaseOwner !== null || chunk.leaseExpiresAt !== null
+          }).length,
+          pendingCount: adoptedChunks.filter((chunk) => {
+            return chunk.status === 'pending'
+          }).length,
+          quarantinedCount: adoptedChunks.filter((chunk) => {
+            return chunk.status === 'quarantined'
+          }).length,
+          replacementCompletedCount: getReplacementCompletedCount(),
+          runningCount: adoptedChunks.filter((chunk) => {
+            return chunk.status === 'running'
+          }).length,
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_request')) {
+      const requestId = getSqlStrings(statement)[0] ?? ''
+
+      return (request === null || request.requestId !== requestId ? [] : [request]) as T[]
+    }
+
+    return [] as T[]
+  }
+
+  const run = async (statement: string) => {
+    statements.push(statement)
+
+    if (
+      request !== null
+      && statement.includes('UPDATE app.review_rebuild_request')
+      && request.projectId === 'project-v4'
+      && request.admissionState === 'admitted'
+      && (request.status === 'admitted' || request.status === 'running')
+      && request.leaseOwner === null
+      && request.leaseExpiresAt === null
+      && getOwnedChunks().every((chunk) => {
+        return (
+          chunk.projectId === 'project-v4'
+          && chunk.status === 'completed'
+          && chunk.leaseOwner === null
+          && chunk.leaseExpiresAt === null
+        )
+      })
+      && getAdoptedChunks().every((chunk) => {
+        return chunk.status === 'completed' && chunk.leaseOwner === null && chunk.leaseExpiresAt === null
+      })
+      && getReplacementCompletedCount() > 0
+    ) {
+      request = {
+        ...request,
+        lastError:
+          'Operator terminalized superseded project-scoped V4 review rebuild request: replacement/adopted project chunks are complete; diagnostic evidence was preserved.',
+        leaseExpiresAt: null,
+        leaseOwner: null,
+        status: 'cancelled',
+        updatedAt: '2026-06-23T16:00:00.000Z',
+      }
+    }
+  }
+
+  const database = {
+    queryJson,
+    run,
+    transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return operation({queryJson, run})
+    },
+  } satisfies ReviewServingChunkManifestRepositoryDatabase
+
+  return {
+    chunks,
+    database,
+    getRequest: () => {
+      return request
+    },
+    statements,
+  }
+}
+
 const createFakeReleaseChunk = (overrides: Partial<FakeReleaseChunkRow> = {}): FakeReleaseChunkRow => {
   return {
     actualInputRows: 10,
@@ -530,6 +723,7 @@ const createFakeReleaseChunk = (overrides: Partial<FakeReleaseChunkRow> = {}): F
     lastError: 'old failed request',
     leaseExpiresAt: null,
     leaseOwner: null,
+    overBudgetReason: null,
     projectId: 'project-v4',
     projectionComponent: 'summary',
     requestId: 'requestless-bootstrap:release-safe',
@@ -904,6 +1098,140 @@ for (const refusalCase of terminalizationRefusalCases) {
     expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
   })
 }
+
+test('terminalizing a superseded project-scoped rebuild request cancels only stale root metadata', async () => {
+  const ownedCompleted = createFakeReleaseChunk({
+    chunkId: 'chunk:owned-completed',
+    completedAt: '2026-06-23T15:00:00.000Z',
+    requestId: 'rebuild:superseded-root',
+    status: 'completed',
+    updatedAt: '2026-06-23T15:00:00.000Z',
+  })
+  const adoptedCompleted = createFakeReleaseChunk({
+    chunkId: 'chunk:adopted-completed',
+    completedAt: '2026-06-23T15:05:00.000Z',
+    lastError: null,
+    requestId: null,
+    status: 'completed',
+    updatedAt: '2026-06-23T15:05:00.000Z',
+  })
+  const {chunks, database, getRequest, statements} = createFakeSupersededProjectScopedRequestDatabase({
+    chunks: [ownedCompleted, adoptedCompleted],
+  })
+
+  const result = await terminalizeSupersededProjectScopedReviewServingRebuildRequest(
+    {
+      apply: true,
+      now: new Date('2026-06-23T16:00:00.000Z'),
+      projectId: 'project-v4',
+      requestId: 'rebuild:superseded-root',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toMatchObject({
+    applied: true,
+    guardCounts: {adoptedCompletedCount: 1, ownedCompletedCount: 1, replacementCompletedCount: 1},
+    refusalReasons: [],
+    status: 'terminalized',
+  })
+  expect(getRequest()).toMatchObject({
+    lastError:
+      'Operator terminalized superseded project-scoped V4 review rebuild request: replacement/adopted project chunks are complete; diagnostic evidence was preserved.',
+    status: 'cancelled',
+  })
+  expect(chunks.get('chunk:owned-completed')).toMatchObject({requestId: 'rebuild:superseded-root', status: 'completed'})
+  expect(chunks.get('chunk:adopted-completed')).toMatchObject({requestId: null, status: 'completed'})
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("SET status = 'cancelled'")
+  expect(joined).toContain('replacement/adopted project chunks are complete')
+  expect(joined).toContain('diagnostic evidence was preserved')
+  expect(joined).toContain('replacement.request_id IS NULL')
+  expect(joined).toContain("replacement.status = 'completed'")
+  expect(joined).toContain('adopted.request_id IS NULL')
+  expect(joined).toContain("adopted.status <> 'completed'")
+  expect(joined).not.toContain('DELETE FROM app.review_rebuild_chunk_manifest')
+  expect(joined).not.toContain('UPDATE app.review_rebuild_chunk_manifest')
+})
+
+test('terminalizing a superseded project-scoped rebuild request is dry-run by default', async () => {
+  const {database, getRequest, statements} = createFakeSupersededProjectScopedRequestDatabase({
+    chunks: [
+      createFakeReleaseChunk({
+        completedAt: '2026-06-23T15:00:00.000Z',
+        requestId: null,
+        status: 'completed',
+        updatedAt: '2026-06-23T15:00:00.000Z',
+      }),
+    ],
+  })
+
+  const result = await terminalizeSupersededProjectScopedReviewServingRebuildRequest(
+    {now: new Date('2026-06-23T16:00:00.000Z'), projectId: 'project-v4', requestId: 'rebuild:superseded-root'},
+    database,
+  )
+
+  expect(result.status).toBe('dry_run')
+  expect(result.applied).toBe(false)
+  expect(result.refusalReasons).toEqual([])
+  expect(getRequest()?.status).toBe('admitted')
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
+})
+
+test('terminalizing a superseded project-scoped rebuild request preserves failed and quarantined evidence', async () => {
+  const failed = createFakeReleaseChunk({
+    chunkId: 'chunk:owned-failed',
+    requestId: 'rebuild:superseded-root',
+    status: 'failed',
+  })
+  const quarantined = createFakeReleaseChunk({
+    chunkId: 'chunk:adopted-quarantined',
+    lastError: 'operator quarantine evidence',
+    overBudgetReason: 'manual quarantine',
+    requestId: null,
+    status: 'quarantined',
+    updatedAt: '2026-06-23T15:05:00.000Z',
+  })
+  const completed = createFakeReleaseChunk({
+    chunkId: 'chunk:replacement-completed',
+    completedAt: '2026-06-23T15:10:00.000Z',
+    requestId: null,
+    status: 'completed',
+    updatedAt: '2026-06-23T15:10:00.000Z',
+  })
+  const {chunks, database, getRequest, statements} = createFakeSupersededProjectScopedRequestDatabase({
+    chunks: [failed, quarantined, completed],
+  })
+
+  const result = await terminalizeSupersededProjectScopedReviewServingRebuildRequest(
+    {
+      apply: true,
+      now: new Date('2026-06-23T16:00:00.000Z'),
+      projectId: 'project-v4',
+      requestId: 'rebuild:superseded-root',
+    },
+    database,
+  )
+
+  expect(result.applied).toBe(false)
+  expect(result.status).toBe('refused')
+  expect(result.refusalReasons).toContain('failed_evidence_remains')
+  expect(result.refusalReasons).toContain('blocked_or_quarantined_evidence_remains')
+  expect(getRequest()?.status).toBe('admitted')
+  expect(chunks.get('chunk:owned-failed')).toMatchObject({
+    lastError: 'old failed request',
+    requestId: 'rebuild:superseded-root',
+    status: 'failed',
+  })
+  expect(chunks.get('chunk:adopted-quarantined')).toMatchObject({
+    lastError: 'operator quarantine evidence',
+    overBudgetReason: 'manual quarantine',
+    requestId: null,
+    status: 'quarantined',
+  })
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
+})
 
 test('failed requestless rebuild chunk release is dry-run by default with operator evidence', async () => {
   const chunkA = createFakeReleaseChunk({chunkId: 'chunk:release-a', status: 'failed'})
