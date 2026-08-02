@@ -51,6 +51,10 @@ const getOperatorTimelineReadout = (
   diagnostics: Awaited<ReturnType<typeof getReviewServingRebuildTimingDiagnostics>>,
 ) => {
   return diagnostics.timeline.map((timeline) => {
+    const searchTitleCost = diagnostics.searchTitleCost.filter((row) => {
+      return row.requestId === timeline.rootRequestId
+    })
+
     return {
       activeSnapshotPromotedAt: timeline.activeSnapshotPromotedAt,
       admittedAt: timeline.admittedAt,
@@ -73,6 +77,7 @@ const getOperatorTimelineReadout = (
       relationships: timeline.relationships,
       reviewConfigHash: timeline.reviewConfigHash,
       rootRequestId: timeline.rootRequestId,
+      searchTitleCost,
       snapshotId: timeline.snapshotId,
       status: timeline.status,
     }
