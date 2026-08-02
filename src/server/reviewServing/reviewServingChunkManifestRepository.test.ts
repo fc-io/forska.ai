@@ -2012,6 +2012,178 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
   expect(statements[3]).toContain('LIMIT 7')
 })
 
+const defaultReadableTimingComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'posting',
+  'summary',
+] as const satisfies readonly FakeChunkRow['projectionComponent'][]
+
+const getTimingDiagnosticsDatabase = (input: {
+  componentRows: readonly Record<string, unknown>[]
+  timelineRow: Record<string, unknown>
+}): ReviewServingChunkManifestRepositoryDatabase => {
+  return {
+    queryJson: async <T>(statement: string) => {
+      if (statement.includes('request.request_id AS rootRequestId')) {
+        return [input.timelineRow] as T[]
+      }
+
+      if (statement.includes('AS wallClockMs')) {
+        return input.componentRows as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async () => {},
+    transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return operation(getTimingDiagnosticsDatabase(input))
+    },
+  }
+}
+
+const getTimingTimelineRow = (overrides: Record<string, unknown> = {}) => {
+  return {
+    activeSnapshotPromotedAt: null,
+    admittedAt: '2026-06-16T14:00:05.000Z',
+    blockedOverBudgetCount: 0,
+    completedAt: null,
+    completedCount: 8,
+    createdAt: '2026-06-16T14:00:00.000Z',
+    failedCount: 0,
+    firstChunkStartedAt: '2026-06-16T14:00:30.000Z',
+    identityJson: {reviewConfigHash: 'review-config-1'},
+    pendingCount: 1,
+    projectId: 'project-1',
+    quarantinedCount: 0,
+    reason: 'operator_cold_bootstrap',
+    requestedComponentsJson: [...defaultReadableTimingComponents, 'search', 'payload', 'judgmentInputContent'],
+    requestlessAdoptableChunkCount: 0,
+    reviewConfigHash: 'review-config-1',
+    rootRequestId: 'rebuild:readiness',
+    runningCount: 0,
+    selectedImportSnapshotId: 'selected-import-1',
+    snapshotId: 'snapshot-1',
+    status: 'running',
+    supersededRequestCount: 0,
+    ...overrides,
+  }
+}
+
+const getTimingComponentRow = (
+  projectionComponent: FakeChunkRow['projectionComponent'],
+  completedAt: string,
+  overrides: Record<string, unknown> = {},
+) => {
+  return {
+    blockedOverBudgetCount: 0,
+    completedAt,
+    completedCount: 1,
+    failedCount: 0,
+    firstChunkStartedAt: '2026-06-16T14:00:30.000Z',
+    lastUpdatedAt: completedAt,
+    pendingCount: 0,
+    projectionComponent,
+    quarantinedCount: 0,
+    rootRequestId: 'rebuild:readiness',
+    runningCount: 0,
+    totalCount: 1,
+    wallClockMs: 60_000,
+    ...overrides,
+  }
+}
+
+test('rebuild timing diagnostics derive defaultReadableAt before search completes', async () => {
+  const defaultRows = defaultReadableTimingComponents.map((component, index) => {
+    return getTimingComponentRow(component, `2026-06-16T14:0${index + 1}:00.000Z`)
+  })
+  const database = getTimingDiagnosticsDatabase({
+    componentRows: [
+      ...defaultRows,
+      getTimingComponentRow('search', '2026-06-16T14:11:00.000Z', {
+        completedAt: null,
+        completedCount: 0,
+        runningCount: 1,
+      }),
+    ],
+    timelineRow: getTimingTimelineRow({pendingCount: 0, runningCount: 1}),
+  })
+
+  const diagnostics = await getReviewServingRebuildTimingDiagnostics({requestId: 'rebuild:readiness'}, database)
+
+  expect(diagnostics.timeline[0]?.defaultReadableAt).toEqual({
+    note: null,
+    status: 'known',
+    value: '2026-06-16T14:08:00.000Z',
+  })
+  expect(diagnostics.timeline[0]?.fullyEnrichedAt).toMatchObject({status: 'unknown', value: null})
+})
+
+test('rebuild timing diagnostics derive fullyEnrichedAt only after all request chunks complete', async () => {
+  const componentRows = [
+    ...defaultReadableTimingComponents.map((component, index) => {
+      return getTimingComponentRow(component, `2026-06-16T14:0${index + 1}:00.000Z`)
+    }),
+    getTimingComponentRow('search', '2026-06-16T14:11:00.000Z'),
+    getTimingComponentRow('payload', '2026-06-16T14:12:00.000Z'),
+    getTimingComponentRow('judgmentInputContent', '2026-06-16T14:13:00.000Z'),
+  ]
+  const database = getTimingDiagnosticsDatabase({
+    componentRows,
+    timelineRow: getTimingTimelineRow({
+      completedAt: '2026-06-16T14:14:00.000Z',
+      completedCount: 11,
+      pendingCount: 0,
+      status: 'completed',
+    }),
+  })
+
+  const diagnostics = await getReviewServingRebuildTimingDiagnostics({requestId: 'rebuild:readiness'}, database)
+
+  expect(diagnostics.timeline[0]?.fullyEnrichedAt).toEqual({
+    note: null,
+    status: 'known',
+    value: '2026-06-16T14:13:00.000Z',
+  })
+})
+
+test('rebuild timing diagnostics keep defaultReadableAt unknown when a default component is not complete', async () => {
+  const incompleteStates = [
+    {completedAt: null, completedCount: 0, pendingCount: 1, statusCount: 'pending'},
+    {completedAt: null, completedCount: 0, failedCount: 1, statusCount: 'failed'},
+    {blockedOverBudgetCount: 1, completedAt: null, completedCount: 0, statusCount: 'blocked'},
+  ]
+
+  for (const incompleteState of incompleteStates) {
+    const database = getTimingDiagnosticsDatabase({
+      componentRows: defaultReadableTimingComponents.map((component, index) => {
+        return getTimingComponentRow(
+          component,
+          `2026-06-16T14:0${index + 1}:00.000Z`,
+          component === 'queue' ? incompleteState : {},
+        )
+      }),
+      timelineRow: getTimingTimelineRow({
+        blockedOverBudgetCount: incompleteState.statusCount === 'blocked' ? 1 : 0,
+        completedCount: 7,
+        failedCount: incompleteState.statusCount === 'failed' ? 1 : 0,
+        pendingCount: incompleteState.statusCount === 'pending' ? 1 : 0,
+      }),
+    })
+
+    const diagnostics = await getReviewServingRebuildTimingDiagnostics({requestId: 'rebuild:readiness'}, database)
+
+    expect(diagnostics.timeline[0]?.defaultReadableAt).toMatchObject({status: 'unknown', value: null})
+    expect(diagnostics.timeline[0]?.defaultReadableAt.note).toContain(
+      'does not prove all default review page components',
+    )
+  }
+})
+
 test('rebuild chunk heartbeat extends only the current owner lease', async () => {
   const running = {
     ...getChunkRowFromIdentity(baseChunkIdentity, []),

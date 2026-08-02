@@ -727,6 +727,95 @@ const getReviewServingTimelineRequestedComponents = (value: unknown): ReviewServ
     : []
 }
 
+const defaultReadableReviewServingComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'posting',
+  'summary',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+const getLatestReviewServingTimelineTimestamp = (values: readonly string[]) => {
+  return values.reduce<string | null>((latest, value) => {
+    if (latest === null) {
+      return value
+    }
+
+    return new Date(value).getTime() > new Date(latest).getTime() ? value : latest
+  }, null)
+}
+
+const getReviewServingComponentCompletionTimestamp = (
+  componentSpans: readonly ReviewServingRebuildComponentSpan[],
+  requiredComponents: readonly ReviewServingProjectionComponent[],
+) => {
+  const spansByComponent = new Map(
+    componentSpans.map((span) => {
+      return [span.projectionComponent, span]
+    }),
+  )
+  const completedAtValues: string[] = []
+
+  for (const component of requiredComponents) {
+    const span = spansByComponent.get(component)
+
+    if (
+      span === undefined
+      || span.completedAt === null
+      || span.counts.total === 0
+      || span.counts.completed !== span.counts.total
+      || span.counts.pending > 0
+      || span.counts.running > 0
+      || span.counts.failed > 0
+      || span.counts.quarantined > 0
+      || span.counts.blockedOverBudget > 0
+    ) {
+      return null
+    }
+
+    completedAtValues.push(span.completedAt)
+  }
+
+  return getLatestReviewServingTimelineTimestamp(completedAtValues)
+}
+
+const getReviewServingDefaultReadableTimestamp = (
+  componentSpans: readonly ReviewServingRebuildComponentSpan[],
+): ReviewServingRebuildTimelineTimestamp => {
+  return getReviewServingTimelineTimestamp(
+    getReviewServingComponentCompletionTimestamp(componentSpans, defaultReadableReviewServingComponents),
+    'defaultReadableAt is unknown because request-owned chunk evidence does not prove all default review page components completed.',
+  )
+}
+
+const getReviewServingFullyEnrichedTimestamp = (
+  componentSpans: readonly ReviewServingRebuildComponentSpan[],
+  counts: ReviewServingRebuildTimelineStatusCounts,
+): ReviewServingRebuildTimelineTimestamp => {
+  const completedAtValues = componentSpans.flatMap((span) => {
+    return span.completedAt === null ? [] : [span.completedAt]
+  })
+  const completedAt =
+    counts.total > 0
+    && counts.completed === counts.total
+    && counts.pending === 0
+    && counts.running === 0
+    && counts.failed === 0
+    && counts.quarantined === 0
+    && counts.blockedOverBudget === 0
+    && completedAtValues.length === componentSpans.length
+      ? getLatestReviewServingTimelineTimestamp(completedAtValues)
+      : null
+
+  return getReviewServingTimelineTimestamp(
+    completedAt,
+    'fullyEnrichedAt is unknown because not all request-owned chunks are completed.',
+  )
+}
+
 const getReviewServingRebuildTimelineFromRows = (
   timelineRows: ReviewServingRebuildTimelineRow[],
   componentSpanRows: ReviewServingRebuildTimelineComponentSpanRow[],
@@ -747,25 +836,22 @@ const getReviewServingRebuildTimelineFromRows = (
   }
 
   return timelineRows.map((row) => {
+    const componentCounts = getReviewServingTimelineStatusCounts(row)
+    const componentSpans = componentSpansByRequestId.get(row.rootRequestId) ?? []
+
     return {
       activeSnapshotPromotedAt: getReviewServingTimelineTimestamp(
         row.activeSnapshotPromotedAt,
         'No active snapshot promotion was found for the request chunk snapshot ids.',
       ),
       admittedAt: getReviewServingTimelineTimestamp(row.admittedAt),
-      componentCounts: getReviewServingTimelineStatusCounts(row),
-      componentSpans: componentSpansByRequestId.get(row.rootRequestId) ?? [],
+      componentCounts,
+      componentSpans,
       completedAt: getReviewServingTimelineTimestamp(row.completedAt),
       createdAt: getReviewServingTimelineTimestamp(row.createdAt),
-      defaultReadableAt: getReviewServingTimelineTimestamp(
-        null,
-        'defaultReadableAt is not schema-backed for this rebuild timeline yet.',
-      ),
+      defaultReadableAt: getReviewServingDefaultReadableTimestamp(componentSpans),
       firstChunkStartedAt: getReviewServingTimelineTimestamp(row.firstChunkStartedAt),
-      fullyEnrichedAt: getReviewServingTimelineTimestamp(
-        null,
-        'fullyEnrichedAt is not schema-backed for this rebuild timeline yet.',
-      ),
+      fullyEnrichedAt: getReviewServingFullyEnrichedTimestamp(componentSpans, componentCounts),
       projectId: row.projectId,
       reason: row.reason,
       relationships: {
