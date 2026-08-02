@@ -555,6 +555,55 @@ test('readReviewServingRows falls back to canonical prompt answers when lazy pos
   expect(sql).not.toContain('FROM mart.review_article_filter_posting_serving_v4 filter_5')
 })
 
+test('readReviewServingRows preserves already-qualified mixed prompt-answer filters', async () => {
+  const reader = createReaderDatabase([{article_id: 'article-2', sort_key: '2026-01-02'}])
+  const lazyPostingStatements: string[] = []
+  const lazyPosting = {
+    database: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        lazyPostingStatements.push(statement)
+
+        return [] as T[]
+      },
+      run: async (statement: string) => {
+        lazyPostingStatements.push(statement)
+      },
+    },
+  }
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: hydratedListComponents,
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const result = await readReviewServingRows(
+    {
+      ...readyRequest,
+      contractKey: 'review.both.rows',
+      filters: {promptAnswer: ['human:promptAnswer:summary:yes', 'review:promptAnswer:summary:maybe']},
+      listMode: 'both',
+    },
+    {
+      database: reader.database,
+      diagnosticsDatabase: manifestDatabase,
+      lazyPromptAnswerPostingDatabase: lazyPosting.database,
+      manifestDatabase,
+    },
+  )
+  const sql = reader.statements[0] ?? ''
+  const joinedLazyStatements = lazyPostingStatements.join('\n')
+
+  expect(result.status).toBe('accepted')
+  expect(joinedLazyStatements).toContain('human:promptAnswer:summary:yes')
+  expect(joinedLazyStatements).toContain('review:promptAnswer:summary:maybe')
+  expect(joinedLazyStatements).not.toContain('review:promptAnswer:human:promptAnswer:summary:yes')
+  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['human:promptAnswer:summary:yes']::VARCHAR[]))")
+  expect(sql).toContain("posting.filter_value IN (SELECT unnest(['review:promptAnswer:summary:maybe']::VARCHAR[]))")
+})
+
 test('readReviewServingRows serializes aliased detail list-mode priority cursors', async () => {
   const reader = createReaderDatabase([
     {article_id: 'article-2', list_mode_priority: 1, prompt_id: 'prompt-2', prompt_order: 2},

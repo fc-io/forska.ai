@@ -280,6 +280,7 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).not.toContain('serving.llm_status_key')
   expect(joined).not.toContain('serving.human_status_key')
   expect(joined).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
+  expect(joined).toContain("concat('review:promptAnswer:summary:', summary.summary_answer)")
   expect(joined).toContain("concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original)")
   expectNoLegacyPostingSourcePatchTables(joined)
 })
@@ -297,6 +298,7 @@ test('full posting rebuilds skip lazy prompt-answer buckets', async () => {
   expect(sourceStatement).toContain('SELECT * FROM selected_postings')
   expect(sourceStatement).toContain('UNION ALL SELECT * FROM serving_status_postings')
   expect(sourceStatement).not.toContain('UNION ALL SELECT * FROM llm_postings')
+  expect(sourceStatement).not.toContain('UNION ALL SELECT * FROM llm_summary_postings')
   expect(sourceStatement).not.toContain('UNION ALL SELECT * FROM human_postings')
 })
 

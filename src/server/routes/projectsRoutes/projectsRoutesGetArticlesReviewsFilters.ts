@@ -22,6 +22,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       const hasDuplicateStudyRecords = query?.covidenceDuplicates === '1'
       const hasStudyDecisionConflict = query?.covidenceConflicts === '1'
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
+      const filterMode = query.mode === 'both' ? 'both' : 'review'
       articlesReviewsFiltersLogger.force(
         'projects.articles-reviews-filters.request-start',
         'Articles reviews filters request started',
@@ -31,13 +32,22 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
           from: query.from,
           to: query.to,
           search: searchTitle,
+          mode: filterMode,
           hasDuplicateStudyRecords,
           hasStudyDecisionConflict,
         },
       )
 
+      const projectConfig =
+        filterMode === 'both' ? await getAppQueryService().getProjectReviewConfig(query.projectId) : null
+      const humanJudgmentMode = projectConfig?.humanJudgmentMode ?? 'prompt'
       const projectPromptRows = await getAppQueryService().getProjectPromptRows(query.projectId)
-      const result = await getReviewFiltersFromServing({mode: 'review', params: query, promptRows: projectPromptRows})
+      const result = await getReviewFiltersFromServing({
+        humanJudgmentMode,
+        mode: filterMode,
+        params: query,
+        promptRows: projectPromptRows,
+      })
 
       articlesReviewsFiltersLogger.force(
         'projects.articles-reviews-filters.request-summary',
@@ -74,6 +84,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       from: t.Optional(t.String()),
       to: t.Optional(t.String()),
       search: t.Optional(t.String()),
+      mode: t.Optional(t.Union([t.Literal('review'), t.Literal('both')])),
     }),
   },
 )

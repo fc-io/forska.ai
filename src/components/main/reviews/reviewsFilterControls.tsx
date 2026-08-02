@@ -36,6 +36,7 @@ interface ReviewsFilterControlsProps {
   setSearchTitle: Setter<string>
   appliedSearchTitle: string
   onSubmitSearch: () => void
+  filterMode?: 'both' | 'review'
   llmStatus?: LlmStatus
   setLlmStatus?: Setter<LlmStatus | undefined>
 }
@@ -65,6 +66,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
         validFrom(),
         validTo(),
         (props.appliedSearchTitle || '').trim() || null,
+        props.filterMode ?? 'review',
       ],
       queryFn: async () => {
         const from = validFrom()
@@ -79,6 +81,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
             from: from ?? undefined,
             to: to ?? undefined,
             search: search || undefined,
+            mode: props.filterMode,
           },
         })
 

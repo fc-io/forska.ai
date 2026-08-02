@@ -111,7 +111,10 @@ export const getReviewServingSqlForbiddenPatternViolations = (sql: string, optio
         return false
       }
 
-      if (forbiddenPattern.label === 'json extraction' && hasOnlyBoundedJsonExtraction(sql)) {
+      if (
+        forbiddenPattern.label === 'json extraction'
+        && (hasOnlyBoundedJsonExtraction(sql) || allowCanonicalPromptAnswerFallback)
+      ) {
         return false
       }
 
@@ -240,8 +243,9 @@ const hasOnlyBoundedLazyPromptAnswerCanonicalForbiddenPatterns = (sql: string) =
   return (
     hasOnlyExpectedJudgmentAliases
     && [...sql.matchAll(/\brow_number\s*\(/giu)].length === 1
-    && [...sql.matchAll(/\bgroup\s+by\b/giu)].length === 1
+    && [...sql.matchAll(/\bgroup\s+by\b/giu)].length === 2
     && /\bgroup\s+by\s+requested\.filter_value\b/iu.test(sql)
+    && /\bgroup\s+by\s+serving\.article_id,\s*serving\.list_mode_key\b/iu.test(sql)
   )
 }
 
@@ -419,7 +423,7 @@ const isBoundedPromptAnswerProjectSettingsReference = (sql: string, tableReferen
 }
 
 const isBoundedTableFunctionReference = (tableReference: ReviewServingSqlTableReference) => {
-  return tableReference.table === 'unnest'
+  return ['json_each', 'unnest'].includes(tableReference.table)
 }
 
 const isBoundedLazyPromptAnswerCanonicalReference = (
@@ -526,7 +530,7 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
       )
     })
     .filter((tableReference) => {
-      return tableReference !== 'unnest'
+      return !['json_each', 'unnest'].includes(tableReference)
     })
     .filter((tableReference) => {
       return (
