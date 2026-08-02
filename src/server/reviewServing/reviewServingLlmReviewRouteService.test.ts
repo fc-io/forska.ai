@@ -339,9 +339,10 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
-  expect(reader.statements).toHaveLength(13)
-  expect(sql).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
-  expect(sql).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(reader.statements).toHaveLength(11)
+  expect(sql).toContain('SELECT requested.filter_value AS filterValue')
+  expect(sql).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(sql).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).toContain('list_mode_state.has_llm_list_mode IS TRUE')
@@ -446,9 +447,48 @@ test('LLM review prompt-filtered count intersects through one posting CTE', asyn
   expect(countStatement).not.toContain('llm_judged_article_ids AS')
   expect(countStatement).not.toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
   expect(countStatement).not.toContain("posting.filter_kind <> 'promptAnswer'")
-  expect(reader.statements.join('\n')).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
-  expect(reader.statements.join('\n')).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(reader.statements.join('\n')).toContain('SELECT requested.filter_value AS filterValue')
+  expect(reader.statements.join('\n')).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(reader.statements.join('\n')).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(countStatement).not.toContain('serving.llm_judged_prompt_count > 0')
+})
+
+test('LLM review prompt-filtered count falls back to canonical prompt answers when publication fails', async () => {
+  const reader = createReaderDatabase()
+  const database = {
+    ...reader.database,
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (statement.includes('SELECT requested.filter_value AS filterValue')) {
+        reader.statements.push(statement)
+
+        return [{filterValue: 'review:promptAnswer:prompt-1:yes'}] as T[]
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+    run: async (statement: string) => {
+      reader.statements.push(statement)
+      if (/\binsert\s+into\s+mart\.review_article_filter_posting_serving_v4\b/iu.test(statement)) {
+        throw new Error('publication failed')
+      }
+    },
+  }
+
+  const result = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {'prompt-1': ['yes']}},
+    {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+  )
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  })
+
+  expect(result).toEqual({totalCount: 1, totalPages: 1})
+  expect(reader.statements.join('\n')).toContain('ROLLBACK')
+  expect(countStatement).toContain('canonical_prompt_answer_posting_rows AS')
+  expect(countStatement).toContain('posting_filter_rows AS')
+  expect(countStatement).toContain('FROM app."judgment" judgment')
+  expect(countStatement).not.toContain("posting.filter_kind <> 'promptAnswer'")
+  expect(countStatement).toContain('FROM posting_filter_rows posting')
 })
 
 test('LLM review multi-prompt count groups posting filters without repeated posting scans', async () => {

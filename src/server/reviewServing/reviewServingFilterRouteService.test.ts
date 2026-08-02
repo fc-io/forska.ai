@@ -314,7 +314,7 @@ test('human filter route service keeps summary-mode answer scope from serving op
 
   expect(response.filters).toEqual([
     {
-      answeredOriginalValues: ['include'],
+      answeredOriginalValues: ['yes', 'no', 'maybe'],
       filterType: 'enum',
       promptId: 'summary',
       promptName: 'Overall human screening decision',
@@ -323,14 +323,18 @@ test('human filter route service keeps summary-mode answer scope from serving op
   expect(response.promptFilterDefinitions).toEqual([
     {
       articleReadinessState: 'slow',
-      debugDisplayState: 'mart/slow',
+      debugDisplayState: 'project/slow',
       kind: 'schemaEnum',
       label: 'Overall human screening decision',
-      optionSourceState: 'fast',
-      options: [{label: 'include', value: 'include'}],
+      optionSourceState: 'schema',
+      options: [
+        {label: 'yes', value: 'yes'},
+        {label: 'no', value: 'no'},
+        {label: 'maybe', value: 'maybe'},
+      ],
       promptId: 'summary',
       selectedValues: [],
-      source: 'mart',
+      source: 'project',
       surface: 'summary',
     },
   ])
@@ -358,7 +362,7 @@ test('human filter route service keeps summary-mode filter when scoped options a
 
   expect(response.filters).toEqual([
     {
-      answeredOriginalValues: [],
+      answeredOriginalValues: ['yes', 'no', 'maybe'],
       filterType: 'enum',
       promptId: 'summary',
       promptName: 'Overall human screening decision',

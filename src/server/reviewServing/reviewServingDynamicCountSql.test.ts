@@ -31,6 +31,34 @@ test('dynamic filtered counts use posting-only fast path for one posting group',
   expect(sql).not.toContain('scoped_serving AS')
 })
 
+test('dynamic filtered counts can read prompt-answer groups from canonical rows after lazy publication failure', () => {
+  const sql = getReviewServingDynamicFilteredCountSql({
+    listModeKey: 'llm',
+    postingFilterGroups: [
+      {filterKind: 'importRoute', filterValues: ['import-route-1']},
+      {filterKind: 'promptAnswer', filterValues: ['review:promptAnswer:prompt-1:yes']},
+    ],
+    projectId: 'project-1',
+    reviewConfigHash: 'review-config-1',
+    snapshotId: 'snapshot-1',
+    useCanonicalPromptAnswerPostings: true,
+  })
+
+  expect(sql).toContain('canonical_prompt_answer_posting_rows AS')
+  expect(sql).toContain('posting_filter_rows AS')
+  expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4 posting')
+  expect(sql).toContain("posting.filter_kind <> 'promptAnswer'")
+  expect(sql).toContain('SELECT * FROM canonical_prompt_answer_posting_rows')
+  expect(sql).toContain('FROM app."judgment" judgment')
+  expect(sql).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
+  expect(sql).toContain("['review:promptAnswer:prompt-1:yes']")
+  expect(sql).toContain('FROM posting_filter_rows posting')
+  expect(sql).toContain("WHEN posting.filter_kind = 'importRoute'")
+  expect(sql).toContain("WHEN posting.filter_kind = 'promptAnswer'")
+  expect(sql).toContain('posting_filtered_article_ids AS')
+  expect(sql).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+})
+
 test('dynamic filtered counts anchor multi-group posting intersections on the smallest posting row', () => {
   const sql = getReviewServingDynamicFilteredCountSql({
     listModeKey: 'llm',
@@ -248,6 +276,136 @@ test('dynamic filtered counts match legacy group-by semantics for multi-group po
 
     expect(optimizedReader.getRowObjectsJson()).toEqual(legacyReader.getRowObjectsJson())
     expect(optimizedReader.getRowObjectsJson()).toEqual([{totalCount: '2'}])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('dynamic filtered counts execute canonical prompt-answer fallback with mixed posting groups in DuckDB', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE SCHEMA mart;
+      CREATE TABLE app.project (
+        id VARCHAR,
+        model_id VARCHAR,
+        use_title BOOLEAN,
+        use_abstract BOOLEAN,
+        use_fulltext BOOLEAN,
+        use_fulltext_no_images BOOLEAN,
+        human_judgment_mode VARCHAR
+      );
+      CREATE TABLE app.project_prompt (
+        project_id VARCHAR,
+        prompt_id VARCHAR,
+        enabled BOOLEAN,
+        archived BOOLEAN
+      );
+      CREATE TABLE app.prompt (
+        id VARCHAR,
+        archived BOOLEAN
+      );
+      CREATE TABLE app."judgment" (
+        id VARCHAR,
+        article_id VARCHAR,
+        prompt_id VARCHAR,
+        model_id VARCHAR,
+        use_title BOOLEAN,
+        use_abstract BOOLEAN,
+        use_fulltext BOOLEAN,
+        use_fulltext_no_images BOOLEAN,
+        answered_original VARCHAR,
+        answered_original_as_array VARCHAR[],
+        created_at TIMESTAMP,
+        deleted_at TIMESTAMP
+      );
+      CREATE TABLE app."judgment_human" (
+        id VARCHAR,
+        article_id VARCHAR,
+        project_id VARCHAR,
+        prompt_id VARCHAR,
+        answer VARCHAR
+      );
+      CREATE TABLE app."judgment_human_summary" (
+        id VARCHAR,
+        article_id VARCHAR,
+        project_id VARCHAR,
+        answer VARCHAR
+      );
+      CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        list_mode_key VARCHAR,
+        filter_kind VARCHAR,
+        filter_value VARCHAR,
+        article_ids VARCHAR[]
+      );
+      CREATE TABLE mart.review_article_serving_base_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        article_id VARCHAR
+      );
+      CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        article_id VARCHAR,
+        has_llm_list_mode BOOLEAN,
+        has_human_list_mode BOOLEAN,
+        has_both_list_mode BOOLEAN,
+        has_unassessed_list_mode BOOLEAN
+      );
+      INSERT INTO app.project VALUES ('project-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'prompt');
+      INSERT INTO app.project_prompt VALUES
+        ('project-1', 'prompt-1', TRUE, FALSE),
+        ('project-1', 'prompt-2', TRUE, FALSE);
+      INSERT INTO app.prompt VALUES ('prompt-1', FALSE), ('prompt-2', FALSE);
+      INSERT INTO app."judgment" VALUES
+        ('judgment-1', 'article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMP '2026-01-01 00:00:00', NULL),
+        ('judgment-2', 'article-2', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMP '2026-01-02 00:00:00', NULL),
+        ('judgment-3', 'article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMP '2026-01-02 00:00:00', NULL),
+        ('judgment-4', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMP '2026-01-03 00:00:00', NULL),
+        ('judgment-5', 'article-3', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMP '2026-01-03 00:00:00', NULL),
+        ('judgment-6', 'article-4', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMP '2026-01-04 00:00:00', NULL),
+        ('judgment-7', 'article-4', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, 'maybe', NULL, TIMESTAMP '2026-01-04 00:00:00', NULL);
+      INSERT INTO mart.review_article_filter_posting_serving_v4 VALUES
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'importRoute', 'import-route-1', ['article-1', 'article-2', 'article-3']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'promptAnswer', 'review:promptAnswer:prompt-1:yes', ['article-1']),
+        ('project-1', 'review-config-1', 'snapshot-1', 'llm', 'promptAnswer', 'review:promptAnswer:prompt-2:no', ['article-1']);
+      INSERT INTO mart.review_article_serving_base_v4 VALUES
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-1'),
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-2'),
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-3'),
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-4');
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-1', TRUE, FALSE, FALSE, FALSE),
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-2', TRUE, FALSE, FALSE, FALSE),
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-3', TRUE, FALSE, FALSE, FALSE),
+        ('project-1', 'review-config-1', 'snapshot-1', 'article-4', TRUE, FALSE, FALSE, FALSE);
+    `)
+
+    const reader = await connection.runAndReadAll(
+      getReviewServingDynamicFilteredCountSql({
+        listModeKey: 'llm',
+        postingFilterGroups: [
+          {filterKind: 'importRoute', filterValues: ['import-route-1']},
+          {filterKind: 'promptAnswer', filterValues: ['review:promptAnswer:prompt-1:yes']},
+          {filterKind: 'promptAnswer', filterValues: ['review:promptAnswer:prompt-2:no']},
+        ],
+        projectId: 'project-1',
+        reviewConfigHash: 'review-config-1',
+        snapshotId: 'snapshot-1',
+        useCanonicalPromptAnswerPostings: true,
+      }),
+    )
+
+    expect(reader.getRowObjectsJson()).toEqual([{totalCount: '2'}])
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()

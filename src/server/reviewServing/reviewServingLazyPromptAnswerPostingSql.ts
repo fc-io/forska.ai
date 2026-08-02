@@ -9,6 +9,12 @@ export const reviewServingLazyPromptAnswerPostingDiagnostics = {
 export type ReviewServingLazyPromptAnswerPostingDatabase = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run?: (statement: string) => Promise<void>
+  transaction?: <T>(
+    operation: (tx: {
+      queryJson: <T>(statement: string) => Promise<T[]>
+      run: (statement: string) => Promise<void>
+    }) => Promise<T>,
+  ) => Promise<T>
 }
 
 export type ReviewServingLazyPromptAnswerPostingEnsureResult = {
@@ -171,6 +177,40 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
   `
 }
 
+export const getReviewServingLazyPromptAnswerPostingRowsSql = (input: {
+  filterValuesSql: string
+  listModeSql: string
+  projectIdSql: string
+  reviewConfigHashSql: string
+  snapshotIdSql: string
+}) => {
+  return `
+    SELECT
+      ${input.projectIdSql} AS project_id,
+      ${input.reviewConfigHashSql} AS review_config_hash,
+      ${input.snapshotIdSql} AS snapshot_id,
+      COALESCE(
+        list(DISTINCT source_article.article_id ORDER BY source_article.article_id)
+          FILTER (WHERE source_article.article_id IS NOT NULL),
+        []::VARCHAR[]
+      ) AS article_ids,
+      '${reviewServingPromptAnswerFilterKind}' AS filter_kind,
+      requested.filter_value,
+      ${input.listModeSql} AS list_mode_key
+    FROM (SELECT DISTINCT unnest(${input.filterValuesSql}::VARCHAR[]) AS filter_value) requested
+    LEFT JOIN (
+      ${getReviewServingLazyPromptAnswerPostingSourceSql(input)}
+    ) source
+      ON source.filter_value = requested.filter_value
+    LEFT JOIN UNNEST(COALESCE(source.article_ids, []::VARCHAR[])) AS source_article(article_id)
+      ON TRUE
+    WHERE requested.filter_value IS NOT NULL
+      AND requested.filter_value <> ''
+    GROUP BY
+      requested.filter_value
+  `
+}
+
 export const getReviewServingPromptAnswerPostingMissingValuesSql = (input: {
   filterValuesSql: string
   listModeSql: string
@@ -229,27 +269,20 @@ export const getReviewServingPromptAnswerPostingCacheWriteSqls = (input: {
         list_mode_key
       )
       SELECT
-        ${input.projectIdSql} AS project_id,
-        ${input.reviewConfigHashSql} AS review_config_hash,
-        ${input.snapshotIdSql} AS snapshot_id,
-        COALESCE(
-          list(DISTINCT source_article.article_id ORDER BY source_article.article_id)
-            FILTER (WHERE source_article.article_id IS NOT NULL),
-          []::VARCHAR[]
-        ) AS article_ids,
-        '${reviewServingPromptAnswerFilterKind}' AS filter_kind,
-        requested.filter_value,
-        ${input.listModeSql} AS list_mode_key
+        source.project_id,
+        source.review_config_hash,
+        source.snapshot_id,
+        source.article_ids,
+        source.filter_kind,
+        source.filter_value,
+        source.list_mode_key
       FROM (SELECT DISTINCT unnest(${input.filterValuesSql}::VARCHAR[]) AS filter_value) requested
-      LEFT JOIN (
-        ${getReviewServingLazyPromptAnswerPostingSourceSql(input)}
+      INNER JOIN (
+        ${getReviewServingLazyPromptAnswerPostingRowsSql(input)}
       ) source
         ON source.filter_value = requested.filter_value
-      LEFT JOIN UNNEST(COALESCE(source.article_ids, []::VARCHAR[])) AS source_article(article_id)
-        ON TRUE
       WHERE requested.filter_value IS NOT NULL
         AND requested.filter_value <> ''
-      GROUP BY requested.filter_value
     `,
   ]
 }
@@ -283,6 +316,15 @@ const executeTransaction = async (
   database: ReviewServingLazyPromptAnswerPostingDatabase,
   statements: readonly string[],
 ) => {
+  if (database.transaction) {
+    await database.transaction(async (tx) => {
+      for (const statement of statements) {
+        await tx.run(statement)
+      }
+    })
+    return
+  }
+
   await executeStatement(database, 'BEGIN TRANSACTION')
 
   try {

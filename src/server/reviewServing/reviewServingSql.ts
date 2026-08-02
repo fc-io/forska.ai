@@ -12,6 +12,7 @@ export type ReviewServingSqlShapeResult =
   | {ok: false; violations: readonly {label: string; pattern: string}[]}
 
 export type ReviewServingSqlShapeOptions = {
+  allowCanonicalPromptAnswerFallback?: boolean
   allowedTables?: readonly string[]
   requireLimit?: boolean
   requireOrderBy?: boolean
@@ -56,6 +57,7 @@ export const reviewServingRegisteredSqlTables = [
 
 const getDefaultReviewServingSqlShapeOptions = (): Required<ReviewServingSqlShapeOptions> => {
   return {
+    allowCanonicalPromptAnswerFallback: false,
     allowedTables: reviewServingRegisteredSqlTables,
     requireLimit: true,
     requireOrderBy: true,
@@ -87,14 +89,25 @@ const getNormalizedSqlAlias = (alias: string | undefined) => {
   return normalizedAlias && !sqlClauseKeywords.has(normalizedAlias) ? normalizedAlias : null
 }
 
-export const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
+export const getReviewServingSqlForbiddenPatternViolations = (sql: string, options?: ReviewServingSqlShapeOptions) => {
+  const shapeOptions = {...getDefaultReviewServingSqlShapeOptions(), ...options}
+  const allowCanonicalPromptAnswerFallback =
+    shapeOptions.allowCanonicalPromptAnswerFallback && hasOnlyBoundedLazyPromptAnswerCanonicalForbiddenPatterns(sql)
+
   return reviewServingSqlForbiddenPatterns
     .filter((forbiddenPattern) => {
       if (forbiddenPattern.label === 'raw article table scan' && hasBoundedArticleLookupJoin(sql)) {
         return false
       }
 
-      if (forbiddenPattern.label === 'raw judgment table scan' && hasBoundedJudgmentAuthoritativeHydrationJoin(sql)) {
+      if (
+        forbiddenPattern.label === 'raw judgment table scan'
+        && (hasBoundedJudgmentAuthoritativeHydrationJoin(sql) || allowCanonicalPromptAnswerFallback)
+      ) {
+        return false
+      }
+
+      if (forbiddenPattern.label === 'window row number' && allowCanonicalPromptAnswerFallback) {
         return false
       }
 
@@ -106,7 +119,8 @@ export const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
         forbiddenPattern.label === 'foreground aggregation'
         && (hasOnlyBoundedPostingFilterIntersectionAggregation(sql)
           || hasOnlyBoundedUnassessedQueueArticleAnchorAggregation(sql)
-          || hasOnlyBoundedLazyPromptAnswerPostingCacheAggregation(sql))
+          || hasOnlyBoundedLazyPromptAnswerPostingCacheAggregation(sql)
+          || allowCanonicalPromptAnswerFallback)
       ) {
         return false
       }
@@ -181,6 +195,53 @@ const hasBoundedJudgmentAuthoritativeHydrationJoin = (sql: string) => {
     && /\bllm_judgment\.article_id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.article_id\b/iu.test(sql)
     && /\bllm_judgment\.prompt_id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.prompt_id\b/iu.test(sql)
     && /\bllm_judgment\.deleted_at\s+is\s+null\b/iu.test(sql)
+  )
+}
+
+const hasBoundedLazyPromptAnswerCanonicalSource = (sql: string) => {
+  return (
+    /\bcanonical_prompt_answer_posting_rows\s+as\s*\(/iu.test(sql)
+    && /\bposting_filter_rows\s+as\s*\(/iu.test(sql)
+    && /\bfrom\s+app\."?judgment"?\s+judgment\b/iu.test(sql)
+    && /\binner\s+join\s+scoped_serving\s+serving\s+on\s+serving\.article_id\s*=\s*judgment\.article_id\b/iu.test(sql)
+    && /\binner\s+join\s+active_prompt\s+prompt\s+on\s+prompt\.prompt_id\s*=\s*judgment\.prompt_id\b/iu.test(sql)
+    && /\bwhere\s+judgment\.deleted_at\s+is\s+null\b/iu.test(sql)
+    && /\bfrom\s+app\."?judgment_human"?\s+judgment_human\b/iu.test(sql)
+    && /\bjudgment_human\.project_id\b/iu.test(sql)
+    && /\bfrom\s+app\."?judgment_human_summary"?\s+judgment_human_summary\b/iu.test(sql)
+    && /\bjudgment_human_summary\.project_id\b/iu.test(sql)
+    && /\bfrom\s+mart\.review_article_serving_list_mode_state_v4\s+list_mode_state\b/iu.test(sql)
+    && /\blist_mode_state\.project_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\blist_mode_state\.review_config_hash\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\blist_mode_state\.snapshot_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bfrom\s+app\.project_prompt\s+project_prompt\b/iu.test(sql)
+    && /\bproject_prompt\.project_id\s*=\s*[$:@?][\w.]+/iu.test(sql)
+    && /\bproject_prompt\.enabled\b/iu.test(sql)
+    && /\bnot\s+project_prompt\.archived\b/iu.test(sql)
+  )
+}
+
+const hasOnlyBoundedLazyPromptAnswerCanonicalForbiddenPatterns = (sql: string) => {
+  if (!hasBoundedLazyPromptAnswerCanonicalSource(sql)) {
+    return false
+  }
+
+  const rawJudgmentReferences = getReviewServingSqlTableReferenceDetails(sql).filter((tableReference) => {
+    return ['app.judgment', 'app.judgment_human', 'app.judgment_human_summary'].includes(tableReference.table)
+  })
+  const hasOnlyExpectedJudgmentAliases = rawJudgmentReferences.every((tableReference) => {
+    return (
+      (tableReference.table === 'app.judgment' && tableReference.alias === 'judgment')
+      || (tableReference.table === 'app.judgment_human' && tableReference.alias === 'judgment_human')
+      || (tableReference.table === 'app.judgment_human_summary' && tableReference.alias === 'judgment_human_summary')
+    )
+  })
+
+  return (
+    hasOnlyExpectedJudgmentAliases
+    && [...sql.matchAll(/\brow_number\s*\(/giu)].length === 1
+    && [...sql.matchAll(/\bgroup\s+by\b/giu)].length === 1
+    && /\bgroup\s+by\s+requested\.filter_value\b/iu.test(sql)
   )
 }
 
@@ -361,6 +422,37 @@ const isBoundedTableFunctionReference = (tableReference: ReviewServingSqlTableRe
   return tableReference.table === 'unnest'
 }
 
+const isBoundedLazyPromptAnswerCanonicalReference = (
+  sql: string,
+  tableReference: ReviewServingSqlTableReference,
+  options: Required<ReviewServingSqlShapeOptions>,
+) => {
+  return (
+    options.allowCanonicalPromptAnswerFallback
+    && hasBoundedLazyPromptAnswerCanonicalSource(sql)
+    && [
+      'active_prompt',
+      'and',
+      'app.judgment',
+      'app.judgment_human',
+      'app.judgment_human_summary',
+      'app.project',
+      'app.project_prompt',
+      'app.prompt',
+      'judgment',
+      'judgment_human',
+      'judgment_human_summary',
+      'latest_llm_judgment',
+      'project',
+      'project_prompt',
+      'project_settings',
+      'prompt',
+      'scoped_serving',
+      'serving',
+    ].includes(tableReference.alias ?? tableReference.table)
+  )
+}
+
 const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
   if (!options.requireRegisteredTable) {
     return []
@@ -404,6 +496,12 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
     })
     .filter((tableReference) => {
       return (
+        !['app.project_prompt', 'app.prompt'].includes(tableReference)
+        || !(options.allowCanonicalPromptAnswerFallback && hasBoundedLazyPromptAnswerCanonicalSource(sql))
+      )
+    })
+    .filter((tableReference) => {
+      return (
         ![
           'app.judgment',
           'app.judgment_assessment',
@@ -411,14 +509,30 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
           'app.provider_connection',
           'app.judgment_human',
           'app.judgment_human_summary',
-        ].includes(tableReference) || !hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
+        ].includes(tableReference)
+        || !(
+          hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
+          || (options.allowCanonicalPromptAnswerFallback && hasBoundedLazyPromptAnswerCanonicalSource(sql))
+        )
       )
     })
     .filter((tableReference) => {
-      return tableReference !== 'app.project' || !hasBoundedPromptAnswerProjectSettingsLookup(sql)
+      return (
+        tableReference !== 'app.project'
+        || !(
+          hasBoundedPromptAnswerProjectSettingsLookup(sql)
+          || (options.allowCanonicalPromptAnswerFallback && hasBoundedLazyPromptAnswerCanonicalSource(sql))
+        )
+      )
     })
     .filter((tableReference) => {
       return tableReference !== 'unnest'
+    })
+    .filter((tableReference) => {
+      return (
+        !(options.allowCanonicalPromptAnswerFallback && hasBoundedLazyPromptAnswerCanonicalSource(sql))
+        || !/^[a-z_][\w]*\.(?:project_id|snapshot_id)$/iu.test(tableReference)
+      )
     })
     .filter((tableReference) => {
       return !allowedTables.has(tableReference)
@@ -476,6 +590,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
               || isBoundedSelectedHotFieldLookupReference(sql, tableReference)
               || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
               || isBoundedJudgmentAuthoritativeHydrationReference(sql, tableReference)
+              || isBoundedLazyPromptAnswerCanonicalReference(sql, tableReference, options)
               || isBoundedPromptAnswerProjectSettingsReference(sql, tableReference)
               || isBoundedTableFunctionReference(tableReference)
             ) {
@@ -515,7 +630,7 @@ export const getReviewServingSqlShapeViolations = (sql: string, options?: Review
   const shapeOptions = {...getDefaultReviewServingSqlShapeOptions(), ...options}
 
   return [
-    ...getReviewServingSqlForbiddenPatternViolations(sql),
+    ...getReviewServingSqlForbiddenPatternViolations(sql, shapeOptions),
     ...getReviewServingSqlRegisteredTableViolations(sql, shapeOptions),
     ...getReviewServingSqlBoundedReadViolations(sql, shapeOptions),
   ]

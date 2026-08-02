@@ -28,8 +28,11 @@ import {
 import {getReviewServingDiagnostics, type ReviewServingDiagnostics} from './reviewServingDiagnosticsRepository.ts'
 import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
+  getReviewServingLazyPromptAnswerPostingRowsSql,
   hasReviewServingPromptAnswerFilterGroup,
+  isReviewServingPromptAnswerFilterGroup,
   type ReviewServingLazyPromptAnswerPostingDatabase,
+  reviewServingPromptAnswerFilterKind,
 } from './reviewServingLazyPromptAnswerPostingSql.ts'
 import {
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
@@ -520,6 +523,7 @@ const getPostingArticleFilterGroups = (request: ReviewServingReaderRequest) => {
 
 const getPostingFilterArticleCtes = (input: {
   contract: ReviewServingReadContract
+  promptAnswerFilterSource?: 'canonical' | 'posting'
   request: ReviewServingReaderRequest
 }) => {
   if (input.contract.physicalAccessStrategy !== 'orderedPrefix') {
@@ -527,36 +531,97 @@ const getPostingFilterArticleCtes = (input: {
   }
 
   const postingArticleFilterGroups = getPostingArticleFilterGroups(input.request)
+  const promptAnswerFilterValues = [
+    ...new Set(
+      postingArticleFilterGroups
+        .filter(isReviewServingPromptAnswerFilterGroup)
+        .flatMap((group) => {
+          return group.filterValues
+        })
+        .filter((value) => {
+          return value.length > 0
+        }),
+    ),
+  ]
+  const shouldUseCanonicalPromptAnswerPostings =
+    input.promptAnswerFilterSource === 'canonical' && promptAnswerFilterValues.length > 0
+  const nonPromptPostingGroups = postingArticleFilterGroups.filter((group) => {
+    return !isReviewServingPromptAnswerFilterGroup(group)
+  })
+  const canonicalPostingRowsCtes = shouldUseCanonicalPromptAnswerPostings
+    ? [
+        [
+          'canonical_prompt_answer_posting_rows AS (',
+          getReviewServingLazyPromptAnswerPostingRowsSql({
+            filterValuesSql: getSqlArrayLiteral(promptAnswerFilterValues),
+            listModeSql: getSqlLiteral(input.request.listMode ?? input.contract.listMode),
+            projectIdSql: '$projectId',
+            reviewConfigHashSql: '$reviewConfigHash',
+            snapshotIdSql: '$snapshotId',
+          }),
+          ')',
+        ].join(''),
+        [
+          'posting_filter_rows AS (',
+          [
+            nonPromptPostingGroups.length > 0
+              ? [
+                  'SELECT posting.project_id, posting.review_config_hash, posting.snapshot_id,',
+                  ' posting.article_ids, posting.filter_kind, posting.filter_value, posting.list_mode_key',
+                  ' FROM mart.review_article_filter_posting_serving_v4 posting',
+                  ' WHERE posting.project_id = $projectId',
+                  ' AND posting.snapshot_id = $snapshotId',
+                  ' AND posting.review_config_hash = $reviewConfigHash',
+                  ` AND posting.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
+                  ` AND posting.filter_kind <> '${reviewServingPromptAnswerFilterKind}'`,
+                ].join('')
+              : '',
+            'SELECT * FROM canonical_prompt_answer_posting_rows',
+          ]
+            .filter(Boolean)
+            .join(' UNION ALL '),
+          ')',
+        ].join(''),
+      ]
+    : []
+  const postingRowsTableSql = shouldUseCanonicalPromptAnswerPostings
+    ? 'posting_filter_rows'
+    : 'mart.review_article_filter_posting_serving_v4'
 
   if (postingArticleFilterGroups.length > 1) {
     return [
+      ...canonicalPostingRowsCtes,
       buildReviewServingPostingFilterIntersectionArticleCte({
         groups: postingArticleFilterGroups,
         listModeSql: getSqlLiteral(input.request.listMode ?? input.contract.listMode),
         projectIdSql: '$projectId',
         reviewConfigHashSql: '$reviewConfigHash',
         snapshotIdSql: '$snapshotId',
+        tableSql: postingRowsTableSql,
       }),
     ].filter((cte) => {
       return cte.length > 0
     })
   }
 
-  return postingArticleFilterGroups.map((filterValues) => {
-    const filterAlias = `filter_${filterValues.index}`
-    const articleAlias = `${filterAlias}_article`
-    return [
-      `filter_${filterValues.index}_articles AS (SELECT ${articleAlias}.article_id`,
-      ` FROM mart.review_article_filter_posting_serving_v4 ${filterAlias}`,
-      ` CROSS JOIN UNNEST(${filterAlias}.article_ids) AS ${articleAlias}(article_id)`,
-      ` WHERE ${filterAlias}.project_id = $projectId`,
-      ` AND ${filterAlias}.snapshot_id = $snapshotId`,
-      ` AND ${filterAlias}.review_config_hash = $reviewConfigHash`,
-      ` AND ${filterAlias}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
-      ` AND ${filterAlias}.filter_kind = ${getSqlLiteral(filterValues.filterKind)}`,
-      ` AND ${filterAlias}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues.filterValues)})))`,
-    ].join('')
-  })
+  return [
+    ...canonicalPostingRowsCtes,
+    ...postingArticleFilterGroups.map((filterValues) => {
+      const filterAlias = `filter_${filterValues.index}`
+      const articleAlias = `${filterAlias}_article`
+      return [
+        `filter_${filterValues.index}_articles AS (SELECT ${articleAlias}.article_id`,
+        ` FROM ${postingRowsTableSql} ${filterAlias}`,
+        ` CROSS JOIN UNNEST(${filterAlias}.article_ids) AS ${articleAlias}(article_id)`,
+        ` WHERE ${filterAlias}.project_id = $projectId`,
+        ` AND ${filterAlias}.snapshot_id = $snapshotId`,
+        ` AND ${filterAlias}.review_config_hash = $reviewConfigHash`,
+        ` AND ${filterAlias}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
+        ` AND ${filterAlias}.filter_kind = ${getSqlLiteral(filterValues.filterKind)}`,
+        ` AND ${filterAlias}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues.filterValues)})))`,
+      ].join('')
+    }),
+  ]
 }
 
 const getPromptAnswerPostingFilterValues = (request: ReviewServingReaderRequest) => {
@@ -636,6 +701,7 @@ const getPostingFilterPredicates = (input: {
 const getOrderedPrefixFilterCtesSql = (input: {
   contract: ReviewServingReadContract
   manifest: ReviewServingSnapshotManifest
+  promptAnswerFilterSource?: 'canonical' | 'posting'
   request: ReviewServingReaderRequest
 }) => {
   const componentStates = getComponentCursorStates(input.manifest)
@@ -875,6 +941,7 @@ const getRequiredIdentityParameter = (
 const getSql = (input: {
   contract: ReviewServingReadContract
   cursorPredicate?: string
+  promptAnswerFilterSource?: 'canonical' | 'posting'
   request: ReviewServingReaderRequest
   manifest: ReviewServingSnapshotManifest
 }) => {
@@ -935,6 +1002,14 @@ const getSqlLiteral = (value: null | number | readonly string[] | string | undef
   }
 
   return `'${value.replaceAll("'", "''")}'`
+}
+
+const getSqlArrayLiteral = (value: readonly string[]) => {
+  const values = value.map((entry) => {
+    return `'${entry.replaceAll("'", "''")}'`
+  })
+
+  return `[${values.join(', ')}]`
 }
 
 const escapeRegExp = (value: string) => {
@@ -1159,15 +1234,30 @@ export const readReviewServingRows = async <T>(
     }
   }
 
-  let sql: string
-
-  try {
-    sql = getSql({
+  const buildAndValidateSql = (promptAnswerFilterSource?: 'canonical' | 'posting') => {
+    const nextSql = getSql({
       contract,
       cursorPredicate: cursor?.valid ? getCursorPredicate(contract, cursor.payload.sortValues) : undefined,
       manifest,
+      promptAnswerFilterSource,
       request,
     })
+
+    const nextShape = assertReviewServingSqlShape(nextSql, {
+      allowCanonicalPromptAnswerFallback: promptAnswerFilterSource === 'canonical',
+      requireSnapshotScope: !snapshotScopedTables.has(contract.servingTable),
+    })
+
+    return {shape: nextShape, sql: nextSql}
+  }
+
+  let sql: string
+  let shape: ReturnType<typeof assertReviewServingSqlShape>
+
+  try {
+    const builtSql = buildAndValidateSql()
+    sql = builtSql.sql
+    shape = builtSql.shape
   } catch (_error) {
     return rejectReaderRequest({
       admission: admission.diagnostics,
@@ -1178,10 +1268,6 @@ export const readReviewServingRows = async <T>(
       reason: 'sqlBuildFailed',
     })
   }
-
-  const shape = assertReviewServingSqlShape(sql, {
-    requireSnapshotScope: !snapshotScopedTables.has(contract.servingTable),
-  })
 
   if (!shape.ok) {
     return rejectReaderRequest({
@@ -1203,14 +1289,44 @@ export const readReviewServingRows = async <T>(
       : null
 
   if (promptAnswerFilterValues.length > 0) {
-    await ensureReviewServingLazyPromptAnswerPostingBuckets({
-      database: lazyPromptAnswerPostingDatabase as ReviewServingLazyPromptAnswerPostingDatabase,
-      filterValues: promptAnswerFilterValues,
-      listModeKey: (request.listMode ?? contract.listMode) as string,
-      projectId: request.projectId as string,
-      reviewConfigHash: manifest.reviewConfigHash,
-      snapshotId: manifest.snapshotId,
-    })
+    try {
+      await ensureReviewServingLazyPromptAnswerPostingBuckets({
+        database: lazyPromptAnswerPostingDatabase as ReviewServingLazyPromptAnswerPostingDatabase,
+        filterValues: promptAnswerFilterValues,
+        listModeKey: (request.listMode ?? contract.listMode) as string,
+        projectId: request.projectId as string,
+        reviewConfigHash: manifest.reviewConfigHash,
+        snapshotId: manifest.snapshotId,
+      })
+    } catch (_error) {
+      try {
+        const builtSql = buildAndValidateSql('canonical')
+        sql = builtSql.sql
+        shape = builtSql.shape
+      } catch (_fallbackError) {
+        return rejectReaderRequest({
+          admission: admission.diagnostics,
+          contract,
+          diagnostics,
+          filterSignature,
+          manifest,
+          reason: 'sqlBuildFailed',
+        })
+      }
+
+      if (!shape.ok) {
+        return rejectReaderRequest({
+          admission: admission.diagnostics,
+          contract,
+          diagnostics,
+          filterSignature,
+          manifest,
+          reason: 'sqlShapeRejected',
+          sql,
+          sqlShapeViolations: shape.violations,
+        })
+      }
+    }
   }
 
   const database = dependencies?.database ?? lazyPromptAnswerPostingDatabase ?? getReaderDatabase()

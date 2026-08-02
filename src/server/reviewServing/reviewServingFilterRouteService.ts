@@ -103,6 +103,7 @@ const reviewFacetSummaryIdentities = [
   'review.filter.publicationYear',
 ] as const
 const humanFacetSummaryIdentities = ['review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer'] as const
+const humanSummaryAnswerOptions = ['yes', 'no', 'maybe'] as const
 const filterOptionRouteLimit = 512
 const filterFacetRouteLimit = 128
 const defaultReviewFilterOptionKeys = [
@@ -300,7 +301,7 @@ const getPromptFilters = (
   })
   const summaryFilter = [
     {
-      answeredOriginalValues: [...new Set(valuesByPrompt.summary ?? [])],
+      answeredOriginalValues: [...humanSummaryAnswerOptions],
       filterType: 'enum' as const,
       promptId: 'summary',
       promptName: 'Overall human screening decision',
@@ -357,21 +358,21 @@ const getPromptFilterDefinitions = (input: {
 
   if (input.mode === 'human' && input.humanJudgmentMode === 'summary') {
     const articleReadinessState = getArticleReadinessState(promptAnswerAvailabilityByPrompt.summary)
-    const options = [...new Set(valuesByPrompt.summary ?? [])].map((value) => {
+    const options = humanSummaryAnswerOptions.map((value) => {
       return {label: value, value}
     })
 
     return [
       {
         articleReadinessState,
-        debugDisplayState: `mart/${articleReadinessState}`,
+        debugDisplayState: `project/${articleReadinessState}`,
         kind: 'schemaEnum',
         label: 'Overall human screening decision',
-        optionSourceState: options.length > 0 ? 'fast' : 'unavailable',
+        optionSourceState: 'schema',
         options,
         promptId: 'summary',
         selectedValues: selectedValuesByPrompt.summary ?? [],
-        source: 'mart',
+        source: 'project',
         surface: 'summary',
       },
     ]
