@@ -8,6 +8,33 @@ import {assertProjectIsActive} from './projectAccessGuard.ts'
 const articlesReviewsFiltersLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const articlesReviewsFiltersErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 
+const parsePromptFilters = (value: string | undefined) => {
+  if (!value) {
+    return undefined
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return undefined
+    }
+
+    return Object.entries(parsed).reduce<Record<string, string[]>>((acc, [key, entry]) => {
+      if (!Array.isArray(entry)) {
+        return acc
+      }
+
+      const values = entry.filter((candidate): candidate is string => {
+        return typeof candidate === 'string' && candidate.length > 0
+      })
+
+      return values.length > 0 ? {...acc, [key]: values} : acc
+    }, {})
+  } catch (_error) {
+    return undefined
+  }
+}
+
 export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
   '/api/articlesreviewsfilters',
   async ({query, set}) => {
@@ -42,10 +69,11 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         filterMode === 'both' ? await getAppQueryService().getProjectReviewConfig(query.projectId) : null
       const humanJudgmentMode = projectConfig?.humanJudgmentMode ?? 'prompt'
       const projectPromptRows = await getAppQueryService().getProjectPromptRows(query.projectId)
+      const promptFilters = parsePromptFilters(query.promptFilters)
       const result = await getReviewFiltersFromServing({
         humanJudgmentMode,
         mode: filterMode,
-        params: query,
+        params: {...query, ...(promptFilters ? {prompts: promptFilters} : {})},
         promptRows: projectPromptRows,
       })
 
@@ -85,6 +113,7 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       to: t.Optional(t.String()),
       search: t.Optional(t.String()),
       mode: t.Optional(t.Union([t.Literal('review'), t.Literal('both')])),
+      promptFilters: t.Optional(t.String()),
     }),
   },
 )

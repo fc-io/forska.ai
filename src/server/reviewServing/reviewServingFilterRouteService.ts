@@ -25,6 +25,7 @@ type ReviewServingFilterRouteParams = {
   covidenceConflicts?: string
   covidenceDuplicates?: string
   from?: string
+  prompts?: Record<string, string[]>
   projectId: string
   search?: string
   to?: string
@@ -61,6 +62,7 @@ type ReviewServingFilterOptionRow = {
   option_value_key?: string | null
   prompt_id?: string | null
 }
+type ReviewServingPromptAnswerPostingRow = {filter_value?: string | null}
 type PromptFilterResponse =
   | {answeredOriginalValues: string[]; filterType: 'enum'; promptId: string; promptName: string}
   | {
@@ -270,6 +272,46 @@ const getArticleReadinessState = (availability: string | undefined): 'fast' | 's
   return availability === 'ready' ? 'fast' : 'slow'
 }
 
+const getSqlLiteral = (value: readonly string[] | string | null) => {
+  if (value === null) {
+    return 'NULL'
+  }
+
+  if (typeof value === 'string') {
+    return `'${value.replaceAll("'", "''")}'`
+  }
+
+  return `[${value
+    .map((entry) => {
+      return `'${entry.replaceAll("'", "''")}'`
+    })
+    .join(', ')}]`
+}
+
+const getPromptAnswerPostingListMode = (mode: ReviewServingFilterMode) => {
+  return mode === 'review' ? 'llm' : mode
+}
+
+const getPromptAnswerPostingValue = (input: {answer: string; promptId: string; surface: 'human' | 'review'}) => {
+  return `${input.surface}:promptAnswer:${input.promptId}:${input.answer}`
+}
+
+const hasMaterializedPromptAnswerPostingValues = (
+  availableValues: ReadonlySet<string>,
+  requestedValues: readonly string[],
+) => {
+  return (
+    requestedValues.length > 0
+    && requestedValues.every((value) => {
+      return availableValues.has(value)
+    })
+  )
+}
+
+const getReadinessOptionValues = (optionValues: readonly string[], selectedValues: readonly string[]) => {
+  return selectedValues.length > 0 ? selectedValues : optionValues
+}
+
 const getPromptFilters = (
   promptRows: readonly PromptRow[],
   optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[],
@@ -349,27 +391,22 @@ const getPromptFilters = (
 }
 
 const getSelectedValuesByPrompt = (params: ReviewServingFilterRouteParams) => {
-  const promptParams = params as ReviewServingFilterRouteParams & {prompts?: unknown}
-
-  if (!promptParams.prompts || typeof promptParams.prompts !== 'object') {
+  if (!params.prompts || typeof params.prompts !== 'object') {
     return {}
   }
 
-  return Object.entries(promptParams.prompts as Record<string, unknown>).reduce<Record<string, string[]>>(
-    (acc, [key, value]) => {
-      if (Array.isArray(value)) {
-        return {
-          ...acc,
-          [key]: value.filter((entry): entry is string => {
-            return typeof entry === 'string'
-          }),
-        }
+  return Object.entries(params.prompts).reduce<Record<string, string[]>>((acc, [key, value]) => {
+    if (Array.isArray(value)) {
+      return {
+        ...acc,
+        [key]: value.filter((entry): entry is string => {
+          return typeof entry === 'string'
+        }),
       }
+    }
 
-      return typeof value === 'string' ? {...acc, [key]: [value]} : acc
-    },
-    {},
-  )
+    return acc
+  }, {})
 }
 
 const getPromptFilterDefinitions = (input: {
@@ -378,6 +415,7 @@ const getPromptFilterDefinitions = (input: {
   mode: ReviewServingFilterMode
   optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[]
   params: ReviewServingFilterRouteParams
+  promptAnswerPostingRows: readonly ReviewServingPromptAnswerPostingRow[]
   promptRows: readonly PromptRow[]
 }): PromptFilterDefinition[] => {
   const selectedValuesByPrompt = getSelectedValuesByPrompt(input.params)
@@ -392,12 +430,29 @@ const getPromptFilterDefinitions = (input: {
       : acc
   }, {})
   const promptAnswerAvailabilityByPrompt = getPromptAnswerAvailabilityByPrompt(input.facetRows, input.mode)
+  const materializedPromptAnswerPostingValues = new Set(
+    input.promptAnswerPostingRows.flatMap((row) => {
+      return row.filter_value ? [row.filter_value] : []
+    }),
+  )
 
   if (input.mode === 'human' && input.humanJudgmentMode === 'summary') {
-    const articleReadinessState = getArticleReadinessState(promptAnswerAvailabilityByPrompt.summary)
     const options = humanSummaryAnswerOptions.map((value) => {
       return {label: value, value}
     })
+    const articleReadinessState = hasMaterializedPromptAnswerPostingValues(
+      materializedPromptAnswerPostingValues,
+      getReadinessOptionValues(
+        options.map((option) => {
+          return option.value
+        }),
+        selectedValuesByPrompt.summary ?? [],
+      ).map((value) => {
+        return getPromptAnswerPostingValue({answer: value, promptId: 'summary', surface: 'human'})
+      }),
+    )
+      ? 'fast'
+      : getArticleReadinessState(promptAnswerAvailabilityByPrompt.summary)
 
     return [
       {
@@ -417,16 +472,39 @@ const getPromptFilterDefinitions = (input: {
 
   if (input.mode === 'both' && input.humanJudgmentMode === 'summary') {
     const humanAvailabilityByPrompt = getPromptAnswerAvailabilityByPrompt(input.facetRows, 'human')
-    const humanArticleReadinessState = getArticleReadinessState(humanAvailabilityByPrompt.summary)
+    const options = humanSummaryAnswerOptions.map((value) => {
+      return {label: value, value}
+    })
+    const humanArticleReadinessState = hasMaterializedPromptAnswerPostingValues(
+      materializedPromptAnswerPostingValues,
+      getReadinessOptionValues(
+        options.map((option) => {
+          return option.value
+        }),
+        selectedValuesByPrompt[bothHumanSummaryPromptId] ?? [],
+      ).map((value) => {
+        return getPromptAnswerPostingValue({answer: value, promptId: 'summary', surface: 'human'})
+      }),
+    )
+      ? 'fast'
+      : getArticleReadinessState(humanAvailabilityByPrompt.summary)
+    const hasMaterializedLlmSummaryPostings = hasMaterializedPromptAnswerPostingValues(
+      materializedPromptAnswerPostingValues,
+      getReadinessOptionValues(
+        options.map((option) => {
+          return option.value
+        }),
+        selectedValuesByPrompt[bothLlmSummaryPromptId] ?? [],
+      ).map((value) => {
+        return getPromptAnswerPostingValue({answer: value, promptId: 'summary', surface: 'review'})
+      }),
+    )
     const hasReadyLlmPromptPostings =
       input.promptRows.length > 0
       && input.promptRows.every((prompt) => {
         return promptAnswerAvailabilityByPrompt[prompt.id] === 'ready'
       })
-    const llmArticleReadinessState = hasReadyLlmPromptPostings ? 'fast' : 'slow'
-    const options = humanSummaryAnswerOptions.map((value) => {
-      return {label: value, value}
-    })
+    const llmArticleReadinessState = hasMaterializedLlmSummaryPostings || hasReadyLlmPromptPostings ? 'fast' : 'slow'
 
     return [
       {
@@ -466,11 +544,24 @@ const getPromptFilterDefinitions = (input: {
     const kind =
       strategy?.strategy === 'enum' ? 'schemaEnum' : strategy?.strategy === 'numeric' ? 'numeric' : 'openString'
     const source = kind === 'schemaEnum' ? 'project' : 'mart'
-    const articleReadinessState = getArticleReadinessState(promptAnswerAvailabilityByPrompt[prompt.id])
     const schemaOptions = strategy?.strategy === 'enum' ? (strategy.enumOptions ?? []) : []
     const martOptions = [...new Set(valuesByPrompt[prompt.id] ?? [])]
     const optionValues = schemaOptions.length > 0 ? schemaOptions : martOptions
+    const selectedValues = selectedValuesByPrompt[prompt.id] ?? []
+    const materializedPromptAnswerFilterValues = getReadinessOptionValues(optionValues, selectedValues).map((value) => {
+      return getPromptAnswerPostingValue({
+        answer: value,
+        promptId: prompt.id,
+        surface: input.mode === 'human' ? 'human' : 'review',
+      })
+    })
     const optionSourceState = source === 'project' ? 'schema' : martOptions.length > 0 ? 'fast' : 'unavailable'
+    const articleReadinessState = hasMaterializedPromptAnswerPostingValues(
+      materializedPromptAnswerPostingValues,
+      materializedPromptAnswerFilterValues,
+    )
+      ? 'fast'
+      : getArticleReadinessState(promptAnswerAvailabilityByPrompt[prompt.id])
 
     return {
       articleReadinessState,
@@ -482,7 +573,7 @@ const getPromptFilterDefinitions = (input: {
         return {label: value, value}
       }),
       promptId: prompt.id,
-      selectedValues: selectedValuesByPrompt[prompt.id] ?? [],
+      selectedValues,
       source,
       surface: input.mode === 'human' ? 'human' : 'llm',
     }
@@ -544,6 +635,96 @@ const readOptionRows = async (
   return {diagnostics: [result.diagnostics], filterOptions, searchIdentity}
 }
 
+const getPromptAnswerPostingProbeValues = (input: {
+  humanJudgmentMode: HumanJudgmentMode
+  mode: ReviewServingFilterMode
+  optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[]
+  params: ReviewServingFilterRouteParams
+  promptRows: readonly PromptRow[]
+}) => {
+  const selectedValuesByPrompt = getSelectedValuesByPrompt(input.params)
+
+  if (input.mode === 'human' && input.humanJudgmentMode === 'summary') {
+    return getReadinessOptionValues(humanSummaryAnswerOptions, selectedValuesByPrompt.summary ?? []).map((answer) => {
+      return getPromptAnswerPostingValue({answer, promptId: 'summary', surface: 'human'})
+    })
+  }
+
+  if (input.mode === 'both' && input.humanJudgmentMode === 'summary') {
+    const humanValues = getReadinessOptionValues(
+      humanSummaryAnswerOptions,
+      selectedValuesByPrompt[bothHumanSummaryPromptId] ?? [],
+    )
+    const llmValues = getReadinessOptionValues(
+      humanSummaryAnswerOptions,
+      selectedValuesByPrompt[bothLlmSummaryPromptId] ?? [],
+    )
+
+    return [
+      ...humanValues.map((answer) => {
+        return getPromptAnswerPostingValue({answer, promptId: 'summary', surface: 'human'})
+      }),
+      ...llmValues.map((answer) => {
+        return getPromptAnswerPostingValue({answer, promptId: 'summary', surface: 'review'})
+      }),
+    ]
+  }
+
+  const valuesByPrompt = input.optionRows.reduce<Record<string, string[]>>((acc, row) => {
+    const promptId = typeof row.optionPayload.promptId === 'string' ? row.optionPayload.promptId : row.prompt_id
+    const value = typeof row.optionPayload.value === 'string' ? row.optionPayload.value : row.facet_value
+    const isPromptAnswer = row.facet_key === 'promptAnswer'
+    const isModeMatch = input.mode === 'human' ? row.filter_kind === 'human' : row.filter_kind === 'review'
+
+    return isPromptAnswer && isModeMatch && promptId && value
+      ? {...acc, [promptId]: [...(acc[promptId] ?? []), value]}
+      : acc
+  }, {})
+  const promptStrategies = analyzePromptTypes([...input.promptRows])
+
+  return input.promptRows.flatMap((prompt) => {
+    const strategy = promptStrategies.find((candidate) => {
+      return candidate.promptId === prompt.id
+    })
+    const schemaOptions = strategy?.strategy === 'enum' ? (strategy.enumOptions ?? []) : []
+    const martOptions = [...new Set(valuesByPrompt[prompt.id] ?? [])]
+    const optionValues = schemaOptions.length > 0 ? schemaOptions : martOptions
+    const surface = input.mode === 'human' ? 'human' : 'review'
+
+    return getReadinessOptionValues(optionValues, selectedValuesByPrompt[prompt.id] ?? []).map((answer) => {
+      return getPromptAnswerPostingValue({answer, promptId: prompt.id, surface})
+    })
+  })
+}
+
+const readMaterializedPromptAnswerPostingRows = async (input: {
+  humanJudgmentMode: HumanJudgmentMode
+  manifest: ReviewServingSnapshotManifest
+  mode: ReviewServingFilterMode
+  optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[]
+  params: ReviewServingFilterRouteParams
+  promptRows: readonly PromptRow[]
+  dependencies?: ReviewServingFilterRouteDependencies
+}) => {
+  const database = input.dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const filterValues = [...new Set(getPromptAnswerPostingProbeValues(input))]
+
+  if (filterValues.length === 0) {
+    return []
+  }
+
+  return database.queryJson<ReviewServingPromptAnswerPostingRow>(`
+    SELECT posting.filter_value
+    FROM mart.review_article_filter_posting_serving_v4 posting
+    WHERE posting.project_id = ${getSqlLiteral(input.params.projectId)}
+      AND posting.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.manifest.reviewConfigHash)}
+      AND posting.snapshot_id = ${getSqlLiteral(input.manifest.snapshotId)}
+      AND posting.list_mode_key = ${getSqlLiteral(getPromptAnswerPostingListMode(input.mode))}
+      AND posting.filter_kind = 'promptAnswer'
+      AND posting.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
+  `)
+}
+
 export const getReviewFiltersFromServing = async (input: {
   dependencies?: ReviewServingFilterRouteDependencies
   humanJudgmentMode?: HumanJudgmentMode
@@ -593,6 +774,16 @@ export const getReviewFiltersFromServing = async (input: {
       ])
   const searchText =
     typeof input.params.search === 'string' && input.params.search.trim() ? input.params.search.trim() : null
+  const humanJudgmentMode = input.humanJudgmentMode ?? 'summary'
+  const promptAnswerPostingRows = await readMaterializedPromptAnswerPostingRows({
+    dependencies: input.dependencies,
+    humanJudgmentMode,
+    manifest,
+    mode: input.mode,
+    optionRows: optionResult.filterOptions,
+    params: input.params,
+    promptRows: input.promptRows,
+  })
 
   return {
     diagnostics: [...facetDiagnostics, ...optionResult.diagnostics],
@@ -601,10 +792,11 @@ export const getReviewFiltersFromServing = async (input: {
     filters: getPromptFilters(input.promptRows, optionResult.filterOptions, input.mode, input.humanJudgmentMode),
     promptFilterDefinitions: getPromptFilterDefinitions({
       facetRows: facets,
-      humanJudgmentMode: input.humanJudgmentMode ?? 'summary',
+      humanJudgmentMode,
       mode: input.mode,
       optionRows: optionResult.filterOptions,
       params: input.params,
+      promptAnswerPostingRows,
       promptRows: input.promptRows,
     }),
     searchScope: {

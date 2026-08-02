@@ -144,6 +144,10 @@ const createReaderDatabase = () => {
         ] as T[]
       }
 
+      if (statement.includes('FROM mart.review_article_filter_posting_serving_v4')) {
+        return [] as T[]
+      }
+
       return [
         {
           availability: 'ready',
@@ -248,9 +252,10 @@ test('review filter route service reads facet and option contracts without raw f
     optionPayload: {facetKey: 'publicationYear', filterType: 'enum', value: '2026'},
   })
   expect(response.searchScope).toMatchObject({mode: 'tokenPrefix', searchIdentity: 'search-identity', text: 'heart'})
-  expect(reader.statements).toHaveLength(2)
+  expect(reader.statements).toHaveLength(3)
   expect(sql).toContain('FROM mart.review_filter_facet_serving_v4')
   expect(sql).toContain('FROM mart.review_filter_option_serving_v4')
+  expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4')
   expect(sql).toContain("AND facet_kind = 'review'")
   expect(sql).toContain('AND summary_identity IN (SELECT unnest(')
   expect(sql).toContain("'review.filter.promptAnswer'")
@@ -261,9 +266,119 @@ test('review filter route service reads facet and option contracts without raw f
   })
 })
 
+test('review filter route service marks schema prompt fast when lazy posting buckets are materialized', async () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.review_article_filter_posting_serving_v4')) {
+        return [
+          {filter_value: 'review:promptAnswer:prompt-1:maybe'},
+          {filter_value: 'review:promptAnswer:prompt-1:no'},
+          {filter_value: 'review:promptAnswer:prompt-1:yes'},
+        ] as T[]
+      }
+
+      return statement.includes('FROM mart.review_filter_option_serving_v4')
+        ? ([] as T[])
+        : ([
+            {
+              availability: 'unavailable',
+              count_value: null,
+              facet_key: 'promptAnswer',
+              facet_kind: 'review',
+              facet_value: '__lazy_prompt_answer__',
+              prompt_id: null,
+              summary_identity: 'review.filter.promptAnswer',
+            },
+          ] as T[])
+    },
+  }
+
+  const response = await getReviewFiltersFromServing({
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+    mode: 'review',
+    params: {projectId: 'project-1'},
+    promptRows: [
+      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: "'yes' | 'no' | 'maybe'"},
+    ],
+  })
+
+  expect(response.promptFilterDefinitions[0]).toMatchObject({
+    articleReadinessState: 'fast',
+    debugDisplayState: 'project/fast',
+  })
+  expect(statements.join('\n')).toContain("'review:promptAnswer:prompt-1:yes'")
+  expect(statements.join('\n')).toContain("posting.list_mode_key = 'llm'")
+})
+
+test('review filter route service keeps schema prompt slow until every displayed bucket is materialized', async () => {
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      if (statement.includes('FROM mart.review_article_filter_posting_serving_v4')) {
+        return [{filter_value: 'review:promptAnswer:prompt-1:yes'}] as T[]
+      }
+
+      return statement.includes('FROM mart.review_filter_option_serving_v4') ? ([] as T[]) : ([] as T[])
+    },
+  }
+
+  const response = await getReviewFiltersFromServing({
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+    mode: 'review',
+    params: {projectId: 'project-1'},
+    promptRows: [
+      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: "'yes' | 'no' | 'maybe'"},
+    ],
+  })
+
+  expect(response.promptFilterDefinitions[0]).toMatchObject({
+    articleReadinessState: 'slow',
+    debugDisplayState: 'project/slow',
+  })
+})
+
+test('review filter route service marks selected schema prompt fast when selected bucket is materialized', async () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.review_article_filter_posting_serving_v4')) {
+        return [{filter_value: 'review:promptAnswer:prompt-1:yes'}] as T[]
+      }
+
+      return statement.includes('FROM mart.review_filter_option_serving_v4') ? ([] as T[]) : ([] as T[])
+    },
+  }
+
+  const response = await getReviewFiltersFromServing({
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+    mode: 'review',
+    params: {projectId: 'project-1', prompts: {'prompt-1': ['yes']}},
+    promptRows: [
+      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: "'yes' | 'no' | 'maybe'"},
+    ],
+  })
+
+  expect(response.promptFilterDefinitions[0]).toMatchObject({
+    articleReadinessState: 'fast',
+    debugDisplayState: 'project/fast',
+    selectedValues: ['yes'],
+  })
+  expect(statements.join('\n')).toContain("'review:promptAnswer:prompt-1:yes'")
+  expect(statements.join('\n')).not.toContain("'review:promptAnswer:prompt-1:no'")
+  expect(statements.join('\n')).not.toContain("'review:promptAnswer:prompt-1:maybe'")
+})
+
 test('review filter route service keeps prompt debug readiness slow when any answer bucket is unavailable', async () => {
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string): Promise<T[]> => {
+      if (statement.includes('FROM mart.review_article_filter_posting_serving_v4')) {
+        return [] as T[]
+      }
+
       return statement.includes('FROM mart.review_filter_option_serving_v4')
         ? ([
             {
