@@ -63,6 +63,7 @@ test('LLM review prompt answer facets are lazy until prompt filter workflow is o
   expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
   expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
   expect(source).toContain('setPromptFiltersRequested(true)')
+  expect(source).toContain('Show prompt answer filters')
   expect(source).toContain('apiClient.api.articlesreviewsfilters.get')
 })
 
@@ -71,8 +72,8 @@ test('Human/Both review prompt answer facets are lazy until prompt filter workfl
 
   expect(source).toContain('const [promptFiltersRequested, setPromptFiltersRequested] = createSignal(false)')
   expect(source).toContain('enabled: !props.hidePromptSelectors && promptFiltersRequested()')
-  expect(source).toContain('open={hasSelectedPromptFilters() || undefined}')
   expect(source).toContain('setPromptFiltersRequested(true)')
+  expect(source).toContain('Show prompt answer filters')
   expect(source).toContain('apiClient.api.articlesreviewshumanfilters.get')
 })
 
