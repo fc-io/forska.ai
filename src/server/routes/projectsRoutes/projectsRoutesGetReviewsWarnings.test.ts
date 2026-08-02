@@ -1359,6 +1359,62 @@ test('reviews warnings fail terminal V4 rebuild requests instead of reporting he
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings fail completed V4 chunks when request finalization is terminal', async () => {
+  const projectId = 'project-v4-terminal-request-completed-chunks-warning'
+  const requestId = 'rebuild:terminal-request-completed-chunks-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-terminal-request-completed-chunks-warning',
+    status: 'candidate',
+  })
+  await insertReviewRebuildRequest({
+    completedAt: '2026-04-02T12:10:00.000Z',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    failedAt: '2026-04-02T12:10:01.000Z',
+    lastError: 'component humanStatus input watermark 0 for source reviewChange is behind source 1',
+    projectId,
+    requestId,
+    status: 'failed',
+    updatedAt: '2026-04-02T12:10:01.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-completed-project-scope-warning',
+    component: 'projectScope',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId,
+    status: 'completed',
+    updatedAt: '2026-04-02T12:05:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-completed-human-status-warning',
+    component: 'humanStatus',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId,
+    status: 'completed',
+    updatedAt: '2026-04-02T12:10:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
+    completedCount: 2,
+    failedCount: 1,
+    pendingCount: 0,
+  })
+  expect(body.data.indexing.serving.diagnostics.snapshot).toMatchObject({candidateCount: 1})
+  expect(body.data.indexing.status).toBe('failed')
+})
+
 test('reviews warnings fail terminal V4 rebuild backlog when server mutation work is disabled', async () => {
   const projectId = 'project-v4-terminal-request-disabled-mutations-warning'
   const requestId = 'rebuild:terminal-request-disabled-mutations-warning'

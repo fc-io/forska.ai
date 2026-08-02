@@ -261,6 +261,58 @@ test('review filter route service reads facet and option contracts without raw f
   })
 })
 
+test('review filter route service keeps prompt debug readiness slow when any answer bucket is unavailable', async () => {
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      return statement.includes('FROM mart.review_filter_option_serving_v4')
+        ? ([
+            {
+              count_value: 3,
+              facet_key: 'promptAnswer',
+              facet_value: 'yes',
+              filter_kind: 'review',
+              option_value_key: 'review:promptAnswer:prompt-1:yes',
+              prompt_id: 'prompt-1',
+            },
+          ] as T[])
+        : ([
+            {
+              availability: 'async',
+              count_value: null,
+              facet_key: 'promptAnswer',
+              facet_kind: 'review',
+              facet_value: 'no',
+              prompt_id: 'prompt-1',
+              summary_identity: 'review.filter.promptAnswer',
+            },
+            {
+              availability: 'ready',
+              count_value: 3,
+              facet_key: 'promptAnswer',
+              facet_kind: 'review',
+              facet_value: 'yes',
+              prompt_id: 'prompt-1',
+              summary_identity: 'review.filter.promptAnswer',
+            },
+          ] as T[])
+    },
+  }
+
+  const response = await getReviewFiltersFromServing({
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+    mode: 'review',
+    params: {projectId: 'project-1'},
+    promptRows: [
+      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: "'yes' | 'no' | 'maybe'"},
+    ],
+  })
+
+  expect(response.promptFilterDefinitions[0]).toMatchObject({
+    articleReadinessState: 'slow',
+    debugDisplayState: 'project/slow',
+  })
+})
+
 test('review filter route service tokenizes search text like row reads', async () => {
   const reader = createReaderDatabase()
 
