@@ -462,6 +462,48 @@ test('projection identity manifest upsert is idempotent for project component id
   expect(manifestWrites.join('\n')).not.toContain('ON CONFLICT(manifest_id)')
 })
 
+test('projection identity manifest preserves prior source watermark coverage on partial updates', async () => {
+  const {database} = createFakeManifestDatabase()
+  const baseInput = {
+    baseGeneration: 0,
+    definitionVersion: 'humanStatus:v1',
+    inputDigest: 'freshReviewServingSnapshot',
+    inputWatermark: 100,
+    inputWatermarks: {projectScope: 100, reviewChange: 75},
+    patchRangeEnd: 0,
+    patchRangeStart: 0,
+    patchWatermark: 0,
+    projectId: 'project-1',
+    projectionComponent: 'humanStatus',
+    projectionIdentity: 'humanStatus:identity-1',
+    promptConfigHash: null,
+    reviewConfigHash: 'review-config-1',
+    status: 'candidate',
+  } as const
+
+  await upsertReviewServingProjectionIdentityManifest(baseInput, database)
+  await upsertReviewServingProjectionIdentityManifest(
+    {
+      ...baseInput,
+      inputDigest: 'project.updated',
+      inputWatermark: 25,
+      inputWatermarks: {projectScope: 125},
+      patchRangeEnd: 125,
+      patchRangeStart: 125,
+      patchWatermark: 125,
+    },
+    database,
+  )
+
+  const manifest = await getReviewServingProjectionIdentityManifest(baseInput, database)
+
+  expect(manifest).toMatchObject({
+    inputWatermark: 100,
+    inputWatermarks: {projectScope: 125, reviewChange: 75},
+    patchWatermark: 125,
+  })
+})
+
 test('projection identity manifest skips unchanged writes', async () => {
   const {database, statements} = createFakeManifestDatabase()
   const input = {

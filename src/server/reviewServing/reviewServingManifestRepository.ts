@@ -161,6 +161,42 @@ const getProjectionManifestInputWatermarks = (input: ReviewServingProjectionIden
   return input.inputWatermarks ?? {}
 }
 
+const mergeProjectionManifestInputWatermarks = (
+  current: ReviewServingSourcePartitionWatermarks,
+  next: ReviewServingSourcePartitionWatermarks,
+) => {
+  const merged = {...current}
+
+  Object.entries(next).forEach(([sourcePartition, watermark]) => {
+    const currentWatermark = merged[sourcePartition]
+
+    merged[sourcePartition] =
+      typeof currentWatermark === 'number' && Number.isFinite(currentWatermark)
+        ? Math.max(currentWatermark, watermark)
+        : watermark
+  })
+
+  return merged
+}
+
+const getEffectiveProjectionManifestInput = (
+  current: ReviewServingProjectionIdentityManifest | null,
+  input: ReviewServingProjectionIdentityManifestInput,
+): ReviewServingProjectionIdentityManifestInput => {
+  if (current === null) {
+    return input
+  }
+
+  return {
+    ...input,
+    inputWatermark: Math.max(current.inputWatermark, input.inputWatermark),
+    inputWatermarks: mergeProjectionManifestInputWatermarks(
+      current.inputWatermarks,
+      getProjectionManifestInputWatermarks(input),
+    ),
+  }
+}
+
 const isProjectionIdentityManifestUnchanged = (
   current: ReviewServingProjectionIdentityManifest,
   input: ReviewServingProjectionIdentityManifestInput,
@@ -230,8 +266,9 @@ export const upsertReviewServingProjectionIdentityManifest = async (
 ) => {
   const manifestId = getProjectionManifestId(input)
   const current = await getReviewServingProjectionIdentityManifest(input, database)
+  const effectiveInput = getEffectiveProjectionManifestInput(current, input)
 
-  if (current !== null && isProjectionIdentityManifestUnchanged(current, input)) {
+  if (current !== null && isProjectionIdentityManifestUnchanged(current, effectiveInput)) {
     return {manifestId}
   }
 
@@ -239,18 +276,18 @@ export const upsertReviewServingProjectionIdentityManifest = async (
     await database.run(`
       UPDATE app.review_projection_identity_manifest
       SET
-        base_generation = ${getSqlLiteral(input.baseGeneration)},
-        patch_watermark = ${getSqlLiteral(input.patchWatermark)},
-        patch_range_start = ${getSqlLiteral(input.patchRangeStart ?? null)},
-        patch_range_end = ${getSqlLiteral(input.patchRangeEnd ?? null)},
-        input_watermark = ${getSqlLiteral(input.inputWatermark)},
-        input_watermarks_json = ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(input))},
-        input_digest = ${getSqlLiteral(input.inputDigest ?? null)},
-        definition_version = ${getSqlLiteral(input.definitionVersion)},
-        review_config_hash = ${getSqlLiteral(input.reviewConfigHash ?? null)},
-        prompt_config_hash = ${getSqlLiteral(input.promptConfigHash ?? null)},
-        status = ${getSqlLiteral(input.status)},
-        invalidation_reason = ${getSqlLiteral(input.invalidationReason ?? null)},
+        base_generation = ${getSqlLiteral(effectiveInput.baseGeneration)},
+        patch_watermark = ${getSqlLiteral(effectiveInput.patchWatermark)},
+        patch_range_start = ${getSqlLiteral(effectiveInput.patchRangeStart ?? null)},
+        patch_range_end = ${getSqlLiteral(effectiveInput.patchRangeEnd ?? null)},
+        input_watermark = ${getSqlLiteral(effectiveInput.inputWatermark)},
+        input_watermarks_json = ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(effectiveInput))},
+        input_digest = ${getSqlLiteral(effectiveInput.inputDigest ?? null)},
+        definition_version = ${getSqlLiteral(effectiveInput.definitionVersion)},
+        review_config_hash = ${getSqlLiteral(effectiveInput.reviewConfigHash ?? null)},
+        prompt_config_hash = ${getSqlLiteral(effectiveInput.promptConfigHash ?? null)},
+        status = ${getSqlLiteral(effectiveInput.status)},
+        invalidation_reason = ${getSqlLiteral(effectiveInput.invalidationReason ?? null)},
         updated_at = current_timestamp
       WHERE manifest_id = ${getSqlLiteral(manifestId)}
     `)
@@ -282,18 +319,18 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       ${getSqlLiteral(input.projectId)},
       ${getSqlLiteral(input.projectionComponent)},
       ${getSqlLiteral(input.projectionIdentity)},
-      ${getSqlLiteral(input.baseGeneration)},
-      ${getSqlLiteral(input.patchWatermark)},
-      ${getSqlLiteral(input.patchRangeStart ?? null)},
-      ${getSqlLiteral(input.patchRangeEnd ?? null)},
-      ${getSqlLiteral(input.inputWatermark)},
-      ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(input))},
-      ${getSqlLiteral(input.inputDigest ?? null)},
-      ${getSqlLiteral(input.definitionVersion)},
-      ${getSqlLiteral(input.reviewConfigHash ?? null)},
-      ${getSqlLiteral(input.promptConfigHash ?? null)},
-      ${getSqlLiteral(input.status)},
-      ${getSqlLiteral(input.invalidationReason ?? null)},
+      ${getSqlLiteral(effectiveInput.baseGeneration)},
+      ${getSqlLiteral(effectiveInput.patchWatermark)},
+      ${getSqlLiteral(effectiveInput.patchRangeStart ?? null)},
+      ${getSqlLiteral(effectiveInput.patchRangeEnd ?? null)},
+      ${getSqlLiteral(effectiveInput.inputWatermark)},
+      ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(effectiveInput))},
+      ${getSqlLiteral(effectiveInput.inputDigest ?? null)},
+      ${getSqlLiteral(effectiveInput.definitionVersion)},
+      ${getSqlLiteral(effectiveInput.reviewConfigHash ?? null)},
+      ${getSqlLiteral(effectiveInput.promptConfigHash ?? null)},
+      ${getSqlLiteral(effectiveInput.status)},
+      ${getSqlLiteral(effectiveInput.invalidationReason ?? null)},
       current_timestamp
     )
   `)

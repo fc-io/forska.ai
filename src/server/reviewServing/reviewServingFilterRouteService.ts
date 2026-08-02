@@ -243,7 +243,20 @@ const getPromptAnswerAvailabilityByPrompt = (
     const isModeMatch = mode === 'human' ? facetKind === 'human' : facetKind === 'review'
     const promptId = row.prompt_id ?? row.promptId ?? null
 
-    return isPromptAnswer && isModeMatch && promptId ? {...acc, [promptId]: row.availability ?? 'unavailable'} : acc
+    if (!isPromptAnswer || !isModeMatch || !promptId) {
+      return acc
+    }
+
+    const availability = row.availability ?? 'unavailable'
+    const existingAvailability = acc[promptId]
+    const nextAvailability =
+      existingAvailability && existingAvailability !== 'ready'
+        ? existingAvailability
+        : availability === 'ready' && existingAvailability !== undefined
+          ? existingAvailability
+          : availability
+
+    return {...acc, [promptId]: nextAvailability}
   }, {})
 }
 
