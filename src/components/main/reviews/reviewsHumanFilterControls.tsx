@@ -7,6 +7,7 @@ import {apiClient} from '../../../services/apiClient.ts'
 import {
   getPromptFilterControls,
   getPromptFilterLabel,
+  getPromptFilterTitle,
   reconcileSchemaEnumSelections,
 } from './reviewPromptFilterControls.ts'
 
@@ -220,6 +221,7 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                       <For each={filters}>
                         {(promptFilter) => {
                           const promptLabel = getPromptFilterLabel(promptFilter)
+                          const promptTitle = getPromptFilterTitle(promptFilter)
                           const current = createMemo(() => {
                             return getSelectedPromptValues(props.promptFilters()[promptFilter.promptId])
                           })
@@ -228,7 +230,7 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                           })
                           return (
                             <div class="flex flex-col gap-2">
-                              <label class="font-medium text-sm truncate" title={promptLabel}>
+                              <label class="font-medium text-sm truncate" title={promptTitle}>
                                 {promptLabel}:
                               </label>
                               <Select.Root<{value: string; label: string}>

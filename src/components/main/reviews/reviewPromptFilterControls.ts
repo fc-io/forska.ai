@@ -172,11 +172,45 @@ export const getPromptFilterControls = (response: unknown): PromptFilterControls
   }
 }
 
-export const getPromptFilterLabel = (control: PromptFilterControl): string => {
-  const debugDisplayState =
-    control.debugDisplayState ?? (control.source && control.readiness ? `${control.source}/${control.readiness}` : null)
+const getPromptFilterSourceLabel = (control: PromptFilterControl): string | null => {
+  if (control.source === 'project') {
+    return 'project prompt'
+  }
+  if (control.source === 'mart') {
+    return 'review index'
+  }
 
-  return debugDisplayState ? `${control.label} (${debugDisplayState})` : control.label
+  return null
+}
+
+const getPromptFilterStatusLabel = (control: PromptFilterControl): string | null => {
+  if (control.optionSourceState === 'schema') {
+    return 'Project schema options'
+  }
+  if (control.optionSourceState === 'fast' || control.optionSourceState === 'slow') {
+    return 'Indexed answer options'
+  }
+  if (control.optionSourceState === 'unavailable') {
+    return 'No indexed answer options yet'
+  }
+
+  return null
+}
+
+export const getPromptFilterLabel = (control: PromptFilterControl): string => {
+  const sourceLabel = getPromptFilterSourceLabel(control)
+
+  return sourceLabel ? `${control.label} (${sourceLabel})` : control.label
+}
+
+export const getPromptFilterTitle = (control: PromptFilterControl): string => {
+  const sourceLabel = getPromptFilterSourceLabel(control)
+  const statusLabel = getPromptFilterStatusLabel(control)
+  const details = [sourceLabel, statusLabel].filter((detail): detail is string => {
+    return typeof detail === 'string'
+  })
+
+  return details.length > 0 ? `${control.label} (${details.join('; ')})` : control.label
 }
 
 export const reconcileSchemaEnumSelections = (
