@@ -22,12 +22,6 @@ cd forska.ai
 bun install
 ```
 
-## Initialize The Database
-
-```bash
-bun run db:mig
-```
-
 ## Start The App
 
 The easiest local development flow starts the API/server stack and Vite app together:
@@ -37,6 +31,7 @@ bun run dev:start
 ```
 
 Press `Ctrl-C` in that terminal to stop both processes.
+The server applies database migrations automatically on startup.
 
 If you prefer separate terminals, start the local API/server stack:
 
@@ -60,6 +55,14 @@ Default local endpoints:
   - Windows: `%LOCALAPPDATA%\Forska\runtime\primary\`
 
 Open the local URL printed by Vite, usually `http://127.0.0.1:3000`.
+
+## Optional Manual Migration
+
+Normal local startup does not require this. If you ever need to run migrations without starting the app:
+
+```bash
+bun run db:mig
+```
 
 ## Configure Providers
 

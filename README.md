@@ -19,13 +19,12 @@ Install Bun if you do not already have it:
 curl -fsSL https://bun.sh/install | bash
 ```
 
-Clone the repo, install dependencies, and initialize the local database:
+Clone the repo and install dependencies:
 
 ```bash
 git clone https://github.com/fc-io/forska.ai.git
 cd forska.ai
 bun install
-bun run db:mig
 ```
 
 Start the local API/server stack and web app together:
@@ -45,6 +44,7 @@ bun run dev:start
 ```
 
 That starts both the server stack and the Vite web app, and shuts both down when you press `Ctrl-C`.
+The server applies database migrations automatically on startup.
 
 If you prefer separate terminals, run:
 
@@ -62,7 +62,7 @@ The default local profile uses:
   - Linux: `${XDG_DATA_HOME:-~/.local/share}/forska/runtime/primary/`
   - Windows: `%LOCALAPPDATA%\Forska\runtime\primary\`
 
-Run migrations again after pulling schema changes:
+If you ever need to run migrations without starting the app:
 
 ```bash
 bun run db:mig
