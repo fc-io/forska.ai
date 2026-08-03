@@ -11,16 +11,42 @@ Forska is currently designed as a standalone single-user app. It is not a hosted
 - DuckDB for local app/query data
 - SQLite for local job/runtime state
 
-## Local Development
+## Quick Start
 
-Install dependencies and initialize the local database:
+Install Bun if you do not already have it:
 
 ```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+Clone the repo, install dependencies, and initialize the local database:
+
+```bash
+git clone https://github.com/fc-io/forska.ai.git
+cd forska.ai
 bun install
 bun run db:mig
 ```
 
-Start the local API/server stack and web app:
+Start the local API/server stack and web app together:
+
+```bash
+bun run dev:start
+```
+
+Then open the local URL printed by Vite, usually `http://127.0.0.1:3000`.
+
+## Local Development
+
+The easiest way to run Forska locally is:
+
+```bash
+bun run dev:start
+```
+
+That starts both the server stack and the Vite web app, and shuts both down when you press `Ctrl-C`.
+
+If you prefer separate terminals, run:
 
 ```bash
 bun run dev:server
@@ -31,9 +57,16 @@ The default local profile uses:
 
 - Web app: `http://127.0.0.1:3000`
 - API: `http://127.0.0.1:3001`
-- Runtime data: `data/runtime/primary/`
+- Runtime data:
+  - macOS: `~/Library/Application Support/Forska/runtime/primary/`
+  - Linux: `${XDG_DATA_HOME:-~/.local/share}/forska/runtime/primary/`
+  - Windows: `%LOCALAPPDATA%\Forska\runtime\primary\`
 
-Open the local URL printed by Vite after `bun run dev:app` starts.
+Run migrations again after pulling schema changes:
+
+```bash
+bun run db:mig
+```
 
 More local runtime notes: [Run Local](./docs/README_RUN_LOCAL.md)
 

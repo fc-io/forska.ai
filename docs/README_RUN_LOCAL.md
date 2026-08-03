@@ -8,9 +8,17 @@ This is the supported local development flow for Forska. Core product configurat
 - Optional local or remote model provider
 - Optional local OpenAI-compatible inference endpoint
 
+Install Bun if needed:
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
 ## Install
 
 ```bash
+git clone https://github.com/fc-io/forska.ai.git
+cd forska.ai
 bun install
 ```
 
@@ -22,7 +30,15 @@ bun run db:mig
 
 ## Start The App
 
-Start the local API/server stack:
+The easiest local development flow starts the API/server stack and Vite app together:
+
+```bash
+bun run dev:start
+```
+
+Press `Ctrl-C` in that terminal to stop both processes.
+
+If you prefer separate terminals, start the local API/server stack:
 
 ```bash
 bun run dev:server
@@ -38,9 +54,12 @@ Default local endpoints:
 
 - Web app: `http://127.0.0.1:3000`
 - API: `http://127.0.0.1:3001`
-- Runtime data: `data/runtime/primary/`
+- Runtime data:
+  - macOS: `~/Library/Application Support/Forska/runtime/primary/`
+  - Linux: `${XDG_DATA_HOME:-~/.local/share}/forska/runtime/primary/`
+  - Windows: `%LOCALAPPDATA%\Forska\runtime\primary\`
 
-Open the local URL printed by Vite after `bun run dev:app` starts.
+Open the local URL printed by Vite, usually `http://127.0.0.1:3000`.
 
 ## Configure Providers
 
