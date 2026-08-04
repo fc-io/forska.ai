@@ -154,6 +154,8 @@ type DeltaIntakePartitionRow = {
   startSourceHighWaterMark: number
 }
 
+type DeltaIntakePartitionSampleRow = {sourceHighWaterMark: number; sourcePartition: string}
+
 type ReviewServingProjectorWorkerRebuildChunkService = {
   claimChunk: typeof claimReviewServingRebuildChunk
   claimChunks?: typeof claimReviewServingRebuildChunks
@@ -8711,17 +8713,47 @@ const runReviewServingProjectorWorkerCleanup = async ({
   return {dirtyWorkRetentionCleanup, retentionCleanups, retentionScopes, status: 'completed'}
 }
 
-const getDeltaIntakePartitions = async (database: ReviewServingProjectorWorkerDatabase, tableName: string) => {
-  return database.queryJson<DeltaIntakePartitionRow>(`
+const getDeltaIntakePartitions = async (
+  database: ReviewServingProjectorWorkerDatabase,
+  tableName: string,
+  limit: number,
+) => {
+  const sampleRows = await database.queryJson<DeltaIntakePartitionSampleRow>(`
     SELECT
       source_partition AS sourcePartition,
-      MIN(source_high_water_mark) AS startSourceHighWaterMark,
-      MAX(source_high_water_mark) AS endSourceHighWaterMark
+      source_high_water_mark AS sourceHighWaterMark
     FROM ${tableName}
     WHERE reconciled_at IS NULL
-    GROUP BY source_partition
-    ORDER BY MIN(source_high_water_mark) ASC, source_partition ASC
+    LIMIT ${limit}
   `)
+
+  const partitionRows = sampleRows.reduce<Map<string, DeltaIntakePartitionRow>>((rows, row) => {
+    const existing = rows.get(row.sourcePartition)
+
+    rows.set(
+      row.sourcePartition,
+      existing === undefined
+        ? {
+            endSourceHighWaterMark: row.sourceHighWaterMark,
+            sourcePartition: row.sourcePartition,
+            startSourceHighWaterMark: row.sourceHighWaterMark,
+          }
+        : {
+            ...existing,
+            endSourceHighWaterMark: Math.max(existing.endSourceHighWaterMark, row.sourceHighWaterMark),
+            startSourceHighWaterMark: Math.min(existing.startSourceHighWaterMark, row.sourceHighWaterMark),
+          },
+    )
+
+    return rows
+  }, new Map())
+
+  return [...partitionRows.values()].sort((left, right) => {
+    return (
+      left.startSourceHighWaterMark - right.startSourceHighWaterMark
+      || left.sourcePartition.localeCompare(right.sourcePartition)
+    )
+  })
 }
 
 const runReviewServingProjectorWorkerDeltaIntake = async ({
@@ -8736,8 +8768,8 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
   const limit = getPositiveInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake)
   const intakeReviewChangeDeltas = dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork
   const intakeImportDeltas = dependencies.intakeImportDeltas ?? intakeReviewImportDeltasToDirtyWork
-  const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta')
-  const importPartitions = await getDeltaIntakePartitions(database, 'app.import_run_article_delta')
+  const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta', limit)
+  const importPartitions = await getDeltaIntakePartitions(database, 'app.import_run_article_delta', limit)
   const reviewChangeResults = await reviewChangePartitions.reduce<
     Promise<ReviewServingProjectorWorkerDeltaIntakeResult>
   >(

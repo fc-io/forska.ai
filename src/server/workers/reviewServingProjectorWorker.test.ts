@@ -3378,6 +3378,7 @@ test('worker resumes normal projector work after the foreground drain TTL expire
 test('worker runs delta intake before waking projectors', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const intakeCalls: Array<{kind: 'import' | 'review'; params: DeltaIntakeParams}> = []
+  const deltaPartitionStatements: string[] = []
 
   harness.database.queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
     if (workloadContext) {
@@ -3385,18 +3386,20 @@ test('worker runs delta intake before waking projectors', async () => {
     }
 
     if (statement.includes('FROM app.review_change_delta')) {
+      deltaPartitionStatements.push(statement)
+
       return [
-        {endSourceHighWaterMark: 7, sourcePartition: 'review_change_delta:project-1', startSourceHighWaterMark: 3},
+        {sourceHighWaterMark: 7, sourcePartition: 'review_change_delta:project-1'},
+        {sourceHighWaterMark: 3, sourcePartition: 'review_change_delta:project-1'},
       ] as T[]
     }
 
     if (statement.includes('FROM app.import_run_article_delta')) {
+      deltaPartitionStatements.push(statement)
+
       return [
-        {
-          endSourceHighWaterMark: 11,
-          sourcePartition: 'import_run_article_delta:project-1',
-          startSourceHighWaterMark: 10,
-        },
+        {sourceHighWaterMark: 11, sourcePartition: 'import_run_article_delta:project-1'},
+        {sourceHighWaterMark: 10, sourcePartition: 'import_run_article_delta:project-1'},
       ] as T[]
     }
 
@@ -3419,6 +3422,9 @@ test('worker runs delta intake before waking projectors', async () => {
   )
 
   expect(result.deltaIntake).toEqual({convertedPartitions: 2, dirtyWorkCount: 3, status: 'completed'})
+  expect(deltaPartitionStatements).toHaveLength(2)
+  expect(deltaPartitionStatements.join('\n')).toContain('LIMIT 25')
+  expect(deltaPartitionStatements.join('\n')).not.toContain('GROUP BY source_partition')
   expect(intakeCalls).toEqual([
     {
       kind: 'review',
