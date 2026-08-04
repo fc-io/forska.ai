@@ -156,6 +156,23 @@ const getJsonLiteral = (value: unknown) => {
   return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
 }
 
+const getFailedRecoveryProgress = ({
+  now,
+  phase,
+  previousProgress,
+}: {
+  now: Date
+  phase: ProjectTransferProgressPayload['phase']
+  previousProgress?: unknown
+}) => {
+  return {
+    ...(parseProjectTransferProgressPayload(previousProgress) ?? {}),
+    phase,
+    status: 'failed',
+    updatedAt: now.toISOString(),
+  } satisfies ProjectTransferProgressPayload
+}
+
 const getRecoveryOwnerToken = (ownerToken: string | undefined) => {
   return typeof ownerToken === 'string' && ownerToken.trim().length > 0
     ? ownerToken
@@ -351,6 +368,9 @@ const transitionImportUploadSessionToFailed = async ({
       state = 'failed',
       owner_token = ${getSqlLiteral(ownerToken)},
       error_json = ${getJsonLiteral({reason: 'project_transfer_import_upload_worker_stale'})},
+      progress_json = ${getJsonLiteral(
+        getFailedRecoveryProgress({now, phase: 'upload', previousProgress: session.progressJson}),
+      )},
       updated_at = ${getTimestampLiteral(now)}
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'
@@ -383,6 +403,9 @@ const transitionImportAnalyzeSessionToFailed = async ({
       state = 'failed',
       owner_token = ${getSqlLiteral(ownerToken)},
       error_json = ${getJsonLiteral({reason: 'project_transfer_import_analysis_worker_stale'})},
+      progress_json = ${getJsonLiteral(
+        getFailedRecoveryProgress({now, phase: 'analyze', previousProgress: session.progressJson}),
+      )},
       updated_at = ${getTimestampLiteral(now)}
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'
@@ -415,6 +438,9 @@ const transitionImportCommitSessionToFailed = async ({
       state = 'failed',
       owner_token = ${getSqlLiteral(ownerToken)},
       error_json = ${getJsonLiteral({reason: 'project_transfer_import_commit_worker_stale'})},
+      progress_json = ${getJsonLiteral(
+        getFailedRecoveryProgress({now, phase: 'commit', previousProgress: session.progressJson}),
+      )},
       updated_at = ${getTimestampLiteral(now)}
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'

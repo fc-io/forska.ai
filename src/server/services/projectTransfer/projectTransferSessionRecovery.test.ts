@@ -533,7 +533,7 @@ test('project transfer recovery fails stale import analysis workers before expir
 test('project transfer recovery uses short default stale window for abandoned import analysis', () => {
   const result = runRecoveryScript<{
     recoveryResult: {expiredSessionCount: number; scannedSessionCount: number}
-    state: string
+    row: {progressStatus: string | null; state: string}
   }>(`
     const sessionId = 'import-analysis-default-stale-window'
     await sessionRepository.createProjectTransferSession({
@@ -560,15 +560,15 @@ test('project transfer recovery uses short default stale window for abandoned im
       ownerToken: 'recovery-owner',
     })
     const [row] = await database.queryJson(
-      "SELECT state FROM app.project_transfer_session WHERE id = '" + sessionId + "'"
+      "SELECT state, json_extract_string(progress_json, '$.status') AS progressStatus FROM app.project_transfer_session WHERE id = '" + sessionId + "'"
     )
 
-    console.log(JSON.stringify({recoveryResult, state: row.state}))
+    console.log(JSON.stringify({recoveryResult, row}))
   `)
 
   expect(result.recoveryResult.scannedSessionCount).toBe(1)
   expect(result.recoveryResult.expiredSessionCount).toBe(0)
-  expect(result.state).toBe('failed')
+  expect(result.row).toEqual({progressStatus: 'failed', state: 'failed'})
 })
 
 test('project transfer recovery publishes stale import analysis when completed artifacts exist', () => {
