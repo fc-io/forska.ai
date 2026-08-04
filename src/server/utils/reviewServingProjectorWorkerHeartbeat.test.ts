@@ -193,13 +193,11 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
   ])
 })
 
-test('review serving projector worker hard RSS restart cap preserves physical memory headroom', () => {
+test('review serving projector worker hard RSS restart cap adds bounded restart grace', () => {
   const gibibyte = 1024 ** 3
 
-  expect(getReviewServingProjectorWorkerHardRestartRssBytes(5 * gibibyte, 8 * gibibyte)).toBe(
-    Math.floor(8 * gibibyte * 0.9),
-  )
-  expect(getReviewServingProjectorWorkerHardRestartRssBytes(12 * gibibyte, 128 * gibibyte)).toBe(36 * gibibyte)
+  expect(getReviewServingProjectorWorkerHardRestartRssBytes(5 * gibibyte, 8 * gibibyte)).toBe(6 * gibibyte)
+  expect(getReviewServingProjectorWorkerHardRestartRssBytes(12 * gibibyte, 128 * gibibyte)).toBe(13 * gibibyte)
 })
 
 test('review serving projector worker heartbeat restarts bounded low-memory worker bursts without closing DuckDB', () => {
@@ -534,7 +532,7 @@ test('review serving projector worker heartbeat restarts native-heavy completion
   expect(result.events).toEqual([['run'], ['run']])
 })
 
-test('review serving projector worker heartbeat resumes supervised maintenance worker when recycle remains above soft RSS cap', () => {
+test('review serving projector worker heartbeat exits supervised maintenance worker when recycle remains above restart RSS cap', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -576,7 +574,7 @@ test('review serving projector worker heartbeat resumes supervised maintenance w
 
         process.memoryUsage = () => {
           events.push(['memoryUsage'])
-          return {rss: 2_000}
+          return {rss: 3 * 1024 ** 3}
         }
         globalThis.Bun.gc = (force) => {
           events.push(['gc', force])
@@ -588,7 +586,7 @@ test('review serving projector worker heartbeat resumes supervised maintenance w
         const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?soft-high-rss=' + Date.now())
         const stop = startReviewServingProjectorWorkerHeartbeat({
           maxCompletedRebuildChunksPerRun: 1,
-          rebuildChunkBatchMaxRssBytes: 1_000,
+          rebuildChunkBatchMaxRssBytes: 1024 ** 3,
           restartDelayMs: 30,
         })
 
@@ -618,7 +616,6 @@ test('review serving projector worker heartbeat resumes supervised maintenance w
     events: Array<Array<boolean | number | string>>
   }
 
-  expect(result.events).not.toContainEqual(['exit', 0])
   expect(result.events).toEqual([
     ['run'],
     ['memoryUsage'],
@@ -626,6 +623,7 @@ test('review serving projector worker heartbeat resumes supervised maintenance w
     ['closeDuckdb', false, false],
     ['gc', true],
     ['memoryUsage'],
+    ['exit', 0],
   ])
 })
 

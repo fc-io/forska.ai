@@ -23,6 +23,7 @@ const gibibyte = 1024 ** 3
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
+const highRssRestartGraceBytes = gibibyte
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
@@ -82,7 +83,7 @@ export const getReviewServingProjectorWorkerHardRestartRssBytes = (
   maxRssBytes: number,
   totalMemoryBytes = totalmem(),
 ) => {
-  const unboundedHardRestartBytes = Math.max(maxRssBytes * 3, maxRssBytes + 8 * gibibyte)
+  const unboundedHardRestartBytes = maxRssBytes + highRssRestartGraceBytes
   const physicalMemoryGuardBytes = Math.floor(totalMemoryBytes * 0.9)
 
   return Math.max(maxRssBytes, Math.min(unboundedHardRestartBytes, physicalMemoryGuardBytes))
@@ -116,7 +117,7 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
 
   reviewServingProjectorWorkerWarningLogger.warn(
     'review-serving-projector.heartbeat-high-rss-process-restart',
-    '[reviewServingProjectorWorker] restarting maintenance worker after DuckDB recycle left RSS above hard cap',
+    '[reviewServingProjectorWorker] restarting maintenance worker after DuckDB recycle left RSS above restart cap',
     {hardRestartRssBytes, maxRssBytes, rssBytesAfterRecycle},
   )
   return process.exit(0)
