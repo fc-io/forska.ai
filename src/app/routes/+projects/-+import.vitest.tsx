@@ -701,6 +701,35 @@ describe('project import route', () => {
     }
   })
 
+  test('shows the stored session error when background commit fails after polling', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        error: {message: 'Constraint Error: duplicate key "article-import-route-1"', name: 'Error'},
+        progress: {
+          completedRows: 0,
+          message: 'Commit failed; rollback cleanup completed or was not required',
+          percent: 100,
+          phase: 'commit',
+          status: 'failed',
+          totalRows: 142_616,
+        },
+        state: 'failed',
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain('Import failed')
+      expect(container.textContent).toContain('Constraint Error: duplicate key "article-import-route-1"')
+      expect(container.textContent).toContain('Rows: 0 of 142,616')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('shows indeterminate create progress instead of stale upload percent', async () => {
     const readyPlanSummary = {
       ...getSession().planSummary,

@@ -185,6 +185,16 @@ const getJsonPreview = (value: unknown) => {
   return JSON.stringify(value, null, 2)
 }
 
+const getSessionErrorMessage = (error: unknown) => {
+  if (typeof error === 'string') {
+    return error.trim() === '' ? null : error
+  }
+
+  const message = getStringField(error, 'message')
+
+  return message === null || message.trim() === '' ? null : message
+}
+
 const getOmittedRoutes = (plan: ProjectImportPlanArtifact | null) => {
   return getPlanArray(plan, 'projectRoutePlan').filter((entry) => {
     return getStringField(entry, 'action') === 'omit'
@@ -732,6 +742,25 @@ const PostImportWarningsPanel = (props: {session: ProjectImportSession | null}) 
           </For>
         </ul>
       </section>
+    </Show>
+  )
+}
+
+const FailedSessionErrorPanel = (props: {session: ProjectImportSession | null}) => {
+  const errorMessage = createMemo(() => {
+    return props.session?.state === 'failed' ? getSessionErrorMessage(props.session.error) : null
+  })
+
+  return (
+    <Show when={errorMessage()}>
+      {(message) => {
+        return (
+          <section class="rounded-lg border border-red-200 bg-red-50 p-4">
+            <h2 class="text-base font-semibold text-red-950">Import failed</h2>
+            <p class="mt-2 break-words text-sm text-red-800">{message()}</p>
+          </section>
+        )
+      }}
     </Show>
   )
 }
@@ -1305,6 +1334,7 @@ export const ImportProjectWizard = () => {
             uploadPercent={uploadPercent()}
           />
           <StalePlanReasonsPanel session={currentSession()} />
+          <FailedSessionErrorPanel session={currentSession()} />
           <PostImportWarningsPanel session={currentSession()} />
           <BlockersPanel summary={planSummary()} />
 

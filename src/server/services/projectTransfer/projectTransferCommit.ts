@@ -1028,11 +1028,13 @@ const getCommitProgress = ({
 }
 
 const writeProjectTransferCommitRuntimeEvent = ({
+  error,
   ownerToken,
   progress,
   sessionId,
   state,
 }: {
+  error?: unknown
   ownerToken?: string | null
   progress: ProjectTransferProgressPayload
   sessionId: string
@@ -1060,7 +1062,7 @@ const writeProjectTransferCommitRuntimeEvent = ({
   }
 
   writeRuntimeLogEvent({
-    attrs: event,
+    attrs: error === undefined ? event : {...event, ...getErrorLogAttrs(error)},
     event: 'project_transfer.commit_progress',
     message: progress.message ?? 'Project transfer commit progress',
     severity: progress.status === 'failed' ? 'ERROR' : 'INFO',
@@ -1608,7 +1610,7 @@ const failClaimedCommit = async ({
     sessionId,
   })
 
-  writeProjectTransferCommitRuntimeEvent({ownerToken, progress, sessionId, state: failed?.state ?? 'failed'})
+  writeProjectTransferCommitRuntimeEvent({error, ownerToken, progress, sessionId, state: failed?.state ?? 'failed'})
 
   return failed
 }
