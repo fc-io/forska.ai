@@ -367,6 +367,30 @@ test('worker skips background review work while foreground DuckDB work is queued
   expect(harness.cleanupInputs).toEqual([])
 })
 
+test('worker skips background review work while project transfer background work is active', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+
+  harness.dependencies.hasActiveProjectTransferBackgroundActivity = () => {
+    return true
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(result).toMatchObject({
+    chunk: {chunkId: null, status: 'idle'},
+    chunkBatchCount: 0,
+    cleanup: {status: 'skipped'},
+    deltaIntake: {status: 'idle'},
+    projector: {status: 'blocked'},
+    status: 'idle',
+  })
+  expect(harness.getNextChunkInputs).toEqual([])
+  expect(harness.claimInputs).toEqual([])
+  expect(harness.runChunkInputs).toEqual([])
+  expect(harness.wakeInputs).toEqual([])
+  expect(harness.cleanupInputs).toEqual([])
+})
+
 test('worker can drain multiple rebuild chunks in one opt-in batch', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {

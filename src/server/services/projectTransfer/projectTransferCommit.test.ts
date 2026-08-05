@@ -364,7 +364,10 @@ const getPlan = ({
   }
 }
 
-const getAnalysis = (planRevision: number): ProjectTransferImportAnalysisArtifact => {
+const getAnalysis = (
+  planRevision: number,
+  overrides: Partial<ProjectTransferImportAnalysisArtifact> = {},
+): ProjectTransferImportAnalysisArtifact => {
   return {
     analyzedAt: '2026-05-28T10:00:00.000Z',
     archive: {expandedBytes: 0, memberCount: 0, packageChecksumSha256: 'a'.repeat(64), packageSizeBytes: 0},
@@ -382,6 +385,7 @@ const getAnalysis = (planRevision: number): ProjectTransferImportAnalysisArtifac
     packageWarnings: [],
     payloads: {} as ProjectTransferImportAnalysisArtifact['payloads'],
     planRevision,
+    ...overrides,
   }
 }
 
@@ -915,11 +919,79 @@ test('project transfer commit claims large imports before running background rev
     expect(result).toMatchObject({executionMode: 'background', status: 'claimed', statusCode: 202})
     expect(revalidateCount).toBe(0)
     expect(backgroundOperation).not.toBeNull()
+    const claimProgress = JSON.parse(
+      await readFile(join(cwd, getProjectTransferImportTempLayout('commit-session').progressPath), 'utf8'),
+    ) as {message: string; phase: string; planRevision: number; status: string}
+
+    expect(claimProgress).toMatchObject({
+      message: 'Commit revalidation running',
+      phase: 'revalidation',
+      planRevision: 1,
+      status: 'running',
+    })
 
     await backgroundOperation?.()
 
     expect(revalidateCount).toBe(1)
     expect(fake.getSession()).toMatchObject({ownerToken: null, state: 'completed'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit uses background mode for large packages before row thresholds', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({
+      analysis: getAnalysis(1, {
+        archive: {
+          expandedBytes: 1024 * 1024,
+          memberCount: 1,
+          packageChecksumSha256: 'a'.repeat(64),
+          packageSizeBytes: 129 * 1024 * 1024,
+        },
+      }),
+      cwd,
+      plan,
+      sessionId: 'commit-session',
+    })
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    let backgroundOperation: null | (() => Promise<void>) = null
+    let revalidateCount = 0
+    const result = await commitProjectTransferImportSession({
+      cwd,
+      now: new Date('2026-05-28T10:30:00.000Z'),
+      repositories: {
+        getCommitId: () => {
+          return 'commit-generated'
+        },
+        getOwnerToken: () => {
+          return 'owner-generated'
+        },
+        historyRepository: getNoopHistoryRepository(),
+        revalidate: async () => {
+          revalidateCount += 1
+          return {changed: false, plan, ready: true}
+        },
+        runAppTableWrites: async () => {
+          throw new Error('unexpected inline writes')
+        },
+        sessionRepository: fake.repository,
+        startBackgroundCommit: (operation) => {
+          backgroundOperation = operation
+        },
+      },
+      request: {planRevision: 1},
+      sessionId: 'commit-session',
+    })
+
+    expect(result).toMatchObject({executionMode: 'background', status: 'claimed', statusCode: 202})
+    expect(revalidateCount).toBe(0)
+    expect(backgroundOperation).not.toBeNull()
+    expect(fake.getSession()).toMatchObject({ownerToken: 'owner-generated', state: 'committing'})
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

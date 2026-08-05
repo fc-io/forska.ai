@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, rmSync, truncateSync, unlinkSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -482,6 +482,176 @@ test('duckdb service checkpoints before close', () => {
   const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
   expect(parsed.runStatements).toEqual(['CHECKPOINT'])
+})
+
+test('duckdb service defers checkpoints after skipped startup WAL checkpoint on low-memory workers', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-skipped-wal-checkpoint-threshold-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const walPath = `${duckdbPath}.wal`
+  const walSizeBytes = 70 * 1024 * 1024
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(walPath, 'wal')
+  truncateSync(walPath, walSizeBytes)
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {statSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const walPath = ${JSON.stringify(walPath)}
+
+        const createOptionsHistory = []
+        let checkpointChildOptions = null
+        let preflightChildOptions = null
+        const runStatements = []
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD === 'true') {
+            preflightChildOptions = JSON.parse(String(command[4]))
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD === 'true') {
+            checkpointChildOptions = JSON.parse(String(command[4]))
+            return {
+              exitCode: 1,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from('simulated startup checkpoint timeout'),
+            }
+          }
+
+          return originalSpawnSync(command, options)
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run(statement) {
+              runStatements.push(statement)
+            }
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create(databasePath, options) {
+              createOptionsHistory.push(options)
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?skipped-wal-checkpoint-threshold-test=' + Date.now())
+        await duckdbService.runDuckdbStatement('INSERT INTO app.sample VALUES (1)')
+        console.log(JSON.stringify({
+          checkpointChildOptions,
+          createOptionsHistory,
+          preflightChildOptions,
+          runStatements,
+          walSize: statSync(walPath).size,
+        }))
+        await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB skipped WAL checkpoint test failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<{
+      checkpointChildOptions: {checkpoint_threshold?: string} | null
+      createOptionsHistory: Array<{checkpoint_threshold?: string}>
+      preflightChildOptions: {checkpoint_threshold?: string} | null
+      runStatements: string[]
+      walSize: number
+    }>(result.stdout.toString())
+    const runtimeCheckpointThresholdMiB = Number(
+      parsed.createOptionsHistory[0]?.checkpoint_threshold?.replace(/MiB$/u, ''),
+    )
+    const runtimeCheckpointThresholdBytes = runtimeCheckpointThresholdMiB * 1024 * 1024
+
+    expect(parsed.walSize).toBeGreaterThan(64 * 1024 * 1024)
+    expect(runtimeCheckpointThresholdMiB).toBeGreaterThanOrEqual(8192)
+    expect(runtimeCheckpointThresholdBytes).toBeGreaterThan(parsed.walSize)
+    expect(parsed.preflightChildOptions?.checkpoint_threshold).toBe(
+      parsed.createOptionsHistory[0]?.checkpoint_threshold,
+    )
+    expect(parsed.checkpointChildOptions?.checkpoint_threshold).toBe(
+      parsed.createOptionsHistory[0]?.checkpoint_threshold,
+    )
+    expect(parsed.createOptionsHistory).toEqual([
+      {
+        checkpoint_threshold: parsed.createOptionsHistory[0]?.checkpoint_threshold,
+        memory_limit: '6400MiB',
+        preserve_insertion_order: 'false',
+        temp_directory: join(dataRoot, 'duckdb-temp'),
+        threads: '1',
+      },
+    ])
+    expect(parsed.runStatements).toEqual(['INSERT INTO app.sample VALUES (1)'])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
 })
 
 test('duckdb service runs only low-memory safe startup mutation preflight on low-memory workers', () => {
@@ -1628,6 +1798,177 @@ test('duckdb service startup repair strips table primary key constraints once', 
       'idx_review_serving_projector_watermark_duplicate_lookup',
     )
     expect(parsed.rows).toEqual([{watermark_id: 'watermark'}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service startup indexed-table repair preserves unrelated app tables', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-preserve-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = `${duckdbPath}.startup-recovery`
+  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+
+  mkdirSync(recoveryDirectory, {recursive: true})
+  writeFileSync(
+    activeRepairSpecPath,
+    JSON.stringify({
+      phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    }),
+  )
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {DuckDBInstance} = await import('@duckdb/node-api')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const instance = await DuckDBInstance.create(duckdbPath, {
+          checkpoint_threshold: '64MiB',
+          memory_limit: '2GB',
+          preserve_insertion_order: 'false',
+          threads: '1',
+        })
+        const connection = await instance.connect()
+        await connection.run(\`
+          CREATE SCHEMA app;
+          CREATE TABLE app.project(id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL);
+          CREATE TABLE app.article(id VARCHAR PRIMARY KEY, title VARCHAR NOT NULL);
+          CREATE TABLE app.judgment(id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, article_id VARCHAR NOT NULL);
+          CREATE TABLE app.review_rebuild_request(
+            request_id VARCHAR NOT NULL,
+            status VARCHAR NOT NULL,
+            admission_state VARCHAR NOT NULL,
+            priority INTEGER,
+            created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL
+          );
+          CREATE TABLE app.review_rebuild_chunk_manifest(
+            chunk_id VARCHAR NOT NULL,
+            request_id VARCHAR,
+            status VARCHAR NOT NULL,
+            admission_state VARCHAR NOT NULL,
+            retry_after TIMESTAMPTZ,
+            lease_expires_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ NOT NULL,
+            completed_at TIMESTAMPTZ,
+            started_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL
+          );
+          INSERT INTO app.project VALUES ('project-1', 'Project 1'), ('project-2', 'Project 2');
+          INSERT INTO app.article VALUES ('article-1', 'Article 1'), ('article-2', 'Article 2'), ('article-3', 'Article 3');
+          INSERT INTO app.judgment VALUES
+            ('judgment-1', 'project-1', 'article-1'),
+            ('judgment-2', 'project-1', 'article-2'),
+            ('judgment-3', 'project-2', 'article-3'),
+            ('judgment-4', 'project-2', 'article-1');
+          INSERT INTO app.review_rebuild_request VALUES (
+            'request-1',
+            'admitted',
+            'admitted',
+            1,
+            TIMESTAMPTZ '2026-08-05T00:00:00Z',
+            TIMESTAMPTZ '2026-08-05T00:00:00Z'
+          );
+          INSERT INTO app.review_rebuild_chunk_manifest VALUES
+            (
+              'chunk-1',
+              'request-1',
+              'pending',
+              'admitted',
+              NULL,
+              NULL,
+              TIMESTAMPTZ '2026-08-05T00:00:00Z',
+              NULL,
+              NULL,
+              TIMESTAMPTZ '2026-08-05T00:00:00Z'
+            ),
+            (
+              'chunk-1',
+              'request-1',
+              'completed',
+              'admitted',
+              NULL,
+              NULL,
+              TIMESTAMPTZ '2026-08-05T01:00:00Z',
+              TIMESTAMPTZ '2026-08-05T01:00:00Z',
+              TIMESTAMPTZ '2026-08-05T00:30:00Z',
+              TIMESTAMPTZ '2026-08-05T00:00:00Z'
+            );
+          CHECKPOINT;
+        \`)
+        connection.closeSync()
+        instance.closeSync()
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?index-repair-preserve=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT
+            (SELECT COUNT(*)::INTEGER FROM app.project) AS projectCount,
+            (SELECT COUNT(*)::INTEGER FROM app.article) AS articleCount,
+            (SELECT COUNT(*)::INTEGER FROM app.judgment) AS judgmentCount,
+            (SELECT COUNT(*)::INTEGER FROM app.review_rebuild_chunk_manifest) AS chunkCount,
+            (SELECT status FROM app.review_rebuild_chunk_manifest WHERE chunk_id = 'chunk-1') AS chunkStatus
+        \`)
+        await duckdbService.closeDuckdbService()
+
+        console.log(JSON.stringify({rows}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB preserve indexed-table repair failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<{
+      rows: Array<{
+        articleCount: number
+        chunkCount: number
+        chunkStatus: string
+        judgmentCount: number
+        projectCount: number
+      }>
+    }>(result.stdout.toString())
+
+    expect(parsed.rows).toEqual([
+      {articleCount: 3, chunkCount: 1, chunkStatus: 'completed', judgmentCount: 4, projectCount: 2},
+    ])
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -2920,7 +3261,7 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
   }
 })
 
-test('duckdb service keeps replayable WAL when startup checkpoint fails', () => {
+test('duckdb service starts with replayable WAL when startup checkpoint fails', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-checkpoint-failure-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
@@ -2940,7 +3281,10 @@ test('duckdb service keeps replayable WAL when startup checkpoint fails', () => 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
         const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
 
-        let childCount = 0
+        let checkpointCount = 0
+        let createCount = 0
+        let preflightCount = 0
+        const runStatements = []
         const originalSpawnSync = globalThis.Bun.spawnSync
 
         globalThis.Bun.spawnSync = ((command, options) => {
@@ -2948,21 +3292,27 @@ test('duckdb service keeps replayable WAL when startup checkpoint fails', () => 
             return originalSpawnSync(command, options)
           }
 
-          childCount += 1
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD === 'true') {
+            preflightCount += 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
 
-          return childCount === 1
-            ? {
-                exitCode: 0,
-                signalCode: null,
-                stdout: Buffer.from(''),
-                stderr: Buffer.from(''),
-              }
-            : {
-                exitCode: 7,
-                signalCode: null,
-                stdout: Buffer.from(''),
-                stderr: Buffer.from('checkpoint temporarily failed'),
-              }
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD === 'true') {
+            checkpointCount += 1
+            return {
+              exitCode: 7,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from('checkpoint temporarily failed'),
+            }
+          }
+
+          return originalSpawnSync(command, options)
         })
 
         void mock.module(serverRuntimeRoleModulePath, () => {
@@ -2974,11 +3324,48 @@ test('duckdb service keeps replayable WAL when startup checkpoint fails', () => 
           }
         })
 
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run(statement) {
+              runStatements.push(statement)
+            }
+
+            async runAndReadAll(statement) {
+              runStatements.push(statement)
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
         let errorMessage = null
+        let rows = []
 
         try {
           const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-checkpoint-failure-test=' + Date.now())
-          await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+          rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+          await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
         } catch (error) {
           errorMessage = error instanceof Error ? error.message : String(error)
         }
@@ -2986,9 +3373,13 @@ test('duckdb service keeps replayable WAL when startup checkpoint fails', () => 
         const recoveryDirectory = duckdbPath + '.startup-recovery'
         const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
         console.log(JSON.stringify({
-          childCount,
+          checkpointCount,
+          createCount,
           errorMessage,
+          preflightCount,
           recoveryFiles,
+          rows,
+          runStatements,
           walExists: existsSync(duckdbPath + '.wal'),
         }))
       `,
@@ -3016,15 +3407,22 @@ test('duckdb service keeps replayable WAL when startup checkpoint fails', () => 
     }
 
     const parsed = parseJsonSubprocessStdout<{
-      childCount: number
+      checkpointCount: number
+      createCount: number
       errorMessage: string | null
+      preflightCount: number
       recoveryFiles: string[]
+      rows: Array<{value: number}>
+      runStatements: string[]
       walExists: boolean
     }>(result.stdout.toString())
 
-    expect(parsed.childCount).toBe(2)
-    expect(parsed.errorMessage).toContain('DuckDB startup WAL checkpoint failed')
-    expect(parsed.errorMessage).toContain('checkpoint temporarily failed')
+    expect(parsed.preflightCount).toBe(1)
+    expect(parsed.checkpointCount).toBe(1)
+    expect(parsed.createCount).toBe(1)
+    expect(parsed.errorMessage).toBeNull()
+    expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.runStatements).toContain('SELECT 1 AS value')
     expect(parsed.walExists).toBe(true)
     expect(parsed.recoveryFiles).toEqual([])
   } finally {
@@ -3602,6 +4000,12 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     expect(parsed.repairScript).toContain('getRepairPrimaryKeyIndexSql')
     expect(parsed.repairScript).toContain('primaryKeyColumns.length > 0')
     expect(parsed.repairScript).toContain('quoteIdentifier(spec.schemaName)')
+    expect(parsed.repairScript).toContain("await connection.run('BEGIN')")
+    expect(parsed.repairScript).toContain("await connection.run('COMMIT')")
+    expect(parsed.repairScript).toContain("await connection.run('ROLLBACK')")
+    expect(parsed.repairScript).toContain('getProtectedTableRowCounts')
+    expect(parsed.repairScript).toContain('assertProtectedTableRowCountsUnchanged')
+    expect(parsed.repairScript).toContain('startup repair changed non-repaired table')
     expect(parsed.repairScript).toContain('spec.recreateRepairPrimaryKeyIndex !== true')
     expect(parsed.repairScript).toContain('indexName.startsWith(repairedPrimaryKeyIndexPrefix)')
     expect(parsed.repairScript).toContain('CREATE UNIQUE INDEX IF NOT EXISTS idx_')

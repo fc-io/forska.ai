@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {readFile, rm} from 'node:fs/promises'
+import {access, readFile, rm} from 'node:fs/promises'
 
 import type {
   ProjectTransferDirection,
@@ -120,7 +120,7 @@ const defaultRecoveryBatchSize = 50
 const defaultExportOwnerHeartbeatStaleMs = 5 * 60 * 1000
 const defaultExportQueuedSessionStaleMs = 10 * 60 * 1000
 const defaultImportAnalyzeHeartbeatStaleMs = 90 * 1000
-const defaultImportCommitHeartbeatStaleMs = 5 * 60 * 1000
+const defaultImportCommitHeartbeatStaleMs = 90 * 1000
 const defaultTerminalSessionPruneAgeMs = 24 * 60 * 60 * 1000
 const maxRecoveryBatchSize = 500
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
@@ -612,6 +612,75 @@ const getRecoveryUploadMetadata = (progress: ProjectTransferProgressPayload | nu
   return isUploadMetadataPayload(progress?.uploadMetadata) ? progress.uploadMetadata : null
 }
 
+const hasRecoverableImportUploadArtifact = async ({
+  runtimeOptions,
+  session,
+}: {
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+  session: ProjectTransferRecoveryCandidate
+}) => {
+  const progress = parseProjectTransferProgressPayload(session.progressJson)
+  const uploadMetadata = getRecoveryUploadMetadata(progress)
+
+  if (uploadMetadata === null) {
+    return false
+  }
+
+  const layout = getProjectTransferImportTempLayout(session.id)
+  const uploadPath = getResolvedTempPath({pathValue: layout.uploadPath, runtimeOptions})
+
+  return access(uploadPath).then(
+    () => {
+      return true
+    },
+    () => {
+      return false
+    },
+  )
+}
+
+const getRequeuedAnalyzeProgress = ({now, previousProgress}: {now: Date; previousProgress?: unknown}) => {
+  return {
+    ...(parseProjectTransferProgressPayload(previousProgress) ?? {}),
+    message: 'Analysis queued after worker restart',
+    phase: 'analyze',
+    status: 'pending',
+    updatedAt: now.toISOString(),
+  } satisfies ProjectTransferProgressPayload
+}
+
+const transitionImportAnalyzeSessionToQueued = async ({
+  now,
+  runner,
+  session,
+  staleImportAnalyzeHeartbeatBefore,
+  staleImportCommitHeartbeatBefore,
+}: {
+  now: Date
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
+  staleImportCommitHeartbeatBefore: Date
+}) => {
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'queued',
+      owner_token = NULL,
+      heartbeat_at = NULL,
+      error_json = NULL,
+      progress_json = ${getJsonLiteral(getRequeuedAnalyzeProgress({now, previousProgress: session.progressJson}))},
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND direction = 'import'
+      AND state IN ('extracting', 'analyzing')
+      ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
 const getRecoveredAnalyzeProgress = ({
   analysis,
   now,
@@ -837,6 +906,27 @@ const getCleanupPlanForSession = async ({
 
     if (recoveredAnalyzeSession !== null) {
       return recoveredAnalyzeSession
+    }
+
+    if (await hasRecoverableImportUploadArtifact({runtimeOptions, session})) {
+      const requeuedSession = await transitionImportAnalyzeSessionToQueued({
+        now,
+        runner,
+        session,
+        staleImportAnalyzeHeartbeatBefore,
+        staleImportCommitHeartbeatBefore,
+      })
+
+      return requeuedSession === null
+        ? null
+        : {
+            ...session,
+            deletePromotedAssets: false,
+            deleteTempArtifacts: false,
+            recoveredFromHistory: false,
+            transitionedToFailed: false,
+            transitionedToExpired: false,
+          }
     }
 
     const failedSession = await transitionImportAnalyzeSessionToFailed({

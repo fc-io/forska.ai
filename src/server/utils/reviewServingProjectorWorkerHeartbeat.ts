@@ -1,5 +1,6 @@
 import {totalmem} from 'node:os'
 
+import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {runReviewServingProjectorWorker} from '../workers/reviewServingProjectorWorker.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
@@ -79,6 +80,41 @@ const shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle = () => {
   return process.env.FORSKA_RUNTIME_SERVICE === 'maintenance-worker-server'
 }
 
+const getActiveForegroundDuckdbWork = async () => {
+  const duckdbService = await import('./duckdbService.ts')
+  const mainQueueDepth =
+    typeof duckdbService.getDuckdbQueueRuntimeMetricsSnapshot === 'function'
+      ? duckdbService.getDuckdbQueueRuntimeMetricsSnapshot().main.queueDepth
+      : 0
+  const appendQueueDepth =
+    typeof duckdbService.getDuckdbAppendRuntimeMetrics === 'function'
+      ? duckdbService.getDuckdbAppendRuntimeMetrics().queueDepth
+      : 0
+
+  return {appendQueueDepth, mainQueueDepth}
+}
+
+const hasActiveForegroundDuckdbWork = (work: {appendQueueDepth: number; mainQueueDepth: number}) => {
+  return work.mainQueueDepth > 0 || work.appendQueueDepth > 0
+}
+
+const hasActiveProjectTransferSession = async () => {
+  try {
+    const {getProjectTransferSessionRepository} =
+      await import('../services/projectTransfer/projectTransferSessionRepository.ts')
+
+    return await getProjectTransferSessionRepository().hasActiveProjectTransferSessions()
+  } catch (error) {
+    reviewServingProjectorWorkerWarningLogger.warn(
+      'review-serving-projector.heartbeat-project-transfer-session-check-failed',
+      '[reviewServingProjectorWorker] skipping DuckDB recycle because active project transfer session check failed',
+      {errorMessage: getErrorMessage(error)},
+    )
+
+    return true
+  }
+}
+
 export const getReviewServingProjectorWorkerHardRestartRssBytes = (
   maxRssBytes: number,
   totalMemoryBytes = totalmem(),
@@ -96,8 +132,26 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
     return
   }
 
+  if (hasActiveProjectTransferBackgroundActivity() || (await hasActiveProjectTransferSession())) {
+    reviewServingProjectorWorkerWarningLogger.warn(
+      'review-serving-projector.heartbeat-recycle-skipped-project-transfer-active',
+      '[reviewServingProjectorWorker] skipping DuckDB recycle because project transfer work is active',
+    )
+    return
+  }
+
   const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
   const rssBytes = process.memoryUsage().rss
+  const activeForegroundWork = await getActiveForegroundDuckdbWork()
+
+  if (hasActiveForegroundDuckdbWork(activeForegroundWork)) {
+    reviewServingProjectorWorkerWarningLogger.warn(
+      'review-serving-projector.heartbeat-skip-recycle-duckdb-foreground-work',
+      '[reviewServingProjectorWorker] skipping DuckDB recycle before bounded loop restart because foreground work is active',
+      {maxRssBytes, rssBytes, ...activeForegroundWork},
+    )
+    return
+  }
 
   reviewServingProjectorWorkerWarningLogger.warn(
     'review-serving-projector.heartbeat-recycle-duckdb',

@@ -826,9 +826,8 @@ test('claim query blocks newer lane work behind lower running or backoff waterma
 
   expect(claimSelect).toContain("blocker.status IN ('running', 'failed')")
   expect(claimSelect).toContain("blocker.updated_at > current_timestamp - INTERVAL '900 seconds'")
-  expect(claimSelect).toContain(
-    'blocker.latest_source_high_water_mark < app.review_serving_dirty_work.latest_source_high_water_mark',
-  )
+  expect(claimSelect).toContain('blocker.latest_source_high_water_mark < oldest.latest_source_high_water_mark')
+  expect(claimSelect).toContain('blocker.latest_source_high_water_mark < candidate.latest_source_high_water_mark')
 })
 
 test('claims dirty work with one atomic update returning statement', async () => {
@@ -848,7 +847,12 @@ test('claims dirty work with one atomic update returning statement', async () =>
 
   expect(claims).toHaveLength(2)
   expect(claimUpdates).toHaveLength(1)
-  expect(claimUpdates[0]).toContain('WITH eligible_lane AS (')
+  expect(claimUpdates[0]).toContain('WITH claim_lane_window AS (')
+  expect(claimUpdates[0]).toContain('eligible_lane AS (')
+  expect(claimUpdates[0]).toContain('FROM claim_lane_window oldest')
+  expect(claimUpdates[0]).toContain('claim_candidate_window AS (')
+  expect(claimUpdates[0]).toContain('FROM claim_candidate_window candidate')
+  expect(claimUpdates[0]).toContain('LIMIT 2048')
   expect(claimUpdates[0]).toContain('claim_candidates AS (')
   expect(claimUpdates[0]).toContain('eligible_lane.source_partition = app.review_serving_dirty_work.source_partition')
   expect(claimUpdates[0]).toContain('eligible_lane.projection_key = app.review_serving_dirty_work.projection_key')

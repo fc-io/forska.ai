@@ -183,6 +183,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     packageHasManifest: boolean
     packageHumanPostRewriteHtmlDigest: string | null
     packageJudgmentPostRewriteHtmlDigest: string | null
+    packageJudgmentSignatureJson: string
     packageManifestAssetSummary: {byteLength: number; entryCount: number} | undefined
     packageManifestExportedAt: string | undefined
     packageManifestPayloadKeys: string[]
@@ -290,7 +291,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         'codex-cli',
         NULL,
         2,
-        CAST('{"runtime":"local"}' AS JSON),
+        CAST('{"runtime":"local","projectTransferImportedSnapshot":{"sourceProviderConnectionId":"source-provider","targetProviderConnectionId":"target-provider","snapshotFingerprint":{"providerKind":"codex"}}}' AS JSON),
         'env:CODEX_API_KEY',
         TIMESTAMPTZ '2026-01-01T00:00:00Z',
         TIMESTAMPTZ '2026-01-02T00:00:00Z'
@@ -1018,6 +1019,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       packageHasManifest: packageZipEntryPaths.includes('manifest.json'),
       packageHumanPostRewriteHtmlDigest: packageHumanJudgment?.humanReviewInputSignature?.article?.fullTextHtmlDigest ?? null,
       packageJudgmentPostRewriteHtmlDigest: packageJudgment?.judgmentInputSignature?.article?.fullTextHtmlDigest ?? null,
+      packageJudgmentSignatureJson: JSON.stringify(packageJudgment?.signature ?? null),
       packageManifestAssetSummary: packageBuild.manifest.assetSummary,
       packageManifestExportedAt: packageManifest.exportedAt,
       packageManifestPayloadKeys: Object.keys(packageManifest.payloads).sort(),
@@ -1054,6 +1056,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       projectArchived: archived.payloads.project.archived,
       projectArticleIds: archived.payloads.projectArticles.map((link) => link.sourceArticleId),
       providerConnectionIds: archived.payloads.providerConnections.map((connection) => connection.sourceProviderConnectionId),
+      providerConnectionSignature: archived.payloads.providerConnections[0]?.signature ?? null,
       rawForcedOmittedArticleImportRouteImportMetadata: rawForcedOmittedArticleImportRoute?.importMetadata ?? null,
       rawForcedOmittedArticleImportRouteRawPayload: rawForcedOmittedArticleImportRoute?.rawPayload ?? null,
       rawOmittedArticleOriginalData: rawOmittedArticle?.originalData ?? null,
@@ -1155,6 +1158,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.humanReviewProvenanceKinds).toEqual(['currentReviewRows', 'currentReviewRows', 'currentReviewRows'])
   expect(result.humanReviewSignatureModes).toEqual(['promptHumanJudgment', 'summaryHumanJudgment', 'reviewRow'])
   expect(result.providerConnectionIds).toEqual(['provider-null-remote'])
+  expect(result.providerConnectionSignature).toMatchObject({configSignature: {runtime: 'local'}})
+  expect(JSON.stringify(result.providerConnectionSignature)).not.toContain('source-provider')
+  expect(JSON.stringify(result.providerConnectionSignature)).not.toContain('target-provider')
+  expect(result.packageJudgmentSignatureJson).not.toContain('source-provider')
+  expect(result.packageJudgmentSignatureJson).not.toContain('target-provider')
   expect(result.routeArticleImportRoute).toBe('/Users/export/inactive-covidence.csv')
   expect(result.routeArticleSelectedImportRoute).toBe('/Users/export/inactive-covidence.csv')
   expect(result.routeArticleUrl).toBe(

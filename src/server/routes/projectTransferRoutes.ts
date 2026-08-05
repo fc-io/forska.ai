@@ -13,6 +13,7 @@ import {
   analyzeProjectTransferImportPackage,
   type ProjectTransferImportPlanArtifact,
 } from '../services/projectTransfer/projectTransferAnalyze.ts'
+import {runWithProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {commitProjectTransferImportSession} from '../services/projectTransfer/projectTransferCommit.ts'
 import {
   getProjectTransferImportAnalyzeExecutionMode,
@@ -280,6 +281,18 @@ const getProjectTransferExportSourceProject = async (projectId: string) => {
   return project ?? null
 }
 
+type ProjectTransferRoutesDependencies = {getExportSourceProject?: typeof getProjectTransferExportSourceProject}
+
+const defaultProjectTransferRoutesDependencies: ProjectTransferRoutesDependencies = {}
+
+export const setProjectTransferRoutesDependenciesForTests = (dependencies: ProjectTransferRoutesDependencies) => {
+  Object.assign(defaultProjectTransferRoutesDependencies, dependencies)
+}
+
+export const resetProjectTransferRoutesDependenciesForTests = () => {
+  delete defaultProjectTransferRoutesDependencies.getExportSourceProject
+}
+
 const getProjectTransferApiError = <TData>(
   set: RouteSet,
   status: number,
@@ -525,6 +538,81 @@ const readImportPlanArtifact = async (
   const planFile = globalThis.Bun.file(planPath)
 
   return (await planFile.exists()) ? (JSON.parse(await planFile.text()) as ProjectTransferImportPlanArtifact) : null
+}
+
+const writeImportProgressArtifact = async (sessionId: string, progress: ProjectTransferProgressPayload) => {
+  const layout = getProjectTransferImportTempLayout(sessionId)
+  const progressPath = resolveProjectTransferTempWritablePath({pathValue: layout.progressPath})
+
+  await mkdir(dirname(progressPath), {recursive: true})
+  await globalThis.Bun.write(progressPath, JSON.stringify(progress))
+}
+
+const getImportSessionStateFromProgress = (
+  progress: ProjectTransferProgressPayload,
+): ProjectTransferSessionResponse['state'] | null => {
+  if (progress.status === 'failed') {
+    return 'failed'
+  }
+
+  if (progress.status !== 'running') {
+    return null
+  }
+
+  return progress.phase === 'commit'
+    || progress.phase === 'app_table_writes'
+    || progress.phase === 'asset_promotion'
+    || progress.phase === 'history_write'
+    || progress.phase === 'staging_load'
+    ? 'committing'
+    : progress.phase === 'extract' || progress.phase === 'package_scan'
+      ? 'extracting'
+      : 'analyzing'
+}
+
+const getImportSessionArtifactResponse = async (
+  exportId: string,
+): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData> | null> => {
+  if (!isProjectTransferSessionId(exportId)) {
+    return null
+  }
+
+  const progress = await readProjectTransferArtifactJson<ProjectTransferProgressPayload>(
+    getProjectTransferImportTempLayout(exportId).progressPath,
+  )
+
+  if (progress === null) {
+    return null
+  }
+
+  const state = getImportSessionStateFromProgress(progress)
+
+  if (state === null) {
+    return null
+  }
+
+  const expiresAt =
+    typeof progress.expiresAt === 'string' ? new Date(progress.expiresAt) : getDefaultImportSessionExpiresAt(new Date())
+  const updatedAt = typeof progress.updatedAt === 'string' ? new Date(progress.updatedAt) : new Date()
+  const response: ProjectTransferSessionResponse = {
+    commitId: null,
+    completion: null,
+    createdAt: updatedAt,
+    direction: 'import',
+    error: null,
+    expiresAt,
+    heartbeatAt: null,
+    id: exportId,
+    ownerToken: null,
+    packageFingerprint: null,
+    planRevision: typeof progress.planRevision === 'number' ? progress.planRevision : 0,
+    planSummary: null,
+    progress,
+    state,
+    updatedAt,
+  }
+
+  return {data: getImportSessionData(response, null, 'background'), error: null}
 }
 
 const validateCurrentImportPlanArtifact = (
@@ -862,6 +950,7 @@ const updateImportWorkerProgress = async ({
   progress: ProjectTransferProgressPayload
   sessionId: string
 }) => {
+  await writeImportProgressArtifact(sessionId, progress)
   const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionProgress({
     expectedOwnerToken: ownerToken,
     now: new Date(progress.updatedAt ?? Date.now()),
@@ -949,7 +1038,13 @@ const writeImportUploadArtifact = async ({
           tempRootPath: layout.rootPath,
         })
       } finally {
-        reader.releaseLock()
+        if (typeof reader.releaseLock === 'function') {
+          try {
+            reader.releaseLock()
+          } catch {
+            // Bun's live HTTP body reader can throw here after a successful large streamed upload.
+          }
+        }
       }
     } else {
       await writeRequestBodyArrayBuffer({
@@ -1168,7 +1263,9 @@ const getAnalyzeJobAttempt = async (params: {ownerToken: string; sessionId: stri
 
 const startBackgroundAnalyzeJob = (params: {ownerToken: string; sessionId: string}) => {
   queueMicrotask(() => {
-    void getAnalyzeJobAttempt(params).catch((error) => {
+    void runWithProjectTransferBackgroundActivity(() => {
+      return getAnalyzeJobAttempt(params)
+    }).catch((error) => {
       console.error('Project transfer import analyze job failed', error)
     })
   })
@@ -1177,8 +1274,9 @@ const startBackgroundAnalyzeJob = (params: {ownerToken: string; sessionId: strin
 const getExportSourceProjectError = async (
   set: RouteSet,
   projectId: string,
+  getExportSourceProject = getProjectTransferExportSourceProject,
 ): Promise<ProjectTransferApiResponse<unknown> | null> => {
-  const project = await getProjectTransferExportSourceProject(projectId)
+  const project = await getExportSourceProject(projectId)
 
   if (project === null) {
     return getProjectTransferApiError(set, 404, 'Project not found')
@@ -1260,6 +1358,77 @@ const getExportSessionData = (response: ProjectTransferSessionResponse): Project
     : null
 }
 
+const readProjectTransferArtifactJson = async <TValue>(pathValue: string): Promise<TValue | null> => {
+  try {
+    const file = globalThis.Bun.file(resolveProjectTransferTempWritablePath({pathValue}))
+
+    if (!(await file.exists())) {
+      return null
+    }
+
+    return JSON.parse(await file.text()) as TValue
+  } catch {
+    return null
+  }
+}
+
+const getExportPendingStatusFromProgress = (
+  progress: ProjectTransferProgressPayload,
+): ProjectTransferExportNonReadyStatus => {
+  return progress.phase === 'export_package_write' ? 'packaging' : 'assembling'
+}
+
+const getExportSessionArtifactResponse = async (
+  set: RouteSet,
+  exportId: string,
+): Promise<ProjectTransferApiResponse<ProjectTransferExportSessionData> | null> => {
+  if (!isProjectTransferSessionId(exportId)) {
+    return null
+  }
+
+  const layout = getProjectTransferExportTempLayout(exportId)
+  const [completion, progress] = await Promise.all([
+    readProjectTransferArtifactJson<ProjectTransferExportReadyPayload>(layout.completionPath),
+    readProjectTransferArtifactJson<ProjectTransferProgressPayload>(layout.progressPath),
+  ])
+  const expiresAt = typeof completion?.expiresAt === 'string' ? completion.expiresAt : progress?.expiresAt
+
+  if (typeof expiresAt !== 'string') {
+    return null
+  }
+
+  if (new Date(expiresAt).getTime() <= Date.now()) {
+    return getProjectTransferApiError(set, 410, 'Project transfer export session expired')
+  }
+
+  if (completion?.status === 'ready') {
+    return {
+      data: {
+        byteLength: completion.byteLength,
+        checksumSha256: completion.checksumSha256,
+        downloadUrl: completion.downloadUrl,
+        expiresAt: completion.expiresAt,
+        exportId,
+        filename: completion.filename,
+        packageFingerprint: completion.packageFingerprint,
+        progress,
+        status: 'ready',
+      },
+      error: null,
+    }
+  }
+
+  if (progress === null) {
+    return null
+  }
+
+  if (progress.status === 'failed') {
+    return getProjectTransferApiError(set, 409, 'Project transfer export failed')
+  }
+
+  return {data: {exportId, expiresAt, progress, status: getExportPendingStatusFromProgress(progress)}, error: null}
+}
+
 const getProjectTransferExportFailureMessage = (error: unknown) => {
   const detail =
     isRecord(error) && typeof error.message === 'string'
@@ -1300,6 +1469,12 @@ const getExportSessionResponse = async (
   set: RouteSet,
   exportId: string,
 ): Promise<ProjectTransferApiResponse<ProjectTransferExportSessionData>> => {
+  const artifactResponse = await getExportSessionArtifactResponse(set, exportId)
+
+  if (artifactResponse !== null) {
+    return artifactResponse
+  }
+
   const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId: exportId})
 
   if (record === null) {
@@ -1398,6 +1573,12 @@ const getImportSession = async (
   sessionId: string,
   includePlan = false,
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
+  const artifactResponse = await getImportSessionArtifactResponse(sessionId)
+
+  if (artifactResponse !== null) {
+    return artifactResponse
+  }
+
   const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
 
   if (record !== null && (record.state === 'awaiting_resolution' || record.state === 'ready_to_commit')) {
@@ -2025,127 +2206,141 @@ const cancelImportSession = async (
   )
 }
 
-export const projectTransferRoutes = new Elysia()
-  .use(withErrorHandler())
-  .get(
-    '/api/projects/:id/export-project',
-    async ({params, set}) => {
-      const sourceProjectError = await getExportSourceProjectError(set, params.id)
+export const createProjectTransferRoutes = (
+  dependencies: ProjectTransferRoutesDependencies = defaultProjectTransferRoutesDependencies,
+) => {
+  return new Elysia()
+    .use(withErrorHandler())
+    .get(
+      '/api/projects/:id/export-project',
+      async ({params, set}) => {
+        const sourceProjectError = await getExportSourceProjectError(
+          set,
+          params.id,
+          dependencies.getExportSourceProject,
+        )
 
-      if (sourceProjectError !== null) {
-        return sourceProjectError
-      }
+        if (sourceProjectError !== null) {
+          return sourceProjectError
+        }
 
-      const summary = await getProjectTransferExportSummary(params.id)
+        const summary = await getProjectTransferExportSummary(params.id)
 
-      return {
-        data: {
-          ...summary,
-          defaultRawArticleProvenanceMode: 'omit' as const,
-        } satisfies ProjectTransferExportSummaryResponse,
-        error: null,
-      }
-    },
-    {params: routeParamSchema},
-  )
-  .post(
-    '/api/projects/:id/export-project',
-    async ({body, params, set}) => {
-      const request = parseExportProjectRequest(body)
+        return {
+          data: {
+            ...summary,
+            defaultRawArticleProvenanceMode: 'omit' as const,
+          } satisfies ProjectTransferExportSummaryResponse,
+          error: null,
+        }
+      },
+      {params: routeParamSchema},
+    )
+    .post(
+      '/api/projects/:id/export-project',
+      async ({body, params, set}) => {
+        const request = parseExportProjectRequest(body)
 
-      if (!request.ok) {
-        return getProjectTransferApiError(set, 400, request.error)
-      }
+        if (!request.ok) {
+          return getProjectTransferApiError(set, 400, request.error)
+        }
 
-      const sourceProjectError = await getExportSourceProjectError(set, params.id)
+        const sourceProjectError = await getExportSourceProjectError(
+          set,
+          params.id,
+          dependencies.getExportSourceProject,
+        )
 
-      if (sourceProjectError !== null) {
-        return sourceProjectError
-      }
+        if (sourceProjectError !== null) {
+          return sourceProjectError
+        }
 
-      const exportInput =
-        request.value.rawArticleProvenanceMode === undefined
-          ? {projectId: params.id}
-          : {projectId: params.id, rawArticleProvenanceMode: request.value.rawArticleProvenanceMode}
-      const result = await createProjectTransferExport(exportInput)
+        const exportInput =
+          request.value.rawArticleProvenanceMode === undefined
+            ? {projectId: params.id}
+            : {projectId: params.id, rawArticleProvenanceMode: request.value.rawArticleProvenanceMode}
+        const result = await createProjectTransferExport(exportInput)
 
-      if (result.executionMode === 'inline') {
-        return new Response(getArrayBufferBody(result.packageBytes), {
-          headers: getProjectTransferPackageHeaders(result.metadata),
-        })
-      }
+        if (result.executionMode === 'inline') {
+          return new Response(getArrayBufferBody(result.packageBytes), {
+            headers: getProjectTransferPackageHeaders(result.metadata),
+          })
+        }
 
-      set.status = 202
+        set.status = 202
 
-      return {
-        data: {
-          downloadUrl: result.metadata.downloadUrl,
-          expiresAt: result.metadata.expiresAt,
-          exportId: result.sessionId,
-          filename: result.metadata.filename,
-          status: 'queued',
-        },
-        error: null,
-      }
-    },
-    {body: exportProjectBodySchema, params: routeParamSchema},
-  )
-  .get(
-    '/api/projects/export/:exportId',
-    async ({params, set}) => {
-      return getExportSessionResponse(set, params.exportId)
-    },
-    {params: exportParamSchema},
-  )
-  .get(
-    '/api/projects/export/:exportId/download',
-    ({params, set}) => {
-      return getDownloadResponse(set, params.exportId)
-    },
-    {params: exportParamSchema},
-  )
-  .post('/api/projects/import/sessions', ({body, set}) => {
-    return createImportSession(set, body)
-  })
-  .put(
-    '/api/projects/import/:sessionId/upload',
-    ({params, request, set}) => {
-      return uploadImportPackage({params, request, set})
-    },
-    {params: importSessionParamSchema, parse: 'none'},
-  )
-  .post(
-    '/api/projects/import/:sessionId/analyze',
-    ({body, params, set}) => {
-      return analyzeImportSession(set, params.sessionId, body)
-    },
-    {params: importSessionParamSchema},
-  )
-  .get(
-    '/api/projects/import/:sessionId',
-    ({params, query, set}) => {
-      return getImportSession(set, params.sessionId, query.includePlan === 'true')
-    },
-    {params: importSessionParamSchema},
-  )
-  .post(
-    '/api/projects/import/:sessionId/resolve-dependencies',
-    ({body, params, set}) => {
-      return resolveImportDependencies(set, params.sessionId, body)
-    },
-    {params: importSessionParamSchema},
-  )
-  .post(
-    '/api/projects/import/:sessionId/commit',
-    ({body, params, set}) => {
-      return commitImportSession(set, params.sessionId, body)
-    },
-    {params: importSessionParamSchema},
-  )
-  .delete(
-    '/api/projects/import/:sessionId',
-    ({body, params, set}) => {
-      return cancelImportSession(set, params.sessionId, body)
-    },
-    {params: importSessionParamSchema},
-  )
+        return {
+          data: {
+            downloadUrl: result.metadata.downloadUrl,
+            expiresAt: result.metadata.expiresAt,
+            exportId: result.sessionId,
+            filename: result.metadata.filename,
+            status: 'queued',
+          },
+          error: null,
+        }
+      },
+      {body: exportProjectBodySchema, params: routeParamSchema},
+    )
+    .get(
+      '/api/projects/export/:exportId',
+      async ({params, set}) => {
+        return getExportSessionResponse(set, params.exportId)
+      },
+      {params: exportParamSchema},
+    )
+    .get(
+      '/api/projects/export/:exportId/download',
+      ({params, set}) => {
+        return getDownloadResponse(set, params.exportId)
+      },
+      {params: exportParamSchema},
+    )
+    .post('/api/projects/import/sessions', ({body, set}) => {
+      return createImportSession(set, body)
+    })
+    .put(
+      '/api/projects/import/:sessionId/upload',
+      ({params, request, set}) => {
+        return uploadImportPackage({params, request, set})
+      },
+      {params: importSessionParamSchema, parse: 'none'},
+    )
+    .post(
+      '/api/projects/import/:sessionId/analyze',
+      ({body, params, set}) => {
+        return analyzeImportSession(set, params.sessionId, body)
+      },
+      {params: importSessionParamSchema},
+    )
+    .get(
+      '/api/projects/import/:sessionId',
+      ({params, query, set}) => {
+        return getImportSession(set, params.sessionId, query.includePlan === 'true')
+      },
+      {params: importSessionParamSchema},
+    )
+    .post(
+      '/api/projects/import/:sessionId/resolve-dependencies',
+      ({body, params, set}) => {
+        return resolveImportDependencies(set, params.sessionId, body)
+      },
+      {params: importSessionParamSchema},
+    )
+    .post(
+      '/api/projects/import/:sessionId/commit',
+      ({body, params, set}) => {
+        return commitImportSession(set, params.sessionId, body)
+      },
+      {params: importSessionParamSchema},
+    )
+    .delete(
+      '/api/projects/import/:sessionId',
+      ({body, params, set}) => {
+        return cancelImportSession(set, params.sessionId, body)
+      },
+      {params: importSessionParamSchema},
+    )
+}
+
+export const projectTransferRoutes = createProjectTransferRoutes()

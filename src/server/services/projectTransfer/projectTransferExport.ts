@@ -466,6 +466,7 @@ const singlePromptEvidenceOutputSchema = {
 const reviewedSectionContractVersion = 1 as const
 const articleRawJsonOmissionThresholdChars = 64 * 1024 * 1024
 const defaultRawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode = 'omit'
+const importedSnapshotMarker = 'projectTransferImportedSnapshot'
 const textEncoder = new TextEncoder()
 const rawArticleProvenanceFields = [
   'canonicalOriginalData',
@@ -1924,10 +1925,23 @@ const getProjectTransferExportImportRouteSignature = (row: Pick<ProjectTransferE
 const getProjectTransferExportProviderConnectionSignature = (
   row: Pick<ProjectTransferExportProviderConnectionRow, 'authMode' | 'baseURL' | 'configJson' | 'providerKind'>,
 ) => {
+  const configSignature = getJsonRecordValue(row.configJson)
+  const sanitizedConfigSignature =
+    configSignature === null
+      ? null
+      : Object.fromEntries(
+          Object.entries(configSignature).filter(([key]) => {
+            return key !== importedSnapshotMarker
+          }),
+        )
+
   return {
     authMode: row.authMode,
     baseURL: row.baseURL,
-    configSignature: getJsonValue(row.configJson) ?? null,
+    configSignature:
+      sanitizedConfigSignature !== null && Object.keys(sanitizedConfigSignature).length > 0
+        ? sanitizedConfigSignature
+        : null,
     providerKind: row.providerKind,
   }
 }

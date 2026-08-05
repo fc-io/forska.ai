@@ -433,8 +433,10 @@ export type ProjectTransferImportAnalyzeThresholdInput = {expandedBytes: number;
 
 export type ProjectTransferCommitThresholdInput = {
   articleCount: number
+  expandedBytes: number
   extractedAssetBytes: number
   judgmentCount: number
+  packageBytes: number
 }
 
 export type ProjectTransferResourcePath = {kind: 'archive_member' | 'runtime_asset'; pathValue: string}
@@ -808,6 +810,8 @@ export const getProjectTransferCommitExecutionMode = (
   return input.articleCount >= projectTransferExecutionThresholds.commitBackgroundArticleCount
     || input.articleCount + input.judgmentCount >= projectTransferExecutionThresholds.commitBackgroundTotalRowCount
     || input.judgmentCount >= projectTransferExecutionThresholds.commitBackgroundJudgmentCount
+    || input.packageBytes > projectTransferExecutionThresholds.importAnalyzeInlineZipBytes
+    || input.expandedBytes > projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes
     || input.extractedAssetBytes >= projectTransferExecutionThresholds.commitBackgroundExtractedAssetBytes
     ? 'background'
     : 'inline'

@@ -248,6 +248,71 @@ test('project transfer session repository normalizes DuckDB timestamps to Date o
   expect(result.updatedAtIsDate).toBe(true)
 })
 
+test('project transfer session repository reports active transfer windows', () => {
+  const result = runSessionRepositoryScript<{
+    activeWithReadyImport: boolean
+    activeWithTerminalOnly: boolean
+    activeWithRunningExport: boolean
+  }>(`
+    const expiredAt = new Date('2026-05-20T12:00:00.000Z')
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'session-ready-import',
+      planSummary: readyPlan,
+      state: 'ready_to_commit',
+    })
+    const activeWithReadyImport = await sessionRepository.hasActiveProjectTransferSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+
+    await sessionRepository.transitionProjectTransferSessionState({
+      completionPayload: {
+        importWarnings: [],
+        packageFingerprint: 'fingerprint',
+        projectId: 'project-imported',
+        projectName: 'Imported',
+        status: 'completed',
+        targetProjectId: 'project-imported',
+        targetProjectName: 'Imported',
+        transferHistoryId: 'history-imported',
+      },
+      expectedState: 'ready_to_commit',
+      nextState: 'completed',
+      planSummary: readyPlan,
+      sessionId: 'session-ready-import',
+    })
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt: expiredAt,
+      id: 'session-expired-export',
+      state: 'packaging',
+    })
+    const activeWithTerminalOnly = await sessionRepository.hasActiveProjectTransferSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt,
+      id: 'session-running-export',
+      state: 'packaging',
+    })
+    const activeWithRunningExport = await sessionRepository.hasActiveProjectTransferSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+
+    console.log(JSON.stringify({
+      activeWithReadyImport,
+      activeWithRunningExport,
+      activeWithTerminalOnly,
+    }))
+  `)
+
+  expect(result).toEqual({activeWithReadyImport: true, activeWithRunningExport: true, activeWithTerminalOnly: false})
+})
+
 test('project transfer session plan revision update can publish final analyze state atomically', () => {
   const result = runSessionRepositoryScript<{
     ownerToken: string | null

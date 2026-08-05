@@ -153,13 +153,16 @@ test('background import selects the next active or draining job for a single imp
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const importedJobIds = []
         const queryStatements = []
+        const runStatements = []
         let syncedLeaseJobIds = null
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
             getAppDatabaseService: () => {
               return {
-                run: async () => {},
+                run: async (statement) => {
+                  runStatements.push(statement)
+                },
                 queryJson: async (statement) => {
                   queryStatements.push(statement)
 
@@ -178,7 +181,10 @@ test('background import selects the next active or draining job for a single imp
             getJudgmentJobSqliteService: () => {
               return {
                 getHealthSnapshot: async () => {
-                  return null
+                  return {
+                    claimedOutboxCount: 0,
+                    hasOutboxRows: false,
+                  }
                 },
                 hasOwnedLease: () => false,
                 syncOwnedLeases: async (jobIds) => {
@@ -210,7 +216,7 @@ test('background import selects the next active or draining job for a single imp
         const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?storage-states=' + Date.now())
         const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
 
-        console.log(JSON.stringify({importedJobIds, queryStatements, summary, syncedLeaseJobIds}))
+        console.log(JSON.stringify({importedJobIds, queryStatements, runStatements, summary, syncedLeaseJobIds}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -225,11 +231,17 @@ test('background import selects the next active or draining job for a single imp
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     importedJobIds: string[]
     queryStatements: string[]
+    runStatements: string[]
     summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
     syncedLeaseJobIds: string[]
   }
 
-  expect(result.importedJobIds).toEqual(['active-job'])
+  expect(result.importedJobIds).toEqual([])
+  expect(
+    result.runStatements.some((statement) => {
+      return statement.includes('last_import_started_at') || statement.includes('last_import_completed_at')
+    }),
+  ).toBe(false)
   expect(
     result.queryStatements.some((statement) => {
       return (
@@ -920,7 +932,7 @@ test('background import skips locked draining jobs and imports the next candidat
 
   expect(result.flushJobIds).toEqual(['draining-job'])
   expect(result.activeImportJobIds).toEqual(['active-job'])
-  expect(result.healthSnapshotJobIds).toEqual(['active-job'])
+  expect(result.healthSnapshotJobIds).toEqual(['active-job', 'active-job'])
   expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 1, succeededCount: 1})
   expect(
     result.queryStatements.some((statement) => {
@@ -995,6 +1007,9 @@ test('background import records metadata and quarantines repeated failures for t
             JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
+                getHealthSnapshot: async () => {
+                  return null
+                },
                 hasOwnedLease: () => false,
                 syncOwnedLeases: async () => {},
               }
@@ -1114,6 +1129,9 @@ test('background import records transient SQLite locks and lease conflicts witho
             JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
+                getHealthSnapshot: async () => {
+                  return null
+                },
                 hasOwnedLease: () => false,
                 syncOwnedLeases: async () => {},
               }
