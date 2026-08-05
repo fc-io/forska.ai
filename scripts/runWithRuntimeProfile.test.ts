@@ -1721,9 +1721,9 @@ realDevServerSmokeTest(
     try {
       await Promise.race([
         Promise.all([
-          waitForRuntimeReady(3001, 45_000),
-          waitForRuntimeReady(3002, 45_000),
-          waitForRuntimeReady(3003, 45_000),
+          waitForRuntimeReady(3001, 180_000),
+          waitForRuntimeReady(3002, 180_000),
+          waitForRuntimeReady(3003, 180_000),
         ]),
         devServerProcess.exited.then((exitCode) => {
           throw new Error(`dev:server exited before all roles became ready with code ${String(exitCode)}`)

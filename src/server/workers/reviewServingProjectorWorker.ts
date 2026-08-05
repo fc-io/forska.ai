@@ -112,6 +112,7 @@ import {
 } from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {
   closeDuckdbService,
@@ -201,6 +202,7 @@ type ReviewServingProjectorWorkerDependencies = {
     & ReviewServingChunkManifestRepositoryDatabase
     & ReviewServingRetentionServiceDatabase
   getMemoryUsage?: () => ReviewServingProjectorWorkerMemoryUsage
+  hasActiveProjectTransferBackgroundActivity?: () => boolean
   getAppendQueueDepth?: () => number
   getForegroundQueueDepth?: () => number
   intakeImportDeltas?: typeof intakeReviewImportDeltasToDirtyWork
@@ -5096,6 +5098,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   getForegroundQueueDepth: () => {
     return getDuckdbQueueRuntimeMetricsSnapshot().main.queueDepth
   },
+  hasActiveProjectTransferBackgroundActivity,
   rebuildChunkService: {
     claimChunk: claimReviewServingRebuildChunk,
     claimChunks: claimReviewServingRebuildChunks,
@@ -6303,6 +6306,12 @@ const hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker = (
   dependencies: ReviewServingProjectorWorkerDependencies,
 ) => {
   return (dependencies.getForegroundQueueDepth?.() ?? 0) > 0 || (dependencies.getAppendQueueDepth?.() ?? 0) > 0
+}
+
+const hasActiveProjectTransferForReviewServingProjectorWorker = (
+  dependencies: ReviewServingProjectorWorkerDependencies,
+) => {
+  return dependencies.hasActiveProjectTransferBackgroundActivity?.() ?? false
 }
 
 const getForegroundRebuildDrainStartedAtMs = (input: {
@@ -8821,6 +8830,31 @@ export const runReviewServingProjectorWorkerCycle = async (
 ): Promise<ReviewServingProjectorWorkerCycleResult> => {
   const workerId = options.workerId ?? getReviewServingProjectorWorkerId()
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
+
+  if (hasActiveProjectTransferForReviewServingProjectorWorker(dependencies)) {
+    const chunk = getIdleReviewServingProjectorWorkerCycleChunkResult()
+    const cleanup = {
+      dirtyWorkRetentionCleanup: null,
+      retentionCleanups: [],
+      retentionScopes: [],
+      status: 'skipped' as const,
+    }
+    const deltaIntake = getIdleReviewServingProjectorWorkerDeltaIntakeResult()
+    const projector = getBlockedReviewServingProjectorWakeResult()
+
+    return {
+      chunk: chunk.chunk,
+      chunkBatchCount: chunk.completedCount,
+      cleanup,
+      deltaIntake,
+      nextCleanupAtMs: options.lastCleanupAtMs ?? null,
+      projector,
+      status: getCycleStatus({chunk: chunk.chunk, cleanup, deltaIntake, projector}),
+      wakeId,
+      workerId,
+    }
+  }
+
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
   await failInconsistentAndSupersededForegroundRebuildRequests({database, projectId: options.rebuildProjectId})

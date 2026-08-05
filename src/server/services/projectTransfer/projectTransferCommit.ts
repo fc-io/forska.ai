@@ -19,6 +19,7 @@ import {
   type ProjectTransferAnalyzeTargetRunner,
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
+import {runWithProjectTransferBackgroundActivity} from './projectTransferBackgroundActivity.ts'
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {
   promoteProjectTransferCommitAssets,
@@ -197,6 +198,22 @@ const revalidatedTargetPlanKeys = [
   'promptPlan',
 ] as const satisfies readonly (keyof ProjectTransferTargetPlan)[]
 const commitWorkerHeartbeatIntervalMs = 15_000
+
+const writeCommitProgressArtifact = async ({
+  progress,
+  runtimeOptions,
+  sessionId,
+}: {
+  progress: ProjectTransferProgressPayload
+  runtimeOptions: RuntimePathOptions
+  sessionId: string
+}) => {
+  const layout = getProjectTransferImportTempLayout(sessionId)
+  const progressPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: layout.progressPath})
+
+  await mkdir(dirname(progressPath), {recursive: true})
+  await globalThis.Bun.write(progressPath, getProjectTransferCanonicalJson(progress))
+}
 
 const getCommitError = (message: string): never => {
   throw new Error(`Project transfer commit: ${message}`)
@@ -523,8 +540,10 @@ const getCommitPerformanceMetrics = ({
 const getCommitExecutionMode = (artifacts: ProjectTransferCommitArtifacts): ProjectTransferExecutionMode => {
   return getProjectTransferCommitExecutionMode({
     articleCount: getPackageCount(artifacts.plan, 'articles'),
+    expandedBytes: artifacts.analysis.archive.expandedBytes,
     extractedAssetBytes: getExtractedAssetBytes(artifacts.analysis),
     judgmentCount: getPackageCount(artifacts.plan, 'judgments'),
+    packageBytes: artifacts.analysis.archive.packageSizeBytes,
   })
 }
 
@@ -1499,13 +1518,16 @@ const updateClaimedCommitProgress = async ({
   ownerToken,
   progress,
   repositories,
+  runtimeOptions,
   sessionId,
 }: {
   ownerToken: string
   progress: ProjectTransferProgressPayload
   repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
+  await writeCommitProgressArtifact({progress, runtimeOptions, sessionId})
   const updated = await repositories.sessionRepository.transitionProjectTransferSessionState({
     expectedOwnerToken: ownerToken,
     expectedState: 'committing',
@@ -1581,12 +1603,14 @@ const failClaimedCommit = async ({
   error,
   ownerToken,
   repositories,
+  runtimeOptions,
   sessionId,
 }: {
   artifacts: ProjectTransferCommitArtifacts
   error: unknown
   ownerToken: string
   repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
   const now = new Date()
@@ -1599,6 +1623,7 @@ const failClaimedCommit = async ({
     planRevision: artifacts.plan.planRevision,
     status: 'failed',
   })
+  await settleCompletionSideEffect(writeCommitProgressArtifact({progress, runtimeOptions, sessionId}))
   const failed = await repositories.sessionRepository.transitionProjectTransferSessionState({
     error: getErrorPayload(error),
     expectedOwnerToken: ownerToken,
@@ -1624,6 +1649,7 @@ const failClaimedPostClaimCommit = async ({
   error,
   ownerToken,
   repositories,
+  runtimeOptions,
   sessionId,
   statusCode = 500,
 }: {
@@ -1631,10 +1657,13 @@ const failClaimedPostClaimCommit = async ({
   error: unknown
   ownerToken: string
   repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
   sessionId: string
   statusCode?: number
 }): Promise<ProjectTransferCommitResult> => {
-  await settleCompletionSideEffect(failClaimedCommit({artifacts, error, ownerToken, repositories, sessionId}))
+  await settleCompletionSideEffect(
+    failClaimedCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId}),
+  )
 
   return {error: error instanceof Error ? error.message : String(error), status: 'error', statusCode}
 }
@@ -1677,7 +1706,7 @@ const runClaimedProjectTransferImportCommit = async ({
     let activeProgress = stagingLoadProgress
     const publishProgress = async (progress: ProjectTransferProgressPayload) => {
       activeProgress = progress
-      const updated = await updateClaimedCommitProgress({ownerToken, progress, repositories, sessionId})
+      const updated = await updateClaimedCommitProgress({ownerToken, progress, repositories, runtimeOptions, sessionId})
 
       if (updated === null) {
         throw new Error('Project transfer import commit ownership was lost while updating progress')
@@ -1687,6 +1716,7 @@ const runClaimedProjectTransferImportCommit = async ({
       ownerToken,
       progress: stagingLoadProgress,
       repositories,
+      runtimeOptions,
       sessionId,
     })
 
@@ -1736,7 +1766,7 @@ const runClaimedProjectTransferImportCommit = async ({
     })
 
     await settleCompletionSideEffect(
-      updateClaimedCommitProgress({ownerToken, progress: completedProgress, repositories, sessionId}),
+      updateClaimedCommitProgress({ownerToken, progress: completedProgress, repositories, runtimeOptions, sessionId}),
     )
 
     const completedSession = await settleCompletionSideEffect(
@@ -1766,7 +1796,9 @@ const runClaimedProjectTransferImportCommit = async ({
       statusCode: 200,
     }
   } catch (error) {
-    await settleCompletionSideEffect(failClaimedCommit({artifacts, error, ownerToken, repositories, sessionId}))
+    await settleCompletionSideEffect(
+      failClaimedCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId}),
+    )
     return getCommitErrorResult(error)
   }
 }
@@ -1890,6 +1922,7 @@ export const commitProjectTransferImportSession = async ({
   }
 
   writeProjectTransferCommitRuntimeEvent({ownerToken, progress: claimProgress, sessionId, state: claimed.state})
+  await writeCommitProgressArtifact({progress: claimProgress, runtimeOptions, sessionId})
 
   const runClaimed = (
     claimedArtifacts: ProjectTransferCommitArtifacts,
@@ -1910,35 +1943,38 @@ export const commitProjectTransferImportSession = async ({
 
   if (executionMode === 'background') {
     repositories.startBackgroundCommit(async () => {
-      try {
-        const revalidation = await getPostClaimRevalidationResult({
-          artifacts,
-          claimed,
-          commitId,
-          inputRepositories,
-          now,
-          ownerToken,
-          repositories,
-          runtimeOptions,
-        })
-
-        if ('artifacts' in revalidation) {
-          await runClaimed(revalidation.artifacts, revalidation.performanceMetrics)
-        }
-
-        if ('error' in revalidation && !('stalePlan' in revalidation)) {
-          await failClaimedPostClaimCommit({
+      await runWithProjectTransferBackgroundActivity(async () => {
+        try {
+          const revalidation = await getPostClaimRevalidationResult({
             artifacts,
-            error: revalidation.error,
+            claimed,
+            commitId,
+            inputRepositories,
+            now,
             ownerToken,
             repositories,
-            sessionId,
-            statusCode: 409,
+            runtimeOptions,
           })
+
+          if ('artifacts' in revalidation) {
+            await runClaimed(revalidation.artifacts, revalidation.performanceMetrics)
+          }
+
+          if ('error' in revalidation && !('stalePlan' in revalidation)) {
+            await failClaimedPostClaimCommit({
+              artifacts,
+              error: revalidation.error,
+              ownerToken,
+              repositories,
+              runtimeOptions,
+              sessionId,
+              statusCode: 409,
+            })
+          }
+        } catch (error) {
+          await failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId})
         }
-      } catch (error) {
-        await failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, sessionId})
-      }
+      })
     })
 
     return {commitId, executionMode, session: claimed, status: 'claimed', statusCode: 202}
@@ -1958,7 +1994,7 @@ export const commitProjectTransferImportSession = async ({
       runtimeOptions,
     })
   } catch (error) {
-    return failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, sessionId})
+    return failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId})
   }
 
   return 'artifacts' in postClaimRevalidation
@@ -1975,6 +2011,7 @@ export const commitProjectTransferImportSession = async ({
           error: postClaimRevalidation.error,
           ownerToken,
           repositories,
+          runtimeOptions,
           sessionId,
           statusCode: 409,
         })

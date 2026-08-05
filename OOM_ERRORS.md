@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-08-05 - Review-Serving Dirty-Work Lane Claim
+
+- Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` in `reviewServingProjectorWorker` while running `WITH eligible_lane AS (...)` over `app.review_serving_dirty_work`; project-transfer TTL recovery then failed because DuckDB was already at the cap.
+- Context: Low-memory split maintenance owner claiming incremental review-serving dirty work under the intended `6400MiB` DuckDB profile.
+- Cause: The dirty-work claim query sorted the full eligible backlog to pick one lane before claiming rows from that lane, so a large accumulated backlog could consume the constrained owner memory before any projector work ran.
+- Fix: The claim query now builds bounded oldest-row windows for lane selection and same-lane candidate selection, preserving one-lane batching while keeping claimant sorting and blocker checks capped per wake.
+- Verification: `bun test src/server/reviewServing/reviewServingDirtyWorkService.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-07-27 - Summary Rebuild Accumulator Chunk Membership
 
 - Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while updating `mart.review_article_summary_rebuild_accumulator_v4`.

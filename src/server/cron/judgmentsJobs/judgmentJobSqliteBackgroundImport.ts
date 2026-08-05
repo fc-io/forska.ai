@@ -238,6 +238,12 @@ const runImportableJudgmentJob = async ({claimedBy, job}: {claimedBy: string; jo
     : runActiveJobImport({claimedBy, jobId: job.id})
 }
 
+const hasActiveJobImportWork = async (jobId: string) => {
+  const healthSnapshot = await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+
+  return healthSnapshot === null || healthSnapshot.hasOutboxRows || healthSnapshot.claimedOutboxCount > 0
+}
+
 const recordImportStart = async (jobId: string) => {
   await runBackground(
     `
@@ -337,13 +343,22 @@ const runJudgmentJobSqliteBackgroundImportAttempt = async ({
   const sqliteService = getJudgmentJobSqliteService()
   const jobId = job.id
 
-  await recordImportStart(jobId)
-
   if (sqliteService.hasOwnedLease(jobId)) {
     await sqliteService.releaseOwnedLease(jobId)
   }
 
   try {
+    const hasImportWork = job.storageState === 'draining' || (await hasActiveJobImportWork(jobId))
+
+    if (!hasImportWork) {
+      return {
+        continueToNextJob: false,
+        summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0},
+      }
+    }
+
+    await recordImportStart(jobId)
+
     const result = await runImportableJudgmentJob({claimedBy, job})
     await recordImportSuccess({exitCode: result.exitCode, jobId})
     await sqliteService.getHealthSnapshot(jobId)

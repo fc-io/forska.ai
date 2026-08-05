@@ -1,6 +1,7 @@
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
+import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
@@ -24,6 +25,7 @@ const logImportCronError = (label: string, error: unknown) => {
 
 export const importJudgmentsCron = async (): Promise<void> => {
   if (!shouldCurrentServerRunMaintenanceLoops() || judgmentsJobsCronState.isImportingJudgments) return
+  if (hasActiveProjectTransferBackgroundActivity()) return
 
   judgmentsJobsCronState.isImportingJudgments = true
 

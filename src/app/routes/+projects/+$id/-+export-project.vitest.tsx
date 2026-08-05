@@ -434,4 +434,97 @@ describe('export project page', () => {
       container.remove()
     }
   })
+
+  test('keeps a queued export session visible and retries after a transient status timeout', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockImplementation((_input, init) => {
+      const method = init?.method ?? 'GET'
+
+      return Promise.resolve(
+        method === 'POST'
+          ? getJsonResponse(
+              {
+                data: {
+                  downloadUrl: '/api/projects/export/export-1/download',
+                  expiresAt: '2030-01-01T00:00:00.000Z',
+                  exportId: 'export-1',
+                  filename: 'project-transfer-project-1-export-1.zip',
+                  progress: {percent: 5},
+                  status: 'queued',
+                },
+                error: null,
+              },
+              202,
+            )
+          : getJsonResponse({
+              data: {
+                articleCount: 12,
+                defaultRawArticleProvenanceMode: 'omit',
+                humanJudgmentCount: 4,
+                judgmentCount: 34,
+                promptHumanJudgmentCount: 3,
+                summaryHumanJudgmentCount: 1,
+              },
+              error: null,
+            }),
+      )
+    })
+    mockState.getExportSession
+      .mockRejectedValueOnce(new Error('Status request timed out'))
+      .mockResolvedValue({
+        data: {
+          data: {
+            byteLength: 671_000_000,
+            checksumSha256: 'a'.repeat(64),
+            downloadUrl: '/api/projects/export/export-1/download',
+            expiresAt: '2030-01-01T00:00:00.000Z',
+            exportId: 'export-1',
+            filename: 'project-transfer-project-1-export-1.zip',
+            packageFingerprint: 'fingerprint-1',
+            progress: {percent: 100},
+            status: 'ready',
+          },
+          error: null,
+        },
+        error: null,
+      })
+    const {container, dispose, queryClient} = await renderExportProject()
+
+    try {
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Transfer project')
+      })
+
+      const exportButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Export Project'
+      })
+
+      vi.useFakeTimers()
+      exportButton?.click()
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Status request timed out')
+        expect(container.textContent).toContain('queued')
+        expect(container.textContent).toContain('5%')
+        expect(
+          Array.from(container.querySelectorAll('button')).some((button) => {
+            return button.textContent?.trim() === 'Export Project'
+          }),
+        ).toBe(false)
+      })
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      await waitForCondition(() => {
+        expect(mockState.getExportSession).toHaveBeenCalledTimes(2)
+        expect(locationAssignSpy).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/export/export-1/download')
+        expect(container.textContent).toContain('Package ready')
+      })
+    } finally {
+      vi.useRealTimers()
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
 })

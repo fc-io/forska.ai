@@ -625,7 +625,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
           }
 
           setErrorMessage(getErrorMessage(error, 'Failed to fetch project transfer export status'))
-          setSession(null)
+          timeoutId = window.setTimeout(pollSession, 2_000)
         })
     }
 

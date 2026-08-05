@@ -818,6 +818,42 @@ describe('project import route', () => {
     }
   })
 
+  test('shows a stale heartbeat notice while background commit remains active', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2030-01-01T00:02:00.000Z'))
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        heartbeatAt: '2030-01-01T00:00:00.000Z',
+        progress: {
+          completedItems: 4,
+          message: null,
+          percent: 25,
+          phase: 'commit',
+          startedAt: '2030-01-01T00:00:00.000Z',
+          status: 'running',
+          totalItems: 16,
+          updatedAt: '2030-01-01T00:01:55.000Z',
+        },
+        state: 'committing',
+        updatedAt: '2030-01-01T00:00:00.000Z',
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain('Create progress')
+      expect(container.textContent).toContain('25% · No session heartbeat for 2m 0s.')
+      expect(container.textContent).toContain('Session heartbeat: 2m 0s ago')
+      expect(container.textContent).toContain('Progress update: 5s ago')
+    } finally {
+      dispose()
+      container.remove()
+      vi.useRealTimers()
+    }
+  })
+
   test('stops elapsed timer when import progress is completed', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,

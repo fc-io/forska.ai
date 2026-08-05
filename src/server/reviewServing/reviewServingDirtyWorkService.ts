@@ -41,6 +41,7 @@ export type ClaimReviewServingDirtyWorkParams = {
 }
 
 export const defaultReviewServingDirtyWorkStaleClaimSeconds = 15 * 60
+const reviewServingDirtyWorkLaneWindowLimit = 2_048
 
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   completedSourceHighWaterMark: number
@@ -807,32 +808,43 @@ export const claimReviewServingDirtyWork = async (
   const limit = getNormalizedLimit(params)
   const claimNowSql = getClaimNowSql(params)
   const eligiblePredicate = getEligibleDirtyWorkPredicate(params, claimNowSql)
-  const laneBlockerPredicate = getLowerWatermarkLaneBlockerPredicate(params, claimNowSql)
 
   if (limit === 0) {
     return []
   }
 
   const rows = await database.queryJson<DirtyWorkRow>(`
-    WITH eligible_lane AS (
-      SELECT source_partition, projection_key
-      FROM app.review_serving_dirty_work oldest
+    WITH claim_lane_window AS (
+      SELECT dirty_work_id, source_partition, projection_key, updated_at, latest_source_high_water_mark
+      FROM app.review_serving_dirty_work
       WHERE ${eligiblePredicate}
-        AND ${getLowerWatermarkLaneBlockerPredicate(params, claimNowSql, 'oldest')}
+      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+      LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
+    ),
+    eligible_lane AS (
+      SELECT source_partition, projection_key
+      FROM claim_lane_window oldest
+      WHERE ${getLowerWatermarkLaneBlockerPredicate(params, claimNowSql, 'oldest')}
       ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
       LIMIT 1
     ),
-    claim_candidates AS (
-      SELECT dirty_work_id
+    claim_candidate_window AS (
+      SELECT dirty_work_id, source_partition, projection_key, updated_at, latest_source_high_water_mark
       FROM app.review_serving_dirty_work
       WHERE ${eligiblePredicate}
-        AND ${laneBlockerPredicate}
         AND EXISTS (
           SELECT 1
           FROM eligible_lane
           WHERE eligible_lane.source_partition = app.review_serving_dirty_work.source_partition
             AND eligible_lane.projection_key = app.review_serving_dirty_work.projection_key
         )
+      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+      LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
+    ),
+    claim_candidates AS (
+      SELECT dirty_work_id
+      FROM claim_candidate_window candidate
+      WHERE ${getLowerWatermarkLaneBlockerPredicate(params, claimNowSql, 'candidate')}
       ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
       LIMIT ${limit}
     )

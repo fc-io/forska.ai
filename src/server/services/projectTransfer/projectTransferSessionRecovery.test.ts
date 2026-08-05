@@ -530,6 +530,87 @@ test('project transfer recovery fails stale import analysis workers before expir
   ])
 })
 
+test('project transfer recovery requeues stale import analysis when uploaded package is retryable', () => {
+  const result = runRecoveryScript<{
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    row: {
+      errorReason: string | null
+      ownerToken: string | null
+      progressMessage: string | null
+      progressPhase: string | null
+      progressStatus: string | null
+      state: string
+    }
+    uploadAfterRecovery: boolean
+  }>(`
+    const sessionId = 'import-analyzing-stale-retryable-upload'
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const uploadMetadata = {
+      byteLength: 1234,
+      checksumSha256: 'abc123',
+      fileName: 'upload.zip',
+    }
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: futureAt,
+      id: sessionId,
+      state: 'queued',
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      expectedOwnerToken: null,
+      expectedState: 'queued',
+      nextOwnerLeaseMs: 60_000,
+      nextOwnerToken: 'analysis-owner-retryable-upload',
+      nextState: 'analyzing',
+      now: new Date('2026-05-21T11:00:00.000Z'),
+      progress: {
+        phase: 'analyze',
+        status: 'running',
+        updatedAt: '2026-05-21T11:00:00.000Z',
+        uploadMetadata,
+      },
+      sessionId,
+    })
+    await writeRuntimeFile(layout.uploadPath)
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      importAnalyzeHeartbeatStaleMs: 60_000,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const [row] = await database.queryJson(\`
+      SELECT
+        state,
+        owner_token AS ownerToken,
+        error_json->>'reason' AS errorReason,
+        progress_json->>'message' AS progressMessage,
+        progress_json->>'phase' AS progressPhase,
+        progress_json->>'status' AS progressStatus
+      FROM app.project_transfer_session
+      WHERE id = 'import-analyzing-stale-retryable-upload'
+    \`)
+    const uploadAfterRecovery = await fileExists(layout.uploadPath)
+
+    console.log(JSON.stringify({recoveryResult, row, uploadAfterRecovery}))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(1)
+  expect(result.recoveryResult.expiredSessionCount).toBe(0)
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(0)
+  expect(result.uploadAfterRecovery).toBe(true)
+  expect(result.row).toEqual({
+    errorReason: null,
+    ownerToken: null,
+    progressMessage: 'Analysis queued after worker restart',
+    progressPhase: 'analyze',
+    progressStatus: 'pending',
+    state: 'queued',
+  })
+})
+
 test('project transfer recovery uses short default stale window for abandoned import analysis', () => {
   const result = runRecoveryScript<{
     recoveryResult: {expiredSessionCount: number; scannedSessionCount: number}

@@ -135,6 +135,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
         const events = []
 
         void mock.module(runtimeRoleModulePath, () => {
@@ -216,6 +217,7 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
         const events = []
 
         void mock.module(runtimeRoleModulePath, () => {
@@ -305,6 +307,7 @@ test('review serving projector worker heartbeat recycles DuckDB before high-RSS 
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
         const events = []
 
         Object.defineProperty(process, 'memoryUsage', {
@@ -339,6 +342,13 @@ test('review serving projector worker heartbeat recycles DuckDB before high-RSS 
             },
           }
         })
+        void mock.module(projectTransferSessionRepositoryModulePath, () => {
+          return {
+            getProjectTransferSessionRepository: () => ({
+              hasActiveProjectTransferSessions: async () => false,
+            }),
+          }
+        })
         const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?rss-recycle=' + Date.now())
         const stop = startReviewServingProjectorWorkerHeartbeat({
           maxRunMs: 5,
@@ -370,6 +380,320 @@ test('review serving projector worker heartbeat recycles DuckDB before high-RSS 
 
   expect(result.events).toContainEqual(['recycle', false, false])
   expect(result.events).toContainEqual(['gc'])
+})
+
+test('review serving projector worker heartbeat skips high-RSS recycle while foreground DuckDB work is active', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
+        const events = []
+
+        Object.defineProperty(process, 'memoryUsage', {
+          value: () => {
+            events.push(['memoryUsage'])
+            return {arrayBuffers: 0, external: 0, heapTotal: 0, heapUsed: 0, rss: 200}
+          },
+        })
+        globalThis.Bun.gc = () => {
+          events.push(['gc'])
+        }
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {
+              events.push(['run'])
+              return {reason: 'nativeHeavyChunkCompleted'}
+            },
+          }
+        })
+        void mock.module(duckdbServiceModulePath, () => {
+          return {
+            closeDuckdbService: async () => {
+              events.push(['recycle'])
+            },
+            getDuckdbAppendRuntimeMetrics: () => {
+              events.push(['appendMetrics'])
+              return {queueDepth: 0}
+            },
+            getDuckdbQueueRuntimeMetricsSnapshot: () => {
+              events.push(['queueMetrics'])
+              return {main: {queueDepth: 1}}
+            },
+          }
+        })
+        void mock.module(projectTransferSessionRepositoryModulePath, () => {
+          return {
+            getProjectTransferSessionRepository: () => ({
+              hasActiveProjectTransferSessions: async () => false,
+            }),
+          }
+        })
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?foreground-active=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxCompletedRebuildChunksPerRun: 1,
+          rebuildChunkBatchMaxRssBytes: 100,
+          restartDelayMs: 50,
+        })
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20)
+        })
+        stop()
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+    },
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat foreground-active recycle guard test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<number | string>>}
+
+  expect(result.events).toContainEqual(['queueMetrics'])
+  expect(result.events).toContainEqual(['appendMetrics'])
+  expect(result.events).not.toContainEqual(['recycle'])
+  expect(result.events).not.toContainEqual(['gc'])
+  expect(result.events).not.toContainEqual(['exit', 0])
+})
+
+test('review serving projector worker heartbeat skips high-RSS recycle during project-transfer background activity', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const activityModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferBackgroundActivity.ts')
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const events = []
+
+        Object.defineProperty(process, 'memoryUsage', {
+          value: () => {
+            events.push(['memoryUsage'])
+            return {arrayBuffers: 0, external: 0, heapTotal: 0, heapUsed: 0, rss: 200}
+          },
+        })
+        globalThis.Bun.gc = () => {
+          events.push(['gc'])
+        }
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {
+              events.push(['run'])
+              return {reason: 'nativeHeavyChunkCompleted'}
+            },
+          }
+        })
+        void mock.module(duckdbServiceModulePath, () => {
+          return {
+            closeDuckdbService: async () => {
+              events.push(['recycle'])
+            },
+            getDuckdbAppendRuntimeMetrics: () => {
+              events.push(['appendMetrics'])
+              return {queueDepth: 0}
+            },
+            getDuckdbQueueRuntimeMetricsSnapshot: () => {
+              events.push(['queueMetrics'])
+              return {main: {queueDepth: 0}}
+            },
+          }
+        })
+
+        const {runWithProjectTransferBackgroundActivity} = await import(activityModulePath)
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?project-transfer-active=' + Date.now())
+        let stop = () => {}
+
+        await runWithProjectTransferBackgroundActivity(async () => {
+          stop = startReviewServingProjectorWorkerHeartbeat({
+            maxCompletedRebuildChunksPerRun: 1,
+            rebuildChunkBatchMaxRssBytes: 100,
+            restartDelayMs: 50,
+          })
+
+          await new Promise((resolve) => {
+            setTimeout(resolve, 20)
+          })
+        })
+        stop()
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+    },
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat project-transfer activity recycle guard test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<number | string>>}
+
+  expect(result.events).toContainEqual(['run'])
+  expect(result.events).not.toContainEqual(['queueMetrics'])
+  expect(result.events).not.toContainEqual(['appendMetrics'])
+  expect(result.events).not.toContainEqual(['recycle'])
+  expect(result.events).not.toContainEqual(['gc'])
+  expect(result.events).not.toContainEqual(['exit', 0])
+})
+
+test('review serving projector worker heartbeat skips high-RSS recycle during active project-transfer sessions', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
+        const events = []
+
+        Object.defineProperty(process, 'memoryUsage', {
+          value: () => {
+            events.push(['memoryUsage'])
+            return {arrayBuffers: 0, external: 0, heapTotal: 0, heapUsed: 0, rss: 200}
+          },
+        })
+        globalThis.Bun.gc = () => {
+          events.push(['gc'])
+        }
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {
+              events.push(['run'])
+              return {reason: 'nativeHeavyChunkCompleted'}
+            },
+          }
+        })
+        void mock.module(duckdbServiceModulePath, () => {
+          return {
+            closeDuckdbService: async () => {
+              events.push(['recycle'])
+            },
+          }
+        })
+        void mock.module(projectTransferSessionRepositoryModulePath, () => {
+          return {
+            getProjectTransferSessionRepository: () => ({
+              hasActiveProjectTransferSessions: async () => {
+                events.push(['activeTransferSessionCheck'])
+                return true
+              },
+            }),
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?project-transfer-session-active=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxCompletedRebuildChunksPerRun: 1,
+          rebuildChunkBatchMaxRssBytes: 100,
+          restartDelayMs: 50,
+        })
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20)
+        })
+        stop()
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+    },
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat active transfer session recycle guard test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<number | string>>}
+
+  expect(result.events).toContainEqual(['run'])
+  expect(result.events).toContainEqual(['activeTransferSessionCheck'])
+  expect(result.events).not.toContainEqual(['recycle'])
+  expect(result.events).not.toContainEqual(['gc'])
+  expect(result.events).not.toContainEqual(['exit', 0])
 })
 
 test('review serving projector worker heartbeat keeps bounded restart timer refed until stop clears it', () => {
@@ -548,6 +872,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
         const events = []
 
         void mock.module(runtimeRoleModulePath, () => {
@@ -569,6 +894,13 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
             closeDuckdbService: async (input) => {
               events.push(['closeDuckdb', input.checkpointBeforeClose, input.releaseOwnerLease])
             },
+          }
+        })
+        void mock.module(projectTransferSessionRepositoryModulePath, () => {
+          return {
+            getProjectTransferSessionRepository: () => ({
+              hasActiveProjectTransferSessions: async () => false,
+            }),
           }
         })
 
@@ -643,6 +975,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
         const events = []
 
         void mock.module(runtimeRoleModulePath, () => {
@@ -664,6 +997,13 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
             closeDuckdbService: async (input) => {
               events.push(['closeDuckdb', input.checkpointBeforeClose, input.releaseOwnerLease])
             },
+          }
+        })
+        void mock.module(projectTransferSessionRepositoryModulePath, () => {
+          return {
+            getProjectTransferSessionRepository: () => ({
+              hasActiveProjectTransferSessions: async () => false,
+            }),
           }
         })
 

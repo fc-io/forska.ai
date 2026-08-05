@@ -164,6 +164,7 @@ type PersistProjectTransferSessionExportReadyParams = {
 }
 
 type GetProjectTransferSessionParams = {runner?: ProjectTransferSessionRunner; sessionId: string}
+type HasActiveProjectTransferSessionsParams = {now?: Date; runner?: ProjectTransferSessionRunner}
 type ProjectTransferSessionTimestamp = Date | string
 type ProjectTransferSessionRow = Omit<
   ProjectTransferSessionRecord,
@@ -430,6 +431,36 @@ const createProjectTransferSession = async (params: CreateProjectTransferSession
 
 const getProjectTransferSession = async ({runner, sessionId}: GetProjectTransferSessionParams) => {
   return getProjectTransferSessionRecord(getRunner(runner), sessionId)
+}
+
+const hasActiveProjectTransferSessions = async (params: HasActiveProjectTransferSessionsParams = {}) => {
+  const currentNow = getNow(params.now)
+  const [row] = await getRunner(params.runner).queryJson<{activeCount: number}>(`
+    SELECT COUNT(*)::INTEGER AS activeCount
+    FROM app.project_transfer_session
+    WHERE expires_at > ${getTimestampLiteral(currentNow)}
+      AND (
+        (
+          direction = 'import'
+          AND state IN (
+            'awaiting_upload',
+            'uploading',
+            'queued',
+            'extracting',
+            'analyzing',
+            'awaiting_resolution',
+            'ready_to_commit',
+            'committing'
+          )
+        )
+        OR (
+          direction = 'export'
+          AND state IN ('queued', 'assembling', 'packaging')
+        )
+      )
+  `)
+
+  return Number(row?.activeCount ?? 0) > 0
 }
 
 const getPlanSummaryForTransitionValidation = (
@@ -735,6 +766,7 @@ const projectTransferSessionRepository = {
   createProjectTransferSession,
   failProjectTransferSessionExport,
   getProjectTransferSession,
+  hasActiveProjectTransferSessions,
   heartbeatProjectTransferExportSessionOwner,
   heartbeatProjectTransferSessionOwner,
   markProjectTransferSessionTerminalCleanupComplete,
@@ -756,6 +788,7 @@ export type {
   CreateProjectTransferSessionParams,
   FailProjectTransferSessionExportParams,
   GetProjectTransferSessionParams,
+  HasActiveProjectTransferSessionsParams,
   HeartbeatProjectTransferExportSessionOwnerParams,
   HeartbeatProjectTransferSessionOwnerParams,
   MarkProjectTransferSessionTerminalCleanupCompleteParams,

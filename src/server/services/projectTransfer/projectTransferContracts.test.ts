@@ -132,29 +132,55 @@ test('locks project-transfer execution thresholds at inclusive and background bo
   expect(
     getProjectTransferCommitExecutionMode({
       articleCount: 10_000,
+      expandedBytes: projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes,
       extractedAssetBytes: projectTransferExecutionThresholds.commitBackgroundExtractedAssetBytes - 1,
       judgmentCount: 10_000,
+      packageBytes: projectTransferExecutionThresholds.importAnalyzeInlineZipBytes,
     }),
   ).toBe('inline')
   expect(
     getProjectTransferCommitExecutionMode({
       articleCount: 10_000,
+      expandedBytes: projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes,
       extractedAssetBytes: 0,
       judgmentCount: projectTransferExecutionThresholds.commitBackgroundTotalRowCount - 10_000 - 1,
+      packageBytes: projectTransferExecutionThresholds.importAnalyzeInlineZipBytes,
     }),
   ).toBe('inline')
   expect(
     getProjectTransferCommitExecutionMode({
       articleCount: projectTransferExecutionThresholds.commitBackgroundArticleCount,
+      expandedBytes: 0,
       extractedAssetBytes: 0,
       judgmentCount: 0,
+      packageBytes: 0,
     }),
   ).toBe('background')
   expect(
     getProjectTransferCommitExecutionMode({
       articleCount: 10_000,
+      expandedBytes: 0,
       extractedAssetBytes: 0,
       judgmentCount: projectTransferExecutionThresholds.commitBackgroundTotalRowCount - 10_000,
+      packageBytes: 0,
+    }),
+  ).toBe('background')
+  expect(
+    getProjectTransferCommitExecutionMode({
+      articleCount: 1,
+      expandedBytes: projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes,
+      extractedAssetBytes: 0,
+      judgmentCount: 0,
+      packageBytes: projectTransferExecutionThresholds.importAnalyzeInlineZipBytes + 1,
+    }),
+  ).toBe('background')
+  expect(
+    getProjectTransferCommitExecutionMode({
+      articleCount: 1,
+      expandedBytes: projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes + 1,
+      extractedAssetBytes: 0,
+      judgmentCount: 0,
+      packageBytes: 1,
     }),
   ).toBe('background')
 })

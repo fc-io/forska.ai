@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto'
-import {existsSync, mkdirSync, readFileSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 
-import {afterAll, afterEach, expect, mock, test} from 'bun:test'
+import {afterEach, beforeEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import type {ProjectTransferSessionRecord} from '../../db/schemaTypes.ts'
@@ -10,7 +10,6 @@ import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 type RouteTestApp = {handle: (request: Request) => Promise<Response> | Response}
 type SourceProjectRow = {deletePendingAt: unknown; id: string}
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
 const analyzeModulePath = new URL('../services/projectTransfer/projectTransferAnalyze.ts', import.meta.url).pathname
 const commitModulePath = new URL('../services/projectTransfer/projectTransferCommit.ts', import.meta.url).pathname
 const exportModulePath = new URL('../services/projectTransfer/projectTransferExport.ts', import.meta.url).pathname
@@ -48,6 +47,9 @@ const getExportRootPath = (sessionId: string) => {
 const getImportPlanPath = (sessionId: string) => {
   return `${getImportRootPath(sessionId)}/plan.json`
 }
+const getImportProgressPath = (sessionId: string) => {
+  return `${getImportRootPath(sessionId)}/progress.json`
+}
 const getUploadPackagePath = (sessionId: string) => {
   return `${getImportRootPath(sessionId)}/upload.zip`
 }
@@ -56,10 +58,14 @@ const getReadyPackagePath = (sessionId: string) => {
 }
 const readySessionId = getRouteTestSessionId('export-ready')
 const readyPackagePath = getReadyPackagePath(readySessionId)
+const progressArtifactSessionId = getRouteTestSessionId('export-progress-artifact')
 const uploadSessionId = getRouteTestSessionId('import-upload')
 const uploadPackagePath = getUploadPackagePath(uploadSessionId)
 const uploadArrayBufferSessionId = getRouteTestSessionId('import-upload-buffer')
 const readOnlyGetSessionId = getRouteTestSessionId('import-read-only-get')
+const progressArtifactImportSessionId = getRouteTestSessionId('import-progress-artifact')
+const commitProgressArtifactImportSessionId = getRouteTestSessionId('import-commit-progress-artifact')
+const largeBackgroundAnalyzeSessionId = getRouteTestSessionId('import-large-background-analyze')
 const missingArtifactsGetSessionId = getRouteTestSessionId('import-missing-get')
 const resolveSessionId = getRouteTestSessionId('import-resolve')
 const routeFlowSessionId = getRouteTestSessionId('route-flow')
@@ -67,9 +73,13 @@ const missingArtifactsResolveSessionId = getRouteTestSessionId('import-missing-r
 const resolveRaceSessionId = getRouteTestSessionId('import-resolve-race')
 const artifactSessionIds = [
   readySessionId,
+  progressArtifactSessionId,
   uploadSessionId,
   uploadArrayBufferSessionId,
   readOnlyGetSessionId,
+  progressArtifactImportSessionId,
+  commitProgressArtifactImportSessionId,
+  largeBackgroundAnalyzeSessionId,
   missingArtifactsGetSessionId,
   resolveSessionId,
   routeFlowSessionId,
@@ -489,75 +499,51 @@ const updateProjectTransferSessionProgressMock = mock(
   },
 )
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        maintenance: async () => {
-          return undefined
-        },
-        queryJson: queryJsonMock,
-        run: async (statement: string) => {
-          routeState.queryStatements.push(statement)
-        },
-        transaction: async <T>(
-          callback: (tx: {queryJson: typeof queryJsonMock; run: (statement: string) => Promise<void>}) => Promise<T>,
-        ) => {
-          return callback({
-            queryJson: queryJsonMock,
-            run: async (statement: string) => {
-              routeState.queryStatements.push(statement)
-            },
-          })
-        },
-      }
-    },
-  }
-})
+const installProjectTransferRouteMocks = () => {
+  void mock.module(exportPackageModulePath, () => {
+    return {createProjectTransferExport: createProjectTransferExportMock}
+  })
 
-void mock.module(exportPackageModulePath, () => {
-  return {createProjectTransferExport: createProjectTransferExportMock}
-})
+  void mock.module(exportModulePath, () => {
+    return {getProjectTransferExportSummary: getProjectTransferExportSummaryMock}
+  })
 
-void mock.module(exportModulePath, () => {
-  return {getProjectTransferExportSummary: getProjectTransferExportSummaryMock}
-})
+  void mock.module(analyzeModulePath, () => {
+    return {analyzeProjectTransferImportPackage: analyzeProjectTransferImportPackageMock}
+  })
 
-void mock.module(analyzeModulePath, () => {
-  return {analyzeProjectTransferImportPackage: analyzeProjectTransferImportPackageMock}
-})
+  void mock.module(commitModulePath, () => {
+    return {
+      commitProjectTransferImportSession: commitProjectTransferImportSessionMock,
+      loadProjectTransferCommitArtifacts: actualCommitModule.loadProjectTransferCommitArtifacts,
+      revalidateProjectTransferCommitPlan: actualCommitModule.revalidateProjectTransferCommitPlan,
+    }
+  })
 
-void mock.module(commitModulePath, () => {
-  return {
-    commitProjectTransferImportSession: commitProjectTransferImportSessionMock,
-    loadProjectTransferCommitArtifacts: actualCommitModule.loadProjectTransferCommitArtifacts,
-    revalidateProjectTransferCommitPlan: actualCommitModule.revalidateProjectTransferCommitPlan,
-  }
-})
+  void mock.module(dependencyResolutionModulePath, () => {
+    return {
+      resolveProjectTransferDependencies: resolveProjectTransferDependenciesMock,
+      writeProjectTransferDependencyPlan: writeProjectTransferDependencyPlanMock,
+    }
+  })
 
-void mock.module(dependencyResolutionModulePath, () => {
-  return {
-    resolveProjectTransferDependencies: resolveProjectTransferDependenciesMock,
-    writeProjectTransferDependencyPlan: writeProjectTransferDependencyPlanMock,
-  }
-})
-
-void mock.module(sessionRepositoryModulePath, () => {
-  return {
-    getProjectTransferSessionRepository: () => {
-      return {
-        cancelProjectTransferImportSession: cancelProjectTransferImportSessionMock,
-        createProjectTransferSession: createProjectTransferSessionMock,
-        getProjectTransferSession: getProjectTransferSessionMock,
-        heartbeatProjectTransferSessionOwner: heartbeatProjectTransferSessionOwnerMock,
-        markProjectTransferSessionTerminalCleanupComplete: markProjectTransferSessionTerminalCleanupCompleteMock,
-        transitionProjectTransferSessionState: transitionProjectTransferSessionStateMock,
-        updateProjectTransferSessionPlanRevision: updateProjectTransferSessionPlanRevisionMock,
-        updateProjectTransferSessionProgress: updateProjectTransferSessionProgressMock,
-      }
-    },
-  }
-})
+  void mock.module(sessionRepositoryModulePath, () => {
+    return {
+      getProjectTransferSessionRepository: () => {
+        return {
+          cancelProjectTransferImportSession: cancelProjectTransferImportSessionMock,
+          createProjectTransferSession: createProjectTransferSessionMock,
+          getProjectTransferSession: getProjectTransferSessionMock,
+          heartbeatProjectTransferSessionOwner: heartbeatProjectTransferSessionOwnerMock,
+          markProjectTransferSessionTerminalCleanupComplete: markProjectTransferSessionTerminalCleanupCompleteMock,
+          transitionProjectTransferSessionState: transitionProjectTransferSessionStateMock,
+          updateProjectTransferSessionPlanRevision: updateProjectTransferSessionPlanRevisionMock,
+          updateProjectTransferSessionProgress: updateProjectTransferSessionProgressMock,
+        }
+      },
+    }
+  })
+}
 
 const loadProjectTransferRoutes = async (): Promise<typeof import('./projectTransferRoutes.ts')> => {
   return (await import(
@@ -572,9 +558,9 @@ const loadProductApiRoutes = async (): Promise<typeof import('./productApiRoutes
 }
 
 const getProjectTransferApp = async () => {
-  const {projectTransferRoutes} = await loadProjectTransferRoutes()
+  const {createProjectTransferRoutes} = await loadProjectTransferRoutes()
 
-  return new Elysia().use(projectTransferRoutes)
+  return new Elysia().use(createProjectTransferRoutes({getExportSourceProject: getRouteTestExportSourceProject}))
 }
 
 const getRequestInit = (method: string, body: Record<string, unknown> = {}): RequestInit => {
@@ -590,6 +576,12 @@ const getRouteResponse = async (
   body: Record<string, unknown> = {},
 ) => {
   return app.handle(new Request(`http://localhost${path}`, getRequestInit(method, body)))
+}
+
+const getRouteTestExportSourceProject = async (projectId: string) => {
+  const [project] = await queryJsonMock(`SELECT id FROM app.project WHERE id = '${projectId}' LIMIT 1`)
+
+  return project ?? null
 }
 
 const getSessionRecord = (overrides: Partial<ProjectTransferSessionRecord> = {}): ProjectTransferSessionRecord => {
@@ -651,7 +643,7 @@ const expectCsvExportRouteValidationResponse = async (app: RouteTestApp, prefix 
   expect(body).toMatchObject({message: 'Expected array', property: '/promptIds', type: 'validation'})
 }
 
-afterEach(() => {
+const resetProjectTransferRouteTestState = () => {
   analyzeProjectTransferImportPackageMock.mockClear()
   cancelProjectTransferImportSessionMock.mockClear()
   commitProjectTransferImportSessionMock.mockClear()
@@ -696,9 +688,19 @@ afterEach(() => {
     rmSync(getExportRootPath(sessionId), {force: true, recursive: true})
     rmSync(getImportRootPath(sessionId), {force: true, recursive: true})
   }
+}
+
+beforeEach(async () => {
+  installProjectTransferRouteMocks()
+  const {setProjectTransferRoutesDependenciesForTests} = await import('./projectTransferRoutes.ts')
+  setProjectTransferRoutesDependenciesForTests({getExportSourceProject: getRouteTestExportSourceProject})
+  resetProjectTransferRouteTestState()
 })
 
-afterAll(() => {
+afterEach(async () => {
+  resetProjectTransferRouteTestState()
+  const {resetProjectTransferRoutesDependenciesForTests} = await import('./projectTransferRoutes.ts')
+  resetProjectTransferRoutesDependenciesForTests()
   mock.restore()
 })
 
@@ -856,6 +858,37 @@ test('project transfer export polling returns pending progress and ready metadat
     },
     error: null,
   })
+})
+
+test('project transfer export polling reads progress artifacts before the session repository', async () => {
+  const app = await getProjectTransferApp()
+  const progressPath = `${getExportRootPath(progressArtifactSessionId)}/progress.json`
+  mkdirSync(getExportRootPath(progressArtifactSessionId), {recursive: true})
+  writeFileSync(
+    progressPath,
+    JSON.stringify({
+      expiresAt: futureDate.toISOString(),
+      percent: 12,
+      phase: 'export_assembly',
+      startedAt: '2030-01-01T00:00:00.000Z',
+      status: 'running',
+      updatedAt: '2030-01-01T00:00:05.000Z',
+      warningCount: 0,
+    }),
+  )
+
+  const response = await getRouteResponse(app, `/api/projects/export/${progressArtifactSessionId}`, 'GET')
+  const body = (await response.json()) as {
+    data: {exportId: string; progress: {percent: number}; status: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {exportId: progressArtifactSessionId, progress: {percent: 12}, status: 'assembling'},
+    error: null,
+  })
+  expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
 })
 
 test('project transfer export polling rejects missing, wrong-direction, failed, and expired sessions', async () => {
@@ -1114,6 +1147,82 @@ test('project transfer import get ignores autoResolve query and remains read-onl
   expect(writeProjectTransferDependencyPlanMock).not.toHaveBeenCalled()
 })
 
+test('project transfer import get reads running progress artifacts before the session repository', async () => {
+  const app = await getProjectTransferApp()
+  mkdirSync(getImportRootPath(progressArtifactImportSessionId), {recursive: true})
+  writeFileSync(
+    getImportProgressPath(progressArtifactImportSessionId),
+    JSON.stringify({
+      expiresAt: futureDate.toISOString(),
+      message: 'Analyzing target project state',
+      phase: 'analyze',
+      planRevision: 1,
+      rowCountProcessed: 0,
+      rowCountTotal: 89419,
+      status: 'running',
+      updatedAt: '2030-01-01T00:00:05.000Z',
+      uploadMetadata: getUploadMetadata('zip-body'),
+      warningCount: 3,
+    }),
+  )
+
+  const response = await getRouteResponse(
+    app,
+    `/api/projects/import/${progressArtifactImportSessionId}?includePlan=true`,
+    'GET',
+  )
+  const body = (await response.json()) as {
+    data: {progress: {message: string}; state: string; upload: {byteLength: number}}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {
+      progress: {message: 'Analyzing target project state'},
+      state: 'analyzing',
+      upload: {byteLength: getUploadMetadata('zip-body').byteLength},
+    },
+    error: null,
+  })
+  expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
+})
+
+test('project transfer import get reads commit progress artifacts before the session repository', async () => {
+  const app = await getProjectTransferApp()
+  mkdirSync(getImportRootPath(commitProgressArtifactImportSessionId), {recursive: true})
+  writeFileSync(
+    getImportProgressPath(commitProgressArtifactImportSessionId),
+    JSON.stringify({
+      message: 'Writing imported project tables',
+      phase: 'app_table_writes',
+      planRevision: 2,
+      rowCountProcessed: 1200,
+      rowCountTotal: 89419,
+      status: 'running',
+      updatedAt: '2030-01-01T00:00:10.000Z',
+      warningCount: 1,
+    }),
+  )
+
+  const response = await getRouteResponse(app, `/api/projects/import/${commitProgressArtifactImportSessionId}`, 'GET')
+  const body = (await response.json()) as {
+    data: {canCommit: boolean; progress: {message: string; phase: string}; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {
+      canCommit: false,
+      progress: {message: 'Writing imported project tables', phase: 'app_table_writes'},
+      state: 'committing',
+    },
+    error: null,
+  })
+  expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
+})
+
 test('project transfer import get fails the session when dependency artifacts are missing', async () => {
   routeState.sessions[missingArtifactsGetSessionId] = getImportSessionRecord({
     id: missingArtifactsGetSessionId,
@@ -1208,6 +1317,34 @@ test('project transfer import analyze returns accepted when expanded size is unk
 
   expect(response.status).toBe(202)
   expect(body).toMatchObject({data: {executionMode: 'background', state: 'extracting'}, error: null})
+})
+
+test('project transfer import analyze returns accepted for explicit large packages', async () => {
+  routeState.sessions[largeBackgroundAnalyzeSessionId] = getImportSessionRecord({
+    id: largeBackgroundAnalyzeSessionId,
+    progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
+    state: 'queued',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/import/${largeBackgroundAnalyzeSessionId}/analyze`, {
+      body: JSON.stringify({expandedBytes: 513 * 1024 * 1024, zipBytes: 129 * 1024 * 1024}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {executionMode: string; ownerToken: string | null; progress: {phase: string; status: string}; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(202)
+  expect(body).toMatchObject({
+    data: {executionMode: 'background', progress: {phase: 'package_scan', status: 'running'}, state: 'extracting'},
+    error: null,
+  })
+  expect(typeof body.data.ownerToken).toBe('string')
 })
 
 test('project transfer import resolve updates the durable dependency plan and commit returns completed session data', async () => {

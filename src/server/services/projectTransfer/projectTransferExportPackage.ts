@@ -8,6 +8,7 @@ import packageJson from '../../../../package.json' with {type: 'json'}
 import type {ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
 import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
+import {runWithProjectTransferBackgroundActivity} from './projectTransferBackgroundActivity.ts'
 import {
   getProjectTransferExportExecutionMode,
   type ProjectTransferExecutionMode,
@@ -779,7 +780,9 @@ const persistCompletedProjectTransferExportBuild = async ({
 }
 
 const startDetachedProjectTransferExportSession = (input: RunProjectTransferExportSessionInput) => {
-  void runProjectTransferExportSession(input).catch((error) => {
+  void runWithProjectTransferBackgroundActivity(() => {
+    return runProjectTransferExportSession(input)
+  }).catch((error) => {
     logProjectTransferExportDetachedWorkerError(input.sessionId, error)
   })
 }
@@ -1127,9 +1130,11 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
   }
 
   writeProjectTransferExportRuntimeEvent({progress: pendingProgress, sessionId: input.sessionId, state: 'assembling'})
+  await writeExportProgressFile({layout, progress: pendingProgress, runtimeOptions: input})
 
   try {
     const publishSessionProgress = async (progress: ProjectTransferProgressPayload) => {
+      await writeExportProgressFile({layout, progress, runtimeOptions: input})
       const session = await repository.heartbeatProjectTransferExportSessionOwner({
         ownerToken,
         progress,
@@ -1210,6 +1215,7 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
     })
   } catch (error) {
     const failedProgress = {...pendingProgress, status: 'failed' as const, updatedAt: new Date().toISOString()}
+    await writeExportProgressFile({layout, progress: failedProgress, runtimeOptions: input})
     writeProjectTransferExportRuntimeEvent({progress: failedProgress, sessionId: input.sessionId, state: 'failed'})
     await rm(resolveProjectTransferTempWritablePath({...input, pathValue: layout.rootPath}), {
       force: true,

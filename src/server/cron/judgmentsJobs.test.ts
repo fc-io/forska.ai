@@ -158,6 +158,90 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
   expect(result.importCalls).toEqual(['server-low-memory'])
 })
 
+test('judgment import cron skips while project transfer background work is active', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobsImportCron.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const projectTransferActivityModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferBackgroundActivity.ts')
+        const cronConfigs = []
+        let importCallCount = 0
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              use() {
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              cronConfigs.push(config)
+              return () => {}
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-transfer-active'}
+        })
+        void mock.module(backgroundImportModulePath, () => {
+          return {
+            runJudgmentJobSqliteBackgroundImport: async () => {
+              importCallCount += 1
+            },
+          }
+        })
+        void mock.module(projectTransferActivityModulePath, () => {
+          return {hasActiveProjectTransferBackgroundActivity: () => true}
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {writeRuntimeFailureLogEvent: () => {}}
+        })
+
+        await import(judgmentsJobsModulePath + '?transfer-active=' + Date.now())
+        const importCron = cronConfigs.find((config) => {
+          return config.name === 'judgments-jobs-import-judgments'
+        })
+        await importCron.run()
+
+        console.log(JSON.stringify({importCallCount}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Judgment import cron transfer guard test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {importCallCount: number}
+
+  expect(result.importCallCount).toBe(0)
+})
+
 test('add-to-queue overlap warning waits for sustained running time', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

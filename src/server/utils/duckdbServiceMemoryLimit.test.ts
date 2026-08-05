@@ -163,9 +163,93 @@ test('duckdb service uses one thread and deferred checkpoints for the 6400MiB wo
       threads: string
     }
 
-    expect(runtimeConfig.checkpointThreshold).toBe('8192MiB')
+    expect(runtimeConfig.checkpointThreshold).toBe('1048576MiB')
     expect(runtimeConfig.threads).toBe('1')
     expect(runtimeConfig.serializeConcurrentWork).toBe(true)
+  } finally {
+    removeDuckdbFiles(duckdbPath)
+  }
+})
+
+test('duckdb service preserves explicit manual checkpoints on low-memory workers', () => {
+  const duckdbPath = `/tmp/f1-duckdb-service-manual-checkpoint-low-memory-${Date.now()}.duckdb`
+
+  try {
+    const stdout = getSpawnOutput(
+      globalThis.Bun.spawnSync(
+        [
+          'bun',
+          '-e',
+          `
+            const {mock} = await import('bun:test')
+
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const runStatements = []
+
+            void mock.module(serverRuntimeRoleModulePath, () => {
+              return {
+                canCurrentServerOwnDuckdb: () => true,
+                ensureCurrentDuckdbOwnerLease: async () => {},
+                registerDuckdbOwnerDemotionHandler: () => {},
+                releaseCurrentDuckdbOwnerLease: async () => {},
+              }
+            })
+
+            void mock.module('@duckdb/node-api', () => {
+              class MockConnection {
+                async run(statement) {
+                  runStatements.push(statement)
+                }
+
+                async runAndReadAll() {
+                  return {
+                    getRowObjectsJson() {
+                      return [{value: 1}]
+                    },
+                  }
+                }
+
+                interrupt() {}
+                closeSync() {}
+              }
+
+              class MockInstance {
+                static async create() {
+                  return new MockInstance()
+                }
+
+                async connect() {
+                  return new MockConnection()
+                }
+
+                closeSync() {}
+              }
+
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            })
+
+            const duckdbService = await import('./src/server/utils/duckdbService.ts?manual-checkpoint-low-memory=' + Date.now())
+            await duckdbService.runDuckdbStatement('INSERT INTO app.sample VALUES (1)')
+            await duckdbService.runDuckdbMaintenance('checkpoint')
+            console.log(JSON.stringify({runStatements}))
+            await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
+          `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '6400MiB',
+            SERVER_ROLE: 'maintenance-worker',
+          },
+        },
+      ),
+    )
+
+    const result = JSON.parse(stdout) as {runStatements: string[]}
+
+    expect(result.runStatements).toEqual(['INSERT INTO app.sample VALUES (1)', 'CHECKPOINT'])
   } finally {
     removeDuckdbFiles(duckdbPath)
   }

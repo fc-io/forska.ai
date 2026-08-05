@@ -193,6 +193,7 @@ type DuckdbServiceState = {
   duckdbPendingCount: number
   duckdbQueue: Promise<void>
   duckdbRuntimeConfig: DuckdbRuntimeConfig | null
+  duckdbStartupWalCheckpointSkipped: boolean
   duckdbTasksCompleted: number
   duckdbTasksStarted: number
   duckdbTotalDurationMs: number
@@ -225,6 +226,8 @@ const duckdbWorkloadMetricsLimit = 50
 const duckdbWorkloadDiagnosticStorage = new AsyncLocalStorage<DuckdbWorkloadDiagnosticContext>()
 const duckdbCheckpointThresholdMaxMiB = 8192
 const duckdbCheckpointThresholdMinMiB = 64
+const duckdbLowMemoryDeferredCheckpointThresholdMiB = 1024 * 1024
+const duckdbStartupWalCheckpointTimeoutMs = 15_000
 const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
 const duckdbStartupPreflightLockRetryDelaysMs = [100, 250, 500, 1000]
@@ -2314,6 +2317,7 @@ const getDuckdbServiceState = () => {
     duckdbPendingCount: 0,
     duckdbQueue: Promise.resolve(),
     duckdbRuntimeConfig: null,
+    duckdbStartupWalCheckpointSkipped: false,
     duckdbTasksCompleted: 0,
     duckdbTasksStarted: 0,
     duckdbTotalDurationMs: 0,
@@ -2361,7 +2365,7 @@ const getDuckdbCheckpointThresholdValue = (memoryLimit: string) => {
   }
 
   if (memoryLimitMiB >= 4096 && memoryLimitMiB <= 6400) {
-    return `${duckdbCheckpointThresholdMaxMiB}MiB`
+    return `${duckdbLowMemoryDeferredCheckpointThresholdMiB}MiB`
   }
 
   const thresholdMiB = Math.max(
@@ -3476,8 +3480,16 @@ const getDuckdbIndexedTableRepairScript = () => {
       return schemaName + '.' + tableName
     }
 
+    const getRepairSpecKey = (schemaName, tableName) => {
+      return schemaName + '.' + tableName
+    }
+
     const quoteIdentifier = (identifier) => {
       return '"' + String(identifier).replaceAll('"', '""') + '"'
+    }
+
+    const getQualifiedIdentifier = (schemaName, tableName) => {
+      return quoteIdentifier(schemaName) + '.' + quoteIdentifier(tableName)
     }
 
     const regexpSpecialCharacters = new Set(['\\\\', '^', '$', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|'])
@@ -3622,6 +3634,67 @@ const getDuckdbIndexedTableRepairScript = () => {
       return Number(rows[0]?.tableCount ?? 0) > 0
     }
 
+    const getTableRowCount = async (schemaName, tableName) => {
+      const rows = await getRows(
+        'SELECT COUNT(*) AS rowCount FROM ' + getQualifiedIdentifier(schemaName, tableName),
+      )
+
+      return String(rows[0]?.rowCount ?? '0')
+    }
+
+    const getProtectedTableRowCounts = async (repairedTableKeys) => {
+      const rows = await getRows(
+        "SELECT table_schema AS schemaName, table_name AS tableName " +
+          "FROM information_schema.tables " +
+          "WHERE table_type = 'BASE TABLE' " +
+          "AND table_schema NOT IN ('information_schema', 'pg_catalog') " +
+          "ORDER BY table_schema, table_name",
+      )
+      const protectedCounts = []
+
+      for (const row of rows) {
+        const schemaName = typeof row.schemaName === 'string' ? row.schemaName : null
+        const tableName = typeof row.tableName === 'string' ? row.tableName : null
+
+        if (schemaName === null || tableName === null || repairedTableKeys.has(getRepairSpecKey(schemaName, tableName))) {
+          continue
+        }
+
+        protectedCounts.push({
+          rowCount: await getTableRowCount(schemaName, tableName),
+          schemaName,
+          tableName,
+        })
+      }
+
+      return protectedCounts
+    }
+
+    const assertProtectedTableRowCountsUnchanged = async (protectedCounts) => {
+      for (const protectedCount of protectedCounts) {
+        if (!(await tableExists(protectedCount.schemaName, protectedCount.tableName))) {
+          throw new Error(
+            'startup repair changed non-repaired table '
+              + getQualifiedName(protectedCount.schemaName, protectedCount.tableName)
+              + ': table disappeared',
+          )
+        }
+
+        const rowCount = await getTableRowCount(protectedCount.schemaName, protectedCount.tableName)
+
+        if (rowCount !== protectedCount.rowCount) {
+          throw new Error(
+            'startup repair changed non-repaired table '
+              + getQualifiedName(protectedCount.schemaName, protectedCount.tableName)
+              + ': row count was '
+              + protectedCount.rowCount
+              + ' and is '
+              + rowCount,
+          )
+        }
+      }
+    }
+
     const getTableColumnNames = async (schemaName, tableName) => {
       const rows = await getRows(
         "SELECT column_name AS columnName FROM information_schema.columns " +
@@ -3724,122 +3797,142 @@ const getDuckdbIndexedTableRepairScript = () => {
     try {
       instance = await DuckDBInstance.create(databasePath, options)
       connection = await instance.connect()
+      const repairedTableKeys = new Set(
+        tableRepairSpecs.map((spec) => {
+          return getRepairSpecKey(spec.schemaName, spec.tableName)
+        }),
+      )
+      const protectedTableRowCounts = await getProtectedTableRowCounts(repairedTableKeys)
+      let repairCommitted = false
 
-      for (const spec of tableRepairSpecs) {
-        if (!(await tableExists(spec.schemaName, spec.tableName))) {
-          continue
-        }
+      await connection.run('BEGIN')
+      try {
+        for (const spec of tableRepairSpecs) {
+          if (!(await tableExists(spec.schemaName, spec.tableName))) {
+            continue
+          }
 
-        if (!(await schemaRequirementsSatisfied(spec.schemaRequirements))) {
-          continue
-        }
+          if (!(await schemaRequirementsSatisfied(spec.schemaRequirements))) {
+            continue
+          }
 
-        const duplicateRows = await getRows(spec.duplicateKeySelectSql)
-        const duplicateCount = Number(duplicateRows[0]?.duplicateCount ?? 0)
+          const duplicateRows = await getRows(spec.duplicateKeySelectSql)
+          const duplicateCount = Number(duplicateRows[0]?.duplicateCount ?? 0)
 
-        if (duplicateCount > 0 && !['dedupe-latest', 'empty-derived'].includes(spec.repairStrategy)) {
-          throw new Error(
-            'cannot rebuild ' + getQualifiedName(spec.schemaName, spec.tableName)
-              + ' because table data contains ' + duplicateCount + ' duplicate primary keys',
-          )
-        }
+          if (duplicateCount > 0 && !['dedupe-latest', 'empty-derived'].includes(spec.repairStrategy)) {
+            throw new Error(
+              'cannot rebuild ' + getQualifiedName(spec.schemaName, spec.tableName)
+                + ' because table data contains ' + duplicateCount + ' duplicate primary keys',
+            )
+          }
 
-        const tableRows = await getRows(
-          "SELECT sql FROM duckdb_tables() " +
-            "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
-            " AND table_name = " + getSqlLiteral(spec.tableName) +
-            " LIMIT 1",
-        )
-        const createSql = tableRows[0]?.sql
-
-        if (typeof createSql !== 'string' || createSql.length === 0) {
-          throw new Error('missing table DDL for ' + getQualifiedName(spec.schemaName, spec.tableName))
-        }
-
-        const indexRows = await getRows(
-          "SELECT index_name AS indexName, sql FROM duckdb_indexes() " +
-            "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
-            " AND table_name = " + getSqlLiteral(spec.tableName) +
-            " AND sql IS NOT NULL " +
-            "ORDER BY index_name",
-        )
-        const repairTableName = spec.tableName + '_startup_repair_' + repairId
-        const sourceName = getQualifiedName(spec.schemaName, spec.tableName)
-        const repairName = getQualifiedName(spec.schemaName, repairTableName)
-        let createRepairSql = createSql.replace(
-          'CREATE TABLE ' + sourceName + '(',
-          'CREATE TABLE ' + repairName + '(',
-        )
-        createRepairSql = stripInlinePrimaryKeyConstraints(createRepairSql, spec.repairPrimaryKeyColumns)
-
-        if (createRepairSql === createSql) {
-          throw new Error('could not rewrite table DDL for ' + sourceName)
-        }
-
-        await connection.run('DROP TABLE IF EXISTS ' + repairName)
-        await connection.run(createRepairSql)
-        if (spec.repairStrategy !== 'empty-derived') {
-          await connection.run(await getRepairCopySql(spec, sourceName, repairName))
-        }
-        await connection.run('DROP TABLE ' + sourceName)
-        await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
-        await connection.run(
-          'DROP INDEX IF EXISTS '
-            + quoteIdentifier(spec.schemaName)
-            + '.'
-            + quoteIdentifier('idx_' + spec.tableName + '_repaired_pk'),
-        )
-        if (spec.recreateRepairPrimaryKeyIndex !== true) {
-          const repairedPrimaryKeyIndexPrefix = 'idx_' + spec.tableName + '_repaired_pk'
-          const repairedPrimaryKeyIndexRows = await getRows(
-            "SELECT index_name AS indexName FROM duckdb_indexes() " +
+          const tableRows = await getRows(
+            "SELECT sql FROM duckdb_tables() " +
               "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
-              " AND table_name = " + getSqlLiteral(spec.tableName),
+              " AND table_name = " + getSqlLiteral(spec.tableName) +
+              " LIMIT 1",
           )
+          const createSql = tableRows[0]?.sql
 
-          for (const indexRow of repairedPrimaryKeyIndexRows) {
-            const indexName = typeof indexRow.indexName === 'string' ? indexRow.indexName : null
+          if (typeof createSql !== 'string' || createSql.length === 0) {
+            throw new Error('missing table DDL for ' + getQualifiedName(spec.schemaName, spec.tableName))
+          }
 
-            if (indexName !== null && indexName.startsWith(repairedPrimaryKeyIndexPrefix)) {
-              await connection.run(
-                'DROP INDEX IF EXISTS ' + quoteIdentifier(spec.schemaName) + '.' + quoteIdentifier(indexName),
-              )
+          const indexRows = await getRows(
+            "SELECT index_name AS indexName, sql FROM duckdb_indexes() " +
+              "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+              " AND table_name = " + getSqlLiteral(spec.tableName) +
+              " AND sql IS NOT NULL " +
+              "ORDER BY index_name",
+          )
+          const repairTableName = spec.tableName + '_startup_repair_' + repairId
+          const sourceName = getQualifiedName(spec.schemaName, spec.tableName)
+          const repairName = getQualifiedName(spec.schemaName, repairTableName)
+          let createRepairSql = createSql.replace(
+            'CREATE TABLE ' + sourceName + '(',
+            'CREATE TABLE ' + repairName + '(',
+          )
+          createRepairSql = stripInlinePrimaryKeyConstraints(createRepairSql, spec.repairPrimaryKeyColumns)
+
+          if (createRepairSql === createSql) {
+            throw new Error('could not rewrite table DDL for ' + sourceName)
+          }
+
+          await connection.run('DROP TABLE IF EXISTS ' + repairName)
+          await connection.run(createRepairSql)
+          if (spec.repairStrategy !== 'empty-derived') {
+            await connection.run(await getRepairCopySql(spec, sourceName, repairName))
+          }
+          await connection.run('DROP TABLE ' + sourceName)
+          await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
+          await connection.run(
+            'DROP INDEX IF EXISTS '
+              + quoteIdentifier(spec.schemaName)
+              + '.'
+              + quoteIdentifier('idx_' + spec.tableName + '_repaired_pk'),
+          )
+          if (spec.recreateRepairPrimaryKeyIndex !== true) {
+            const repairedPrimaryKeyIndexPrefix = 'idx_' + spec.tableName + '_repaired_pk'
+            const repairedPrimaryKeyIndexRows = await getRows(
+              "SELECT index_name AS indexName FROM duckdb_indexes() " +
+                "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+                " AND table_name = " + getSqlLiteral(spec.tableName),
+            )
+
+            for (const indexRow of repairedPrimaryKeyIndexRows) {
+              const indexName = typeof indexRow.indexName === 'string' ? indexRow.indexName : null
+
+              if (indexName !== null && indexName.startsWith(repairedPrimaryKeyIndexPrefix)) {
+                await connection.run(
+                  'DROP INDEX IF EXISTS ' + quoteIdentifier(spec.schemaName) + '.' + quoteIdentifier(indexName),
+                )
+              }
             }
           }
-        }
-        const repairPrimaryKeyIndexSql = getRepairPrimaryKeyIndexSql(spec, sourceName)
+          const repairPrimaryKeyIndexSql = getRepairPrimaryKeyIndexSql(spec, sourceName)
 
-        if (repairPrimaryKeyIndexSql !== null) {
-          await connection.run(repairPrimaryKeyIndexSql)
-        }
-
-        if (spec.recreateSecondaryIndexes !== false) {
-          for (const indexRow of indexRows) {
-            if (String(indexRow.indexName).startsWith('idx_' + spec.tableName + '_repaired_pk')) {
-              continue
-            }
-
-            const indexSql = String(indexRow.sql)
-            if (indexDuplicatesRepairPrimaryKey(spec, indexSql)) {
-              continue
-            }
-
-            const recreatedIndexSql = indexSql
-              .replace(/^CREATE UNIQUE INDEX /, 'CREATE UNIQUE INDEX IF NOT EXISTS ')
-              .replace(/^CREATE INDEX /, 'CREATE INDEX IF NOT EXISTS ')
-            await connection.run(recreatedIndexSql)
+          if (repairPrimaryKeyIndexSql !== null) {
+            await connection.run(repairPrimaryKeyIndexSql)
           }
+
+          if (spec.recreateSecondaryIndexes !== false) {
+            for (const indexRow of indexRows) {
+              if (String(indexRow.indexName).startsWith('idx_' + spec.tableName + '_repaired_pk')) {
+                continue
+              }
+
+              const indexSql = String(indexRow.sql)
+              if (indexDuplicatesRepairPrimaryKey(spec, indexSql)) {
+                continue
+              }
+
+              const recreatedIndexSql = indexSql
+                .replace(/^CREATE UNIQUE INDEX /, 'CREATE UNIQUE INDEX IF NOT EXISTS ')
+                .replace(/^CREATE INDEX /, 'CREATE INDEX IF NOT EXISTS ')
+              await connection.run(recreatedIndexSql)
+            }
+          }
+
+          if (
+            typeof spec.postRepairSql === 'string'
+            && spec.postRepairSql.trim().length > 0
+            && (await schemaRequirementsSatisfied(spec.postRepairSchemaRequirements))
+          ) {
+            await connection.run(spec.postRepairSql)
+          }
+
+          await assertRepairPostconditions(spec)
         }
 
-        if (
-          typeof spec.postRepairSql === 'string'
-          && spec.postRepairSql.trim().length > 0
-          && (await schemaRequirementsSatisfied(spec.postRepairSchemaRequirements))
-        ) {
-          await connection.run(spec.postRepairSql)
+        await assertProtectedTableRowCountsUnchanged(protectedTableRowCounts)
+        await connection.run('COMMIT')
+        repairCommitted = true
+      } finally {
+        if (!repairCommitted) {
+          try {
+            await connection.run('ROLLBACK')
+          } catch {}
         }
-
-        await assertRepairPostconditions(spec)
       }
 
       try {
@@ -4072,26 +4165,34 @@ const checkpointDuckdbStartupWalReplay = async (runtimeConfig: DuckdbRuntimeConf
       stderr: 'pipe',
       stdin: 'ignore',
       stdout: 'pipe',
+      timeout: duckdbStartupWalCheckpointTimeoutMs,
     },
   )
 
   if (result.exitCode === 0) {
+    duckdbServiceState.duckdbStartupWalCheckpointSkipped = false
     writeRuntimeOperatorLogEvent({
       attrs: {databasePath: runtimeConfig.databasePath},
       event: 'duckdb.startup.wal-checkpoint',
       message: '[duckdb] checkpointed replayed WAL before startup mutation preflight',
       severity: 'INFO',
     })
-    return
+    return true
   }
 
   const outputText = getDuckdbStartupChildOutputText(result)
+  const failureText = outputText === '' ? `exitCode=${result.exitCode ?? 'unknown'}` : outputText
 
-  throw new Error(
-    `DuckDB startup WAL checkpoint failed for ${runtimeConfig.databasePath}: ${
-      outputText === '' ? `exitCode=${result.exitCode ?? 'unknown'}` : outputText
-    }`,
-  )
+  writeRuntimeOperatorLogEvent({
+    attrs: {databasePath: runtimeConfig.databasePath, error: failureText},
+    event: 'duckdb.startup.wal-checkpoint-skipped',
+    message: '[duckdb] startup WAL checkpoint failed; keeping replayable WAL for normal startup',
+    severity: 'WARN',
+    terminalArgs: [failureText],
+  })
+
+  duckdbServiceState.duckdbStartupWalCheckpointSkipped = true
+  return false
 }
 
 const repairDuckdbStartupIndexedTables = async (
@@ -4248,12 +4349,16 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
     if (error === null) {
       if (!hadWalBeforePreflight) {
+        duckdbServiceState.duckdbStartupWalCheckpointSkipped = false
         pendingPostRepairPreflightSpecs = []
       }
 
       if (hadWalBeforePreflight && !checkpointedWalReplay) {
         checkpointedWalReplay = true
-        await checkpointDuckdbStartupWalReplay(runtimeConfig)
+        const checkpointed = await checkpointDuckdbStartupWalReplay(runtimeConfig)
+        if (!checkpointed) {
+          return
+        }
         continue
       }
 
@@ -5446,6 +5551,10 @@ const assertDuckdbAppendTransactionEnabled = () => {
 
 export const getDuckdbRuntimeConfig = () => {
   return {...getDuckdbRuntimeConfigValue()}
+}
+
+export const hasSkippedDuckdbStartupWalCheckpoint = () => {
+  return duckdbServiceState.duckdbStartupWalCheckpointSkipped
 }
 
 export const getDuckdbTempSpillMetricsSnapshot = (): DuckdbTempSpillMetrics => {
