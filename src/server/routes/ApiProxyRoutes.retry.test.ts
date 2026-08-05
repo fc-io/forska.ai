@@ -1,3 +1,6 @@
+import {mkdirSync, rmSync, writeFileSync} from 'node:fs'
+import {join} from 'node:path'
+
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
@@ -22,6 +25,7 @@ const actualRuntimeCutoverModule = (await import(
 
 const originalFetch = globalThis.fetch
 const textEncoder = new TextEncoder()
+const importArtifactTestRoot = join(process.cwd(), 'tmp/project-transfer/import/api-proxy-status-artifact-test')
 
 const state: {ownerUrls: string[]; shouldProxy: boolean} = {ownerUrls: ['http://owner-1:34991'], shouldProxy: true}
 
@@ -133,6 +137,7 @@ afterEach(() => {
   state.shouldProxy = true
   state.ownerUrls = ['http://owner-1:34991']
   globalThis.fetch = originalFetch
+  rmSync(importArtifactTestRoot, {force: true, recursive: true})
 })
 
 test.serial('api proxy retries idempotent GET requests after a transport failure', async () => {
@@ -157,6 +162,46 @@ test.serial('api proxy retries idempotent GET requests after a transport failure
   expect(body.data.ok).toBe(true)
   expect(ownerFetchCallUrls).toHaveLength(4)
 })
+
+test.serial(
+  'api proxy serves active project import status from progress artifact before contacting owner',
+  async () => {
+    const app = await loadRoutes()
+    mkdirSync(importArtifactTestRoot, {recursive: true})
+    writeFileSync(
+      join(importArtifactTestRoot, 'progress.json'),
+      JSON.stringify({
+        message: 'Commit app-table writes running',
+        phase: 'commit',
+        rowCountProcessed: 0,
+        rowCountTotal: 142_616,
+        status: 'running',
+        updatedAt: '2030-01-01T00:00:00.000Z',
+      }),
+    )
+    const fetchMock = mock(async () => {
+      throw new Error('owner proxy should not be contacted when a running import progress artifact exists')
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const response = await app.handle(
+      new Request('http://localhost/api/projects/import/api-proxy-status-artifact-test', {method: 'GET'}),
+    )
+    const body = (await response.json()) as {
+      data: {id: string; progress: {message: string; rowCountProcessed: number; rowCountTotal: number}; state: string}
+      error: string | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(body.error).toBe(null)
+    expect(body.data.id).toBe('api-proxy-status-artifact-test')
+    expect(body.data.state).toBe('committing')
+    expect(body.data.progress.message).toBe('Commit app-table writes running')
+    expect(body.data.progress.rowCountProcessed).toBe(0)
+    expect(body.data.progress.rowCountTotal).toBe(142_616)
+    expect(fetchMock).toHaveBeenCalledTimes(0)
+  },
+)
 
 test.serial('api proxy does not retry non-idempotent POST requests after a transport failure', async () => {
   const app = await loadRoutes()
