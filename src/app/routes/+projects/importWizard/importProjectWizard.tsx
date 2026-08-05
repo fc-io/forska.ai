@@ -331,12 +331,20 @@ const getProgressPercent = (
   createProgress: boolean,
 ) => {
   const progressPercent = session?.progress?.percent
+  const rowCountProcessed = session?.progress?.rowCountProcessed ?? session?.progress?.completedRows ?? null
+  const rowCountTotal = session?.progress?.rowCountTotal ?? session?.progress?.totalRows ?? null
+  const countPercent =
+    typeof rowCountProcessed === 'number'
+    && Number.isFinite(rowCountProcessed)
+    && typeof rowCountTotal === 'number'
+    && Number.isFinite(rowCountTotal)
+    && rowCountTotal > 0
+      ? Math.round(Math.max(0, Math.min(100, (rowCountProcessed / rowCountTotal) * 100)))
+      : null
 
   return typeof progressPercent === 'number'
     ? Math.round(progressPercent)
-    : createProgress || session?.state === 'committing'
-      ? null
-      : uploadPercent
+    : (countPercent ?? (createProgress || session?.state === 'committing' ? null : uploadPercent))
 }
 
 const hasUnresolvedDependencies = (session: ProjectImportSession | null) => {

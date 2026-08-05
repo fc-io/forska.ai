@@ -21,6 +21,7 @@ import {
   type ProjectTransferCancellationReason,
   type ProjectTransferExecutionMode,
   type ProjectTransferExportReadyPayload,
+  type ProjectTransferImportCompletionPayload,
   type ProjectTransferPlanSummary,
   type ProjectTransferProgressPayload,
   type ProjectTransferRawArticleProvenanceMode,
@@ -81,7 +82,7 @@ type ProjectTransferExportSessionReadyResponse = ProjectTransferExportPackageMet
 type ProjectTransferExportSessionData =
   | ProjectTransferExportSessionPendingResponse
   | ProjectTransferExportSessionReadyResponse
-type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
+export type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
   analyzeUrl: string
   blockers: string[]
   canCommit: boolean
@@ -570,16 +571,41 @@ const getImportSessionStateFromProgress = (
       : 'analyzing'
 }
 
-const getImportSessionArtifactResponse = async (
+export const getImportSessionArtifactResponse = async (
   exportId: string,
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData> | null> => {
   if (!isProjectTransferSessionId(exportId)) {
     return null
   }
 
-  const progress = await readProjectTransferArtifactJson<ProjectTransferProgressPayload>(
-    getProjectTransferImportTempLayout(exportId).progressPath,
-  )
+  const layout = getProjectTransferImportTempLayout(exportId)
+  const [completion, progress] = await Promise.all([
+    readProjectTransferArtifactJson<ProjectTransferImportCompletionPayload>(layout.completionPath),
+    readProjectTransferArtifactJson<ProjectTransferProgressPayload>(layout.progressPath),
+  ])
+
+  if (completion?.status === 'completed') {
+    const completedAt = typeof progress?.updatedAt === 'string' ? new Date(progress.updatedAt) : new Date()
+    const response: ProjectTransferSessionResponse = {
+      commitId: null,
+      completion,
+      createdAt: completedAt,
+      direction: 'import',
+      error: null,
+      expiresAt: getDefaultImportSessionExpiresAt(completedAt),
+      heartbeatAt: null,
+      id: exportId,
+      ownerToken: null,
+      packageFingerprint: completion.packageFingerprint ?? null,
+      planRevision: typeof progress?.planRevision === 'number' ? progress.planRevision : 0,
+      planSummary: null,
+      progress: progress ?? null,
+      state: 'completed',
+      updatedAt: completedAt,
+    }
+
+    return {data: getImportSessionData(response, null, 'background'), error: null}
+  }
 
   if (progress === null) {
     return null
@@ -631,8 +657,11 @@ const getImportSessionData = (
   plan: ProjectTransferImportPlanArtifact | null,
   executionMode?: ProjectTransferExecutionMode,
 ): ProjectTransferImportSessionData => {
+  const completion = compactImportCompletionForApi(response.completion)
+
   return {
     ...response,
+    completion,
     ...getImportSessionUrls(response.id),
     blockers: getImportSessionBlockers(response.planSummary),
     canCommit: canCommitImportSession(response),
@@ -689,6 +718,56 @@ const getImportArtifactsUnavailableError = (error: string) => {
     error === 'Project transfer dependency payloads are unavailable'
     || error === 'Project transfer import plan artifact is unavailable'
   )
+}
+
+const maxImportCompletionWarningsInStatusResponse = 200
+
+const getWarningCodeCounts = (warnings: readonly unknown[]) => {
+  return warnings.reduce<Record<string, number>>((counts, warning) => {
+    const code =
+      typeof warning === 'object' && warning !== null && 'code' in warning && typeof warning.code === 'string'
+        ? warning.code
+        : 'unknown'
+
+    return {...counts, [code]: (counts[code] ?? 0) + 1}
+  }, {})
+}
+
+const compactImportCompletionForApi = (
+  completion: ProjectTransferSessionResponse['completion'],
+): ProjectTransferSessionResponse['completion'] => {
+  if (completion?.status !== 'completed') {
+    return completion
+  }
+
+  const importWarnings = completion.importWarnings ?? []
+
+  if (importWarnings.length <= maxImportCompletionWarningsInStatusResponse) {
+    return completion
+  }
+
+  const omittedWarningCount = importWarnings.length - maxImportCompletionWarningsInStatusResponse
+  const compactCompletion: ProjectTransferImportCompletionPayload = {
+    ...completion,
+    importWarnings: [
+      ...importWarnings.slice(0, maxImportCompletionWarningsInStatusResponse),
+      {
+        action: 'summarized',
+        code: 'postImportWarningsTruncated',
+        details: {
+          codeCounts: getWarningCodeCounts(importWarnings),
+          includedWarningCount: maxImportCompletionWarningsInStatusResponse,
+          omittedWarningCount,
+          totalWarningCount: importWarnings.length,
+        },
+        message: `${omittedWarningCount.toLocaleString('en-US')} additional post-import warning(s) were omitted from this status response.`,
+        scope: 'projectTransfer.importWarnings',
+        severity: 'warning',
+      },
+    ],
+  }
+
+  return compactCompletion
 }
 
 const getFailedImportArtifactsProgress = (record: ProjectTransferSessionRecord, now: Date) => {

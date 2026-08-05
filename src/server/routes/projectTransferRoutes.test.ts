@@ -65,6 +65,7 @@ const uploadArrayBufferSessionId = getRouteTestSessionId('import-upload-buffer')
 const readOnlyGetSessionId = getRouteTestSessionId('import-read-only-get')
 const progressArtifactImportSessionId = getRouteTestSessionId('import-progress-artifact')
 const commitProgressArtifactImportSessionId = getRouteTestSessionId('import-commit-progress-artifact')
+const completedArtifactImportSessionId = getRouteTestSessionId('import-completed-artifact')
 const largeBackgroundAnalyzeSessionId = getRouteTestSessionId('import-large-background-analyze')
 const missingArtifactsGetSessionId = getRouteTestSessionId('import-missing-get')
 const resolveSessionId = getRouteTestSessionId('import-resolve')
@@ -79,6 +80,7 @@ const artifactSessionIds = [
   readOnlyGetSessionId,
   progressArtifactImportSessionId,
   commitProgressArtifactImportSessionId,
+  completedArtifactImportSessionId,
   largeBackgroundAnalyzeSessionId,
   missingArtifactsGetSessionId,
   resolveSessionId,
@@ -1147,6 +1149,54 @@ test('project transfer import get ignores autoResolve query and remains read-onl
   expect(writeProjectTransferDependencyPlanMock).not.toHaveBeenCalled()
 })
 
+test('project transfer import get caps bulky completed warning payloads', async () => {
+  const completedWarningSessionId = getRouteTestSessionId('import-completed-warning-cap')
+  const importWarnings = Array.from({length: 250}, (_, index) => {
+    return {
+      action: 'reused',
+      code: index % 2 === 0 ? 'equivalentTargetJudgmentReused' : 'targetArticleImportRouteOmitted',
+      message: `Warning ${index}`,
+      scope: `warnings.${index}`,
+      severity: 'info',
+    }
+  })
+  routeState.sessions[completedWarningSessionId] = getImportSessionRecord({
+    completionPayloadJson: {
+      finalCounts: {warnings: importWarnings.length},
+      importWarnings,
+      packageFingerprint: 'fingerprint-warning-cap',
+      projectId: 'imported-warning-cap-project',
+      projectName: 'Imported Warning Cap Project',
+      status: 'completed',
+      targetProjectId: 'imported-warning-cap-project',
+      targetProjectName: 'Imported Warning Cap Project',
+      transferHistoryId: 'history-warning-cap',
+    },
+    id: completedWarningSessionId,
+    state: 'completed',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await getRouteResponse(app, `/api/projects/import/${completedWarningSessionId}`, 'GET')
+  const body = (await response.json()) as {
+    data: {completion: {finalCounts: {warnings: number}; importWarnings: Array<{code: string; details?: unknown}>}}
+    error: string | null
+  }
+  const summaryWarning = body.data.completion.importWarnings.at(-1)
+
+  expect(response.status).toBe(200)
+  expect(body.error).toBe(null)
+  expect(body.data.completion.finalCounts.warnings).toBe(250)
+  expect(body.data.completion.importWarnings).toHaveLength(201)
+  expect(summaryWarning?.code).toBe('postImportWarningsTruncated')
+  expect(summaryWarning?.details).toMatchObject({
+    codeCounts: {equivalentTargetJudgmentReused: 125, targetArticleImportRouteOmitted: 125},
+    includedWarningCount: 200,
+    omittedWarningCount: 50,
+    totalWarningCount: 250,
+  })
+})
+
 test('project transfer import get reads running progress artifacts before the session repository', async () => {
   const app = await getProjectTransferApp()
   mkdirSync(getImportRootPath(progressArtifactImportSessionId), {recursive: true})
@@ -1217,6 +1267,53 @@ test('project transfer import get reads commit progress artifacts before the ses
       canCommit: false,
       progress: {message: 'Writing imported project tables', phase: 'app_table_writes'},
       state: 'committing',
+    },
+    error: null,
+  })
+  expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
+})
+
+test('project transfer import get reads completed import artifacts before the session repository', async () => {
+  const app = await getProjectTransferApp()
+  mkdirSync(getImportRootPath(completedArtifactImportSessionId), {recursive: true})
+  writeFileSync(
+    getImportProgressPath(completedArtifactImportSessionId),
+    JSON.stringify({
+      message: 'Commit transaction completed',
+      percent: 100,
+      phase: 'commit',
+      planRevision: 2,
+      status: 'completed',
+      updatedAt: '2030-01-01T00:00:10.000Z',
+    }),
+  )
+  writeFileSync(
+    `${getImportRootPath(completedArtifactImportSessionId)}/completion.json`,
+    JSON.stringify({
+      finalCounts: {warnings: 0},
+      importWarnings: [],
+      packageFingerprint: 'fingerprint-completed-artifact',
+      projectId: 'completed-artifact-project',
+      projectName: 'Completed Artifact Project',
+      status: 'completed',
+      targetProjectId: 'completed-artifact-project',
+      targetProjectName: 'Completed Artifact Project',
+      transferHistoryId: 'history-completed-artifact',
+    }),
+  )
+
+  const response = await getRouteResponse(app, `/api/projects/import/${completedArtifactImportSessionId}`, 'GET')
+  const body = (await response.json()) as {
+    data: {completion: {targetProjectId: string}; progress: {message: string}; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {
+      completion: {targetProjectId: 'completed-artifact-project'},
+      progress: {message: 'Commit transaction completed'},
+      state: 'completed',
     },
     error: null,
   })

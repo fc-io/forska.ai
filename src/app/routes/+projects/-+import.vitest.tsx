@@ -818,6 +818,36 @@ describe('project import route', () => {
     }
   })
 
+  test('derives create progress percentage from row counts when artifact has no explicit percent', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        progress: {
+          message: 'Commit app-table writes running',
+          phase: 'commit',
+          rowCountProcessed: 71_308,
+          rowCountTotal: 142_616,
+          status: 'running',
+          updatedAt: '2030-01-01T00:00:01.000Z',
+        },
+        state: 'committing',
+        updatedAt: '2030-01-01T00:00:01.000Z',
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain('Create progress')
+      expect(container.textContent).toContain('50% · Commit app-table writes running')
+      expect(container.textContent).toContain('Rows: 71,308 of 142,616')
+      expect(container.textContent).not.toContain('No determinate percentage for this phase.')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('shows a stale heartbeat notice while background commit remains active', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2030-01-01T00:02:00.000Z'))

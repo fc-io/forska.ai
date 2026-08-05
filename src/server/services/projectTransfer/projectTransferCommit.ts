@@ -368,9 +368,22 @@ const cleanupCompletedImportArtifacts = async ({
   runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
-  const rootPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: layout.rootPath})
+  const cleanupPaths = [
+    layout.analysisPath,
+    layout.extractedPath,
+    layout.manifestPath,
+    layout.planPath,
+    layout.promotionManifestPath,
+    layout.uploadPath,
+  ]
 
-  await rm(rootPath, {force: true, recursive: true})
+  await Promise.all(
+    cleanupPaths.map((pathValue) => {
+      const resolvedPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue})
+
+      return rm(resolvedPath, {force: true, recursive: true})
+    }),
+  )
   await repositories.sessionRepository.markProjectTransferSessionTerminalCleanupComplete({
     expectedOwnerToken: null,
     expectedState: 'completed',

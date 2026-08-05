@@ -648,7 +648,10 @@ test('project transfer commit loads frozen artifacts and claims with server gene
         return {changed: false, plan, ready: true}
       },
     })
-    const tempRootExists = await globalThis.Bun.file(join(cwd, layout.rootPath)).exists()
+    const analysisArtifactExists = await globalThis.Bun.file(join(cwd, layout.analysisPath)).exists()
+    const completionArtifactExists = await globalThis.Bun.file(join(cwd, layout.completionPath)).exists()
+    const planArtifactExists = await globalThis.Bun.file(join(cwd, layout.planPath)).exists()
+    const progressArtifactExists = await globalThis.Bun.file(join(cwd, layout.progressPath)).exists()
 
     expect(result.status).toBe('completed')
     expect(result.statusCode).toBe(200)
@@ -683,7 +686,10 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(fake.getSession().terminalCleanupAt).not.toBeNull()
     expect(fake.calls.updatePlan).toHaveLength(0)
     expect(revalidationInputs).toHaveLength(2)
-    expect(tempRootExists).toBe(false)
+    expect(analysisArtifactExists).toBe(false)
+    expect(planArtifactExists).toBe(false)
+    expect(completionArtifactExists).toBe(true)
+    expect(progressArtifactExists).toBe(true)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

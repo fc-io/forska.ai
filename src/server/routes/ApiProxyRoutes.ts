@@ -12,6 +12,7 @@ import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from '../utils/serverRuntimeRole.ts'
 import {
   classifyApiRoute,
+  duckdbOwnerPrivateApiPrefix,
   getDuckdbOwnerProxyPathname,
   isProjectTransferStreamingUploadPath,
   shouldApiRouteFailClosedWithoutDuckdbOwner,
@@ -225,6 +226,40 @@ const getDuckdbOwnerProxyFailureResponse = (requestTemplate: {failClosedWithoutD
   return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse() : null
 }
 
+const getImportSessionIdFromProxyPathname = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  if (requestTemplate.method !== 'GET') {
+    return null
+  }
+
+  const publicPathname = requestTemplate.pathname.startsWith(duckdbOwnerPrivateApiPrefix)
+    ? requestTemplate.pathname.slice(duckdbOwnerPrivateApiPrefix.length)
+    : requestTemplate.pathname
+  const match = publicPathname.match(/^\/api\/projects\/import\/([^/]+)$/)
+
+  if (match === null) {
+    return null
+  }
+
+  try {
+    return decodeURIComponent(match[1] ?? '')
+  } catch {
+    return null
+  }
+}
+
+const getProjectTransferImportArtifactProxyResponse = async (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  const sessionId = getImportSessionIdFromProxyPathname(requestTemplate)
+
+  if (sessionId === null) {
+    return null
+  }
+
+  const {getImportSessionArtifactResponse} = await import('./projectTransferRoutes.ts')
+  const artifactResponse = await getImportSessionArtifactResponse(sessionId)
+
+  return artifactResponse === null ? null : Response.json(artifactResponse)
+}
+
 const getDuckdbOwnerProxyResponseHeaders = (response: Response) => {
   return Array.from(response.headers.entries()).reduce<Headers>((headers, [key, value]) => {
     if (!duckdbOwnerProxyHopByHopResponseHeaders.has(key.toLowerCase())) {
@@ -296,6 +331,12 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
 
   if (requestTemplate === null) {
     return null
+  }
+
+  const artifactResponse = await getProjectTransferImportArtifactProxyResponse(requestTemplate)
+
+  if (artifactResponse !== null) {
+    return artifactResponse
   }
 
   const target = await getDuckdbOwnerProxyTargetFailureResponse(requestTemplate)

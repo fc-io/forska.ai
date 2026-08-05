@@ -3881,26 +3881,30 @@ const advanceCommitTargetStateDirtyTokens = async ({now, tx}: {now: Date; tx: Pr
 const getEquivalentReusedJudgmentWarnings = (
   judgmentPlan: readonly JudgmentPlanEntry[],
 ): ProjectTransferPackageWarning[] => {
-  return judgmentPlan
-    .filter((entry) => {
-      return entry.action === 'reuse' && entry.targetJudgmentId !== null
-    })
-    .map((entry): ProjectTransferPackageWarning => {
-      return {
-        action: 'reused',
-        code: 'equivalentTargetJudgmentReused',
-        details: {
-          inputSignatureProvenance: entry.provenanceKind,
-          physicalKey: entry.physicalKey,
-          reviewVisibleKey: entry.reviewVisibleKey,
-          sourceJudgmentId: entry.sourceJudgmentId,
-          targetJudgmentId: entry.targetJudgmentId,
-        },
-        message: `${entry.sourceJudgmentId} reused equivalent target judgment ${entry.targetJudgmentId}`,
-        scope: `judgments.${entry.sourceJudgmentId}`,
-        severity: 'info',
-      }
-    })
+  const reusedEntries = judgmentPlan.filter((entry) => {
+    return entry.action === 'reuse' && entry.targetJudgmentId !== null
+  })
+
+  if (reusedEntries.length === 0) {
+    return []
+  }
+
+  const provenanceCounts = reusedEntries.reduce<Record<string, number>>((counts, entry) => {
+    const key = entry.provenanceKind ?? 'notRecorded'
+
+    return {...counts, [key]: (counts[key] ?? 0) + 1}
+  }, {})
+
+  return [
+    {
+      action: 'reused',
+      code: 'equivalentTargetJudgmentReused',
+      details: {provenanceCounts, reusedJudgmentCount: reusedEntries.length},
+      message: `${reusedEntries.length.toLocaleString('en-US')} equivalent target judgment(s) were reused`,
+      scope: 'judgments',
+      severity: 'info',
+    },
+  ]
 }
 
 const getCommitImportWarnings = ({
