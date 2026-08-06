@@ -1531,12 +1531,14 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
       `
         const {Buffer} = await import('node:buffer')
         const {existsSync, unlinkSync} = await import('node:fs')
+        const {totalmem} = await import('node:os')
         const {mock} = await import('bun:test')
 
         const walPath = ${JSON.stringify(walPath)}
         const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
 
         let checkpointCount = 0
+        const checkpointOptionsHistory = []
         let createCount = 0
         let preflightCount = 0
         const preflightSpecsHistory = []
@@ -1561,6 +1563,7 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
           }
 
           checkpointCount += 1
+          checkpointOptionsHistory.push(JSON.parse(String(command[4] ?? '{}')))
           if (existsSync(walPath)) {
             unlinkSync(walPath)
           }
@@ -1613,7 +1616,15 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-checkpoint-preflight-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
-        console.log(JSON.stringify({checkpointCount, createCount, preflightCount, preflightSpecsHistory, rows, walExists: existsSync(walPath)}))
+        const runtimeMemoryLimitMiB = 6400
+        const availableMemoryMiB = Math.floor(totalmem() / 1024 / 1024 / 2)
+        const expectedCheckpointMemoryMiB = availableMemoryMiB <= runtimeMemoryLimitMiB
+          ? runtimeMemoryLimitMiB
+          : Math.max(runtimeMemoryLimitMiB, Math.min(availableMemoryMiB, 12 * 1024))
+        const expectedCheckpointMemoryLimit = expectedCheckpointMemoryMiB % 1024 === 0
+          ? String(expectedCheckpointMemoryMiB / 1024) + 'GB'
+          : String(expectedCheckpointMemoryMiB) + 'MiB'
+        console.log(JSON.stringify({checkpointCount, checkpointOptionsHistory, createCount, expectedCheckpointMemoryLimit, preflightCount, preflightSpecsHistory, rows, walExists: existsSync(walPath)}))
         await duckdbService.closeDuckdbService()
       `,
     ],
@@ -1622,7 +1633,7 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
       env: {
         ...process.env,
         API_SERVER_PORT: '3999',
-        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
         DUCKDB_PATH: duckdbPath,
         DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',

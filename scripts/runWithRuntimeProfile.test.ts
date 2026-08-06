@@ -84,6 +84,7 @@ const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === '
 const realDevServerSmokeTest = realDevServerSmokeEnabled ? test : test.skip
 const reviewServingProgressProjectId =
   process.env.FORSKA_REVIEW_SERVING_PROGRESS_PROJECT_ID ?? 'd03fe24a-cfcf-41ed-b09f-7b554a393d80'
+const isReviewServingProgressProjectIdExplicit = process.env.FORSKA_REVIEW_SERVING_PROGRESS_PROJECT_ID !== undefined
 const reviewServingWarningRouteProbeProjectId =
   process.env.FORSKA_REVIEW_SERVING_WARNING_ROUTE_PROBE_PROJECT_ID ?? '4ec939b2-47bb-48dd-ad62-ad9f4b5acecf'
 const staleReviewServingQueuedProgressMs = 10 * 60_000
@@ -131,13 +132,20 @@ test('current-db network smoke includes read-only browser and mutation-enabled s
   expect(scripts['test:network-smoke:current-db:readonly']).toContain('FORSKA_DISABLE_SERVER_MUTATIONS=true')
   expect(scripts['test:dev-server:current-db']).toContain('FORSKA_REAL_DEV_SERVER_SMOKE=true')
   expect(scripts['test:dev-server:current-db']).toContain('-t "real primary dev:server startup')
+
+  const source = readFileSync(new URL('./runWithRuntimeProfile.test.ts', import.meta.url), 'utf8')
+  expect(source).toContain('const isReviewServingProgressProjectIdExplicit =')
+  expect(source).toContain('if (isReviewServingProgressProjectIdExplicit) {')
 })
 
 test('stacked server allows DuckDB startup recovery to finish before maintenance restart', () => {
   const source = readFileSync(new URL('./startServerStack.ts', import.meta.url), 'utf8')
 
-  expect(source).toContain('const maintenanceStartupTimeoutMs = 180_000')
+  expect(source).toContain('const maintenanceStartupTimeoutMs = 1_800_000')
   expect(source).toContain('deadlineMs = Date.now() + maintenanceStartupTimeoutMs')
+  expect(source).toContain("spawnSync(['pgrep', '-P', String(pid)]")
+  expect(source).toContain('const descendantPids = pid === undefined ? [] : getDescendantProcessIds(pid)')
+  expect(source).toContain("killProcessIds([...descendantPids, pid], 'SIGTERM')")
   expect(source).toContain('isJsonSyntaxError(error)')
   expect(source).toContain('rename(temporaryPath, serverStackLockPath)')
   expect(source).not.toContain('deadlineMs = Date.now() + startupTimeoutMs')
@@ -769,6 +777,10 @@ const getReviewServingProgressCandidates = async (apiPort: number) => {
 
   if (targetBody !== null && isReviewServingProgressCandidate(targetBody)) {
     candidates.push({body: targetBody, projectId: reviewServingProgressProjectId})
+  }
+
+  if (isReviewServingProgressProjectIdExplicit) {
+    return candidates
   }
 
   try {
