@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
+import {projectTransferCommitTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
 
 type TargetStateDirtyTokenRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -220,7 +221,9 @@ const withTransaction = <T>(
   runner: TargetStateDirtyTokenRunner | undefined,
   work: (tx: TargetStateDirtyTokenRunner) => Promise<T>,
 ) => {
-  return runner ? work(runner) : (getAppDatabaseService().transaction(work) as Promise<T>)
+  return runner
+    ? work(runner)
+    : (getAppDatabaseService().transaction(work, projectTransferCommitTransactionWorkloadContext) as Promise<T>)
 }
 
 const initializeTargetStateCoverage = async ({

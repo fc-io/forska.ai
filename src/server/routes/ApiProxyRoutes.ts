@@ -254,10 +254,13 @@ const getProjectTransferImportArtifactProxyResponse = async (requestTemplate: Du
     return null
   }
 
-  const {getImportSessionArtifactResponse} = await import('./projectTransferRoutes.ts')
+  const {getImportSessionArtifactResponse, shouldUseImportSessionArtifactResponse} =
+    await import('./projectTransferRoutes.ts')
   const artifactResponse = await getImportSessionArtifactResponse(sessionId)
 
-  return artifactResponse === null ? null : Response.json(artifactResponse)
+  return artifactResponse === null || !shouldUseImportSessionArtifactResponse(artifactResponse)
+    ? null
+    : Response.json(artifactResponse)
 }
 
 const getDuckdbOwnerProxyResponseHeaders = (response: Response) => {

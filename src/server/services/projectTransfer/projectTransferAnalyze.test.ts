@@ -903,6 +903,50 @@ test('rejects unsupported package fingerprints while sanitizing article route pa
   }
 })
 
+test('preserves API article routes during package fingerprint validation', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, manifest, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+      cwd,
+      payloadOverride: (payloads) => {
+        return {
+          ...payloads,
+          articles: payloads.articles.map((article) => {
+            return {
+              ...article,
+              importRoute: '/api/datasources/import/pubmed',
+              selectedImportRoute: '/api/datasources/import/pubmed',
+            }
+          }),
+        }
+      },
+    })
+    const result = await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 1,
+      runner: getEmptyAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    const extractedArticlesText = await readFile(
+      join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.articles),
+      'utf8',
+    )
+    const blockerCodes = result.planSummary.blockers.map((blocker) => {
+      return blocker.code
+    })
+
+    expect(result.packageFingerprint).toBe(manifest.packageFingerprint)
+    expect(blockerCodes).not.toContain('unsupported_package_fingerprint')
+    expect(extractedArticlesText).toContain('"/api/datasources/import/pubmed"')
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('plans reused article fills, asset promotion, route omissions, and duplicate warnings', async () => {
   const cwd = getRuntimeRoot()
 

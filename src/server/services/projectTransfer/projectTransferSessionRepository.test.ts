@@ -250,9 +250,14 @@ test('project transfer session repository normalizes DuckDB timestamps to Date o
 
 test('project transfer session repository reports active transfer windows', () => {
   const result = runSessionRepositoryScript<{
+    activeWithRunningImport: boolean
     activeWithReadyImport: boolean
     activeWithTerminalOnly: boolean
     activeWithRunningExport: boolean
+    writerWithQueuedExport: boolean
+    writerWithReadyImport: boolean
+    writerWithRunningExport: boolean
+    writerWithUploadingImport: boolean
   }>(`
     const expiredAt = new Date('2026-05-20T12:00:00.000Z')
 
@@ -265,6 +270,45 @@ test('project transfer session repository reports active transfer windows', () =
     })
     const activeWithReadyImport = await sessionRepository.hasActiveProjectTransferSessions({
       now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+    const writerWithReadyImport = await sessionRepository.hasProjectTransferWriterSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt: expiredAt,
+      id: 'session-queued-export',
+      state: 'queued',
+    })
+    const writerWithQueuedExport = await sessionRepository.hasProjectTransferWriterSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'session-uploading-import',
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      expectedState: 'awaiting_upload',
+      nextOwnerToken: 'upload-owner',
+      nextState: 'uploading',
+      sessionId: 'session-uploading-import',
+    })
+    const writerWithUploadingImport = await sessionRepository.hasProjectTransferWriterSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+    const activeWithRunningImport = await sessionRepository.hasActiveProjectTransferSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      error: {message: 'upload cancelled'},
+      expectedOwnerToken: 'upload-owner',
+      expectedState: 'uploading',
+      nextOwnerToken: null,
+      nextState: 'cancelled',
+      sessionId: 'session-uploading-import',
     })
 
     await sessionRepository.transitionProjectTransferSessionState({
@@ -297,20 +341,43 @@ test('project transfer session repository reports active transfer windows', () =
       direction: 'export',
       expiresAt,
       id: 'session-running-export',
-      state: 'packaging',
+      state: 'queued',
+    })
+    await sessionRepository.claimProjectTransferExportSessionOwner({
+      expectedState: 'queued',
+      nextState: 'assembling',
+      ownerToken: 'export-owner',
+      sessionId: 'session-running-export',
     })
     const activeWithRunningExport = await sessionRepository.hasActiveProjectTransferSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+    const writerWithRunningExport = await sessionRepository.hasProjectTransferWriterSessions({
       now: new Date('2026-05-21T11:00:00.000Z'),
     })
 
     console.log(JSON.stringify({
       activeWithReadyImport,
+      activeWithRunningImport,
       activeWithRunningExport,
       activeWithTerminalOnly,
+      writerWithQueuedExport,
+      writerWithReadyImport,
+      writerWithRunningExport,
+      writerWithUploadingImport,
     }))
   `)
 
-  expect(result).toEqual({activeWithReadyImport: true, activeWithRunningExport: true, activeWithTerminalOnly: false})
+  expect(result).toEqual({
+    activeWithReadyImport: false,
+    activeWithRunningImport: true,
+    activeWithRunningExport: true,
+    activeWithTerminalOnly: false,
+    writerWithQueuedExport: false,
+    writerWithReadyImport: false,
+    writerWithRunningExport: true,
+    writerWithUploadingImport: true,
+  })
 })
 
 test('project transfer session plan revision update can publish final analyze state atomically', () => {

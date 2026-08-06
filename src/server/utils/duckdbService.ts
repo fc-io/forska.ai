@@ -4745,6 +4745,70 @@ const closeDuckdbServiceDirect = async (options: CloseDuckdbServiceOptions = {})
   })
 }
 
+const getProjectTransferForegroundMemoryLimit = () => {
+  return getDuckdbStartupWalCheckpointMemoryLimit(getDuckdbRuntimeConfigValue())
+}
+
+const getDuckdbSetMemoryLimitStatement = (memoryLimit: string) => {
+  return `SET memory_limit = '${memoryLimit.replaceAll("'", "''")}'`
+}
+
+const projectTransferForegroundMemoryHeadroomRouteOrJobKeys = new Set([
+  'projectTransfer.export.queries',
+  'projectTransfer.export.transaction',
+  'projectTransfer.import.analyze.operationTables',
+  'projectTransfer.import.commit.transaction',
+  'projectTransfer.recovery',
+])
+
+const withProjectTransferForegroundMemoryHeadroomIfNeeded = async <T>(
+  workloadContext: DuckdbWorkloadContext | undefined,
+  statement: string | null,
+  work: () => Promise<T>,
+) => {
+  const normalizedStatement = statement?.trimStart().toUpperCase()
+  const isProjectTransferRecovery = workloadContext?.routeOrJobKey === 'projectTransfer.recovery'
+
+  if (
+    workloadContext?.workloadClass !== 'projectTransfer'
+    || !projectTransferForegroundMemoryHeadroomRouteOrJobKeys.has(workloadContext.routeOrJobKey)
+    || (normalizedStatement?.startsWith('SELECT') && !isProjectTransferRecovery)
+  ) {
+    return work()
+  }
+
+  const runtimeMemoryLimit = getDuckdbRuntimeConfigValue().memoryLimit
+  const foregroundMemoryLimit = getProjectTransferForegroundMemoryLimit()
+
+  if (foregroundMemoryLimit === runtimeMemoryLimit) {
+    return work()
+  }
+
+  writeRuntimeOperatorLogEvent({
+    attrs: {routeOrJobKey: workloadContext?.routeOrJobKey ?? null, runtimeMemoryLimit, foregroundMemoryLimit},
+    event: 'duckdb.project-transfer-foreground-memory-headroom',
+    message: '[duckdb] temporarily raising memory limit for project transfer foreground work',
+    severity: 'WARN',
+  })
+
+  await runDuckdbStatementDirect(getDuckdbSetMemoryLimitStatement(foregroundMemoryLimit))
+
+  try {
+    return await work()
+  } finally {
+    try {
+      await runDuckdbStatementDirect(getDuckdbSetMemoryLimitStatement(runtimeMemoryLimit))
+    } catch (error) {
+      writeRuntimeOperatorLogEvent({
+        attrs: {error, runtimeMemoryLimit},
+        event: 'duckdb.project-transfer-foreground-memory-restore-failure',
+        message: '[duckdb] failed to restore memory limit after project transfer foreground work',
+        severity: 'WARN',
+      })
+    }
+  }
+}
+
 const closeDuckdbServiceForSignal = async () => {
   duckdbShutdownInProgress = true
   const shouldCloseRuntime = !shouldSerializeDuckdbConcurrentWork(getDuckdbRuntimeConfigValue().memoryLimit)
@@ -5960,7 +6024,9 @@ export const runDuckdbJsonQuery = async <T>(
           return withNormalizedDuckdbError(() => {
             return enqueueDuckdbWork(async () => {
               await ensureStartedDuckdbProcess()
-              return runDuckdbJsonQueryDirect<T>(statement)
+              return withProjectTransferForegroundMemoryHeadroomIfNeeded(workloadContext, statement, () => {
+                return runDuckdbJsonQueryDirect<T>(statement)
+              })
             })
           })
         },
@@ -5986,7 +6052,9 @@ export const runDuckdbStatement = async (statement: string, workloadContext?: Du
           return withNormalizedDuckdbError(() => {
             return enqueueDuckdbWork(async () => {
               await ensureStartedDuckdbProcess()
-              await runDuckdbStatementDirect(statement)
+              await withProjectTransferForegroundMemoryHeadroomIfNeeded(workloadContext, statement, async () => {
+                await runDuckdbStatementDirect(statement)
+              })
             })
           })
         },
@@ -6204,25 +6272,27 @@ export const runDuckdbTransaction = async <T>(
         return withNormalizedDuckdbError(() => {
           return enqueueDuckdbWork(async () => {
             await ensureStartedDuckdbProcess()
-            await runDuckdbStatementDirect('BEGIN TRANSACTION')
+            return withProjectTransferForegroundMemoryHeadroomIfNeeded(workloadContext, null, async () => {
+              await runDuckdbStatementDirect('BEGIN TRANSACTION')
 
-            try {
-              const result = await work({
-                queryJson: async <T>(statement: string) => {
-                  return runDuckdbJsonQueryDirect<T>(statement)
-                },
-                run: async (statement: string) => {
-                  await runDuckdbStatementDirect(statement)
-                },
-              })
+              try {
+                const result = await work({
+                  queryJson: async <T>(statement: string) => {
+                    return runDuckdbJsonQueryDirect<T>(statement)
+                  },
+                  run: async (statement: string) => {
+                    await runDuckdbStatementDirect(statement)
+                  },
+                })
 
-              await runDuckdbStatementDirect('COMMIT')
-              return result
-            } catch (error) {
-              const rollbackError = await getDuckdbRollbackError()
+                await runDuckdbStatementDirect('COMMIT')
+                return result
+              } catch (error) {
+                const rollbackError = await getDuckdbRollbackError()
 
-              throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
-            }
+                throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
+              }
+            })
           })
         })
       })

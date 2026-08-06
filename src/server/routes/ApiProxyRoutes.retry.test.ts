@@ -203,6 +203,39 @@ test.serial(
   },
 )
 
+test.serial('api proxy falls through stale active project import status artifacts to the owner', async () => {
+  const app = await loadRoutes()
+  mkdirSync(importArtifactTestRoot, {recursive: true})
+  writeFileSync(
+    join(importArtifactTestRoot, 'progress.json'),
+    JSON.stringify({
+      message: 'Scanning package archive',
+      phase: 'package_scan',
+      status: 'running',
+      updatedAt: '2020-01-01T00:00:00.000Z',
+    }),
+  )
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    return isRuntimeReadyUrl(url)
+      ? getCompatibleRuntimeReadyResponse()
+      : Response.json({data: {id: 'api-proxy-status-artifact-test', state: 'failed'}, error: null})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/api-proxy-status-artifact-test', {method: 'GET'}),
+  )
+  const body = (await response.json()) as {data: {state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({data: {state: 'failed'}, error: null})
+  expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
+  )
+})
+
 test.serial('api proxy does not retry non-idempotent POST requests after a transport failure', async () => {
   const app = await loadRoutes()
   const fetchMock = mock(async (request: Request | URL | string) => {

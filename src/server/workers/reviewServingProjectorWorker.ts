@@ -203,6 +203,7 @@ type ReviewServingProjectorWorkerDependencies = {
     & ReviewServingRetentionServiceDatabase
   getMemoryUsage?: () => ReviewServingProjectorWorkerMemoryUsage
   hasActiveProjectTransferBackgroundActivity?: () => boolean
+  hasActiveProjectTransferSession?: () => Promise<boolean>
   getAppendQueueDepth?: () => number
   getForegroundQueueDepth?: () => number
   intakeImportDeltas?: typeof intakeReviewImportDeltasToDirtyWork
@@ -5099,6 +5100,12 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
     return getDuckdbQueueRuntimeMetricsSnapshot().main.queueDepth
   },
   hasActiveProjectTransferBackgroundActivity,
+  hasActiveProjectTransferSession: async () => {
+    const {getProjectTransferSessionRepository} =
+      await import('../services/projectTransfer/projectTransferSessionRepository.ts')
+
+    return getProjectTransferSessionRepository().hasActiveProjectTransferSessions()
+  },
   rebuildChunkService: {
     claimChunk: claimReviewServingRebuildChunk,
     claimChunks: claimReviewServingRebuildChunks,
@@ -6308,10 +6315,13 @@ const hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker = (
   return (dependencies.getForegroundQueueDepth?.() ?? 0) > 0 || (dependencies.getAppendQueueDepth?.() ?? 0) > 0
 }
 
-const hasActiveProjectTransferForReviewServingProjectorWorker = (
+const hasActiveProjectTransferForReviewServingProjectorWorker = async (
   dependencies: ReviewServingProjectorWorkerDependencies,
 ) => {
-  return dependencies.hasActiveProjectTransferBackgroundActivity?.() ?? false
+  return (
+    (dependencies.hasActiveProjectTransferBackgroundActivity?.() ?? false)
+    || (await (dependencies.hasActiveProjectTransferSession?.() ?? Promise.resolve(false)))
+  )
 }
 
 const getForegroundRebuildDrainStartedAtMs = (input: {
@@ -8831,7 +8841,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const workerId = options.workerId ?? getReviewServingProjectorWorkerId()
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
 
-  if (hasActiveProjectTransferForReviewServingProjectorWorker(dependencies)) {
+  if (await hasActiveProjectTransferForReviewServingProjectorWorker(dependencies)) {
     const chunk = getIdleReviewServingProjectorWorkerCycleChunkResult()
     const cleanup = {
       dirtyWorkRetentionCleanup: null,
@@ -8867,11 +8877,8 @@ export const runReviewServingProjectorWorkerCycle = async (
   if (terminalFailedChunk === null) {
     await readmitRetryableFailedRebuildRequests({database, projectId: options.rebuildProjectId})
   }
-  const shouldDeferForForegroundDuckdbWork =
-    terminalFailedChunk === null && hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
-  const chunkBatch = shouldDeferForForegroundDuckdbWork
-    ? getIdleReviewServingProjectorWorkerCycleChunkResult()
-    : terminalFailedChunk === null
+  const chunkBatch =
+    terminalFailedChunk === null
       ? await runReviewServingProjectorWorkerRebuildChunkBatch({
           database,
           dependencies,
@@ -8887,10 +8894,11 @@ export const runReviewServingProjectorWorkerCycle = async (
       : chunkBatch
   const chunk = finalizedChunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
+  const shouldYieldToForegroundDuckdbWork = hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
   const shouldRunOnlyRebuildChunk =
-    shouldDeferForForegroundDuckdbWork
-    || terminalFailedChunk !== null
+    terminalFailedChunk !== null
     || chunk.status === 'failed'
+    || shouldYieldToForegroundDuckdbWork
     || shouldPrioritizeNextRebuildChunk({chunk, dependencies, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
@@ -8941,8 +8949,6 @@ const shouldRestartAfterCompletedRebuildChunk = (
   return (
     input.maxCompletedRebuildChunksPerRun > 0
     && chunk.status === 'completed'
-    && chunk.requestId !== null
-    && reviewServingNativeHeavyRebuildComponents.has(chunk.projectionComponent)
     && hasReviewServingProjectorWorkerReachedRssCap(input)
   )
 }

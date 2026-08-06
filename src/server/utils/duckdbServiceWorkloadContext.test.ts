@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {expect, mock, test} from 'bun:test'
 
 type DuckdbServiceModule = typeof import('./duckdbService.ts')
@@ -17,6 +19,93 @@ const restoreEnvValue = (key: string, value: string | undefined) => {
   process.env[key] = value
 }
 
+test('project transfer memory headroom stays off lightweight session work', () => {
+  const source = readFileSync(new URL('./duckdbService.ts', import.meta.url), 'utf8')
+  const [allowlistSource] = source.match(/projectTransferForegroundMemoryHeadroomRouteOrJobKeys[\s\S]*?\]\)/u) ?? []
+
+  expect(allowlistSource).toContain('projectTransfer.export.transaction')
+  expect(allowlistSource).toContain('projectTransfer.import.analyze.operationTables')
+  expect(allowlistSource).toContain('projectTransfer.import.commit.transaction')
+  expect(allowlistSource).not.toContain('projectTransfer.session')
+})
+
+const getServerRuntimeRoleMock = ({
+  canOwnDuckdb,
+  currentRole,
+  shouldProxyToOwner,
+}: {
+  canOwnDuckdb: boolean
+  currentRole: 'api' | 'maintenance-worker'
+  shouldProxyToOwner: boolean
+}) => {
+  return {
+    canCurrentServerOwnDuckdb: () => {
+      return canOwnDuckdb
+    },
+    canCurrentServerRunJudgingLoops: () => {
+      return currentRole === 'maintenance-worker'
+    },
+    canCurrentServerRunMaintenanceLoops: () => {
+      return currentRole === 'maintenance-worker'
+    },
+    ensureCurrentDuckdbOwnerLease: async () => {},
+    getCurrentServerDuckdbOwnerUrl: async () => {
+      return null
+    },
+    getCurrentServerRole: () => {
+      return currentRole
+    },
+    getCurrentServerWorkerRegistryOwnerUrl: async () => {
+      return null
+    },
+    getKnownDuckdbOwnerUrl: () => {
+      return null
+    },
+    initializeServerRuntimeRole: async () => {},
+    isCurrentServerDuckdbOwnerProxyDisabled: () => {
+      return false
+    },
+    isExpectedDuckdbOwnerRoleLossError: () => {
+      return false
+    },
+    registerDuckdbOwnerDemotionHandler: () => {},
+    registerDuckdbOwnerPromotionHandler: () => {},
+    releaseCurrentDuckdbOwnerLease: async () => {},
+    resetServerRuntimeRoleForTests: () => {},
+    shouldCurrentServerMountDuckdbOwnerPrivateApi: () => {
+      return true
+    },
+    shouldCurrentServerMountPublicProductApi: () => {
+      return true
+    },
+    shouldCurrentServerProxyApiToDuckdbOwner: () => {
+      return shouldProxyToOwner
+    },
+    shouldCurrentServerProxyApiToOwner: () => {
+      return shouldProxyToOwner
+    },
+    shouldCurrentServerRunDuckdbOwnerWork: () => {
+      return currentRole === 'maintenance-worker'
+    },
+    shouldCurrentServerRunJudgingLoops: () => {
+      return currentRole === 'maintenance-worker'
+    },
+    shouldCurrentServerRunJudgingWork: () => {
+      return currentRole === 'maintenance-worker'
+    },
+    shouldCurrentServerRunMaintenanceLoops: () => {
+      return currentRole === 'maintenance-worker'
+    },
+    shouldCurrentServerRunMaintenanceWork: () => {
+      return currentRole === 'maintenance-worker'
+    },
+    startServerRuntimeRoleMonitor: () => {},
+    withCurrentServerRoleOverride: async <T>(_role: string, work: () => Promise<T>) => {
+      return work()
+    },
+  }
+}
+
 test('duckdb workload context rejects over-budget query results and records metrics', async () => {
   const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
@@ -24,32 +113,7 @@ test('duckdb workload context rejects over-budget query results and records metr
   const previousServerRole = process.env.SERVER_ROLE
 
   void mock.module(serverRuntimeRoleModulePath, () => {
-    return {
-      canCurrentServerOwnDuckdb: () => {
-        return true
-      },
-      ensureCurrentDuckdbOwnerLease: async () => {},
-      getCurrentServerDuckdbOwnerUrl: async () => {
-        return null
-      },
-      getCurrentServerRole: () => {
-        return 'maintenance-worker'
-      },
-      getKnownDuckdbOwnerUrl: () => {
-        return null
-      },
-      isCurrentServerDuckdbOwnerProxyDisabled: () => {
-        return false
-      },
-      registerDuckdbOwnerDemotionHandler: () => {},
-      releaseCurrentDuckdbOwnerLease: async () => {},
-      shouldCurrentServerProxyApiToDuckdbOwner: () => {
-        return false
-      },
-      shouldCurrentServerProxyApiToOwner: () => {
-        return false
-      },
-    }
+    return getServerRuntimeRoleMock({canOwnDuckdb: true, currentRole: 'maintenance-worker', shouldProxyToOwner: false})
   })
 
   void mock.module('@duckdb/node-api', () => {
@@ -140,32 +204,7 @@ test('api-role foreground DuckDB work requires workload context before connectio
   let createCount = 0
 
   void mock.module(serverRuntimeRoleModulePath, () => {
-    return {
-      canCurrentServerOwnDuckdb: () => {
-        return false
-      },
-      ensureCurrentDuckdbOwnerLease: async () => {},
-      getCurrentServerDuckdbOwnerUrl: async () => {
-        return null
-      },
-      getCurrentServerRole: () => {
-        return 'api'
-      },
-      getKnownDuckdbOwnerUrl: () => {
-        return null
-      },
-      isCurrentServerDuckdbOwnerProxyDisabled: () => {
-        return false
-      },
-      registerDuckdbOwnerDemotionHandler: () => {},
-      releaseCurrentDuckdbOwnerLease: async () => {},
-      shouldCurrentServerProxyApiToDuckdbOwner: () => {
-        return true
-      },
-      shouldCurrentServerProxyApiToOwner: () => {
-        return true
-      },
-    }
+    return getServerRuntimeRoleMock({canOwnDuckdb: false, currentRole: 'api', shouldProxyToOwner: true})
   })
 
   void mock.module('@duckdb/node-api', () => {
@@ -237,32 +276,7 @@ test('api-role foreground DuckDB workload-context guard has an explicit rollout 
   let createCount = 0
 
   void mock.module(serverRuntimeRoleModulePath, () => {
-    return {
-      canCurrentServerOwnDuckdb: () => {
-        return false
-      },
-      ensureCurrentDuckdbOwnerLease: async () => {},
-      getCurrentServerDuckdbOwnerUrl: async () => {
-        return null
-      },
-      getCurrentServerRole: () => {
-        return 'api'
-      },
-      getKnownDuckdbOwnerUrl: () => {
-        return null
-      },
-      isCurrentServerDuckdbOwnerProxyDisabled: () => {
-        return false
-      },
-      registerDuckdbOwnerDemotionHandler: () => {},
-      releaseCurrentDuckdbOwnerLease: async () => {},
-      shouldCurrentServerProxyApiToDuckdbOwner: () => {
-        return true
-      },
-      shouldCurrentServerProxyApiToOwner: () => {
-        return true
-      },
-    }
+    return getServerRuntimeRoleMock({canOwnDuckdb: false, currentRole: 'api', shouldProxyToOwner: true})
   })
 
   void mock.module('@duckdb/node-api', () => {
@@ -329,32 +343,7 @@ test('app database foreground wrappers inherit API-role missing-context rejectio
   let createCount = 0
 
   void mock.module(serverRuntimeRoleModulePath, () => {
-    return {
-      canCurrentServerOwnDuckdb: () => {
-        return false
-      },
-      ensureCurrentDuckdbOwnerLease: async () => {},
-      getCurrentServerDuckdbOwnerUrl: async () => {
-        return null
-      },
-      getCurrentServerRole: () => {
-        return 'api'
-      },
-      getKnownDuckdbOwnerUrl: () => {
-        return null
-      },
-      isCurrentServerDuckdbOwnerProxyDisabled: () => {
-        return false
-      },
-      registerDuckdbOwnerDemotionHandler: () => {},
-      releaseCurrentDuckdbOwnerLease: async () => {},
-      shouldCurrentServerProxyApiToDuckdbOwner: () => {
-        return true
-      },
-      shouldCurrentServerProxyApiToOwner: () => {
-        return true
-      },
-    }
+    return getServerRuntimeRoleMock({canOwnDuckdb: false, currentRole: 'api', shouldProxyToOwner: true})
   })
 
   void mock.module('@duckdb/node-api', () => {
@@ -444,32 +433,7 @@ test('owner and background DuckDB scopes remain allowed without foreground workl
   const previousServerRole = process.env.SERVER_ROLE
 
   void mock.module(serverRuntimeRoleModulePath, () => {
-    return {
-      canCurrentServerOwnDuckdb: () => {
-        return true
-      },
-      ensureCurrentDuckdbOwnerLease: async () => {},
-      getCurrentServerDuckdbOwnerUrl: async () => {
-        return null
-      },
-      getCurrentServerRole: () => {
-        return 'maintenance-worker'
-      },
-      getKnownDuckdbOwnerUrl: () => {
-        return null
-      },
-      isCurrentServerDuckdbOwnerProxyDisabled: () => {
-        return false
-      },
-      registerDuckdbOwnerDemotionHandler: () => {},
-      releaseCurrentDuckdbOwnerLease: async () => {},
-      shouldCurrentServerProxyApiToDuckdbOwner: () => {
-        return false
-      },
-      shouldCurrentServerProxyApiToOwner: () => {
-        return false
-      },
-    }
+    return getServerRuntimeRoleMock({canOwnDuckdb: true, currentRole: 'maintenance-worker', shouldProxyToOwner: false})
   })
 
   void mock.module('@duckdb/node-api', () => {

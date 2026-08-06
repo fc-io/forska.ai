@@ -343,7 +343,7 @@ test('rebuild timing summaries keep compact aggregate phase stats', () => {
   })
 })
 
-test('worker skips background review work while foreground DuckDB work is queued', async () => {
+test('worker still drains rebuild chunks while foreground DuckDB work is queued', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
 
   harness.dependencies.getForegroundQueueDepth = () => {
@@ -353,18 +353,20 @@ test('worker skips background review work while foreground DuckDB work is queued
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
 
   expect(result).toMatchObject({
-    chunk: {chunkId: null, status: 'idle'},
-    chunkBatchCount: 0,
+    chunk: {chunkId: chunkManifest.chunkId, status: 'completed'},
+    chunkBatchCount: 1,
     cleanup: {status: 'skipped'},
     deltaIntake: {status: 'idle'},
     projector: {status: 'blocked'},
-    status: 'idle',
+    status: 'completed',
   })
-  expect(harness.getNextChunkInputs).toEqual([])
-  expect(harness.claimInputs).toEqual([])
-  expect(harness.runChunkInputs).toEqual([])
+  expect(harness.getNextChunkInputs).toHaveLength(1)
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toHaveLength(1)
   expect(harness.wakeInputs).toEqual([])
   expect(harness.cleanupInputs).toEqual([])
+  expect(harness.dirtyWorkRetentionCleanupInputs).toEqual([])
+  expect(harness.workloadContexts).toContainEqual(getReviewServingProjectorWorkerWorkloadContext('worker-1'))
 })
 
 test('worker skips background review work while project transfer background work is active', async () => {
@@ -4017,6 +4019,57 @@ test('bounded worker reports a native-heavy lifecycle boundary when request chun
   expect(harness.runChunkInputs).toEqual([summaryChunk])
   expect(harness.recycledChunks).toEqual([summaryChunk])
   expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
+})
+
+test('bounded worker yields for recycle when search chunks reach RSS cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const searchChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'search' as const,
+    projectionIdentity: 'search:project-1',
+  }
+  const searchChunk = {
+    ...chunkManifest,
+    ...searchChunkInput,
+    chunkId: 'chunk-search-bounded-rss-cap',
+    requestId: 'rebuild-search-bounded-rss-cap',
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return searchChunk
+    },
+    getNextChunk: async () => {
+      return searchChunkInput
+    },
+    heartbeatChunk: async () => {
+      return searchChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 2_000}
+  }
+
+  const result = await runReviewServingProjectorWorker(
+    {
+      maxCompletedRebuildChunksPerRun: 16,
+      rebuildChunkBatchMaxRssBytes: 1_000,
+      rebuildChunkBatchSize: 1,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result).toEqual({reason: 'nativeHeavyChunkCompleted'})
+  expect(harness.runChunkInputs).toEqual([searchChunk])
+  expect(harness.recycledChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([])
 })
 
 test('worker does not fail completed requestless posting chunks when DuckDB recycle fails', async () => {

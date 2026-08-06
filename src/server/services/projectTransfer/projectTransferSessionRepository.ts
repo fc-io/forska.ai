@@ -19,10 +19,11 @@ import {
   validateProjectTransferPlanReadyToCommit,
   validateProjectTransferProgressUpdate,
 } from './projectTransferSession.ts'
+import {projectTransferSessionWorkloadContext} from './projectTransferWorkloadContext.ts'
 
 type ProjectTransferSessionRunner = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: typeof projectTransferSessionWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: typeof projectTransferSessionWorkloadContext) => Promise<void>
 }
 
 type CreateProjectTransferSessionParams = {
@@ -165,6 +166,7 @@ type PersistProjectTransferSessionExportReadyParams = {
 
 type GetProjectTransferSessionParams = {runner?: ProjectTransferSessionRunner; sessionId: string}
 type HasActiveProjectTransferSessionsParams = {now?: Date; runner?: ProjectTransferSessionRunner}
+type HasProjectTransferWriterSessionsParams = {now?: Date; runner?: ProjectTransferSessionRunner}
 type ProjectTransferSessionTimestamp = Date | string
 type ProjectTransferSessionRow = Omit<
   ProjectTransferSessionRecord,
@@ -302,12 +304,15 @@ const getOwnerClaimLeaseMs = (leaseMs: number | undefined) => {
 }
 
 const getProjectTransferSessionRecord = async (runner: ProjectTransferSessionRunner, sessionId: string) => {
-  const [row] = await runner.queryJson<ProjectTransferSessionRow>(`
+  const [row] = await runner.queryJson<ProjectTransferSessionRow>(
+    `
     SELECT ${getProjectTransferSessionSelectSql()}
     FROM app.project_transfer_session
     WHERE id = ${getSqlLiteral(sessionId)}
     LIMIT 1
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -395,7 +400,8 @@ const createProjectTransferSession = async (params: CreateProjectTransferSession
   assertProjectTransferSessionId(params.id)
   assertSessionStateForDirection(params.direction, state)
 
-  const [row] = await runner.queryJson<ProjectTransferSessionRow>(`
+  const [row] = await runner.queryJson<ProjectTransferSessionRow>(
+    `
     INSERT INTO app.project_transfer_session (
       id,
       direction,
@@ -420,7 +426,9 @@ const createProjectTransferSession = async (params: CreateProjectTransferSession
       ${getTimestampLiteral(currentNow)}
     )
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   if (!row) {
     throw new Error(`Failed to create project transfer session ${params.id}`)
@@ -435,7 +443,8 @@ const getProjectTransferSession = async ({runner, sessionId}: GetProjectTransfer
 
 const hasActiveProjectTransferSessions = async (params: HasActiveProjectTransferSessionsParams = {}) => {
   const currentNow = getNow(params.now)
-  const [row] = await getRunner(params.runner).queryJson<{activeCount: number}>(`
+  const [row] = await getRunner(params.runner).queryJson<{activeCount: number}>(
+    `
     SELECT COUNT(*)::INTEGER AS activeCount
     FROM app.project_transfer_session
     WHERE expires_at > ${getTimestampLiteral(currentNow)}
@@ -443,13 +452,10 @@ const hasActiveProjectTransferSessions = async (params: HasActiveProjectTransfer
         (
           direction = 'import'
           AND state IN (
-            'awaiting_upload',
             'uploading',
             'queued',
             'extracting',
             'analyzing',
-            'awaiting_resolution',
-            'ready_to_commit',
             'committing'
           )
         )
@@ -458,9 +464,36 @@ const hasActiveProjectTransferSessions = async (params: HasActiveProjectTransfer
           AND state IN ('queued', 'assembling', 'packaging')
         )
       )
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return Number(row?.activeCount ?? 0) > 0
+}
+
+const hasProjectTransferWriterSessions = async (params: HasProjectTransferWriterSessionsParams = {}) => {
+  const currentNow = getNow(params.now)
+  const [row] = await getRunner(params.runner).queryJson<{writerCount: number}>(
+    `
+    SELECT COUNT(*)::INTEGER AS writerCount
+    FROM app.project_transfer_session
+    WHERE expires_at > ${getTimestampLiteral(currentNow)}
+      AND owner_token IS NOT NULL
+      AND (
+        (
+          direction = 'import'
+          AND state IN ('uploading', 'extracting', 'analyzing', 'committing')
+        )
+        OR (
+          direction = 'export'
+          AND state IN ('assembling', 'packaging')
+        )
+      )
+  `,
+    projectTransferSessionWorkloadContext,
+  )
+
+  return Number(row?.writerCount ?? 0) > 0
 }
 
 const getPlanSummaryForTransitionValidation = (
@@ -491,14 +524,17 @@ const transitionProjectTransferSessionState = async (params: TransitionProjectTr
     getOwnerTokenCondition(params.expectedOwnerToken),
     getStagingRevisionCondition(params.expectedStagingRevision),
   ])
-  const [row] = await runner.queryJson<ProjectTransferSessionRow>(`
+  const [row] = await runner.queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET ${getTransitionUpdateSets(params, currentNow).join(',\n      ')}
     WHERE id = ${getSqlLiteral(params.sessionId)}
       AND ${getStateCondition(params.expectedState)}
       ${optionalConditions.length > 0 ? `AND ${optionalConditions}` : ''}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -519,7 +555,8 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
   const currentNow = getNow(params.now)
   const ownerCondition = getOwnerTokenCondition(params.expectedOwnerToken)
   const stagingCondition = getStagingRevisionCondition(params.expectedStagingRevision)
-  const [row] = await runner.queryJson<ProjectTransferSessionRow>(`
+  const [row] = await runner.queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = ${getSqlLiteral(nextState)},
@@ -534,7 +571,9 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
       ${ownerCondition ? `AND ${ownerCondition}` : ''}
       ${stagingCondition ? `AND ${stagingCondition}` : ''}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -542,7 +581,8 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
 const heartbeatProjectTransferSessionOwner = async (params: HeartbeatProjectTransferSessionOwnerParams) => {
   const currentNow = getNow(params.now)
   getOwnerClaimLeaseMs(params.leaseMs)
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       heartbeat_at = ${getTimestampLiteral(currentNow)},
@@ -550,7 +590,9 @@ const heartbeatProjectTransferSessionOwner = async (params: HeartbeatProjectTran
     WHERE id = ${getSqlLiteral(params.sessionId)}
       AND owner_token = ${getSqlLiteral(params.ownerToken)}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -559,7 +601,8 @@ const claimProjectTransferExportSessionOwner = async (params: ClaimProjectTransf
   const currentNow = getNow(params.now)
   const ownerCondition =
     params.expectedState === 'queued' ? 'owner_token IS NULL' : `owner_token = ${getSqlLiteral(params.ownerToken)}`
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = ${getSqlLiteral(params.nextState)},
@@ -573,14 +616,17 @@ const claimProjectTransferExportSessionOwner = async (params: ClaimProjectTransf
       AND state = ${getSqlLiteral(params.expectedState)}
       AND ${ownerCondition}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
 
 const heartbeatProjectTransferExportSessionOwner = async (params: HeartbeatProjectTransferExportSessionOwnerParams) => {
   const currentNow = getNow(params.now)
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       heartbeat_at = ${getTimestampLiteral(currentNow)},
@@ -591,14 +637,17 @@ const heartbeatProjectTransferExportSessionOwner = async (params: HeartbeatProje
       AND owner_token = ${getSqlLiteral(params.ownerToken)}
       AND state IN ('assembling', 'packaging')
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
 
 const failProjectTransferSessionExport = async (params: FailProjectTransferSessionExportParams) => {
   const currentNow = getNow(params.now)
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'failed',
@@ -611,7 +660,9 @@ const failProjectTransferSessionExport = async (params: FailProjectTransferSessi
       AND state IN ('assembling', 'packaging')
       AND owner_token = ${getSqlLiteral(params.ownerToken)}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -620,7 +671,8 @@ const cancelProjectTransferImportSession = async (params: CancelProjectTransferI
   assertProjectTransferSessionId(params.sessionId)
   const currentNow = getNow(params.now)
   const ownerCondition = getOwnerTokenCondition(params.expectedOwnerToken)
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = ${getSqlLiteral(params.nextState)},
@@ -634,7 +686,9 @@ const cancelProjectTransferImportSession = async (params: CancelProjectTransferI
       AND ${getStateCondition(params.expectedState)}
       ${ownerCondition ? `AND ${ownerCondition}` : ''}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -646,7 +700,8 @@ const markProjectTransferSessionTerminalCleanupComplete = async (
   const currentNow = getNow(params.now)
   const ownerCondition = getOwnerTokenCondition(params.expectedOwnerToken)
   const stateCondition = getStateCondition(params.expectedState ?? ['cancelled', 'completed', 'expired', 'failed'])
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       terminal_cleanup_at = ${getTimestampLiteral(currentNow)},
@@ -655,7 +710,9 @@ const markProjectTransferSessionTerminalCleanupComplete = async (
       AND ${stateCondition}
       ${ownerCondition ? `AND ${ownerCondition}` : ''}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -672,7 +729,8 @@ const updateProjectTransferSessionProgress = async (params: UpdateProjectTransfe
 
     const ownerCondition = getOwnerTokenCondition(params.expectedOwnerToken)
     const currentNow = getNow(params.now)
-    const [row] = await runner.queryJson<ProjectTransferSessionRow>(`
+    const [row] = await runner.queryJson<ProjectTransferSessionRow>(
+      `
       UPDATE app.project_transfer_session
       SET
         progress_json = ${getJsonLiteral(params.progress)},
@@ -680,14 +738,19 @@ const updateProjectTransferSessionProgress = async (params: UpdateProjectTransfe
       WHERE id = ${getSqlLiteral(params.sessionId)}
         ${ownerCondition ? `AND ${ownerCondition}` : ''}
       RETURNING ${getProjectTransferSessionSelectSql()}
-    `)
+    `,
+      projectTransferSessionWorkloadContext,
+    )
 
     return row ? mapProjectTransferSessionRecord(row) : null
   }
 
   return params.runner
     ? work(params.runner)
-    : (getAppDatabaseService().transaction(work) as Promise<ProjectTransferSessionRecord | null>)
+    : (getAppDatabaseService().transaction(
+        work,
+        projectTransferSessionWorkloadContext,
+      ) as Promise<ProjectTransferSessionRecord | null>)
 }
 
 const persistProjectTransferSessionCompletion = async (params: PersistProjectTransferSessionCompletionParams) => {
@@ -713,7 +776,8 @@ const persistProjectTransferSessionCompletion = async (params: PersistProjectTra
 
 const reopenProjectTransferCommitSession = async (params: ReopenProjectTransferCommitSessionParams) => {
   const currentNow = getNow(params.now)
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'awaiting_resolution',
@@ -729,7 +793,9 @@ const reopenProjectTransferCommitSession = async (params: ReopenProjectTransferC
       AND owner_token = ${getSqlLiteral(params.ownerToken)}
       AND commit_id = ${getSqlLiteral(params.commitId)}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -740,7 +806,8 @@ const persistProjectTransferSessionExportReady = async (params: PersistProjectTr
   }
 
   const currentNow = getNow(params.now)
-  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(`
+  const [row] = await getRunner(params.runner).queryJson<ProjectTransferSessionRow>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'ready',
@@ -755,7 +822,9 @@ const persistProjectTransferSessionExportReady = async (params: PersistProjectTr
       AND state = 'packaging'
       AND owner_token = ${getSqlLiteral(params.ownerToken)}
     RETURNING ${getProjectTransferSessionSelectSql()}
-  `)
+  `,
+    projectTransferSessionWorkloadContext,
+  )
 
   return row ? mapProjectTransferSessionRecord(row) : null
 }
@@ -767,6 +836,7 @@ const projectTransferSessionRepository = {
   failProjectTransferSessionExport,
   getProjectTransferSession,
   hasActiveProjectTransferSessions,
+  hasProjectTransferWriterSessions,
   heartbeatProjectTransferExportSessionOwner,
   heartbeatProjectTransferSessionOwner,
   markProjectTransferSessionTerminalCleanupComplete,
@@ -789,6 +859,7 @@ export type {
   FailProjectTransferSessionExportParams,
   GetProjectTransferSessionParams,
   HasActiveProjectTransferSessionsParams,
+  HasProjectTransferWriterSessionsParams,
   HeartbeatProjectTransferExportSessionOwnerParams,
   HeartbeatProjectTransferSessionOwnerParams,
   MarkProjectTransferSessionTerminalCleanupCompleteParams,

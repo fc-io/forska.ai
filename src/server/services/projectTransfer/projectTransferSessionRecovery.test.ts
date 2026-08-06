@@ -449,7 +449,7 @@ test('project transfer recovery fails stale import analysis workers before expir
     rows: Array<{errorReason: string | null; id: string; state: string; terminalCleanupAt: string | null}>
     tempAfterRecovery: Record<string, boolean>
   }>(`
-    const sessionIds = ['import-extracting-stale', 'import-analyzing-stale']
+    const sessionIds = ['import-extracting-stale', 'import-analyzing-stale', 'import-ownerless-extracting-stale']
     await Promise.all(sessionIds.map(async (sessionId) => {
       const layout = getProjectTransferImportTempLayout(sessionId)
       await sessionRepository.createProjectTransferSession({
@@ -478,6 +478,12 @@ test('project transfer recovery fails stale import analysis workers before expir
       now: new Date('2026-05-21T11:00:01.000Z'),
       sessionId: 'import-analyzing-stale',
     })
+    await database.run(\`
+      UPDATE app.project_transfer_session
+      SET owner_token = NULL,
+          heartbeat_at = NULL
+      WHERE id = 'import-ownerless-extracting-stale'
+    \`)
 
     const recoveryResult = await recovery.runProjectTransferStartupRecovery({
       batchSize: 10,
@@ -494,7 +500,7 @@ test('project transfer recovery fails stale import analysis workers before expir
         error_json->>'reason' AS errorReason,
         terminal_cleanup_at AS terminalCleanupAt
       FROM app.project_transfer_session
-      WHERE id IN ('import-extracting-stale', 'import-analyzing-stale')
+      WHERE id IN ('import-extracting-stale', 'import-analyzing-stale', 'import-ownerless-extracting-stale')
       ORDER BY id ASC
     \`)
     const tempAfterRecovery = Object.fromEntries(await Promise.all(sessionIds.map(async (sessionId) => {
@@ -510,10 +516,14 @@ test('project transfer recovery fails stale import analysis workers before expir
     }), tempAfterRecovery}))
   `)
 
-  expect(result.recoveryResult.scannedSessionCount).toBe(2)
+  expect(result.recoveryResult.scannedSessionCount).toBe(3)
   expect(result.recoveryResult.expiredSessionCount).toBe(0)
-  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(2)
-  expect(result.tempAfterRecovery).toEqual({'import-analyzing-stale': false, 'import-extracting-stale': false})
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(3)
+  expect(result.tempAfterRecovery).toEqual({
+    'import-analyzing-stale': false,
+    'import-extracting-stale': false,
+    'import-ownerless-extracting-stale': false,
+  })
   expect(result.rows).toEqual([
     {
       errorReason: 'project_transfer_import_analysis_worker_stale',
@@ -524,6 +534,12 @@ test('project transfer recovery fails stale import analysis workers before expir
     {
       errorReason: 'project_transfer_import_analysis_worker_stale',
       id: 'import-extracting-stale',
+      state: 'failed',
+      terminalCleanupAt: '2026-05-21T12:00:00.000Z',
+    },
+    {
+      errorReason: 'project_transfer_import_analysis_worker_stale',
+      id: 'import-ownerless-extracting-stale',
       state: 'failed',
       terminalCleanupAt: '2026-05-21T12:00:00.000Z',
     },
