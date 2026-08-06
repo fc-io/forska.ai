@@ -224,6 +224,11 @@ type CovidenceProjectRecord = {
 }
 type CovidenceHumanJudgmentSeed = {answer: 'no' | 'yes' | null; articleExternalId: string; isAnswered: boolean}
 type CovidenceMappedHumanJudgmentSeed = CovidenceHumanJudgmentSeed & {articleId: string}
+type CovidenceArticleExternalIdMapping = {
+  articleExternalId: string
+  articleId: string
+  mappingSource: 'current' | 'source_record'
+}
 type CovidenceProjectScopeSeed = {articleExternalId: string}
 type CovidenceProjectPromptLink = {
   criteriaDisposition?: CovidenceEligibilityFieldDisposition
@@ -1974,28 +1979,35 @@ const getCovidenceInternalArticleIds = async (params: {articleExternalIds: strin
     articleExternalIds.length === 0
       ? []
       : await getCovidenceValueChunks(articleExternalIds).reduce<
-          Promise<Array<{articleExternalId: string; articleId: string; articleIdCount: number}>>
+          Promise<Array<CovidenceArticleExternalIdMapping & {articleIdCount: number}>>
         >(async (rowsPromise, articleExternalIdChunk) => {
           const rows = await rowsPromise
           const chunkRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
             articleExternalId: string
             articleId: string
             articleIdCount: number
+            mappingSource: 'current' | 'source_record'
           }>(`
             SELECT
               articleExternalId,
               MIN(articleId) AS articleId,
-              CAST(COUNT(DISTINCT articleId) AS INTEGER) AS articleIdCount
+              CAST(COUNT(DISTINCT articleId) AS INTEGER) AS articleIdCount,
+              CASE MIN(mappingSourceRank)
+                WHEN 0 THEN 'current'
+                ELSE 'source_record'
+              END AS mappingSource
             FROM (
               SELECT
                 current_link.external_article_id AS articleExternalId,
-                current_link.article_id AS articleId
+                current_link.article_id AS articleId,
+                0 AS mappingSourceRank
               FROM app.article_import_route current_link
               WHERE current_link.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
               UNION ALL
               SELECT
                 source_record.external_article_id AS articleExternalId,
-                source_record.article_id AS articleId
+                source_record.article_id AS articleId,
+                1 AS mappingSourceRank
               FROM app.article_import_route_source_record source_record
               WHERE source_record.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
                 AND source_record.quarantined_at IS NULL
@@ -2019,7 +2031,7 @@ const getCovidenceInternalArticleIds = async (params: {articleExternalIds: strin
   }
 
   return rows.map((row) => {
-    return {articleExternalId: row.articleExternalId, articleId: row.articleId}
+    return {articleExternalId: row.articleExternalId, articleId: row.articleId, mappingSource: row.mappingSource}
   })
 }
 
@@ -2045,24 +2057,34 @@ const getMergedCovidenceHumanJudgmentSeed = (
 }
 
 const getCovidenceMappedHumanJudgmentSeeds = (params: {
-  articleIdByExternalId: Map<string, string>
+  articleIdByExternalId: Map<string, CovidenceArticleExternalIdMapping>
   judgmentSeeds: CovidenceHumanJudgmentSeed[]
 }) => {
   return Array.from(
     params.judgmentSeeds
-      .reduce<Map<string, CovidenceHumanJudgmentSeed[]>>((seedMap, judgmentSeed) => {
-        const articleId = params.articleIdByExternalId.get(judgmentSeed.articleExternalId)
-        const existingSeeds = articleId ? (seedMap.get(articleId) ?? []) : []
+      .reduce<Map<string, Array<CovidenceHumanJudgmentSeed & {mappingSource: CovidenceArticleExternalIdMapping['mappingSource']}>>>(
+        (seedMap, judgmentSeed) => {
+          const articleMapping = params.articleIdByExternalId.get(judgmentSeed.articleExternalId)
+          const existingSeeds = articleMapping ? (seedMap.get(articleMapping.articleId) ?? []) : []
 
-        if (articleId) {
-          seedMap.set(articleId, [...existingSeeds, judgmentSeed])
-        }
+          if (articleMapping) {
+            seedMap.set(articleMapping.articleId, [
+              ...existingSeeds,
+              {...judgmentSeed, mappingSource: articleMapping.mappingSource},
+            ])
+          }
 
-        return seedMap
-      }, new Map())
+          return seedMap
+        },
+        new Map(),
+      )
       .entries(),
   ).map(([articleId, seeds]) => {
-    return getMergedCovidenceHumanJudgmentSeed(articleId, seeds)
+    const currentLinkSeeds = seeds.filter((seed) => {
+      return seed.mappingSource === 'current'
+    })
+
+    return getMergedCovidenceHumanJudgmentSeed(articleId, currentLinkSeeds.length > 0 ? currentLinkSeeds : seeds)
   })
 }
 
@@ -2724,7 +2746,7 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   })
   const articleIdByExternalId = new Map(
     articleRows.map((articleRow) => {
-      return [articleRow.articleExternalId, articleRow.articleId]
+      return [articleRow.articleExternalId, articleRow]
     }),
   )
   const mappedJudgmentSeeds = getCovidenceMappedHumanJudgmentSeeds({articleIdByExternalId, judgmentSeeds})

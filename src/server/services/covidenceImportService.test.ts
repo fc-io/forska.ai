@@ -2909,8 +2909,24 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
         })
         const config = covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
 
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-duplicate-records', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-duplicate-records', 'pc-covidence-duplicate-records', 'gpt-covidence', 'gpt-covidence', TRUE);
+        \`)
+
         await database.transaction(async (tx) => {
           await covidenceImportService.importCovidencePackageFromConfig({config, datasourceId, importRoute, tx})
+          const project = await covidenceImportService.getOrCreateCovidenceProject({
+            importRoute,
+            mode: 'title_abstract',
+            modelId: 'model-covidence-duplicate-records',
+            title: 'Covidence duplicate records project',
+            tx,
+          })
+          await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: project.id, tx})
         })
 
         const articleRows = await database.queryJson(\`
@@ -2944,6 +2960,16 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
           WHERE ir.route = '\${importRoute}'
           ORDER BY hot.source_record_key ASC
         \`)
+        const summaryRows = await database.queryJson(\`
+          SELECT
+            air.external_article_id AS externalArticleId,
+            jhs.answer AS answer
+          FROM app.judgment_human_summary jhs
+          INNER JOIN app.article_import_route air ON air.article_id = jhs.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id
+          WHERE ir.route = '\${importRoute}'
+          ORDER BY air.external_article_id ASC
+        \`)
         const currentLinkRows = await database.queryJson(\`
           SELECT COUNT(*)::INTEGER AS count
           FROM app.article_import_route air
@@ -2951,7 +2977,7 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
           WHERE ir.route = '\${importRoute}'
         \`)
 
-        console.log(JSON.stringify({articleRows, currentLinkRows, hotFieldRows, sourceRecordRows}))
+        console.log(JSON.stringify({articleRows, currentLinkRows, hotFieldRows, sourceRecordRows, summaryRows}))
         covidenceImportService.deleteCovidencePackageFiles(datasourceId)
         await database.close()
       `,
@@ -3003,11 +3029,18 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
         seededHumanJudgmentAnswer: string | null
         sourceRecordKey: string
       }>
+      summaryRows: Array<{answer: string | null; externalArticleId: string}>
     }
 
     expect(parsed.articleRows).toHaveLength(1)
     expect(parsed.articleRows[0]?.legacyArticleId).toBeNull()
     expect(parsed.currentLinkRows[0]?.count).toBe(1)
+    expect(parsed.summaryRows).toEqual([
+      {
+        answer: 'yes',
+        externalArticleId: `${importRoute}:covidence%3A%231002`,
+      },
+    ])
     expect(parsed.sourceRecordRows).toHaveLength(2)
     expect(
       parsed.sourceRecordRows.every((row) => {

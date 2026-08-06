@@ -42,11 +42,15 @@ import {
   validateProjectTransferPlanReadyToCommit,
 } from './projectTransferSession.ts'
 import {removeProjectTransferStaleStagingRevisions} from './projectTransferStaging.ts'
+import {projectTransferRecoveryWorkloadContext} from './projectTransferWorkloadContext.ts'
 
 type ProjectTransferSessionRecoveryRunner = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
-  transaction?: <T>(operation: (runner: ProjectTransferSessionRecoveryRunner) => Promise<T>) => Promise<T>
+  queryJson: <T>(statement: string, workloadContext?: typeof projectTransferRecoveryWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: typeof projectTransferRecoveryWorkloadContext) => Promise<void>
+  transaction?: <T>(
+    operation: (runner: ProjectTransferSessionRecoveryRunner) => Promise<T>,
+    workloadContext?: typeof projectTransferRecoveryWorkloadContext,
+  ) => Promise<T>
 }
 
 type ProjectTransferSessionRecoveryRuntimeOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
@@ -205,7 +209,8 @@ const getStaleProjectTransferSessions = async ({
   const staleImportAnalyzeHeartbeatBefore = getDateBefore({ms: importAnalyzeHeartbeatStaleMs, now})
   const staleImportCommitHeartbeatBefore = getDateBefore({ms: importCommitHeartbeatStaleMs, now})
 
-  return runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  return runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     SELECT
       direction,
       id,
@@ -221,7 +226,6 @@ const getStaleProjectTransferSessions = async ({
           THEN 'stale_import_upload'
         WHEN direction = 'import'
           AND state IN ('extracting', 'analyzing')
-          AND owner_token IS NOT NULL
           AND expires_at > ${getTimestampLiteral(now)}
           AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
           THEN 'stale_import_analysis'
@@ -250,7 +254,6 @@ const getStaleProjectTransferSessions = async ({
       OR (
         direction = 'import'
         AND state IN ('extracting', 'analyzing')
-        AND owner_token IS NOT NULL
         AND expires_at > ${getTimestampLiteral(now)}
         AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
       )
@@ -281,7 +284,9 @@ const getStaleProjectTransferSessions = async ({
       updated_at ASC,
       id ASC
     LIMIT ${batchSize}
-  `)
+  `,
+    projectTransferRecoveryWorkloadContext,
+  )
 }
 
 const getImportRecoveryCondition = ({
@@ -302,7 +307,7 @@ const getImportRecoveryCondition = ({
 
   return session.recoveryKind === 'expired_or_terminal'
     ? `AND expires_at <= ${getTimestampLiteral(now)}`
-    : `AND owner_token = ${getSqlLiteral(session.ownerToken)}
+    : `${session.ownerToken === null ? 'AND owner_token IS NULL' : `AND owner_token = ${getSqlLiteral(session.ownerToken)}`}
        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleHeartbeatBefore)}`
 }
 
@@ -1402,12 +1407,15 @@ const markTerminalCleanupComplete = async ({
     return
   }
 
-  await runner.run(`
+  await runner.run(
+    `
     UPDATE app.project_transfer_session
     SET terminal_cleanup_at = ${getTimestampLiteral(now)}
     WHERE id IN (${getQuotedStringList(sessionIds).join(', ')})
       AND state IN (${terminalStateListSql})
-  `)
+  `,
+    projectTransferRecoveryWorkloadContext,
+  )
 }
 
 const pruneExpiredTerminalSessions = async ({
@@ -1420,7 +1428,8 @@ const pruneExpiredTerminalSessions = async ({
   runner: ProjectTransferSessionRecoveryRunner
 }) => {
   const pruneBefore = getDateBefore({ms: defaultTerminalSessionPruneAgeMs, now})
-  const rows = await runner.queryJson<{id: string}>(`
+  const rows = await runner.queryJson<{id: string}>(
+    `
     SELECT id
     FROM app.project_transfer_session
     WHERE state IN (${terminalStateListSql})
@@ -1429,7 +1438,9 @@ const pruneExpiredTerminalSessions = async ({
       AND terminal_cleanup_at <= ${getTimestampLiteral(pruneBefore)}
     ORDER BY expires_at ASC, terminal_cleanup_at ASC, id ASC
     LIMIT ${batchSize}
-  `)
+  `,
+    projectTransferRecoveryWorkloadContext,
+  )
   const sessionIds = rows.map((row) => {
     return row.id
   })
@@ -1438,10 +1449,13 @@ const pruneExpiredTerminalSessions = async ({
     return
   }
 
-  await runner.run(`
+  await runner.run(
+    `
     DELETE FROM app.project_transfer_session
     WHERE id IN (${getQuotedStringList(sessionIds).join(', ')})
-  `)
+  `,
+    projectTransferRecoveryWorkloadContext,
+  )
 }
 
 const cleanupStaleLiveImportStagingRevisions = async ({
@@ -1455,7 +1469,8 @@ const cleanupStaleLiveImportStagingRevisions = async ({
   runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
   runner: ProjectTransferSessionRecoveryRunner
 }) => {
-  const rows = await runner.queryJson<{id: string; stagingRevision: number}>(`
+  const rows = await runner.queryJson<{id: string; stagingRevision: number}>(
+    `
     SELECT
       id,
       TRY_CAST(${getStagingRevisionJsonSql()} AS INTEGER) AS stagingRevision
@@ -1468,7 +1483,9 @@ const cleanupStaleLiveImportStagingRevisions = async ({
       AND TRY_CAST(${getStagingRevisionJsonSql()} AS INTEGER) IS NOT NULL
     ORDER BY updated_at ASC, id ASC
     LIMIT ${batchSize}
-  `)
+  `,
+    projectTransferRecoveryWorkloadContext,
+  )
 
   return rows.reduce<Promise<number>>(async (promise, row) => {
     const count = await promise
@@ -1525,7 +1542,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
           staleImportAnalyzeHeartbeatBefore,
           staleImportCommitHeartbeatBefore,
         })
-      })
+      }, projectTransferRecoveryWorkloadContext)
     : await getCleanupPlans({
         now,
         ownerToken,

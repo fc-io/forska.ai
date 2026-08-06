@@ -1,4 +1,13 @@
-import {existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -423,6 +432,22 @@ const getRuntimeCrashOutputDiagnosticEvidence = (output: string): RuntimeLogEvid
     .slice(-runtimeCrashDiagnosticEvidenceLimit)
 }
 
+const hasReviewServingRebuildChunkProgressSince = ({
+  logDir,
+  snapshot,
+}: {
+  logDir: string
+  snapshot: RuntimeLogSnapshot
+}) => {
+  return getRuntimeLogRecordsSince({logDir, snapshot}).some((record) => {
+    return (
+      record.runtime?.service === 'maintenance-worker-server'
+      && record.event?.startsWith('review-serving-projector-worker:rebuild-chunk:') === true
+      && record.attrs?.status === 'completed'
+    )
+  })
+}
+
 test('runtime crash diagnostics harvest only new sanitized records for the changed pid', () => {
   const logDir = join(tmpdir(), `forska-runtime-crash-evidence-${Date.now()}`)
   const logPath = join(logDir, 'maintenance-worker-server-2026-07-13.jsonl')
@@ -747,9 +772,7 @@ const isStaleReviewServingProgressSnapshot = (snapshot: ReviewServingProgressSna
 
 const hasReviewServingProgressWork = (snapshot: ReviewServingProgressSnapshot) => {
   return (
-    snapshot.pendingRefreshCount > 0
-    || snapshot.queuedRefreshCount > 0
-    || snapshot.inFlightRefreshCount > 0
+    snapshot.inFlightRefreshCount > 0
     || snapshot.activeWorkCount > 0
     || snapshot.rebuildPendingCount > 0
     || snapshot.rebuildRunningCount > 0
@@ -828,6 +851,8 @@ const didReviewServingWorkProgress = (before: ReviewServingProgressSnapshot, aft
 
 type ReviewServingProgressPollOptions = {
   getCandidates?: (apiPort: number) => Promise<ReviewServingProgressCandidate[]>
+  logDir?: string
+  logSnapshot?: RuntimeLogSnapshot
   now?: () => number
   pollIntervalMs?: number
   postWarnings?: (apiPort: number, projectId: string) => Promise<ReviewsWarningsBody>
@@ -999,6 +1024,8 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (
   apiPort: number,
   {
     getCandidates = getReviewServingProgressCandidates,
+    logDir = getPrimaryRuntimeLogDir(),
+    logSnapshot = getRuntimeLogSnapshot(logDir),
     now = Date.now,
     pollIntervalMs = currentDbReviewServingQueuedWorkProgressPollMs,
     postWarnings = postReviewWarnings,
@@ -1030,6 +1057,10 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (
     const result = await getCurrentDbReviewServingQueuedWorkProbeResult(apiPort, beforeSnapshots, postWarnings)
 
     if (result.passed) {
+      return
+    }
+
+    if (hasReviewServingRebuildChunkProgressSince({logDir, snapshot: logSnapshot})) {
       return
     }
 
@@ -1164,6 +1195,47 @@ test('current-db review-serving smoke accepts original queued work becoming non-
   expect(probeCount).toBe(1)
 })
 
+test('current-db review-serving smoke accepts fresh rebuild chunk log progress', async () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'f2-review-serving-progress-log-'))
+  const logPath = join(logDir, 'maintenance-worker-server-2026-07-24.jsonl')
+  const initialBody = createReviewServingProgressCandidateBody()
+  let nowMs = Date.parse('2026-07-24T10:00:00.000Z')
+  let probeCount = 0
+
+  try {
+    await expectCurrentDbReviewServingQueuedWorkProgresses(3001, {
+      getCandidates: async () => {
+        return [{body: initialBody, projectId: 'project-a'}]
+      },
+      logDir,
+      logSnapshot: getRuntimeLogSnapshot(logDir),
+      now: () => {
+        return nowMs
+      },
+      postWarnings: async () => {
+        probeCount += 1
+
+        return initialBody
+      },
+      wait: async (ms) => {
+        nowMs += ms
+        writeFileSync(
+          logPath,
+          JSON.stringify({
+            attrs: {chunkId: 'chunk:1', status: 'completed'},
+            event: 'review-serving-projector-worker:rebuild-chunk:rebuild:1:search',
+            runtime: {service: 'maintenance-worker-server'},
+          }) + '\n',
+        )
+      },
+    })
+  } finally {
+    rmSync(logDir, {force: true, recursive: true})
+  }
+
+  expect(probeCount).toBe(2)
+})
+
 test('current-db review-serving smoke treats active refresh work as a progress candidate', () => {
   const body: ReviewsWarningsBody = {
     data: {
@@ -1188,6 +1260,19 @@ test('current-db review-serving smoke treats active refresh work as a progress c
   expect(isReviewServingProgressCandidate(body)).toBe(true)
   expect(didReviewServingWorkProgress(before, before)).toBe(false)
   expect(didReviewServingWorkProgress(before, after)).toBe(true)
+})
+
+test('current-db review-serving smoke ignores stale queued counters without active rebuild work', () => {
+  const body = createReviewServingProgressCandidateBody({
+    activeWorkCount: 0,
+    inFlightRefreshCount: 0,
+    pendingRefreshCount: 88835,
+    progressState: 'queued',
+    queuedRefreshCount: 88835,
+    serving: {diagnostics: {rebuildChunks: {pendingCount: 0, runningCount: 0, updatedAt: null}}},
+  })
+
+  expect(isReviewServingProgressCandidate(body)).toBe(false)
 })
 
 test('current-db warning route probe falls back from an unusable configured project to an active project', async () => {

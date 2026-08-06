@@ -25,6 +25,16 @@ export const projectTransferRouteLookupWorkloadContext = getProjectTransferWorkl
   routeOrJobKey: 'projectTransfer.route.sourceProjectLookup',
 })
 
+export const projectTransferSessionWorkloadContext = getProjectTransferWorkloadContext({
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'projectTransfer.session',
+})
+
+export const projectTransferRecoveryWorkloadContext = getProjectTransferWorkloadContext({
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'projectTransfer.recovery',
+})
+
 export const projectTransferExportWorkloadContext = getProjectTransferWorkloadContext({
   allowsTempSpill: true,
   routeOrJobKey: 'projectTransfer.export.queries',

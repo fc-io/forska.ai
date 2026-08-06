@@ -22,8 +22,9 @@ const reviewServingProjectorWorkerComponent = 'reviewServingProjectorWorker'
 const defaultReviewServingProjectorWorkerHeartbeatBatchSize = 2
 const gibibyte = 1024 ** 3
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
-const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
+const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
+const lowMemoryReviewServingProjectorWorkerRssCapRatio = 0.75
 const highRssRestartGraceBytes = gibibyte
 
 const getErrorMessage = (error: unknown) => {
@@ -61,10 +62,19 @@ const getReviewServingProjectorWorkerMaxCompletedChunksPerRun = (
 const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
   options: ReviewServingProjectorWorkerHeartbeatOptions,
 ) => {
-  return (
+  const configuredMaxRssBytes =
     options.rebuildChunkBatchMaxRssBytes
     ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
     ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
+
+  if (duckdbLimitMiB === null || duckdbLimitMiB > lowMemoryMaintenanceDuckdbLimitMiB) {
+    return configuredMaxRssBytes
+  }
+
+  return Math.min(
+    configuredMaxRssBytes,
+    Math.floor(duckdbLimitMiB * 1024 ** 2 * lowMemoryReviewServingProjectorWorkerRssCapRatio),
   )
 }
 
@@ -107,7 +117,7 @@ const hasActiveProjectTransferSession = async () => {
   } catch (error) {
     reviewServingProjectorWorkerWarningLogger.warn(
       'review-serving-projector.heartbeat-project-transfer-session-check-failed',
-      '[reviewServingProjectorWorker] skipping DuckDB recycle because active project transfer session check failed',
+      '[reviewServingProjectorWorker] skipping DuckDB recycle because project transfer session check failed',
       {errorMessage: getErrorMessage(error)},
     )
 

@@ -257,7 +257,7 @@ const isUnsafeLegacyArticleRoute = (value: string | null) => {
     value !== null
     && (value.includes('/api/runtime-asset')
       || value.includes('tmp/project-transfer')
-      || /^\/(?!\/)/.test(value)
+      || (!value.startsWith('/api/') && /^\/(?!\/)/.test(value))
       || /^[A-Za-z]:[\\/]/.test(value)
       || value.startsWith('file://'))
   )
@@ -614,7 +614,13 @@ const getStagedNdjsonBlocker = ({
   return getPlanBlocker({code, message: `${key}[${lineNumber}] ${message}`, scope: `${key}[${lineNumber}]`})
 }
 
-const getNormalizedStreamedNdjsonRecord = (key: ProjectTransferPackagePayloadKey, record: Record<string, unknown>) => {
+const getNormalizedStreamedNdjsonRecord = ({
+  key,
+  record,
+}: {
+  key: ProjectTransferPackagePayloadKey
+  record: Record<string, unknown>
+}) => {
   return key === 'articles' ? sanitizeLegacyArticlePayload(record) : record
 }
 
@@ -650,7 +656,7 @@ const getStreamedNdjsonLineValue = ({
   const validated = validateProjectTransferPayloadRowForSchemaVersion(schemaVersion, key, parsed.value, lineNumber)
 
   return validated.ok
-    ? {ok: true, value: getNormalizedStreamedNdjsonRecord(key, validated.value)}
+    ? {ok: true, value: getNormalizedStreamedNdjsonRecord({key, record: validated.value})}
     : {
         blocker: getStagedNdjsonBlocker({
           code: 'payload_row_contract_invalid',

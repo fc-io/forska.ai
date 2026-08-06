@@ -66,6 +66,7 @@ const readOnlyGetSessionId = getRouteTestSessionId('import-read-only-get')
 const progressArtifactImportSessionId = getRouteTestSessionId('import-progress-artifact')
 const commitProgressArtifactImportSessionId = getRouteTestSessionId('import-commit-progress-artifact')
 const completedArtifactImportSessionId = getRouteTestSessionId('import-completed-artifact')
+const staleProgressTerminalImportSessionId = getRouteTestSessionId('import-stale-progress-terminal')
 const largeBackgroundAnalyzeSessionId = getRouteTestSessionId('import-large-background-analyze')
 const missingArtifactsGetSessionId = getRouteTestSessionId('import-missing-get')
 const resolveSessionId = getRouteTestSessionId('import-resolve')
@@ -81,6 +82,7 @@ const artifactSessionIds = [
   progressArtifactImportSessionId,
   commitProgressArtifactImportSessionId,
   completedArtifactImportSessionId,
+  staleProgressTerminalImportSessionId,
   largeBackgroundAnalyzeSessionId,
   missingArtifactsGetSessionId,
   resolveSessionId,
@@ -1318,6 +1320,33 @@ test('project transfer import get reads completed import artifacts before the se
     error: null,
   })
   expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
+})
+
+test('project transfer import get returns terminal session rows over stale active progress artifacts', async () => {
+  const app = await getProjectTransferApp()
+  routeState.sessions[staleProgressTerminalImportSessionId] = getImportSessionRecord({
+    errorJson: {message: 'Recovered stale import session'},
+    id: staleProgressTerminalImportSessionId,
+    state: 'failed',
+  })
+  mkdirSync(getImportRootPath(staleProgressTerminalImportSessionId), {recursive: true})
+  writeFileSync(
+    getImportProgressPath(staleProgressTerminalImportSessionId),
+    JSON.stringify({
+      expiresAt: futureDate.toISOString(),
+      message: 'Scanning package',
+      phase: 'package_scan',
+      status: 'running',
+      updatedAt: '2020-01-01T00:00:00.000Z',
+    }),
+  )
+
+  const response = await getRouteResponse(app, `/api/projects/import/${staleProgressTerminalImportSessionId}`, 'GET')
+  const body = (await response.json()) as {data: {error: unknown; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({data: {error: {message: 'Recovered stale import session'}, state: 'failed'}, error: null})
+  expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: staleProgressTerminalImportSessionId})
 })
 
 test('project transfer import get fails the session when dependency artifacts are missing', async () => {

@@ -1420,6 +1420,23 @@ const getReviewServingRebuildChunkProjectPredicate = (input: {projectId?: string
     : `AND ${source}project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}`
 }
 
+const getReviewServingRebuildChunkActiveProjectPredicate = (tableAlias?: string) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+
+  return `
+    AND (
+      ${source}project_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM app.project project
+        WHERE project.id IS NOT DISTINCT FROM ${source}project_id
+          AND project.archived = FALSE
+          AND project.delete_pending_at IS NULL
+      )
+    )
+  `
+}
+
 const getReviewServingRebuildChunkForegroundBackpressurePredicate = (
   input: {now: Date | string},
   tableAlias?: string,
@@ -1485,6 +1502,7 @@ export const getReviewServingRebuildChunkClaimWhere = (
 ) => {
   return `
     (${getReviewServingRebuildChunkClaimPredicate(input, tableAlias)})
+    ${getReviewServingRebuildChunkActiveProjectPredicate(tableAlias)}
     ${getReviewServingRebuildChunkForegroundBackpressurePredicate(input, tableAlias)}
     ${getReviewServingRebuildChunkProjectPredicate(input, tableAlias)}
   `

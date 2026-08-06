@@ -8,6 +8,7 @@ import {
   getProjectTransferTargetStateDirtyTokenService,
   type TargetStateDirtyTokenRunner,
 } from './projectTransferTargetStateDirtyTokenService.ts'
+import {projectTransferCommitTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
 
 type ProjectTransferHistoryRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -279,7 +280,7 @@ const createProjectTransferHistory = async (params: CreateProjectTransferHistory
     ? createProjectTransferHistoryTx({...params, runner: params.runner})
     : (getAppDatabaseService().transaction((tx) => {
         return createProjectTransferHistoryTx({...params, runner: tx as ProjectTransferHistoryWriterRunner})
-      }) as Promise<ProjectTransferHistoryRecord>)
+      }, projectTransferCommitTransactionWorkloadContext) as Promise<ProjectTransferHistoryRecord>)
 }
 
 const projectTransferHistoryRepository = {

@@ -112,6 +112,13 @@ type ProjectTransferPackageHeaderMetadata = Pick<
 
 const importWorkerHeartbeatIntervalMs = 15_000
 const importWorkerHeartbeatLeaseMs = 60_000
+const staleActiveImportArtifactMaxAgeMs = 10 * 60 * 1000
+const terminalImportSessionStates = new Set<ProjectTransferSessionResponse['state']>([
+  'cancelled',
+  'completed',
+  'expired',
+  'failed',
+])
 
 export const projectTransferRouteSpecs = [
   {
@@ -639,6 +646,19 @@ export const getImportSessionArtifactResponse = async (
   }
 
   return {data: getImportSessionData(response, null, 'background'), error: null}
+}
+
+export const shouldUseImportSessionArtifactResponse = (
+  response: ProjectTransferApiResponse<ProjectTransferImportSessionData>,
+  now = Date.now(),
+) => {
+  if (response.error !== null || terminalImportSessionStates.has(response.data.state)) {
+    return true
+  }
+
+  const updatedAtMs = new Date(response.data.updatedAt).getTime()
+
+  return !Number.isFinite(updatedAtMs) || now - updatedAtMs <= staleActiveImportArtifactMaxAgeMs
 }
 
 const validateCurrentImportPlanArtifact = (
@@ -1654,11 +1674,21 @@ const getImportSession = async (
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
   const artifactResponse = await getImportSessionArtifactResponse(sessionId)
 
-  if (artifactResponse !== null) {
+  if (artifactResponse !== null && shouldUseImportSessionArtifactResponse(artifactResponse)) {
     return artifactResponse
   }
 
   const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
+
+  if (artifactResponse !== null && record !== null && terminalImportSessionStates.has(record.state)) {
+    const response = await getImportSessionResponseFromRecord(set, record, undefined, includePlan)
+
+    return response ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
+  }
+
+  if (artifactResponse !== null) {
+    return artifactResponse
+  }
 
   if (record !== null && (record.state === 'awaiting_resolution' || record.state === 'ready_to_commit')) {
     const response = toProjectTransferSessionResponse(record)
