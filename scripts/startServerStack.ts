@@ -3,7 +3,7 @@ import {mkdir, readFile, rename, unlink, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {spawn, type Subprocess} from 'bun'
+import {spawn, spawnSync, type Subprocess} from 'bun'
 import {Effect} from 'effect'
 
 import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/server/utils/backgroundServerStack.ts'
@@ -39,7 +39,7 @@ type ManagedServerState = {
 type ManagedProcessExitRecord = {exitedAtMs: number; pid: number}
 
 const restartDelayMs = 1_000
-const maintenanceStartupTimeoutMs = 180_000
+const maintenanceStartupTimeoutMs = 1_800_000
 const judgeStartupTimeoutMs = 90_000
 const shutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
@@ -87,6 +87,46 @@ const isProcessAlive = (pid: number) => {
     return true
   } catch {
     return false
+  }
+}
+
+const getChildProcessIds = (pid: number) => {
+  const result = spawnSync(['pgrep', '-P', String(pid)], {stderr: 'pipe', stdin: 'ignore', stdout: 'pipe'})
+
+  if (result.exitCode !== 0) {
+    return []
+  }
+
+  return result.stdout
+    .toString()
+    .split(/\s+/u)
+    .map((value) => {
+      return Number(value)
+    })
+    .filter((value) => {
+      return Number.isInteger(value) && value > 0
+    })
+}
+
+const getDescendantProcessIds = (pid: number): number[] => {
+  const childPids = getChildProcessIds(pid)
+
+  return childPids.flatMap((childPid) => {
+    return [childPid, ...getDescendantProcessIds(childPid)]
+  })
+}
+
+const killProcessIds = (pids: number[], signal: 'SIGTERM' | 'SIGKILL') => {
+  for (const pid of new Set(pids)) {
+    try {
+      if (isProcessAlive(pid)) {
+        process.kill(pid, signal)
+      }
+    } catch (error) {
+      if (isProcessAlive(pid)) {
+        throw error
+      }
+    }
   }
 }
 
@@ -321,19 +361,29 @@ const stopExternalProcess = async ({pid, processName}: {pid: number; processName
     return
   }
 
-  process.kill(pid, 'SIGTERM')
+  const descendantPids = getDescendantProcessIds(pid)
+
+  killProcessIds([...descendantPids, pid], 'SIGTERM')
 
   if (await waitForProcessExit(pid)) {
+    await Promise.all(
+      descendantPids.map((descendantPid) => {
+        return waitForProcessExit(descendantPid)
+      }),
+    )
     return
   }
 
   console.error(`[server:stack] ${processName} pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
 
-  if (isProcessAlive(pid)) {
-    process.kill(pid, 'SIGKILL')
-  }
+  killProcessIds([...getDescendantProcessIds(pid), ...descendantPids, pid], 'SIGKILL')
 
   if (await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs)) {
+    await Promise.all(
+      descendantPids.map((descendantPid) => {
+        return waitForProcessExit(descendantPid, Date.now() + forcedKillTimeoutMs)
+      }),
+    )
     return
   }
 
@@ -456,20 +506,29 @@ const stopServerProcess = async (serverProcess: ServerProcess | null) => {
   }
 
   const pid = serverProcess.pid
+  const descendantPids = pid === undefined ? [] : getDescendantProcessIds(pid)
 
-  serverProcess.kill('SIGTERM')
+  if (pid === undefined) {
+    serverProcess.kill('SIGTERM')
+  } else {
+    killProcessIds([...descendantPids, pid], 'SIGTERM')
+  }
 
   if (pid !== undefined && !(await waitForProcessExit(pid))) {
     console.error(`[server:stack] pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
 
-    if (isProcessAlive(pid)) {
-      serverProcess.kill('SIGKILL')
-    }
+    killProcessIds([...getDescendantProcessIds(pid), ...descendantPids, pid], 'SIGKILL')
 
     if (!(await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs))) {
       throw new Error(`Timed out waiting for pid=${pid} to exit`)
     }
   }
+
+  await Promise.all(
+    descendantPids.map((descendantPid) => {
+      return waitForProcessExit(descendantPid, Date.now() + forcedKillTimeoutMs)
+    }),
+  )
 
   try {
     await serverProcess.exited

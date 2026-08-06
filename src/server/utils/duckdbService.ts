@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import {access, copyFile, mkdir, rename, rm, writeFile} from 'node:fs/promises'
-import {availableParallelism, tmpdir} from 'node:os'
+import {availableParallelism, tmpdir, totalmem} from 'node:os'
 import {basename, join} from 'node:path'
 
 import {DuckDBConnection, DuckDBInstance, type DuckDBType, type DuckDBValue} from '@duckdb/node-api'
@@ -227,7 +227,8 @@ const duckdbWorkloadDiagnosticStorage = new AsyncLocalStorage<DuckdbWorkloadDiag
 const duckdbCheckpointThresholdMaxMiB = 8192
 const duckdbCheckpointThresholdMinMiB = 64
 const duckdbLowMemoryDeferredCheckpointThresholdMiB = 1024 * 1024
-const duckdbStartupWalCheckpointTimeoutMs = 15_000
+const duckdbStartupWalCheckpointMinimumMemoryMiB = 12 * 1024
+const duckdbStartupWalCheckpointTimeoutMs = 1_200_000
 const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
 const duckdbStartupPreflightLockRetryDelaysMs = [100, 250, 500, 1000]
@@ -2430,6 +2431,30 @@ const getDuckdbIndexedTableRepairInstanceOptions = (runtimeConfig: DuckdbRuntime
   return {...getDuckdbInstanceOptions(runtimeConfig), checkpoint_threshold: '8GB'}
 }
 
+const formatDuckdbMemoryLimitMiB = (memoryLimitMiB: number) => {
+  return memoryLimitMiB % 1024 === 0 ? `${memoryLimitMiB / 1024}GB` : `${memoryLimitMiB}MiB`
+}
+
+const getDuckdbStartupWalCheckpointMemoryLimit = (runtimeConfig: DuckdbRuntimeConfig) => {
+  const runtimeMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(runtimeConfig.memoryLimit)
+  const availableMemoryMiB = Math.floor(totalmem() / 1024 / 1024 / 2)
+
+  if (runtimeMemoryLimitMiB === null || availableMemoryMiB <= runtimeMemoryLimitMiB) {
+    return runtimeConfig.memoryLimit
+  }
+
+  return formatDuckdbMemoryLimitMiB(
+    Math.max(runtimeMemoryLimitMiB, Math.min(availableMemoryMiB, duckdbStartupWalCheckpointMinimumMemoryMiB)),
+  )
+}
+
+const getDuckdbStartupWalCheckpointInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<string, string> => {
+  return {
+    ...getDuckdbInstanceOptions(runtimeConfig),
+    memory_limit: getDuckdbStartupWalCheckpointMemoryLimit(runtimeConfig),
+  }
+}
+
 export const getReadOnlyDuckdbRuntimeOptions = (input: ReadOnlyDuckdbRuntimeOptionsInput = {}) => {
   const runtimeConfig = getDuckdbRuntimeConfigValue()
   const tempDirectory = input.tempDirectory ?? runtimeConfig.tempDirectory
@@ -4157,7 +4182,7 @@ const checkpointDuckdbStartupWalReplay = async (runtimeConfig: DuckdbRuntimeConf
       '-e',
       getDuckdbStartupWalCheckpointScript(),
       JSON.stringify(runtimeConfig.databasePath),
-      JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
+      JSON.stringify(getDuckdbStartupWalCheckpointInstanceOptions(runtimeConfig)),
     ],
     {
       cwd: process.cwd(),
