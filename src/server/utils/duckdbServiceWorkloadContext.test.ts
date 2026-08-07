@@ -26,6 +26,7 @@ test('project transfer memory headroom stays off lightweight session work', () =
   expect(allowlistSource).toContain('projectTransfer.export.transaction')
   expect(allowlistSource).toContain('projectTransfer.import.analyze.operationTables')
   expect(allowlistSource).toContain('projectTransfer.import.commit.transaction')
+  expect(allowlistSource).not.toContain('projectTransfer.recovery')
   expect(allowlistSource).not.toContain('projectTransfer.session')
 })
 

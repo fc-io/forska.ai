@@ -654,8 +654,8 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
   }
 })
 
-test('duckdb service runs only low-memory safe startup mutation preflight on low-memory workers', () => {
-  const dataRoot = join(tmpdir(), `f1-duckdb-service-low-memory-safe-preflight-${Date.now()}`)
+test('duckdb service skips proactive startup mutation preflight on low-memory workers', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-low-memory-skip-preflight-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
   mkdirSync(dataRoot, {recursive: true})
@@ -733,7 +733,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
           return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
         })
 
-        const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-safe-preflight-test=' + Date.now())
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-skip-preflight-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
         console.log(JSON.stringify({createCount, preflightCount, preflightSpecs, rows}))
         await duckdbService.closeDuckdbService()
@@ -758,7 +758,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
 
   try {
     if (result.exitCode !== 0) {
-      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB low-memory safe preflight failed')
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB low-memory preflight skip failed')
     }
 
     const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
@@ -768,25 +768,8 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       rows: Array<{value: number}>
     }
 
-    expect(parsed.preflightCount).toBe(1)
-    expect(
-      parsed.preflightSpecs.map((spec) => {
-        return `${spec.schemaName}.${spec.tableName}`
-      }),
-    ).toEqual([
-      'app.review_serving_projector_watermark',
-      'app.review_serving_snapshot_manifest',
-      'app.comparison_project_serving_generation',
-      'app.review_rebuild_chunk_manifest',
-      'mart.review_article_count_serving_v4',
-      'mart.review_filtered_count_serving_v4',
-      'mart.review_filter_facet_serving_v4',
-      'mart.review_filter_option_serving_v4',
-      'mart.review_article_judgment_detail_serving_v4',
-      'mart.review_title_search_serving_v4',
-      'mart.review_unassessed_queue_serving_v4',
-      'mart.review_article_filter_posting_serving_v4',
-    ])
+    expect(parsed.preflightCount).toBe(0)
+    expect(parsed.preflightSpecs).toEqual([])
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
   } finally {
@@ -1654,13 +1637,8 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
 
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
-    expect(parsed.preflightCount).toBe(2)
+    expect(parsed.preflightCount).toBe(1)
     expect(parsed.preflightSpecsHistory[0]).toEqual([])
-    expect(
-      parsed.preflightSpecsHistory[1]?.map((spec) => {
-        return `${spec.schemaName}.${spec.tableName}`
-      }),
-    ).toContain('mart.review_article_filter_posting_serving_v4')
     expect(parsed.checkpointCount).toBe(1)
     expect(parsed.walExists).toBe(false)
     expect(parsed.createCount).toBe(1)
@@ -4574,4 +4552,131 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
   const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
   expect(parsed).toEqual({createCount: 2, releaseCount: 1, rows: [{value: 1}], runStatements: ['2:CHECKPOINT']})
+})
+
+test('duckdb service restarts and retries after a fatal rollback OOM', () => {
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        let firstInsertRollbackOom = false
+        let releaseCount = 0
+        const runStatements = []
+        const readStatements = []
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {
+              releaseCount += 1
+            },
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async run(statement) {
+              if (statement === 'CHECKPOINT' && this.instanceId === 1) {
+                throw new Error('recovery checkpoint should not run')
+              }
+
+              runStatements.push(this.instanceId + ':' + statement)
+            }
+
+            async runAndReadAll(statement) {
+              readStatements.push(this.instanceId + ':' + statement)
+
+              if (!firstInsertRollbackOom && this.instanceId === 1) {
+                firstInsertRollbackOom = true
+                throw new Error(
+                  'FATAL Error: Failed to rollback transaction. Cannot continue operation. Original Error: Out of Memory Error: could not allocate block of size 52.8 MiB (6.2 GiB/6.2 GiB used) Rollback Error: Out of Memory Error: could not allocate block of size 52.8 MiB (6.2 GiB/6.2 GiB used)',
+                )
+              }
+
+              return {
+                getRowObjectsJson() {
+                  return [{id: 'session-1'}]
+                },
+              }
+            }
+
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance(createCount)
+            }
+
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async connect() {
+              return new MockConnection(this.instanceId)
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-rollback-oom-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery("INSERT INTO app.project_transfer_session (id) VALUES ('session-1') RETURNING id")
+        await duckdbService.closeDuckdbService()
+        console.log(JSON.stringify({createCount, readStatements, releaseCount, rows, runStatements}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: '/tmp/f1-duckdb-service-fatal-rollback-oom-test.duckdb',
+        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-fatal-rollback-oom-test-temp',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.toString() || result.stdout.toString() || 'DuckDB fatal rollback OOM subprocess failed',
+    )
+  }
+
+  const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult & {readStatements: string[]}>(
+    result.stdout.toString(),
+  )
+
+  expect(parsed).toEqual({
+    createCount: 2,
+    readStatements: [
+      "1:INSERT INTO app.project_transfer_session (id) VALUES ('session-1') RETURNING id",
+      "2:INSERT INTO app.project_transfer_session (id) VALUES ('session-1') RETURNING id",
+    ],
+    releaseCount: 1,
+    rows: [{id: 'session-1'}],
+    runStatements: [],
+  })
 })

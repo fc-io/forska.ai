@@ -1,8 +1,8 @@
 import {existsSync, mkdirSync, rmSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
-import {Database} from 'bun:sqlite'
 import {DuckDBInstance} from '@duckdb/node-api'
+import {Database} from 'bun:sqlite'
 import {expect, test} from 'bun:test'
 
 const projectRoot = process.cwd()
@@ -28,6 +28,22 @@ const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     rmSync(filePath, {force: true, recursive: true})
   }
+}
+
+const getLastJsonLine = (text: string) => {
+  const line = text
+    .trim()
+    .split('\n')
+    .reverse()
+    .find((candidate) => {
+      return candidate.trim().startsWith('{')
+    })
+
+  if (line === undefined) {
+    throw new Error(`No JSON object found in output: ${text}`)
+  }
+
+  return line
 }
 
 const seedRecoverySql = `
@@ -269,7 +285,7 @@ const runRecoveryScript = (duckdbPath: string, scriptPath: string, jobId: string
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'SQLite recovery script failed')
   }
 
-  return JSON.parse(result.stdout.toString()) as ScriptResult
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as ScriptResult
 }
 
 const queryDuckdbJson = async <T>(duckdbPath: string, statement: string) => {

@@ -4,6 +4,22 @@ import {existsSync, readFileSync, unlinkSync} from 'fs'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {createAppQueryService} from './appQueryServiceCore.ts'
 
+const getLastJsonLine = (text: string) => {
+  const line = text
+    .trim()
+    .split('\n')
+    .reverse()
+    .find((candidate) => {
+      return candidate.trim().startsWith('{')
+    })
+
+  if (line === undefined) {
+    throw new Error(`No JSON object found in output: ${text}`)
+  }
+
+  return line
+}
+
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     unlinkSync(filePath)
@@ -188,7 +204,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       )
     }
 
-    const parsed = JSON.parse(result.stdout.toString()) as {
+    const parsed = JSON.parse(getLastJsonLine(result.stdout.toString())) as {
       promptRow: {id: string; promptHeading: string; originalText: string; type: string}
       projectConfig: {
         dateFrom: string

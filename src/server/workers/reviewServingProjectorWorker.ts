@@ -5060,8 +5060,9 @@ const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
   }
 
   return (
-    reviewServingDuckdbRecycleAfterRebuildComponents.has(input.chunk.projectionComponent)
-    && input.chunk.requestId === null
+    (reviewServingDuckdbRecycleAfterRebuildComponents.has(input.chunk.projectionComponent)
+      && input.chunk.requestId === null)
+    || hasRequestAssociatedNativeHeavyChunkReachedRssCap(input)
   )
 }
 

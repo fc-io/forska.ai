@@ -3711,6 +3711,54 @@ test('worker avoids DuckDB recycle and collects garbage after request-associated
   expect(harness.garbageCollectedChunks).toEqual([postingChunk])
 })
 
+test('worker recycles DuckDB after request-associated posting chunks at the RSS cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const postingChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'posting' as const,
+    projectionIdentity: 'posting:project-1',
+  }
+  const postingChunk = {
+    ...chunkManifest,
+    ...postingChunkInput,
+    requestId: 'rebuild-posting',
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return postingChunk
+    },
+    getNextChunk: async () => {
+      return postingChunkInput
+    },
+    heartbeatChunk: async () => {
+      return postingChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 2_000}
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchMaxRssBytes: 1_000, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({
+    projectionComponent: 'posting',
+    requestId: 'rebuild-posting',
+    status: 'completed',
+  })
+  expect(harness.recycledChunks).toEqual([postingChunk])
+  expect(harness.garbageCollectedChunks).toEqual([postingChunk])
+})
+
 test('worker keeps long status chunk loops on the normal lightweight yield path', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const controller = new AbortController()

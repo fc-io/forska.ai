@@ -221,6 +221,7 @@ const duckdbWalReplayRecoveryErrorFragments = [
 const duckdbAbortedTransactionErrorFragments = ['Current transaction is aborted']
 const duckdbRestartRequiredErrorFragments = [
   'database has been invalidated because of a previous fatal error',
+  'Failed to rollback transaction. Cannot continue operation.',
   'must be restarted prior to being used again',
 ]
 const duckdbWorkloadMetricsLimit = 50
@@ -2640,10 +2641,12 @@ const getDuckdbErrorWithStatementContext = (error: unknown, label: string, state
 }
 
 const withDuckdbStatementErrorContext = async <T>({
+  canRetryAfterRestart = false,
   label,
   statement,
   work,
 }: {
+  canRetryAfterRestart?: boolean
   label: string
   statement: string
   work: () => Promise<T>
@@ -2651,7 +2654,19 @@ const withDuckdbStatementErrorContext = async <T>({
   try {
     return await work()
   } catch (error) {
-    throw getDuckdbErrorWithStatementContext(error, label, statement)
+    const contextualError = getDuckdbErrorWithStatementContext(error, label, statement)
+
+    if (!canRetryAfterRestart || !isDuckdbRestartRequiredError(contextualError)) {
+      throw contextualError
+    }
+
+    await recoverDuckdbRuntimeAfterFatalError(contextualError)
+
+    try {
+      return await work()
+    } catch (retryError) {
+      throw getChainedDuckdbError(contextualError, retryError, 'statement-context restart retry failed')
+    }
   }
 }
 
@@ -3424,9 +3439,7 @@ const getDuckdbStartupPreflightSpecsForRuntime = (
     return duckdbStartupIndexedTableRepairSpecs
   }
 
-  return duckdbStartupIndexedTableRepairSpecs.filter((spec) => {
-    return spec.lowMemoryStartupPreflight === true
-  })
+  return []
 }
 
 const expandDuckdbStartupIndexedTableRepairSpecs = (
@@ -4759,7 +4772,6 @@ const projectTransferForegroundMemoryHeadroomRouteOrJobKeys = new Set([
   'projectTransfer.export.transaction',
   'projectTransfer.import.analyze.operationTables',
   'projectTransfer.import.commit.transaction',
-  'projectTransfer.recovery',
 ])
 
 const withProjectTransferForegroundMemoryHeadroomIfNeeded = async <T>(
@@ -6010,6 +6022,7 @@ export const runDuckdbJsonQuery = async <T>(
   workloadContext?: DuckdbWorkloadContext,
 ): Promise<T[]> => {
   return withDuckdbStatementErrorContext({
+    canRetryAfterRestart: true,
     label: 'duckdb main query',
     statement,
     work: () => {
@@ -6038,6 +6051,7 @@ export const runDuckdbJsonQuery = async <T>(
 
 export const runDuckdbStatement = async (statement: string, workloadContext?: DuckdbWorkloadContext) => {
   await withDuckdbStatementErrorContext({
+    canRetryAfterRestart: true,
     label: 'duckdb main statement',
     statement,
     work: () => {
