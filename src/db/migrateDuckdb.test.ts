@@ -7827,6 +7827,173 @@ test('DuckDB migration creates selected-import staging mart for replay-safe dete
   }
 })
 
+test('DuckDB judgment detail answer migration accepts the original payload-kind schema', async () => {
+  const duckdbPath = `/tmp/forska-review-serving-judgment-detail-is-answered-${Date.now()}.duckdb`
+  const isAnsweredMigrationSql = readFileSync(
+    resolve(migrationsFolder, '0125_reviewServingJudgmentDetailIsAnswered.sql'),
+    'utf8',
+  )
+  const promptScalarsMigrationSql = readFileSync(
+    resolve(migrationsFolder, '0135_reviewServingJudgmentDetailPromptScalars.sql'),
+    'utf8',
+  )
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run("CREATE TYPE project_prompt_criteria_disposition_v2 AS ENUM ('include', 'exclude', 'combined')")
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            payload_kind VARCHAR NOT NULL DEFAULT 'llm',
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            prompt_order INTEGER,
+            judgment_id VARCHAR,
+            model_id VARCHAR,
+            is_answered BOOLEAN,
+            answered_original VARCHAR,
+            answered_original_as_array VARCHAR[],
+            judgment_payload_json JSON,
+            placeholder_kind VARCHAR,
+            detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            list_mode_key,
+            payload_kind,
+            article_id,
+            prompt_id,
+            prompt_order,
+            judgment_id,
+            model_id,
+            answered_original,
+            judgment_payload_json
+          )
+          VALUES (
+            'project-a',
+            'config-a',
+            'snapshot-a',
+            'global',
+            'llm',
+            'article-a',
+            'prompt-a',
+            1,
+            'judgment-a',
+            'model-a',
+            'include',
+            '{"isAnswered":true,"prompt":{"criteriaDisposition":"include","originalText":"Prompt A text","promptHeading":"Prompt A","type":"yes_no"}}'
+          )
+        \`)
+
+        await database.run(${JSON.stringify(isAnsweredMigrationSql)})
+
+        const answerRows = await database.queryJson(\`
+          SELECT
+            is_answered AS isAnswered,
+            prompt_original_text AS promptOriginalText,
+            prompt_heading AS promptHeading,
+            prompt_type AS promptType,
+            prompt_criteria_disposition AS promptCriteriaDisposition
+          FROM mart.review_article_judgment_detail_serving_v4
+        \`)
+
+        await database.run(${JSON.stringify(promptScalarsMigrationSql)})
+
+        const promptRows = await database.queryJson(\`
+          SELECT
+            is_answered AS isAnswered,
+            prompt_original_text AS promptOriginalText,
+            prompt_heading AS promptHeading,
+            prompt_type AS promptType,
+            prompt_criteria_disposition AS promptCriteriaDisposition
+          FROM mart.review_article_judgment_detail_serving_v4
+        \`)
+
+        console.log(JSON.stringify({answerRows, promptRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      answerRows: Array<{
+        isAnswered: boolean
+        promptCriteriaDisposition: string | null
+        promptHeading: string | null
+        promptOriginalText: string | null
+        promptType: string | null
+      }>
+      promptRows: Array<{
+        isAnswered: boolean
+        promptCriteriaDisposition: string | null
+        promptHeading: string | null
+        promptOriginalText: string | null
+        promptType: string | null
+      }>
+    }
+
+    expect(parsed.answerRows).toEqual([
+      {
+        isAnswered: true,
+        promptCriteriaDisposition: null,
+        promptHeading: null,
+        promptOriginalText: null,
+        promptType: null,
+      },
+    ])
+    expect(parsed.promptRows).toEqual([
+      {
+        isAnswered: true,
+        promptCriteriaDisposition: 'include',
+        promptHeading: 'Prompt A',
+        promptOriginalText: 'Prompt A text',
+        promptType: 'yes_no',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift and prompt scalar shape', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFiles = new Set([

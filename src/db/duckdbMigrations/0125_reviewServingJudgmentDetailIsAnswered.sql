@@ -1,3 +1,15 @@
+ALTER TABLE mart.review_article_judgment_detail_serving_v4
+ADD COLUMN IF NOT EXISTS prompt_original_text VARCHAR;
+
+ALTER TABLE mart.review_article_judgment_detail_serving_v4
+ADD COLUMN IF NOT EXISTS prompt_heading VARCHAR;
+
+ALTER TABLE mart.review_article_judgment_detail_serving_v4
+ADD COLUMN IF NOT EXISTS prompt_type VARCHAR;
+
+ALTER TABLE mart.review_article_judgment_detail_serving_v4
+ADD COLUMN IF NOT EXISTS prompt_criteria_disposition project_prompt_criteria_disposition_v2;
+
 DROP TABLE IF EXISTS mart.review_article_judgment_detail_serving_v4_is_answered_next;
 
 CREATE TABLE mart.review_article_judgment_detail_serving_v4_is_answered_next (
