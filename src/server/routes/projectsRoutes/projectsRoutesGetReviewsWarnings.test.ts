@@ -6,6 +6,7 @@ import {Elysia} from 'elysia'
 import {buildPromptConfigHash, buildReviewConfigHash} from '../../reviewServing/reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from '../../reviewServing/reviewServingContracts.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
+import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from '../../utils/duckdbExclusiveWork.ts'
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-project-reviews-warnings')
 const tempDbPath = tempRuntimeRoot.duckdbPath
@@ -22,6 +23,7 @@ type ReviewsWarningsResponse = {
       activeConsumerCount: number
       activeWorkCount: number
       blockedReason:
+        | 'duckdb_exclusive_work_active'
         | 'operator_intervention_required'
         | 'paused_by_policy'
         | 'quarantine_barrier'
@@ -811,6 +813,41 @@ test('reviews warnings do not expose candidate snapshots as readable review page
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings report review indexing paused while DuckDB exclusive import work is active', async () => {
+  const projectId = 'project-candidate-exclusive-import-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-candidate-exclusive-import-warning',
+    status: 'candidate',
+  })
+
+  const handle = await prepareDuckdbExclusiveWork({
+    kind: 'project_transfer_import',
+    phase: 'commit',
+    sessionId: 'session-exclusive-warning',
+  })
+
+  try {
+    const {body, response} = await postWarningsRequest(projectId)
+
+    expect(response.status).toBe(200)
+    expect(body.data.indexing.blockedReason).toBe('duckdb_exclusive_work_active')
+    expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
+    expect(body.data.indexing.pendingRefreshCount).toBe(1)
+    expect(body.data.indexing.progressState).toBe('blocked')
+    expect(body.data.indexing.status).toBe('blocked')
+  } finally {
+    await handle.release()
+    resetDuckdbExclusiveWorkForTests()
+  }
 })
 
 test('reviews warnings block candidate-only snapshots when server mutation work is disabled', async () => {

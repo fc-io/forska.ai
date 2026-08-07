@@ -2,6 +2,8 @@ import {readFileSync} from 'node:fs'
 
 import {expect, mock, test} from 'bun:test'
 
+import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from './duckdbExclusiveWork.ts'
+
 type DuckdbServiceModule = typeof import('./duckdbService.ts')
 
 const getImportedDuckdbService = async (label: string) => {
@@ -265,6 +267,49 @@ test('api-role foreground DuckDB work requires workload context before connectio
     restoreEnvValue('FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT', previousEnforceWorkloadContext)
     restoreEnvValue('SERVER_ROLE', previousServerRole)
     mock.restore()
+  }
+})
+
+test('active DuckDB exclusive work rejects non-project-transfer contextual work before execution', async () => {
+  const duckdbService = await getImportedDuckdbService('duckdb-exclusive-work-context-guard')
+  const handle = await prepareDuckdbExclusiveWork({
+    kind: 'project_transfer_import',
+    phase: 'commit',
+    sessionId: 'session-exclusive-guard',
+  })
+  let executed = false
+
+  try {
+    const error = await duckdbService
+      .runMeasuredDuckdbJsonWorkload({
+        operation: 'backgroundQuery',
+        queue: 'background',
+        queueDepthAtStart: 0,
+        workloadContext: {
+          fallbackIntent: 'async',
+          routeOrJobKey: 'reviewServing.projector.worker',
+          workloadClass: 'reviewProjector',
+        },
+        work: async () => {
+          executed = true
+          return []
+        },
+      })
+      .then(
+        () => {
+          return null
+        },
+        (caughtError: unknown) => {
+          return caughtError instanceof Error ? caughtError : new Error(String(caughtError))
+        },
+      )
+
+    expect(error?.message).toContain('DuckDB is reserved for project-transfer commit work')
+    expect(error?.message).toContain('reviewServing.projector.worker')
+    expect(executed).toBe(false)
+  } finally {
+    await handle.release()
+    resetDuckdbExclusiveWorkForTests()
   }
 })
 

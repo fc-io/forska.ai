@@ -193,6 +193,73 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
   ])
 })
 
+test('review serving projector worker heartbeat does not start a loop while DuckDB exclusive work is active', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const exclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {
+              events.push(['run'])
+            },
+          }
+        })
+
+        const {prepareDuckdbExclusiveWork} = await import(exclusiveWorkModulePath)
+        const handle = await prepareDuckdbExclusiveWork({
+          kind: 'project_transfer_import',
+          phase: 'commit',
+          sessionId: 'session-1',
+        })
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?exclusive-active=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({pollIntervalMs: 5})
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20)
+        })
+        stop()
+        await handle.release()
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat exclusive-active guard test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<string>>}
+
+  expect(result.events).toEqual([])
+})
+
 test('review serving projector worker hard RSS restart cap adds bounded restart grace', () => {
   const gibibyte = 1024 ** 3
 

@@ -1293,7 +1293,9 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
         onProgress: (progress) => {
           return updateImportWorkerProgress({ownerToken, progress, sessionId})
         },
+        ownerToken,
         planRevision: analyzing.planRevision + 1,
+        sessionId,
         uploadMetadata: upload,
       })
     },

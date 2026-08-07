@@ -30,6 +30,10 @@ import {
   revalidateProjectTransferResolvedDependencies,
 } from './projectTransferDependencyResolution.ts'
 import {
+  runWithDuckdbExclusiveWork,
+  updateActiveDuckdbExclusiveWorkProgress,
+} from './projectTransferDuckdbExclusiveWork.ts'
+import {
   getProjectTransferCanonicalJson,
   getProjectTransferCanonicalNdjson,
   getProjectTransferLegacyPackageFingerprint,
@@ -164,8 +168,10 @@ type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & 
   dependencyResolutionRepositories?: ProjectTransferDependencyResolutionRepositories
   layout: ProjectTransferImportTempLayout
   onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void> | void
+  ownerToken?: string
   planRevision: number
   runner?: ProjectTransferAnalyzeTargetRunner
+  sessionId?: string
   uploadMetadata?: ProjectTransferUploadMetadataPayload | null
   zipModule?: ProjectTransferZipJsModule
 }
@@ -2297,6 +2303,7 @@ const publishImportAnalyzeProgress = async ({
     ...(warningCount === null ? {} : {warningCount}),
   } satisfies ProjectTransferProgressPayload
 
+  updateActiveDuckdbExclusiveWorkProgress(progress)
   await input.onProgress?.(progress)
 }
 
@@ -2469,24 +2476,43 @@ export const analyzeProjectTransferImportPackage = async (
   const packageRowCount = getPackageRowCount(packageCounts)
   await publishImportAnalyzeProgress({
     input,
-    message: 'Analyzing target project state',
+    message: 'Waiting for DuckDB maintenance work to pause',
     phase: 'analyze',
     rowCountProcessed: 0,
     rowCountTotal: packageRowCount,
     status: 'running',
     warningCount: parsed.warnings.length,
   })
-  const targetAnalysisMeasurement = await measureProjectTransferPhase('targetAnalysis', () => {
-    return input.runner === undefined
-      ? getProjectTransferAnalyzeTargetPlanWithOperationTables({
-          cwd: input.cwd,
-          envValues: input.envValues,
-          layout: stagingLayout,
-          packageFingerprint,
-          payloads: parsed.payloads,
+  const targetAnalysisMeasurement =
+    input.runner === undefined
+      ? await runWithDuckdbExclusiveWork(
+          {
+            estimatedRows: packageRowCount,
+            kind: 'project_transfer_import',
+            message: 'Analyzing target project state',
+            ownerToken: input.ownerToken,
+            phase: 'analyze',
+            sessionId: input.sessionId,
+          },
+          () => {
+            return measureProjectTransferPhase('targetAnalysis', () => {
+              return getProjectTransferAnalyzeTargetPlanWithOperationTables({
+                cwd: input.cwd,
+                envValues: input.envValues,
+                layout: stagingLayout,
+                packageFingerprint,
+                payloads: parsed.payloads,
+              })
+            })
+          },
+        )
+      : await measureProjectTransferPhase('targetAnalysis', () => {
+          return getProjectTransferAnalyzeTargetPlan({
+            packageFingerprint,
+            payloads: parsed.payloads,
+            runner: input.runner,
+          })
         })
-      : getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads: parsed.payloads, runner: input.runner})
-  })
   const targetAnalysis = targetAnalysisMeasurement.value
   await publishImportAnalyzeProgress({
     input,

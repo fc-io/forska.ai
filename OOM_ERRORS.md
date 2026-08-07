@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-08-07 - Project Transfer Exclusive DuckDB Phases
+
+- Error: Large project-transfer analyze/commit work can hit `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` when competing DuckDB maintenance already occupies the constrained owner runtime.
+- Context: Project-transfer import target-state operation-table analysis and commit app-table writes under the low-memory split DuckDB owner profile.
+- Cause: The heavy import phases shared DuckDB admission with review-serving/maintenance work, while session/progress/recovery metadata paths needed to remain lightweight and available.
+- Fix: Added a project-transfer DuckDB exclusive-work registry and wrapped only analyze operation-table work plus claimed commit `runAppTableWrites`; progress now publishes a waiting message before entering the heavy phase and refreshes the exclusive snapshot while running.
+- Verification: `bun test src/server/utils/duckdbExclusiveWork.test.ts src/server/services/projectTransfer/projectTransferDuckdbAccess.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`; `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`.
+
 ## 2026-08-05 - Review-Serving Dirty-Work Lane Claim
 
 - Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` in `reviewServingProjectorWorker` while running `WITH eligible_lane AS (...)` over `app.review_serving_dirty_work`; project-transfer TTL recovery then failed because DuckDB was already at the cap.

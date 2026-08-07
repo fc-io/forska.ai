@@ -113,6 +113,7 @@ import {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
+import {hasActiveDuckdbExclusiveWork} from '../utils/duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {
   closeDuckdbService,
@@ -204,6 +205,7 @@ type ReviewServingProjectorWorkerDependencies = {
   getMemoryUsage?: () => ReviewServingProjectorWorkerMemoryUsage
   hasActiveProjectTransferBackgroundActivity?: () => boolean
   hasActiveProjectTransferSession?: () => Promise<boolean>
+  hasActiveDuckdbExclusiveWork?: () => boolean
   getAppendQueueDepth?: () => number
   getForegroundQueueDepth?: () => number
   intakeImportDeltas?: typeof intakeReviewImportDeltasToDirtyWork
@@ -5101,6 +5103,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
     return getDuckdbQueueRuntimeMetricsSnapshot().main.queueDepth
   },
   hasActiveProjectTransferBackgroundActivity,
+  hasActiveDuckdbExclusiveWork,
   hasActiveProjectTransferSession: async () => {
     const {getProjectTransferSessionRepository} =
       await import('../services/projectTransfer/projectTransferSessionRepository.ts')
@@ -6323,6 +6326,12 @@ const hasActiveProjectTransferForReviewServingProjectorWorker = async (
     (dependencies.hasActiveProjectTransferBackgroundActivity?.() ?? false)
     || (await (dependencies.hasActiveProjectTransferSession?.() ?? Promise.resolve(false)))
   )
+}
+
+const hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker = (
+  dependencies: ReviewServingProjectorWorkerDependencies,
+) => {
+  return dependencies.hasActiveDuckdbExclusiveWork?.() ?? false
 }
 
 const getForegroundRebuildDrainStartedAtMs = (input: {
@@ -8842,7 +8851,10 @@ export const runReviewServingProjectorWorkerCycle = async (
   const workerId = options.workerId ?? getReviewServingProjectorWorkerId()
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
 
-  if (await hasActiveProjectTransferForReviewServingProjectorWorker(dependencies)) {
+  if (
+    hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
+    || (await hasActiveProjectTransferForReviewServingProjectorWorker(dependencies))
+  ) {
     const chunk = getIdleReviewServingProjectorWorkerCycleChunkResult()
     const cleanup = {
       dirtyWorkRetentionCleanup: null,

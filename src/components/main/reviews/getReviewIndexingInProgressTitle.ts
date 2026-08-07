@@ -30,23 +30,27 @@ export const getReviewIndexingStalledBody = () => {
 }
 
 export const getReviewIndexingBlockedTitle = (blockedReason: ReviewIndexingBlockedReason) => {
-  return blockedReason === 'quarantine_barrier'
-    ? 'Review indexing blocked by quarantined article'
-    : blockedReason === 'operator_intervention_required'
-      ? 'Review indexing requires operator intervention'
-      : blockedReason === 'paused_by_policy'
-        ? 'Review indexing recovering after memory pressure'
-        : 'Review indexing blocked: waiting for maintenance worker'
+  return blockedReason === 'duckdb_exclusive_work_active'
+    ? 'Review indexing paused during import'
+    : blockedReason === 'quarantine_barrier'
+      ? 'Review indexing blocked by quarantined article'
+      : blockedReason === 'operator_intervention_required'
+        ? 'Review indexing requires operator intervention'
+        : blockedReason === 'paused_by_policy'
+          ? 'Review indexing recovering after memory pressure'
+          : 'Review indexing blocked: waiting for maintenance worker'
 }
 
 export const getReviewIndexingBlockedBody = (blockedReason: ReviewIndexingBlockedReason) => {
-  return blockedReason === 'quarantine_barrier'
-    ? 'One or more article refreshes are quarantined. Review lists keep using the current index until the quarantined work is resolved.'
-    : blockedReason === 'operator_intervention_required'
-      ? 'The review index candidate is incomplete and needs operator repair before it can become readable.'
-      : blockedReason === 'paused_by_policy'
-        ? 'Review index work is queued. The maintenance worker will resume review refresh work automatically once memory and DuckDB queues are quiet.'
-        : 'Review index work is queued and waiting for a maintenance worker to become available.'
+  return blockedReason === 'duckdb_exclusive_work_active'
+    ? 'A project transfer import is using DuckDB exclusively. Review indexing and maintenance will resume automatically after the import phase finishes.'
+    : blockedReason === 'quarantine_barrier'
+      ? 'One or more article refreshes are quarantined. Review lists keep using the current index until the quarantined work is resolved.'
+      : blockedReason === 'operator_intervention_required'
+        ? 'The review index candidate is incomplete and needs operator repair before it can become readable.'
+        : blockedReason === 'paused_by_policy'
+          ? 'Review index work is queued. The maintenance worker will resume review refresh work automatically once memory and DuckDB queues are quiet.'
+          : 'Review index work is queued and waiting for a maintenance worker to become available.'
 }
 
 const hasOnlyArticleRefreshWork = (indexing: ReviewsWarningsData['indexing']) => {

@@ -21,6 +21,7 @@ const getLastJsonLine = (value: string) => {
 }
 
 const runStartBackgroundWork = (input: {
+  activeDuckdbExclusiveWork?: boolean
   appendQueueDepth?: number
   backgroundQueueDepth?: number
   disableServerMutations?: boolean
@@ -47,6 +48,7 @@ const runStartBackgroundWork = (input: {
         }
 
         const startBackgroundWorkModulePath = getModulePath('./src/server/utils/startBackgroundWork.ts')
+        const duckdbExclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
         const reviewServingProjectorWorkerHeartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const comparisonProjectServingMaintenanceWorkerHeartbeatModulePath = getModulePath('./src/server/utils/comparisonProjectServingMaintenanceWorkerHeartbeat.ts')
         const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
@@ -172,6 +174,15 @@ const runStartBackgroundWork = (input: {
           }
         })
 
+        if (input.activeDuckdbExclusiveWork) {
+          const {prepareDuckdbExclusiveWork} = await import(duckdbExclusiveWorkModulePath)
+          await prepareDuckdbExclusiveWork({
+            kind: 'project_transfer_import',
+            phase: 'analyze',
+            sessionId: 'session-1',
+          })
+        }
+
         const {startBackgroundWork} = await import(startBackgroundWorkModulePath + '?start=' + Date.now())
         startBackgroundWork()
         if (input.promoteAfterStart) {
@@ -245,6 +256,17 @@ test('startBackgroundWork starts maintenance work after auto owner promotion', (
     'comparisonProjectServingMaintenanceWorkerHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:default:default:false',
   ])
+})
+
+test('startBackgroundWork keeps maintenance heartbeats paused while DuckDB exclusive work is active', () => {
+  const result = runStartBackgroundWork({
+    activeDuckdbExclusiveWork: true,
+    duckdbMemoryLimit: '20GB',
+    role: 'maintenance-worker',
+    waitAfterStartMs: 10,
+  })
+
+  expect(result.calls).toEqual(['serverRuntimeRoleMonitor', 'duckdbOwnerConnectionHeartbeat'])
 })
 
 test('startBackgroundWork defers nonessential DuckDB maintenance under low-memory owner profile', () => {

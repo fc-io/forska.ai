@@ -17,6 +17,7 @@ import {
   type ProjectTransferCommitResult,
   revalidateProjectTransferCommitPlan,
 } from './projectTransferCommit.ts'
+import {getActiveDuckdbExclusiveWorkSnapshot} from './projectTransferDuckdbExclusiveWork.ts'
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import type {ProjectTransferPlanSummary} from './projectTransferSession.ts'
@@ -586,6 +587,14 @@ const runCommit = async ({
       revalidate,
       requestReviewServingBuild,
       runAppTableWrites: async () => {
+        expect(getActiveDuckdbExclusiveWorkSnapshot()).toMatchObject({
+          admissionState: 'running',
+          kind: 'project_transfer_import',
+          ownerToken: 'owner-generated',
+          phase: 'commit',
+          sessionId,
+        })
+
         const completion = {
           finalCounts: {articles: 0, judgments: 0, prompts: 0, reviews: 0, routes: 0, warnings: 0},
           importWarnings: [],
@@ -661,7 +670,7 @@ test('project transfer commit loads frozen artifacts and claims with server gene
       ownerToken: null,
       state: 'completed',
     })
-    expect(fake.calls.transition).toHaveLength(3)
+    expect(fake.calls.transition).toHaveLength(4)
     expect(fake.calls.transition[0]).toMatchObject({
       commitId: 'commit-generated',
       nextOwnerToken: 'owner-generated',
@@ -676,11 +685,20 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(fake.calls.transition[2]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
+      progress: {
+        message: 'Waiting for DuckDB maintenance work to pause',
+        phase: 'commit',
+        status: 'running',
+      },
+    })
+    expect(fake.calls.transition[3]).toMatchObject({
+      expectedOwnerToken: 'owner-generated',
+      nextState: 'committing',
       progress: {percent: 100, phase: 'commit', status: 'completed'},
     })
     expect(fake.calls.persist).toHaveLength(1)
     expect((fake.calls.persist[0] as {now: Date}).now.toISOString()).toBe(
-      (fake.calls.transition[2] as {progress: {updatedAt: string}}).progress.updatedAt,
+      (fake.calls.transition[3] as {progress: {updatedAt: string}}).progress.updatedAt,
     )
     expect(fake.calls.cleanup).toHaveLength(1)
     expect(fake.getSession().terminalCleanupAt).not.toBeNull()

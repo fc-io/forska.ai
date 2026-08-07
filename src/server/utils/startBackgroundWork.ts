@@ -1,4 +1,5 @@
 import {startComparisonProjectServingMaintenanceWorkerHeartbeat} from './comparisonProjectServingMaintenanceWorkerHeartbeat.ts'
+import {getActiveDuckdbExclusiveWorkSnapshot} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {startDuckdbOwnerConnectionHeartbeat} from './duckdbOwnerConnectionHeartbeat.ts'
 import {
@@ -34,6 +35,7 @@ const reviewServingProjectorPauseRecoveryPollIntervalMs = 30_000
 const reviewServingProjectorPauseRecoveryMinAgeMs = 5 * 60_000
 const reviewServingProjectorPauseRecoveryQueueResampleDelayMs = 250
 const reviewServingProjectorPauseRecoveryDuckdbRecycleCooldownMs = 60_000
+const duckdbExclusiveWorkMaintenancePollIntervalMs = 5_000
 
 const getPositiveIntegerEnv = (key: string, fallback: number) => {
   const value = Number(process.env[key])
@@ -230,6 +232,55 @@ const startReviewServingProjectorPauseRecoveryHeartbeat = (startProjector: () =>
   return stop
 }
 
+const startDuckdbExclusiveWorkAwareMaintenanceHeartbeat = (component: string, startHeartbeat: () => () => void) => {
+  let stopped = false
+  let stopHeartbeat: (() => void) | null = null
+
+  const stopActiveHeartbeat = () => {
+    if (stopHeartbeat === null) {
+      return
+    }
+
+    stopHeartbeat()
+    stopHeartbeat = null
+  }
+
+  const updateHeartbeatState = () => {
+    if (stopped || !shouldCurrentServerRunMaintenanceLoops()) {
+      stopActiveHeartbeat()
+      return
+    }
+
+    const exclusiveWork = getActiveDuckdbExclusiveWorkSnapshot()
+    if (exclusiveWork !== null) {
+      if (stopHeartbeat !== null) {
+        writeRuntimeOperatorLogEvent({
+          attrs: {component, duckdbExclusiveWork: exclusiveWork},
+          event: 'duckdb-exclusive-work.maintenance-paused',
+          message: '[duckdbExclusiveWork] pausing background maintenance while exclusive DuckDB work is active',
+          severity: 'INFO',
+        })
+      }
+      stopActiveHeartbeat()
+      return
+    }
+
+    if (stopHeartbeat === null) {
+      stopHeartbeat = startHeartbeat()
+    }
+  }
+
+  updateHeartbeatState()
+  const timer = setInterval(updateHeartbeatState, duckdbExclusiveWorkMaintenancePollIntervalMs)
+  timer.unref()
+
+  return () => {
+    stopped = true
+    clearInterval(timer)
+    stopActiveHeartbeat()
+  }
+}
+
 const startMaintenanceBackgroundWork = () => {
   if (!shouldCurrentServerRunMaintenanceLoops()) {
     return
@@ -257,12 +308,33 @@ const startMaintenanceBackgroundWork = () => {
   }
 
   maintenanceBackgroundWorkStops = [
-    ...(shouldDeferNonessentialDuckdbMaintenanceWork() ? [] : [startRequestAttemptCloseoutBackfillScheduler()]),
-    ...(shouldDeferNonessentialDuckdbMaintenanceWork() ? [] : [startReviewBulkOperationWorkerHeartbeat()]),
-    startComparisonProjectServingMaintenanceWorkerHeartbeat(),
+    ...(shouldDeferNonessentialDuckdbMaintenanceWork()
+      ? []
+      : [
+          startDuckdbExclusiveWorkAwareMaintenanceHeartbeat(
+            'requestAttemptCloseoutBackfillScheduler',
+            startRequestAttemptCloseoutBackfillScheduler,
+          ),
+        ]),
+    ...(shouldDeferNonessentialDuckdbMaintenanceWork()
+      ? []
+      : [
+          startDuckdbExclusiveWorkAwareMaintenanceHeartbeat(
+            'reviewBulkOperationWorkerHeartbeat',
+            startReviewBulkOperationWorkerHeartbeat,
+          ),
+        ]),
+    startDuckdbExclusiveWorkAwareMaintenanceHeartbeat(
+      'comparisonProjectServingMaintenanceWorkerHeartbeat',
+      startComparisonProjectServingMaintenanceWorkerHeartbeat,
+    ),
     ...(reviewServingProjectorPaused
       ? [startReviewServingProjectorPauseRecoveryHeartbeat(startReviewServingProjector)]
-      : [startReviewServingProjectorWorkerHeartbeat(getReviewServingProjectorWorkerHeartbeatOptions())]),
+      : [
+          startDuckdbExclusiveWorkAwareMaintenanceHeartbeat('reviewServingProjectorWorkerHeartbeat', () => {
+            return startReviewServingProjectorWorkerHeartbeat(getReviewServingProjectorWorkerHeartbeatOptions())
+          }),
+        ]),
   ]
 }
 

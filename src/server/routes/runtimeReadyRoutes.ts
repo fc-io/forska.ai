@@ -1,5 +1,6 @@
 import {Elysia} from 'elysia'
 
+import {getActiveDuckdbExclusiveWorkSnapshot} from '../utils/duckdbExclusiveWork.ts'
 import {getRuntimeCutoverVersion, probeDuckdbOwnerRuntimeReadiness} from '../utils/runtimeCutover.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {getServerRoleCapabilities} from '../utils/serverRole.ts'
@@ -90,6 +91,7 @@ export const runtimeReadyRoutes = new Elysia()
         capabilities: getServerRoleCapabilities(role),
         duckdbOwner: canCurrentServerOwnDuckdb(),
         duckdbOwnerUrl,
+        duckdbExclusiveWork: {active: getActiveDuckdbExclusiveWorkSnapshot() !== null},
         localOperatorApiExposed: isLocalOperatorApiExposed(),
         ownerProxy,
         ready,
@@ -104,6 +106,10 @@ export const runtimeReadyRoutes = new Elysia()
     return {
       data: {
         bun: {maxHttpRequests: getBunMaxHttpRequestsState()},
+        duckdbExclusiveWork: {
+          active: getActiveDuckdbExclusiveWorkSnapshot() !== null,
+          current: getActiveDuckdbExclusiveWorkSnapshot(),
+        },
         pid: process.pid,
         role: getCurrentServerRole(),
         runtimeVersion: getRuntimeCutoverVersion(),

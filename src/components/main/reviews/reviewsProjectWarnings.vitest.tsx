@@ -167,6 +167,25 @@ test('renders automatic memory-pressure recovery without active progress copy', 
   }
 })
 
+test('renders DuckDB exclusive import pause without active progress copy', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      blockedReason: 'duckdb_exclusive_work_active',
+      eligibleConsumerPresent: false,
+      progressState: 'blocked',
+      status: 'blocked',
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Review indexing paused during import')
+    expect(container.textContent).toContain('using DuckDB exclusively')
+    expect(container.textContent).not.toContain('Review indexing in progress')
+  } finally {
+    dispose()
+  }
+})
+
 test('does not render retired large rebuild product warning copy', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({pendingArticleRefreshCount: 148, pendingRefreshCount: 149, queuedArticleRefreshCount: 148}),

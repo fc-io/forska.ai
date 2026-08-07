@@ -8,6 +8,7 @@ export type ReviewsWarningsData = {
     activeWorkCount: number
     articleRefreshesPerMinute: number | null
     blockedReason:
+      | 'duckdb_exclusive_work_active'
       | 'operator_intervention_required'
       | 'paused_by_policy'
       | 'quarantine_barrier'

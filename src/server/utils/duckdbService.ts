@@ -17,6 +17,7 @@ import {DuckDBConnection, DuckDBInstance, type DuckDBType, type DuckDBValue} fro
 import {Effect} from 'effect'
 
 import {getSelectedImportCurrentStartupMutationProbeSql} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
+import {getActiveDuckdbExclusiveWorkSnapshot} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
 import {getEnv} from './env.ts'
@@ -5849,7 +5850,44 @@ const shouldEnforceForegroundDuckdbWorkloadContext = () => {
   return !['0', 'false', 'no', 'off'].includes(configuredValue)
 }
 
+const duckdbExclusiveWorkAllowedRouteOrJobKeys = new Set([
+  'projectTransfer.import.analyze.operationTables',
+  'projectTransfer.import.commit.transaction',
+  'projectTransfer.route.sourceProjectLookup',
+  'projectTransfer.session',
+])
+
+const shouldAllowDuckdbWorkDuringExclusiveWork = (
+  _operation: DuckdbWorkloadOperation,
+  context?: DuckdbWorkloadContext,
+) => {
+  return (
+    context === undefined
+    || duckdbExclusiveWorkAllowedRouteOrJobKeys.has(context.routeOrJobKey)
+    || context.routeOrJobKey.startsWith('review.warnings.')
+  )
+}
+
+const assertDuckdbExclusiveWorkAllowsWorkload = (
+  operation: DuckdbWorkloadOperation,
+  context?: DuckdbWorkloadContext,
+) => {
+  const exclusiveWork = getActiveDuckdbExclusiveWorkSnapshot()
+
+  if (exclusiveWork === null || shouldAllowDuckdbWorkDuringExclusiveWork(operation, context)) {
+    return
+  }
+
+  const routeOrJobKey = context?.routeOrJobKey ?? 'unknown'
+  throw new Error(
+    `DuckDB is reserved for project-transfer ${exclusiveWork.phase} work; `
+      + `rejecting ${operation} for ${routeOrJobKey} until the import phase completes`,
+  )
+}
+
 const assertDuckdbWorkloadContextIsAllowed = (operation: DuckdbWorkloadOperation, context?: DuckdbWorkloadContext) => {
+  assertDuckdbExclusiveWorkAllowsWorkload(operation, context)
+
   if (
     context === undefined
     && shouldEnforceForegroundDuckdbWorkloadContext()

@@ -2,6 +2,7 @@ import {totalmem} from 'node:os'
 
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {runReviewServingProjectorWorker} from '../workers/reviewServingProjectorWorker.ts'
+import {getActiveDuckdbExclusiveWorkSnapshot, hasActiveDuckdbExclusiveWork} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
@@ -150,6 +151,16 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
     return
   }
 
+  const exclusiveWork = getActiveDuckdbExclusiveWorkSnapshot()
+  if (exclusiveWork !== null) {
+    reviewServingProjectorWorkerWarningLogger.warn(
+      'review-serving-projector.heartbeat-recycle-skipped-duckdb-exclusive-work-active',
+      '[reviewServingProjectorWorker] skipping DuckDB recycle because exclusive DuckDB work is active',
+      {duckdbExclusiveWork: exclusiveWork},
+    )
+    return
+  }
+
   const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
   const rssBytes = process.memoryUsage().rss
   const activeForegroundWork = await getActiveForegroundDuckdbWork()
@@ -236,6 +247,17 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       return
     }
 
+    const exclusiveWork = getActiveDuckdbExclusiveWorkSnapshot()
+    if (exclusiveWork !== null) {
+      reviewServingProjectorWorkerLogger.log(
+        'review-serving-projector-worker:loop-paused-duckdb-exclusive-work',
+        '[reviewServingProjectorWorker] background loop paused while exclusive DuckDB work is active',
+        {duckdbExclusiveWork: exclusiveWork},
+      )
+      scheduleRestart(options.pollIntervalMs ?? lowMemoryReviewServingProjectorWorkerRestartDelayMs, false)
+      return
+    }
+
     const loopController = new AbortController()
     const maxCompletedRebuildChunksPerRun = getReviewServingProjectorWorkerMaxCompletedChunksPerRun(options)
     const maxRunMs = getReviewServingProjectorWorkerMaxRunMs(options)
@@ -245,6 +267,13 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     const abortActiveLoop = () => {
       loopController.abort()
     }
+    const exclusiveWorkPollTimer = setInterval(() => {
+      if (hasActiveDuckdbExclusiveWork()) {
+        endedByMaxRun = true
+        loopController.abort()
+      }
+    }, options.pollIntervalMs ?? lowMemoryReviewServingProjectorWorkerRestartDelayMs)
+    exclusiveWorkPollTimer.unref()
 
     activeLoopController = loopController
     controller.signal.addEventListener('abort', abortActiveLoop, {once: true})
@@ -293,6 +322,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         if (maxRunTimer !== null) {
           clearTimeout(maxRunTimer)
         }
+        clearInterval(exclusiveWorkPollTimer)
         if (activeLoopController === loopController) {
           activeLoopController = null
         }

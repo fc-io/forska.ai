@@ -55,6 +55,10 @@ import {
   getProjectTransferDirtyTokenStalePlanReasons,
   type ProjectTransferDirtyTokenRevalidationDecision,
 } from './projectTransferDirtyTokenRevalidation.ts'
+import {
+  runWithDuckdbExclusiveWork,
+  updateActiveDuckdbExclusiveWorkProgress,
+} from './projectTransferDuckdbExclusiveWork.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {
@@ -1400,7 +1404,7 @@ const runProjectTransferCommitAppTableWrites = async ({
       getCommitProgress({
         artifacts,
         includeBytes: false,
-        message: 'Commit app-table writes running',
+        message: 'Waiting for DuckDB maintenance work to pause',
         now: new Date(),
         phase: 'commit',
         planRevision: artifacts.plan.planRevision,
@@ -1719,6 +1723,7 @@ const runClaimedProjectTransferImportCommit = async ({
     let activeProgress = stagingLoadProgress
     const publishProgress = async (progress: ProjectTransferProgressPayload) => {
       activeProgress = progress
+      updateActiveDuckdbExclusiveWorkProgress(progress)
       const updated = await updateClaimedCommitProgress({ownerToken, progress, repositories, runtimeOptions, sessionId})
 
       if (updated === null) {
@@ -1745,16 +1750,40 @@ const runClaimedProjectTransferImportCommit = async ({
       getProgress: () => {
         return activeProgress
       },
-      operation: () => {
-        return repositories.runAppTableWrites({
-          artifacts,
-          commitId,
-          now,
-          onProgress: publishProgress,
-          schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
-          ...runtimeOptions,
-          sessionId,
-        })
+      operation: async () => {
+        await publishProgress(
+          getCommitProgress({
+            artifacts,
+            includeBytes: false,
+            message: 'Waiting for DuckDB maintenance work to pause',
+            now: new Date(),
+            phase: 'commit',
+            planRevision: artifacts.plan.planRevision,
+            status: 'running',
+          }),
+        )
+
+        return runWithDuckdbExclusiveWork(
+          {
+            estimatedRows: getCommitRowCount(artifacts.plan),
+            kind: 'project_transfer_import',
+            message: 'Commit app-table writes running',
+            ownerToken,
+            phase: 'commit',
+            sessionId,
+          },
+          () => {
+            return repositories.runAppTableWrites({
+              artifacts,
+              commitId,
+              now,
+              onProgress: publishProgress,
+              schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
+              ...runtimeOptions,
+              sessionId,
+            })
+          },
+        )
       },
       ownerToken,
       repositories,

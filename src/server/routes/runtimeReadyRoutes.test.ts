@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from '../utils/duckdbExclusiveWork.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {resetServerRuntimeRoleForTests} from '../utils/serverRuntimeRole.ts'
 import {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} from './apiRouteClassification.ts'
@@ -10,6 +11,7 @@ type RuntimeReadyResponse = {
   data: {
     duckdbOwner: boolean
     duckdbOwnerUrl: string | null
+    duckdbExclusiveWork: {active: boolean}
     localOperatorApiExposed: boolean
     ready: boolean
     settingsDiagnosticsApiExposed: boolean
@@ -25,6 +27,10 @@ type RuntimeStateResponse = {
         effectiveMaxHttpRequests: number
         source: string
       }
+    }
+    duckdbExclusiveWork: {
+      active: boolean
+      current: {admissionState: string; kind: string; phase: string; sessionId: string} | null
     }
   }
 }
@@ -168,6 +174,34 @@ test('runtime readiness reports local operator API exposure', async () => {
     expect(response.data.ready).toBe(true)
     expect(response.data.localOperatorApiExposed).toBe(false)
     expect(response.data.settingsDiagnosticsApiExposed).toBe(true)
+  })
+})
+
+test('runtime diagnostics report active DuckDB exclusive work without making runtime unready', async () => {
+  await withLocalOperatorApiEnv(undefined, async () => {
+    process.env.SERVER_ROLE = 'maintenance-worker'
+    resetServerRuntimeRoleForTests()
+
+    const handle = await prepareDuckdbExclusiveWork({
+      kind: 'project_transfer_import',
+      phase: 'analyze',
+      sessionId: 'session-1',
+    })
+
+    try {
+      const readyResponse = await getRuntimeReadyResponse()
+      const stateResponse = await getRuntimeStateResponse()
+
+      expect(readyResponse.data.ready).toBe(true)
+      expect(readyResponse.data.duckdbExclusiveWork.active).toBe(true)
+      expect(stateResponse.data.duckdbExclusiveWork).toMatchObject({
+        active: true,
+        current: {admissionState: 'ready', kind: 'project_transfer_import', phase: 'analyze', sessionId: 'session-1'},
+      })
+    } finally {
+      await handle.release()
+      resetDuckdbExclusiveWorkForTests()
+    }
   })
 })
 

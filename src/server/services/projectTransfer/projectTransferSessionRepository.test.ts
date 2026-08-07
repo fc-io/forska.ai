@@ -253,6 +253,7 @@ test('project transfer session repository reports active transfer windows', () =
     activeWithRunningImport: boolean
     activeWithReadyImport: boolean
     activeWithTerminalOnly: boolean
+    activeWithUploadingImport: boolean
     activeWithRunningExport: boolean
     writerWithQueuedExport: boolean
     writerWithReadyImport: boolean
@@ -299,13 +300,23 @@ test('project transfer session repository reports active transfer windows', () =
     const writerWithUploadingImport = await sessionRepository.hasProjectTransferWriterSessions({
       now: new Date('2026-05-21T11:00:00.000Z'),
     })
+    const activeWithUploadingImport = await sessionRepository.hasActiveProjectTransferSessions({
+      now: new Date('2026-05-21T11:00:00.000Z'),
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      expectedOwnerToken: 'upload-owner',
+      expectedState: 'uploading',
+      nextOwnerToken: 'analysis-owner',
+      nextState: 'extracting',
+      sessionId: 'session-uploading-import',
+    })
     const activeWithRunningImport = await sessionRepository.hasActiveProjectTransferSessions({
       now: new Date('2026-05-21T11:00:00.000Z'),
     })
     await sessionRepository.transitionProjectTransferSessionState({
-      error: {message: 'upload cancelled'},
-      expectedOwnerToken: 'upload-owner',
-      expectedState: 'uploading',
+      error: {message: 'analysis cancelled'},
+      expectedOwnerToken: 'analysis-owner',
+      expectedState: 'extracting',
       nextOwnerToken: null,
       nextState: 'cancelled',
       sessionId: 'session-uploading-import',
@@ -361,6 +372,7 @@ test('project transfer session repository reports active transfer windows', () =
       activeWithRunningImport,
       activeWithRunningExport,
       activeWithTerminalOnly,
+      activeWithUploadingImport,
       writerWithQueuedExport,
       writerWithReadyImport,
       writerWithRunningExport,
@@ -373,6 +385,7 @@ test('project transfer session repository reports active transfer windows', () =
     activeWithRunningImport: true,
     activeWithRunningExport: true,
     activeWithTerminalOnly: false,
+    activeWithUploadingImport: false,
     writerWithQueuedExport: false,
     writerWithReadyImport: false,
     writerWithRunningExport: true,

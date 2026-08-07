@@ -452,8 +452,6 @@ const hasActiveProjectTransferSessions = async (params: HasActiveProjectTransfer
         (
           direction = 'import'
           AND state IN (
-            'uploading',
-            'queued',
             'extracting',
             'analyzing',
             'committing'
@@ -461,7 +459,7 @@ const hasActiveProjectTransferSessions = async (params: HasActiveProjectTransfer
         )
         OR (
           direction = 'export'
-          AND state IN ('queued', 'assembling', 'packaging')
+          AND state IN ('assembling', 'packaging')
         )
       )
   `,

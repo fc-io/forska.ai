@@ -234,7 +234,16 @@ const writeServerStackLock = async (metadata: ServerStackLockMetadata, flag: 'w'
   }
 
   const temporaryPath = `${serverStackLockPath}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temporaryPath, payload, {flag: 'wx'})
+  try {
+    await writeFile(temporaryPath, payload, {flag: 'wx'})
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') {
+      throw error
+    }
+
+    await unlink(temporaryPath).catch(() => {})
+    await writeFile(temporaryPath, payload, {flag: 'wx'})
+  }
   await rename(temporaryPath, serverStackLockPath)
 }
 

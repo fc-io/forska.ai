@@ -10,12 +10,14 @@ import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getApiReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
+import {getActiveDuckdbExclusiveWorkSnapshot} from '../../utils/duckdbExclusiveWork.ts'
 import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {isReviewServingProjectorPaused} from '../../utils/reviewServingProjectorPause.ts'
 import {shouldDisableServerMutationWork} from '../../utils/serverMutationMode.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 type ReviewsIndexingBlockedReason =
+  | 'duckdb_exclusive_work_active'
   | 'operator_intervention_required'
   | 'paused_by_policy'
   | 'quarantine_barrier'
@@ -275,6 +277,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     )
     const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
     const reviewServingProjectorPaused = isReviewServingProjectorPaused()
+    const activeDuckdbExclusiveWork = getActiveDuckdbExclusiveWorkSnapshot()
     const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.claimableCount
     const totalQueuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
     const inFlightRebuildChunkCount = getNonNegativeDifference(
@@ -330,10 +333,15 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingRebuildChunkCount + pendingDirtyWorkCount + pendingCandidateSnapshotActivationCount
     const claimableRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
     const eligibleConsumerCount =
-      claimableRefreshCount > 0 && !isServerMutationWorkDisabled && !reviewServingProjectorPaused ? 1 : 0
+      claimableRefreshCount > 0
+      && !isServerMutationWorkDisabled
+      && !reviewServingProjectorPaused
+      && activeDuckdbExclusiveWork === null
+        ? 1
+        : 0
     const hasBlockedCandidateSnapshot =
       servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
-    const indexingStatus = getReviewsIndexingStatus({
+    const baseIndexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
       hasBlockedCandidateSnapshot,
@@ -351,6 +359,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingRefreshCount,
       runningRefreshCount: inFlightRefreshCount,
     })
+    const shouldBlockForDuckdbExclusiveWork =
+      activeDuckdbExclusiveWork !== null
+      && enabledPromptCount > 0
+      && hasAnyArticlesInScope
+      && (pendingRefreshCount > 0 || !hasReviewServingRows)
+    const indexingStatus = shouldBlockForDuckdbExclusiveWork ? 'blocked' : baseIndexingStatus
     const hasRecentVisibleProgress =
       pendingRefreshCount > 0 && inFlightRefreshCount === 0 && eligibleConsumerCount > 0 && hasRecentProgress
     const progressState = getReviewsIndexingProgressState({
@@ -359,8 +373,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       inFlightRefreshCount,
       status: indexingStatus,
     })
-    const blockedReason: ReviewsIndexingBlockedReason =
-      indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
+    const blockedReason: ReviewsIndexingBlockedReason = shouldBlockForDuckdbExclusiveWork
+      ? 'duckdb_exclusive_work_active'
+      : indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
         ? 'quarantine_barrier'
         : indexingStatus === 'blocked' && hasBlockedCandidateSnapshot
           ? 'operator_intervention_required'

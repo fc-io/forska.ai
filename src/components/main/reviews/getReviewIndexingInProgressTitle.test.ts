@@ -92,6 +92,8 @@ test('review indexing stalled copy does not claim active progress', () => {
 })
 
 test('review indexing blocked copy distinguishes worker wait from automatic memory recovery', () => {
+  expect(getReviewIndexingBlockedTitle('duckdb_exclusive_work_active')).toBe('Review indexing paused during import')
+  expect(getReviewIndexingBlockedBody('duckdb_exclusive_work_active')).toContain('using DuckDB exclusively')
   expect(getReviewIndexingBlockedTitle('waiting_for_maintenance_worker')).toBe(
     'Review indexing blocked: waiting for maintenance worker',
   )
