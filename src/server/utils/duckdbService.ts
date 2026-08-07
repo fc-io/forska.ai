@@ -18,6 +18,7 @@ import {Effect} from 'effect'
 
 import {getSelectedImportCurrentStartupMutationProbeSql} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
+import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {
@@ -3912,24 +3913,24 @@ const getDuckdbStartupPreflightError = (
 
   clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
 
-  const result = globalThis.Bun.spawnSync(
-    [
-      process.execPath,
-      '-e',
-      getDuckdbStartupPreflightScript(),
+  const childProcessInput = getDuckdbStartupChildProcessInput({
+    executablePath: process.execPath,
+    platform: process.platform,
+    script: getDuckdbStartupPreflightScript(),
+    serializedArguments: [
       JSON.stringify(runtimeConfig.databasePath),
       JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
       JSON.stringify(preflightRepairSpecs),
       JSON.stringify(activeRepairSpecPath),
     ],
-    {
-      cwd: process.cwd(),
-      env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD: 'true'},
-      stderr: 'pipe',
-      stdin: 'ignore',
-      stdout: 'pipe',
-    },
-  )
+  })
+  const result = globalThis.Bun.spawnSync(childProcessInput.command, {
+    cwd: process.cwd(),
+    env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD: 'true'},
+    stderr: 'pipe',
+    stdin: childProcessInput.stdin,
+    stdout: 'pipe',
+  })
 
   if (result.exitCode === 0) {
     clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
@@ -4010,24 +4011,24 @@ const getDuckdbStartupChildOutputText = (result: ReturnType<typeof globalThis.Bu
 const waitForDuckdbStartupRepairFileLock = async (runtimeConfig: DuckdbRuntimeConfig) => {
   let result: ReturnType<typeof globalThis.Bun.spawnSync> | null = null
   let outputText = ''
+  const childProcessInput = getDuckdbStartupChildProcessInput({
+    executablePath: process.execPath,
+    platform: process.platform,
+    script: getDuckdbStartupFileLockProbeScript(),
+    serializedArguments: [
+      JSON.stringify(runtimeConfig.databasePath),
+      JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
+    ],
+  })
 
   for (let attempt = 0; attempt <= duckdbStartupIndexedTableRepairLockRetryDelaysMs.length; attempt += 1) {
-    result = globalThis.Bun.spawnSync(
-      [
-        process.execPath,
-        '-e',
-        getDuckdbStartupFileLockProbeScript(),
-        JSON.stringify(runtimeConfig.databasePath),
-        JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
-      ],
-      {
-        cwd: process.cwd(),
-        env: {...process.env, FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD: 'true'},
-        stderr: 'pipe',
-        stdin: 'ignore',
-        stdout: 'pipe',
-      },
-    )
+    result = globalThis.Bun.spawnSync(childProcessInput.command, {
+      cwd: process.cwd(),
+      env: {...process.env, FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD: 'true'},
+      stderr: 'pipe',
+      stdin: childProcessInput.stdin,
+      stdout: 'pipe',
+    })
     outputText = getDuckdbStartupChildOutputText(result)
 
     if (result.exitCode === 0) {
@@ -4058,22 +4059,22 @@ const waitForDuckdbStartupRepairFileLock = async (runtimeConfig: DuckdbRuntimeCo
 }
 
 const checkpointDuckdbStartupWalReplay = async (runtimeConfig: DuckdbRuntimeConfig) => {
-  const result = globalThis.Bun.spawnSync(
-    [
-      process.execPath,
-      '-e',
-      getDuckdbStartupWalCheckpointScript(),
+  const childProcessInput = getDuckdbStartupChildProcessInput({
+    executablePath: process.execPath,
+    platform: process.platform,
+    script: getDuckdbStartupWalCheckpointScript(),
+    serializedArguments: [
       JSON.stringify(runtimeConfig.databasePath),
       JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
     ],
-    {
-      cwd: process.cwd(),
-      env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD: 'true'},
-      stderr: 'pipe',
-      stdin: 'ignore',
-      stdout: 'pipe',
-    },
-  )
+  })
+  const result = globalThis.Bun.spawnSync(childProcessInput.command, {
+    cwd: process.cwd(),
+    env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD: 'true'},
+    stderr: 'pipe',
+    stdin: childProcessInput.stdin,
+    stdout: 'pipe',
+  })
 
   if (result.exitCode === 0) {
     writeRuntimeOperatorLogEvent({
@@ -4123,26 +4124,26 @@ const repairDuckdbStartupIndexedTables = async (
 
   let result: ReturnType<typeof globalThis.Bun.spawnSync> | null = null
   let outputText = ''
+  const childProcessInput = getDuckdbStartupChildProcessInput({
+    executablePath: process.execPath,
+    platform: process.platform,
+    script: getDuckdbIndexedTableRepairScript(),
+    serializedArguments: [
+      JSON.stringify(runtimeConfig.databasePath),
+      JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
+      JSON.stringify(repairSpecs),
+      JSON.stringify(repairId),
+    ],
+  })
 
   for (let attempt = 0; attempt <= duckdbStartupIndexedTableRepairLockRetryDelaysMs.length; attempt += 1) {
-    result = globalThis.Bun.spawnSync(
-      [
-        process.execPath,
-        '-e',
-        getDuckdbIndexedTableRepairScript(),
-        JSON.stringify(runtimeConfig.databasePath),
-        JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
-        JSON.stringify(repairSpecs),
-        JSON.stringify(repairId),
-      ],
-      {
-        cwd: process.cwd(),
-        env: {...process.env, FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD: 'true'},
-        stderr: 'pipe',
-        stdin: 'ignore',
-        stdout: 'pipe',
-      },
-    )
+    result = globalThis.Bun.spawnSync(childProcessInput.command, {
+      cwd: process.cwd(),
+      env: {...process.env, FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD: 'true'},
+      stderr: 'pipe',
+      stdin: childProcessInput.stdin,
+      stdout: 'pipe',
+    })
 
     outputText = getDuckdbStartupChildOutputText(result)
 
