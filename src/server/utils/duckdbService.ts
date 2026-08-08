@@ -488,6 +488,85 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT id
+        FROM app.judgment_job
+        GROUP BY id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_judgment_job;
+      CREATE TEMP TABLE startup_probe_judgment_job AS
+      SELECT
+        id,
+        updated_at
+      FROM app.judgment_job
+      ORDER BY updated_at DESC, created_at DESC, id ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.judgment_job
+      SET updated_at = current_timestamp
+      WHERE id = (
+        SELECT id
+        FROM startup_probe_judgment_job
+        LIMIT 1
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.judgment_job
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_judgment_job
+        LIMIT 1
+      )
+      WHERE id = (
+        SELECT id
+        FROM startup_probe_judgment_job
+        LIMIT 1
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_judgment_job;
+    `,
+    repairDedupeOrderSql: `
+      CASE
+        WHEN storage_state = 'active' AND status IN ('running', 'ready') THEN 0
+        WHEN storage_state = 'draining' THEN 1
+        WHEN storage_state = 'active' THEN 2
+        WHEN storage_state = 'quarantined' THEN 3
+        ELSE 4
+      END ASC,
+      updated_at DESC NULLS LAST,
+      last_import_completed_at DESC NULLS LAST,
+      last_import_started_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      id DESC
+    `,
+    repairPrimaryKeyColumns: ['id'],
+    repairStrategy: 'dedupe-latest',
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: [
+          'id',
+          'storage_state',
+          'status',
+          'updated_at',
+          'last_import_completed_at',
+          'last_import_started_at',
+          'created_at',
+        ],
+        schemaName: 'app',
+        tableName: 'judgment_job',
+      },
+    ],
+    tableName: 'judgment_job',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT comparison_project_id
         FROM app.comparison_project_serving_generation
         GROUP BY comparison_project_id

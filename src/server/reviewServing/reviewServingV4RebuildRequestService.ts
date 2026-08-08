@@ -854,7 +854,7 @@ const getNoopReviewServingV4RebuildRequest = (input: {
 }
 
 const getReviewServingV4RebuildStats = async (
-  input: {projectId: string},
+  input: {projectId: string; reviewConfigHash: string | null},
   database: {queryJson: <T>(statement: string) => Promise<T[]>},
 ) => {
   const [stats] = await database.queryJson<ReviewServingV4RebuildStatsRow>(`
@@ -973,6 +973,7 @@ const getReviewServingV4RebuildStats = async (
       FROM app.review_serving_snapshot_manifest snapshot
       INNER JOIN project_settings project ON project.id = snapshot.project_id
       WHERE snapshot.snapshot_status IN ('candidate', 'active')
+        AND snapshot.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash)}
     )
     SELECT
       CAST((SELECT COUNT(*) FROM scoped_article_id) AS INTEGER) AS scopedArticleCount,
@@ -1098,7 +1099,8 @@ export const requestReviewServingV4RebuildEffect = (
     }
 
     const requestedComponents = input.components ?? defaultReviewServingV4RebuildComponents
-    const stats = await getReviewServingV4RebuildStats({projectId: input.projectId}, database)
+    const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(input.projectId, database)
+    const stats = await getReviewServingV4RebuildStats({projectId: input.projectId, reviewConfigHash}, database)
     const hasQueuedSnapshot = getSafeCount(stats.snapshotCount) > 0
     const hasActiveSnapshot = getSafeCount(stats.activeSnapshotCount) > 0
     const isFreshBootstrap =
