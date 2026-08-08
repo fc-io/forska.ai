@@ -2446,6 +2446,135 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
   }
 })
 
+test('duckdb service marks judgment job after fatal index-delete import status update', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-judgment-job-fatal-index-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {
+              throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. FatalException: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 1 rows.')
+            }
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?judgment-job-fatal-index-marker-test=' + Date.now())
+        try {
+          await duckdbService.runDuckdbStatement(\`
+            UPDATE app.judgment_job
+            SET last_import_error_at = current_timestamp,
+                last_import_error = 'isolated import failed',
+                updated_at = current_timestamp
+            WHERE id = 'job-1'
+          \`)
+        } catch {}
+
+        const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+        console.log(JSON.stringify({marker}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB judgment job fatal index marker subprocess failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.marker).toEqual({
+      phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
+      repairSpecs: [{schemaName: 'app', tableName: 'judgment_job'}],
+      schemaName: 'app',
+      tableName: 'judgment_job',
+    })
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service keeps the repairable indexed target when a transaction fails on commit', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-commit-fatal-index-marker-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
@@ -4200,6 +4329,29 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     expect(snapshotManifestProbe?.repairDedupeOrderSql).toContain("snapshot_status = 'active'")
     expect(snapshotManifestProbe?.mutationProbeSql).toContain('startup_probe_review_serving_snapshot_manifest')
     expect(snapshotManifestProbe?.mutationProbeSql).toContain('UPDATE app.review_serving_snapshot_manifest')
+    const judgmentJobProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'judgment_job'
+    })
+    expect(judgmentJobProbe?.repairPrimaryKeyColumns).toEqual(['id'])
+    expect(judgmentJobProbe?.repairStrategy).toBe('dedupe-latest')
+    expect(judgmentJobProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(judgmentJobProbe?.recreateSecondaryIndexes).toBe(false)
+    expect(judgmentJobProbe?.repairDedupeOrderSql).toContain("storage_state = 'active'")
+    expect(judgmentJobProbe?.mutationProbeSql).toContain('startup_probe_judgment_job')
+    expect(judgmentJobProbe?.mutationProbeSql).toContain('UPDATE app.judgment_job')
+    expect(judgmentJobProbe?.schemaRequirements).toContainEqual({
+      columnNames: [
+        'id',
+        'storage_state',
+        'status',
+        'updated_at',
+        'last_import_completed_at',
+        'last_import_started_at',
+        'created_at',
+      ],
+      schemaName: 'app',
+      tableName: 'judgment_job',
+    })
     const rebuildRequestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_request'
     })

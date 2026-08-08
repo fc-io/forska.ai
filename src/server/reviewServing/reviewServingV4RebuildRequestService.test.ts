@@ -397,6 +397,7 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('AND COALESCE(prompt.archived, FALSE) = FALSE')
   expect(joined).toContain('COALESCE(prompt.content_hash, sha256(prompt.original_text))')
   expect(joined).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
+  expect(joined).toContain('snapshot.review_config_hash IS NOT DISTINCT FROM')
   expect(joined).toContain("WHERE snapshot_status = 'active'")
   expect(joined).toContain('judgment.model_id = project.model_id')
   expect(joined).not.toContain('judgment.project_id = project.id')
