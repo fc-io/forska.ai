@@ -27,6 +27,10 @@ const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const lowMemoryReviewServingProjectorWorkerRssCapRatio = 0.75
 const highRssRestartGraceBytes = gibibyte
+const foregroundWorkRecycleMaxDefers = 3
+const foregroundWorkRecycleMaxDeferMs = 30_000
+let foregroundWorkRecycleDeferStartedAtMs: number | null = null
+let foregroundWorkRecycleDeferCount = 0
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
@@ -109,6 +113,21 @@ const hasActiveForegroundDuckdbWork = (work: {appendQueueDepth: number; mainQueu
   return work.mainQueueDepth > 0 || work.appendQueueDepth > 0
 }
 
+const resetForegroundWorkRecycleDeferral = () => {
+  foregroundWorkRecycleDeferStartedAtMs = null
+  foregroundWorkRecycleDeferCount = 0
+}
+
+const shouldForceRecycleAfterForegroundWorkDeferral = (nowMs: number) => {
+  foregroundWorkRecycleDeferStartedAtMs ??= nowMs
+  foregroundWorkRecycleDeferCount += 1
+
+  return (
+    foregroundWorkRecycleDeferCount > foregroundWorkRecycleMaxDefers
+    || nowMs - foregroundWorkRecycleDeferStartedAtMs >= foregroundWorkRecycleMaxDeferMs
+  )
+}
+
 const hasActiveProjectTransferSession = async () => {
   try {
     const {getProjectTransferSessionRepository} =
@@ -166,12 +185,35 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   const activeForegroundWork = await getActiveForegroundDuckdbWork()
 
   if (hasActiveForegroundDuckdbWork(activeForegroundWork)) {
+    const nowMs = Date.now()
+    if (!shouldForceRecycleAfterForegroundWorkDeferral(nowMs)) {
+      reviewServingProjectorWorkerWarningLogger.warn(
+        'review-serving-projector.heartbeat-skip-recycle-duckdb-foreground-work',
+        '[reviewServingProjectorWorker] skipping DuckDB recycle before bounded loop restart because foreground work is active',
+        {
+          foregroundWorkRecycleDeferCount,
+          foregroundWorkRecycleDeferStartedAtMs,
+          maxRssBytes,
+          rssBytes,
+          ...activeForegroundWork,
+        },
+      )
+      return
+    }
+
     reviewServingProjectorWorkerWarningLogger.warn(
-      'review-serving-projector.heartbeat-skip-recycle-duckdb-foreground-work',
-      '[reviewServingProjectorWorker] skipping DuckDB recycle before bounded loop restart because foreground work is active',
-      {maxRssBytes, rssBytes, ...activeForegroundWork},
+      'review-serving-projector.heartbeat-force-recycle-duckdb-after-foreground-work-deferral',
+      '[reviewServingProjectorWorker] recycling DuckDB after bounded foreground queue deferral',
+      {
+        foregroundWorkRecycleDeferCount,
+        foregroundWorkRecycleDeferStartedAtMs,
+        maxRssBytes,
+        rssBytes,
+        ...activeForegroundWork,
+      },
     )
-    return
+  } else {
+    resetForegroundWorkRecycleDeferral()
   }
 
   reviewServingProjectorWorkerWarningLogger.warn(
@@ -182,6 +224,7 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   const {closeDuckdbService} = await import('./duckdbService.ts')
   await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
   globalThis.Bun.gc(true)
+  resetForegroundWorkRecycleDeferral()
 
   const rssBytesAfterRecycle = process.memoryUsage().rss
   const hardRestartRssBytes = getReviewServingProjectorWorkerHardRestartRssBytes(maxRssBytes)
