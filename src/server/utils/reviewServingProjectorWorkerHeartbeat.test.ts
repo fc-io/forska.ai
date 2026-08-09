@@ -554,6 +554,117 @@ test('review serving projector worker heartbeat skips high-RSS recycle while for
   expect(result.events).not.toContainEqual(['exit', 0])
 })
 
+test('review serving projector worker heartbeat force-recycles after repeated foreground DuckDB queue deferrals', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
+        const events = []
+
+        Object.defineProperty(process, 'memoryUsage', {
+          value: () => {
+            events.push(['memoryUsage'])
+            return {arrayBuffers: 0, external: 0, heapTotal: 0, heapUsed: 0, rss: 200}
+          },
+        })
+        globalThis.Bun.gc = () => {
+          events.push(['gc'])
+        }
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {
+              events.push(['run'])
+              return {reason: 'nativeHeavyChunkCompleted'}
+            },
+          }
+        })
+        void mock.module(duckdbServiceModulePath, () => {
+          return {
+            closeDuckdbService: async (options) => {
+              events.push(['recycle', options.checkpointBeforeClose, options.releaseOwnerLease])
+            },
+            getDuckdbAppendRuntimeMetrics: () => {
+              events.push(['appendMetrics'])
+              return {queueDepth: 0}
+            },
+            getDuckdbQueueRuntimeMetricsSnapshot: () => {
+              events.push(['queueMetrics'])
+              return {main: {queueDepth: 1}}
+            },
+          }
+        })
+        void mock.module(projectTransferSessionRepositoryModulePath, () => {
+          return {
+            getProjectTransferSessionRepository: () => ({
+              hasActiveProjectTransferSessions: async () => false,
+            }),
+          }
+        })
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?foreground-bounded=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxCompletedRebuildChunksPerRun: 1,
+          rebuildChunkBatchMaxRssBytes: 100,
+          restartDelayMs: 1,
+        })
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 60)
+        })
+        stop()
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+    },
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat bounded foreground recycle guard test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<Array<boolean | number | string>>
+  }
+
+  expect(
+    result.events.filter((event) => {
+      return event[0] === 'queueMetrics'
+    }).length,
+  ).toBeGreaterThanOrEqual(4)
+  expect(result.events).toContainEqual(['recycle', false, false])
+  expect(result.events).toContainEqual(['gc'])
+  expect(result.events).not.toContainEqual(['exit', 0])
+})
+
 test('review serving projector worker heartbeat skips high-RSS recycle during project-transfer background activity', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
