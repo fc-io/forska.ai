@@ -159,6 +159,10 @@ Tasks:
 - Keep `review.detail.judgments`, `review.detail.humanJudgments`,
   `review.export.selection`, and `review.pdf.selection` behind `payload`
   readiness unless a bounded exact on-demand detail builder is implemented.
+- Audit the actual export and PDF entrypoints:
+  `src/server/routes/ProjectExportRoutes.ts`,
+  `src/server/routes/ArticlesRoutes.ts`, and
+  `src/server/reviewServing/reviewBulkOperationService.ts`.
 - Return a typed availability/error response for these workflows while payload
   is pending, instead of falling through to empty rows.
 - In the frontend, show a concise "details still indexing" state for detail,
@@ -169,6 +173,13 @@ Acceptance criteria:
 - Detail/export/PDF cannot silently produce incomplete judgment payloads.
 - The user can distinguish "no judgments" from "detail payload is still
   indexing".
+- Export job creation refuses or marks pending when `review.export.selection`
+  lacks payload readiness, instead of creating a job that later downloads an
+  incomplete CSV.
+- Export download still validates every source snapshot has payload/detail
+  readiness before reading `mart.review_article_judgment_detail_serving_v4`.
+- PDF-fetch-by-filter/project routes have the same payload-pending behavior for
+  `review.pdf.selection`.
 
 ### 5. Preserve LLM Dispatch Independence
 
@@ -235,6 +246,9 @@ Acceptance criteria:
 - `bun test src/server/reviewServing/reviewServingChunkManifestRepository.test.ts`
 - `bun test src/server/reviewServing/reviewServingSnapshotPromotionService.test.ts`
 - `bun test src/server/reviewServing/reviewServingFilteredCountService.test.ts`
+- `bun test src/server/routes/ProjectExportRoutes.test.ts`
+- `bun test src/server/routes/ArticlesRoutes.test.ts`
+- `bun test src/server/reviewServing/reviewBulkOperationService.test.ts`
 - Add the focused dispatch/queue test if the existing suite does not already
   prove payload independence for LLM scheduling.
 - For UI changes, run the focused import/review route Vitest suite that covers

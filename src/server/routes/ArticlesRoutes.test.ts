@@ -289,8 +289,8 @@ test('PDF project route preserves date-only upper bounds and request identity in
   })
   void mock.module(reviewBulkOperationServiceModulePath, () => {
     return {
-      assertArticleIdOnlyBulkOperationCaps: () => {
-        return undefined
+      isActiveReviewServingSnapshotDetailReady: async () => {
+        return true
       },
       createReviewBulkOperationJob: async (request: unknown) => {
         jobRequests.push(request)
@@ -349,8 +349,8 @@ test('PDF filter route gives repeated filter jobs durable request identities', a
   })
   void mock.module(reviewBulkOperationServiceModulePath, () => {
     return {
-      assertArticleIdOnlyBulkOperationCaps: () => {
-        return undefined
+      isActiveReviewServingSnapshotDetailReady: async () => {
+        return true
       },
       createReviewBulkOperationJob: async (request: unknown) => {
         jobRequests.push(request)
@@ -374,4 +374,145 @@ test('PDF filter route gives repeated filter jobs durable request identities', a
 
   expect(response.status).toBe(202)
   expect(typeof jobRequest.criteria.requestId).toBe('string')
+})
+
+test('PDF filter route returns detail-indexing availability before queueing when payload is pending', async () => {
+  const jobRequests: unknown[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async () => {
+            return []
+          },
+          run: async () => {
+            return undefined
+          },
+          transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
+            return callback({})
+          },
+        }
+      },
+    }
+  })
+  void mock.module(articleImportStoreServiceModulePath, () => {
+    return {storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current}
+  })
+  void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
+    return {
+      getCurrentReviewConfigHash: async () => {
+        return 'config-1'
+      },
+    }
+  })
+  void mock.module(reviewBulkOperationServiceModulePath, () => {
+    return {
+      isActiveReviewServingSnapshotDetailReady: async () => {
+        return false
+      },
+      createReviewBulkOperationJob: async (request: unknown) => {
+        jobRequests.push(request)
+        return {jobKind: 'review.pdf.selection', latestSnapshotSemantics: true, status: 'pending'}
+      },
+    }
+  })
+
+  const routesModule = (await import(
+    `./ArticlesRoutes.ts?test=pdf-filter-pending-${Date.now()}-${Math.random()}`
+  )) as typeof import('./ArticlesRoutes.ts')
+  const app = new Elysia().use(routesModule.articlesRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/articles/pdf-fetch-by-filter', {
+      body: JSON.stringify({listType: 'llm', sourceProjectId: 'project-1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as unknown
+
+  expect(response.status).toBe(409)
+  expect(body).toMatchObject({
+    availability: 'pending',
+    detailReadiness: 'indexing',
+    error: 'PDF selection details are still indexing',
+    success: false,
+  })
+  expect(jobRequests).toHaveLength(0)
+})
+
+test('PDF project route returns detail-indexing availability before queueing when payload is pending', async () => {
+  const jobRequests: unknown[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async () => {
+            return []
+          },
+          run: async () => {
+            return undefined
+          },
+          transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
+            return callback({})
+          },
+        }
+      },
+    }
+  })
+  void mock.module(articleImportStoreServiceModulePath, () => {
+    return {storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current}
+  })
+  void mock.module(appQueryServiceModulePath, () => {
+    return {
+      getAppQueryService: () => {
+        return {
+          getProjectReviewConfig: async () => {
+            return {dateFrom: '2026-01-01', dateTo: '2026-12-31'}
+          },
+        }
+      },
+    }
+  })
+  void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
+    return {
+      getCurrentReviewConfigHash: async () => {
+        return 'config-1'
+      },
+    }
+  })
+  void mock.module(reviewBulkOperationServiceModulePath, () => {
+    return {
+      isActiveReviewServingSnapshotDetailReady: async () => {
+        return false
+      },
+      createReviewBulkOperationJob: async (request: unknown) => {
+        jobRequests.push(request)
+        return {jobKind: 'review.pdf.selection', latestSnapshotSemantics: true, status: 'pending'}
+      },
+    }
+  })
+
+  const routesModule = (await import(
+    `./ArticlesRoutes.ts?test=pdf-project-pending-${Date.now()}-${Math.random()}`
+  )) as typeof import('./ArticlesRoutes.ts')
+  const app = new Elysia().use(routesModule.articlesRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/articles/pdf-fetch-by-project', {
+      body: JSON.stringify({projectId: 'project-1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as unknown
+
+  expect(response.status).toBe(409)
+  expect(body).toMatchObject({
+    availability: 'pending',
+    detailReadiness: 'indexing',
+    error: 'PDF selection details are still indexing',
+    success: false,
+  })
+  expect(jobRequests).toHaveLength(0)
 })

@@ -2,6 +2,7 @@ import type {
   ArticlesReviewsCountResponse,
   ArticlesReviewsParams,
   ArticlesReviewsResponse,
+  ReviewDetailReadiness,
 } from '../../services/olap/olapTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
@@ -370,7 +371,6 @@ const getFilteredCountValue = async (
       'llmStatus',
       'posting',
       'search',
-      'payload',
     ]),
     computeCount: async () => {
       const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
@@ -568,10 +568,15 @@ const readJudgments = async (
       })
 }
 
+const getResponseDetailReadiness = (value: string): ReviewDetailReadiness => {
+  return value === 'ready' || value === 'indexing' ? value : 'unavailable'
+}
+
 const getResponseRows = (
   rows: readonly ReviewServingArticleRow[],
   judgmentRows: readonly ReviewServingJudgmentRow[],
   enabledPromptCount: number,
+  detailReadiness: ReviewDetailReadiness,
 ): ArticlesReviewsResponse['data'] => {
   const judgmentsByArticleId = getJudgmentRowsByArticleId(judgmentRows)
 
@@ -593,6 +598,7 @@ const getResponseRows = (
       arxivId: row.arxiv_id ?? row.arxivId ?? null,
       biorxivId: row.biorxiv_id ?? row.biorxivId ?? null,
       canonicalArticleId: row.canonical_article_id ?? row.canonicalArticleId ?? null,
+      detailReadiness,
       doi: row.doi ?? null,
       fullTextConversionStatus: row.full_text_conversion_status ?? row.fullTextConversionStatus ?? null,
       fullTextFetchedAt: getDateValue(row.full_text_fetched_at ?? row.fullTextFetchedAt),
@@ -641,15 +647,19 @@ export const getLlmReviewArticlesFromServing = async (
 
   const pageRows = rowsResult.rows.slice(0, limit)
   const enabledPromptCount = await enabledPromptCountPromise
+  const detailReadiness = getResponseDetailReadiness(rowsResult.diagnostics.manifest.detailReadiness)
   const [judgmentRows, totalCount] = await Promise.all([
-    readJudgments(effectiveParams, manifest, pageRows, enabledPromptCount, dependencies),
+    detailReadiness === 'ready'
+      ? readJudgments(effectiveParams, manifest, pageRows, enabledPromptCount, dependencies)
+      : Promise.resolve([]),
     getCountValue(effectiveParams, manifest, {...dependencies, database}),
   ])
   const lastRow = pageRows[pageRows.length - 1]
   const hasNextPage = rowsResult.rows.length > limit
 
   return {
-    data: getResponseRows(pageRows, judgmentRows, enabledPromptCount),
+    data: getResponseRows(pageRows, judgmentRows, enabledPromptCount, detailReadiness),
+    detailReadiness,
     totalCount,
     page,
     limit,

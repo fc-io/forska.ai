@@ -25,6 +25,8 @@ type JudgmentData = {
   answeredOriginalAsArray?: string[] | null
 }
 
+export type ReviewDetailReadiness = 'indexing' | 'ready' | 'unavailable'
+
 // Minimal article data required for the reviews table
 // This supports both the full article schema and the denormalized API response
 export type ArticleWithJudgments = ArticleUrlInput & {
@@ -35,6 +37,7 @@ export type ArticleWithJudgments = ArticleUrlInput & {
   judgments: Array<JudgmentData>
   journalTitle?: string | null
   canonicalArticleId?: string | null
+  detailReadiness?: ReviewDetailReadiness
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
   fullTextConversionStatus?: string | null
@@ -168,6 +171,33 @@ const getJudgmentComparisonHeadingClassName = () => {
 
 const getJudgmentComparisonValueClassName = () => {
   return 'px-1.5 py-1 text-center text-xs font-semibold text-gray-900'
+}
+
+const getDetailReadiness = (article: ArticleWithJudgments) => {
+  return article.detailReadiness === 'indexing' || article.detailReadiness === 'unavailable'
+    ? article.detailReadiness
+    : 'ready'
+}
+
+const ReviewDetailReadinessBadge = (props: {readiness: Exclude<ReviewDetailReadiness, 'ready'>}) => {
+  const isIndexing = () => {
+    return props.readiness === 'indexing'
+  }
+
+  return (
+    <span
+      class={`inline-flex rounded px-1.5 py-0.5 text-xs font-medium ${
+        isIndexing() ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-700'
+      }`}
+      title={
+        isIndexing()
+          ? 'Judgment details are still indexing for this row'
+          : 'Judgment details are not available for this row'
+      }
+    >
+      {isIndexing() ? 'Details indexing' : 'Details unavailable'}
+    </span>
+  )
 }
 
 const getSourceArticleId = (article: ArticleWithJudgments) => {
@@ -364,69 +394,77 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     cell: (info) => {
       const judgmentsData = info.getValue() as JudgmentData[]
       const row = info.row.original
+      const detailReadiness = getDetailReadiness(row)
 
       return (
         <div class="space-y-2">
           <Show
-            when={row.humanJudgmentMode === 'summary'}
+            when={detailReadiness === 'ready'}
             fallback={
-              <Show when={judgmentsData && judgmentsData.length > 0}>
-                <div class="flex flex-wrap gap-2">
-                  <For each={judgmentsData.slice(0, 3)}>
-                    {(judgment) => {
-                      const aiAnswer = normalizeAnswer(judgment.answeredOriginal)
-                      const humanAnswers = (row.humanAnswersByPrompt?.[judgment.promptId] ?? []).map((answer) => {
-                        return normalizeAnswer(answer)
-                      })
-                      const humanValue = getHumanAnswerLabel(row.humanAnswersByPrompt?.[judgment.promptId])
-                      const aiValue = getAnswerLabel(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
-
-                      const tooltip = (() => {
-                        const aiText = judgment.answeredOriginal ?? '—'
-                        const humans = row.humanAnswersByPrompt?.[judgment.promptId]
-                        const humanText = humans && humans.length > 0 ? humans.join(', ') : '—'
-                        return `AI: ${aiText} • Human: ${humanText}`
-                      })()
-                      const tone = getPromptTone(aiAnswer, humanAnswers)
-
-                      return (
-                        <div class={getJudgmentComparisonClassName()} title={tooltip}>
-                          <div class={getJudgmentComparisonHeadingRowClassName()}>
-                            <span class={getJudgmentComparisonHeadingClassName()}>AI</span>
-                            <span class={getJudgmentComparisonHeadingClassName()}>H</span>
-                          </div>
-                          <div class={getJudgmentComparisonValueRowClassName(tone)}>
-                            <span class={getJudgmentComparisonValueClassName()}>{aiValue}</span>
-                            <span class={getJudgmentComparisonValueClassName()}>{humanValue}</span>
-                          </div>
-                        </div>
-                      )
-                    }}
-                  </For>
-                  <Show when={judgmentsData.length > 3}>
-                    <span class="self-center text-xs text-gray-500">+{judgmentsData.length - 3}</span>
-                  </Show>
-                </div>
-              </Show>
+              <ReviewDetailReadinessBadge readiness={detailReadiness as Exclude<ReviewDetailReadiness, 'ready'>} />
             }
           >
-            <div
-              class={getJudgmentComparisonClassName()}
-              title={`AI: ${row.llmSummaryAnswer ?? '—'} • Human: ${row.humanSummaryAnswer ?? '—'}`}
+            <Show
+              when={row.humanJudgmentMode === 'summary'}
+              fallback={
+                <Show when={judgmentsData && judgmentsData.length > 0}>
+                  <div class="flex flex-wrap gap-2">
+                    <For each={judgmentsData.slice(0, 3)}>
+                      {(judgment) => {
+                        const aiAnswer = normalizeAnswer(judgment.answeredOriginal)
+                        const humanAnswers = (row.humanAnswersByPrompt?.[judgment.promptId] ?? []).map((answer) => {
+                          return normalizeAnswer(answer)
+                        })
+                        const humanValue = getHumanAnswerLabel(row.humanAnswersByPrompt?.[judgment.promptId])
+                        const aiValue = getAnswerLabel(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
+
+                        const tooltip = (() => {
+                          const aiText = judgment.answeredOriginal ?? '—'
+                          const humans = row.humanAnswersByPrompt?.[judgment.promptId]
+                          const humanText = humans && humans.length > 0 ? humans.join(', ') : '—'
+                          return `AI: ${aiText} • Human: ${humanText}`
+                        })()
+                        const tone = getPromptTone(aiAnswer, humanAnswers)
+
+                        return (
+                          <div class={getJudgmentComparisonClassName()} title={tooltip}>
+                            <div class={getJudgmentComparisonHeadingRowClassName()}>
+                              <span class={getJudgmentComparisonHeadingClassName()}>AI</span>
+                              <span class={getJudgmentComparisonHeadingClassName()}>H</span>
+                            </div>
+                            <div class={getJudgmentComparisonValueRowClassName(tone)}>
+                              <span class={getJudgmentComparisonValueClassName()}>{aiValue}</span>
+                              <span class={getJudgmentComparisonValueClassName()}>{humanValue}</span>
+                            </div>
+                          </div>
+                        )
+                      }}
+                    </For>
+                    <Show when={judgmentsData.length > 3}>
+                      <span class="self-center text-xs text-gray-500">+{judgmentsData.length - 3}</span>
+                    </Show>
+                  </div>
+                </Show>
+              }
             >
-              <div class={getJudgmentComparisonHeadingRowClassName()}>
-                <span class={getJudgmentComparisonHeadingClassName()}>AI</span>
-                <span class={getJudgmentComparisonHeadingClassName()}>H</span>
-              </div>
               <div
-                class={getJudgmentComparisonValueRowClassName(
-                  getSummaryTone(normalizeAnswer(row.llmSummaryAnswer), normalizeAnswer(row.humanSummaryAnswer)),
-                )}
+                class={getJudgmentComparisonClassName()}
+                title={`AI: ${row.llmSummaryAnswer ?? '—'} • Human: ${row.humanSummaryAnswer ?? '—'}`}
               >
-                <span class={getJudgmentComparisonValueClassName()}>{getAnswerLabel(row.llmSummaryAnswer)}</span>
-                <span class={getJudgmentComparisonValueClassName()}>{getAnswerLabel(row.humanSummaryAnswer)}</span>
+                <div class={getJudgmentComparisonHeadingRowClassName()}>
+                  <span class={getJudgmentComparisonHeadingClassName()}>AI</span>
+                  <span class={getJudgmentComparisonHeadingClassName()}>H</span>
+                </div>
+                <div
+                  class={getJudgmentComparisonValueRowClassName(
+                    getSummaryTone(normalizeAnswer(row.llmSummaryAnswer), normalizeAnswer(row.humanSummaryAnswer)),
+                  )}
+                >
+                  <span class={getJudgmentComparisonValueClassName()}>{getAnswerLabel(row.llmSummaryAnswer)}</span>
+                  <span class={getJudgmentComparisonValueClassName()}>{getAnswerLabel(row.humanSummaryAnswer)}</span>
+                </div>
               </div>
-            </div>
+            </Show>
           </Show>
         </div>
       )

@@ -7,6 +7,7 @@ import {appendArticleReviewServingDeltasForIds} from '../reviewServing/articleRe
 import {
   assertArticleIdOnlyBulkOperationCaps,
   createReviewBulkOperationJob,
+  isActiveReviewServingSnapshotDetailReady,
 } from '../reviewServing/reviewBulkOperationService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
@@ -118,6 +119,19 @@ const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
     modelThinking: getProviderModelMetadataOptions(getJsonValue(row.modelMetadataJson)).thinking,
     modelVersion: row.modelVersion,
   }
+}
+
+const getPdfDetailPendingResponse = () => {
+  return {
+    availability: 'pending',
+    detailReadiness: 'indexing',
+    error: 'PDF selection details are still indexing',
+    success: false,
+  }
+}
+
+const isPdfSelectionDetailReady = async (input: {projectId: string; reviewConfigHash: string | null}) => {
+  return isActiveReviewServingSnapshotDetailReady(input)
 }
 
 export const articlesRoutes = new Elysia()
@@ -246,6 +260,12 @@ export const articlesRoutes = new Elysia()
     '/api/articles/pdf-fetch-by-filter',
     async ({body, set}) => {
       const reviewConfigHash = await getCurrentReviewConfigHash(body.sourceProjectId)
+
+      if (!(await isPdfSelectionDetailReady({projectId: body.sourceProjectId, reviewConfigHash}))) {
+        set.status = 409
+        return getPdfDetailPendingResponse()
+      }
+
       const job = await createReviewBulkOperationJob({
         criteria: {
           concurrency: body.concurrency,
@@ -311,6 +331,11 @@ export const articlesRoutes = new Elysia()
       const reviewConfigHash = await getCurrentReviewConfigHash(body.projectId)
       const effectiveFrom = getLaterDateFilter(body.from, projectBounds.dateFrom)
       const effectiveTo = getEarlierDateFilter(body.to, projectBounds.dateTo)
+
+      if (!(await isPdfSelectionDetailReady({projectId: body.projectId, reviewConfigHash}))) {
+        set.status = 409
+        return getPdfDetailPendingResponse()
+      }
 
       const job = await createReviewBulkOperationJob({
         criteria: {

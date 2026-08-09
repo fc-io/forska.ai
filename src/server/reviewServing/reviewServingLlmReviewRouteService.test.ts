@@ -250,9 +250,11 @@ test('LLM default list remains foreground-readable while search and payload enri
   const sql = reader.statements.join('\n')
 
   expect(result.data).toHaveLength(1)
+  expect(result.detailReadiness).toBe('indexing')
+  expect(result.data[0]?.detailReadiness).toBe('indexing')
   expect(result.totalCount).toBe(1)
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
-  expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(sql).not.toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).not.toContain('mart.review_title_search_serving_v4')
   expect(sql).not.toContain('search_identity')
   expect(sql).not.toContain('lazy-detail-hydration')
@@ -625,6 +627,7 @@ test('LLM review route diagnostics surface failed snapshot errors for articlesre
 
   expect(result.status).toBe('rejected')
   expect(result.diagnostics.manifest).toEqual({
+    detailReadiness: 'unavailable',
     freshness: 'unavailable',
     lastError: 'projection failed',
     projectId: 'project-1',

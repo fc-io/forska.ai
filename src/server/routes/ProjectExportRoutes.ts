@@ -4,7 +4,10 @@ import {Elysia, t} from 'elysia'
 
 import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
-import {createReviewBulkOperationJob} from '../reviewServing/reviewBulkOperationService.ts'
+import {
+  createReviewBulkOperationJob,
+  isReviewServingSnapshotDetailReady,
+} from '../reviewServing/reviewBulkOperationService.ts'
 import {
   getActiveReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
@@ -481,7 +484,9 @@ const getExportServingSnapshotScopes = async (input: {job: ExportJobRow; sourceP
           ? await getReviewServingSnapshotManifest({projectId, snapshotId: input.job.snapshotId})
           : null
 
-      return manifest && (input.job.latestSnapshotSemantics ? manifest.status === 'active' : true)
+      return manifest
+        && (input.job.latestSnapshotSemantics ? manifest.status === 'active' : true)
+        && isReviewServingSnapshotDetailReady(manifest)
         ? {projectId, reviewConfigHash: manifest.reviewConfigHash ?? reviewConfigHash, snapshotId: manifest.snapshotId}
         : null
     }),
@@ -670,6 +675,35 @@ const getMissingExportSnapshotSourceProjectIds = async (input: {
   })
 }
 
+const getPayloadPendingExportSourceProjectIds = async (input: {
+  reviewConfigHash: string | null
+  reviewConfigHashByProjectId: Record<string, string | null>
+  snapshot: {snapshotId: string; type: 'pinned'} | {type: 'latest'}
+  sourceProjectIds: string[]
+}) => {
+  const pendingSourceProjectIds = await Promise.all(
+    input.sourceProjectIds.map(async (sourceProjectId) => {
+      const manifest =
+        input.snapshot.type === 'pinned'
+          ? await getReviewServingSnapshotManifest({projectId: sourceProjectId, snapshotId: input.snapshot.snapshotId})
+          : await getActiveReviewServingSnapshotManifest({
+              projectId: sourceProjectId,
+              reviewConfigHash: input.reviewConfigHashByProjectId[sourceProjectId] ?? input.reviewConfigHash,
+            })
+
+      return manifest
+        && (input.snapshot.type === 'latest' ? manifest.status === 'active' : true)
+        && !isReviewServingSnapshotDetailReady(manifest)
+        ? sourceProjectId
+        : null
+    }),
+  )
+
+  return pendingSourceProjectIds.filter((sourceProjectId): sourceProjectId is string => {
+    return sourceProjectId !== null
+  })
+}
+
 const getExportPromptFilters = async (
   projectId: string,
   promptSelections: Array<{promptId: string; types: string[]}>,
@@ -769,6 +803,25 @@ export const projectExportRoutes = new Elysia()
         set.status = 400
         return {
           error: `Export sources are missing a ready review serving snapshot: ${missingSnapshotSourceProjectIds.join(', ')}`,
+          success: false,
+        }
+      }
+
+      const payloadPendingSourceProjectIds = body.articleIds
+        ? []
+        : await getPayloadPendingExportSourceProjectIds({
+            reviewConfigHash,
+            reviewConfigHashByProjectId,
+            snapshot,
+            sourceProjectIds,
+          })
+
+      if (payloadPendingSourceProjectIds.length > 0) {
+        set.status = 409
+        return {
+          availability: 'pending',
+          detailReadiness: 'indexing',
+          error: `Export details are still indexing for source projects: ${payloadPendingSourceProjectIds.join(', ')}`,
           success: false,
         }
       }

@@ -14,6 +14,40 @@ export const reviewServingProjectionComponents = [
 
 export type ReviewServingProjectionComponent = (typeof reviewServingProjectionComponents)[number]
 
+export const defaultReadableReviewServingComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'posting',
+  'summary',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+export const detailReadyReviewServingComponents = [
+  'payload',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+export const fullyEnrichedReviewServingComponents = [
+  ...defaultReadableReviewServingComponents,
+  ...detailReadyReviewServingComponents,
+  'search',
+  'judgmentInputContent',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+export const filteredCountIdentityReviewServingComponents = [
+  'display',
+  'humanStatus',
+  'llmStatus',
+  'posting',
+  'projectScope',
+  'queue',
+  'search',
+  'selectedImport',
+  'summary',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
 export const reviewServingChangeKinds = [
   'article.display.updated',
   'article.searchText.updated',

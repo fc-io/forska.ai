@@ -2,6 +2,8 @@ import {expect, test} from 'bun:test'
 import {readFile} from 'fs/promises'
 
 import {
+  defaultReadableReviewServingComponents,
+  detailReadyReviewServingComponents,
   namedReviewFastCountDefinitions,
   namedReviewFastCountKeys,
   reviewServingFilterKeys,
@@ -386,6 +388,22 @@ test('unassessed row contract requires only base list-mode dependencies', () => 
   expect(unassessedRows?.requiredComponents).not.toContain('payload')
 })
 
+test('default-readable row contracts do not require detail payload readiness', () => {
+  const defaultRowContracts = [
+    getReviewServingReadContract('review.llm.rows'),
+    getReviewServingReadContract('review.human.rows'),
+    getReviewServingReadContract('review.both.rows'),
+    getReviewServingReadContract('review.unassessed.rows'),
+  ]
+
+  for (const contract of defaultRowContracts) {
+    expect(contract?.requiredComponents).not.toContain('payload')
+    for (const component of contract?.requiredComponents ?? []) {
+      expect(defaultReadableReviewServingComponents).toContain(component)
+    }
+  }
+})
+
 test('detail row contract does not pin article lookups to a list mode', () => {
   const detailRow = getReviewServingReadContract('review.detail.row')
   const detailJudgments = getReviewServingReadContract('review.detail.judgments')
@@ -566,6 +584,21 @@ test('human payload contracts cover list and detail response judgments', () => {
   expect(bothListJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(bothListHumanJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(detailHumanJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
+})
+
+test('strict detail export and pdf contracts stay payload gated', () => {
+  const strictPayloadContracts = [
+    getReviewServingReadContract('review.detail.judgments'),
+    getReviewServingReadContract('review.detail.humanJudgments'),
+    getReviewServingReadContract('review.export.selection'),
+    getReviewServingReadContract('review.pdf.selection'),
+  ]
+
+  for (const contract of strictPayloadContracts) {
+    for (const component of detailReadyReviewServingComponents) {
+      expect(contract?.requiredComponents).toContain(component)
+    }
+  }
 })
 
 test('list judgment payload contracts cover current default review page payloads', () => {

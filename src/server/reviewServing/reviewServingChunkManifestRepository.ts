@@ -4,7 +4,12 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
-import {isReviewServingProjectionComponent, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  defaultReadableReviewServingComponents,
+  detailReadyReviewServingComponents,
+  isReviewServingProjectionComponent,
+  type ReviewServingProjectionComponent,
+} from './reviewServingContracts.ts'
 
 export type ReviewServingChunkManifestRepositoryTransaction = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -204,6 +209,7 @@ export type ReviewServingRebuildTimeline = {
   completedAt: ReviewServingRebuildTimelineTimestamp
   createdAt: ReviewServingRebuildTimelineTimestamp
   defaultReadableAt: ReviewServingRebuildTimelineTimestamp
+  detailReadyAt: ReviewServingRebuildTimelineTimestamp
   firstChunkStartedAt: ReviewServingRebuildTimelineTimestamp
   fullyEnrichedAt: ReviewServingRebuildTimelineTimestamp
   projectId: string
@@ -750,17 +756,6 @@ const getReviewServingTimelineRequestedComponents = (value: unknown): ReviewServ
     : []
 }
 
-const defaultReadableReviewServingComponents = [
-  'projectScope',
-  'selectedImport',
-  'display',
-  'llmStatus',
-  'humanStatus',
-  'queue',
-  'posting',
-  'summary',
-] as const satisfies readonly ReviewServingProjectionComponent[]
-
 const getLatestReviewServingTimelineTimestamp = (values: readonly string[]) => {
   return values.reduce<string | null>((latest, value) => {
     if (latest === null) {
@@ -811,6 +806,15 @@ const getReviewServingDefaultReadableTimestamp = (
   return getReviewServingTimelineTimestamp(
     getReviewServingComponentCompletionTimestamp(componentSpans, defaultReadableReviewServingComponents),
     'defaultReadableAt is unknown because request-owned chunk evidence does not prove all default review page components completed.',
+  )
+}
+
+const getReviewServingDetailReadyTimestamp = (
+  componentSpans: readonly ReviewServingRebuildComponentSpan[],
+): ReviewServingRebuildTimelineTimestamp => {
+  return getReviewServingTimelineTimestamp(
+    getReviewServingComponentCompletionTimestamp(componentSpans, detailReadyReviewServingComponents),
+    'detailReadyAt is unknown because request-owned chunk evidence does not prove payload enrichment completed.',
   )
 }
 
@@ -873,6 +877,7 @@ const getReviewServingRebuildTimelineFromRows = (
       completedAt: getReviewServingTimelineTimestamp(row.completedAt),
       createdAt: getReviewServingTimelineTimestamp(row.createdAt),
       defaultReadableAt: getReviewServingDefaultReadableTimestamp(componentSpans),
+      detailReadyAt: getReviewServingDetailReadyTimestamp(componentSpans),
       firstChunkStartedAt: getReviewServingTimelineTimestamp(row.firstChunkStartedAt),
       fullyEnrichedAt: getReviewServingFullyEnrichedTimestamp(componentSpans, componentCounts),
       projectId: row.projectId,

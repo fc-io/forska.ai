@@ -1,6 +1,7 @@
 import type {PromptFilterInfo} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 
 export type LlmStatus = 'complete' | 'both' | 'partial'
+export type ReviewDetailReadiness = 'indexing' | 'ready' | 'unavailable'
 
 export type ArticlesReviewsParams = {
   projectId: string
@@ -44,6 +45,7 @@ export type ArticleReviewResult = {
   arxivId?: string | null
   biorxivId?: string | null
   canonicalArticleId?: string | null
+  detailReadiness?: ReviewDetailReadiness
   doi?: string | null
   medrxivId?: string | null
   originalData?: unknown
@@ -67,6 +69,7 @@ export type ArticleReviewResult = {
 
 export type ArticlesReviewsResponse = {
   data: ArticleReviewResult[]
+  detailReadiness?: ReviewDetailReadiness
   error?: string
   totalCount: number | null
   page: number
@@ -125,6 +128,7 @@ export type ArticleReviewsBothResult = {
   arxivId?: string | null
   biorxivId?: string | null
   canonicalArticleId?: string | null
+  detailReadiness?: ReviewDetailReadiness
   doi?: string | null
   medrxivId?: string | null
   originalData?: unknown
@@ -150,6 +154,7 @@ export type ArticleReviewsBothResult = {
 
 export type ArticlesReviewsBothResponse = {
   data: ArticleReviewsBothResult[]
+  detailReadiness?: ReviewDetailReadiness
   error?: string
   totalCount: number
   page: number

@@ -31,8 +31,52 @@ type ExportRequestBody = {
 type ExportPromptsRequestBody = {promptIds: string[]}
 type ExportJobResponse = {downloadUrl?: string; job?: {jobId?: string}; success?: boolean}
 type ExportJobStatusResponse = {downloadUrl?: string | null; job?: {jobId?: string; status?: string}; success?: boolean}
+type ExportErrorResponse = {
+  availability?: string | null
+  error?: string | null
+  message?: string | null
+  reason?: string | null
+  status?: string | null
+}
 
 const terminalExportJobStatuses = new Set(['cancelled', 'completed', 'failed'])
+
+const isDetailPendingExportError = (data: ExportErrorResponse | null) => {
+  const status = data?.status?.toLowerCase()
+  const availability = data?.availability?.toLowerCase()
+  const text = [data?.error, data?.message, data?.reason].join(' ').toLowerCase()
+
+  return (
+    status === 'unavailable'
+    || availability === 'indexing'
+    || availability === 'unavailable'
+    || text.includes('payload')
+    || text.includes('detail')
+    || text.includes('review serving snapshot')
+  )
+}
+
+const getExportErrorMessage = (data: ExportErrorResponse | null) => {
+  const detail = data?.message ?? data?.error ?? data?.reason ?? null
+
+  return isDetailPendingExportError(data)
+    ? `Review details are still indexing for export.${detail ? ` ${detail}` : ''}`
+    : (detail ?? 'Export failed')
+}
+
+const readExportErrorMessage = async (response: Response) => {
+  const contentType = response.headers.get('content-type') ?? ''
+
+  if (!contentType.includes('application/json')) {
+    return 'Export failed'
+  }
+
+  try {
+    return getExportErrorMessage((await response.json()) as ExportErrorResponse)
+  } catch {
+    return 'Export failed'
+  }
+}
 
 const createProjectExportJob = async (projectId: string, body: ExportRequestBody): Promise<ExportJobResponse> => {
   const response = await fetch(getApiRequestUrl(`/api/projects/${projectId}/export`), {
@@ -43,7 +87,7 @@ const createProjectExportJob = async (projectId: string, body: ExportRequestBody
   })
 
   if (!response.ok) {
-    throw new Error('Export failed')
+    throw new Error(await readExportErrorMessage(response))
   }
 
   return (await response.json()) as ExportJobResponse

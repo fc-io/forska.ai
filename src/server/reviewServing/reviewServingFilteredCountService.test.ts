@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {
+  getReviewServingFilteredCountComponentIdentities,
   getReviewServingFilteredCountPruneSql,
   getReviewServingFilteredCountReadSql,
   getReviewServingFilteredCountSignature,
@@ -9,6 +10,7 @@ import {
   type ReviewServingFilteredCountDatabase,
   type ReviewServingFilteredCountLookup,
 } from './reviewServingFilteredCountService.ts'
+import type {ReviewServingSnapshotManifest} from './reviewServingManifestRepository.ts'
 
 const lookup: ReviewServingFilteredCountLookup = {
   componentIdentity: 'component-identity',
@@ -20,6 +22,66 @@ const lookup: ReviewServingFilteredCountLookup = {
   projectId: 'project-1',
   reviewConfigHash: 'config-1',
   snapshotId: 'snapshot-1',
+}
+
+const getManifest = (
+  payloadIdentity: string,
+  postingIdentity = 'posting:identity-1',
+): ReviewServingSnapshotManifest => {
+  return {
+    componentRequirements: {
+      optionalComponents: ['payload', 'search'],
+      requiredComponents: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'posting', 'summary'],
+    },
+    componentState: {
+      optional: [
+        {
+          baseGeneration: '1',
+          component: 'payload',
+          patchWatermark: '2',
+          projectionIdentity: payloadIdentity,
+          requirement: 'optional',
+        },
+        {
+          baseGeneration: '1',
+          component: 'search',
+          patchWatermark: '2',
+          projectionIdentity: 'search:identity-1',
+          requirement: 'optional',
+        },
+      ],
+      required: (
+        [
+          ['projectScope', 'projectScope:identity-1'],
+          ['selectedImport', 'selectedImport:identity-1'],
+          ['display', 'display:identity-1'],
+          ['llmStatus', 'llmStatus:identity-1'],
+          ['posting', postingIdentity],
+          ['summary', 'summary:identity-1'],
+        ] as const
+      ).map(([component, projectionIdentity]) => {
+        return {
+          baseGeneration: '1',
+          component,
+          patchWatermark: '2',
+          projectionIdentity,
+          requirement: 'required' as const,
+        }
+      }),
+    },
+    composedIdentity: {},
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: ['payload', 'search'],
+    projectId: 'project-1',
+    requiredComponents: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'posting', 'summary'],
+    reviewConfigHash: 'config-1',
+    selectedImportSnapshotId: 'selected-import-1',
+    snapshotId: 'snapshot-1',
+    sourceWatermarks: {},
+    status: 'active',
+    validationResult: null,
+  }
 }
 
 test('filtered count serving read SQL only touches the memoized count table', () => {
@@ -52,6 +114,19 @@ test('filtered count serving write records composed component identity without i
   expect(writeSql).not.toContain('excluded.')
   expect(pruneSql).toContain('ROW_NUMBER() OVER')
   expect(pruneSql).toContain('row_rank > 17')
+})
+
+test('filtered count component identities ignore payload churn and track count dependencies', () => {
+  const components = ['display', 'projectScope', 'selectedImport', 'llmStatus', 'posting', 'search', 'payload'] as const
+  const payloadV1 = getReviewServingFilteredCountComponentIdentities(getManifest('payload:identity-1'), components)
+  const payloadV2 = getReviewServingFilteredCountComponentIdentities(getManifest('payload:identity-2'), components)
+  const postingV2 = getReviewServingFilteredCountComponentIdentities(
+    getManifest('payload:identity-2', 'posting:identity-2'),
+    components,
+  )
+
+  expect(payloadV2.componentIdentity).toBe(payloadV1.componentIdentity)
+  expect(postingV2.componentIdentity).not.toBe(payloadV1.componentIdentity)
 })
 
 test('filtered count serving returns cache hits without computing or writing', async () => {

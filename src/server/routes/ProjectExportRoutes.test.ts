@@ -31,6 +31,7 @@ const queryJsonRef = {
 const reviewConfigHashes = new Map<string, string | null>()
 const activeSnapshotProjectIds = new Set<string>(['project-1', 'project-2'])
 const pinnedSnapshotProjectIds = new Set<string>(['project-1', 'project-2'])
+const payloadPendingSnapshotProjectIds = new Set<string>()
 const pinnedSnapshotStatuses = new Map<string, string>()
 const createReviewBulkOperationJobCalls: unknown[] = []
 
@@ -48,6 +49,31 @@ const getProjectQueryRows = (statement: string) => {
   }
 
   return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+}
+
+const getSnapshotManifest = (input: {projectId: string; snapshotId: string; status?: string}) => {
+  const components = payloadPendingSnapshotProjectIds.has(input.projectId)
+    ? ['projectScope', 'posting']
+    : ['projectScope', 'posting', 'payload']
+
+  return {
+    componentState: {
+      optional: [],
+      required: components.map((component) => {
+        return {
+          baseGeneration: '1',
+          component,
+          patchWatermark: '2',
+          projectionIdentity: `${component}-identity`,
+          requirement: 'required',
+        }
+      }),
+    },
+    projectId: input.projectId,
+    reviewConfigHash: reviewConfigHashes.get(input.projectId) ?? 'config-1',
+    snapshotId: input.snapshotId,
+    status: input.status ?? 'active',
+  }
 }
 
 const registerModuleMocks = () => {
@@ -107,6 +133,11 @@ const registerModuleMocks = () => {
           status: 'pending',
         }
       },
+      isReviewServingSnapshotDetailReady: (manifest: ReturnType<typeof getSnapshotManifest>) => {
+        return [...manifest.componentState.required, ...manifest.componentState.optional].some((state) => {
+          return state.component === 'payload'
+        })
+      },
     }
   })
 
@@ -114,12 +145,12 @@ const registerModuleMocks = () => {
     return {
       getActiveReviewServingSnapshotManifest: async ({projectId}: {projectId: string}) => {
         return activeSnapshotProjectIds.has(projectId)
-          ? {projectId, snapshotId: `active-${projectId}`, status: 'active'}
+          ? getSnapshotManifest({projectId, snapshotId: `active-${projectId}`})
           : null
       },
       getReviewServingSnapshotManifest: async ({projectId, snapshotId}: {projectId: string; snapshotId: string}) => {
         return pinnedSnapshotProjectIds.has(projectId)
-          ? {projectId, snapshotId, status: pinnedSnapshotStatuses.get(projectId) ?? 'active'}
+          ? getSnapshotManifest({projectId, snapshotId, status: pinnedSnapshotStatuses.get(projectId) ?? 'active'})
           : null
       },
     }
@@ -151,6 +182,7 @@ afterEach(() => {
   pinnedSnapshotProjectIds.clear()
   pinnedSnapshotProjectIds.add('project-1')
   pinnedSnapshotProjectIds.add('project-2')
+  payloadPendingSnapshotProjectIds.clear()
   pinnedSnapshotStatuses.clear()
   mock.restore()
 })
@@ -377,6 +409,32 @@ test('project export rejects cross-project jobs when a source latest snapshot is
   expect(response.status).toBe(400)
   expect(json).toMatchObject({
     error: 'Export sources are missing a ready review serving snapshot: project-2',
+    success: false,
+  })
+  expect(createReviewBulkOperationJobCalls).toHaveLength(0)
+})
+
+test('project export refuses filtered jobs while source payload detail is indexing', async () => {
+  payloadPendingSnapshotProjectIds.add('project-2')
+  queryJsonRef.current = async (statement) => {
+    return getProjectQueryRows(statement)
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({promptIds: ['prompt-1'], sourceProjectIds: ['project-1', 'project-2']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const json = (await response.json()) as unknown
+
+  expect(response.status).toBe(409)
+  expect(json).toMatchObject({
+    availability: 'pending',
+    detailReadiness: 'indexing',
+    error: 'Export details are still indexing for source projects: project-2',
     success: false,
   })
   expect(createReviewBulkOperationJobCalls).toHaveLength(0)
@@ -708,4 +766,39 @@ test('project export download rejects partially unavailable source snapshots', a
   expect(response.status).toBe(409)
   expect(body).toEqual({error: 'Export serving snapshot is unavailable', success: false})
   expect(queryStatements.join('\n')).not.toContain('JOIN mart.review_article_serving_v4')
+})
+
+test('project export download rejects source snapshots whose payload detail is still indexing before judgment reads', async () => {
+  payloadPendingSnapshotProjectIds.add('project-2')
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.project') && statement.includes('LIMIT 1') && statement.includes('id, name')) {
+      return [{id: 'project-1', name: 'Project 1'}]
+    }
+
+    if (statement.includes('FROM app.review_bulk_operation_job')) {
+      return [
+        {
+          criteriaJson: {
+            exportContract: {promptOutput: {promptIds: ['prompt-1']}},
+            sourceProjectIds: ['project-1', 'project-2'],
+          },
+          latestSnapshotSemantics: true,
+          resultManifestJson: {batches: {'article-1': ['article-1']}},
+          reviewConfigHash: 'config-1',
+          snapshotId: null,
+          status: 'completed',
+        },
+      ]
+    }
+
+    return []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(new Request('http://localhost/api/projects/project-1/export/export-job-1/download'))
+  const body = (await response.json()) as {error: string; success: boolean}
+
+  expect(response.status).toBe(409)
+  expect(body).toEqual({error: 'Export serving snapshot is unavailable', success: false})
+  expect(queryStatements.join('\n')).not.toContain(judgmentDetailServingFixtureTable)
 })
