@@ -3,6 +3,7 @@ import type {
   ArticlesReviewsBothParams,
   ArticlesReviewsBothResponse,
   ArticlesReviewsParams,
+  ReviewDetailReadiness,
 } from '../../services/olap/olapTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
@@ -112,6 +113,7 @@ type ReviewServingRouteDependencies = {
 }
 type HumanReviewArticlesResponse = {
   data: unknown[]
+  detailReadiness?: ReviewDetailReadiness
   error?: string
   humanJudgmentMode: 'prompt' | 'summary'
   limit: number
@@ -135,6 +137,7 @@ type ReviewServingRowsPageInput = {
   limit: number
   request: Omit<ReviewServingReaderRequest, 'contractKey'> & {contractKey: string}
 }
+type ReviewServingRowsPageResult<T> = {detailReadiness: ReviewDetailReadiness; nextCursor: string | null; rows: T[]}
 type PromptAnswerFilterGroup = {filterValues: string[]}
 
 const maxReviewPageSize = 500
@@ -505,9 +508,9 @@ const getFilteredCountValue = async (
     ...getReviewServingFilteredCountComponentIdentities(
       manifest,
       mode === 'both'
-        ? ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'posting', 'search', 'payload']
+        ? ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'posting', 'search']
         : mode === 'human'
-          ? ['display', 'projectScope', 'selectedImport', 'humanStatus', 'posting', 'search', 'payload']
+          ? ['display', 'projectScope', 'selectedImport', 'humanStatus', 'posting', 'search']
           : ['display', 'projectScope', 'selectedImport', 'queue', 'posting', 'search'],
     ),
     computeCount: async () => {
@@ -759,7 +762,11 @@ const readJudgments = async (
       })
 }
 
-const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<{nextCursor: string | null; rows: T[]}> => {
+const getResponseDetailReadiness = (value: string): ReviewDetailReadiness => {
+  return value === 'ready' || value === 'indexing' ? value : 'unavailable'
+}
+
+const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<ReviewServingRowsPageResult<T>> => {
   const rowsResult = await readReviewServingRows<T>(input.request, getReaderDependencies(input.dependencies))
 
   if (rowsResult.status === 'rejected') {
@@ -773,10 +780,14 @@ const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<{next
       ? rowsResult.getCursorForRow(lastRow as Record<string, unknown>)
       : null
 
-  return {nextCursor, rows}
+  return {
+    detailReadiness: getResponseDetailReadiness(rowsResult.diagnostics.manifest.detailReadiness),
+    nextCursor,
+    rows,
+  }
 }
 
-const getArticleResponseBase = (row: ReviewServingArticleRow) => {
+const getArticleResponseBase = (row: ReviewServingArticleRow, detailReadiness?: ReviewDetailReadiness) => {
   return {
     id: getArticleId(row),
     articleTitle: row.article_title ?? row.articleTitle ?? null,
@@ -786,6 +797,7 @@ const getArticleResponseBase = (row: ReviewServingArticleRow) => {
     arxivId: row.arxiv_id ?? row.arxivId ?? null,
     biorxivId: row.biorxiv_id ?? row.biorxivId ?? null,
     canonicalArticleId: row.canonical_article_id ?? row.canonicalArticleId ?? null,
+    ...(detailReadiness ? {detailReadiness} : {}),
     doi: row.doi ?? null,
     fullTextConversionStatus: row.full_text_conversion_status ?? row.fullTextConversionStatus ?? null,
     fullTextFetchedAt: getDateValue(row.full_text_fetched_at ?? row.fullTextFetchedAt),
@@ -829,8 +841,11 @@ export const getHumanReviewArticlesFromServing = async (
   const pageRows = pageResult.rows
 
   const enabledPromptCount = await enabledPromptCountPromise
+  const detailReadiness = pageResult.detailReadiness
   const [humanRows, totalCount] = await Promise.all([
-    readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', enabledPromptCount, routeDependencies),
+    detailReadiness === 'ready'
+      ? readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', enabledPromptCount, routeDependencies)
+      : Promise.resolve([]),
     getCountValue(effectiveParams, manifest, 'human', routeDependencies),
   ])
   const judgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
@@ -841,7 +856,7 @@ export const getHumanReviewArticlesFromServing = async (
     })
 
     return {
-      ...getArticleResponseBase(row),
+      ...getArticleResponseBase(row, detailReadiness),
       humanJudgmentMode: summaryJudgment ? ('summary' as const) : ('prompt' as const),
       humanSummaryAnswer: summaryJudgment?.answer ?? null,
       judgments,
@@ -854,6 +869,7 @@ export const getHumanReviewArticlesFromServing = async (
 
   return {
     data,
+    detailReadiness,
     humanJudgmentMode: data[0]?.humanJudgmentMode ?? 'prompt',
     totalCount,
     page,
@@ -892,9 +908,14 @@ export const getBothReviewArticlesFromServing = async (
   const pageRows = pageResult.rows
 
   const enabledPromptCount = await enabledPromptCountPromise
+  const detailReadiness = pageResult.detailReadiness
   const [llmRows, humanRows, totalCount] = await Promise.all([
-    readJudgments(effectiveParams, manifest, 'both', pageRows, 'llm', enabledPromptCount, routeDependencies),
-    readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', enabledPromptCount, routeDependencies),
+    detailReadiness === 'ready'
+      ? readJudgments(effectiveParams, manifest, 'both', pageRows, 'llm', enabledPromptCount, routeDependencies)
+      : Promise.resolve([]),
+    detailReadiness === 'ready'
+      ? readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', enabledPromptCount, routeDependencies)
+      : Promise.resolve([]),
     getCountValue(effectiveParams, manifest, 'both', routeDependencies),
   ])
   const llmJudgmentsByArticleId = getLlmJudgmentsByArticleId(llmRows)
@@ -908,7 +929,7 @@ export const getBothReviewArticlesFromServing = async (
     const judgments = llmJudgmentsByArticleId.get(articleId) ?? []
 
     return {
-      ...getArticleResponseBase(row),
+      ...getArticleResponseBase(row, detailReadiness),
       judgments: withoutInternalLlmJudgmentFields(judgments),
       humanJudgmentMode: summaryJudgment ? ('summary' as const) : ('prompt' as const),
       humanSummaryAnswer: getSummaryAnswer(summaryJudgment?.answer),
@@ -917,7 +938,15 @@ export const getBothReviewArticlesFromServing = async (
     }
   })
 
-  return {data, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit), nextCursor: pageResult.nextCursor}
+  return {
+    data,
+    detailReadiness,
+    totalCount,
+    page,
+    limit,
+    totalPages: Math.ceil(totalCount / limit),
+    nextCursor: pageResult.nextCursor,
+  }
 }
 
 export const getUnassessedReviewArticlesFromServing = async (

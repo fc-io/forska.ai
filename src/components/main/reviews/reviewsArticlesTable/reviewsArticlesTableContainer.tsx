@@ -198,6 +198,19 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
   const currentResponse = () => {
     return loadedPages()[props.currentPage()] ?? articlesQuery.data
   }
+  const responseDetailReadiness = () => {
+    return (currentResponse() as {detailReadiness?: ArticleWithJudgments['detailReadiness']} | undefined)
+      ?.detailReadiness
+  }
+  const articlesWithDetailReadiness = () => {
+    const detailReadiness = responseDetailReadiness()
+
+    return detailReadiness
+      ? loadedArticles().map((article) => {
+          return {...article, detailReadiness: article.detailReadiness ?? detailReadiness}
+        })
+      : loadedArticles()
+  }
   const isLoadingMore = () => {
     return articlesQuery.isFetching && loadedPages()[props.currentPage()] == null && props.currentPage() > 1
   }
@@ -249,9 +262,9 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 <Show
                   when={totalCount() !== null}
                   fallback={
-                    loadedArticles().length > 0 ? (
+                    articlesWithDetailReadiness().length > 0 ? (
                       <span class="inline-flex items-center gap-2">
-                        <span class="text-gray-600">{`Showing 1-${loadedArticles().length} of`}</span>
+                        <span class="text-gray-600">{`Showing 1-${articlesWithDetailReadiness().length} of`}</span>
                         <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
                       </span>
                     ) : (
@@ -260,7 +273,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                   }
                 >
                   {(totalCount() ?? 0) > 0
-                    ? `Showing 1-${Math.min(loadedArticles().length, totalCount() ?? 0)} of ${formatThousandSeparatedNumber(totalCount() ?? 0)}`
+                    ? `Showing 1-${Math.min(articlesWithDetailReadiness().length, totalCount() ?? 0)} of ${formatThousandSeparatedNumber(totalCount() ?? 0)}`
                     : '0'}
                 </Show>
               </span>
@@ -279,7 +292,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
             totalPages={totalPages()}
             setCurrentPage={props.setCurrentPage}
             useCursorPagination={useCursorPagination}
-            currentPageRowIds={loadedArticles().map((a: {id: string}) => {
+            currentPageRowIds={articlesWithDetailReadiness().map((a: {id: string}) => {
               return a.id
             })}
             rowSelection={rowSelection}
@@ -321,7 +334,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
           />
 
           <Show
-            when={loadedArticles().length > 0}
+            when={articlesWithDetailReadiness().length > 0}
             fallback={
               <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
                 <p class="font-medium text-slate-800">{emptyState().title}</p>
@@ -336,7 +349,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
           >
             <ReviewsArticlesTable
               projectId={props.projectId}
-              articles={loadedArticles()}
+              articles={articlesWithDetailReadiness()}
               rowSelection={rowSelection}
               setRowSelection={setRowSelection}
             />
@@ -349,7 +362,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
             totalPages={totalPages()}
             setCurrentPage={props.setCurrentPage}
             useCursorPagination={useCursorPagination}
-            currentPageRowIds={loadedArticles().map((a: {id: string}) => {
+            currentPageRowIds={articlesWithDetailReadiness().map((a: {id: string}) => {
               return a.id
             })}
             rowSelection={rowSelection}

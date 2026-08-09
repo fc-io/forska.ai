@@ -84,6 +84,22 @@ const getSqlStrings = (statement: string) => {
   })
 }
 
+const getJsonArraysFromSql = (statement: string) => {
+  return getSqlStrings(statement).flatMap((value) => {
+    if (!value.startsWith('[')) {
+      return []
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(value)
+
+      return Array.isArray(parsed) ? [parsed] : []
+    } catch (_error) {
+      return []
+    }
+  })
+}
+
 const baseStats = {
   activeSnapshotCount: 1,
   enabledPromptCount: 2,
@@ -112,12 +128,12 @@ const fakeRebuildComponents = [
   'projectScope',
   'selectedImport',
   'display',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
   'posting',
   'summary',
+  'judgmentInputContent',
   'payload',
   'search',
 ] as const
@@ -448,6 +464,30 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain("'search'")
   expect(joined).toContain('snapshot:')
   expect(joined).toContain('freshReviewServingSnapshot')
+})
+
+test('V4 bootstrap candidate makes payload optional for default readiness', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+
+  const snapshotInsert =
+    statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    }) ?? ''
+  const jsonArrays = getJsonArraysFromSql(snapshotInsert)
+  const requiredComponents = jsonArrays.find((entry) => {
+    return entry.includes('projectScope') && entry.includes('selectedImport')
+  })
+  const optionalComponents = jsonArrays.find((entry) => {
+    return entry.includes('payload')
+  })
+
+  expect(requiredComponents).toContain('summary')
+  expect(requiredComponents).not.toContain('payload')
+  expect(optionalComponents).toEqual(['payload', 'search'])
 })
 
 test('V4 bootstrap request transaction carries workload context for all published manifests', async () => {

@@ -18,6 +18,7 @@ import {
   upsertReviewServingRebuildChunkManifests,
   writeReviewServingRebuildChunkOutput,
 } from './reviewServingChunkManifestRepository.ts'
+import {defaultReadableReviewServingComponents} from './reviewServingContracts.ts'
 
 type FakeChunkRow = ReviewServingRebuildChunkManifest
 
@@ -2191,16 +2192,8 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
   expect(statements[4]).toContain('LIMIT 7')
 })
 
-const defaultReadableTimingComponents = [
-  'projectScope',
-  'selectedImport',
-  'display',
-  'llmStatus',
-  'humanStatus',
-  'queue',
-  'posting',
-  'summary',
-] as const satisfies readonly FakeChunkRow['projectionComponent'][]
+const defaultReadableTimingComponents =
+  defaultReadableReviewServingComponents satisfies readonly FakeChunkRow['projectionComponent'][]
 
 const getTimingDiagnosticsDatabase = (input: {
   componentRows: readonly Record<string, unknown>[]
@@ -2299,6 +2292,7 @@ test('rebuild timing diagnostics derive defaultReadableAt before search complete
     status: 'known',
     value: '2026-06-16T14:08:00.000Z',
   })
+  expect(diagnostics.timeline[0]?.detailReadyAt).toMatchObject({status: 'unknown', value: null})
   expect(diagnostics.timeline[0]?.fullyEnrichedAt).toMatchObject({status: 'unknown', value: null})
 })
 
@@ -2327,6 +2321,11 @@ test('rebuild timing diagnostics derive fullyEnrichedAt only after all request c
     note: null,
     status: 'known',
     value: '2026-06-16T14:13:00.000Z',
+  })
+  expect(diagnostics.timeline[0]?.detailReadyAt).toEqual({
+    note: null,
+    status: 'known',
+    value: '2026-06-16T14:12:00.000Z',
   })
 })
 

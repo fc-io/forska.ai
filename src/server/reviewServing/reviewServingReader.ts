@@ -3,6 +3,7 @@ import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseS
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {admitReviewServingDuckdbWorkload, type ReviewServingAdmissionDiagnostics} from './reviewServingAdmission.ts'
 import {
+  detailReadyReviewServingComponents,
   type NamedReviewFastCountKey,
   type ReviewServingBulkState,
   type ReviewServingCountState,
@@ -112,6 +113,7 @@ export type ReviewServingReaderDiagnostics = {
   diagnostics: ReviewServingDiagnostics | null
   filterSignature: string | null
   manifest: {
+    detailReadiness: ReviewServingFreshnessState
     freshness: ReviewServingFreshnessState
     lastError: string | null
     projectId: string | null
@@ -179,10 +181,28 @@ const getManifestFreshness = (manifest: ReviewServingSnapshotManifest | null): R
   return manifest.status === 'candidate' ? 'indexing' : 'unavailable'
 }
 
+const getManifestDetailReadiness = (manifest: ReviewServingSnapshotManifest | null): ReviewServingFreshnessState => {
+  if (!manifest) {
+    return 'unavailable'
+  }
+
+  if (manifest.status !== 'active') {
+    return getManifestFreshness(manifest)
+  }
+
+  const componentStates = getComponentCursorStates(manifest)
+  const hasDetailReadyState = detailReadyReviewServingComponents.every((component) => {
+    return componentStates[component] !== undefined
+  })
+
+  return hasDetailReadyState ? 'ready' : 'indexing'
+}
+
 const getManifestDiagnostics = (manifest: ReviewServingSnapshotManifest | null) => {
   const status: ReviewServingSnapshotStatus | 'missing' = manifest?.status ?? 'missing'
 
   return {
+    detailReadiness: getManifestDetailReadiness(manifest),
     freshness: getManifestFreshness(manifest),
     lastError: manifest?.lastError ?? null,
     projectId: manifest?.projectId ?? null,

@@ -185,6 +185,28 @@ test('readReviewServingRows admits ready manifests and executes serving SQL only
   expect(reader.statements[0]).not.toContain('$selectedImportSnapshotId')
   expect(reader.statements[0]).not.toContain('selected_scoped_article_import')
   expect(reader.workloads[0]).toMatchObject({fallbackIntent: 'reject', routeOrJobKey: 'review.llm.rows'})
+  expect(result.status === 'accepted' ? result.diagnostics.manifest.detailReadiness : null).toBe('indexing')
+})
+
+test('readReviewServingRows reports detail readiness when payload state is present', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: [...llmRowComponents, 'payload'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const result = await readReviewServingRows<{article_id: string}>(readyRequest, {
+    database: reader.database,
+    diagnosticsDatabase: manifestDatabase,
+    manifestDatabase,
+  })
+
+  expect(result.status).toBe('accepted')
+  expect(result.status === 'accepted' ? result.diagnostics.manifest.detailReadiness : null).toBe('ready')
 })
 
 test('readReviewServingRows metadata-only probes preserve accepted diagnostics without row SQL', async () => {
@@ -633,6 +655,28 @@ test('readReviewServingRows serializes aliased detail list-mode priority cursors
   expect(result.status).toBe('accepted')
   expect(reader.statements[0]).toContain('AS list_mode_priority')
   expect(decoded.valid ? decoded.payload.sortValues : []).toEqual([1, 2, 'prompt-2'])
+})
+
+test('readReviewServingRows rejects strict detail judgments while payload is indexing', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: ['humanStatus', 'llmStatus', 'summary'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const result = await readReviewServingRows(
+    {...readyRequest, articleId: 'article-2', contractKey: 'review.detail.judgments'},
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+
+  expect(result).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
+  expect(result.diagnostics.missingRequiredComponents).toContain('payload')
+  expect(result.diagnostics.manifest).toMatchObject({detailReadiness: 'indexing', freshness: 'ready'})
+  expect(reader.statements).toHaveLength(0)
 })
 
 test('readReviewServingRows binds placeholders in a single pass', async () => {

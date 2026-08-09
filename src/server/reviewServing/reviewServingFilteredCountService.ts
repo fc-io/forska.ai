@@ -1,6 +1,9 @@
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  filteredCountIdentityReviewServingComponents,
+  type ReviewServingProjectionComponent,
+} from './reviewServingContracts.ts'
 import {getReviewServingFilterSignature, type ReviewServingFilterSignatureValue} from './reviewServingCursor.ts'
 import type {ReviewServingSnapshotManifest} from './reviewServingManifestRepository.ts'
 import type {ReviewServingReaderDatabase} from './reviewServingReader.ts'
@@ -57,7 +60,13 @@ export const getReviewServingFilteredCountComponentIdentities = (
   manifest: ReviewServingSnapshotManifest,
   components: readonly ReviewServingProjectionComponent[],
 ): ReviewServingFilteredCountComponentIdentities => {
+  const countIdentityComponents = new Set<ReviewServingProjectionComponent>(
+    filteredCountIdentityReviewServingComponents,
+  )
   const componentEntries = components
+    .filter((component) => {
+      return countIdentityComponents.has(component)
+    })
     .map((component) => {
       return [component, getManifestComponentIdentity(manifest, component) ?? ''] as const
     })

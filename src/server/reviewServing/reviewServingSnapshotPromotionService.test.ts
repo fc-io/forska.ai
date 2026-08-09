@@ -36,6 +36,14 @@ const searchManifest = {
   projectionIdentity: 'search:identity-1',
 } as const
 
+const payloadManifest = {
+  ...displayManifest,
+  definitionVersion: 'payload-v1',
+  manifestId: 'payload-manifest',
+  projectionComponent: 'payload',
+  projectionIdentity: 'payload:identity-1',
+} as const
+
 const projectScopeManifest = {
   ...displayManifest,
   definitionVersion: 'project-scope-v1',
@@ -70,7 +78,14 @@ const humanStatusManifest = {
 
 const getManifestKey = (manifest: {
   projectId: string
-  projectionComponent: 'display' | 'humanStatus' | 'llmStatus' | 'projectScope' | 'search' | 'selectedImport'
+  projectionComponent:
+    | 'display'
+    | 'humanStatus'
+    | 'llmStatus'
+    | 'payload'
+    | 'projectScope'
+    | 'search'
+    | 'selectedImport'
   projectionIdentity: string
 }) => {
   return getReviewServingProjectionComponentIdentityKey(manifest)
@@ -81,6 +96,7 @@ const createPromotionDatabase = (input?: {selectedImportStatus?: string}) => {
     [getManifestKey(displayManifest), displayManifest],
     [getManifestKey(humanStatusManifest), humanStatusManifest],
     [getManifestKey(llmStatusManifest), llmStatusManifest],
+    [getManifestKey(payloadManifest), payloadManifest],
     [getManifestKey(projectScopeManifest), projectScopeManifest],
     [getManifestKey(searchManifest), searchManifest],
     [getManifestKey(selectedImportManifest), selectedImportManifest],
@@ -177,6 +193,74 @@ test('snapshot validation fails required gaps but allows missing optional compon
 
   expect(result.ok).toBe(false)
   expect(result.ok ? null : result.error).toBe('required component display is missing from snapshot state')
+})
+
+test('snapshot validation promotes default candidate when optional payload is missing', async () => {
+  const {database} = createPromotionDatabase()
+  const candidate = await composeReviewServingCandidateSnapshotManifest(
+    {
+      componentIdentities: {display: displayManifest},
+      componentRequirements: {optionalComponents: ['payload'], requiredComponents: ['display']},
+      composedIdentity: {route: 'review.llm.rows', version: 1},
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {reviewChange: 10},
+    },
+    database,
+  )
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      ...candidate,
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: candidate.componentRequirements.optionalComponents,
+      requiredComponents: candidate.componentRequirements.requiredComponents,
+      reviewConfigHash: candidate.reviewConfigHash ?? null,
+      selectedImportSnapshotId: candidate.selectedImportSnapshotId ?? null,
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(candidate.componentState.optional).toEqual([])
+  expect(result.ok).toBe(true)
+})
+
+test('snapshot validation blocks detail candidate when required payload is missing', async () => {
+  const {database} = createPromotionDatabase()
+  const candidate = await composeReviewServingCandidateSnapshotManifest(
+    {
+      componentIdentities: {display: displayManifest},
+      componentRequirements: {optionalComponents: [], requiredComponents: ['display', 'payload']},
+      composedIdentity: {route: 'review.detail.judgments', version: 1},
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {reviewChange: 10},
+    },
+    database,
+  )
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      ...candidate,
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: candidate.componentRequirements.optionalComponents,
+      requiredComponents: candidate.componentRequirements.requiredComponents,
+      reviewConfigHash: candidate.reviewConfigHash ?? null,
+      selectedImportSnapshotId: candidate.selectedImportSnapshotId ?? null,
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(result.ok).toBe(false)
+  expect(result.ok ? null : result.error).toBe('required component payload is missing from snapshot state')
 })
 
 test('snapshot validation catches selected import and component-state pin mismatches', async () => {

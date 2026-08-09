@@ -16,6 +16,8 @@ import type {
   ReviewServingRebuildChunkManifestInput,
 } from './reviewServingChunkManifestRepository.ts'
 import {
+  defaultReadableReviewServingComponents,
+  detailReadyReviewServingComponents,
   type ReviewServingComponentRequirements,
   reviewServingListModes,
   type ReviewServingProjectionComponent,
@@ -39,16 +41,9 @@ import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedI
 import {composeReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
 
 export const defaultReviewServingV4RebuildComponents = [
-  'projectScope',
-  'selectedImport',
-  'display',
+  ...defaultReadableReviewServingComponents,
   'judgmentInputContent',
-  'llmStatus',
-  'humanStatus',
-  'queue',
-  'posting',
-  'summary',
-  'payload',
+  ...detailReadyReviewServingComponents,
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
@@ -153,7 +148,10 @@ const humanStatusListModeFanOut = 2
 const selectedImportPostingFilterFanOut = 4
 const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
 const syntheticHumanStatusPromptCount = 1
-const bootstrapOptionalComponents = ['search'] as const satisfies readonly ReviewServingProjectionComponent[]
+const bootstrapOptionalComponents = [
+  ...detailReadyReviewServingComponents,
+  'search',
+] as const satisfies readonly ReviewServingProjectionComponent[]
 const fullProjectBootstrapComponents = [] as const satisfies readonly ReviewServingProjectionComponent[]
 const articleScaledComponentFanOut = {
   display: listModeFanOut,

@@ -87,6 +87,16 @@ type ReviewBulkOperationServiceDependencies = {
 const defaultBatchSize = 500
 export const reviewBulkOperationArticleIdCap = 5_000
 export const reviewBulkOperationPayloadByteCap = 1_000_000
+export const reviewBulkOperationDetailPendingCode = 'reviewDetailIndexing'
+
+export class ReviewBulkOperationDetailPendingError extends Error {
+  code = reviewBulkOperationDetailPendingCode
+
+  constructor(message = 'Review details are still indexing') {
+    super(message)
+    this.name = 'ReviewBulkOperationDetailPendingError'
+  }
+}
 
 const getDatabase = () => {
   return getAppDatabaseService() as ReviewBulkOperationServiceDatabase
@@ -103,6 +113,26 @@ const getComponentIdentity = (manifest: ReviewServingSnapshotManifest, component
   })
 
   return state?.projectionIdentity ?? null
+}
+
+export const isReviewServingSnapshotDetailReady = (manifest: ReviewServingSnapshotManifest | null) => {
+  return manifest ? getComponentIdentity(manifest, 'payload') !== null : false
+}
+
+export const isActiveReviewServingSnapshotDetailReady = async (
+  input: {projectId: string; reviewConfigHash?: string | null},
+  manifestDatabase: ReviewServingManifestRepositoryDatabase = getAppDatabaseService(),
+) => {
+  const manifest = await getActiveReviewServingSnapshotManifest(input, manifestDatabase)
+
+  return manifest?.status === 'active' && isReviewServingSnapshotDetailReady(manifest)
+}
+
+const requiresStrictDetailReadiness = (request: ReviewBulkOperationServiceRequest) => {
+  return (
+    (request.jobKind === 'review.export.selection' || request.jobKind === 'review.pdf.selection')
+    && !Array.isArray(request.criteria.articleIds)
+  )
 }
 
 const getBulkOperationFilterSignature = (request: ReviewBulkOperationServiceRequest) => {
@@ -384,6 +414,14 @@ export const createReviewBulkOperationJob = async (
 
   if (request.snapshot.type === 'latest' && !Array.isArray(request.criteria.articleIds) && !latestRequiredManifest) {
     throw new Error('Review bulk operation latest snapshot is not ready')
+  }
+
+  if (
+    verificationManifest
+    && requiresStrictDetailReadiness(request)
+    && !isReviewServingSnapshotDetailReady(verificationManifest)
+  ) {
+    throw new ReviewBulkOperationDetailPendingError()
   }
 
   const searchIdentity = verificationManifest ? getComponentIdentity(verificationManifest, 'search') : null

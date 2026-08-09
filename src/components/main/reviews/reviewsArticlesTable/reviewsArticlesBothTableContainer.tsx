@@ -131,6 +131,17 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
 
     return articlePages.flat()
   }
+  const articlesWithDetailReadiness = () => {
+    const detailReadiness = (
+      articlesQuery.data as {detailReadiness?: ArticleWithJudgments['detailReadiness']} | undefined
+    )?.detailReadiness
+
+    return detailReadiness
+      ? loadedArticles().map((article) => {
+          return {...article, detailReadiness: article.detailReadiness ?? detailReadiness}
+        })
+      : loadedArticles()
+  }
 
   return (
     <Suspense>
@@ -161,17 +172,13 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
 
         <Show when={canLoadArticles() && articlesQuery.data}>
           {(response) => {
-            const articles = () => {
-              return loadedArticles()
-            }
-
             return (
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
                   <h3 class="text-lg font-semibold mb-2">
                     Articles Assessed by Both (
                     {response().totalCount > 0
-                      ? `Showing 1-${Math.min(articles().length, response().totalCount)} of ${response().totalCount}`
+                      ? `Showing 1-${Math.min(articlesWithDetailReadiness().length, response().totalCount)} of ${response().totalCount}`
                       : '0'}
                     )
                   </h3>
@@ -190,7 +197,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   setCurrentPage={props.setCurrentPage}
                   useCursorPagination
                   hasNextPage={Boolean(response().nextCursor)}
-                  currentPageRowIds={articles().map((a) => {
+                  currentPageRowIds={articlesWithDetailReadiness().map((a) => {
                     return a.id
                   })}
                   rowSelection={rowSelection}
@@ -230,7 +237,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                 />
 
                 <Show
-                  when={articles().length > 0}
+                  when={articlesWithDetailReadiness().length > 0}
                   fallback={
                     <div class="p-8 text-center text-gray-500">
                       No articles found assessed by both
@@ -243,7 +250,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                 >
                   <ReviewsArticlesTable
                     projectId={props.projectId}
-                    articles={articles()}
+                    articles={articlesWithDetailReadiness()}
                     rowSelection={rowSelection}
                     setRowSelection={setRowSelection}
                   />
@@ -255,7 +262,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   setCurrentPage={props.setCurrentPage}
                   useCursorPagination
                   hasNextPage={Boolean(response().nextCursor)}
-                  currentPageRowIds={articles().map((a) => {
+                  currentPageRowIds={articlesWithDetailReadiness().map((a) => {
                     return a.id
                   })}
                   rowSelection={rowSelection}
