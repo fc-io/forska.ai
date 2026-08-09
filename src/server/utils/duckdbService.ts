@@ -4852,6 +4852,7 @@ const projectTransferForegroundMemoryHeadroomRouteOrJobKeys = new Set([
   'projectTransfer.export.transaction',
   'projectTransfer.import.analyze.operationTables',
   'projectTransfer.import.commit.transaction',
+  'projectTransfer.recovery',
 ])
 
 const withProjectTransferForegroundMemoryHeadroomIfNeeded = async <T>(

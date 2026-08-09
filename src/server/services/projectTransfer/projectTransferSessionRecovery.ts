@@ -13,6 +13,13 @@ import {
 } from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
+import {parseDuckdbMemoryLimitToMiB} from '../../utils/duckdbMemoryLimit.ts'
+import {
+  closeDuckdbService,
+  getDuckdbAppendRuntimeMetrics,
+  getDuckdbQueueRuntimeMetricsSnapshot,
+  getDuckdbRuntimeConfig,
+} from '../../utils/duckdbService.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
 import type {
@@ -127,6 +134,7 @@ const defaultImportAnalyzeHeartbeatStaleMs = 90 * 1000
 const defaultImportCommitHeartbeatStaleMs = 90 * 1000
 const defaultTerminalSessionPruneAgeMs = 24 * 60 * 60 * 1000
 const maxRecoveryBatchSize = 500
+const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
 
 const emptyRecoveryResult = (skippedActiveWriterCheck: boolean): ProjectTransferSessionRecoveryResult => {
@@ -154,6 +162,95 @@ const getRecoveryBatchSize = (batchSize: number | undefined) => {
 
 const getRunner = (runner?: ProjectTransferSessionRecoveryRunner) => {
   return runner ?? getAppDatabaseService()
+}
+
+const getProjectTransferRecoveryQueueState = () => {
+  const queueMetrics = getDuckdbQueueRuntimeMetricsSnapshot()
+  const appendMetrics = getDuckdbAppendRuntimeMetrics()
+
+  return {
+    appendQueueDepth: appendMetrics.queueDepth,
+    backgroundQueueDepth: queueMetrics.background.queueDepth,
+    foregroundQueueDepth: queueMetrics.main.queueDepth,
+  }
+}
+
+const hasActiveProjectTransferRecoveryQueueWork = (queueState: ReturnType<typeof getProjectTransferRecoveryQueueState>) => {
+  return queueState.foregroundQueueDepth > 0 || queueState.backgroundQueueDepth > 0 || queueState.appendQueueDepth > 0
+}
+
+const getLowMemoryProjectTransferRecoveryRssCapBytes = () => {
+  const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(getDuckdbRuntimeConfig().memoryLimit)
+
+  return memoryLimitMiB !== null && memoryLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
+    ? memoryLimitMiB * 1024 ** 2
+    : null
+}
+
+const prepareProjectTransferRecoveryRuntime = async () => {
+  const maxRssBytes = getLowMemoryProjectTransferRecoveryRssCapBytes()
+
+  if (maxRssBytes === null) {
+    return {ready: true as const}
+  }
+
+  const rssBytes = process.memoryUsage().rss
+
+  if (rssBytes < maxRssBytes) {
+    return {ready: true as const}
+  }
+
+  const queueState = getProjectTransferRecoveryQueueState()
+
+  if (hasActiveProjectTransferRecoveryQueueWork(queueState)) {
+    writeRuntimeLogEvent({
+      attrs: {maxRssBytes, rssBytes, ...queueState},
+      event: 'project-transfer.recovery.defer-low-memory-runtime',
+      message: '[project-transfer] deferred recovery while low-memory DuckDB owner is busy above RSS cap',
+      severity: 'INFO',
+    })
+    return {ready: false as const}
+  }
+
+  writeRuntimeLogEvent({
+    attrs: {maxRssBytes, rssBytes, ...queueState},
+    event: 'project-transfer.recovery.recycle-low-memory-runtime',
+    message: '[project-transfer] recycling DuckDB before recovery on low-memory owner above RSS cap',
+    severity: 'WARN',
+  })
+  await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+  globalThis.Bun.gc(true)
+
+  return {ready: true as const}
+}
+
+const recycleProjectTransferRecoveryRuntimeForLowMemoryMutation = async () => {
+  if (getLowMemoryProjectTransferRecoveryRssCapBytes() === null) {
+    return {ready: true as const}
+  }
+
+  const queueState = getProjectTransferRecoveryQueueState()
+
+  if (hasActiveProjectTransferRecoveryQueueWork(queueState)) {
+    writeRuntimeLogEvent({
+      attrs: queueState,
+      event: 'project-transfer.recovery.defer-low-memory-mutation',
+      message: '[project-transfer] deferred recovery mutation while DuckDB queues are active',
+      severity: 'INFO',
+    })
+    return {ready: false as const}
+  }
+
+  writeRuntimeLogEvent({
+    attrs: queueState,
+    event: 'project-transfer.recovery.recycle-low-memory-mutation',
+    message: '[project-transfer] recycling DuckDB before recovery mutation on low-memory owner',
+    severity: 'WARN',
+  })
+  await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+  globalThis.Bun.gc(true)
+
+  return {ready: true as const}
 }
 
 const getJsonLiteral = (value: unknown) => {
@@ -209,14 +306,13 @@ const getStaleProjectTransferSessions = async ({
   const staleImportAnalyzeHeartbeatBefore = getDateBefore({ms: importAnalyzeHeartbeatStaleMs, now})
   const staleImportCommitHeartbeatBefore = getDateBefore({ms: importCommitHeartbeatStaleMs, now})
 
-  return runner.queryJson<ProjectTransferRecoveryCandidate>(
+  const candidates = await runner.queryJson<ProjectTransferRecoveryCandidate>(
     `
     SELECT
       direction,
       id,
       owner_token AS ownerToken,
       CAST(plan_revision AS INTEGER) AS planRevision,
-      progress_json AS progressJson,
       CASE
         WHEN direction = 'import'
           AND state = 'uploading'
@@ -287,6 +383,34 @@ const getStaleProjectTransferSessions = async ({
   `,
     projectTransferRecoveryWorkloadContext,
   )
+
+  if (candidates.length === 0) {
+    return candidates
+  }
+
+  const progressRows = await runner.queryJson<Pick<ProjectTransferRecoveryCandidate, 'id' | 'progressJson'>>(
+    `
+    SELECT
+      id,
+      progress_json AS progressJson
+    FROM app.project_transfer_session
+    WHERE id IN (${getQuotedStringList(
+      candidates.map((candidate) => {
+        return candidate.id
+      }),
+    ).join(', ')})
+  `,
+    projectTransferRecoveryWorkloadContext,
+  )
+  const progressBySessionId = new Map(
+    progressRows.map((row) => {
+      return [row.id, row.progressJson]
+    }),
+  )
+
+  return candidates.map((candidate) => {
+    return {...candidate, progressJson: progressBySessionId.get(candidate.id)}
+  })
 }
 
 const getImportRecoveryCondition = ({
@@ -1508,6 +1632,14 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
     return emptyRecoveryResult(true)
   }
 
+  if (params.runner === undefined) {
+    const runtimeReadiness = await prepareProjectTransferRecoveryRuntime()
+
+    if (!runtimeReadiness.ready) {
+      return emptyRecoveryResult(false)
+    }
+  }
+
   const now = params.now ?? new Date()
   const ownerToken = getRecoveryOwnerToken(params.ownerToken)
   const runner = getRunner(params.runner)
@@ -1530,6 +1662,15 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
     now,
     runner,
   })
+
+  if (params.runner === undefined && sessions.length > 0) {
+    const mutationRuntimeReadiness = await recycleProjectTransferRecoveryRuntimeForLowMemoryMutation()
+
+    if (!mutationRuntimeReadiness.ready) {
+      return emptyRecoveryResult(false)
+    }
+  }
+
   const plans = runner.transaction
     ? await runner.transaction((tx) => {
         return getCleanupPlans({

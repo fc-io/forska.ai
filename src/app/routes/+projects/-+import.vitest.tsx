@@ -701,6 +701,52 @@ describe('project import route', () => {
     }
   })
 
+  test('lets a terminal poll result replace a newer local committing override', async () => {
+    const {shouldReplaceSessionOverride} = await import('./importWizard/importProjectWizard.tsx')
+    type ReplacementInput = Parameters<typeof shouldReplaceSessionOverride>[0]
+    const committingSession = getSession({
+      progress: {
+        message: 'Waiting for DuckDB maintenance work to pause',
+        percent: 0,
+        phase: 'commit',
+        status: 'running',
+        updatedAt: '2030-01-01T00:18:00.000Z',
+      },
+      state: 'committing',
+      updatedAt: '2030-01-01T00:18:00.000Z',
+    }) as ReplacementInput['current']
+    const completedSession = getSession({
+      completion: {
+        importWarnings: [],
+        packageFingerprint: 'fingerprint-1',
+        projectId: 'target-project-1',
+        projectName: 'Imported Project',
+        status: 'completed',
+        targetProjectId: 'target-project-1',
+        targetProjectName: 'Imported Project',
+        transferHistoryId: 'history-1',
+      },
+      progress: {
+        message: 'Commit transaction completed',
+        percent: 100,
+        phase: 'commit',
+        rowCountProcessed: 142_616,
+        rowCountTotal: 142_616,
+        status: 'completed',
+        updatedAt: '2030-01-01T00:17:00.000Z',
+      },
+      state: 'completed',
+      updatedAt: '2030-01-01T00:17:00.000Z',
+    }) as ReplacementInput['next']
+
+    expect(
+      shouldReplaceSessionOverride({
+        current: committingSession,
+        next: completedSession,
+      }),
+    ).toBe(true)
+  })
+
   test('shows the stored session error when background commit fails after polling', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,

@@ -296,7 +296,7 @@ export const createProjectImportSession = async () => {
 }
 
 export const fetchProjectImportSession = async (sessionId: string) => {
-  const response = await apiClient.api.projects.import({sessionId}).get()
+  const response = await apiClient.api.projects.import({sessionId}).get({query: {includePlan: 'false'}})
   const envelope = handleApiResponse<ProjectImportApiResponse<ProjectImportSession>>(
     response as unknown as {data?: ProjectImportApiResponse<ProjectImportSession>; error?: unknown; status?: number},
     'Failed to fetch project import session',

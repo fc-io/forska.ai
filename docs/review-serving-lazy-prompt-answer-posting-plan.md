@@ -116,6 +116,14 @@ Implementation status, 2026-08-01:
   are not published as precise ready counts during default rebuild, and filter
   options ignore unavailable lazy facet buckets.
 
+Follow-up, 2026-08-09:
+
+- See `docs/review-serving-payload-nonblocking-plan.md` for the narrower
+  payload-specific cutover plan. The old Stage 2 work made visible-page
+  hydration lazy/bounded, but further work is still needed to make `payload`
+  explicitly secondary across rebuild request requirements, candidate promotion,
+  filtered-count identity, and detail/export/PDF pending-state behavior.
+
 ### Stage 0: First-Load Choreography Audit
 
 Audit and adjust the frontend/API first-load path so the initial unfiltered page

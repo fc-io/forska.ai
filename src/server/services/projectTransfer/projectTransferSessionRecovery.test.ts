@@ -4,6 +4,8 @@ import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {getProjectTransferSessionRecoveryService} from './projectTransferSessionRecovery.ts'
+
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
 }
@@ -126,6 +128,36 @@ const runRecoveryScript = <T>(body: string) => {
     removeFileIfExists(runtimeRoot)
   }
 }
+
+test('project transfer recovery keeps initial stale-session scan narrow', async () => {
+  const statements: string[] = []
+  const recovery = getProjectTransferSessionRecoveryService()
+  const runner = {
+    queryJson: async (statement: string) => {
+      statements.push(statement)
+
+      return []
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+  }
+
+  await recovery.runProjectTransferStartupRecovery({
+    batchSize: 10,
+    isActiveWriter: () => true,
+    now: new Date('2026-05-21T12:00:00.000Z'),
+    ownerToken: 'recovery-owner',
+    requestReviewServingBuild: async () => null,
+    runner,
+  })
+
+  const initialStaleScan = statements[0] ?? ''
+
+  expect(initialStaleScan).toContain('FROM app.project_transfer_session')
+  expect(initialStaleScan).toContain('LIMIT 10')
+  expect(initialStaleScan).not.toContain('progress_json')
+})
 
 test('project transfer recovery runs only on active writer and batch-limits stale scans', () => {
   const result = runRecoveryScript<{

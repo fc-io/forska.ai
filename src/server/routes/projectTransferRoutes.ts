@@ -57,6 +57,7 @@ import {
   isProjectTransferSessionId,
   toProjectTransferSessionResponse,
 } from '../services/projectTransfer/projectTransferSession.ts'
+import type {ProjectTransferPackageWarning} from '../services/projectTransfer/projectTransferSchemas.ts'
 import {getProjectTransferSessionRepository} from '../services/projectTransfer/projectTransferSessionRepository.ts'
 import {
   getProjectTransferCurrentImportStagingLayout,
@@ -678,10 +679,12 @@ const getImportSessionData = (
   executionMode?: ProjectTransferExecutionMode,
 ): ProjectTransferImportSessionData => {
   const completion = compactImportCompletionForApi(response.completion)
+  const progress = compactImportProgressForApi(response.progress)
 
   return {
     ...response,
     completion,
+    progress,
     ...getImportSessionUrls(response.id),
     blockers: getImportSessionBlockers(response.planSummary),
     canCommit: canCommitImportSession(response),
@@ -741,6 +744,56 @@ const getImportArtifactsUnavailableError = (error: string) => {
 }
 
 const maxImportCompletionWarningsInStatusResponse = 200
+const compactImportWarningDetailKeys = [
+  'dependencyReason',
+  'field',
+  'omittedParentRef',
+  'reason',
+  'sourceRowId',
+  'triggeringField',
+] as const
+
+const getCompactWarningDetails = (details: unknown) => {
+  if (!isRecord(details)) {
+    return details
+  }
+
+  const compactDetails = compactImportWarningDetailKeys.reduce<Record<string, unknown>>((compact, key) => {
+    const value = details[key]
+
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+      ? {...compact, [key]: value}
+      : compact
+  }, {})
+
+  return Object.keys(compactDetails).length > 0 ? compactDetails : undefined
+}
+
+const compactImportWarningForApi = (warning: ProjectTransferPackageWarning): ProjectTransferPackageWarning => {
+  const details = getCompactWarningDetails(warning.details)
+
+  return details === undefined ? {...warning, details: undefined} : {...warning, details}
+}
+
+const compactImportProgressPerformanceMetricsForApi = (
+  performanceMetrics: ProjectTransferPerformanceMetrics | undefined,
+): ProjectTransferPerformanceMetrics | undefined => {
+  return performanceMetrics === undefined
+    ? undefined
+    : {
+        ...performanceMetrics,
+        benchmark: {...performanceMetrics.benchmark, warningDetails: []},
+        warnings: {...performanceMetrics.warnings, details: []},
+      }
+}
+
+const compactImportProgressForApi = (
+  progress: ProjectTransferSessionResponse['progress'],
+): ProjectTransferSessionResponse['progress'] => {
+  return progress === null
+    ? null
+    : {...progress, performanceMetrics: compactImportProgressPerformanceMetricsForApi(progress.performanceMetrics)}
+}
 
 const getWarningCodeCounts = (warnings: readonly unknown[]) => {
   return warnings.reduce<Record<string, number>>((counts, warning) => {
@@ -749,7 +802,9 @@ const getWarningCodeCounts = (warnings: readonly unknown[]) => {
         ? warning.code
         : 'unknown'
 
-    return {...counts, [code]: (counts[code] ?? 0) + 1}
+    counts[code] = (counts[code] ?? 0) + 1
+
+    return counts
   }, {})
 }
 
@@ -763,14 +818,14 @@ const compactImportCompletionForApi = (
   const importWarnings = completion.importWarnings ?? []
 
   if (importWarnings.length <= maxImportCompletionWarningsInStatusResponse) {
-    return completion
+    return {...completion, importWarnings: importWarnings.map(compactImportWarningForApi)}
   }
 
   const omittedWarningCount = importWarnings.length - maxImportCompletionWarningsInStatusResponse
   const compactCompletion: ProjectTransferImportCompletionPayload = {
     ...completion,
     importWarnings: [
-      ...importWarnings.slice(0, maxImportCompletionWarningsInStatusResponse),
+      ...importWarnings.slice(0, maxImportCompletionWarningsInStatusResponse).map(compactImportWarningForApi),
       {
         action: 'summarized',
         code: 'postImportWarningsTruncated',

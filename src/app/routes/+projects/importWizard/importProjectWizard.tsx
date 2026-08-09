@@ -92,14 +92,19 @@ const getSessionUpdatedAtTime = (session: ProjectImportSession) => {
   return getTimeMs(session.updatedAt)
 }
 
-const shouldReplaceSessionOverride = ({
+export const shouldReplaceSessionOverride = ({
   current,
   next,
 }: {
   current: ProjectImportSession | null
   next: ProjectImportSession
 }) => {
-  return current === null || current.id !== next.id || getSessionUpdatedAtTime(next) >= getSessionUpdatedAtTime(current)
+  return (
+    current === null
+    || current.id !== next.id
+    || (terminalSessionStates.has(next.state) && !terminalSessionStates.has(current.state))
+    || getSessionUpdatedAtTime(next) >= getSessionUpdatedAtTime(current)
+  )
 }
 
 const formatCount = (value: number | null | undefined) => {

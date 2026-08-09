@@ -1349,6 +1349,66 @@ test('project transfer import get returns terminal session rows over stale activ
   expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: staleProgressTerminalImportSessionId})
 })
 
+test('project transfer import get compacts completed import warning details for status polling', async () => {
+  const app = await getProjectTransferApp()
+  const sessionId = getRouteTestSessionId('import-completed-large-warnings')
+  const largeNestedDetails = {
+    dependencyReason: 'sourceArticle',
+    payload: Array.from({length: 500}, (_, index) => {
+      return {index, value: `payload-row-${index}`}
+    }),
+    sourceRowId: 'article-source-1',
+  }
+
+  routeState.sessions[sessionId] = getImportSessionRecord({
+    completionPayloadJson: {
+      finalCounts: {warnings: 1},
+      importWarnings: [
+        {
+          code: 'route_omitted',
+          details: largeNestedDetails,
+          message: 'One route link was omitted.',
+          scope: 'articleRoutes.article-source-1',
+          severity: 'warning',
+        },
+      ],
+      packageFingerprint: 'fingerprint-large-warning',
+      projectId: 'completed-large-warning-project',
+      projectName: 'Completed Large Warning Project',
+      status: 'completed',
+      targetProjectId: 'completed-large-warning-project',
+      targetProjectName: 'Completed Large Warning Project',
+      transferHistoryId: 'history-large-warning',
+    },
+    id: sessionId,
+    progressJson: {
+      message: 'Commit transaction completed',
+      percent: 100,
+      phase: 'commit',
+      rowCountProcessed: 142_616,
+      rowCountTotal: 142_616,
+      status: 'completed',
+      updatedAt: '2030-01-01T00:00:10.000Z',
+    },
+    state: 'completed',
+  })
+
+  const response = await getRouteResponse(app, `/api/projects/import/${sessionId}?includePlan=false`, 'GET')
+  const body = (await response.json()) as {
+    data: {completion: {importWarnings: Array<{details?: Record<string, unknown>}>}; plan: unknown; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.state).toBe('completed')
+  expect(body.data.plan).toBeNull()
+  expect(body.data.completion.importWarnings[0]?.details).toEqual({
+    dependencyReason: 'sourceArticle',
+    sourceRowId: 'article-source-1',
+  })
+  expect(JSON.stringify(body)).not.toContain('payload-row-499')
+})
+
 test('project transfer import get fails the session when dependency artifacts are missing', async () => {
   routeState.sessions[missingArtifactsGetSessionId] = getImportSessionRecord({
     id: missingArtifactsGetSessionId,
