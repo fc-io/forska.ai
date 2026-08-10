@@ -29,6 +29,14 @@ export type ReviewsWarningsData = {
     lastProgressedAt: string | null
     lastProcessedAt: string | null
     lastStartedAt: string | null
+    maintenance: {
+      hasActionableFailures: boolean
+      hasHistoricalFailures: boolean
+      status: 'blocked' | 'failed' | 'idle' | 'processing'
+      terminalDirtyWorkCount: number
+      terminalQuarantineCount: number
+      terminalRebuildChunkCount: number
+    }
     oldestQueuedAt: string | null
     pendingArticleRefreshCount: number
     pendingProjectRefreshCount: number
