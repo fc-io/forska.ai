@@ -76,7 +76,10 @@ type FakeProjectionManifestRow = {
 
 type FakeDirtyWatermark = {latestSourceHighWaterMark: number; sourcePartition: string}
 
-type FakeRequestDatabaseOptions = {dirtyWatermarks?: readonly FakeDirtyWatermark[]}
+type FakeRequestDatabaseOptions = {
+  dirtyWatermarks?: readonly FakeDirtyWatermark[]
+  legacyRequiredDetailCandidate?: boolean
+}
 
 const getSqlStrings = (statement: string) => {
   return [...statement.matchAll(/'((?:''|[^'])*)'/g)].map((match) => {
@@ -279,6 +282,10 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
 
     if (statement.includes('FROM app.review_serving_dirty_work')) {
       return (options.dirtyWatermarks ?? []) as T[]
+    }
+
+    if (statement.includes('legacyRequiredDetailCount')) {
+      return [{legacyRequiredDetailCount: options.legacyRequiredDetailCandidate === true ? 1 : 0}] as T[]
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -611,6 +618,41 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
   expect(secondRequest.requestId).toBe(firstRequest.requestId)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
+})
+
+test('V4 missing snapshot rebuild reseeds legacy payload-required bootstrap candidates', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, snapshotCount: 0, snapshotUpdatedAt: null},
+    {legacyRequiredDetailCandidate: true},
+  )
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const reseededRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const snapshotWrites = statements.filter((statement) => {
+    return statement.includes('app.review_serving_snapshot_manifest')
+  })
+  const snapshotUpdate =
+    snapshotWrites.find((statement) => {
+      return (
+        statement.includes('UPDATE app.review_serving_snapshot_manifest')
+        && statement.includes('optional_components_json')
+      )
+    }) ?? ''
+  const jsonArrays = getJsonArraysFromSql(snapshotUpdate)
+  const requiredComponents = jsonArrays.find((entry) => {
+    return entry.includes('projectScope') && entry.includes('selectedImport')
+  })
+  const optionalComponents = jsonArrays.find((entry) => {
+    return entry.includes('payload')
+  })
+
+  expect(reseededRequest.requestId).toBe(firstRequest.requestId)
+  expect(requiredComponents).not.toContain('payload')
+  expect(optionalComponents).toEqual(['payload', 'search'])
 })
 
 test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {
