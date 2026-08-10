@@ -3,12 +3,17 @@ import {readFile} from 'node:fs/promises'
 import {expect, test} from 'bun:test'
 
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
-import type {ReviewServingProjectionComponent, ReviewServingSnapshotStatus} from './reviewServingContracts.ts'
+import {
+  namedReviewFastCountDefinitions,
+  type ReviewServingProjectionComponent,
+  type ReviewServingSnapshotStatus,
+} from './reviewServingContracts.ts'
 import {
   getBothReviewArticlesFromServing,
   getHumanReviewArticlesFromServing,
   getUnassessedReviewArticlesFromServing,
 } from './reviewServingHumanBothUnassessedRouteService.ts'
+import {countLlmReviewArticlesFromServing} from './reviewServingLlmReviewRouteService.ts'
 import type {ReviewServingManifestRepositoryDatabase} from './reviewServingManifestRepository.ts'
 import type {ReviewServingReaderDatabase} from './reviewServingReader.ts'
 
@@ -211,6 +216,228 @@ const expectUnavailableSnapshotRejection = async (promise: Promise<unknown>) => 
   )
 }
 
+type ReviewTabCountFixtureArticle = {
+  archived?: boolean
+  hasCompleteLlmJudgment?: boolean
+  hasHumanJudgment?: boolean
+  hasLlmJudgment?: boolean
+  id: string
+  projectActive?: boolean
+  projectArchived?: boolean
+  projectId?: string
+}
+type ReviewTabCountListMode = 'both' | 'human' | 'llm' | 'unassessed'
+
+const reviewTabCountProjectId = 'project-1'
+const reviewTabCountConfigHash = 'config-1'
+const reviewTabCountSnapshotId = 'active-snapshot'
+const reviewTabCountListModes = ['llm', 'human', 'both', 'unassessed'] as const
+const reviewTabCountFixtureArticles: readonly ReviewTabCountFixtureArticle[] = [
+  {hasCompleteLlmJudgment: true, hasHumanJudgment: true, hasLlmJudgment: true, id: 'article-both-1'},
+  {hasCompleteLlmJudgment: true, hasHumanJudgment: true, hasLlmJudgment: true, id: 'article-both-2'},
+  {hasCompleteLlmJudgment: true, hasLlmJudgment: true, id: 'article-llm-only'},
+  {hasLlmJudgment: true, id: 'article-partial-llm'},
+  {hasHumanJudgment: true, id: 'article-human-only'},
+  {id: 'article-unassessed-1'},
+  {id: 'article-unassessed-2'},
+  {archived: true, hasCompleteLlmJudgment: true, hasHumanJudgment: true, hasLlmJudgment: true, id: 'article-archived'},
+  {
+    hasCompleteLlmJudgment: true,
+    hasHumanJudgment: true,
+    hasLlmJudgment: true,
+    id: 'article-other-project',
+    projectId: 'project-2',
+  },
+  {
+    hasCompleteLlmJudgment: true,
+    hasHumanJudgment: true,
+    hasLlmJudgment: true,
+    id: 'article-inactive-project',
+    projectActive: false,
+  },
+  {
+    hasCompleteLlmJudgment: true,
+    hasHumanJudgment: true,
+    hasLlmJudgment: true,
+    id: 'article-archived-project',
+    projectArchived: true,
+  },
+]
+
+const isActiveSourceProjectReviewArticle = (article: ReviewTabCountFixtureArticle) => {
+  return (
+    (article.projectId ?? reviewTabCountProjectId) === reviewTabCountProjectId
+    && article.archived !== true
+    && article.projectActive !== false
+    && article.projectArchived !== true
+  )
+}
+
+const getSourceTruthReviewTabCounts = (articles: readonly ReviewTabCountFixtureArticle[]) => {
+  const activeArticles = articles.filter(isActiveSourceProjectReviewArticle)
+
+  return {
+    both: activeArticles.filter((article) => {
+      return article.hasCompleteLlmJudgment === true && article.hasHumanJudgment === true
+    }).length,
+    human: activeArticles.filter((article) => {
+      return article.hasHumanJudgment === true
+    }).length,
+    llm: activeArticles.filter((article) => {
+      return article.hasLlmJudgment === true
+    }).length,
+    unassessed: activeArticles.filter((article) => {
+      return article.hasCompleteLlmJudgment !== true
+    }).length,
+  }
+}
+
+const getMartListModeFlags = (article: ReviewTabCountFixtureArticle) => {
+  const isActiveArticle = isActiveSourceProjectReviewArticle(article)
+  const hasLlm = isActiveArticle && article.hasLlmJudgment === true
+  const hasCompleteLlm = isActiveArticle && article.hasCompleteLlmJudgment === true
+  const hasHuman = isActiveArticle && article.hasHumanJudgment === true
+
+  return {
+    both: hasCompleteLlm && hasHuman,
+    human: hasHuman,
+    llm: hasLlm,
+    unassessed: isActiveArticle && !hasCompleteLlm,
+  }
+}
+
+const getReviewTabCountRows = (articles: readonly ReviewTabCountFixtureArticle[]) => {
+  const sourceTruth = getSourceTruthReviewTabCounts(articles)
+
+  return reviewTabCountListModes.map((listMode) => {
+    const countKind = listMode === 'unassessed' ? 'review.queue.unassessedReady' : 'review.list.total'
+    const definition = namedReviewFastCountDefinitions[countKind]
+
+    return {
+      availability: 'ready',
+      count_kind: countKind,
+      count_value: sourceTruth[listMode],
+      filter_key: listMode === 'unassessed' ? 'queue:ready' : 'list:all',
+      list_mode_key: listMode === 'unassessed' ? 'llm' : listMode,
+      project_id: reviewTabCountProjectId,
+      review_config_hash: reviewTabCountConfigHash,
+      snapshot_id: reviewTabCountSnapshotId,
+      summary_definition_version: definition.summaryDefinitionVersion,
+    }
+  })
+}
+
+const getRowsForListMode = (articles: readonly ReviewTabCountFixtureArticle[], listMode: ReviewTabCountListMode) => {
+  return articles
+    .filter((article) => {
+      return getMartListModeFlags(article)[listMode]
+    })
+    .map((article, index) => {
+      return {
+        activity_sort_at: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+        article_id: article.id,
+        article_title: article.id,
+        sort_key: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+      }
+    })
+}
+
+const getListModeFromStatement = (statement: string): ReviewTabCountListMode | null => {
+  const match = statement.match(/list_mode_key\s*=\s*'([^']+)'/u) ?? statement.match(/'([^']+)'\s+AS list_mode_key/u)
+  const value = match?.[1]
+
+  if (value === 'llm' || value === 'human' || value === 'both' || value === 'unassessed') {
+    return value
+  }
+
+  if (statement.includes("WHEN 'unassessed' THEN list_mode_state.has_unassessed_list_mode")) {
+    return 'unassessed'
+  }
+
+  if (statement.includes("WHEN 'both' THEN list_mode_state.has_both_list_mode")) {
+    return 'both'
+  }
+
+  if (statement.includes("WHEN 'human' THEN list_mode_state.has_human_list_mode")) {
+    return 'human'
+  }
+
+  if (statement.includes("WHEN 'llm' THEN list_mode_state.has_llm_list_mode")) {
+    return 'llm'
+  }
+
+  return null
+}
+
+const createReviewTabCountDatabase = (articles: readonly ReviewTabCountFixtureArticle[]) => {
+  const statements: string[] = []
+  const sourceTruth = getSourceTruthReviewTabCounts(articles)
+  const countRows = getReviewTabCountRows(articles)
+  const database: ReviewServingReaderDatabase & {run: (statement: string) => Promise<void>} = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.project')) {
+        return [{dateFrom: null, dateTo: null}] as T[]
+      }
+
+      if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
+        return [{promptCount: 1}] as T[]
+      }
+
+      if (statement.includes('FROM source_review_truth')) {
+        return [sourceTruth] as T[]
+      }
+
+      if (statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')) {
+        const listMode = getListModeFromStatement(statement) ?? 'llm'
+
+        return [{totalCount: sourceTruth[listMode]}] as T[]
+      }
+
+      if (statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')) {
+        const listMode = getListModeFromStatement(statement) ?? 'llm'
+
+        return [{totalCount: sourceTruth[listMode]}] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_count_serving_v4')) {
+        const row = countRows.find((candidate) => {
+          return (
+            statement.includes(`list_mode_key = '${candidate.list_mode_key}'`)
+            && statement.includes(`count_kind = '${candidate.count_kind}'`)
+            && statement.includes(`filter_key = '${candidate.filter_key}'`)
+            && statement.includes(`summary_definition_version = '${candidate.summary_definition_version}'`)
+          )
+        })
+
+        return (row ? [row] : []) as T[]
+      }
+
+      if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4')) {
+        return getRowsForListMode(articles, 'unassessed') as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_serving_base_v4 serving')) {
+        const listMode = getListModeFromStatement(statement)
+
+        return getRowsForListMode(articles, listMode ?? 'llm') as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
+        return [] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string): Promise<void> => {
+      statements.push(statement)
+    },
+  }
+
+  return {database, sourceTruth, statements}
+}
+
 const createChunkedHydrationReaderDatabase = (articleCount: number, enabledPromptCount?: number) => {
   const statements: string[] = []
   const articleIds = Array.from({length: articleCount}, (_, index) => {
@@ -244,6 +471,60 @@ const createChunkedHydrationReaderDatabase = (articleCount: number, enabledPromp
 
   return {database, statements}
 }
+
+test('project review tab counts match active non-archived source judgment truth', async () => {
+  const fixture = createReviewTabCountDatabase(reviewTabCountFixtureArticles)
+  const dependencies = {
+    currentReviewConfigHash: reviewTabCountConfigHash,
+    database: fixture.database,
+    manifestDatabase: createManifestDatabase('active'),
+  }
+  const [sourceTruth] = await fixture.database.queryJson<Record<ReviewTabCountListMode, number>>(`
+    WITH source_review_truth AS (
+      SELECT 'ordinary source DB truth for active non-archived project review counts' AS contract
+    )
+    SELECT * FROM source_review_truth
+  `)
+
+  const [llmCount, humanResult, bothResult, unassessedResult] = await Promise.all([
+    countLlmReviewArticlesFromServing(
+      {projectId: reviewTabCountProjectId, page: 1, limit: 100, prompts: {}},
+      dependencies,
+    ),
+    getHumanReviewArticlesFromServing(
+      {projectId: reviewTabCountProjectId, page: 1, limit: 100, prompts: {}},
+      dependencies,
+    ),
+    getBothReviewArticlesFromServing(
+      {projectId: reviewTabCountProjectId, page: 1, limit: 100, prompts: {}},
+      dependencies,
+    ),
+    getUnassessedReviewArticlesFromServing(
+      {projectId: reviewTabCountProjectId, page: 1, limit: 100, prompts: {}},
+      dependencies,
+    ),
+  ])
+  const sql = fixture.statements.join('\n')
+
+  expect(sourceTruth).toEqual({both: 2, human: 3, llm: 4, unassessed: 4})
+  expect({
+    both: bothResult.totalCount,
+    human: humanResult.totalCount,
+    llm: llmCount.totalCount,
+    unassessed: unassessedResult.totalCount,
+  }).toEqual(sourceTruth)
+  expect({
+    both: bothResult.data.length,
+    human: humanResult.data.length,
+    unassessed: unassessedResult.data.length,
+  }).toEqual({both: sourceTruth.both, human: sourceTruth.human, unassessed: sourceTruth.unassessed})
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4')
+  expect(sql).toContain('list_mode_state.has_llm_list_mode')
+  expect(sql).toContain('list_mode_state.has_human_list_mode')
+  expect(sql).toContain('list_mode_state.has_both_list_mode')
+  expect(sql).toContain('list_mode_state.has_unassessed_list_mode')
+})
 
 test('human review route service uses serving rows, human payload hydration, and count without raw fallback', async () => {
   const reader = createReaderDatabase()
