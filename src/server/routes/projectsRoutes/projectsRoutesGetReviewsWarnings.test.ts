@@ -2065,12 +2065,13 @@ test('reviews warnings boost stale foreground V4 repairs that already have progr
   expect(after.updatedAt).not.toBe(before.updatedAt)
 })
 
-test('reviews warnings boost stale foreground V4 repairs when a candidate is waiting for activation', async () => {
+test('reviews warnings boost foreground V4 repairs with recent progress for legacy required-enrichment candidates', async () => {
   const projectId = 'project-missing-serving-stale-candidate-foreground-warning'
   const requestId = 'request-missing-serving-stale-candidate-foreground-warning'
   const selectedImportSnapshotId = 'selected-import-stale-candidate-foreground-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
-  const requiredComponents = ['projectScope', 'posting', 'queue', 'summary'] as const
+  const recentTimestamp = new Date().toISOString()
+  const requiredComponents = ['projectScope', 'posting', 'queue', 'summary', 'judgmentInputContent'] as const
   const requiredState = requiredComponents.map((component) => {
     return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
   })
@@ -2170,22 +2171,169 @@ test('reviews warnings boost stale foreground V4 repairs when a candidate is wai
     status: 'pending',
     updatedAt: oldTimestamp,
   })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-missing-serving-recent-candidate-foreground-warning',
+    component: 'projectScope',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId,
+    status: 'completed',
+    updatedAt: recentTimestamp,
+  })
 
   const before = await getReviewRebuildRequestMetadata(requestId)
+  const beforeCount = await getReviewRebuildRequestCount(projectId)
   const {body, response} = await postWarningsRequest(projectId)
   await new Promise((resolve) => {
     return setTimeout(resolve, 50)
   })
   const after = await getReviewRebuildRequestMetadata(requestId)
+  const afterCount = await getReviewRebuildRequestCount(projectId)
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.progressState).toBe('processing')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('refreshing')
   expect(before.priority).toBe(100)
-  expect(after.priority).toBe(10_000)
-  expect(after.updatedAt).not.toBe(before.updatedAt)
+  expect(after.priority).toBe(before.priority)
+  expect(after.updatedAt).toBe(before.updatedAt)
+  expect(afterCount).toBeGreaterThan(beforeCount)
+})
+
+test('reviews warnings do not requeue recent candidate repairs after enrichment requirements are corrected', async () => {
+  const projectId = 'project-corrected-candidate-recent-foreground-warning'
+  const requestId = 'request-corrected-candidate-recent-foreground-warning'
+  const selectedImportSnapshotId = 'selected-import-corrected-candidate-recent-warning'
+  const oldTimestamp = '2026-04-02T12:00:00.000Z'
+  const recentTimestamp = new Date().toISOString()
+  const requiredComponents = ['projectScope', 'posting', 'queue', 'summary'] as const
+  const requiredState = requiredComponents.map((component) => {
+    return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
+  })
+
+  await insertProjectFixture(projectId)
+  await insertReviewRebuildRequest({
+    createdAt: oldTimestamp,
+    priority: 100,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId,
+    requestedComponents: requiredComponents,
+    status: 'admitted',
+    updatedAt: oldTimestamp,
+  })
+  await runDatabase?.(`
+    INSERT INTO app.review_selected_import_snapshot (
+      selected_import_snapshot_id,
+      project_id,
+      project_scope_identity,
+      source_delta_high_water,
+      status,
+      updated_at
+    ) VALUES (
+      '${selectedImportSnapshotId}',
+      '${projectId}',
+      'projectScope:identity-1',
+      1,
+      'completed',
+      TIMESTAMPTZ '${oldTimestamp}'
+    )
+  `)
+  for (const component of requiredComponents) {
+    await runDatabase?.(`
+      INSERT INTO app.review_projection_identity_manifest (
+        manifest_id,
+        project_id,
+        projection_component,
+        projection_identity,
+        base_generation,
+        patch_watermark,
+        input_watermark,
+        input_watermarks_json,
+        definition_version,
+        review_config_hash,
+        status,
+        updated_at
+      ) VALUES (
+        'manifest-${projectId}-${component}',
+        '${projectId}',
+        '${component}',
+        '${component}:identity-1',
+        1,
+        0,
+        1,
+        '{}'::JSON,
+        '${component}:test-v1',
+        '${getFixtureReviewConfigHash(projectId)}',
+        'candidate',
+        TIMESTAMPTZ '${oldTimestamp}'
+      )
+    `)
+  }
+  await runDatabase?.(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id,
+      snapshot_id,
+      snapshot_status,
+      review_config_hash,
+      composed_identity_json,
+      component_state_json,
+      required_components_json,
+      optional_components_json,
+      source_watermarks_json,
+      selected_import_snapshot_id,
+      updated_at
+    ) VALUES (
+      '${projectId}',
+      'snapshot-corrected-candidate-recent-warning',
+      'candidate',
+      '${getFixtureReviewConfigHash(projectId)}',
+      '{}'::JSON,
+      '${JSON.stringify({optional: [], required: requiredState}).replaceAll("'", "''")}'::JSON,
+      '${JSON.stringify(requiredComponents).replaceAll("'", "''")}'::JSON,
+      '${JSON.stringify(['judgmentInputContent', 'payload', 'search']).replaceAll("'", "''")}'::JSON,
+      '{}'::JSON,
+      '${selectedImportSnapshotId}',
+      TIMESTAMPTZ '${oldTimestamp}'
+    )
+  `)
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-corrected-candidate-recent-foreground-warning',
+    component: 'summary',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: oldTimestamp,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-corrected-candidate-completed-recent-foreground-warning',
+    component: 'projectScope',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId,
+    status: 'completed',
+    updatedAt: recentTimestamp,
+  })
+
+  const before = await getReviewRebuildRequestMetadata(requestId)
+  const beforeCount = await getReviewRebuildRequestCount(projectId)
+  const {body, response} = await postWarningsRequest(projectId)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+  const after = await getReviewRebuildRequestMetadata(requestId)
+  const afterCount = await getReviewRebuildRequestCount(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('refreshing')
+  expect(after.priority).toBe(before.priority)
+  expect(after.updatedAt).toBe(before.updatedAt)
+  expect(afterCount).toBe(beforeCount)
 })
 
 test('reviews warnings do not mutate stale queued V4 repairs even when serving rows are readable', async () => {

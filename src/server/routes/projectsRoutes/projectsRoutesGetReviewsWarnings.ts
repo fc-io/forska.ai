@@ -8,6 +8,7 @@ import {
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   type ReviewServingSnapshotManifest,
 } from '../../reviewServing/reviewServingManifestRepository.ts'
+import {promoteReviewServingProjectorSnapshot} from '../../reviewServing/reviewServingProjectorWriter.ts'
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
@@ -110,6 +111,53 @@ const getReviewWarningsComponentCanMaterialize = (
     manifest?.optionalComponents.includes(component) === true
     || getReviewWarningsComponentState(manifest, component) !== undefined
   )
+}
+
+const legacyRequiredBootstrapEnrichmentComponents = ['judgmentInputContent', 'payload', 'search'] as const
+
+const getHasLegacyRequiredBootstrapEnrichmentCandidate = async (input: {
+  projectId: string
+  reviewConfigHash: string | null
+}) => {
+  const [row] = await getApiReadOnlyAppDatabaseService().queryJson<{count: number}>(
+    `
+    SELECT CAST(COUNT(*) AS INTEGER) AS count
+    FROM app.review_serving_snapshot_manifest snapshot,
+      json_each(snapshot.required_components_json) required_component
+    WHERE snapshot.project_id = '${escapeSqlString(input.projectId)}'
+      AND snapshot.review_config_hash IS NOT DISTINCT FROM ${
+        input.reviewConfigHash === null ? 'NULL' : `'${escapeSqlString(input.reviewConfigHash)}'`
+      }
+      AND snapshot.snapshot_status = 'candidate'
+      AND json_extract_string(required_component.value, '$') IN (${legacyRequiredBootstrapEnrichmentComponents
+        .map((component) => {
+          return `'${component}'`
+        })
+        .join(', ')})
+    `,
+    getReviewWarningsWorkloadContext(input.projectId, 'legacyCandidateEnrichmentState'),
+  )
+
+  return Number(row?.count ?? 0) > 0
+}
+
+const getLatestCandidateSnapshotId = async (input: {projectId: string; reviewConfigHash: string | null}) => {
+  const [row] = await getApiReadOnlyAppDatabaseService().queryJson<{snapshotId: string}>(
+    `
+    SELECT snapshot_id AS snapshotId
+    FROM app.review_serving_snapshot_manifest
+    WHERE project_id = '${escapeSqlString(input.projectId)}'
+      AND review_config_hash IS NOT DISTINCT FROM ${
+        input.reviewConfigHash === null ? 'NULL' : `'${escapeSqlString(input.reviewConfigHash)}'`
+      }
+      AND snapshot_status = 'candidate'
+    ORDER BY updated_at DESC
+    LIMIT 1
+    `,
+    getReviewWarningsWorkloadContext(input.projectId, 'candidateSnapshot'),
+  )
+
+  return row?.snapshotId ?? null
 }
 
 const getReviewsWarningsCoverage = async (input: {
@@ -402,6 +450,28 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
+    const hasPendingCandidateSnapshotActivationWork =
+      pendingCandidateSnapshotActivationCount > 0 && hasPendingReviewServingWork
+    const shouldAttemptCandidatePromotion =
+      !isServerMutationWorkDisabled
+      && !reviewServingProjectorPaused
+      && shouldPrioritizeMissingSnapshotRepair
+      && servingDiagnostics.snapshot.candidateCount > 0
+    if (shouldAttemptCandidatePromotion) {
+      const candidateSnapshotId = await getLatestCandidateSnapshotId({projectId, reviewConfigHash})
+      if (candidateSnapshotId !== null) {
+        await promoteReviewServingProjectorSnapshot({
+          projectId,
+          reviewConfigHash,
+          snapshotId: candidateSnapshotId,
+        }).catch(() => {
+          return undefined
+        })
+      }
+    }
+    const hasLegacyRequiredBootstrapEnrichmentCandidate = hasPendingCandidateSnapshotActivationWork
+      ? await getHasLegacyRequiredBootstrapEnrichmentCandidate({projectId, reviewConfigHash})
+      : false
     const hasStalePendingCandidateActivationWork =
       pendingCandidateSnapshotActivationCount > 0
       && !hasRecentProgress
@@ -410,8 +480,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       !isServerMutationWorkDisabled
       && !reviewServingProjectorPaused
       && shouldPrioritizeMissingSnapshotRepair
-      && (pendingCandidateSnapshotActivationCount === 0 || hasStalePendingCandidateActivationWork)
-      && !hasRecentProgress
+      && (pendingCandidateSnapshotActivationCount === 0
+        || hasStalePendingCandidateActivationWork
+        || hasLegacyRequiredBootstrapEnrichmentCandidate)
+      && (!hasRecentProgress || hasLegacyRequiredBootstrapEnrichmentCandidate)
       && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork)
 
     if (shouldRequestForegroundRepair) {

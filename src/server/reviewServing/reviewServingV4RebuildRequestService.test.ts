@@ -78,7 +78,7 @@ type FakeDirtyWatermark = {latestSourceHighWaterMark: number; sourcePartition: s
 
 type FakeRequestDatabaseOptions = {
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
-  legacyRequiredDetailCandidate?: boolean
+  legacyRequiredEnrichmentCandidate?: boolean
 }
 
 const getSqlStrings = (statement: string) => {
@@ -284,8 +284,8 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return (options.dirtyWatermarks ?? []) as T[]
     }
 
-    if (statement.includes('legacyRequiredDetailCount')) {
-      return [{legacyRequiredDetailCount: options.legacyRequiredDetailCandidate === true ? 1 : 0}] as T[]
+    if (statement.includes('legacyRequiredEnrichmentCount')) {
+      return [{legacyRequiredEnrichmentCount: options.legacyRequiredEnrichmentCandidate === true ? 1 : 0}] as T[]
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -473,7 +473,7 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain('freshReviewServingSnapshot')
 })
 
-test('V4 bootstrap candidate makes payload optional for default readiness', async () => {
+test('V4 bootstrap candidate makes enrichment components optional for default readiness', async () => {
   const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
 
   await Effect.runPromise(
@@ -493,8 +493,9 @@ test('V4 bootstrap candidate makes payload optional for default readiness', asyn
   })
 
   expect(requiredComponents).toContain('summary')
+  expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['payload', 'search'])
+  expect(optionalComponents).toEqual(['judgmentInputContent', 'payload', 'search'])
 })
 
 test('V4 bootstrap request transaction carries workload context for all published manifests', async () => {
@@ -620,10 +621,10 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
   expect(statements.join('\n')).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
 })
 
-test('V4 missing snapshot rebuild reseeds legacy payload-required bootstrap candidates', async () => {
+test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap candidates', async () => {
   const {database, statements} = createFakeRequestDatabase(
     {...baseStats, snapshotCount: 0, snapshotUpdatedAt: null},
-    {legacyRequiredDetailCandidate: true},
+    {legacyRequiredEnrichmentCandidate: true},
   )
 
   const firstRequest = await Effect.runPromise(
@@ -651,8 +652,9 @@ test('V4 missing snapshot rebuild reseeds legacy payload-required bootstrap cand
   })
 
   expect(reseededRequest.requestId).toBe(firstRequest.requestId)
+  expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['payload', 'search'])
+  expect(optionalComponents).toEqual(['judgmentInputContent', 'payload', 'search'])
 })
 
 test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {

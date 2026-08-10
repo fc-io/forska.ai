@@ -265,7 +265,7 @@ const getOptionalManifestValidationError = async (
   )
 }
 
-const getCandidateValidationError = async (
+const getCandidateValidationReport = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingSnapshotPromotionDatabase,
 ) => {
@@ -299,16 +299,20 @@ const getCandidateValidationError = async (
       return `required component ${component} is missing from snapshot state`
     }),
     ...requiredErrors,
-    ...optionalErrors,
   ]
 
-  return errors[0] ?? null
+  return {error: errors[0] ?? null, optionalErrors}
 }
 
-const getValidationResultValue = (candidate: ReviewServingSnapshotManifest, error: string | null) => {
+const getValidationResultValue = (
+  candidate: ReviewServingSnapshotManifest,
+  input: {error: string | null; optionalErrors: readonly string[]},
+) => {
   return {
-    error,
-    ok: error === null,
+    error: input.error,
+    ok: input.error === null,
+    optionalComponentErrorCount: input.optionalErrors.length,
+    optionalComponentErrors: input.optionalErrors,
     requiredComponentCount: candidate.componentState.required.length,
     snapshotId: candidate.snapshotId,
   }
@@ -365,10 +369,12 @@ export const validateReviewServingCandidateSnapshotManifest = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingSnapshotPromotionDatabase = getAppDatabaseService(),
 ): Promise<ReviewServingSnapshotValidationResult> => {
-  const error = await getCandidateValidationError(candidate, database)
-  const validationResult = getValidationResultValue(candidate, error)
+  const report = await getCandidateValidationReport(candidate, database)
+  const validationResult = getValidationResultValue(candidate, report)
 
-  return error === null ? {candidate, ok: true, validationResult} : {candidate, error, ok: false, validationResult}
+  return report.error === null
+    ? {candidate, ok: true, validationResult}
+    : {candidate, error: report.error, ok: false, validationResult}
 }
 
 export const getReviewServingOptionalComponentAvailability = (input: {

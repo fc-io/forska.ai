@@ -10,6 +10,7 @@ import {
   isReviewServingProjectionComponent,
   type ReviewServingProjectionComponent,
 } from './reviewServingContracts.ts'
+import {promoteReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
 
 export type ReviewServingChunkManifestRepositoryTransaction = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -2206,6 +2207,18 @@ export const writeReviewServingRebuildChunkOutput = async (
     `)
     const completed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
     await completeFinishedReviewServingRebuildRequest({requestId: completed?.requestId ?? input.requestId}, tx)
+    if (completed?.projectId !== null && completed?.projectId !== undefined && completed.snapshotId !== null) {
+      await promoteReviewServingProjectorSnapshot(
+        {projectId: completed.projectId, snapshotId: completed.snapshotId},
+        {
+          queryJson: tx.queryJson,
+          run: tx.run,
+          transaction: async (operation) => {
+            return operation(tx)
+          },
+        },
+      )
+    }
 
     return completed
   }
