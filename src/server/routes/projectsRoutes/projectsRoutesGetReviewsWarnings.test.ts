@@ -30,6 +30,12 @@ type ReviewsWarningsResponse = {
         | 'waiting_for_maintenance_worker'
         | null
       cleanup: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
+      coverage: {
+        detailReadyArticleCount: number | null
+        reviewPageReadyArticleCount: number
+        searchReadyArticleCount: number | null
+        totalArticleCount: number
+      }
       eligibleConsumerCount: number
       eligibleConsumerPresent: boolean
       inFlightArticleRefreshCount: number
@@ -1744,6 +1750,98 @@ test('reviews warnings search diagnostic ignores active snapshots for older revi
   })
 })
 
+test('reviews warnings exposes article coverage for review page details and search readiness', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-article-coverage-warning'
+  const articleId = `article-${projectId}`
+  const reviewConfigHash = getFixtureReviewConfigHash(projectId)
+  const snapshotId = 'snapshot-article-coverage-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, articleId)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: ['payload', 'search'],
+    projectId,
+    snapshotId,
+  })
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving_base_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      base_generation,
+      patch_watermark,
+      article_id,
+      article_created_at,
+      sort_key,
+      activity_sort_at
+    ) VALUES (
+      '${projectId}',
+      '${reviewConfigHash}',
+      '${snapshotId}',
+      1,
+      0,
+      '${articleId}',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      payload_kind,
+      article_id,
+      prompt_id,
+      prompt_order,
+      is_answered
+    ) VALUES (
+      '${projectId}',
+      '${reviewConfigHash}',
+      '${snapshotId}',
+      'llm',
+      '${articleId}',
+      'prompt-${projectId}',
+      1,
+      TRUE
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_title_search_serving_v4 (
+      project_id,
+      search_identity,
+      project_scope_identity,
+      snapshot_id,
+      token,
+      article_ids
+    ) VALUES (
+      '${projectId}',
+      'search:identity-1',
+      'projectScope:identity-1',
+      '${snapshotId}',
+      'indexed',
+      ['${articleId}']
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.coverage).toEqual({
+    detailReadyArticleCount: 1,
+    reviewPageReadyArticleCount: 1,
+    searchReadyArticleCount: 1,
+    totalArticleCount: 1,
+  })
+})
+
 test('reviews warnings request V4 repair without legacy judgment fact fallback outside the foreground response', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -1974,12 +2072,7 @@ test('reviews warnings boost stale foreground V4 repairs when a candidate is wai
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
   const requiredComponents = ['projectScope', 'posting', 'queue', 'summary'] as const
   const requiredState = requiredComponents.map((component) => {
-    return {
-      baseGeneration: '1',
-      component,
-      patchWatermark: '0',
-      projectionIdentity: `${component}:identity-1`,
-    }
+    return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
   })
 
   await insertProjectFixture(projectId)

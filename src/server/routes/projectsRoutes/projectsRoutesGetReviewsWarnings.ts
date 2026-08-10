@@ -4,6 +4,10 @@ import {
   getReviewServingDiagnostics,
   type ReviewServingDiagnostics,
 } from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
+import {
+  getActiveOrLastKnownGoodReviewServingSnapshotManifest,
+  type ReviewServingSnapshotManifest,
+} from '../../reviewServing/reviewServingManifestRepository.ts'
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
@@ -44,6 +48,7 @@ const getReviewWarningsScopeState = async (projectId: string) => {
   const [state] = await getApiReadOnlyAppDatabaseService().queryJson<{
     enabledPromptCount: number
     hasAnyArticlesInScope: boolean
+    totalArticleCount: number
   }>(
     `
     WITH enabled_prompt AS (
@@ -74,9 +79,9 @@ const getReviewWarningsScopeState = async (projectId: string) => {
         AND (p.date_to IS NULL OR a.article_created_at <= p.date_to)
     )
     SELECT
-      CAST(enabled_prompt.enabledPromptCount AS INTEGER) AS enabledPromptCount,
-      EXISTS (SELECT 1 FROM scoped_article) AS hasAnyArticlesInScope
-    FROM enabled_prompt
+      CAST((SELECT enabledPromptCount FROM enabled_prompt) AS INTEGER) AS enabledPromptCount,
+      EXISTS (SELECT 1 FROM scoped_article) AS hasAnyArticlesInScope,
+      CAST((SELECT COUNT(DISTINCT articleId) FROM scoped_article) AS INTEGER) AS totalArticleCount
   `,
     getReviewWarningsWorkloadContext(projectId, 'scopeState'),
   )
@@ -84,6 +89,105 @@ const getReviewWarningsScopeState = async (projectId: string) => {
   return {
     enabledPromptCount: Number(state?.enabledPromptCount ?? 0),
     hasAnyArticlesInScope: state?.hasAnyArticlesInScope ?? false,
+    totalArticleCount: Number(state?.totalArticleCount ?? 0),
+  }
+}
+
+const getReviewWarningsComponentState = (
+  manifest: ReviewServingSnapshotManifest | null,
+  component: 'payload' | 'search',
+) => {
+  return [...(manifest?.componentState.required ?? []), ...(manifest?.componentState.optional ?? [])].find((state) => {
+    return state.component === component
+  })
+}
+
+const getReviewWarningsComponentCanMaterialize = (
+  manifest: ReviewServingSnapshotManifest | null,
+  component: 'payload' | 'search',
+) => {
+  return (
+    manifest?.optionalComponents.includes(component) === true
+    || getReviewWarningsComponentState(manifest, component) !== undefined
+  )
+}
+
+const getReviewsWarningsCoverage = async (input: {
+  manifest: ReviewServingSnapshotManifest | null
+  projectId: string
+  reviewConfigHash: string | null
+  totalArticleCount: number
+}) => {
+  const snapshotId = input.manifest?.snapshotId ?? null
+
+  if (snapshotId === null) {
+    return {
+      detailReadyArticleCount: null,
+      reviewPageReadyArticleCount: 0,
+      searchReadyArticleCount: null,
+      totalArticleCount: input.totalArticleCount,
+    }
+  }
+
+  const canMaterializePayload = getReviewWarningsComponentCanMaterialize(input.manifest, 'payload')
+  const canMaterializeSearch = getReviewWarningsComponentCanMaterialize(input.manifest, 'search')
+  const [coverage] = await getApiReadOnlyAppDatabaseService().queryJson<{
+    detailReadyArticleCount: number | null
+    reviewPageReadyArticleCount: number
+    searchReadyArticleCount: number | null
+  }>(
+    `
+    SELECT
+      CAST((
+        SELECT COUNT(DISTINCT serving.article_id)
+        FROM mart.review_article_serving_base_v4 serving
+        WHERE serving.project_id = '${escapeSqlString(input.projectId)}'
+          AND serving.review_config_hash IS NOT DISTINCT FROM ${
+            input.reviewConfigHash === null ? 'NULL' : `'${escapeSqlString(input.reviewConfigHash)}'`
+          }
+          AND serving.snapshot_id = '${escapeSqlString(snapshotId)}'
+      ) AS INTEGER) AS reviewPageReadyArticleCount,
+      ${
+        !canMaterializePayload
+          ? 'NULL'
+          : `CAST((
+              SELECT COUNT(DISTINCT detail.article_id)
+              FROM mart.review_article_judgment_detail_serving_v4 detail
+              WHERE detail.project_id = '${escapeSqlString(input.projectId)}'
+                AND detail.review_config_hash IS NOT DISTINCT FROM ${
+                  input.reviewConfigHash === null ? 'NULL' : `'${escapeSqlString(input.reviewConfigHash)}'`
+                }
+                AND detail.snapshot_id = '${escapeSqlString(snapshotId)}'
+            ) AS INTEGER)`
+      } AS detailReadyArticleCount,
+      ${
+        !canMaterializeSearch
+          ? 'NULL'
+          : `CAST((
+              SELECT COUNT(DISTINCT article_id)
+              FROM (
+                SELECT UNNEST(search.article_ids) AS article_id
+                FROM mart.review_title_search_serving_v4 search
+                WHERE search.project_id = '${escapeSqlString(input.projectId)}'
+                  AND search.snapshot_id = '${escapeSqlString(snapshotId)}'
+              ) search_articles
+            ) AS INTEGER)`
+      } AS searchReadyArticleCount
+    `,
+    getReviewWarningsWorkloadContext(input.projectId, 'coverage'),
+  )
+
+  return {
+    detailReadyArticleCount:
+      coverage?.detailReadyArticleCount === null || coverage?.detailReadyArticleCount === undefined
+        ? null
+        : Number(coverage.detailReadyArticleCount),
+    reviewPageReadyArticleCount: Number(coverage?.reviewPageReadyArticleCount ?? 0),
+    searchReadyArticleCount:
+      coverage?.searchReadyArticleCount === null || coverage?.searchReadyArticleCount === undefined
+        ? null
+        : Number(coverage.searchReadyArticleCount),
+    totalArticleCount: input.totalArticleCount,
   }
 }
 
@@ -245,7 +349,18 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       routeDiagnosticWorkloadContext,
       reviewConfigHash,
     })
-    const {enabledPromptCount, hasAnyArticlesInScope} = await getReviewWarningsScopeState(projectId)
+    const {enabledPromptCount, hasAnyArticlesInScope, totalArticleCount} = await getReviewWarningsScopeState(projectId)
+    const coverageManifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest({
+      projectId,
+      reviewConfigHash,
+      workloadContext: getReviewWarningsWorkloadContext(projectId, 'coverageManifest'),
+    })
+    const coverage = await getReviewsWarningsCoverage({
+      manifest: coverageManifest,
+      projectId,
+      reviewConfigHash,
+      totalArticleCount,
+    })
     const servingDiagnostics =
       warningSnapshot.diagnostics.diagnostics
       ?? (await getReviewServingDiagnostics({
@@ -388,6 +503,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           articleRefreshesPerMinute: null,
           blockedReason,
           cleanup: {inFlightGenerationCleanupCount: 0, lastProgressedAt: null},
+          coverage,
           eligibleConsumerCount,
           eligibleConsumerPresent: eligibleConsumerCount > 0,
           inFlightArticleRefreshCount: 0,
