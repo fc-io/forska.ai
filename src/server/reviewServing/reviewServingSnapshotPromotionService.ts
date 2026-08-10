@@ -37,6 +37,11 @@ export type ReviewServingSnapshotValidationResult =
   | {candidate: ReviewServingSnapshotManifest; error: string; ok: false; validationResult: ReviewServingIdentityValue}
 
 type SelectedImportSnapshotStatusRow = {status: string}
+type ReviewServingSnapshotMaterializationValidationRow = {
+  enabledPromptCount?: number | null
+  missingQueueArticleCount?: number | null
+  nullLlmStatusRowCount?: number | null
+}
 
 const completeManifestStatuses = ['active', 'candidate'] as const
 
@@ -293,15 +298,125 @@ const getCandidateValidationReport = async (
       return state.component === component
     })
   })
+  const materializationErrors =
+    requiredErrors.length > 0 || missingRequiredComponents.length > 0
+      ? []
+      : await getMaterializationValidationErrors(candidate, database)
   const errors = [
     ...(selectedImportCompleted ? [] : ['selected import snapshot is not completed']),
     ...missingRequiredComponents.map((component) => {
       return `required component ${component} is missing from snapshot state`
     }),
     ...requiredErrors,
+    ...materializationErrors,
   ]
 
   return {error: errors[0] ?? null, optionalErrors}
+}
+
+const hasRequiredComponent = (
+  candidate: ReviewServingSnapshotManifest,
+  component: ReviewServingProjectionComponent,
+) => {
+  return candidate.requiredComponents.includes(component)
+}
+
+const getEnabledPromptCountSql = (projectId: string) => {
+  return `(
+    SELECT COUNT(DISTINCT prompt.id)
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+  )`
+}
+
+const getLlmStatusMaterializationValidationError = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  if (!hasRequiredComponent(candidate, 'llmStatus') || candidate.reviewConfigHash === null) {
+    return null
+  }
+
+  const [row] = await database.queryJson<ReviewServingSnapshotMaterializationValidationRow>(`
+    WITH enabled_prompt_count(prompt_count) AS (
+      SELECT ${getEnabledPromptCountSql(candidate.projectId)}
+    )
+    SELECT
+      COUNT(*) FILTER (
+        WHERE prompt_count > 0
+          AND (state.has_llm_list_mode OR state.has_both_list_mode OR state.has_unassessed_list_mode)
+          AND state.llm_status IS NULL
+      ) AS nullLlmStatusRowCount
+    FROM mart.review_article_serving_list_mode_state_v4 state
+    CROSS JOIN enabled_prompt_count
+    WHERE state.project_id = ${getSqlLiteral(candidate.projectId)}
+      AND state.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(candidate.reviewConfigHash)}
+      AND state.snapshot_id = ${getSqlLiteral(candidate.snapshotId)}
+  `)
+
+  const missingCount = row?.nullLlmStatusRowCount ?? 0
+
+  return missingCount > 0
+    ? `required component llmStatus has ${missingCount} list-mode rows with NULL status despite enabled prompts`
+    : null
+}
+
+const getQueueMaterializationValidationError = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  if (!hasRequiredComponent(candidate, 'queue') || candidate.reviewConfigHash === null) {
+    return null
+  }
+
+  const [row] = await database.queryJson<ReviewServingSnapshotMaterializationValidationRow>(`
+    WITH enabled_prompt_count(prompt_count) AS (
+      SELECT ${getEnabledPromptCountSql(candidate.projectId)}
+    )
+    SELECT
+      COUNT(DISTINCT state.article_id) FILTER (
+        WHERE prompt_count > 0
+          AND state.has_unassessed_list_mode
+          AND state.llm_status = 'unanswered'
+          AND queue.article_id IS NULL
+      ) AS missingQueueArticleCount
+    FROM mart.review_article_serving_list_mode_state_v4 state
+    CROSS JOIN enabled_prompt_count
+    LEFT JOIN mart.review_unassessed_queue_article_rank_serving_v4 queue
+      ON queue.project_id = state.project_id
+      AND queue.review_config_hash IS NOT DISTINCT FROM state.review_config_hash
+      AND queue.snapshot_id = state.snapshot_id
+      AND queue.queue_kind = 'unassessed'
+      AND queue.article_id = state.article_id
+    WHERE state.project_id = ${getSqlLiteral(candidate.projectId)}
+      AND state.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(candidate.reviewConfigHash)}
+      AND state.snapshot_id = ${getSqlLiteral(candidate.snapshotId)}
+  `)
+
+  const missingCount = row?.missingQueueArticleCount ?? 0
+
+  return missingCount > 0
+    ? `required component queue is missing ${missingCount} unassessed article-rank rows for unanswered list-mode articles`
+    : null
+}
+
+const getMaterializationValidationErrors = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  const errors = await Promise.all([
+    getLlmStatusMaterializationValidationError(candidate, database),
+    getQueueMaterializationValidationError(candidate, database),
+  ])
+
+  return errors.filter((error): error is string => {
+    return error !== null
+  })
 }
 
 const getValidationResultValue = (

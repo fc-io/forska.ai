@@ -76,6 +76,14 @@ const humanStatusManifest = {
   projectionIdentity: 'human-status:identity-1',
 } as const
 
+const queueManifest = {
+  ...displayManifest,
+  definitionVersion: 'queue-v1',
+  manifestId: 'queue-manifest',
+  projectionComponent: 'queue',
+  projectionIdentity: 'queue:identity-1',
+} as const
+
 const getManifestKey = (manifest: {
   projectId: string
   projectionComponent:
@@ -84,6 +92,7 @@ const getManifestKey = (manifest: {
     | 'llmStatus'
     | 'payload'
     | 'projectScope'
+    | 'queue'
     | 'search'
     | 'selectedImport'
   projectionIdentity: string
@@ -98,6 +107,7 @@ const createPromotionDatabase = (input?: {selectedImportStatus?: string}) => {
     [getManifestKey(llmStatusManifest), llmStatusManifest],
     [getManifestKey(payloadManifest), payloadManifest],
     [getManifestKey(projectScopeManifest), projectScopeManifest],
+    [getManifestKey(queueManifest), queueManifest],
     [getManifestKey(searchManifest), searchManifest],
     [getManifestKey(selectedImportManifest), selectedImportManifest],
   ])
@@ -699,6 +709,113 @@ test('snapshot validation requires import-run watermarks for status manifests', 
   expect(humanResult.ok).toBe(false)
   expect(humanResult.ok ? null : humanResult.error).toBe(
     'component humanStatus input watermark 0 for source importRunArticle is behind source 1000',
+  )
+})
+
+test('snapshot validation blocks required LLM status candidates with null list-mode status rows', async () => {
+  const {database} = createPromotionDatabase()
+  const originalQueryJson = database.queryJson
+
+  database.queryJson = async <T>(statement: string) => {
+    if (statement.includes('nullLlmStatusRowCount')) {
+      return [{enabledPromptCount: 1, nullLlmStatusRowCount: 18784}] as T[]
+    }
+
+    return originalQueryJson(statement)
+  }
+
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [],
+        required: [
+          {
+            baseGeneration: '1',
+            component: 'llmStatus',
+            patchWatermark: '4',
+            projectionIdentity: 'llm-status:identity-1',
+            requirement: 'required',
+          },
+        ],
+      },
+      composedIdentity: {route: 'review.rows', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: [],
+      projectId: 'project-1',
+      requiredComponents: ['llmStatus'],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(result.ok).toBe(false)
+  expect(result.ok ? null : result.error).toBe(
+    'required component llmStatus has 18784 list-mode rows with NULL status despite enabled prompts',
+  )
+})
+
+test('snapshot validation blocks required queue candidates with unanswered articles missing article-rank rows', async () => {
+  const {database} = createPromotionDatabase()
+  const originalQueryJson = database.queryJson
+
+  database.queryJson = async <T>(statement: string) => {
+    if (statement.includes('nullLlmStatusRowCount')) {
+      return [{enabledPromptCount: 1, nullLlmStatusRowCount: 0}] as T[]
+    }
+
+    if (statement.includes('missingQueueArticleCount')) {
+      return [{enabledPromptCount: 1, missingQueueArticleCount: 18784}] as T[]
+    }
+
+    return originalQueryJson(statement)
+  }
+
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [],
+        required: [
+          {
+            baseGeneration: '1',
+            component: 'llmStatus',
+            patchWatermark: '4',
+            projectionIdentity: 'llm-status:identity-1',
+            requirement: 'required',
+          },
+          {
+            baseGeneration: '1',
+            component: 'queue',
+            patchWatermark: '4',
+            projectionIdentity: 'queue:identity-1',
+            requirement: 'required',
+          },
+        ],
+      },
+      composedIdentity: {route: 'review.unassessed.rows', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: [],
+      projectId: 'project-1',
+      requiredComponents: ['llmStatus', 'queue'],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(result.ok).toBe(false)
+  expect(result.ok ? null : result.error).toBe(
+    'required component queue is missing 18784 unassessed article-rank rows for unanswered list-mode articles',
   )
 })
 

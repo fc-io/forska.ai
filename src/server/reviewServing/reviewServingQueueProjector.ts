@@ -255,17 +255,6 @@ export const getReviewServingQueueRebuildSourceCtes = (input: ProjectReviewServi
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
         AND (scope.in_curated_scope OR scope.in_route_scope)
         ${getArticleRangePredicate({alias: 'scope', ...input})}
-    ),
-    selected_import_state AS (
-      SELECT
-        scoped.article_id,
-        COALESCE(selected_base.tombstone, FALSE) AS selected_tombstone
-      FROM scoped_article scoped
-      LEFT JOIN mart.review_selected_article_import_current_v4 selected_base
-        ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
-        AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-        AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-        AND selected_base.article_id = scoped.article_id
     ), enabled_prompt AS (
       SELECT
         prompt.id AS prompt_id
@@ -319,14 +308,11 @@ export const getReviewServingQueueRebuildSourceCtes = (input: ProjectReviewServi
         ${getSqlLiteral('unassessed')} AS queue_kind,
         CASE WHEN judgment.created_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
         COALESCE(judgment.created_at, scoped.activity_sort_at) AS activity_sort_at,
-        selected.selected_tombstone
-          OR scoped.scope_tombstone
+        scoped.scope_tombstone
           OR COALESCE(judgment.is_answered, FALSE)
           OR judgment.answered_original IS NOT NULL
           OR COALESCE(LENGTH(judgment.answered_original_as_array), 0) > 0 AS tombstone
       FROM scoped_article scoped
-      INNER JOIN selected_import_state selected
-        ON selected.article_id = scoped.article_id
       CROSS JOIN enabled_prompt prompt
       LEFT JOIN latest_judgment judgment
         ON judgment.article_id = scoped.article_id
@@ -344,12 +330,9 @@ export const getReviewServingQueueRebuildSourceCtes = (input: ProjectReviewServi
           ELSE 1
         END AS priority_bucket,
         COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at, scoped.activity_sort_at) AS activity_sort_at,
-        selected.selected_tombstone
-          OR scoped.scope_tombstone
+        scoped.scope_tombstone
           OR NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NOT NULL AS tombstone
       FROM scoped_article scoped
-      INNER JOIN selected_import_state selected
-        ON selected.article_id = scoped.article_id
       CROSS JOIN project_settings
       CROSS JOIN human_prompt prompt
       LEFT JOIN app."judgment_human" judgment_human

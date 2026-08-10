@@ -1269,7 +1269,9 @@ const getLlmStatusRebuildChunkOutputChecksum = async (
         CAST(review_config_hash AS VARCHAR) || ':' ||
         CAST(list_mode_key AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(patch_watermark AS VARCHAR), ''),
+        COALESCE(CAST(patch_watermark AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_status AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_has_judgment AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
       ), '')) AS actualChecksum
     FROM ${getReviewArticleServingDirectReadSql({alias: 'serving', baseGeneration: input.chunk.outputBaseGeneration, chunk: input.chunk, projectId, snapshotIds: input.snapshotIds})}
@@ -1374,10 +1376,10 @@ const getQueueRebuildChunkOutputChecksum = async (
         CAST(queue_kind AS VARCHAR) || ':' ||
         CAST(priority_bucket AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(prompt_ids AS VARCHAR), '[]'),
-        '|' ORDER BY snapshot_id, review_config_hash, queue_kind, priority_bucket, article_id, CAST(prompt_ids AS VARCHAR)
+        COALESCE(CAST(activity_sort_at AS VARCHAR), ''),
+        '|' ORDER BY snapshot_id, review_config_hash, queue_kind, priority_bucket, article_id, activity_sort_at
       ), '')) AS actualChecksum
-    FROM mart.review_unassessed_queue_serving_v4 serving
+    FROM mart.review_unassessed_queue_article_rank_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
@@ -1394,7 +1396,7 @@ const getQueueRebuildChunkOutputCount = async (
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM mart.review_unassessed_queue_serving_v4 serving
+    FROM mart.review_unassessed_queue_article_rank_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
       AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}

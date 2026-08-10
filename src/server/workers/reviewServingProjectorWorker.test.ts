@@ -75,6 +75,7 @@ const reviewArticleServingDirectReadScopedRangeEnd = "AND base.article_id <= 'ar
 const reviewArticleServingDirectReadFlagExpansion = 'AS list_mode(list_mode_key, has_list_mode)'
 const reviewArticleServingDirectReadFlagPredicate = 'WHERE list_mode.has_list_mode IS TRUE'
 const reviewArticleServingCompatibilityViewRead = 'FROM mart.review_article_serving_v4 serving'
+const reviewUnassessedQueueArticleRankRead = 'FROM mart.review_unassessed_queue_article_rank_serving_v4 serving'
 
 const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
   const digest = createHash('sha256')
@@ -1829,7 +1830,7 @@ test('worker writes compatible queue rebuild chunks through one batch writer', a
       ] as T[]
     }
 
-    if (statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')) {
+    if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4 serving')) {
       return [{actualChecksum: 'checksum-queue-batch', actualCount: 2}] as T[]
     }
 
@@ -1957,7 +1958,7 @@ test('worker clamps foreground queue rebuild batches to the completed chunk run 
       ] as T[]
     }
 
-    if (statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')) {
+    if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4 serving')) {
       return [{actualChecksum: 'checksum-queue-cap', actualCount: 16}] as T[]
     }
 
@@ -2054,7 +2055,7 @@ test('worker fails completed foreground queue rebuild request when batch finaliz
       ] as T[]
     }
 
-    if (statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')) {
+    if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4 serving')) {
       return [{actualChecksum: 'checksum-queue-finalization-failure', actualCount: 2}] as T[]
     }
 
@@ -2475,7 +2476,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       identity: 'queue:project-1',
       preclaimTailLimit: 31,
       startKeys: ['article-001', 'article-034', 'article-067'],
-      validationTable: reviewArticleServingCompatibilityViewRead,
+      validationTable: reviewUnassessedQueueArticleRankRead,
       writerName: 'queueBatchWriter',
     },
     {
@@ -6009,7 +6010,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
 
       if (
         statement.includes('AS actualChecksum')
-        && statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')
+        && statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4 serving')
       ) {
         return [{actualChecksum: 'checksum-queue', actualCount: 1}] as T[]
       }
@@ -8229,7 +8230,7 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
         ] as T[]
       }
 
-      if (statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')) {
+      if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4 serving')) {
         return [{actualChecksum: 'checksum-queue-range', actualCount: 2}] as T[]
       }
 
@@ -8262,7 +8263,8 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain("article_id >= 'article-050'")
   expect(joined).toContain("article_id <= 'article-099'")
-  expect(joined).toContain("COALESCE(CAST(prompt_ids AS VARCHAR), '[]')")
+  expect(joined).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 serving')
+  expect(joined).toContain("COALESCE(CAST(activity_sort_at AS VARCHAR), '')")
   expect(joined).not.toContain('queue_identity')
   expect(joined).toContain("checksum = 'checksum-queue-range'")
   expect(joined).not.toContain('INSERT INTO mart.review_queue_patch_v4')
