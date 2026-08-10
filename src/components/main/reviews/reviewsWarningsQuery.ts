@@ -15,6 +15,12 @@ export type ReviewsWarningsData = {
       | 'waiting_for_maintenance_worker'
       | null
     cleanup?: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
+    coverage: {
+      detailReadyArticleCount: number | null
+      reviewPageReadyArticleCount: number
+      searchReadyArticleCount: number | null
+      totalArticleCount: number
+    }
     eligibleConsumerCount: number
     eligibleConsumerPresent: boolean
     inFlightArticleRefreshCount: number

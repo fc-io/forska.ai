@@ -20,61 +20,8 @@ const getTimestampSuffix = (label: string, value: string | null) => {
   return formatted === null ? null : `${label} ${formatted}`
 }
 
-const getSpeedLabel = (speedPerMinute: number | null) => {
-  return speedPerMinute === null ? null : speedPerMinute < 1 ? '<1/min' : `${Math.round(speedPerMinute)}/min`
-}
-
 const getCountLabel = (count: number) => {
   return count.toLocaleString()
-}
-
-const formatCountNoun = (count: number, singular: string, plural: string) => {
-  return `${getCountLabel(count)} ${count === 1 ? singular : plural}`
-}
-
-const getLaneDescription = (processingCount: number, queuedCount: number, speedPerMinute: number | null) => {
-  return joinLabelParts([`processing ${processingCount}`, `queued ${queuedCount}`, getSpeedLabel(speedPerMinute)])
-}
-
-const getProjectDiagnosticsCounts = (indexing: ReviewsIndexing) => {
-  const dirtyWork = indexing.serving.diagnostics.dirtyWork
-  const rebuildChunks = indexing.serving.diagnostics.rebuildChunks
-
-  if (dirtyWork === undefined && rebuildChunks === undefined) {
-    return null
-  }
-
-  const expiredRebuildChunkLeaseCount = Math.min(
-    rebuildChunks?.runningCount ?? 0,
-    rebuildChunks?.expiredLeaseCount ?? 0,
-  )
-  const runningRebuildChunkCount = Math.max(0, (rebuildChunks?.runningCount ?? 0) - expiredRebuildChunkLeaseCount)
-  const queuedRebuildChunkCount = rebuildChunks?.claimableCount ?? 0
-  const dirtyBacklogCount =
-    (dirtyWork?.pendingCount ?? 0) + (dirtyWork?.runningCount ?? 0) + (dirtyWork?.failedCount ?? 0)
-
-  return {dirtyBacklogCount, queuedRebuildChunkCount, runningRebuildChunkCount}
-}
-
-const getProjectDiagnosticsDescription = (indexing: ReviewsIndexing) => {
-  const counts = getProjectDiagnosticsCounts(indexing)
-
-  if (counts === null) {
-    return getLaneDescription(
-      indexing.inFlightProjectRefreshCount,
-      indexing.queuedProjectRefreshCount,
-      indexing.projectRefreshesPerMinute,
-    )
-  }
-
-  return joinLabelParts([
-    `${formatCountNoun(counts.runningRebuildChunkCount, 'rebuild chunk', 'rebuild chunks')} running`,
-    `${formatCountNoun(counts.queuedRebuildChunkCount, 'rebuild chunk', 'rebuild chunks')} queued`,
-    counts.dirtyBacklogCount === 0
-      ? null
-      : `${formatCountNoun(counts.dirtyBacklogCount, 'dirty-work item', 'dirty-work items')} in backlog`,
-    getSpeedLabel(indexing.projectRefreshesPerMinute),
-  ])
 }
 
 const joinLabelParts = (parts: Array<string | null>) => {
@@ -85,9 +32,15 @@ const joinLabelParts = (parts: Array<string | null>) => {
     .join(', ')
 }
 
+const getCoverageCountLabel = (readyCount: number | null, totalCount: number) => {
+  return readyCount === null
+    ? `indexing ${getCountLabel(totalCount)} ${totalCount === 1 ? 'article' : 'articles'}`
+    : `${getCountLabel(readyCount)} / ${getCountLabel(totalCount)} ${totalCount === 1 ? 'article' : 'articles'} ready`
+}
+
 export const getProjectRefreshLabel = (indexing: ReviewsIndexing) => {
   return joinLabelParts([
-    getProjectDiagnosticsDescription(indexing),
+    getCoverageCountLabel(indexing.coverage.reviewPageReadyArticleCount, indexing.coverage.totalArticleCount),
     getTimestampSuffix('last progress', indexing.lastProgressedAt),
     getTimestampSuffix('started', indexing.lastStartedAt),
   ])
@@ -95,13 +48,13 @@ export const getProjectRefreshLabel = (indexing: ReviewsIndexing) => {
 
 export const getArticleRefreshLabel = (indexing: ReviewsIndexing) => {
   return joinLabelParts([
-    getLaneDescription(
-      indexing.inFlightArticleRefreshCount,
-      indexing.queuedArticleRefreshCount,
-      indexing.articleRefreshesPerMinute,
-    ),
+    getCoverageCountLabel(indexing.coverage.detailReadyArticleCount, indexing.coverage.totalArticleCount),
     getTimestampSuffix('last progress', indexing.lastProgressedAt),
   ])
+}
+
+export const getSearchCoverageLabel = (indexing: ReviewsIndexing) => {
+  return getCoverageCountLabel(indexing.coverage.searchReadyArticleCount, indexing.coverage.totalArticleCount)
 }
 
 export const getCleanupLabel = (indexing: ReviewsIndexing) => {
@@ -120,7 +73,7 @@ export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
   return (indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0 && indexing.progressState === 'completed'
     ? 'old index cleanup running'
     : indexing.progressState === 'processing'
-      ? `${indexing.activeWorkCount} ${indexing.activeWorkCount === 1 ? 'refresh job' : 'refresh jobs'} actively processing`
+      ? 'maintenance worker is updating the review index'
       : indexing.progressState === 'queued'
         ? 'queued for the maintenance worker'
         : indexing.progressState === 'blocked' && indexing.blockedReason === 'paused_by_policy'

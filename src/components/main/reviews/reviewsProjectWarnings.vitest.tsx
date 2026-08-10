@@ -38,6 +38,12 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       activeWorkCount: 0,
       articleRefreshesPerMinute: null,
       blockedReason: null,
+      coverage: {
+        detailReadyArticleCount: null,
+        reviewPageReadyArticleCount: 0,
+        searchReadyArticleCount: null,
+        totalArticleCount: 1,
+      },
       eligibleConsumerCount: 1,
       eligibleConsumerPresent: true,
       inFlightArticleRefreshCount: 0,
@@ -195,7 +201,7 @@ test('does not render retired large rebuild product warning copy', async () => {
     expect(container.textContent).not.toContain('Current phase articles')
     expect(container.textContent).not.toContain('Dirty article ACKs')
     expect(container.textContent).not.toContain('Large rebuild')
-    expect(container.textContent).toContain('Article refreshes: processing 0, queued 148')
+    expect(container.textContent).toContain('Details: indexing 1 article')
     expect(container.textContent).not.toContain('0/min')
   } finally {
     dispose()
@@ -208,17 +214,23 @@ test('renders unmeasured review indexing rates without implying zero throughput'
   )
 
   try {
-    expect(container.textContent).toContain('Project refreshes: processing 0, queued 1')
+    expect(container.textContent).toContain('Review page: 0 / 1 article ready')
     expect(container.textContent).not.toContain('0/min')
   } finally {
     dispose()
   }
 })
 
-test('separates rebuild chunk progress from dirty-work backlog diagnostics', async () => {
+test('renders article coverage instead of rebuild chunk diagnostics', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({
       activeWorkCount: 2,
+      coverage: {
+        detailReadyArticleCount: 47,
+        reviewPageReadyArticleCount: 92,
+        searchReadyArticleCount: 24,
+        totalArticleCount: 100,
+      },
       inFlightProjectRefreshCount: 5,
       inFlightRefreshCount: 5,
       pendingProjectRefreshCount: 11,
@@ -239,11 +251,12 @@ test('separates rebuild chunk progress from dirty-work backlog diagnostics', asy
   )
 
   try {
-    expect(container.textContent).toContain(
-      'Project refreshes: 2 rebuild chunks running, 3 rebuild chunks queued, 4 dirty-work items in backlog',
-    )
-    expect(container.textContent).not.toContain('Project refreshes: processing 5, queued 9')
-    expect(container.textContent).not.toContain('refreshs')
+    expect(container.textContent).toContain('Review page: 92 / 100 articles ready')
+    expect(container.textContent).toContain('Details: 47 / 100 articles ready')
+    expect(container.textContent).toContain('Search: 24 / 100 articles ready')
+    expect(container.textContent).not.toContain('rebuild chunk')
+    expect(container.textContent).not.toContain('dirty-work')
+    expect(container.textContent).not.toContain('Project refreshes:')
   } finally {
     dispose()
   }
@@ -280,7 +293,7 @@ test('renders user-facing counts and progress timestamps for review indexing wor
   )
 
   try {
-    expect(container.textContent).toContain('Project refreshes: processing 1, queued 0')
+    expect(container.textContent).toContain('Review page: 0 / 1 article ready')
     expect(container.textContent).toContain('last progress')
     expect(container.textContent).not.toContain('Dirty materialization')
     expect(container.textContent).not.toContain('Quarantine')

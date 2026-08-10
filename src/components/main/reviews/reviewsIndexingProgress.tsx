@@ -6,6 +6,7 @@ import {
   getIndexingStatusLabel,
   getProgressContainerClass,
   getProjectRefreshLabel,
+  getSearchCoverageLabel,
   shouldShowIndexingProgress,
 } from './reviewsIndexingProgress/reviewsIndexingProgressLabels.ts'
 import type {ReviewsWarningsData} from './reviewsWarningsQuery.ts'
@@ -20,10 +21,13 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
           <span class="font-medium text-slate-700">Status:</span> {getIndexingStatusLabel(props.indexing)}
         </p>
         <p>
-          <span class="font-medium text-slate-700">Project refreshes:</span> {getProjectRefreshLabel(props.indexing)}
+          <span class="font-medium text-slate-700">Review page:</span> {getProjectRefreshLabel(props.indexing)}
         </p>
         <p>
-          <span class="font-medium text-slate-700">Article refreshes:</span> {getArticleRefreshLabel(props.indexing)}
+          <span class="font-medium text-slate-700">Details:</span> {getArticleRefreshLabel(props.indexing)}
+        </p>
+        <p>
+          <span class="font-medium text-slate-700">Search:</span> {getSearchCoverageLabel(props.indexing)}
         </p>
         <Show when={getCleanupLabel(props.indexing)}>
           {(cleanupLabel) => {
