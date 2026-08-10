@@ -310,7 +310,7 @@ test('project review config changes rebuild queue rows for all scoped project ar
   expect(articleRankDelete).not.toContain('prompt_ids')
 })
 
-test('queue rebuild rows read selected-import base rows without patch overlay', async () => {
+test('queue rebuild rows do not let selected-import tombstones suppress scoped articles', async () => {
   const {database, statements} = createQueueDatabase()
 
   await projectReviewServingQueueRebuildRows(
@@ -328,7 +328,9 @@ test('queue rebuild rows read selected-import base rows without patch overlay', 
     return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
   })
 
-  expect(insertStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
+  expect(insertStatement).not.toContain('review_selected_article_import_current_v4')
+  expect(insertStatement).not.toContain('selected_tombstone')
+  expect(insertStatement).toContain('scoped.scope_tombstone')
   expect(insertStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(insertStatement).not.toContain('selected_patch')
 })
