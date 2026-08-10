@@ -18,6 +18,12 @@ const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): Revie
     activeWorkCount: 0,
     articleRefreshesPerMinute: null,
     blockedReason: null,
+    coverage: {
+      detailReadyArticleCount: null,
+      reviewPageReadyArticleCount: 0,
+      searchReadyArticleCount: null,
+      totalArticleCount: 1,
+    },
     eligibleConsumerCount: 1,
     eligibleConsumerPresent: true,
     inFlightArticleRefreshCount: 0,
@@ -78,6 +84,29 @@ test('review indexing progress copy is reserved for active progress', () => {
     surface: 'banner',
   })
   expect(copy.title).toBe('Review indexing in progress for project project-1')
+})
+
+test('ready review pages describe processing as background work', () => {
+  const copy = getReviewIndexingStateCopy({
+    indexing: getIndexing({
+      activeWorkCount: 1,
+      coverage: {
+        detailReadyArticleCount: 100,
+        reviewPageReadyArticleCount: 100,
+        searchReadyArticleCount: 42,
+        totalArticleCount: 100,
+      },
+      progressState: 'processing',
+    }),
+    projectId: 'project-1',
+    surface: 'banner',
+  })
+
+  expect(copy.title).toBe('Background review indexing in progress')
+  expect(copy.description).toBe(
+    'Review pages and details are ready. Search indexing is still catching up in the background.',
+  )
+  expect(copy.description).not.toContain('partial or empty')
 })
 
 test('review indexing stalled copy does not claim active progress', () => {

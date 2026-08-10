@@ -270,6 +270,33 @@ test('renders article coverage instead of rebuild chunk diagnostics', async () =
   }
 })
 
+test('labels ready review page processing as background work', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      activeWorkCount: 1,
+      coverage: {
+        detailReadyArticleCount: 100,
+        reviewPageReadyArticleCount: 100,
+        searchReadyArticleCount: 42,
+        totalArticleCount: 100,
+      },
+      progressState: 'processing',
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Background review indexing in progress')
+    expect(container.textContent).toContain(
+      'Review pages and details are ready. Search indexing is still catching up in the background.',
+    )
+    expect(container.textContent).toContain('Background work: updating search and enrichment in the background')
+    expect(container.textContent).not.toContain('Review lists may look partial or empty')
+    expect(container.textContent).not.toContain('Status: maintenance worker is updating the review index')
+  } finally {
+    dispose()
+  }
+})
+
 test('renders user-facing counts and progress timestamps for review indexing work', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({
@@ -390,7 +417,7 @@ test('renders bounded cleanup while review index reads stay ready', async () => 
   try {
     expect(container.textContent).toContain('Review cleanup in progress')
     expect(container.textContent).toContain('Current review pages remain usable')
-    expect(container.textContent).toContain('Status: old index cleanup running')
+    expect(container.textContent).toContain('Indexing status: old index cleanup running')
     expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
     expect(container.textContent).toContain('last progress')
   } finally {
