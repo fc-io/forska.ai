@@ -5,7 +5,6 @@ import {
   type ReviewServingDiagnostics,
 } from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
-import {boostActiveReviewServingRebuildRequestForProject} from '../../reviewServing/reviewServingRebuildRequestRepository.ts'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getApiReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
@@ -288,11 +287,15 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
+    const hasStalePendingCandidateActivationWork =
+      pendingCandidateSnapshotActivationCount > 0
+      && !hasRecentProgress
+      && servingDiagnostics.rebuildChunks.claimableCount > 0
     const shouldRequestForegroundRepair =
       !isServerMutationWorkDisabled
       && !reviewServingProjectorPaused
       && shouldPrioritizeMissingSnapshotRepair
-      && pendingCandidateSnapshotActivationCount === 0
+      && (pendingCandidateSnapshotActivationCount === 0 || hasStalePendingCandidateActivationWork)
       && !hasRecentProgress
       && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork)
 
@@ -300,19 +303,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       const priority = hasRecentProgress
         ? foregroundReviewServingRepairPriority
         : stalledForegroundReviewServingRepairPriority
-      const boostedActiveRequest = await boostActiveReviewServingRebuildRequestForProject({
-        priority,
-        projectId,
-        reason: 'missingReviewServingSnapshot',
-      }).catch(() => {
-        return false
+      await requestReviewServingV4Rebuild({priority, projectId, reason: 'missingReviewServingSnapshot'}).catch(() => {
+        return undefined
       })
-
-      if (!boostedActiveRequest) {
-        await requestReviewServingV4Rebuild({priority, projectId, reason: 'missingReviewServingSnapshot'}).catch(() => {
-          return undefined
-        })
-      }
     }
 
     const pendingRebuildChunkCount = totalQueuedRebuildChunkCount + inFlightRebuildChunkCount
