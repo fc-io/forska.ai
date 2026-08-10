@@ -304,9 +304,7 @@ const getPromptOrSummaryKey = (promptId: string | null) => {
 const getSourceHumanStatusKey = (
   row: Pick<HumanStatusSourceRow, 'humanAnsweredValue' | 'promptOrSummaryKey' | 'summaryOrigin' | 'tombstone'>,
 ) => {
-  return row.promptOrSummaryKey === 'summary' && row.summaryOrigin === 'covidence_import' && !row.tombstone
-    ? 'answered'
-    : getHumanStatusKey(row.humanAnsweredValue, row.tombstone)
+  return getHumanStatusKey(row.humanAnsweredValue, row.tombstone)
 }
 
 const getJudgmentDeltaRows = async (
@@ -337,7 +335,6 @@ const getJudgmentDeltaRows = async (
             COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
             CASE
               WHEN delta.tombstone THEN NULL
-              WHEN delta.prompt_id IS NULL AND judgment_human_summary.origin = 'covidence_import' THEN 'answered'
               WHEN NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NULL THEN 'unanswered'
               ELSE 'answered'
             END AS humanStatusKey,
@@ -555,7 +552,6 @@ const getProjectScopedRows = async (
       COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
       CASE
         WHEN NOT article_prompt.active THEN NULL
-        WHEN article_prompt.prompt_id = 'summary' AND judgment_human_summary.origin = 'covidence_import' THEN 'answered'
         WHEN NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NULL THEN 'unanswered'
         ELSE 'answered'
       END AS humanStatusKey,
@@ -752,7 +748,7 @@ const getApplyHumanStatusServingRangeReplacementStatements = (input: {
          serving.article_id,
          CASE
            WHEN COALESCE(project.human_judgment_mode, 'prompt') = 'summary'
-             AND BOOL_OR(judgment_human_summary.id IS NOT NULL) THEN 'answered'
+             AND BOOL_OR(NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL) THEN 'answered'
            WHEN COALESCE(project.human_judgment_mode, 'prompt') = 'summary' THEN 'unanswered'
            WHEN COALESCE(enabled_prompt_count.prompt_count, 0) = 0 THEN NULL
            WHEN enabled_prompt_count.prompt_count = COUNT(DISTINCT prompt.id) FILTER (
