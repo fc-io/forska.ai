@@ -12,8 +12,8 @@ export const ReviewsTabs = (props: ReviewsTabsProps): JSX.Element => {
   const active = 'text-blue-700 border-blue-600 font-semibold'
 
   return (
-    <div class="mb-4 border-b border-gray-200">
-      <nav class="-mb-px flex gap-4" aria-label="Tabs">
+    <div class="mb-4 overflow-x-auto border-b border-gray-200">
+      <nav class="-mb-px flex min-w-max gap-4" aria-label="Tabs">
         <Link
           to="/projects/$id/reviews-llm"
           params={{id: props.projectId}}

@@ -71,15 +71,17 @@ const ReviewsBoth = () => {
     >
       <div class="min-h-screen bg-gray-50 p-6 mx-auto">
         <Suspense>
-          <div class="flex justify-between items-center mb-6">
-            <div class="flex items-center gap-4">
+          <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex min-w-0 flex-wrap items-center gap-4">
               <Button as={Link} to="/projects" variant="outline" size="sm">
                 ← Back to Projects
               </Button>
               <h1 class="text-2xl font-bold">Project Reviews</h1>
-              <span class="text-sm text-gray-500">{projectQuery.data?.project?.name ?? 'Loading...'}</span>
+              <span class="min-w-0 break-words text-sm text-gray-500">
+                {projectQuery.data?.project?.name ?? 'Loading...'}
+              </span>
             </div>
-            <div class="flex gap-2">
+            <div class="flex flex-wrap gap-2">
               <Button as={Link} to="/projects/$id" params={{id: params().id} as never} variant="outline">
                 Project Details
               </Button>
