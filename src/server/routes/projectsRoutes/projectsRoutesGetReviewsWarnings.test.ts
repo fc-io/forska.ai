@@ -44,6 +44,14 @@ type ReviewsWarningsResponse = {
       lastProgressedAt: string | null
       lastProcessedAt: string | null
       lastStartedAt: string | null
+      maintenance: {
+        hasActionableFailures: boolean
+        hasHistoricalFailures: boolean
+        status: 'blocked' | 'failed' | 'idle' | 'processing'
+        terminalDirtyWorkCount: number
+        terminalQuarantineCount: number
+        terminalRebuildChunkCount: number
+      }
       oldestQueuedAt: string | null
       pendingArticleRefreshCount: number
       pendingProjectRefreshCount: number
@@ -719,7 +727,7 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.indexing.status).toBe('ready')
 })
 
-test('reviews warnings preserve failed latest terminal rebuild request behind serving rows', async () => {
+test('reviews warnings preserve failed latest terminal rebuild request as historical maintenance behind serving rows', async () => {
   const projectId = 'project-latest-terminal-rebuild-failed-with-serving-warning'
 
   await insertProjectFixture(projectId)
@@ -745,10 +753,16 @@ test('reviews warnings preserve failed latest terminal rebuild request behind se
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: false,
+    hasHistoricalFailures: true,
+    status: 'idle',
+    terminalRebuildChunkCount: 1,
+  })
+  expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 0})
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings ignore failed requestless bootstrap bookkeeping behind serving rows', async () => {
@@ -793,6 +807,12 @@ test('reviews warnings ignore failed requestless bootstrap bookkeeping behind se
     pendingCount: 0,
     quarantinedCount: 1,
     terminalQuarantinedCount: 0,
+  })
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: false,
+    hasHistoricalFailures: true,
+    status: 'idle',
+    terminalRebuildChunkCount: 1,
   })
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('ready')
@@ -999,9 +1019,15 @@ test('reviews warnings fold V4 rebuild chunks into visible progress', async () =
   expect(body.data.indexing.inFlightRefreshCount).toBe(1)
   expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 12:00:00+00')
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: false,
+    hasHistoricalFailures: true,
+    status: 'processing',
+    terminalRebuildChunkCount: 1,
+  })
+  expect(body.data.indexing.progressState).toBe('processing')
   expect(body.data.indexing.queuedRefreshCount).toBe(1)
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings keep fresh serving ready when only obsolete V4 chunks are blocked', async () => {
@@ -1391,6 +1417,12 @@ test('reviews warnings fail terminal V4 rebuild requests instead of reporting he
   expect(body.data.indexing.activeWorkCount).toBe(0)
   expect(body.data.indexing.eligibleConsumerCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(3)
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: true,
+    hasHistoricalFailures: true,
+    status: 'failed',
+    terminalRebuildChunkCount: 1,
+  })
   expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.queuedRefreshCount).toBe(0)
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
@@ -1506,12 +1538,18 @@ test('reviews warnings fail terminal V4 rebuild backlog when server mutation wor
   })
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
   expect(body.data.indexing.eligibleConsumerCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: false,
+    hasHistoricalFailures: true,
+    status: 'blocked',
+    terminalRebuildChunkCount: 1,
+  })
+  expect(body.data.indexing.progressState).toBe('blocked')
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 2})
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.status).toBe('blocked')
 })
 
 test('reviews warnings ignore chunks from superseded V4 rebuild requests', async () => {
@@ -1619,6 +1657,65 @@ test('reviews warnings mark quarantined V4 outbox barriers as blocked', async ()
     unresolvedOutboxCount: 1,
   })
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('failed')
+})
+
+test('reviews warnings keep readable serving failed when a quarantine barrier blocks live dirty work', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-v4-readable-outbox-barrier-live-work-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-readable-outbox-barrier-live-work-warning',
+  })
+  await insertReviewSourceChangeOutbox(projectId, 'quarantined')
+  await runDatabase(`
+    INSERT INTO app.review_serving_dirty_work (
+      dirty_work_id,
+      project_id,
+      scope_kind,
+      scope_id,
+      article_id,
+      dirty_kind,
+      source_partition,
+      first_source_high_water_mark,
+      latest_source_high_water_mark,
+      status
+    ) VALUES (
+      'dirty-work-${projectId}',
+      '${projectId}',
+      'article',
+      'article-${projectId}',
+      'article-${projectId}',
+      'review-change',
+      'review-change:${projectId}',
+      1,
+      1,
+      'pending'
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe('quarantine_barrier')
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: true,
+    hasHistoricalFailures: true,
+    status: 'failed',
+    terminalQuarantineCount: 1,
+  })
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('failed')
 })
 
@@ -2437,7 +2534,7 @@ test('reviews warnings report blocked V4 repair without retrying terminal missin
   expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
 })
 
-test('reviews warnings fail readable serving when the latest active V4 rebuild has a quarantined chunk', async () => {
+test('reviews warnings keep readable serving ready when terminal quarantined V4 chunks are historical', async () => {
   const projectId = 'project-readable-serving-active-quarantined-v4-warning'
   const requestId = 'request-readable-serving-active-quarantined-v4-warning'
 
@@ -2469,7 +2566,13 @@ test('reviews warnings fail readable serving when the latest active V4 rebuild h
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: false,
+    hasHistoricalFailures: true,
+    status: 'idle',
+    terminalRebuildChunkCount: 1,
+  })
+  expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.serving.readable).toBe(true)
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
     failedCount: 0,
@@ -2477,7 +2580,7 @@ test('reviews warnings fail readable serving when the latest active V4 rebuild h
     quarantinedCount: 1,
     terminalQuarantinedCount: 1,
   })
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings prioritize terminal V4 request over disabled mutation backlog', async () => {

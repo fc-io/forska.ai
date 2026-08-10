@@ -27,6 +27,7 @@ type ReviewsIndexingBlockedReason =
   | 'quarantine_barrier'
   | 'waiting_for_maintenance_worker'
   | null
+type ReviewsIndexingMaintenanceStatus = 'blocked' | 'failed' | 'idle' | 'processing'
 type ReviewsIndexingProgressState = 'blocked' | 'completed' | 'failed' | 'processing' | 'queued' | 'stalled'
 type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 
@@ -308,14 +309,26 @@ const getHasPendingReviewServingWork = (diagnostics: ReviewServingDiagnostics) =
   )
 }
 
+const getReviewsIndexingMaintenanceStatus = (params: {
+  hasActionableFailures: boolean
+  hasBlockedLiveWork: boolean
+  hasLiveRefreshWork: boolean
+}): ReviewsIndexingMaintenanceStatus => {
+  return params.hasActionableFailures
+    ? 'failed'
+    : params.hasBlockedLiveWork
+      ? 'blocked'
+      : params.hasLiveRefreshWork
+        ? 'processing'
+        : 'idle'
+}
+
 const getReviewsIndexingStatus = (params: {
   enabledPromptCount: number
+  hasActionableFailures: boolean
   hasAnyArticlesInScope: boolean
   hasBlockedCandidateSnapshot: boolean
-  hasLatestTerminalV4Request: boolean
-  hasQuarantineBarrier: boolean
   hasReviewServingRows: boolean
-  hasTerminalV4Work: boolean
   isReviewServingProjectorPaused: boolean
   isServerMutationWorkDisabled: boolean
   pendingRefreshCount: number
@@ -327,12 +340,7 @@ const getReviewsIndexingStatus = (params: {
     return 'not-needed'
   }
 
-  if (
-    params.hasQuarantineBarrier
-    || params.hasLatestTerminalV4Request
-    || (params.hasTerminalV4Work
-      && (!params.hasReviewServingRows || params.pendingRefreshCount > 0 || params.runningRefreshCount > 0))
-  ) {
+  if (params.hasActionableFailures) {
     return 'failed'
   }
 
@@ -504,7 +512,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const terminalQuarantineCount = servingDiagnostics.quarantine.quarantinedOutboxCount
     const pendingDirtyWorkCount =
       servingDiagnostics.dirtyWork.pendingCount
-      + servingDiagnostics.dirtyWork.failedCount
       + servingDiagnostics.dirtyWork.runningCount
       + servingDiagnostics.quarantine.retryableOutboxCount
     const queuedRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
@@ -521,19 +528,29 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         : 0
     const hasBlockedCandidateSnapshot =
       servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
+    const hasLiveRefreshWork = pendingRefreshCount > 0 || inFlightRefreshCount > 0 || claimableRefreshCount > 0
+    const hasHistoricalMaintenanceFailures =
+      terminalRebuildChunkCount + terminalDirtyWorkCount + terminalQuarantineCount > 0
+    const hasActionableMaintenanceFailures =
+      hasHistoricalMaintenanceFailures && (!hasReviewServingRows || (terminalQuarantineCount > 0 && hasLiveRefreshWork))
+    const hasBlockedLiveMaintenanceWork =
+      hasLiveRefreshWork
+      && (reviewServingProjectorPaused
+        || isServerMutationWorkDisabled
+        || activeDuckdbExclusiveWork !== null
+        || hasBlockedCandidateSnapshot
+        || terminalQuarantineCount > 0)
+    const maintenanceStatus = getReviewsIndexingMaintenanceStatus({
+      hasActionableFailures: hasActionableMaintenanceFailures,
+      hasBlockedLiveWork: hasBlockedLiveMaintenanceWork,
+      hasLiveRefreshWork,
+    })
     const baseIndexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
+      hasActionableFailures: hasActionableMaintenanceFailures,
       hasAnyArticlesInScope,
       hasBlockedCandidateSnapshot,
-      hasLatestTerminalV4Request:
-        servingDiagnostics.rebuildChunks.failedCount + servingDiagnostics.rebuildChunks.terminalQuarantinedCount > 0,
-      hasQuarantineBarrier: terminalQuarantineCount > 0,
       hasReviewServingRows,
-      hasTerminalV4Work:
-        terminalRebuildChunkCount
-          + terminalQuarantineCount
-          + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount)
-        > 0,
       isReviewServingProjectorPaused: reviewServingProjectorPaused,
       isServerMutationWorkDisabled,
       pendingRefreshCount,
@@ -584,6 +601,14 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           lastProgressedAt,
           lastProcessedAt: servingDiagnostics.snapshot.activeUpdatedAt,
           lastStartedAt: null,
+          maintenance: {
+            hasActionableFailures: hasActionableMaintenanceFailures,
+            hasHistoricalFailures: hasHistoricalMaintenanceFailures,
+            status: maintenanceStatus,
+            terminalDirtyWorkCount,
+            terminalQuarantineCount,
+            terminalRebuildChunkCount,
+          },
           oldestQueuedAt: getOldestTimestamp(
             servingDiagnostics.dirtyWork.oldestQueuedAt,
             servingDiagnostics.rebuildChunks.oldestQueuedAt,
