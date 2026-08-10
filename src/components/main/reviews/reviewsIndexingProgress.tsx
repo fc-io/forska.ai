@@ -3,6 +3,7 @@ import {Show} from 'solid-js'
 import {
   getArticleRefreshLabel,
   getCleanupLabel,
+  getIndexingStatusHeading,
   getIndexingStatusLabel,
   getProgressContainerClass,
   getProjectRefreshLabel,
@@ -18,7 +19,8 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
     <Show when={shouldShowIndexingProgress(props.indexing)}>
       <div class={getProgressContainerClass(props.compact ?? false)}>
         <p>
-          <span class="font-medium text-slate-700">Status:</span> {getIndexingStatusLabel(props.indexing)}
+          <span class="font-medium text-slate-700">{getIndexingStatusHeading(props.indexing)}:</span>{' '}
+          {getIndexingStatusLabel(props.indexing)}
         </p>
         <p>
           <span class="font-medium text-slate-700">Review page:</span> {getProjectRefreshLabel(props.indexing)}

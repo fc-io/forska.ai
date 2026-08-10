@@ -61,6 +61,15 @@ const hasCleanupWork = (indexing: ReviewsWarningsData['indexing']) => {
   return (indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0
 }
 
+const hasReadyReviewPages = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return (
+    totalArticleCount > 0
+    && indexing.coverage.reviewPageReadyArticleCount === totalArticleCount
+    && indexing.coverage.detailReadyArticleCount === totalArticleCount
+  )
+}
+
 const getArticleRefreshQueuedDescription = (surface: ReviewIndexingCopySurface) => {
   return surface === 'unassessedEmpty'
     ? "New judgments are queued to be folded into this project's review index. This list may change once the backlog clears."
@@ -79,6 +88,15 @@ const getProjectRefreshProcessingDescription = (surface: ReviewIndexingCopySurfa
     : surface === 'judgedEmpty'
       ? 'This project has scoped articles, but the review index is actively processing. Articles with judgments may appear here soon.'
       : 'This project has scoped articles, but the review index is actively processing in the maintenance worker. Review lists may look partial or empty until indexing finishes.'
+}
+
+const getBackgroundProcessingDescription = (indexing: ReviewsWarningsData['indexing']) => {
+  const searchReadyArticleCount = indexing.coverage.searchReadyArticleCount
+  const totalArticleCount = indexing.coverage.totalArticleCount
+
+  return searchReadyArticleCount !== null && searchReadyArticleCount < totalArticleCount
+    ? 'Review pages and details are ready. Search indexing is still catching up in the background.'
+    : 'Review pages and details are ready. Background maintenance is finishing review index enrichment.'
 }
 
 const getFailedReviewIndexingCopy = (): ReviewIndexingCopy => {
@@ -112,10 +130,15 @@ const getProcessingReviewIndexingCopy = (params: ReviewIndexingCopyParams): Revi
         description: getArticleRefreshProcessingDescription(params.surface),
         title: 'New judgments are still being incorporated',
       }
-    : {
-        description: getProjectRefreshProcessingDescription(params.surface),
-        title: getReviewIndexingInProgressTitle(params.projectId),
-      }
+    : hasReadyReviewPages(params.indexing)
+      ? {
+          description: getBackgroundProcessingDescription(params.indexing),
+          title: 'Background review indexing in progress',
+        }
+      : {
+          description: getProjectRefreshProcessingDescription(params.surface),
+          title: getReviewIndexingInProgressTitle(params.projectId),
+        }
 }
 
 export const getReviewIndexingStateCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {

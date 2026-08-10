@@ -40,6 +40,15 @@ const getCoverageCountLabel = (readyCount: number | null, totalCount: number) =>
     : `${getCountLabel(readyCount)} / ${getCountLabel(totalCount)} ${totalCount === 1 ? 'article' : 'articles'} ready`
 }
 
+const hasReadyReviewPages = (indexing: ReviewsIndexing) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return (
+    totalArticleCount > 0
+    && indexing.coverage.reviewPageReadyArticleCount === totalArticleCount
+    && indexing.coverage.detailReadyArticleCount === totalArticleCount
+  )
+}
+
 export const getProjectRefreshLabel = (indexing: ReviewsIndexing) => {
   return joinLabelParts([
     getCoverageCountLabel(indexing.coverage.reviewPageReadyArticleCount, indexing.coverage.totalArticleCount),
@@ -75,7 +84,9 @@ export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
   return (indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0 && indexing.progressState === 'completed'
     ? 'old index cleanup running'
     : indexing.progressState === 'processing'
-      ? 'maintenance worker is updating the review index'
+      ? hasReadyReviewPages(indexing)
+        ? 'updating search and enrichment in the background'
+        : 'maintenance worker is updating the review page index'
       : indexing.progressState === 'queued'
         ? 'queued for the maintenance worker'
         : indexing.progressState === 'blocked' && indexing.blockedReason === 'paused_by_policy'
@@ -87,6 +98,12 @@ export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
               : indexing.progressState === 'failed'
                 ? 'failed'
                 : 'completed'
+}
+
+export const getIndexingStatusHeading = (indexing: ReviewsIndexing) => {
+  return hasReadyReviewPages(indexing) && indexing.progressState === 'processing'
+    ? 'Background work'
+    : 'Indexing status'
 }
 
 export const shouldShowIndexingProgress = (indexing: ReviewsIndexing) => {
