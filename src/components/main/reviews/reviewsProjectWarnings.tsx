@@ -21,19 +21,19 @@ const getPendingRefreshMetaLabel = (params: {
   const segments = [
     params.pendingProjectRefreshCount > 0
       ? params.pendingProjectRefreshCount === 1
-        ? '1 project refresh outstanding'
-        : `${params.pendingProjectRefreshCount} project refreshes outstanding`
+        ? '1 maintenance task remaining'
+        : `${params.pendingProjectRefreshCount} maintenance tasks remaining`
       : null,
     params.pendingArticleRefreshCount > 0
       ? params.pendingArticleRefreshCount === 1
-        ? '1 article judgment refresh outstanding'
-        : `${params.pendingArticleRefreshCount} article judgment refreshes outstanding`
+        ? '1 article judgment refresh remaining'
+        : `${params.pendingArticleRefreshCount} article judgment refreshes remaining`
       : null,
   ].filter((value): value is string => {
     return value !== null
   })
 
-  return segments.join(' and ')
+  return segments.length === 0 ? '' : `Background work: ${segments.join(' and ')}`
 }
 
 export const ReviewsProjectWarnings = (props: {projectId: string}) => {

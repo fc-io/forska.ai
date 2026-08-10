@@ -335,6 +335,10 @@ test('renders user-facing counts and progress timestamps for review indexing wor
     expect(container.textContent).not.toContain('last updated')
     expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
     expect(container.textContent).not.toContain('Large rebuild')
+    expect(container.textContent).toContain(
+      'Background work: 1 maintenance task remaining and 2 article judgment refreshes remaining',
+    )
+    expect(container.textContent).not.toContain('project refresh')
   } finally {
     dispose()
   }
