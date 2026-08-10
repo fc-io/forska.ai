@@ -28,6 +28,7 @@
     "test:network-smoke:current-db:readonly": "FORSKA_NETWORK_SMOKE_AUDIT=true FORSKA_NETWORK_SMOKE_DB_MODE=current FORSKA_NETWORK_SMOKE_SEED_MODE=existing FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS=true FORSKA_DISABLE_SERVER_MUTATIONS=true bunx playwright test tests/e2e/networkSmoke.spec.ts",
     "test:network-smoke:synthetic": "FORSKA_NETWORK_SMOKE_AUDIT=true bunx playwright test tests/e2e/networkSmoke.spec.ts",
     "test:dev-server:current-db": "FORSKA_REAL_DEV_SERVER_SMOKE=true bun test scripts/runWithRuntimeProfile.test.ts -t \"real primary dev:server startup has no DuckDB owner heartbeat or restart errors\"",
+    "test:review-serving:current-db-tab-count-parity": "FORSKA_RUNTIME_PROFILE=primary DUCKDB_PATH=\"$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb\" SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/checkReviewServingCurrentDbTabCountParity.ts",
     "lint": "bunx eslint src",
     "lint:fix": "bunx eslint src --fix",
     "dev:start": "bun scripts/devStart.ts",
