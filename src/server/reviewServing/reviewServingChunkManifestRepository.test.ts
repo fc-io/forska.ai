@@ -1831,6 +1831,39 @@ test('completed rebuild chunks finalize their root request only after all reques
   expect(requestUpdate).toContain('chunk.project_id IS DISTINCT FROM app.review_rebuild_request.project_id')
 })
 
+test('completed rebuild chunks attempt snapshot promotion for their candidate snapshot', async () => {
+  const requestId = 'rebuild:promotion-root'
+  const running = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-promotion-child', requestId}, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-promotion-child',
+    snapshotId: 'snapshot:promotion-candidate',
+    status: 'running' as const,
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([running])
+
+  await writeReviewServingRebuildChunkOutput(
+    {
+      ...baseChunkIdentity,
+      inputDigest: 'digest-promotion-child',
+      leaseOwner: 'worker-promotion-child',
+      requestId,
+      validateOutput: async () => {
+        return {
+          actualChecksum: 'checksum-promotion-child',
+          actualCount: 1,
+          expectedChecksum: 'checksum-promotion-child',
+        }
+      },
+      writeOutput: async () => {},
+    },
+    database,
+  )
+
+  expect(statements.join('\n')).toContain('FROM app.review_serving_snapshot_manifest')
+  expect(statements.join('\n')).toContain('snapshot:promotion-candidate')
+})
+
 test('root request completion preserves blocked or quarantined chunk evidence', async () => {
   const requestId = 'rebuild:blocked-root'
   const blockedSibling = {

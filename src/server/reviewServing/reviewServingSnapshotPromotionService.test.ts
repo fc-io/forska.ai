@@ -195,12 +195,12 @@ test('snapshot validation fails required gaps but allows missing optional compon
   expect(result.ok ? null : result.error).toBe('required component display is missing from snapshot state')
 })
 
-test('snapshot validation promotes default candidate when optional payload is missing', async () => {
+test('snapshot validation promotes default candidate when optional enrichment components are missing', async () => {
   const {database} = createPromotionDatabase()
   const candidate = await composeReviewServingCandidateSnapshotManifest(
     {
       componentIdentities: {display: displayManifest},
-      componentRequirements: {optionalComponents: ['payload'], requiredComponents: ['display']},
+      componentRequirements: {optionalComponents: ['judgmentInputContent', 'payload'], requiredComponents: ['display']},
       composedIdentity: {route: 'review.llm.rows', version: 1},
       projectId: 'project-1',
       reviewConfigHash: 'review-config-1',
@@ -227,6 +227,45 @@ test('snapshot validation promotes default candidate when optional payload is mi
 
   expect(candidate.componentState.optional).toEqual([])
   expect(result.ok).toBe(true)
+})
+
+test('snapshot validation records optional enrichment errors without blocking default promotion', async () => {
+  const {database, manifests} = createPromotionDatabase()
+  manifests.set(getManifestKey(searchManifest), {...searchManifest, status: 'failed'})
+  const candidate = await composeReviewServingCandidateSnapshotManifest(
+    {
+      componentIdentities: {display: displayManifest, search: searchManifest},
+      componentRequirements: {optionalComponents: ['search'], requiredComponents: ['display']},
+      composedIdentity: {route: 'review.llm.rows', version: 1},
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {reviewChange: 10},
+    },
+    database,
+  )
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      ...candidate,
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: candidate.componentRequirements.optionalComponents,
+      requiredComponents: candidate.componentRequirements.requiredComponents,
+      reviewConfigHash: candidate.reviewConfigHash ?? null,
+      selectedImportSnapshotId: candidate.selectedImportSnapshotId ?? null,
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(result.ok).toBe(true)
+  expect(result.validationResult).toMatchObject({
+    ok: true,
+    optionalComponentErrorCount: 1,
+    optionalComponentErrors: ['required component search is failed'],
+  })
 })
 
 test('snapshot validation blocks detail candidate when required payload is missing', async () => {
@@ -368,23 +407,23 @@ test('snapshot validation ignores project-scope watermarks for display and requi
   const searchResult = await validateReviewServingCandidateSnapshotManifest(
     {
       componentState: {
-        optional: [
+        optional: [],
+        required: [
           {
             baseGeneration: '1',
             component: 'search',
             patchWatermark: '4',
             projectionIdentity: 'search:identity-1',
-            requirement: 'optional',
+            requirement: 'required',
           },
         ],
-        required: [],
       },
       composedIdentity: {route: 'review.search', version: 1},
       lastError: null,
       lastKnownGoodSnapshotId: null,
-      optionalComponents: ['search'],
+      optionalComponents: [],
       projectId: 'project-1',
-      requiredComponents: [],
+      requiredComponents: ['search'],
       reviewConfigHash: 'review-config-1',
       selectedImportSnapshotId: 'selected-import-1',
       snapshotId: 'snapshot-1',
@@ -445,23 +484,23 @@ test('snapshot validation requires import-run watermarks for search manifests', 
   const result = await validateReviewServingCandidateSnapshotManifest(
     {
       componentState: {
-        optional: [
+        optional: [],
+        required: [
           {
             baseGeneration: '1',
             component: 'search',
             patchWatermark: '4',
             projectionIdentity: 'search:identity-1',
-            requirement: 'optional',
+            requirement: 'required',
           },
         ],
-        required: [],
       },
       composedIdentity: {route: 'review.search', version: 1},
       lastError: null,
       lastKnownGoodSnapshotId: null,
-      optionalComponents: ['search'],
+      optionalComponents: [],
       projectId: 'project-1',
-      requiredComponents: [],
+      requiredComponents: ['search'],
       reviewConfigHash: 'review-config-1',
       selectedImportSnapshotId: 'selected-import-1',
       snapshotId: 'snapshot-1',
@@ -488,23 +527,23 @@ test('snapshot validation checks each source watermark partition independently',
   const result = await validateReviewServingCandidateSnapshotManifest(
     {
       componentState: {
-        optional: [
+        optional: [],
+        required: [
           {
             baseGeneration: '1',
             component: 'search',
             patchWatermark: '4',
             projectionIdentity: 'search:identity-1',
-            requirement: 'optional',
+            requirement: 'required',
           },
         ],
-        required: [],
       },
       composedIdentity: {route: 'review.search', version: 1},
       lastError: null,
       lastKnownGoodSnapshotId: null,
-      optionalComponents: ['search'],
+      optionalComponents: [],
       projectId: 'project-1',
-      requiredComponents: [],
+      requiredComponents: ['search'],
       reviewConfigHash: 'review-config-1',
       selectedImportSnapshotId: 'selected-import-1',
       snapshotId: 'snapshot-1',

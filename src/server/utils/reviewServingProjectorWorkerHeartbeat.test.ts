@@ -554,7 +554,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle while for
   expect(result.events).not.toContainEqual(['exit', 0])
 })
 
-test('review serving projector worker heartbeat force-recycles after repeated foreground DuckDB queue deferrals', () => {
+test('review serving projector worker heartbeat keeps skipping high-RSS recycle after repeated foreground DuckDB queue deferrals', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -660,8 +660,8 @@ test('review serving projector worker heartbeat force-recycles after repeated fo
       return event[0] === 'queueMetrics'
     }).length,
   ).toBeGreaterThanOrEqual(4)
-  expect(result.events).toContainEqual(['recycle', false, false])
-  expect(result.events).toContainEqual(['gc'])
+  expect(result.events).not.toContainEqual(['recycle', false, false])
+  expect(result.events).not.toContainEqual(['gc'])
   expect(result.events).not.toContainEqual(['exit', 0])
 })
 
