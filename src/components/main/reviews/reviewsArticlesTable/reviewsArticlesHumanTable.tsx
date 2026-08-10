@@ -41,8 +41,8 @@ const selectionColumn: ColumnDef<ArticleWithHumanJudgments, unknown> = {
   header: () => {
     return <span class="sr-only">Select</span>
   },
-  size: 15,
-  minSize: 15,
+  size: 44,
+  minSize: 44,
   enableSorting: false,
   cell: (info) => {
     const selected = () => {
@@ -270,7 +270,10 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
 
   return (
     <div class="overflow-x-auto bg-white rounded-lg shadow">
-      <table class="min-w-full divide-y divide-gray-200 table-fixed">
+      <table
+        class="divide-y divide-gray-200 table-fixed"
+        style={{width: `${table.getTotalSize()}px`, 'min-width': '100%'}}
+      >
         <thead class="bg-gray-50">
           <For each={table.getHeaderGroups()}>
             {(headerGroup) => {

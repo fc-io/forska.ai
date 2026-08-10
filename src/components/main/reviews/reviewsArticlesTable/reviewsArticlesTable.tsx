@@ -211,8 +211,8 @@ const selectionColumn: ColumnDef<ArticleWithJudgments, unknown> = {
   header: () => {
     return <span class="sr-only">Select</span>
   },
-  size: 15,
-  minSize: 15,
+  size: 44,
+  minSize: 44,
   enableSorting: false,
   cell: (info) => {
     const selected = () => {
@@ -237,8 +237,8 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     id: 'status',
     header: 'Status',
-    size: 80,
-    minSize: 60,
+    size: 112,
+    minSize: 96,
     cell: (info) => {
       const isFullyJudged = info.row.original.isFullyJudged
       const judgedCount = info.row.original.judgedPromptIds?.length ?? 0
@@ -503,7 +503,10 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
 
   return (
     <div class="overflow-x-auto bg-white rounded-lg shadow">
-      <table class="min-w-full divide-y divide-gray-200 table-fixed">
+      <table
+        class="divide-y divide-gray-200 table-fixed"
+        style={{width: `${table.getTotalSize()}px`, 'min-width': '100%'}}
+      >
         <thead class="bg-gray-50">
           <For each={table.getHeaderGroups()}>
             {(headerGroup) => {

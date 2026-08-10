@@ -3,7 +3,9 @@ import type {ReviewsWarningsData} from '../reviewsWarningsQuery.ts'
 type ReviewsIndexing = ReviewsWarningsData['indexing']
 
 export const getProgressContainerClass = (compact: boolean) => {
-  return compact ? 'mt-3 space-y-1 text-xs text-slate-600' : 'mt-3 space-y-1.5 text-xs text-slate-600'
+  return compact
+    ? 'mt-3 min-w-0 space-y-1 break-words text-xs text-slate-600'
+    : 'mt-3 min-w-0 space-y-1.5 break-words text-xs text-slate-600'
 }
 
 const formatProgressTimestamp = (value: string | null) => {
