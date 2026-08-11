@@ -72,6 +72,10 @@ const getComparisonProjectServingBoundaryQueryRows = <T>(statement: string) => {
     return [{stagedArticleCount: 2, stagedCellCount: 4, stagedFilterMemberCount: 6, stagedFilterStatsCount: 8}] as T[]
   }
 
+  if (statement.includes('compare_with_humans AS compareWithHumans')) {
+    return [{compareWithHumans: true, humanJudgmentMode: 'prompt'}] as T[]
+  }
+
   if (statement.includes('SELECT') && statement.includes('CAST(active_generation AS INTEGER) AS activeGeneration')) {
     return [
       {
@@ -438,6 +442,90 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
       return event.kind.includes('SELECT\n      DISTINCT project.id')
     }),
   ).toBe(true)
+})
+
+test('comparison serving rebuild skips prompt cell phase for summary-mode projects', async () => {
+  const events: RebuildBoundaryEvent[] = []
+  let transactionDepth = 0
+  const recordEvent = (kind: string) => {
+    events.push({activeTransaction: transactionDepth > 0, kind})
+  }
+  const queryJson = async <T>(statement: string): Promise<T[]> => {
+    recordEvent(getComparisonProjectServingBoundaryQueryEventKind(statement))
+
+    if (statement.includes('compare_with_humans AS compareWithHumans')) {
+      return [{compareWithHumans: true, humanJudgmentMode: 'summary'}] as T[]
+    }
+
+    return getComparisonProjectServingBoundaryQueryRows<T>(statement)
+  }
+  const run = async (statement: string) => {
+    recordEvent(statement)
+  }
+  const database = {
+    queryJson,
+    run,
+    transaction: async <T>(operation: (runner: {queryJson: typeof queryJson; run: typeof run}) => Promise<T>) => {
+      recordEvent('transaction:start')
+      transactionDepth += 1
+
+      try {
+        return await operation({queryJson, run})
+      } finally {
+        transactionDepth -= 1
+        recordEvent('transaction:end')
+      }
+    },
+  }
+  const getBulkPhase = (phase: string) => {
+    return async (_params: {comparisonProjectId: string; generation: number}, runner?: {run: typeof run}) => {
+      const phaseRunner = runner ?? database
+
+      recordEvent(`bulk:${phase}`)
+      await phaseRunner.run(`bulk-run:${phase}`)
+    }
+  }
+  const service = getComparisonProjectServingRebuildService()
+
+  await service.rebuildComparisonProjectServing('comparison-summary-boundary-project', {
+    cellBuilder: {
+      insertPromptModeComparisonProjectCells: getBulkPhase('prompt_cells'),
+      insertSummaryModeComparisonProjectCells: getBulkPhase('summary_cells'),
+    },
+    database,
+    generationService: {
+      promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        recordEvent('generation:promote')
+
+        return generationDependencies.transaction(async () => {
+          return true
+        })
+      },
+    },
+    rollupBuilder: {insertComparisonProjectServingRollups: getBulkPhase('rollups')},
+  })
+
+  const mutationAndBulkEvents = events
+    .filter((event) => {
+      return event.kind.startsWith('status:') || event.kind.startsWith('bulk:')
+    })
+    .map((event) => {
+      return event.kind
+    })
+
+  expect(mutationAndBulkEvents).toEqual([
+    'status:queued',
+    'status:summary_cells',
+    'bulk:summary_cells',
+    'status:summary_cells',
+    'status:rollups',
+    'bulk:rollups',
+    'status:rollups',
+    'status:promoting',
+    'status:ready',
+  ])
 })
 
 test('comparison serving rebuild persists staged counts from batch progress callbacks', async () => {

@@ -120,6 +120,9 @@ type ComparisonProjectServingStatusRecordRow = {
   servingTotalCellCount: unknown
 }
 
+type ComparisonProjectServingMode = 'prompt' | 'summary'
+type ComparisonProjectServingModeRow = {compareWithHumans: unknown; humanJudgmentMode: string | null}
+
 const comparisonProjectServingGenerationTable = 'app.comparison_project_serving_generation'
 const comparisonProjectTable = 'app.comparison_project'
 const comparisonProjectServingRebuildClaimTimeoutMs = 15 * 60 * 1000
@@ -689,6 +692,22 @@ const getComparisonProjectServingTotalArticleCount = async (
   return getComparisonProjectServingProgressTotalValue(row?.totalArticleCount)
 }
 
+const getComparisonProjectServingMode = async (
+  runner: Pick<ComparisonProjectServingRebuildRunner, 'queryJson'>,
+  comparisonProjectId: string,
+): Promise<ComparisonProjectServingMode> => {
+  const [row] = await runner.queryJson<ComparisonProjectServingModeRow>(`
+    SELECT
+      compare_with_humans AS compareWithHumans,
+      COALESCE(human_judgment_mode, 'prompt') AS humanJudgmentMode
+    FROM ${comparisonProjectTable}
+    WHERE id = ${getSqlLiteral(comparisonProjectId)}
+    LIMIT 1
+  `)
+
+  return row?.compareWithHumans === true && row.humanJudgmentMode === 'summary' ? 'summary' : 'prompt'
+}
+
 const recordComparisonProjectServingProgressPhase = async (params: {
   comparisonProjectId: string
   counts?: ComparisonProjectServingProgressCounts
@@ -769,15 +788,18 @@ const buildComparisonProjectServingGeneration = async ({
     comparisonProjectId,
   )
   const pendingTotals = {totalArticleCount, totalCellCount: null}
+  const servingMode = await getComparisonProjectServingMode(dependencies.database, comparisonProjectId)
 
-  await runComparisonProjectServingBuildPhase({
-    comparisonProjectId,
-    dependencies,
-    generation,
-    phase: 'prompt_cells',
-    run: dependencies.cellBuilder.insertPromptModeComparisonProjectCells,
-    totals: pendingTotals,
-  })
+  if (servingMode === 'prompt') {
+    await runComparisonProjectServingBuildPhase({
+      comparisonProjectId,
+      dependencies,
+      generation,
+      phase: 'prompt_cells',
+      run: dependencies.cellBuilder.insertPromptModeComparisonProjectCells,
+      totals: pendingTotals,
+    })
+  }
   const cellCounts = await runComparisonProjectServingBuildPhase({
     comparisonProjectId,
     dependencies,
