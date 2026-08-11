@@ -1083,6 +1083,32 @@ test('project transfer import upload streams to upload.zip and persists public m
   expect(text).not.toContain('tmp/project-transfer')
 })
 
+test('project transfer import upload rejects truncated content-length bodies', async () => {
+  const sessionId = getRouteTestSessionId('import-upload-truncated-content-length')
+  routeState.sessions[sessionId] = getImportSessionRecord({id: sessionId})
+  const app = await getProjectTransferApp()
+  const uploadRoot = getImportRootPath(sessionId)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/import/${sessionId}/upload`, {
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(textEncoder.encode('partial'))
+          controller.close()
+        },
+      }),
+      headers: {'content-length': '100', 'content-type': 'application/zip'},
+      method: 'PUT',
+    }),
+  )
+  const body = (await response.json()) as {data: null; error: string}
+
+  expect(response.status).toBe(400)
+  expect(body.error).toBe('Project transfer upload ended after 7 bytes, expected 100 bytes')
+  expect(await globalThis.Bun.file(`${uploadRoot}/upload.zip`).exists()).toBe(false)
+  expect(routeState.sessions[sessionId]?.state).toBe('failed')
+})
+
 test('project transfer import upload falls back when the request body has no reader', async () => {
   rmSync(getImportRootPath(uploadArrayBufferSessionId), {force: true, recursive: true})
   routeState.sessions[uploadArrayBufferSessionId] = getImportSessionRecord({id: uploadArrayBufferSessionId})
