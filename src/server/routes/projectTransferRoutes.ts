@@ -51,13 +51,13 @@ import {
   projectTransferMetricUnavailable,
   type ProjectTransferPerformanceMetrics,
 } from '../services/projectTransfer/projectTransferPerformanceMetrics.ts'
+import type {ProjectTransferPackageWarning} from '../services/projectTransfer/projectTransferSchemas.ts'
 import {
   getProjectTransferExportTempLayout,
   getProjectTransferImportTempLayout,
   isProjectTransferSessionId,
   toProjectTransferSessionResponse,
 } from '../services/projectTransfer/projectTransferSession.ts'
-import type {ProjectTransferPackageWarning} from '../services/projectTransfer/projectTransferSchemas.ts'
 import {getProjectTransferSessionRepository} from '../services/projectTransfer/projectTransferSessionRepository.ts'
 import {
   getProjectTransferCurrentImportStagingLayout,
@@ -1027,6 +1027,40 @@ const isUploadResourceGateError = (error: unknown) => {
   return error instanceof Error && error.name === 'ProjectTransferUploadResourceGateError'
 }
 
+const isUploadContentLengthMismatchError = (error: unknown) => {
+  return error instanceof Error && error.name === 'ProjectTransferUploadContentLengthMismatchError'
+}
+
+const getExpectedUploadContentLength = (request: Request) => {
+  const headerValue = request.headers.get('content-length')
+
+  if (headerValue === null) {
+    return null
+  }
+
+  const byteLength = Number(headerValue)
+
+  return Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : null
+}
+
+const assertUploadContentLength = ({
+  expectedByteLength,
+  actualByteLength,
+}: {
+  actualByteLength: number
+  expectedByteLength: number | null
+}) => {
+  if (expectedByteLength === null || expectedByteLength === actualByteLength) {
+    return
+  }
+
+  const error = new Error(
+    `Project transfer upload ended after ${actualByteLength} bytes, expected ${expectedByteLength} bytes`,
+  )
+  error.name = 'ProjectTransferUploadContentLengthMismatchError'
+  throw error
+}
+
 const getDefaultImportPerformanceMetrics = () => {
   return getProjectTransferPerformanceMetrics({operation: 'import'})
 }
@@ -1170,6 +1204,7 @@ const writeImportUploadArtifact = async ({
   const uploadPath = resolveProjectTransferTempWritablePath({pathValue: layout.uploadPath})
   const tempPath = resolveProjectTransferTempWritablePath({pathValue: getUploadTempPathValue({ownerToken, sessionId})})
   const hash = createHash('sha256')
+  const expectedByteLength = getExpectedUploadContentLength(request)
   const state = {byteLength: 0}
   let writeSucceeded = false
 
@@ -1211,6 +1246,7 @@ const writeImportUploadArtifact = async ({
       })
     }
 
+    assertUploadContentLength({actualByteLength: state.byteLength, expectedByteLength})
     await rename(tempPath, uploadPath)
     writeSucceeded = true
   } finally {
@@ -1852,7 +1888,9 @@ const uploadImportPackage = async ({
   if (!upload.ok) {
     const uploadErrorMessage = isUploadResourceGateError(upload.error)
       ? (upload.error as Error).message
-      : 'Project transfer upload failed'
+      : isUploadContentLengthMismatchError(upload.error)
+        ? (upload.error as Error).message
+        : 'Project transfer upload failed'
 
     await repository.transitionProjectTransferSessionState({
       error: getErrorPayload(upload.error),
@@ -1869,7 +1907,11 @@ const uploadImportPackage = async ({
       sessionId: params.sessionId,
     })
 
-    return getProjectTransferApiError(set, isUploadResourceGateError(upload.error) ? 413 : 500, uploadErrorMessage)
+    return getProjectTransferApiError(
+      set,
+      isUploadResourceGateError(upload.error) ? 413 : isUploadContentLengthMismatchError(upload.error) ? 400 : 500,
+      uploadErrorMessage,
+    )
   }
 
   const completedAt = new Date()
