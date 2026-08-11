@@ -121,19 +121,25 @@ const createManifestDatabase = (
 const createReaderDatabase = (input?: {
   humanRows?: readonly Record<string, unknown>[]
   llmRows?: readonly Record<string, unknown>[]
+  projectHumanJudgmentMode?: 'prompt' | 'summary'
   promptCount?: number
+  rowCount?: number
 }) => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
+      if (statement.includes('FROM app.project')) {
+        return [{humanJudgmentMode: input?.projectHumanJudgmentMode ?? 'prompt'}] as T[]
+      }
+
       if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
         return [{promptCount: input?.promptCount ?? 1}] as T[]
       }
 
       if (statement.includes(' AS totalCount')) {
-        return [{totalCount: 1}] as T[]
+        return [{totalCount: input?.rowCount ?? 1}] as T[]
       }
 
       if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4')) {
@@ -141,6 +147,10 @@ const createReaderDatabase = (input?: {
       }
 
       if (hasArticleServingRowSource(statement)) {
+        if (input?.rowCount === 0) {
+          return [] as T[]
+        }
+
         return [
           {
             activity_sort_at: '2026-01-02T00:00:00.000Z',
@@ -318,7 +328,7 @@ const getReviewTabCountRows = (articles: readonly ReviewTabCountFixtureArticle[]
       count_kind: countKind,
       count_value: sourceTruth[listMode],
       filter_key: listMode === 'unassessed' ? 'queue:ready' : 'list:all',
-      list_mode_key: listMode === 'unassessed' ? 'llm' : listMode,
+      list_mode_key: listMode,
       project_id: reviewTabCountProjectId,
       review_config_hash: reviewTabCountConfigHash,
       snapshot_id: reviewTabCountSnapshotId,
@@ -399,6 +409,10 @@ const createReviewTabCountDatabase = (articles: readonly ReviewTabCountFixtureAr
         const listMode = getListModeFromStatement(statement) ?? 'llm'
 
         return [{totalCount: sourceTruth[listMode]}] as T[]
+      }
+
+      if (statement.includes('SELECT COUNT(DISTINCT queue.article_id) AS totalCount')) {
+        return [{totalCount: sourceTruth.unassessed}] as T[]
       }
 
       if (statement.includes('FROM mart.review_article_count_serving_v4')) {
@@ -557,7 +571,7 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(firstRow?.judgments[0]?.answer).toBe('yes')
   expect(firstRow?.articleCreatedAt).toBeNull()
   expect(firstRow?.sourceMetadata).toEqual({covidence: {studyId: 'study-1'}})
-  expect(reader.statements).toHaveLength(11)
+  expect(reader.statements).toHaveLength(12)
   expect(sql).toContain('SELECT requested.filter_value AS filterValue')
   expect(sql).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(sql).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
@@ -583,6 +597,32 @@ test('human review route service uses serving rows, human payload hydration, and
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('human review route service reports summary project mode even while the summary page is empty', async () => {
+  const reader = createReaderDatabase({projectHumanJudgmentMode: 'summary', rowCount: 0})
+  const result = await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result).toEqual({
+    data: [],
+    detailReadiness: 'ready',
+    humanJudgmentMode: 'summary',
+    limit: 100,
+    nextCursor: null,
+    page: 1,
+    totalCount: 0,
+    totalPages: 0,
+  })
+  expect(sql).toContain('SELECT human_judgment_mode AS humanJudgmentMode')
+  expect(sql).toContain('FROM app.project')
 })
 
 test('human review prompt-filtered count intersects through one posting CTE with human prompt answer prefix', async () => {
@@ -877,7 +917,7 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.humanAnswersByPrompt?.['prompt-1']).toEqual(['yes'])
-  expect(reader.statements).toHaveLength(12)
+  expect(reader.statements).toHaveLength(13)
   expect(sql).toContain('SELECT requested.filter_value AS filterValue')
   expect(sql).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(sql).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
@@ -934,6 +974,7 @@ test('both review route service derives displayed LLM summaries with criteria se
       },
     ],
     promptCount: 2,
+    projectHumanJudgmentMode: 'summary',
   })
 
   const result = await getBothReviewArticlesFromServing(
@@ -1045,6 +1086,50 @@ test('unassessed review route service pages filtered distinct article rows and q
   })
 })
 
+test('unassessed review route service counts unfiltered pages from the queue serving rows', async () => {
+  const reader = createReaderDatabase()
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (statement.includes('FROM mart.review_filtered_count_serving_v4')) {
+        return [{countFound: true, countValue: 0}] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_count_serving_v4')) {
+        return [
+          {
+            availability: 'ready',
+            count_value: 0,
+            countValue: 0,
+            filter_key: 'queue:ready',
+            key: 'review.queue.unassessedReady',
+          },
+        ] as T[]
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+  }
+
+  const result = await getUnassessedReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result.data).toHaveLength(1)
+  expect(result.totalCount).toBe(1)
+  expect(result.totalPages).toBe(1)
+  expect(sql).toContain('SELECT COUNT(DISTINCT queue.article_id) AS totalCount')
+  expect(sql).toContain('FROM mart.review_unassessed_queue_article_rank_serving_v4 queue')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(sql).toContain("queue.queue_kind = 'unassessed'")
+  expect(sql).toContain('list_mode_state.has_unassessed_list_mode IS TRUE')
+  expect(sql).not.toContain('FROM mart.review_article_count_serving_v4')
+  expect(sql).not.toContain('FROM mart.review_filtered_count_serving_v4')
+  expect(sql).not.toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+})
+
 test('human, both, and unassessed routes read one cursor page for numeric direct page jumps', async () => {
   const humanReader = createReaderDatabase()
   const humanResult = await getHumanReviewArticlesFromServing(
@@ -1077,9 +1162,9 @@ test('human, both, and unassessed routes read one cursor page for numeric direct
   expect(humanResult.page).toBe(1)
   expect(bothResult.page).toBe(1)
   expect(unassessedResult.page).toBe(1)
-  expect(humanReader.statements).toHaveLength(9)
-  expect(bothReader.statements).toHaveLength(10)
-  expect(unassessedReader.statements).toHaveLength(7)
+  expect(humanReader.statements).toHaveLength(10)
+  expect(bothReader.statements).toHaveLength(11)
+  expect(unassessedReader.statements).toHaveLength(3)
 })
 
 test('human, both, and unassessed services surface stale and unavailable freshness without raw fallback', async () => {
