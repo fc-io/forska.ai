@@ -3391,6 +3391,21 @@ test('comparison project conflict resolution import analyze returns row details 
   expect(state.rootRunStatements).toEqual([])
   expect(state.createdComparisonProjectIds).toEqual([])
   expect(state.staleServingIds).toEqual([])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_article_identifier_serving matched_identifier')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_article_serving a')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('target_identifier AS (') || statement.includes('articleScopeConditions')
+    }),
+  ).toBe(false)
 })
 
 test('comparison project conflict resolution import matches same article rows before identifier lookup', async () => {
@@ -6438,11 +6453,19 @@ test('comparison project conflict resolution export returns saved resolutions as
   expect(exportStatement).toContain('FROM app.comparison_project_conflict_resolution cr')
   expect(exportStatement).toContain('INNER JOIN mart.comparison_article_serving a')
   expect(exportStatement).toContain('LEFT JOIN mart.comparison_article_identifier_serving ai')
+  expect(exportStatement).toContain('ai.source_identifier_id ASC')
   expect(exportStatement).not.toContain('INNER JOIN app.article a ON a.id = cr.article_id')
   expect(exportStatement).not.toContain('LEFT JOIN app.article_identifier ai ON ai.article_id = a.id')
+  expect(exportStatement).not.toContain('mart.comparison_cell_serving')
+  expect(exportStatement).not.toContain('ai.id ASC')
   expect(exportStatement).not.toContain('LIMIT')
   expect(exportStatement).not.toContain('row_filter')
   expect(exportStatement).not.toContain('difference_filter')
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_cell_serving')
+    }),
+  ).toBe(false)
 })
 
 test('comparison project conflict resolution export fails closed without active serving generation', async () => {
