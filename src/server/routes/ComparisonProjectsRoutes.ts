@@ -3432,7 +3432,7 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
       ai.is_primary DESC,
       ai.kind ASC,
       ai.normalized_value ASC,
-      ai.id ASC
+      ai.source_identifier_id ASC
   `)
 
   return rows.map((row) => {
