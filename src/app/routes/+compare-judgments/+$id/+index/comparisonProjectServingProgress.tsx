@@ -4,12 +4,12 @@ import type {ComparisonProjectServingProgress as ComparisonProjectServingProgres
 
 const phaseLabels: Record<NonNullable<ComparisonProjectServingProgressData['phase']>, string> = {
   cleanup: 'cleaning up old comparison generations',
-  prompt_cells: 'materializing prompt comparison cells',
+  prompt_cells: 'materializing prompt comparison answers',
   promoting: 'promoting the readable generation',
   queued: 'queued for comparison materialization',
   ready: 'materialization complete',
   rollups: 'building comparison rows and filters',
-  summary_cells: 'materializing summary comparison cells',
+  summary_cells: 'materializing summary comparison answers',
 }
 
 const formatProgressTimestamp = (value: Date | string | null) => {
@@ -61,8 +61,8 @@ const getStagedRowsLabel = (progress: ComparisonProjectServingProgressData) => {
     getProgressCountLabel(
       progress.stagedCellCount,
       progress.totalCellCount,
-      'cells',
-      'total known after cell materialization',
+      'comparison answers',
+      'total known after answer materialization',
     ),
     progress.stagedFilterMemberCount > 0
       ? `${getCountLabel(progress.stagedFilterMemberCount)} filter memberships`
@@ -101,9 +101,9 @@ export const ComparisonProjectServingProgress = (props: {
     <Show when={shouldShowProgress(props.progress, props.showWaiting ?? false)}>
       <div class="mt-3 space-y-1.5 text-xs text-slate-600">
         <p>
-          Staged rows belong to the new, inactive generation. Cells are built first, then article rows and filters; the
-          existing generation stays readable until promotion. The exact cell total appears after cell materialization
-          because empty or missing answers do not create cells.
+          Staged rows belong to the new, inactive generation. Comparison answers are built first, then article rows and
+          filters; the existing generation stays readable until promotion. The exact answer total appears after answer
+          materialization because empty or missing answers are skipped.
         </p>
         <p>
           <span class="font-medium text-slate-700">Materialization:</span> {getPhaseLabel(props.progress)}
