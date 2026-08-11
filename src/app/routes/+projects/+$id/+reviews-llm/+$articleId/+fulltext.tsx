@@ -12,8 +12,11 @@ import {ReviewJudgments} from '../../../../../../components/main/projects/review
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
 import {
+  getArchivedReviewDetailFromResponseError,
   getAvailableReviewDetail,
+  isArchivedReviewDetail,
   isUnavailableReviewDetail,
+  ReviewDetailArchivedState,
   ReviewDetailUnavailableState,
 } from './reviewDetailReadiness'
 
@@ -28,9 +31,14 @@ export const ReviewDetailFulltext = () => {
       queryKey: ['article-review-details', projectId, articleId],
       queryFn: async () => {
         const response = await apiClient.api.projectsreview.post({projectId, articleId})
+        const archivedDetail = getArchivedReviewDetailFromResponseError(response.error)
+
+        if (archivedDetail) {
+          return archivedDetail
+        }
 
         if (!response.data) {
-          throw new Error('Failed to fetch apiClient.api.projectsreview.pos')
+          throw new Error('Failed to load article review details')
         }
         return response.data
       },
@@ -59,6 +67,12 @@ export const ReviewDetailFulltext = () => {
 
   const unavailableDetail = createMemo(() => {
     return isUnavailableReviewDetail(articleQuery.data) ? articleQuery.data : null
+  })
+
+  const archivedDetail = createMemo(() => {
+    return isArchivedReviewDetail(articleQuery.data)
+      ? articleQuery.data
+      : (getArchivedReviewDetailFromResponseError(articleQuery.error) ?? null)
   })
 
   createEffect(() => {
@@ -92,6 +106,12 @@ export const ReviewDetailFulltext = () => {
             <div class="p-4 bg-red-50 rounded-lg shadow">
               <p class="text-red-600">Error loading article: {articleQuery.error?.message}</p>
             </div>
+          </Show>
+
+          <Show when={archivedDetail()}>
+            {(data) => {
+              return <ReviewDetailArchivedState data={data()} />
+            }}
           </Show>
 
           <Show when={unavailableDetail()}>

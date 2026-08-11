@@ -293,6 +293,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['POST', '/api/comparison-projects/:id/export'],
     ['POST', '/api/comparison-projects'],
     ['PATCH', '/api/comparison-projects/:id'],
+    ['DELETE', '/api/comparison-projects/:id/purge'],
     ['DELETE', '/api/comparison-projects/:id'],
     ['POST', '/api/comparison-projects/:id/unarchive'],
   ]),

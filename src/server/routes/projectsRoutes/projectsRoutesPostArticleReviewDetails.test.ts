@@ -44,6 +44,12 @@ const reviewServingRowsRef = {
   },
 }
 
+const assertProjectIsActiveRef = {
+  current: async (_projectId: string): Promise<unknown> => {
+    return {archived: false, id: 'project-1', name: 'Project 1'}
+  },
+}
+
 const registerModuleMocks = () => {
   void mock.module(appQueryServiceModulePath, () => {
     return {
@@ -98,8 +104,9 @@ const registerModuleMocks = () => {
 
   void mock.module(projectAccessGuardModulePath, () => {
     return {
+      archivedProjectAccessErrorMessage: 'Archived projects must be unarchived before use',
       assertProjectIsActive: async () => {
-        return {archived: false, id: 'project-1', name: 'Project 1'}
+        return assertProjectIsActiveRef.current('project-1')
       },
     }
   })
@@ -158,6 +165,9 @@ beforeEach(() => {
   }
   reviewServingRowsRef.current = async () => {
     return {rows: [], status: 'accepted'}
+  }
+  assertProjectIsActiveRef.current = async () => {
+    return {archived: false, id: 'project-1', name: 'Project 1'}
   }
 })
 
@@ -285,6 +295,23 @@ test('project review details hydrates article, judgments, and assessments from V
       return request.contractKey
     }),
   ).toEqual(['review.detail.row', 'review.detail.judgments', 'review.detail.humanJudgments'])
+})
+
+test('project review details returns a typed conflict for archived projects', async () => {
+  assertProjectIsActiveRef.current = async () => {
+    throw new Error('Archived projects must be unarchived before use')
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {article: null; code: string; message: string; status: string}
+
+  expect(response.status).toBe(409)
+  expect(body).toMatchObject({
+    article: null,
+    code: 'PROJECT_ARCHIVED',
+    message: 'Unarchive this project before reviewing articles.',
+    status: 'archived',
+  })
 })
 
 test('project review details builds prompt placeholders from project prompt metadata when serving detail has no judgment rows', async () => {

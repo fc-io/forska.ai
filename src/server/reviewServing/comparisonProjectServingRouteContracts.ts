@@ -122,10 +122,16 @@ export const comparisonProjectServingRouteContracts = [
     routePath: '/api/comparison-projects/:id',
   },
   {
+    handling: 'owner-write',
+    method: 'DELETE',
+    migrationTarget: 'comparison archive stays owner-routed and keeps serving state for reversible archived reads',
+    routePath: '/api/comparison-projects/:id',
+  },
+  {
     handling: 'owner-write-plus-serving-cleanup',
     method: 'DELETE',
-    migrationTarget: 'comparison delete stays owner-routed and cleans comparison serving state',
-    routePath: '/api/comparison-projects/:id',
+    migrationTarget: 'comparison permanent delete stays owner-routed and cleans comparison serving state',
+    routePath: '/api/comparison-projects/:id/purge',
   },
   {
     handling: 'owner-write-plus-serving-rebuild',
@@ -138,6 +144,7 @@ export const comparisonProjectServingRouteContracts = [
     | 'owner-source-metadata'
     | 'owner-source-metadata-plus-serving-status'
     | 'owner-source-validation'
+    | 'owner-write'
     | 'owner-write-plus-serving-cleanup'
     | 'owner-write-plus-serving-rebuild'
     | 'serving-read'
