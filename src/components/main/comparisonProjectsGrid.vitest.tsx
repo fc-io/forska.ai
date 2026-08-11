@@ -16,6 +16,7 @@ const mockServiceState = vi.hoisted(() => {
     fetchComparisonProjectConflictResolutionExportArtifact: vi.fn(async (_comparisonProjectId: string) => {
       return exportResult
     }),
+    purgeComparisonProject: vi.fn(async (_comparisonProjectId: string) => {}),
     unarchiveComparisonProject: vi.fn(async (_comparisonProjectId: string) => {}),
   }
 })
@@ -37,6 +38,7 @@ vi.mock('../../services/comparisonProjectsService.ts', () => {
     archiveComparisonProject: mockServiceState.archiveComparisonProject,
     fetchComparisonProjectConflictResolutionExportArtifact:
       mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact,
+    purgeComparisonProject: mockServiceState.purgeComparisonProject,
     unarchiveComparisonProject: mockServiceState.unarchiveComparisonProject,
   }
 })
@@ -89,11 +91,14 @@ const getComparisonProject = (overrides: Partial<ComparisonProject> = {}): Compa
   }
 }
 
-const renderComparisonProjectsGrid = async (comparisonProjects: ComparisonProject[]) => {
+const renderComparisonProjectsGrid = async (
+  comparisonProjects: ComparisonProject[],
+  props: {isArchived?: boolean; onChange?: () => void} = {},
+) => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const dispose = render(() => {
-    return <ComparisonProjectsGrid comparisonProjects={comparisonProjects} />
+    return <ComparisonProjectsGrid comparisonProjects={comparisonProjects} {...props} />
   }, container)
 
   await Promise.resolve()
@@ -105,6 +110,15 @@ const getActionLabels = (container: HTMLElement) => {
   return Array.from(container.querySelectorAll('a, button')).map((element) => {
     return element.textContent?.trim() ?? ''
   })
+}
+
+const stubConfirm = (confirmed: boolean) => {
+  const confirmMock = vi.fn(() => {
+    return confirmed
+  })
+  Object.defineProperty(window, 'confirm', {configurable: true, value: confirmMock})
+
+  return confirmMock
 }
 
 const tick = () => {
@@ -131,6 +145,7 @@ beforeEach(() => {
   mockServiceState.archiveComparisonProject.mockReset()
   mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact.mockReset()
   mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact.mockResolvedValue(exportResult)
+  mockServiceState.purgeComparisonProject.mockReset()
   mockServiceState.unarchiveComparisonProject.mockReset()
   exportResult = {artifact: transferArtifact, filename: 'conflict-resolutions-comparison-project-1.json'}
   Object.defineProperty(URL, 'createObjectURL', {
@@ -204,6 +219,111 @@ describe('ComparisonProjectsGrid resolution export action', () => {
         expect(
           container.querySelector('a[href="/compare-judgments/comparison-project-1/export"]')?.textContent?.trim(),
         ).toBe('Export data')
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+})
+
+describe('ComparisonProjectsGrid archive actions', () => {
+  test('keeps active comparison projects on archive-only actions', async () => {
+    const {container, dispose} = await renderComparisonProjectsGrid([getComparisonProject()])
+
+    try {
+      const labels = getActionLabels(container)
+
+      expect(labels).toContain('Archive')
+      expect(labels).not.toContain('Unarchive')
+      expect(labels).not.toContain('Delete permanently')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows permanent delete only for archived comparison projects', async () => {
+    const {container, dispose} = await renderComparisonProjectsGrid([getComparisonProject({archived: true})], {
+      isArchived: true,
+    })
+
+    try {
+      const labels = getActionLabels(container)
+
+      expect(labels).toContain('Unarchive')
+      expect(labels).toContain('Delete permanently')
+      expect(labels).not.toContain('Archive')
+      expect(labels).not.toContain('Edit')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('confirms and permanently deletes archived comparison projects', async () => {
+    const onChange = vi.fn()
+    const confirmSpy = stubConfirm(true)
+    const {container, dispose} = await renderComparisonProjectsGrid([getComparisonProject({archived: true})], {
+      isArchived: true,
+      onChange,
+    })
+
+    try {
+      const deleteButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Delete permanently'
+      })
+
+      deleteButton?.click()
+
+      await waitForCondition(() => {
+        expect(confirmSpy).toHaveBeenCalledWith('Permanently delete "Comparison project"? This cannot be undone.')
+        expect(mockServiceState.purgeComparisonProject).toHaveBeenCalledWith('comparison-project-1')
+        expect(onChange).toHaveBeenCalled()
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('leaves archived comparison projects unchanged when permanent delete is cancelled', async () => {
+    const confirmSpy = stubConfirm(false)
+    const {container, dispose} = await renderComparisonProjectsGrid([getComparisonProject({archived: true})], {
+      isArchived: true,
+    })
+
+    try {
+      const deleteButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Delete permanently'
+      })
+
+      deleteButton?.click()
+
+      expect(confirmSpy).toHaveBeenCalled()
+      expect(mockServiceState.purgeComparisonProject).not.toHaveBeenCalled()
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows permanent delete failures inline', async () => {
+    mockServiceState.purgeComparisonProject.mockRejectedValue(new Error('Serving cleanup failed'))
+    stubConfirm(true)
+    const {container, dispose} = await renderComparisonProjectsGrid([getComparisonProject({archived: true})], {
+      isArchived: true,
+    })
+
+    try {
+      const deleteButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Delete permanently'
+      })
+
+      deleteButton?.click()
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Serving cleanup failed')
       })
     } finally {
       dispose()

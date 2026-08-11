@@ -892,6 +892,16 @@ export const archiveComparisonProject = async (comparisonProjectId: string): Pro
   }
 }
 
+export const purgeComparisonProject = async (comparisonProjectId: string): Promise<void> => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).purge.delete()
+
+  handleApiResponse(response, 'Failed to permanently delete comparison project')
+
+  if (!response.data?.success) {
+    throw new Error('Failed to permanently delete comparison project')
+  }
+}
+
 export const unarchiveComparisonProject = async (comparisonProjectId: string): Promise<void> => {
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).unarchive.post()
 

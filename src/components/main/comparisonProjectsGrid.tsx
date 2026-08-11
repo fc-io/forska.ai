@@ -5,6 +5,7 @@ import {createMemo, createSignal, For, Show} from 'solid-js'
 import {
   archiveComparisonProject,
   fetchComparisonProjects,
+  purgeComparisonProject,
   unarchiveComparisonProject,
 } from '../../services/comparisonProjectsService'
 import {Button} from '../ui/button'
@@ -46,6 +47,7 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
   })
 
   const [pendingComparisonProjects, setPendingComparisonProjects] = createSignal<Set<string>>(new Set())
+  const [actionErrors, setActionErrors] = createSignal<Map<string, string>>(new Map())
 
   const updatePendingComparisonProjects = (comparisonProjectId: string, isPending: boolean) => {
     setPendingComparisonProjects((current) => {
@@ -61,14 +63,34 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
     })
   }
 
+  const setActionError = (comparisonProjectId: string, message: string | null) => {
+    setActionErrors((current) => {
+      const next = new Map(current)
+
+      if (message) {
+        next.set(comparisonProjectId, message)
+      } else {
+        next.delete(comparisonProjectId)
+      }
+
+      return next
+    })
+  }
+
+  const getErrorMessage = (error: unknown, fallback: string) => {
+    return error instanceof Error && error.message.trim() ? error.message : fallback
+  }
+
   const handleArchiveComparisonProject = async (comparisonProjectId: string) => {
     updatePendingComparisonProjects(comparisonProjectId, true)
+    setActionError(comparisonProjectId, null)
 
     try {
       await archiveComparisonProject(comparisonProjectId)
       props.onChange?.()
     } catch (error) {
       console.error('Failed to archive comparison project:', error)
+      setActionError(comparisonProjectId, getErrorMessage(error, 'Failed to archive comparison project'))
     } finally {
       updatePendingComparisonProjects(comparisonProjectId, false)
     }
@@ -76,14 +98,37 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
 
   const handleUnarchiveComparisonProject = async (comparisonProjectId: string) => {
     updatePendingComparisonProjects(comparisonProjectId, true)
+    setActionError(comparisonProjectId, null)
 
     try {
       await unarchiveComparisonProject(comparisonProjectId)
       props.onChange?.()
     } catch (error) {
       console.error('Failed to unarchive comparison project:', error)
+      setActionError(comparisonProjectId, getErrorMessage(error, 'Failed to unarchive comparison project'))
     } finally {
       updatePendingComparisonProjects(comparisonProjectId, false)
+    }
+  }
+
+  const handlePurgeComparisonProject = async (comparisonProject: ComparisonProject) => {
+    const confirmed = window.confirm(`Permanently delete "${comparisonProject.name}"? This cannot be undone.`)
+
+    if (!confirmed) {
+      return
+    }
+
+    updatePendingComparisonProjects(comparisonProject.id, true)
+    setActionError(comparisonProject.id, null)
+
+    try {
+      await purgeComparisonProject(comparisonProject.id)
+      props.onChange?.()
+    } catch (error) {
+      console.error('Failed to permanently delete comparison project:', error)
+      setActionError(comparisonProject.id, getErrorMessage(error, 'Failed to permanently delete comparison project'))
+    } finally {
+      updatePendingComparisonProjects(comparisonProject.id, false)
     }
   }
 
@@ -186,6 +231,17 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                     >
                       {pendingComparisonProjects().has(comparisonProject.id) ? 'Unarchiving...' : 'Unarchive'}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      class="px-3 py-1 text-sm"
+                      disabled={pendingComparisonProjects().has(comparisonProject.id)}
+                      onClick={() => {
+                        void handlePurgeComparisonProject(comparisonProject)
+                      }}
+                    >
+                      {pendingComparisonProjects().has(comparisonProject.id) ? 'Deleting...' : 'Delete permanently'}
+                    </Button>
                   </Show>
                   <Show when={!props.isArchived}>
                     <Button
@@ -201,6 +257,11 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                     </Button>
                   </Show>
                 </div>
+                <Show when={actionErrors().get(comparisonProject.id)}>
+                  {(errorMessage) => {
+                    return <p class="mt-3 text-sm text-red-600">{errorMessage()}</p>
+                  }}
+                </Show>
               </div>
             </li>
           )

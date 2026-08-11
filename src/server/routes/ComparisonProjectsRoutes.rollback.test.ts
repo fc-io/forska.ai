@@ -121,6 +121,7 @@ type MockDatabaseState = {
   }
   cleanedServingProjectIds: string[]
   createdComparisonProjectIds: string[]
+  deletedComparisonProjectIds: string[]
   conflictResolutionImportSourceRows: MockConflictResolutionImportSourceRow[]
   conflictResolutionRows: Array<{
     answerValue: string | null
@@ -139,6 +140,7 @@ type MockDatabaseState = {
   }>
   extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
+  failServingCleanup: boolean
   failSelectableModelValidation?: boolean
   includeSingleAnswerArticle: boolean
   isInTransaction: boolean
@@ -157,6 +159,7 @@ type MockDatabaseState = {
   queryStatements: string[]
   queuedServingRebuildIds: string[]
   routeLinks: Array<{id: string; importRouteId: string}>
+  runStatements: string[]
   servingRebuildGate?: Promise<void>
   servingStatus: MockServingStatus
   sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
@@ -576,7 +579,10 @@ const getMockConflictResolutionImportServingTargetRows = (statement: string) => 
     })
 }
 
-const getMockConflictResolutionExistingTargetResolutionRows = (statement: string, state: MockDatabaseState) => {
+const getMockConflictResolutionExistingTargetResolutionRows = (
+  statement: string,
+  state: Pick<MockDatabaseState, 'conflictResolutionRows'>,
+) => {
   const comparisonProjectId = statement.match(/comparison_project_id = '([^']+)'/)?.[1] ?? ''
 
   return state.conflictResolutionRows
@@ -1357,6 +1363,7 @@ const queryJson = async (
   state: {
     comparisonProject: MockDatabaseState['comparisonProject']
     createdComparisonProjectIds: MockDatabaseState['createdComparisonProjectIds']
+    deletedComparisonProjectIds: MockDatabaseState['deletedComparisonProjectIds']
     conflictResolutionImportSourceRows: MockDatabaseState['conflictResolutionImportSourceRows']
     conflictResolutionRows: MockDatabaseState['conflictResolutionRows']
     extraLlmRows: MockDatabaseState['extraLlmRows']
@@ -1411,6 +1418,10 @@ const queryJson = async (
   }
 
   if (statement.includes('FROM app.comparison_project') && statement.includes('updated_at AS updatedAt')) {
+    if (state.deletedComparisonProjectIds.includes(state.comparisonProject.id)) {
+      return []
+    }
+
     return [getComparisonProjectRow(state.comparisonProject)]
   }
 
@@ -1419,6 +1430,10 @@ const queryJson = async (
     && statement.includes('created_at AS createdAt')
     && statement.includes('WHERE id =')
   ) {
+    if (state.deletedComparisonProjectIds.includes(state.comparisonProject.id)) {
+      return []
+    }
+
     return [getComparisonProjectRow(state.comparisonProject)]
   }
 
@@ -2006,7 +2021,13 @@ const registerModuleMocks = () => {
       getComparisonProjectServingGenerationService: () => {
         return {
           cleanupComparisonProjectServing: async (comparisonProjectId: string) => {
-            getMockDatabaseState().cleanedServingProjectIds.push(comparisonProjectId)
+            const state = getMockDatabaseState()
+
+            if (state.failServingCleanup) {
+              throw new Error('serving cleanup failed')
+            }
+
+            state.cleanedServingProjectIds.push(comparisonProjectId)
 
             return {deletedRowCount: 0, tables: []}
           },
@@ -2032,6 +2053,7 @@ const registerModuleMocks = () => {
           },
           run: async (statement: string) => {
             const state = getMockDatabaseState()
+            state.runStatements.push(statement)
             state.rootRunStatements.push(statement)
 
             if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
@@ -2055,6 +2077,7 @@ const registerModuleMocks = () => {
             const state = getMockDatabaseState()
             const pendingComparisonProject = {...state.comparisonProject}
             const pendingCreatedComparisonProjectIds = [...state.createdComparisonProjectIds]
+            const pendingDeletedComparisonProjectIds = [...state.deletedComparisonProjectIds]
             const pendingConflictResolutionRows = state.conflictResolutionRows.map((row) => {
               return {...row}
             })
@@ -2074,9 +2097,22 @@ const registerModuleMocks = () => {
             const result = await work({
               queryJson: async <R>(statement: string) => {
                 getMockDatabaseState().queryStatements.push(statement)
+                if (statement.includes('DELETE FROM app.comparison_project')) {
+                  if (
+                    pendingComparisonProject.archived
+                    && !pendingDeletedComparisonProjectIds.includes(pendingComparisonProject.id)
+                  ) {
+                    pendingDeletedComparisonProjectIds.push(pendingComparisonProject.id)
+                    return [{id: pendingComparisonProject.id}] as R[]
+                  }
+
+                  return [] as R[]
+                }
+
                 return (await queryJson(statement, {
                   comparisonProject: pendingComparisonProject,
                   createdComparisonProjectIds: pendingCreatedComparisonProjectIds,
+                  deletedComparisonProjectIds: pendingDeletedComparisonProjectIds,
                   conflictResolutionImportSourceRows: state.conflictResolutionImportSourceRows,
                   conflictResolutionRows: pendingConflictResolutionRows,
                   extraLlmRows: state.extraLlmRows,
@@ -2087,6 +2123,8 @@ const registerModuleMocks = () => {
                 })) as R[]
               },
               run: async (statement: string) => {
+                state.runStatements.push(statement)
+
                 if (statement.includes('UPDATE app.comparison_project')) {
                   state.lastUpdateStatement = statement
                   if (statement.includes("human_judgment_mode = 'summary'")) {
@@ -2133,6 +2171,10 @@ const registerModuleMocks = () => {
                   return
                 }
 
+                if (statement.includes('DELETE FROM app.comparison_project_serving_generation')) {
+                  return
+                }
+
                 if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
                   pendingRouteLinks.splice(0, pendingRouteLinks.length)
                   return
@@ -2140,6 +2182,11 @@ const registerModuleMocks = () => {
 
                 if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
                   pendingSourceProjectLinks.splice(0, pendingSourceProjectLinks.length)
+                  return
+                }
+
+                if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
+                  pendingConflictResolutionRows.splice(0, pendingConflictResolutionRows.length)
                   return
                 }
 
@@ -2233,6 +2280,7 @@ const registerModuleMocks = () => {
 
             state.comparisonProject = pendingComparisonProject
             state.createdComparisonProjectIds = pendingCreatedComparisonProjectIds
+            state.deletedComparisonProjectIds = pendingDeletedComparisonProjectIds
             state.conflictResolutionRows = pendingConflictResolutionRows
             state.isInTransaction = false
             state.promptLinks = pendingPromptLinks
@@ -2258,10 +2306,12 @@ const createMockDatabaseState = (): MockDatabaseState => {
     },
     cleanedServingProjectIds: [],
     createdComparisonProjectIds: [],
+    deletedComparisonProjectIds: [],
     conflictResolutionRows: [],
     conflictResolutionImportSourceRows: [],
     extraLlmRows: [],
     failPromptInsert: true,
+    failServingCleanup: false,
     failSelectableModelValidation: false,
     includeSingleAnswerArticle: false,
     isInTransaction: false,
@@ -2272,6 +2322,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
     queryStatements: [],
     queuedServingRebuildIds: [],
+    runStatements: [],
     rootRunStatements: [],
     rootQueryStatementsDuringTransaction: [],
     selectableModelValidationCalls: 0,
@@ -4916,8 +4967,12 @@ test('comparison project create and update mark serving stale and queue rebuilds
   ])
 })
 
-test('comparison project archive cleans serving materialization state', async () => {
-  mockDatabaseStateRef.current = {...createMockDatabaseStateWithReadyServing(), failPromptInsert: false}
+test('comparison project archive marks archived without cleaning serving materialization state', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    failPromptInsert: false,
+    failServingCleanup: true,
+  }
 
   const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
   const app = new Elysia().use(comparisonProjectsRoutes)
@@ -4929,8 +4984,95 @@ test('comparison project archive cleans serving materialization state', async ()
 
   expect(response.status).toBe(200)
   expect(body.success).toBe(true)
-  expect(state.cleanedServingProjectIds).toEqual(['comparison-project-1'])
+  expect(state.cleanedServingProjectIds).toEqual([])
   expect(state.lastUpdateStatement).toContain('archived = TRUE')
+  expect(state.comparisonProject.archived).toBe(true)
+})
+
+test('comparison project purge rejects active projects without serving cleanup', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseStateWithReadyServing(), failPromptInsert: false}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/purge', {method: 'DELETE'}),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(409)
+  expect(bodyText).toContain('Comparison project must be archived before it can be permanently deleted')
+  expect(state.cleanedServingProjectIds).toEqual([])
+  expect(state.deletedComparisonProjectIds).toEqual([])
+})
+
+test('comparison project purge cleans serving state and deletes archived comparison project children', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      archived: true,
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: null,
+    },
+    conflictResolutionRows: [{answerValue: 'yes', articleId: 'article-1', promptId: null}],
+    failPromptInsert: false,
+    sourceProjectLinks: [{id: 'comparison-project-source-1', sourceProjectId: 'prompt-project-1'}],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/purge', {method: 'DELETE'}),
+  )
+  const body = (await response.json()) as {success: boolean}
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.success).toBe(true)
+  expect(state.cleanedServingProjectIds).toEqual(['comparison-project-1'])
+  expect(state.deletedComparisonProjectIds).toEqual(['comparison-project-1'])
+  expect(state.conflictResolutionRows).toEqual([])
+  expect(state.promptLinks).toEqual([])
+  expect(state.routeLinks).toEqual([])
+  expect(state.sourceProjectLinks).toEqual([])
+  expect(
+    state.runStatements.some((statement) => {
+      return statement.includes('DELETE FROM app.comparison_project_serving_generation')
+    }),
+  ).toBe(true)
+})
+
+test('comparison project purge keeps archived project when serving cleanup fails', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      archived: true,
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    failServingCleanup: true,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/purge', {method: 'DELETE'}),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Failed to clean up comparison project serving data before permanent delete')
+  expect(state.comparisonProject.archived).toBe(true)
+  expect(state.deletedComparisonProjectIds).toEqual([])
+  expect(state.promptLinks).toEqual([{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}])
 })
 
 test('comparison stats endpoint returns serving metadata and conflict counts from serving cells', async () => {

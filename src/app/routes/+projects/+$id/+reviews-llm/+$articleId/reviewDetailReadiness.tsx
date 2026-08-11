@@ -1,16 +1,31 @@
 type ReviewDetailUnavailableData = {article?: null; reason?: string | null; status?: string}
+type ReviewDetailArchivedData = {article?: null; code?: string | null; message?: string | null; status?: string}
+
+const isObjectRecord = (data: unknown): data is Record<string, unknown> => {
+  return typeof data === 'object' && data !== null
+}
 
 export const isUnavailableReviewDetail = (data: unknown): data is ReviewDetailUnavailableData => {
+  return isObjectRecord(data) && data.status === 'unavailable' && (data.article === null || data.article === undefined)
+}
+
+export const isArchivedReviewDetail = (data: unknown): data is ReviewDetailArchivedData => {
   return (
-    typeof data === 'object'
-    && data !== null
-    && (data as {status?: unknown}).status === 'unavailable'
-    && ((data as {article?: unknown}).article === null || (data as {article?: unknown}).article === undefined)
+    isObjectRecord(data)
+    && data.status === 'archived'
+    && data.code === 'PROJECT_ARCHIVED'
+    && (data.article === null || data.article === undefined)
   )
 }
 
+export const getArchivedReviewDetailFromResponseError = (error: unknown): ReviewDetailArchivedData | null => {
+  const value = isObjectRecord(error) && isObjectRecord(error.value) ? error.value : null
+
+  return isArchivedReviewDetail(value) ? value : null
+}
+
 export const getAvailableReviewDetail = <T,>(data: T | null | undefined): T | null => {
-  return data && !isUnavailableReviewDetail(data) ? data : null
+  return data && !isUnavailableReviewDetail(data) && !isArchivedReviewDetail(data) ? data : null
 }
 
 export const getReviewDetailUnavailableMessage = (data: ReviewDetailUnavailableData) => {
@@ -27,6 +42,24 @@ export const ReviewDetailUnavailableState = (props: {data: ReviewDetailUnavailab
       <p class="mt-2 text-sm text-amber-900">{getReviewDetailUnavailableMessage(props.data)}</p>
       <p class="mt-2 text-xs text-amber-800">
         Article and judgment detail will load after the review-serving detail snapshot is ready.
+      </p>
+    </div>
+  )
+}
+
+export const ReviewDetailArchivedState = (props: {data: ReviewDetailArchivedData}) => {
+  const message = () => {
+    return typeof props.data.message === 'string' && props.data.message.trim().length > 0
+      ? props.data.message.trim()
+      : 'Unarchive this project before reviewing articles.'
+  }
+
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow">
+      <h1 class="text-lg font-semibold text-gray-950">Archived project</h1>
+      <p class="mt-2 text-sm text-gray-700">{message()}</p>
+      <p class="mt-2 text-xs text-gray-500">
+        Archived projects are read-only here. Move the project back to the active list to continue review work.
       </p>
     </div>
   )

@@ -22,7 +22,7 @@ import {
   getNormalizedSummaryAnswer,
   normalizeSummaryAnswerValue,
 } from '../../utils/judgmentAnswers.ts'
-import {assertProjectIsActive} from './projectAccessGuard.ts'
+import {archivedProjectAccessErrorMessage, assertProjectIsActive} from './projectAccessGuard.ts'
 
 type JudgmentWithPromptAndAssessments = JudgmentRecord & {
   prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
@@ -807,11 +807,26 @@ const getArticleRecordFromServing = (input: {
 
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
   '/api/projectsreview',
-  async ({body}) => {
+  async ({body, set}) => {
     try {
       const {projectId, articleId} = body
 
-      await assertProjectIsActive(projectId)
+      try {
+        await assertProjectIsActive(projectId)
+      } catch (error) {
+        if (error instanceof Error && error.message === archivedProjectAccessErrorMessage) {
+          set.status = 409
+          return {
+            article: null,
+            code: 'PROJECT_ARCHIVED',
+            message: 'Unarchive this project before reviewing articles.',
+            reason: archivedProjectAccessErrorMessage,
+            status: 'archived',
+          }
+        }
+
+        throw error
+      }
 
       const projectReviewConfigPromise: Promise<ProjectReviewConfig | null> =
         getAppQueryService().getProjectReviewConfig(projectId)
