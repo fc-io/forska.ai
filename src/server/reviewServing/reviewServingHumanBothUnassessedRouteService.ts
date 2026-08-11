@@ -349,8 +349,12 @@ const getCountValue = async (
   mode: ReviewServingReviewMode,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<number> => {
-  if (mode === 'unassessed' || hasDynamicFilters(params, mode)) {
+  if (hasDynamicFilters(params, mode)) {
     return getFilteredCountValue(params, manifest, mode, dependencies)
+  }
+
+  if (mode === 'unassessed') {
+    return getUnassessedQueueCountValue(params, manifest, dependencies)
   }
 
   const countState = getCountState(params, manifest, mode)
@@ -573,6 +577,38 @@ const getFilteredCountValue = async (
   })
 }
 
+const getUnassessedQueueCountValue = async (
+  params: ArticlesReviewsBothParams | ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  dependencies?: ReviewServingRouteDependencies,
+): Promise<number> => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
+    database,
+    `
+    SELECT COUNT(DISTINCT queue.article_id) AS totalCount
+    FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
+    INNER JOIN mart.review_article_serving_base_v4 serving
+      ON serving.project_id = queue.project_id
+     AND serving.review_config_hash = queue.review_config_hash
+     AND serving.snapshot_id = queue.snapshot_id
+     AND serving.article_id = queue.article_id
+    INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state
+      ON list_mode_state.project_id = queue.project_id
+     AND list_mode_state.review_config_hash = queue.review_config_hash
+     AND list_mode_state.snapshot_id = queue.snapshot_id
+     AND list_mode_state.article_id = queue.article_id
+    WHERE queue.project_id = ${getSqlLiteral(params.projectId)}
+      AND queue.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
+      AND queue.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
+      AND queue.queue_kind = 'unassessed'
+      AND list_mode_state.has_unassessed_list_mode IS TRUE
+  `,
+  )
+
+  return Number(row?.totalCount ?? 0)
+}
+
 const getArticleId = (row: ReviewServingArticleRow) => {
   return row.article_id ?? row.articleId ?? ''
 }
@@ -678,6 +714,21 @@ const getEnabledPromptCount = async (
   `)
 
   return Number(row?.promptCount ?? row?.prompt_count ?? 0)
+}
+
+const getProjectHumanJudgmentMode = async (
+  projectId: string,
+  dependencies?: ReviewServingRouteDependencies,
+): Promise<'prompt' | 'summary'> => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const [row] = await database.queryJson<{humanJudgmentMode?: 'prompt' | 'summary' | null}>(`
+    SELECT human_judgment_mode AS humanJudgmentMode
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  return row?.humanJudgmentMode === 'summary' ? 'summary' : 'prompt'
 }
 
 const getJudgmentHydrationPromptCount = (enabledPromptCount: number) => {
@@ -828,6 +879,7 @@ export const getHumanReviewArticlesFromServing = async (
   }
 
   const enabledPromptCountPromise = getEnabledPromptCount(params.projectId, routeDependencies)
+  const humanJudgmentModePromise = getProjectHumanJudgmentMode(params.projectId, routeDependencies)
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
     dependencies: routeDependencies,
     label: 'human review rows',
@@ -841,6 +893,7 @@ export const getHumanReviewArticlesFromServing = async (
   const pageRows = pageResult.rows
 
   const enabledPromptCount = await enabledPromptCountPromise
+  const humanJudgmentMode = await humanJudgmentModePromise
   const detailReadiness = pageResult.detailReadiness
   const [humanRows, totalCount] = await Promise.all([
     detailReadiness === 'ready'
@@ -857,7 +910,7 @@ export const getHumanReviewArticlesFromServing = async (
 
     return {
       ...getArticleResponseBase(row, detailReadiness),
-      humanJudgmentMode: summaryJudgment ? ('summary' as const) : ('prompt' as const),
+      humanJudgmentMode,
       humanSummaryAnswer: summaryJudgment?.answer ?? null,
       judgments,
       judgedPromptIds: judgments.map((judgment) => {
@@ -870,7 +923,7 @@ export const getHumanReviewArticlesFromServing = async (
   return {
     data,
     detailReadiness,
-    humanJudgmentMode: data[0]?.humanJudgmentMode ?? 'prompt',
+    humanJudgmentMode,
     totalCount,
     page,
     limit,
@@ -895,6 +948,7 @@ export const getBothReviewArticlesFromServing = async (
   }
 
   const enabledPromptCountPromise = getEnabledPromptCount(params.projectId, routeDependencies)
+  const humanJudgmentModePromise = getProjectHumanJudgmentMode(params.projectId, routeDependencies)
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
     dependencies: routeDependencies,
     label: 'both review rows',
@@ -908,6 +962,7 @@ export const getBothReviewArticlesFromServing = async (
   const pageRows = pageResult.rows
 
   const enabledPromptCount = await enabledPromptCountPromise
+  const humanJudgmentMode = await humanJudgmentModePromise
   const detailReadiness = pageResult.detailReadiness
   const [llmRows, humanRows, totalCount] = await Promise.all([
     detailReadiness === 'ready'
@@ -931,10 +986,10 @@ export const getBothReviewArticlesFromServing = async (
     return {
       ...getArticleResponseBase(row, detailReadiness),
       judgments: withoutInternalLlmJudgmentFields(judgments),
-      humanJudgmentMode: summaryJudgment ? ('summary' as const) : ('prompt' as const),
+      humanJudgmentMode,
       humanSummaryAnswer: getSummaryAnswer(summaryJudgment?.answer),
       llmSummaryAnswer: getLlmSummaryAnswer(judgments),
-      ...(summaryJudgment ? {} : {humanAnswersByPrompt: getHumanAnswersByPrompt(humanJudgments)}),
+      ...(humanJudgmentMode === 'summary' ? {} : {humanAnswersByPrompt: getHumanAnswersByPrompt(humanJudgments)}),
     }
   })
 
