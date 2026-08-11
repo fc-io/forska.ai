@@ -38,6 +38,30 @@ const getProgressCountLabel = (count: number, total: number | null, noun: string
     : `${countLabel} / ${getCountLabel(total)} ${noun}`
 }
 
+const getAverageComparisonAnswersPerArticleLabel = (answerCount: number, articleCount: number) => {
+  if (answerCount <= 0 || articleCount <= 0) {
+    return null
+  }
+
+  const average = answerCount / articleCount
+
+  return `~${average.toLocaleString(undefined, {maximumFractionDigits: 1, minimumFractionDigits: 1})} per article`
+}
+
+export const getComparisonAnswerProgressLabel = (progress: ComparisonProjectServingProgressData) => {
+  const articleCount = progress.totalArticleCount ?? progress.stagedArticleCount
+  const averageLabel = getAverageComparisonAnswersPerArticleLabel(progress.stagedCellCount, articleCount)
+  const answerLabel = getCountLabel(progress.stagedCellCount)
+  const totalSuffix =
+    progress.totalCellCount === null
+      ? 'total known after answer materialization'
+      : `${getCountLabel(progress.totalCellCount)} total`
+
+  return averageLabel === null
+    ? `${answerLabel} comparison answers (${totalSuffix})`
+    : `${answerLabel} comparison answers across ${getCountLabel(articleCount)} articles (${averageLabel}; ${totalSuffix})`
+}
+
 const joinLabelParts = (parts: Array<string | null>) => {
   return parts
     .filter((part): part is string => {
@@ -58,12 +82,7 @@ const getStagedRowsLabel = (progress: ComparisonProjectServingProgressData) => {
       'articles',
       'total known after rollups',
     ),
-    getProgressCountLabel(
-      progress.stagedCellCount,
-      progress.totalCellCount,
-      'comparison answers',
-      'total known after answer materialization',
-    ),
+    getComparisonAnswerProgressLabel(progress),
     progress.stagedFilterMemberCount > 0
       ? `${getCountLabel(progress.stagedFilterMemberCount)} filter memberships`
       : null,

@@ -501,6 +501,7 @@ const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
         content_variant.content_key
       FROM app.judgment j
       ${getComparisonProjectArticleBatchJoinSql('j.article_id', useArticleBatch)}
+      CROSS JOIN comparison_project
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
       INNER JOIN prompt_config prompt_config ON prompt_config.prompt_id = j.prompt_id
       INNER JOIN model_config model_config ON model_config.model_id = j.model_id
@@ -590,6 +591,7 @@ const getPromptModeComparisonProjectHumanCellServingInsertSql = ({
         ) AS answer_rank
       FROM app.judgment_human h
       ${getComparisonProjectArticleBatchJoinSql('h.article_id', useArticleBatch)}
+      CROSS JOIN comparison_project
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = h.article_id
       INNER JOIN prompt_config prompt_config ON prompt_config.prompt_id = h.prompt_id
       WHERE h.is_answered = TRUE
@@ -675,6 +677,7 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
         content_variant.content_key
       FROM app.judgment j
       ${getComparisonProjectArticleBatchJoinSql('j.article_id', useArticleBatch)}
+      CROSS JOIN comparison_project
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
       INNER JOIN summary_prompt_id_config prompt_config ON prompt_config.prompt_id = j.prompt_id
       INNER JOIN model_config model_config ON model_config.model_id = j.model_id

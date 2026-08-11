@@ -765,6 +765,10 @@ const getSummaryModeServingCellsScript = () => {
         ('human-summary-ignored-source-b', 'source-project-b', 'article-summary-yes', 'no', 'manual_override', TIMESTAMPTZ '2026-04-28T00:00:00.000Z', TIMESTAMPTZ '2026-04-28T01:00:00.000Z')
     \`)
 
+    await builder.insertPromptModeComparisonProjectCells(
+      {comparisonProjectId: '${summaryModeComparisonProjectId}', generation: 1},
+      {queryJson: database.queryJson, run: database.run},
+    )
     await builder.insertSummaryModeComparisonProjectCells(
       {comparisonProjectId: '${summaryModeComparisonProjectId}', generation: 1},
       {queryJson: database.queryJson, run: database.run},
@@ -830,6 +834,13 @@ test('summary-mode serving cells derive LLM summaries and normalized human summa
   })
   const summaryCells = getActualCellsByArticle(summaryRows)
 
+  expect(
+    new Set(
+      summaryRows.map((row) => {
+        return row.promptId
+      }),
+    ),
+  ).toEqual(new Set([summaryPromptId]))
   expect(summaryCells['article-summary-yes']?.[sourceAColumnId]).toBe('yes')
   expect(summaryCells['article-summary-yes']?.[sourceBColumnId]).toBe('yes')
   expect(summaryCells['article-summary-no-include']?.[sourceAColumnId]).toBe('no')
