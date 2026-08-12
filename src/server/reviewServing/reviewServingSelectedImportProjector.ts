@@ -8,7 +8,10 @@ import {
   type ReviewServingIdentityValue,
 } from './reviewProjectionIdentity.ts'
 import {type ReviewServingProjectionIdentityManifestInput} from './reviewServingManifestRepository.ts'
-import {type ReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
+import {
+  getSnapshotComponentProjectionIdentityPredicate,
+  type ReviewServingSourcePartitionWatermarks,
+} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
@@ -746,7 +749,11 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
            WHERE snapshot.project_id = serving.project_id
              AND snapshot.snapshot_id = serving.snapshot_id
              AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-             AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.servingProjectionIdentity)}
+             AND ${getSnapshotComponentProjectionIdentityPredicate(
+               'snapshot',
+               'selectedImport',
+               getSqlLiteral(input.servingProjectionIdentity),
+             )}
              AND snapshot.snapshot_status IN ('candidate', 'active')
          )
      ), scoped_article AS (
@@ -795,7 +802,11 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
           WHERE snapshot.project_id = serving.project_id
             AND snapshot.snapshot_id = serving.snapshot_id
             AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-            AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.servingProjectionIdentity)}
+            AND ${getSnapshotComponentProjectionIdentityPredicate(
+              'snapshot',
+              'selectedImport',
+              getSqlLiteral(input.servingProjectionIdentity),
+            )}
             AND snapshot.snapshot_status IN ('candidate', 'active')
         )`,
     `DELETE FROM mart.review_article_serving_list_mode_state_v4 state
@@ -808,7 +819,11 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
           WHERE snapshot.project_id = state.project_id
             AND snapshot.snapshot_id = state.snapshot_id
             AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-            AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.servingProjectionIdentity)}
+            AND ${getSnapshotComponentProjectionIdentityPredicate(
+              'snapshot',
+              'selectedImport',
+              getSqlLiteral(input.servingProjectionIdentity),
+            )}
             AND snapshot.snapshot_status IN ('candidate', 'active')
         )`,
     `INSERT INTO mart.review_article_serving_base_v4 (${selectedImportServingColumns})

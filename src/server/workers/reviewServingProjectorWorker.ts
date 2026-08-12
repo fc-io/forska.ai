@@ -1157,7 +1157,11 @@ const getDisplayRebuildChunkOutputChecksum = async (
         FROM app.review_serving_snapshot_manifest snapshot
         WHERE snapshot.project_id = serving.project_id
           AND snapshot.snapshot_id = serving.snapshot_id
-          AND json_extract_string(snapshot.composed_identity_json, '$.display.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+          AND ${getSnapshotComponentProjectionIdentityPredicate(
+            'snapshot',
+            'display',
+            getSqlLiteral(input.chunk.projectionIdentity),
+          )}
       )
   `)
 
@@ -1179,7 +1183,11 @@ const getDisplayRebuildChunkOutputCount = async (
         FROM app.review_serving_snapshot_manifest snapshot
         WHERE snapshot.project_id = serving.project_id
           AND snapshot.snapshot_id = serving.snapshot_id
-          AND json_extract_string(snapshot.composed_identity_json, '$.display.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+          AND ${getSnapshotComponentProjectionIdentityPredicate(
+            'snapshot',
+            'display',
+            getSqlLiteral(input.chunk.projectionIdentity),
+          )}
       )
   `)
 

@@ -933,8 +933,12 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).not.toContain('selected.selected_rank_key,')
   expect(joined).toContain('AND NOT selected.tombstone')
   expect(joined).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'selectedImport'")
   expect(joined).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = 'selectedImport:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'selectedImport:identity-1'",
+  )
+  expect(joined).not.toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity')",
   )
   expect(joined).not.toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
   expect(joined).not.toContain('COALESCE(selected_hot.article_title, article.article_title) AS article_title')
