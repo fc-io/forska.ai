@@ -55,11 +55,6 @@ export const projectTransferExportWorkloadContext = getProjectTransferWorkloadCo
   routeOrJobKey: 'projectTransfer.export.queries',
 })
 
-export const projectTransferExportTransactionWorkloadContext = getProjectTransferWorkloadContext({
-  allowsTempSpill: true,
-  routeOrJobKey: 'projectTransfer.export.transaction',
-})
-
 export const projectTransferAnalyzeOperationWorkloadContext = getProjectTransferWorkloadContext({
   allowsTempSpill: true,
   routeOrJobKey: 'projectTransfer.import.analyze.operationTables',

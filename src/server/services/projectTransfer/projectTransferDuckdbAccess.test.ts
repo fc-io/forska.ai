@@ -18,7 +18,8 @@ test('project transfer heavy DuckDB flows carry workload contexts', () => {
 
   expect(routesSource).toContain('projectTransferRouteLookupWorkloadContext')
   expect(exportSource).toContain('projectTransferExportWorkloadContext')
-  expect(exportPackageSource).toContain('projectTransferExportTransactionWorkloadContext')
+  expect(exportPackageSource).not.toContain('projectTransferExportTransactionWorkloadContext')
+  expect(exportPackageSource).toContain('stageProjectTransferExportPayloadRows({')
   expect(analyzeSource).toContain('runWithDuckdbExclusiveWork')
   expect(analyzeSource).toContain('getProjectTransferAnalyzeTargetPlanWithOperationTables')
   expect(analyzeTargetSource).toContain('projectTransferAnalyzeOperationWorkloadContext')
@@ -40,6 +41,8 @@ test('project transfer exclusive DuckDB work stays scoped to heavy import phases
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.scan'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.mutation'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.cleanup'")
+  expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.export.queries'")
+  expect(workloadSource).not.toContain('projectTransfer.export.transaction')
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.import.analyze.operationTables'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.import.commit.transaction'")
 
@@ -48,6 +51,8 @@ test('project transfer exclusive DuckDB work stays scoped to heavy import phases
   expect(commitSource).toContain('Waiting for DuckDB maintenance work to pause')
   expect(workloadSource).not.toContain('projectTransfer.session.exclusive')
   expect(workloadSource).not.toContain('projectTransfer.recovery.exclusive')
+  expect(duckdbServiceSource).not.toContain("'projectTransfer.export.queries',")
+  expect(duckdbServiceSource).not.toContain("'projectTransfer.export.transaction',")
   expect(duckdbServiceSource).not.toContain("'projectTransfer.recovery',")
 })
 

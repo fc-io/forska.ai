@@ -158,6 +158,59 @@ test('filtered count serving returns cache hits without computing or writing', a
   expect(statements[0]).not.toContain('review_article_filter_posting_serving_v4')
 })
 
+test('filtered count serving treats cached zero as provisional and recomputes', async () => {
+  const statements: string[] = []
+  const database: ReviewServingFilteredCountDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return [{countFound: true, countValue: 0}] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+  }
+
+  const value = await getReviewServingFilteredCountValue({
+    ...lookup,
+    computeCount: async () => {
+      return 42
+    },
+    database,
+  })
+
+  expect(value).toBe(42)
+  expect(statements).toHaveLength(4)
+  expect(statements[1]).toContain('DELETE FROM mart.review_filtered_count_serving_v4')
+  expect(statements[2]).toContain('INSERT INTO mart.review_filtered_count_serving_v4')
+})
+
+test('filtered count serving does not memoize zero misses', async () => {
+  const statements: string[] = []
+  const database: ReviewServingFilteredCountDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+  }
+
+  const value = await getReviewServingFilteredCountValue({
+    ...lookup,
+    computeCount: async () => {
+      return 0
+    },
+    database,
+  })
+
+  expect(value).toBe(0)
+  expect(statements).toHaveLength(1)
+  expect(statements[0]).toContain('FROM mart.review_filtered_count_serving_v4')
+})
+
 test('filtered count serving fills and bounds after a miss', async () => {
   const statements: string[] = []
   const database: ReviewServingFilteredCountDatabase = {

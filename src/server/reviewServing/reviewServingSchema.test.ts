@@ -116,6 +116,9 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0217_selectedImportPublishedMart.sql',
   '../../db/duckdbMigrations/0218_reviewSelectedImportAppendStaging.sql',
   '../../db/duckdbMigrations/0219_selectedImportCompatibilityView.sql',
+  '../../db/duckdbMigrations/0220_reviewServingDirtyWorkIdLookupIndexes.sql',
+  '../../db/duckdbMigrations/0221_reviewServingDirtyWorkIdLookupTables.sql',
+  '../../db/duckdbMigrations/0222_rebuildReviewServingDirtyWorkWithoutIndexes.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -318,6 +321,10 @@ const reviewJudgmentDetailNoIndexForwardMigrationSql =
 const reviewDirtyWorkAckNoIndexForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0211_rebuildReviewServingDirtyWorkAckWithoutIndexes.sql'
+  ]
+const reviewDirtyWorkNoIndexForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0222_rebuildReviewServingDirtyWorkWithoutIndexes.sql'
   ]
 const reviewRemainingHotTableIndexDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0213_dropRemainingReviewServingHotTableIndexes.sql']
@@ -1886,7 +1893,15 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   )
   expect(reviewDirtyWorkAckNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
   expect(reviewDirtyWorkAckNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
+  expect(reviewDirtyWorkNoIndexForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_serving_dirty_work_noindex_repair_0222',
+  )
+  expect(reviewDirtyWorkNoIndexForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewDirtyWorkNoIndexForwardMigrationSql).not.toContain('CREATE INDEX')
+  expect(hasActiveIndex('idx_review_serving_dirty_work_lookup')).toBe(false)
+  expect(hasActiveIndex('idx_review_serving_dirty_work_id_lookup')).toBe(false)
   expect(hasActiveIndex('idx_review_serving_dirty_work_ack_component')).toBe(false)
+  expect(hasActiveIndex('idx_review_serving_dirty_work_ack_id_lookup')).toBe(false)
   expect(hasActiveIndex('idx_review_article_judgment_detail_serving_v4_article')).toBe(false)
   expect(hasActiveIndex('idx_review_article_judgment_detail_serving_v4_repaired_pk')).toBe(false)
   expect(reviewJudgmentDetailLlmPlaceholderDropForwardMigrationSql).not.toContain('detail_updated_at')
