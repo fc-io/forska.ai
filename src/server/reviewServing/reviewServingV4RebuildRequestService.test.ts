@@ -1054,8 +1054,8 @@ test('V4 rebuild request service estimates status rebuild rows from written list
   expect(request.overBudgetReason).toBeNull()
 })
 
-test('V4 rebuild request service includes synthetic summary prompt rows in human status estimates', async () => {
-  const {database} = createFakeRequestDatabase({
+test('V4 rebuild request service presplits synthetic summary prompt rows in human status estimates', async () => {
+  const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     enabledPromptCount: 1,
     humanJudgmentCount: 0,
@@ -1072,12 +1072,23 @@ test('V4 rebuild request service includes synthetic summary prompt rows in human
     ),
   )
 
-  expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('input rows: estimated 400000 > max 250000')
+  const joined = statements.join('\n')
+  const humanStatusChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes('humanStatus')
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(joined).toContain('NTILE(64)')
+  expect(joined).toContain('"estimatedInputRows":400000')
+  expect(humanStatusChunkInserts).toHaveLength(64)
+  expect(humanStatusChunkInserts[0]).toContain('"admissionPresplit":true')
+  expect(humanStatusChunkInserts[0]).toContain('"inputRowLimit":64')
+  expect(humanStatusChunkInserts[0]).toContain('6250')
 })
 
-test('V4 rebuild request service includes selected-import posting facets in admission budgets', async () => {
-  const {database} = createFakeRequestDatabase({
+test('V4 rebuild request service presplits selected-import posting facets in admission budgets', async () => {
+  const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     enabledPromptCount: 0,
     humanJudgmentCount: 0,
@@ -1094,8 +1105,19 @@ test('V4 rebuild request service includes selected-import posting facets in admi
     ),
   )
 
-  expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('input rows: estimated 640000 > max 250000')
+  const joined = statements.join('\n')
+  const postingChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes('posting')
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(joined).toContain('NTILE(64)')
+  expect(joined).toContain('"estimatedInputRows":640000')
+  expect(postingChunkInserts).toHaveLength(64)
+  expect(postingChunkInserts[0]).toContain('"admissionPresplit":true')
+  expect(postingChunkInserts[0]).toContain('"inputRowLimit":512')
+  expect(postingChunkInserts[0]).toContain('10000')
 })
 
 test('V4 rebuild request service excludes lazy prompt-answer posting fan-out from admission budgets', async () => {
