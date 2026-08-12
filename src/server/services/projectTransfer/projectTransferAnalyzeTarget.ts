@@ -2336,6 +2336,7 @@ export const getProjectTransferAnalyzeTargetPlanWithOperationTables = async ({
     envValues,
     layout,
     operationId,
+    payloadKeys: ['importRoutes'],
     runner,
     workloadContext: projectTransferAnalyzeOperationWorkloadContext,
     work: ({runner: operationRunner, tables}) => {
