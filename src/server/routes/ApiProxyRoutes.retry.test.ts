@@ -163,6 +163,49 @@ test.serial('api proxy retries idempotent GET requests after a transport failure
   expect(ownerFetchCallUrls).toHaveLength(4)
 })
 
+test.serial('api proxy times out wedged DuckDB owner diagnostic GET requests', async () => {
+  const app = await loadRoutes()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
+    const forwardedRequest = request as Request
+    await new Promise<never>((_resolve, reject) => {
+      if (forwardedRequest.signal.aborted) {
+        reject(new Error('owner request aborted'))
+        return
+      }
+
+      forwardedRequest.signal.addEventListener(
+        'abort',
+        () => {
+          reject(new Error('owner request aborted'))
+        },
+        {once: true},
+      )
+    })
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const startedAt = Date.now()
+  const response = await app.handle(new Request('http://localhost/api/llmstatus', {method: 'GET'}))
+  const elapsedMs = Date.now() - startedAt
+  const body = (await response.json()) as {data: null; error: string}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+
+  expect(response.status).toBe(504)
+  expect(body.data).toBe(null)
+  expect(body.error).toContain('DuckDB owner proxy target timed out')
+  expect(elapsedMs).toBeLessThan(4_000)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/llmstatus',
+  ])
+})
+
 test.serial(
   'api proxy serves active project import status from progress artifact before contacting owner',
   async () => {
