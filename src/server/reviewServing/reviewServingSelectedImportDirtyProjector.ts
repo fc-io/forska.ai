@@ -8,6 +8,7 @@ import {
 } from './reviewServingManifestRepository.ts'
 import {
   getReviewServingSourcePartitionWatermarks,
+  getSnapshotComponentProjectionIdentityPredicate,
   type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
 import {
@@ -167,7 +168,11 @@ const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportDirtyInput,
               WHERE snapshot.project_id = serving.project_id
                 AND snapshot.snapshot_id = serving.snapshot_id
                 AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-                AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
+                AND ${getSnapshotComponentProjectionIdentityPredicate(
+                  'snapshot',
+                  'selectedImport',
+                  getSqlLiteral(input.projectionIdentity),
+                )}
                 AND snapshot.snapshot_status IN ('candidate', 'active')
             )
         )`
@@ -365,7 +370,11 @@ const getSelectedImportServingTemplateCte = (input: {
                 WHERE snapshot.project_id = serving.project_id
                   AND snapshot.snapshot_id = serving.snapshot_id
                   AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-                  AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
+                  AND ${getSnapshotComponentProjectionIdentityPredicate(
+                    'snapshot',
+                    'selectedImport',
+                    getSqlLiteral(input.projectionIdentity),
+                  )}
                   AND snapshot.snapshot_status IN ('candidate', 'active')
               )
             ${fallbackTemplateCte}
@@ -527,7 +536,11 @@ const getApplySelectedImportServingStatements = (input: {
              WHERE snapshot.project_id = serving.project_id
                AND snapshot.snapshot_id = serving.snapshot_id
                AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-               AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
+               AND ${getSnapshotComponentProjectionIdentityPredicate(
+                 'snapshot',
+                 'selectedImport',
+                 getSqlLiteral(input.projectionIdentity),
+               )}
                AND snapshot.snapshot_status IN ('candidate', 'active')
            )
            AND EXISTS (
@@ -545,7 +558,11 @@ const getApplySelectedImportServingStatements = (input: {
              WHERE snapshot.project_id = state.project_id
                AND snapshot.snapshot_id = state.snapshot_id
                AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-               AND json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
+               AND ${getSnapshotComponentProjectionIdentityPredicate(
+                 'snapshot',
+                 'selectedImport',
+                 getSqlLiteral(input.projectionIdentity),
+               )}
                AND snapshot.snapshot_status IN ('candidate', 'active')
            )
            AND EXISTS (

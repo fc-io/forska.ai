@@ -809,8 +809,12 @@ test('project-scoped selected-import rebuilds include previous serving articles 
   expect(selectStatement).toContain('state.has_human_list_mode IS TRUE')
   expect(selectStatement).toContain('state.has_both_list_mode IS TRUE')
   expect(selectStatement).toContain('state.has_unassessed_list_mode IS TRUE')
+  expect(selectStatement).toContain("json_extract_string(component_state.value, '$.component') = 'selectedImport'")
   expect(selectStatement).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = 'selectedImport:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'selectedImport:identity-1'",
+  )
+  expect(selectStatement).not.toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity')",
   )
   expect(selectStatement).not.toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
   expect(selectStatement).toContain("snapshot.selected_import_snapshot_id = 'selected-import-snapshot-1'")
@@ -903,8 +907,12 @@ test('selected-import serving insert can seed rows from snapshot templates witho
   expect(servingInsert).not.toContain('source_metadata')
   expect(servingInsert).toContain('review-config-1')
   expect(servingInsert).toContain('snapshot-1')
+  expect(servingInsert).toContain("json_extract_string(component_state.value, '$.component') = 'selectedImport'")
   expect(servingInsert).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity') = 'selectedImport:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'selectedImport:identity-1'",
+  )
+  expect(servingInsert).not.toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity')",
   )
   expect(servingInsert).not.toContain('llmStatus:identity-1')
 })
