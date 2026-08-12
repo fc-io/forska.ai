@@ -17,8 +17,8 @@ import {
   type ProjectTransferCommitResult,
   revalidateProjectTransferCommitPlan,
 } from './projectTransferCommit.ts'
-import {getActiveDuckdbExclusiveWorkSnapshot} from './projectTransferDuckdbExclusiveWork.ts'
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
+import {getActiveDuckdbExclusiveWorkSnapshot} from './projectTransferDuckdbExclusiveWork.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import type {ProjectTransferPlanSummary} from './projectTransferSession.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
@@ -685,11 +685,7 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(fake.calls.transition[2]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {
-        message: 'Waiting for DuckDB maintenance work to pause',
-        phase: 'commit',
-        status: 'running',
-      },
+      progress: {message: 'Waiting for DuckDB maintenance work to pause', phase: 'commit', status: 'running'},
     })
     expect(fake.calls.transition[3]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
@@ -1633,10 +1629,10 @@ test('project transfer commit writer creates project rows and preserves safe pac
       ],
       projectRoutePlan: [
         {
-          action: 'link',
-          dateBoundedOutsideExportedArticleCount: 0,
+          action: 'omit',
+          dateBoundedOutsideExportedArticleCount: 1,
           dateBoundedRouteArticleCount: 1,
-          outsideExportedArticleCount: 0,
+          outsideExportedArticleCount: 1,
           sourceImportRouteId: 'source-route',
           sourceProjectImportRouteId: 'source-project-route',
           targetImportRouteId: 'target-route',
@@ -1788,7 +1784,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
     sourceMetadata: {package: 'reuse'},
   })
   expect(result.projectArticleCount).toBe(2)
-  expect(result.projectImportRouteCount).toBe(1)
+  expect(result.projectImportRouteCount).toBe(0)
   expect(result.articleImportRouteCount).toBe(1)
   expect(result.importRouteCount).toBe(1)
   expect(result.identifierCount).toBe(1)
