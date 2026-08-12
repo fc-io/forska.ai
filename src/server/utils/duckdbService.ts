@@ -78,6 +78,29 @@ export type DuckdbQueueRuntimeMetrics = {
   background: DuckdbSingleQueueRuntimeMetrics
   main: DuckdbSingleQueueRuntimeMetrics
 }
+export type DuckdbActiveMainWorkRuntimeSnapshot = {
+  allowsTempSpill: boolean | null
+  durationMs: number
+  fallbackIntent: DuckdbWorkloadFallbackIntent | null
+  id: string
+  maxResultBytes: number | null
+  maxResultRows: number | null
+  operation: DuckdbWorkloadOperation | null
+  projectId: string | null
+  queue: DuckdbWorkloadQueue
+  queueDepthAtStart: number
+  queueWaitMs: number
+  queuedAt: string
+  routeOrJobKey: string
+  searchMode: string | null
+  startedAt: string
+  statementExecutionId: string | null
+  statementHash: string | null
+  statementKind: string | null
+  statementTargetTable: string | null
+  timeoutMs: number | null
+  workloadClass: string
+}
 export type DuckdbTempSpillMetrics = {
   available: boolean
   error: string | null
@@ -130,6 +153,7 @@ export type DuckdbWorkloadRuntimeMetric = {
   workloadClass: string
 }
 export type DuckdbBackgroundRuntimeDiagnostics = {
+  activeMainWork: DuckdbActiveMainWorkRuntimeSnapshot | null
   configured: DuckdbRuntimeConfig
   effective: {
     checkpointThreshold: string | null
@@ -145,11 +169,13 @@ export type DuckdbBackgroundRuntimeDiagnostics = {
 }
 type DuckdbWorkloadResultMetrics = {resultBytes: number | null; resultRows: number | null}
 type DuckdbWorkloadDiagnosticContext = {
+  activeMainWorkId?: string
   context?: DuckdbWorkloadContext
   operation: DuckdbWorkloadOperation
   queue: DuckdbWorkloadQueue
   queueDepthAtStart: number
 }
+type DuckdbActiveMainWorkRuntimeState = Omit<DuckdbActiveMainWorkRuntimeSnapshot, 'durationMs'> & {startedAtMs: number}
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
@@ -165,6 +191,7 @@ type DuckdbBoundValues = DuckDBValue[] | Record<string, DuckDBValue>
 type DuckdbBoundTypes = DuckDBType[] | Record<string, DuckDBType | undefined>
 
 type DuckdbServiceState = {
+  activeMainWork: DuckdbActiveMainWorkRuntimeState | null
   appendBarrier: DuckdbAppendBarrier | null
   appendConnections: DuckDBConnection[]
   appendLastDurationMs: number | null
@@ -2370,6 +2397,7 @@ const getInitialDuckdbAppendLaneMetrics = (appendLaneCount: number) => {
 
 const getDuckdbServiceState = () => {
   globalThis.__forskaDuckdbServiceState ??= {
+    activeMainWork: null,
     appendBarrier: null,
     appendConnections: [],
     appendLastDurationMs: null,
@@ -2416,6 +2444,7 @@ const getDuckdbServiceState = () => {
 
 const duckdbServiceState = getDuckdbServiceState()
 duckdbServiceState.controlTransactionIndexedMutationTarget ??= null
+duckdbServiceState.activeMainWork ??= null
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
@@ -4584,6 +4613,7 @@ const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfte
 const resetDuckdbRuntimeState = () => {
   const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
 
+  duckdbServiceState.activeMainWork = null
   duckdbServiceState.appendBarrier = null
   duckdbServiceState.appendConnections = []
   duckdbServiceState.appendLastDurationMs = null
@@ -5148,17 +5178,28 @@ const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
   const runQueuedWork = async () => {
     const startedAtMs = Date.now()
     const waitMs = startedAtMs - queuedAtMs
+    const activeMainWorkId = startDuckdbActiveMainWork({
+      diagnosticContext,
+      queuedAtMs,
+      queueWaitMs: waitMs,
+      startedAtMs,
+    })
+    const activeDiagnosticContext =
+      diagnosticContext === undefined ? undefined : {...diagnosticContext, activeMainWorkId}
     duckdbServiceState.duckdbLastWaitMs = waitMs
     duckdbServiceState.duckdbTasksStarted += 1
     duckdbServiceState.duckdbTotalWaitMs += waitMs
 
     try {
-      return await work()
+      return await (activeDiagnosticContext === undefined
+        ? work()
+        : duckdbWorkloadDiagnosticStorage.run(activeDiagnosticContext, work))
     } finally {
       const durationMs = Date.now() - startedAtMs
       duckdbServiceState.duckdbLastDurationMs = durationMs
       duckdbServiceState.duckdbTasksCompleted += 1
       duckdbServiceState.duckdbTotalDurationMs += durationMs
+      finishDuckdbActiveMainWork(activeMainWorkId)
     }
   }
   const queuedWork = duckdbServiceState.duckdbQueue.then(() => {
@@ -5219,6 +5260,74 @@ const getDuckdbAppendQueueDepth = () => {
   return duckdbServiceState.appendPendingCountByLane.reduce((totalCount, currentCount) => {
     return totalCount + currentCount
   }, 0)
+}
+
+const startDuckdbActiveMainWork = ({
+  diagnosticContext,
+  queuedAtMs,
+  queueWaitMs,
+  startedAtMs,
+}: {
+  diagnosticContext: DuckdbWorkloadDiagnosticContext | undefined
+  queuedAtMs: number
+  queueWaitMs: number
+  startedAtMs: number
+}) => {
+  const workloadContext = diagnosticContext?.context
+  const activeMainWork: DuckdbActiveMainWorkRuntimeState = {
+    allowsTempSpill: workloadContext?.allowsTempSpill ?? null,
+    fallbackIntent: workloadContext?.fallbackIntent ?? null,
+    id: randomUUID(),
+    maxResultBytes: workloadContext?.maxResultBytes ?? null,
+    maxResultRows: workloadContext?.maxResultRows ?? null,
+    operation: diagnosticContext?.operation ?? null,
+    projectId: workloadContext?.projectId ?? null,
+    queue: diagnosticContext?.queue ?? 'main',
+    queueDepthAtStart: diagnosticContext?.queueDepthAtStart ?? duckdbServiceState.duckdbPendingCount,
+    queueWaitMs,
+    queuedAt: new Date(queuedAtMs).toISOString(),
+    routeOrJobKey: workloadContext?.routeOrJobKey ?? 'duckdb.main',
+    searchMode: workloadContext?.searchMode ?? null,
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    statementExecutionId: null,
+    statementHash: null,
+    statementKind: null,
+    statementTargetTable: null,
+    timeoutMs: workloadContext?.timeoutMs ?? null,
+    workloadClass: workloadContext?.workloadClass ?? 'unclassified',
+  }
+
+  duckdbServiceState.activeMainWork = activeMainWork
+  return activeMainWork.id
+}
+
+const finishDuckdbActiveMainWork = (activeMainWorkId: string) => {
+  if (duckdbServiceState.activeMainWork?.id === activeMainWorkId) {
+    duckdbServiceState.activeMainWork = null
+  }
+}
+
+const updateDuckdbActiveMainWorkStatement = ({
+  activeMainWorkId,
+  statement,
+  statementExecutionId,
+}: {
+  activeMainWorkId: string
+  statement: string
+  statementExecutionId: string
+}) => {
+  if (duckdbServiceState.activeMainWork?.id !== activeMainWorkId) {
+    return
+  }
+
+  duckdbServiceState.activeMainWork = {
+    ...duckdbServiceState.activeMainWork,
+    statementExecutionId,
+    statementHash: getDuckdbStatementHash(statement),
+    statementKind: getDuckdbStatementKind(statement),
+    statementTargetTable: getDuckdbStatementTargetTable(statement),
+  }
 }
 
 const incrementDuckdbAppendQueueDepth = (laneIndex: number) => {
@@ -5497,6 +5606,14 @@ const writeDuckdbStatementDiagnostic = ({
   if (phase === 'start') {
     duckdbFailedMutatingStatementTargetTable = null
     recordDuckdbMutatingStatementTarget(duckdbConnection, statement)
+
+    if (diagnosticContext?.activeMainWorkId !== undefined) {
+      updateDuckdbActiveMainWorkStatement({
+        activeMainWorkId: diagnosticContext.activeMainWorkId,
+        statement,
+        statementExecutionId,
+      })
+    }
   }
 
   if (phase === 'error') {
@@ -5780,6 +5897,7 @@ export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBac
   `)
 
   return {
+    activeMainWork: getDuckdbActiveMainWorkRuntimeSnapshot(),
     configured,
     effective: {
       checkpointThreshold: settingsRow?.checkpointThreshold ?? null,
@@ -5791,6 +5909,25 @@ export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBac
     instanceOptions: getDuckdbInstanceOptions(configured),
     queues: getDuckdbQueueRuntimeMetricsSnapshot(),
     tempSpill: getDuckdbTempSpillMetricsSnapshot(),
+    workloads: getDuckdbWorkloadRuntimeMetricsSnapshot(),
+  }
+}
+
+export const getDuckdbActiveMainWorkRuntimeSnapshot = (): DuckdbActiveMainWorkRuntimeSnapshot | null => {
+  const activeMainWork = duckdbServiceState.activeMainWork
+
+  if (activeMainWork === null) {
+    return null
+  }
+
+  const {startedAtMs, ...snapshot} = activeMainWork
+  return {...snapshot, durationMs: Math.max(0, Date.now() - startedAtMs)}
+}
+
+export const getDuckdbRuntimeWorkloadDiagnosticsSnapshot = () => {
+  return {
+    activeMainWork: getDuckdbActiveMainWorkRuntimeSnapshot(),
+    queues: getDuckdbQueueRuntimeMetricsSnapshot(),
     workloads: getDuckdbWorkloadRuntimeMetricsSnapshot(),
   }
 }
@@ -6049,7 +6186,12 @@ const withDuckdbWorkloadContext = <T>({
   const diagnosticContext = context ?? duckdbWorkloadDiagnosticStorage.getStore()?.context
 
   const runWork = () => {
-    return duckdbWorkloadDiagnosticStorage.run({context: diagnosticContext, operation, queue, queueDepthAtStart}, work)
+    const activeMainWorkId = duckdbWorkloadDiagnosticStorage.getStore()?.activeMainWorkId
+
+    return duckdbWorkloadDiagnosticStorage.run(
+      {activeMainWorkId, context: diagnosticContext, operation, queue, queueDepthAtStart},
+      work,
+    )
   }
 
   if (context === undefined) {

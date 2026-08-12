@@ -36,6 +36,169 @@ const getSpawnOutput = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => 
   return stdout.trim()
 }
 
+test('duckdb active main work diagnostics expose in-flight workload without SQL text', () => {
+  const privateSqlValue = 'private-active-work-value'
+  const stdout = getSpawnOutput(
+    globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {mock} = await import('bun:test')
+
+          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').pathname
+          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+          let connectCount = 0
+          let unblockActiveQuery
+
+          void mock.module(runtimeLoggerModulePath, () => {
+            return {
+              exitWithRuntimeLogFlush: async () => {},
+              getRuntimeLogConfig: () => ({
+                logDir: '/tmp/forska-duckdb-active-work-test',
+                logLevel: 'INFO',
+                logStderrLevel: 'WARN',
+                runtimeProfile: 'local',
+              }),
+              writeRuntimeFailureLogEvent: () => false,
+              writeRuntimeLogEvent: () => true,
+              writeRuntimeOperatorLogEvent: () => false,
+            }
+          })
+
+          void mock.module(serverRuntimeRoleModulePath, () => {
+            return {
+              canCurrentServerOwnDuckdb: () => true,
+              ensureCurrentDuckdbOwnerLease: async () => {},
+              registerDuckdbOwnerDemotionHandler: () => {},
+              releaseCurrentDuckdbOwnerLease: async () => {},
+            }
+          })
+
+          void mock.module('@duckdb/node-api', () => {
+            class MockConnection {
+              constructor(kind) {
+                this.kind = kind
+              }
+
+              async run() {}
+
+              async runAndReadAll(statement) {
+                if (statement.includes('BLOCK_ACTIVE_WORK')) {
+                  await new Promise((resolve) => {
+                    unblockActiveQuery = resolve
+                  })
+                }
+
+                return {getRowObjectsJson: () => [{value: 1}]}
+              }
+
+              interrupt() {}
+              closeSync() {}
+            }
+
+            class MockInstance {
+              static async create() {
+                return new MockInstance()
+              }
+
+              async connect() {
+                connectCount += 1
+                return new MockConnection(connectCount === 1 ? 'control' : 'secondary')
+              }
+
+              closeSync() {}
+            }
+
+            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          })
+
+          const service = await import('./src/server/utils/duckdbService.ts')
+          const runningQuery = service.runDuckdbJsonQuery("SELECT '${privateSqlValue}' AS value /* BLOCK_ACTIVE_WORK */", {
+            fallbackIntent: 'serveStale',
+            maxResultRows: 1,
+            projectId: 'project-active-work',
+            routeOrJobKey: 'llmStatus.route',
+            timeoutMs: 3000,
+            workloadClass: 'foreground-diagnostic',
+          })
+
+          const waitForActiveStatement = async () => {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              const snapshot = service.getDuckdbActiveMainWorkRuntimeSnapshot()
+
+              if (snapshot?.statementHash) {
+                return snapshot
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, 5))
+            }
+
+            throw new Error('Timed out waiting for active DuckDB statement snapshot')
+          }
+
+          const active = await waitForActiveStatement()
+          unblockActiveQuery()
+          const rows = await runningQuery
+          const after = service.getDuckdbActiveMainWorkRuntimeSnapshot()
+          await service.closeDuckdbService({checkpointBeforeClose: false})
+          console.log(JSON.stringify({active, after, rows}))
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          DUCKDB_APPEND_LANE_COUNT: '1',
+          DUCKDB_MEMORY_LIMIT: '20GB',
+          DUCKDB_PATH: ':memory:',
+          SERVER_ROLE: 'maintenance-worker',
+        },
+      },
+    ),
+  )
+  const result = JSON.parse(stdout) as {
+    active: {
+      durationMs: number
+      fallbackIntent: string | null
+      maxResultRows: number | null
+      operation: string | null
+      projectId: string | null
+      queue: string
+      queueDepthAtStart: number
+      queueWaitMs: number
+      routeOrJobKey: string
+      statementHash: string | null
+      statementKind: string | null
+      statementTargetTable: string | null
+      timeoutMs: number | null
+      workloadClass: string
+    }
+    after: unknown
+    rows: unknown[]
+  }
+
+  expect(stdout).not.toContain(privateSqlValue)
+  expect(result.rows).toEqual([{value: 1}])
+  expect(result.after).toBeNull()
+  expect(result.active).toMatchObject({
+    fallbackIntent: 'serveStale',
+    maxResultRows: 1,
+    operation: 'mainQuery',
+    projectId: 'project-active-work',
+    queue: 'main',
+    queueDepthAtStart: 0,
+    routeOrJobKey: 'llmStatus.route',
+    statementKind: 'SELECT',
+    statementTargetTable: null,
+    timeoutMs: 3000,
+    workloadClass: 'foreground-diagnostic',
+  })
+  expect(result.active.durationMs).toBeGreaterThanOrEqual(0)
+  expect(result.active.queueWaitMs).toBeGreaterThanOrEqual(0)
+  expect(result.active.statementHash).toMatch(/^[a-f0-9]{12}$/)
+})
+
 test('duckdb native statement diagnostics identify workload and connection without logging SQL', () => {
   const privateSqlValue = 'private-project-value'
   const stdout = getSpawnOutput(
