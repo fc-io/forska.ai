@@ -427,11 +427,16 @@ test('LLM range rebuild batches write one SQL-native serving replacement stateme
   })
   expect(replacementStatements).toHaveLength(1)
   expect(replacementStatements[0]).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(replacementStatements[0]).toContain('target_serving AS')
+  expect(replacementStatements[0]).toContain('FROM target_serving serving')
   expect(replacementStatements[0]).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
   expect(joined).toContain('FROM app.project_prompt project_prompt')
   expect(joined).toContain('llm_status = article_status.llm_status')
   expect(joined).toContain('llm_has_judgment = article_status.llm_has_judgment')
-  expect(joined).toContain('FROM app."judgment" judgment')
+  expect(joined).toContain('INNER JOIN app."judgment" judgment')
+  expect(joined).toContain('judgment.article_id = serving.article_id')
+  expect(joined).toContain('judgment.is_answered')
+  expect(joined).not.toContain('judgment.*')
 })
 
 test('article judgment-input claims rebuild article-scoped LLM status rows', async () => {

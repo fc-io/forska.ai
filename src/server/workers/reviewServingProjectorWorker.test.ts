@@ -344,7 +344,7 @@ test('rebuild timing summaries keep compact aggregate phase stats', () => {
   })
 })
 
-test('worker still drains rebuild chunks while foreground DuckDB work is queued', async () => {
+test('worker yields before draining rebuild chunks while foreground DuckDB work is queued', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
 
   harness.dependencies.getForegroundQueueDepth = () => {
@@ -354,20 +354,20 @@ test('worker still drains rebuild chunks while foreground DuckDB work is queued'
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
 
   expect(result).toMatchObject({
-    chunk: {chunkId: chunkManifest.chunkId, status: 'completed'},
-    chunkBatchCount: 1,
+    chunk: {chunkId: null, status: 'idle'},
+    chunkBatchCount: 0,
     cleanup: {status: 'skipped'},
     deltaIntake: {status: 'idle'},
     projector: {status: 'blocked'},
-    status: 'completed',
+    status: 'idle',
   })
-  expect(harness.getNextChunkInputs).toHaveLength(1)
-  expect(harness.claimInputs).toHaveLength(1)
-  expect(harness.runChunkInputs).toHaveLength(1)
+  expect(harness.getNextChunkInputs).toEqual([])
+  expect(harness.claimInputs).toEqual([])
+  expect(harness.runChunkInputs).toEqual([])
   expect(harness.wakeInputs).toEqual([])
   expect(harness.cleanupInputs).toEqual([])
   expect(harness.dirtyWorkRetentionCleanupInputs).toEqual([])
-  expect(harness.workloadContexts).toContainEqual(getReviewServingProjectorWorkerWorkloadContext('worker-1'))
+  expect(harness.workloadContexts).toEqual([])
 })
 
 test('worker skips background review work while project transfer background work is active', async () => {

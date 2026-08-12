@@ -852,16 +852,46 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
          AND COALESCE(prompt.archived, FALSE) = FALSE
        GROUP BY project_prompt.project_id
      ),
+     target_serving AS (
+       SELECT
+         serving.project_id,
+         serving.review_config_hash,
+         serving.snapshot_id,
+         serving.article_id
+       FROM mart.review_article_serving_base_v4 serving
+       INNER JOIN article_range_filter range
+         ON (range.chunk_start_article_id IS NULL OR serving.article_id >= range.chunk_start_article_id)
+        AND (range.chunk_end_article_id IS NULL OR serving.article_id <= range.chunk_end_article_id)
+       WHERE serving.project_id = ${getSqlLiteral(firstRange.projectId)}
+         AND serving.base_generation = ${getSqlLiteral(firstRange.baseGeneration)}
+         AND EXISTS (
+           SELECT 1
+           FROM app.review_serving_snapshot_manifest snapshot
+           WHERE snapshot.project_id = serving.project_id
+             AND snapshot.snapshot_id = serving.snapshot_id
+             AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+             AND ${getSnapshotComponentProjectionIdentityPredicate(
+               'snapshot',
+               'llmStatus',
+               getSqlLiteral(firstRange.projectionIdentity),
+             )}
+             AND snapshot.snapshot_status IN ('candidate', 'active')
+         )
+     ),
      latest_judgment AS (
        SELECT
-         judgment.*,
+         judgment.article_id,
+         judgment.prompt_id,
+         judgment.is_answered,
          ROW_NUMBER() OVER (
            PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images
            ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
          ) AS judgment_rank
-       FROM app."judgment" judgment
+       FROM target_serving serving
        INNER JOIN app.project project
-         ON project.id = ${getSqlLiteral(firstRange.projectId)}
+         ON project.id = serving.project_id
+       INNER JOIN app."judgment" judgment
+         ON judgment.article_id = serving.article_id
         AND project.model_id = judgment.model_id
         AND project.use_title = judgment.use_title
         AND project.use_abstract = judgment.use_abstract
@@ -883,10 +913,7 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
            ELSE 'unanswered'
          END AS llm_status,
          COALESCE(BOOL_OR(latest_judgment.is_answered IS TRUE), FALSE) AS llm_has_judgment
-       FROM mart.review_article_serving_base_v4 serving
-       INNER JOIN article_range_filter range
-         ON (range.chunk_start_article_id IS NULL OR serving.article_id >= range.chunk_start_article_id)
-        AND (range.chunk_end_article_id IS NULL OR serving.article_id <= range.chunk_end_article_id)
+       FROM target_serving serving
        INNER JOIN app.project project
          ON project.id = serving.project_id
        INNER JOIN app.project_prompt project_prompt
@@ -902,21 +929,6 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
          ON latest_judgment.article_id = serving.article_id
         AND latest_judgment.prompt_id = prompt.id
         AND latest_judgment.judgment_rank = 1
-       WHERE serving.project_id = ${getSqlLiteral(firstRange.projectId)}
-         AND serving.base_generation = ${getSqlLiteral(firstRange.baseGeneration)}
-         AND EXISTS (
-           SELECT 1
-           FROM app.review_serving_snapshot_manifest snapshot
-           WHERE snapshot.project_id = serving.project_id
-             AND snapshot.snapshot_id = serving.snapshot_id
-             AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-             AND ${getSnapshotComponentProjectionIdentityPredicate(
-               'snapshot',
-               'llmStatus',
-               getSqlLiteral(firstRange.projectionIdentity),
-             )}
-             AND snapshot.snapshot_status IN ('candidate', 'active')
-         )
        GROUP BY serving.project_id, serving.review_config_hash, serving.snapshot_id, serving.article_id, enabled_prompt_count.prompt_count
      )
      UPDATE mart.review_article_serving_list_mode_state_v4 state

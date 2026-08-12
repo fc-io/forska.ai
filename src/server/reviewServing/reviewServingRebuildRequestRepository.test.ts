@@ -1559,6 +1559,75 @@ test('search-only default rebuild admission compares per-chunk budget after pres
   expect(joined).toContain('250000')
 })
 
+test('mixed presplit rebuild admission compares bounded chunk estimates', async () => {
+  const {database, statements} = createFakeRequestDatabase()
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      budget: {maxInputRows: 250_000, maxOutputBytes: 128 * 1024 * 1024},
+      chunks: [
+        {
+          chunkEndKey: 'article-050',
+          chunkStartKey: 'article-001',
+          estimatedInputRows: 135_001,
+          estimatedOutputBytes: 6_912_512,
+          inputDigest: 'llm-status-digest-v1',
+          inputWatermark: 12,
+          outputBaseGeneration: 4,
+          projectId: 'project-v4',
+          projectionComponent: 'llmStatus',
+          projectionIdentity: 'llmStatus:identity-1',
+        },
+        {
+          chunkEndKey: 'article-050',
+          chunkStartKey: 'article-001',
+          estimatedInputRows: 135_001,
+          estimatedOutputBytes: 6_912_512,
+          inputDigest: 'summary-digest-v1',
+          inputWatermark: 12,
+          outputBaseGeneration: 4,
+          projectId: 'project-v4',
+          projectionComponent: 'summary',
+          projectionIdentity: 'summary:identity-1',
+        },
+        {
+          chunkEndKey: 'article-100',
+          chunkStartKey: 'article-050',
+          estimatedInputRows: 135_001,
+          estimatedOutputBytes: 6_912_512,
+          inputDigest: 'posting-digest-v1',
+          inputWatermark: 12,
+          outputBaseGeneration: 4,
+          projectId: 'project-v4',
+          projectionComponent: 'posting',
+          projectionIdentity: 'posting:identity-1',
+        },
+      ],
+      estimate: {estimatedInputRows: 864_064, estimatedOutputBytes: 864_064 * 512},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['llmStatus', 'posting', 'summary'],
+      requestId: 'rebuild:mixed-budget-presplit',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(request).toMatchObject({
+    admissionState: 'admitted',
+    overBudgetReason: null,
+    requestId: 'rebuild:mixed-budget-presplit',
+    status: 'admitted',
+  })
+  expect(joined).toContain("'llmStatus'")
+  expect(joined).toContain("'posting'")
+  expect(joined).toContain("'summary'")
+  expect(joined).toContain('135001')
+  expect(joined).toContain('250000')
+  expect(joined).not.toContain("'request_over_budget'")
+  expect(joined).not.toContain('input rows: estimated 864064 > max 250000')
+})
+
 test('posting default rebuilds presplit into non-overlapping bounded chunks', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {
