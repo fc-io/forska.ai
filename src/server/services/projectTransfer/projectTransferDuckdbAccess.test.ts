@@ -33,9 +33,13 @@ test('project transfer exclusive DuckDB work stays scoped to heavy import phases
   const workloadSource = readSource('./projectTransferWorkloadContext.ts')
   const analyzeSource = readSource('./projectTransferAnalyze.ts')
   const commitSource = readSource('./projectTransferCommit.ts')
+  const duckdbServiceSource = readSource('../../utils/duckdbService.ts')
 
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.session'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery'")
+  expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.scan'")
+  expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.mutation'")
+  expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.cleanup'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.import.analyze.operationTables'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.import.commit.transaction'")
 
@@ -44,6 +48,7 @@ test('project transfer exclusive DuckDB work stays scoped to heavy import phases
   expect(commitSource).toContain('Waiting for DuckDB maintenance work to pause')
   expect(workloadSource).not.toContain('projectTransfer.session.exclusive')
   expect(workloadSource).not.toContain('projectTransfer.recovery.exclusive')
+  expect(duckdbServiceSource).not.toContain("'projectTransfer.recovery',")
 })
 
 test('project transfer commit article create staging avoids duplicating full article JSON payloads', () => {

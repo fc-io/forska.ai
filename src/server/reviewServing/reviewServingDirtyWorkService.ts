@@ -278,6 +278,46 @@ const getArticleId = (input: ReviewServingDirtyWorkInput) => {
       : null
 }
 
+const reserveReviewServingDirtyWorkId = async (dirtyWorkId: string, database: ReviewServingDirtyWorkTransaction) => {
+  const rows = await database.queryJson<{dirtyWorkId: string}>(`
+    SELECT dirty_work_id AS dirtyWorkId
+    FROM app.review_serving_dirty_work_id_lookup
+    WHERE dirty_work_id = ${getSqlLiteral(dirtyWorkId)}
+    LIMIT 1
+  `)
+
+  if (rows.length > 0) {
+    return false
+  }
+
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work_id_lookup (dirty_work_id)
+    VALUES (${getSqlLiteral(dirtyWorkId)})
+  `)
+
+  return true
+}
+
+const reserveReviewServingDirtyAckId = async (dirtyAckId: string, database: ReviewServingDirtyWorkTransaction) => {
+  const rows = await database.queryJson<{dirtyAckId: string}>(`
+    SELECT dirty_ack_id AS dirtyAckId
+    FROM app.review_serving_dirty_work_ack_id_lookup
+    WHERE dirty_ack_id = ${getSqlLiteral(dirtyAckId)}
+    LIMIT 1
+  `)
+
+  if (rows.length > 0) {
+    return false
+  }
+
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work_ack_id_lookup (dirty_ack_id)
+    VALUES (${getSqlLiteral(dirtyAckId)})
+  `)
+
+  return true
+}
+
 const getProjectionFromKey = (projectionKey: string | null) => {
   if (projectionKey === null) {
     return null
@@ -361,44 +401,16 @@ const getQualifiedDirtyWorkSelect = (dirtyWorkSql: string) => {
   `
 }
 
-const getAcknowledgedDirtyRangeCondition = (input: ReviewServingDirtyWorkInput) => {
-  const dirtyRangeStart = input.scope.dirtyRangeStart
-  const dirtyRangeEnd = input.scope.dirtyRangeEnd
-
-  return dirtyRangeStart === null || dirtyRangeEnd === null
-    ? 'dirty_range_start IS NULL AND dirty_range_end IS NULL'
-    : `(
-        dirty_range_start IS NULL
-        OR (
-          dirty_range_start <= ${getSqlLiteral(dirtyRangeStart)}
-          AND dirty_range_end >= ${getSqlLiteral(dirtyRangeEnd)}
-        )
-      )`
-}
-
-const isReviewServingDirtyWorkAcknowledged = async (
-  input: ReviewServingDirtyWorkInput,
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  const rows = await database.queryJson<{acknowledged: boolean}>(`
-    SELECT true AS acknowledged
-    FROM app.review_serving_dirty_work_ack
-    WHERE projection_component = ${getSqlLiteral(input.projectionComponent)}
-      AND projection_identity = ${getSqlLiteral(input.projectionIdentity)}
-      AND source_partition = ${getSqlLiteral(input.scope.sourcePartition)}
-      AND status = 'completed'
-      AND completed_source_high_water_mark >= ${input.scope.sourceHighWaterMark}
-      AND (${getAcknowledgedDirtyRangeCondition(input)})
-    LIMIT 1
-  `)
-
-  return rows.length > 0
-}
-
 const acknowledgeReviewServingDirtyWorkClaim = async (
   claim: ReviewServingDirtyWorkClaim,
   database: ReviewServingDirtyWorkTransaction,
 ) => {
+  const dirtyAckId = getDirtyAckId(claim)
+
+  if (!(await reserveReviewServingDirtyAckId(dirtyAckId, database))) {
+    return
+  }
+
   await database.run(`
     INSERT INTO app.review_serving_dirty_work_ack (
       dirty_ack_id,
@@ -412,10 +424,8 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
       status,
       completed_at
     )
-    SELECT *
-    FROM (
-      VALUES (
-      ${getSqlLiteral(getDirtyAckId(claim))},
+    VALUES (
+      ${getSqlLiteral(dirtyAckId)},
       ${getSqlLiteral(claim.dirtyWorkId)},
       ${getSqlLiteral(claim.projectionComponent)},
       ${getSqlLiteral(claim.projectionIdentity)},
@@ -425,23 +435,6 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
       ${getSqlLiteral(claim.dirtyRangeEnd)},
       'completed',
       current_timestamp
-      )
-    ) AS incoming(
-      dirty_ack_id,
-      dirty_work_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      completed_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end,
-      status,
-      completed_at
-    )
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_dirty_work_ack existing
-      WHERE existing.dirty_ack_id = incoming.dirty_ack_id
     )
   `)
 }
@@ -640,17 +633,29 @@ const insertReviewServingDirtyWorkCoverageAcknowledgements = async (
     return
   }
 
-  const valuesSql = coverages
+  const reservedCoverages: Array<ReviewServingDirtyWorkCoverage & {dirtyAckId: string}> = []
+
+  for (const coverage of coverages) {
+    const dirtyAckId = getDirtyAckHighWaterId({
+      completedSourceHighWaterMark: coverage.completedSourceHighWaterMark,
+      projectionComponent: coverage.projectionComponent,
+      projectionIdentity: coverage.projectionIdentity,
+      sourcePartition: coverage.sourcePartition,
+    })
+
+    if (await reserveReviewServingDirtyAckId(dirtyAckId, database)) {
+      reservedCoverages.push({...coverage, dirtyAckId})
+    }
+  }
+
+  if (reservedCoverages.length === 0) {
+    return
+  }
+
+  const valuesSql = reservedCoverages
     .map((coverage) => {
       return `(
-        ${getSqlLiteral(
-          getDirtyAckHighWaterId({
-            completedSourceHighWaterMark: coverage.completedSourceHighWaterMark,
-            projectionComponent: coverage.projectionComponent,
-            projectionIdentity: coverage.projectionIdentity,
-            sourcePartition: coverage.sourcePartition,
-          }),
-        )},
+        ${getSqlLiteral(coverage.dirtyAckId)},
         NULL,
         ${getSqlLiteral(coverage.projectionComponent)},
         ${getSqlLiteral(coverage.projectionIdentity)},
@@ -677,27 +682,8 @@ const insertReviewServingDirtyWorkCoverageAcknowledgements = async (
       status,
       completed_at
     )
-    SELECT *
-    FROM (
-      VALUES
+    VALUES
       ${valuesSql}
-    ) AS incoming(
-      dirty_ack_id,
-      dirty_work_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      completed_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end,
-      status,
-      completed_at
-    )
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_dirty_work_ack existing
-      WHERE existing.dirty_ack_id = incoming.dirty_ack_id
-    )
   `)
 }
 
@@ -706,11 +692,7 @@ export const upsertReviewServingDirtyWork = async (
   database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
 ) => {
   const dirtyWorkId = getDirtyWorkId(input)
-  const skipped = await isReviewServingDirtyWorkAcknowledged(input, database)
-
-  if (skipped) {
-    return {dirtyWorkId, skipped}
-  }
+  const skipped = false
 
   const projectionKey = getProjectionKey({
     projectionComponent: input.projectionComponent,
@@ -744,6 +726,10 @@ export const upsertReviewServingDirtyWork = async (
     WHERE dirty_work_id = ${getSqlLiteral(dirtyWorkId)}
   `)
 
+  if (!(await reserveReviewServingDirtyWorkId(dirtyWorkId, database))) {
+    return {dirtyWorkId, skipped}
+  }
+
   await database.run(`
     INSERT INTO app.review_serving_dirty_work (
       dirty_work_id,
@@ -762,7 +748,7 @@ export const upsertReviewServingDirtyWork = async (
       status,
       updated_at
     )
-    SELECT
+    VALUES (
       ${getSqlLiteral(dirtyWorkId)},
       ${getSqlLiteral(input.scope.projectId)},
       ${getSqlLiteral(input.scope.scopeKind)},
@@ -778,10 +764,6 @@ export const upsertReviewServingDirtyWork = async (
       ${getSqlLiteral(input.scope.dirtyRangeEnd)},
       'pending',
       current_timestamp
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_dirty_work existing
-      WHERE (existing.dirty_work_id || '') = (${getSqlLiteral(dirtyWorkId)} || '')
     )
   `)
 
@@ -1040,51 +1022,34 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
 ) => {
   const dirtyAckId = getDirtyAckHighWaterId(input)
 
-  await database.run(`
-    INSERT INTO app.review_serving_dirty_work_ack (
-      dirty_ack_id,
-      dirty_work_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      completed_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end,
-      status,
-      completed_at
-    )
-    SELECT *
-    FROM (
-      VALUES (
-      ${getSqlLiteral(dirtyAckId)},
-      NULL,
-      ${getSqlLiteral(input.projectionComponent)},
-      ${getSqlLiteral(input.projectionIdentity)},
-      ${getSqlLiteral(input.sourcePartition)},
-      ${input.completedSourceHighWaterMark},
-      NULL,
-      NULL,
-      'completed',
-      current_timestamp
+  if (await reserveReviewServingDirtyAckId(dirtyAckId, database)) {
+    await database.run(`
+      INSERT INTO app.review_serving_dirty_work_ack (
+        dirty_ack_id,
+        dirty_work_id,
+        projection_component,
+        projection_identity,
+        source_partition,
+        completed_source_high_water_mark,
+        dirty_range_start,
+        dirty_range_end,
+        status,
+        completed_at
       )
-    ) AS incoming(
-      dirty_ack_id,
-      dirty_work_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      completed_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end,
-      status,
-      completed_at
-    )
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_dirty_work_ack existing
-      WHERE existing.dirty_ack_id = incoming.dirty_ack_id
-    )
-  `)
+      VALUES (
+        ${getSqlLiteral(dirtyAckId)},
+        NULL,
+        ${getSqlLiteral(input.projectionComponent)},
+        ${getSqlLiteral(input.projectionIdentity)},
+        ${getSqlLiteral(input.sourcePartition)},
+        ${input.completedSourceHighWaterMark},
+        NULL,
+        NULL,
+        'completed',
+        current_timestamp
+      )
+    `)
+  }
 
   await database.run(`
     DELETE FROM app.review_serving_dirty_work_ack
@@ -1305,51 +1270,34 @@ export const cleanupReviewServingDirtyWorkRetention = async (
         const compactions = await previousCompactions
         const dirtyAckId = getDirtyAckHighWaterId(lane)
 
-        await tx.run(`
-        INSERT INTO app.review_serving_dirty_work_ack (
-          dirty_ack_id,
-          dirty_work_id,
-          projection_component,
-          projection_identity,
-          source_partition,
-          completed_source_high_water_mark,
-          dirty_range_start,
-          dirty_range_end,
-          status,
-          completed_at
-        )
-        SELECT *
-        FROM (
-          VALUES (
-          ${getSqlLiteral(dirtyAckId)},
-          NULL,
-          ${getSqlLiteral(lane.projectionComponent)},
-          ${getSqlLiteral(lane.projectionIdentity)},
-          ${getSqlLiteral(lane.sourcePartition)},
-          ${getSqlLiteral(lane.completedSourceHighWaterMark)},
-          NULL,
-          NULL,
-          'completed',
-          current_timestamp
-          )
-        ) AS incoming(
-          dirty_ack_id,
-          dirty_work_id,
-          projection_component,
-          projection_identity,
-          source_partition,
-          completed_source_high_water_mark,
-          dirty_range_start,
-          dirty_range_end,
-          status,
-          completed_at
-        )
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM app.review_serving_dirty_work_ack existing
-          WHERE existing.dirty_ack_id = incoming.dirty_ack_id
-        )
-      `)
+        if (await reserveReviewServingDirtyAckId(dirtyAckId, tx)) {
+          await tx.run(`
+            INSERT INTO app.review_serving_dirty_work_ack (
+              dirty_ack_id,
+              dirty_work_id,
+              projection_component,
+              projection_identity,
+              source_partition,
+              completed_source_high_water_mark,
+              dirty_range_start,
+              dirty_range_end,
+              status,
+              completed_at
+            )
+            VALUES (
+              ${getSqlLiteral(dirtyAckId)},
+              NULL,
+              ${getSqlLiteral(lane.projectionComponent)},
+              ${getSqlLiteral(lane.projectionIdentity)},
+              ${getSqlLiteral(lane.sourcePartition)},
+              ${getSqlLiteral(lane.completedSourceHighWaterMark)},
+              NULL,
+              NULL,
+              'completed',
+              current_timestamp
+            )
+          `)
+        }
 
         return [...compactions, {...lane, dirtyAckId}]
       },

@@ -95,7 +95,7 @@ const createFakeIntakeDatabase = (
   const run = async (statement: string) => {
     statements.push(statement)
 
-    if (statement.includes('INSERT INTO app.review_serving_dirty_work')) {
+    if (statement.includes('INSERT INTO app.review_serving_dirty_work (')) {
       dirtyWorkIds.add(getDirtyWorkId(statement))
     }
   }
@@ -139,7 +139,7 @@ test('delta intake starts projector work at first affected component only', asyn
     database,
   )
   const dirtyInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
   const projectionComponents = dirtyInserts.map((statement) => {
     return parseProjectionKey(statement).projectionComponent
@@ -203,7 +203,7 @@ test('delta intake rejects malformed rows before dirty work writes', async () =>
   expect(result).toEqual({deltaId: 'delta-bad', reason: 'missing required keys: humanJudgmentKey', status: 'failed'})
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_serving_dirty_work')
+      return statement.includes('INSERT INTO app.review_serving_dirty_work (')
     }),
   ).toBe(false)
   expect(
@@ -238,7 +238,7 @@ test('delta intake fans route and project changes to project-scope dirty work', 
     database,
   )
   const dirtyInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
   const projectionComponents = dirtyInserts.map((statement) => {
     return parseProjectionKey(statement).projectionComponent
@@ -308,7 +308,7 @@ test('delta intake expands article-only changes to affected projects', async () 
     database,
   )
   const dirtyInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
 
   expect(result).toMatchObject({dirtyWorkCount: 6, maxSourceHighWaterMark: 11, status: 'converted'})
@@ -340,7 +340,7 @@ test('delta intake replay from the same range is idempotent', async () => {
   )
 
   const dirtyInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
 
   expect(dirtyInserts).toHaveLength(10)
@@ -406,7 +406,7 @@ test('delta projection identity is stable across per-mutation values', async () 
 
   const projectionKeys = statements
     .filter((statement) => {
-      return statement.includes('INSERT INTO app.review_serving_dirty_work')
+      return statement.includes('INSERT INTO app.review_serving_dirty_work (')
     })
     .map(getProjectionKey)
 

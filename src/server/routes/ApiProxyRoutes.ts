@@ -11,6 +11,7 @@ import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from '../utils/serverRuntimeRole.ts'
 import {
+  type ApiRouteClassification,
   classifyApiRoute,
   duckdbOwnerPrivateApiPrefix,
   getDuckdbOwnerProxyPathname,
@@ -21,6 +22,7 @@ import {
 
 type DuckdbOwnerProxyRequestTemplate = {
   body: ArrayBuffer | null
+  classification: ApiRouteClassification
   failClosedWithoutDuckdbOwner: boolean
   headers: Headers
   method: string
@@ -30,6 +32,7 @@ type DuckdbOwnerProxyRequestTemplate = {
 
 type DuckdbOwnerStreamingProxyRequestTemplate = {
   body: ReadableStream<Uint8Array> | null
+  classification: ApiRouteClassification
   failClosedWithoutDuckdbOwner: boolean
   headers: Headers
   method: string
@@ -40,6 +43,9 @@ type DuckdbOwnerStreamingProxyRequestTemplate = {
 const duckdbOwnerProxyRetryDelayMs = 250
 const duckdbOwnerProxyRetryTimeoutMs = 4000
 const duckdbOwnerDiagnosticProxyTimeoutMs = 3000
+const duckdbOwnerReadProxyTimeoutMs = 15000
+const duckdbOwnerMutationProxyTimeoutMs = 60000
+const duckdbOwnerStreamingProxyTimeoutMs = 10 * 60 * 1000
 const duckdbOwnerProxyRetryableMethods = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'])
 const duckdbOwnerProxyHopByHopResponseHeaders = new Set([
   'connection',
@@ -104,6 +110,7 @@ const getDuckdbOwnerProxyRequestTemplate = async (
     ? null
     : {
         body: hasRequestBody ? await request.clone().arrayBuffer() : null,
+        classification,
         failClosedWithoutDuckdbOwner: shouldApiRouteFailClosedWithoutDuckdbOwner(classification),
         headers: getDuckdbOwnerProxyHeaders(request),
         method: request.method,
@@ -123,6 +130,7 @@ const getDuckdbOwnerStreamingProxyRequestTemplate = (
     ? null
     : {
         body: request.body,
+        classification,
         failClosedWithoutDuckdbOwner: shouldApiRouteFailClosedWithoutDuckdbOwner(classification),
         headers: getDuckdbOwnerProxyHeaders(request),
         method: request.method,
@@ -147,11 +155,13 @@ const getDuckdbOwnerProxyRequest = (
 const getDuckdbOwnerStreamingProxyRequest = (
   requestTemplate: DuckdbOwnerStreamingProxyRequestTemplate,
   duckdbOwnerUrl: string,
+  signal?: AbortSignal,
 ) => {
   return new Request(`${duckdbOwnerUrl}${requestTemplate.pathname}${requestTemplate.search}`, {
     body: requestTemplate.body ?? undefined,
     headers: requestTemplate.headers,
     method: requestTemplate.method,
+    signal,
   })
 }
 
@@ -162,9 +172,17 @@ const getIncompatibleDuckdbOwnerTargetResponse = async (duckdbOwnerUrl: string) 
 }
 
 const getDuckdbOwnerProxyTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
-  return requestTemplate.method === 'GET' && duckdbOwnerDiagnosticProxyTimeoutPathnames.has(requestTemplate.pathname)
-    ? duckdbOwnerDiagnosticProxyTimeoutMs
-    : null
+  if (
+    requestTemplate.method === 'GET'
+    && (requestTemplate.classification === 'duckdb-owner-diagnostics'
+      || duckdbOwnerDiagnosticProxyTimeoutPathnames.has(requestTemplate.pathname))
+  ) {
+    return duckdbOwnerDiagnosticProxyTimeoutMs
+  }
+
+  return requestTemplate.method === 'GET' || requestTemplate.method === 'HEAD' || requestTemplate.method === 'OPTIONS'
+    ? duckdbOwnerReadProxyTimeoutMs
+    : duckdbOwnerMutationProxyTimeoutMs
 }
 
 const getDuckdbOwnerProxyTimeoutResponse = (timeoutMs: number) => {
@@ -248,7 +266,21 @@ const fetchDuckdbOwnerStreamingProxyResponse = async (
 ) => {
   const incompatibleTargetResponse = await getIncompatibleDuckdbOwnerTargetResponse(duckdbOwnerUrl)
 
-  return incompatibleTargetResponse ?? fetch(getDuckdbOwnerStreamingProxyRequest(requestTemplate, duckdbOwnerUrl))
+  if (incompatibleTargetResponse !== null) {
+    return incompatibleTargetResponse
+  }
+
+  const signal = AbortSignal.timeout(duckdbOwnerStreamingProxyTimeoutMs)
+
+  try {
+    return await fetch(getDuckdbOwnerStreamingProxyRequest(requestTemplate, duckdbOwnerUrl, signal))
+  } catch (error) {
+    if (signal.aborted) {
+      return getDuckdbOwnerProxyTimeoutResponse(duckdbOwnerStreamingProxyTimeoutMs)
+    }
+
+    throw error
+  }
 }
 
 const getRetriedProxyResponse = async (

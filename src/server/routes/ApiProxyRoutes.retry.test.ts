@@ -24,6 +24,7 @@ const actualRuntimeCutoverModule = (await import(
 )) as RuntimeCutoverModule
 
 const originalFetch = globalThis.fetch
+const originalAbortSignalTimeoutDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout')
 const textEncoder = new TextEncoder()
 const importArtifactTestRoot = join(process.cwd(), 'tmp/project-transfer/import/api-proxy-status-artifact-test')
 
@@ -92,6 +93,36 @@ const getOwnerFetchCallUrls = (calls: Array<[Request | URL | string]>) => {
     })
 }
 
+const installFastAbortSignalTimeoutMock = () => {
+  const timeoutMock = mock((timeoutMs: number) => {
+    const controller = new AbortController()
+    setTimeout(() => {
+      controller.abort(new Error(`test timeout ${timeoutMs}`))
+    }, 1)
+    return controller.signal
+  })
+
+  Object.defineProperty(AbortSignal, 'timeout', {configurable: true, value: timeoutMock})
+  return timeoutMock
+}
+
+const waitForForwardedRequestAbort = async (request: Request) => {
+  await new Promise<never>((_resolve, reject) => {
+    if (request.signal.aborted) {
+      reject(new Error('owner request aborted'))
+      return
+    }
+
+    request.signal.addEventListener(
+      'abort',
+      () => {
+        reject(new Error('owner request aborted'))
+      },
+      {once: true},
+    )
+  })
+}
+
 const getTextStream = (text: string, onPull: () => void) => {
   const streamState = {sent: false}
 
@@ -137,6 +168,9 @@ afterEach(() => {
   state.shouldProxy = true
   state.ownerUrls = ['http://owner-1:34991']
   globalThis.fetch = originalFetch
+  if (originalAbortSignalTimeoutDescriptor !== undefined) {
+    Object.defineProperty(AbortSignal, 'timeout', originalAbortSignalTimeoutDescriptor)
+  }
   rmSync(importArtifactTestRoot, {force: true, recursive: true})
 })
 
@@ -172,21 +206,7 @@ test.serial('api proxy times out wedged DuckDB owner diagnostic GET requests', a
       return getCompatibleRuntimeReadyResponse()
     }
 
-    const forwardedRequest = request as Request
-    await new Promise<never>((_resolve, reject) => {
-      if (forwardedRequest.signal.aborted) {
-        reject(new Error('owner request aborted'))
-        return
-      }
-
-      forwardedRequest.signal.addEventListener(
-        'abort',
-        () => {
-          reject(new Error('owner request aborted'))
-        },
-        {once: true},
-      )
-    })
+    await waitForForwardedRequestAbort(request as Request)
   })
   globalThis.fetch = fetchMock as unknown as typeof fetch
 
@@ -203,6 +223,71 @@ test.serial('api proxy times out wedged DuckDB owner diagnostic GET requests', a
   expect(ownerFetchCallUrls).toEqual([
     'http://owner-1:34991/api/runtime/ready',
     'http://owner-1:34991/__duckdb-owner-rpc/api/llmstatus',
+  ])
+})
+
+test.serial('api proxy times out wedged owner-dependent GET requests', async () => {
+  const app = await loadRoutes()
+  const timeoutMock = installFastAbortSignalTimeoutMock()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
+    await waitForForwardedRequestAbort(request as Request)
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const startedAt = Date.now()
+  const response = await app.handle(new Request('http://localhost/api/projects', {method: 'GET'}))
+  const elapsedMs = Date.now() - startedAt
+  const body = (await response.json()) as {data: null; error: string}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+
+  expect(response.status).toBe(504)
+  expect(body.data).toBe(null)
+  expect(body.error).toContain('DuckDB owner proxy target timed out after 15000 ms')
+  expect(elapsedMs).toBeLessThan(1_000)
+  expect(timeoutMock).toHaveBeenCalledWith(15000)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects',
+  ])
+})
+
+test.serial('api proxy times out wedged non-retryable owner mutations without retrying', async () => {
+  const app = await loadRoutes()
+  const timeoutMock = installFastAbortSignalTimeoutMock()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
+    await waitForForwardedRequestAbort(request as Request)
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/articlesreviews', {
+      body: JSON.stringify({projectId: 'project-1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: null; error: string}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+
+  expect(response.status).toBe(504)
+  expect(body.data).toBe(null)
+  expect(body.error).toContain('DuckDB owner proxy target timed out after 60000 ms')
+  expect(timeoutMock).toHaveBeenCalledWith(60000)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/articlesreviews',
   ])
 })
 
@@ -502,6 +587,38 @@ test.serial('api proxy does not retry failed project transfer upload streams', a
   expect(request.bodyUsed).toBe(false)
   expect(cloneMock).toHaveBeenCalledTimes(0)
   expect(ownerFetchCallUrls).toHaveLength(2)
+})
+
+test.serial('api proxy times out wedged project transfer upload streams without buffering', async () => {
+  const app = await loadRoutes()
+  const timeoutMock = installFastAbortSignalTimeoutMock()
+  const request = getStreamingUploadRequest({onPull: () => {}})
+  const cloneMock = getRequestCloneFailureMock(request)
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
+    await waitForForwardedRequestAbort(request as Request)
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(request)
+  const body = (await response.json()) as {data: null; error: string}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+
+  expect(response.status).toBe(504)
+  expect(body.data).toBe(null)
+  expect(body.error).toContain('DuckDB owner proxy target timed out after 600000 ms')
+  expect(timeoutMock).toHaveBeenCalledWith(600000)
+  expect(request.bodyUsed).toBe(false)
+  expect(cloneMock).toHaveBeenCalledTimes(0)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/session-1/upload?replace=true',
+  ])
 })
 
 test.serial('api proxy keeps project transfer export downloads streaming from the owner response', async () => {

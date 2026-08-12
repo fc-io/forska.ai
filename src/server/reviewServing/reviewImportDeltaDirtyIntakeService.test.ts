@@ -101,7 +101,7 @@ const createFakeIntakeDatabase = (rows: readonly Record<string, unknown>[]) => {
   const run = async (statement: string) => {
     statements.push(statement)
 
-    if (statement.includes('INSERT INTO app.review_serving_dirty_work')) {
+    if (statement.includes('INSERT INTO app.review_serving_dirty_work (')) {
       dirtyWorkIds.add(getDirtyWorkId(statement))
     }
   }
@@ -130,7 +130,7 @@ test('import delta intake bounds source rows before route fanout', async () => {
     return statement.includes('WITH bounded_deltas AS')
   })
   const dirtyInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
 
   expect(result).toMatchObject({dirtyWorkCount: 18, maxSourceHighWaterMark: 4, status: 'converted'})
@@ -171,7 +171,7 @@ test('repeated import changes collapse into one dirty row per project component 
   )
 
   const dirtyInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
 
   expect(dirtyInserts).toHaveLength(8)
@@ -206,7 +206,7 @@ test('import projection identity is stable across per-mutation article values', 
 
   const projectionKeys = statements
     .filter((statement) => {
-      return statement.includes('INSERT INTO app.review_serving_dirty_work')
+      return statement.includes('INSERT INTO app.review_serving_dirty_work (')
     })
     .map(getProjectionKey)
   const uniqueProjectionKeys = new Set(projectionKeys)
@@ -225,10 +225,10 @@ test('selected import rank-field changes dirty search but not display payload or
     database,
   )
   const dirtyInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
   const dirtyInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
   const projectionKey = dirtyInsert === undefined ? {} : parseProjectionKey(dirtyInsert)
   const projectionComponents = dirtyInserts.map((statement) => {
@@ -254,7 +254,7 @@ test('tombstone import deltas create removed work with registry declared compone
     database,
   )
   const dirtyInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
   })
   const tombstoneRule = getReviewServingInvalidationRule('importRoute.article.removed')
 
@@ -291,7 +291,7 @@ test('import delta intake rejects missing hot-field typed keys before dirty writ
   })
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_serving_dirty_work')
+      return statement.includes('INSERT INTO app.review_serving_dirty_work (')
     }),
   ).toBe(false)
   expect(

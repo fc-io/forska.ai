@@ -8946,10 +8946,17 @@ export const runReviewServingProjectorWorkerCycle = async (
   const deltaIntake = shouldRunOnlyRebuildChunk
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     : await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
+  const projectorServiceDependencies = {
+    getQueueState: async () => {
+      return {foregroundDuckdbQueueDepth: dependencies.getForegroundQueueDepth()}
+    },
+    runners: getDefaultReviewServingProjectorRunners(database),
+    ...(dependencies.projectorServiceDependencies ?? {}),
+  }
   const projector = shouldRunOnlyRebuildChunk
     ? getBlockedReviewServingProjectorWakeResult()
     : await dependencies.wakeProjectors(getWakeInput(options, wakeId), {
-        ...(dependencies.projectorServiceDependencies ?? {runners: getDefaultReviewServingProjectorRunners(database)}),
+        ...projectorServiceDependencies,
         database,
         nowMs: () => {
           return getWorkerNowMs(dependencies, options)
