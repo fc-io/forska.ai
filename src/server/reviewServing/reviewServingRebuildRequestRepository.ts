@@ -650,14 +650,6 @@ const getChunkedAdmissionEstimate = (input: {
     return input.estimate
   }
 
-  const canUsePerChunkAdmissionBudget = input.chunks.every((chunk) => {
-    return chunk.projectionComponent === 'search'
-  })
-
-  if (!canUsePerChunkAdmissionBudget) {
-    return input.estimate
-  }
-
   const hasChunkEstimate = input.chunks.some((chunk) => {
     return (
       chunk.estimatedInputRows !== undefined

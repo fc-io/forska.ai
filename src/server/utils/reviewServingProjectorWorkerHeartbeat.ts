@@ -311,6 +311,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     }
 
     void runReviewServingProjectorWorker({
+      lastCleanupAtMs: Date.now(),
       pollIntervalMs: options.pollIntervalMs,
       rebuildChunkBatchMaxRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options),
       rebuildChunkBatchSize:

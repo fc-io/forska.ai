@@ -8883,6 +8883,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   if (
     hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
     || (await hasActiveProjectTransferForReviewServingProjectorWorker(dependencies))
+    || hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
   ) {
     const chunk = getIdleReviewServingProjectorWorkerCycleChunkResult()
     const cleanup = {
