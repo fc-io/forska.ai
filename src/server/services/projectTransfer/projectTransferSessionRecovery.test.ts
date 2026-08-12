@@ -103,7 +103,7 @@ const getRecoveryScript = (body: string) => {
   `
 }
 
-const runRecoveryScript = <T>(body: string) => {
+const runRecoveryScript = <T>(body: string, envValues: Record<string, string> = {}) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), `f2-project-transfer-recovery-${process.pid}-`))
   const duckdbPath = join(runtimeRoot, 'forska.duckdb')
   const result = globalThis.Bun.spawnSync(['bun', '-e', getRecoveryScript(body)], {
@@ -115,6 +115,7 @@ const runRecoveryScript = <T>(body: string) => {
       SERVER_ROLE: 'dev-single',
       TRANSFER_RUNTIME_ROOT: runtimeRoot,
       VITE_PORT: '3000',
+      ...envValues,
     },
   })
 
@@ -130,33 +131,42 @@ const runRecoveryScript = <T>(body: string) => {
 }
 
 test('project transfer recovery keeps initial stale-session scan narrow', async () => {
-  const statements: string[] = []
+  const statements: Array<{routeOrJobKey: string | null; statement: string}> = []
   const recovery = getProjectTransferSessionRecoveryService()
   const runner = {
-    queryJson: async (statement: string) => {
-      statements.push(statement)
+    queryJson: async (statement: string, workloadContext?: {routeOrJobKey: string}) => {
+      statements.push({routeOrJobKey: workloadContext?.routeOrJobKey ?? null, statement})
 
       return []
     },
-    run: async (statement: string) => {
-      statements.push(statement)
+    run: async (statement: string, workloadContext?: {routeOrJobKey: string}) => {
+      statements.push({routeOrJobKey: workloadContext?.routeOrJobKey ?? null, statement})
     },
   }
 
   await recovery.runProjectTransferStartupRecovery({
     batchSize: 10,
-    isActiveWriter: () => true,
+    isActiveWriter: () => {
+      return true
+    },
     now: new Date('2026-05-21T12:00:00.000Z'),
     ownerToken: 'recovery-owner',
-    requestReviewServingBuild: async () => null,
+    requestReviewServingBuild: async () => {
+      return null
+    },
     runner,
   })
 
-  const initialStaleScan = statements[0] ?? ''
+  const initialStaleScan = statements[0]?.statement ?? ''
+  const routeOrJobKeys = statements.map((entry) => {
+    return entry.routeOrJobKey
+  })
 
   expect(initialStaleScan).toContain('FROM app.project_transfer_session')
   expect(initialStaleScan).toContain('LIMIT 10')
   expect(initialStaleScan).not.toContain('progress_json')
+  expect(routeOrJobKeys).toContain('projectTransfer.recovery.scan')
+  expect(routeOrJobKeys).not.toContain('projectTransfer.recovery')
 })
 
 test('project transfer recovery runs only on active writer and batch-limits stale scans', () => {
@@ -225,6 +235,52 @@ test('project transfer recovery runs only on active writer and batch-limits stal
     'stale-c': 'queued',
   })
   expect(result.tempAfterBatch).toEqual({'future-a': true, 'stale-a': false, 'stale-b': false, 'stale-c': true})
+})
+
+test('project transfer startup recovery uses a single-session automatic batch on low-memory owners', () => {
+  const result = runRecoveryScript<{
+    result: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    states: Record<string, string>
+  }>(
+    `
+      const sessionIds = ['low-memory-stale-a', 'low-memory-stale-b', 'low-memory-stale-c']
+      await Promise.all(sessionIds.map(async (sessionId) => {
+        const layout = getProjectTransferImportTempLayout(sessionId)
+        await sessionRepository.createProjectTransferSession({
+          direction: 'import',
+          expiresAt: expiredAt,
+          id: sessionId,
+          state: 'queued',
+        })
+        await writeRuntimeFile(layout.uploadPath)
+      }))
+
+      const result = await recovery.runProjectTransferStartupRecovery({
+        cwd: runtimeRoot,
+        isActiveWriter: () => true,
+        now,
+        ownerToken: 'recovery-owner',
+      })
+      const states = await getStates()
+
+      console.log(JSON.stringify({result, states}))
+    `,
+    {DUCKDB_MEMORY_LIMIT: '6400MiB'},
+  )
+
+  expect(result.result.scannedSessionCount).toBe(1)
+  expect(result.result.expiredSessionCount).toBe(1)
+  expect(result.result.cleanupTempArtifactCount).toBe(1)
+  expect(
+    Object.values(result.states).filter((state) => {
+      return state === 'expired'
+    }),
+  ).toHaveLength(1)
+  expect(
+    Object.values(result.states).filter((state) => {
+      return state === 'queued'
+    }),
+  ).toHaveLength(2)
 })
 
 test('project transfer recovery marks terminal cleanup and prioritizes stale active sessions', () => {

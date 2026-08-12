@@ -11,15 +11,16 @@ import {
   requestReviewServingV4Rebuild,
   type RequestReviewServingV4RebuildInput,
 } from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
-import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
-import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../../utils/duckdbMemoryLimit.ts'
 import {
   closeDuckdbService,
+  type DuckdbWorkloadContext,
   getDuckdbAppendRuntimeMetrics,
   getDuckdbQueueRuntimeMetricsSnapshot,
   getDuckdbRuntimeConfig,
 } from '../../utils/duckdbService.ts'
+import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
+import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
 import type {
@@ -49,14 +50,18 @@ import {
   validateProjectTransferPlanReadyToCommit,
 } from './projectTransferSession.ts'
 import {removeProjectTransferStaleStagingRevisions} from './projectTransferStaging.ts'
-import {projectTransferRecoveryWorkloadContext} from './projectTransferWorkloadContext.ts'
+import {
+  projectTransferRecoveryCleanupWorkloadContext,
+  projectTransferRecoveryMutationWorkloadContext,
+  projectTransferRecoveryScanWorkloadContext,
+} from './projectTransferWorkloadContext.ts'
 
 type ProjectTransferSessionRecoveryRunner = {
-  queryJson: <T>(statement: string, workloadContext?: typeof projectTransferRecoveryWorkloadContext) => Promise<T[]>
-  run: (statement: string, workloadContext?: typeof projectTransferRecoveryWorkloadContext) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
   transaction?: <T>(
     operation: (runner: ProjectTransferSessionRecoveryRunner) => Promise<T>,
-    workloadContext?: typeof projectTransferRecoveryWorkloadContext,
+    workloadContext?: DuckdbWorkloadContext,
   ) => Promise<T>
 }
 
@@ -134,6 +139,7 @@ const defaultImportAnalyzeHeartbeatStaleMs = 90 * 1000
 const defaultImportCommitHeartbeatStaleMs = 90 * 1000
 const defaultTerminalSessionPruneAgeMs = 24 * 60 * 60 * 1000
 const maxRecoveryBatchSize = 500
+const lowMemoryAutomaticRecoveryBatchSize = 1
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
 
@@ -160,6 +166,24 @@ const getRecoveryBatchSize = (batchSize: number | undefined) => {
   return Math.max(1, Math.min(maxRecoveryBatchSize, normalized))
 }
 
+const isLowMemoryProjectTransferRecoveryOwner = () => {
+  return getLowMemoryProjectTransferRecoveryRssCapBytes() !== null
+}
+
+const getEffectiveRecoveryBatchSize = ({
+  batchSize,
+  hasInjectedRunner,
+}: {
+  batchSize: number | undefined
+  hasInjectedRunner: boolean
+}) => {
+  const requestedBatchSize = getRecoveryBatchSize(batchSize)
+
+  return batchSize === undefined && !hasInjectedRunner && isLowMemoryProjectTransferRecoveryOwner()
+    ? Math.min(requestedBatchSize, lowMemoryAutomaticRecoveryBatchSize)
+    : requestedBatchSize
+}
+
 const getRunner = (runner?: ProjectTransferSessionRecoveryRunner) => {
   return runner ?? getAppDatabaseService()
 }
@@ -175,7 +199,9 @@ const getProjectTransferRecoveryQueueState = () => {
   }
 }
 
-const hasActiveProjectTransferRecoveryQueueWork = (queueState: ReturnType<typeof getProjectTransferRecoveryQueueState>) => {
+const hasActiveProjectTransferRecoveryQueueWork = (
+  queueState: ReturnType<typeof getProjectTransferRecoveryQueueState>,
+) => {
   return queueState.foregroundQueueDepth > 0 || queueState.backgroundQueueDepth > 0 || queueState.appendQueueDepth > 0
 }
 
@@ -381,7 +407,7 @@ const getStaleProjectTransferSessions = async ({
       id ASC
     LIMIT ${batchSize}
   `,
-    projectTransferRecoveryWorkloadContext,
+    projectTransferRecoveryScanWorkloadContext,
   )
 
   if (candidates.length === 0) {
@@ -400,7 +426,7 @@ const getStaleProjectTransferSessions = async ({
       }),
     ).join(', ')})
   `,
-    projectTransferRecoveryWorkloadContext,
+    projectTransferRecoveryScanWorkloadContext,
   )
   const progressBySessionId = new Map(
     progressRows.map((row) => {
@@ -456,7 +482,8 @@ const transitionImportSessionToCompletedFromHistory = async ({
     return null
   }
 
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'completed',
@@ -471,7 +498,9 @@ const transitionImportSessionToCompletedFromHistory = async ({
       AND state = ${getSqlLiteral(session.state)}
       ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -491,7 +520,8 @@ const transitionImportUploadSessionToFailed = async ({
   staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'failed',
@@ -506,7 +536,9 @@ const transitionImportUploadSessionToFailed = async ({
       AND state = 'uploading'
       ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -526,7 +558,8 @@ const transitionImportAnalyzeSessionToFailed = async ({
   staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'failed',
@@ -541,7 +574,9 @@ const transitionImportAnalyzeSessionToFailed = async ({
       AND state IN ('extracting', 'analyzing')
       ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -561,7 +596,8 @@ const transitionImportCommitSessionToFailed = async ({
   staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'failed',
@@ -576,7 +612,9 @@ const transitionImportCommitSessionToFailed = async ({
       AND state = 'committing'
       ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -592,7 +630,8 @@ const transitionSessionToExpired = async ({
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
 }) => {
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'expired',
@@ -603,7 +642,9 @@ const transitionSessionToExpired = async ({
       AND state = ${getSqlLiteral(session.state)}
       AND expires_at <= ${getTimestampLiteral(now)}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -627,7 +668,8 @@ const transitionExportSessionToFailed = async ({
        AND owner_token = ${getSqlLiteral(session.ownerToken)}
        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleExportHeartbeatBefore)}`
       : ''
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'failed',
@@ -639,7 +681,9 @@ const transitionExportSessionToFailed = async ({
       AND state = ${getSqlLiteral(session.state)}
       ${activeWorkerCondition}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -791,7 +835,8 @@ const transitionImportAnalyzeSessionToQueued = async ({
   staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = 'queued',
@@ -805,7 +850,9 @@ const transitionImportAnalyzeSessionToQueued = async ({
       AND state IN ('extracting', 'analyzing')
       ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -879,7 +926,8 @@ const transitionImportAnalyzeSessionToRecoveredPlan = async ({
   const progress = getRecoveredAnalyzeProgress({analysis, now, plan, previousProgress, session})
   const expectedPlanRevisionCondition =
     session.planRevision === undefined ? '' : `AND plan_revision = ${session.planRevision}`
-  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(
+    `
     UPDATE app.project_transfer_session
     SET
       state = ${getSqlLiteral(getRecoveredAnalyzeNextState(plan.summary))},
@@ -896,7 +944,9 @@ const transitionImportAnalyzeSessionToRecoveredPlan = async ({
       ${expectedPlanRevisionCondition}
       ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
-  `)
+  `,
+    projectTransferRecoveryMutationWorkloadContext,
+  )
 
   return row ?? null
 }
@@ -1538,7 +1588,7 @@ const markTerminalCleanupComplete = async ({
     WHERE id IN (${getQuotedStringList(sessionIds).join(', ')})
       AND state IN (${terminalStateListSql})
   `,
-    projectTransferRecoveryWorkloadContext,
+    projectTransferRecoveryCleanupWorkloadContext,
   )
 }
 
@@ -1563,7 +1613,7 @@ const pruneExpiredTerminalSessions = async ({
     ORDER BY expires_at ASC, terminal_cleanup_at ASC, id ASC
     LIMIT ${batchSize}
   `,
-    projectTransferRecoveryWorkloadContext,
+    projectTransferRecoveryScanWorkloadContext,
   )
   const sessionIds = rows.map((row) => {
     return row.id
@@ -1578,7 +1628,7 @@ const pruneExpiredTerminalSessions = async ({
     DELETE FROM app.project_transfer_session
     WHERE id IN (${getQuotedStringList(sessionIds).join(', ')})
   `,
-    projectTransferRecoveryWorkloadContext,
+    projectTransferRecoveryCleanupWorkloadContext,
   )
 }
 
@@ -1608,7 +1658,7 @@ const cleanupStaleLiveImportStagingRevisions = async ({
     ORDER BY updated_at ASC, id ASC
     LIMIT ${batchSize}
   `,
-    projectTransferRecoveryWorkloadContext,
+    projectTransferRecoveryScanWorkloadContext,
   )
 
   return rows.reduce<Promise<number>>(async (promise, row) => {
@@ -1644,7 +1694,10 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const ownerToken = getRecoveryOwnerToken(params.ownerToken)
   const runner = getRunner(params.runner)
   const requestReviewServingBuild = params.requestReviewServingBuild ?? requestReviewServingV4Rebuild
-  const batchSize = getRecoveryBatchSize(params.batchSize)
+  const batchSize = getEffectiveRecoveryBatchSize({
+    batchSize: params.batchSize,
+    hasInjectedRunner: params.runner !== undefined,
+  })
   const exportOwnerHeartbeatStaleMs = params.exportOwnerHeartbeatStaleMs ?? defaultExportOwnerHeartbeatStaleMs
   const exportQueuedSessionStaleMs = params.exportQueuedSessionStaleMs ?? defaultExportQueuedSessionStaleMs
   const importAnalyzeHeartbeatStaleMs = params.importAnalyzeHeartbeatStaleMs ?? defaultImportAnalyzeHeartbeatStaleMs
@@ -1683,7 +1736,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
           staleImportAnalyzeHeartbeatBefore,
           staleImportCommitHeartbeatBefore,
         })
-      }, projectTransferRecoveryWorkloadContext)
+      }, projectTransferRecoveryMutationWorkloadContext)
     : await getCleanupPlans({
         now,
         ownerToken,

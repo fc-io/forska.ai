@@ -4882,7 +4882,6 @@ const projectTransferForegroundMemoryHeadroomRouteOrJobKeys = new Set([
   'projectTransfer.export.transaction',
   'projectTransfer.import.analyze.operationTables',
   'projectTransfer.import.commit.transaction',
-  'projectTransfer.recovery',
 ])
 
 const withProjectTransferForegroundMemoryHeadroomIfNeeded = async <T>(
@@ -4891,12 +4890,11 @@ const withProjectTransferForegroundMemoryHeadroomIfNeeded = async <T>(
   work: () => Promise<T>,
 ) => {
   const normalizedStatement = statement?.trimStart().toUpperCase()
-  const isProjectTransferRecovery = workloadContext?.routeOrJobKey === 'projectTransfer.recovery'
 
   if (
     workloadContext?.workloadClass !== 'projectTransfer'
     || !projectTransferForegroundMemoryHeadroomRouteOrJobKeys.has(workloadContext.routeOrJobKey)
-    || (normalizedStatement?.startsWith('SELECT') && !isProjectTransferRecovery)
+    || normalizedStatement?.startsWith('SELECT')
   ) {
     return work()
   }

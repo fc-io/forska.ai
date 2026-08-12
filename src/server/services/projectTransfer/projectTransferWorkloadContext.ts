@@ -35,6 +35,21 @@ export const projectTransferRecoveryWorkloadContext = getProjectTransferWorkload
   routeOrJobKey: 'projectTransfer.recovery',
 })
 
+export const projectTransferRecoveryScanWorkloadContext = getProjectTransferWorkloadContext({
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'projectTransfer.recovery.scan',
+})
+
+export const projectTransferRecoveryMutationWorkloadContext = getProjectTransferWorkloadContext({
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'projectTransfer.recovery.mutation',
+})
+
+export const projectTransferRecoveryCleanupWorkloadContext = getProjectTransferWorkloadContext({
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'projectTransfer.recovery.cleanup',
+})
+
 export const projectTransferExportWorkloadContext = getProjectTransferWorkloadContext({
   allowsTempSpill: true,
   routeOrJobKey: 'projectTransfer.export.queries',

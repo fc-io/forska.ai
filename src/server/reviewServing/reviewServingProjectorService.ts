@@ -53,7 +53,11 @@ export type ReviewServingProjectorIdentityResolver = (input: {
   scope: ReviewServingDirtyWorkScope
 }) => string
 
-export type ReviewServingProjectorQueueState = {activeImportCount?: number; pendingDirtyWorkCount?: number}
+export type ReviewServingProjectorQueueState = {
+  activeImportCount?: number
+  foregroundDuckdbQueueDepth?: number
+  pendingDirtyWorkCount?: number
+}
 
 export type ReviewServingProjectorServiceDependencies = {
   claimDirtyWork?: (
@@ -406,12 +410,14 @@ const shouldBlockWake = async (
 ) => {
   const queueState = await dependencies.getQueueState?.()
   const activeImportCount = queueState?.activeImportCount ?? 0
+  const foregroundDuckdbQueueDepth = queueState?.foregroundDuckdbQueueDepth ?? 0
   const pendingDirtyWorkCount = queueState?.pendingDirtyWorkCount ?? 0
   const activeImportBlocked = input.maxActiveImportCount !== undefined && activeImportCount > input.maxActiveImportCount
+  const foregroundDuckdbQueueBlocked = foregroundDuckdbQueueDepth > 0
   const queuePressureBlocked =
     input.maxPendingDirtyWorkCount !== undefined && pendingDirtyWorkCount > input.maxPendingDirtyWorkCount
 
-  return activeImportBlocked || queuePressureBlocked
+  return activeImportBlocked || foregroundDuckdbQueueBlocked || queuePressureBlocked
 }
 
 export const wakeReviewServingProjectorService = async (

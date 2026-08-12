@@ -585,6 +585,72 @@ test('wake does not claim work while queue pressure or active imports exceed con
   expect(claimedComponents).toEqual([])
 })
 
+test('wake stops claiming later dirty-work batches when foreground DuckDB work queues mid-wake', async () => {
+  const {claimedComponents, dependencies} = createDependencyHarness({
+    humanStatus: [getClaim({component: 'humanStatus', dirtyWorkId: 'human-1'})],
+    posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
+  })
+  let foregroundDuckdbQueueDepth = 0
+
+  dependencies.getQueueState = async () => {
+    return {foregroundDuckdbQueueDepth}
+  }
+  dependencies.runners = {
+    humanStatus: async () => {
+      foregroundDuckdbQueueDepth = 1
+
+      return {processedCount: 1}
+    },
+    posting: async () => {
+      throw new Error('posting runner should not execute while foreground DuckDB work is queued')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['humanStatus', 'posting'], maxRowsPerWake: 2, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(claimedComponents).toEqual(['humanStatus'])
+  expect(
+    result.runs.map((run) => {
+      return run.component
+    }),
+  ).toEqual(['humanStatus'])
+})
+
+test('wake releases claimed work when foreground DuckDB work queues before projector writes', async () => {
+  const {completedClaimIds, dependencies, releasedClaimIds} = createDependencyHarness({
+    posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
+  })
+  let queueStateReadCount = 0
+  const runnerCalls: string[] = []
+
+  dependencies.getQueueState = async () => {
+    queueStateReadCount += 1
+
+    return {foregroundDuckdbQueueDepth: queueStateReadCount >= 3 ? 1 : 0}
+  }
+  dependencies.runners = {
+    posting: async () => {
+      runnerCalls.push('posting')
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['posting'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(releasedClaimIds).toEqual(['posting-1'])
+  expect(completedClaimIds).toEqual([])
+  expect(runnerCalls).toEqual([])
+})
+
 test('failed snapshot promotion is reported without replacing last-known-good data in the service', async () => {
   const {dependencies} = createDependencyHarness({
     summary: [getClaim({component: 'summary', dirtyWorkId: 'summary-1'})],

@@ -722,8 +722,11 @@ test('dirty-work creation coalesces by project component identity and scope', as
   expect(dirtyWork.size).toBe(1)
   expect(dirtyWorkUpdate).toContain('latest_source_high_water_mark = GREATEST')
   expect(dirtyWorkUpdate).toContain("status = 'pending'")
-  expect(dirtyWorkInsert).toContain('WHERE NOT EXISTS')
-  expect(dirtyWorkInsert).toContain("(existing.dirty_work_id || '')")
+  expect(dirtyWorkInsert).toContain('INSERT INTO app.review_serving_dirty_work')
+  expect(statements.join('\n')).toContain('FROM app.review_serving_dirty_work_id_lookup')
+  expect(dirtyWorkInsert).not.toContain('WHERE NOT EXISTS')
+  expect(dirtyWorkInsert).not.toContain('existing.dirty_work_id =')
+  expect(dirtyWorkInsert).not.toContain('existing.dirty_work_id ||')
   expect(statements.join('\n')).not.toContain('ON CONFLICT(dirty_work_id) DO UPDATE SET')
   expect(row).toMatchObject({
     dirtyRangeEnd: '1',
@@ -977,7 +980,7 @@ test('completion advances dirty source watermarks by project and source partitio
   expect(aggregateInsert).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
 })
 
-test('component acknowledgements skip already completed dirty keys', async () => {
+test('component acknowledgements do not scan ack history before dirty work coalescing', async () => {
   const {acks, database, dirtyWork} = createFakeDirtyWorkDatabase()
 
   await upsertDisplayWork(database, getBaseScope(5), 'delta-1')
@@ -987,10 +990,10 @@ test('component acknowledgements skip already completed dirty keys', async () =>
   const result = await upsertDisplayWork(database, getBaseScope(5), 'delta-1-replayed')
   const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
 
-  expect(result.skipped).toBe(true)
+  expect(result.skipped).toBe(false)
   expect(acks.size).toBe(1)
   expect(dirtyWork.size).toBe(1)
-  expect(claims).toHaveLength(0)
+  expect(claims).toHaveLength(1)
 })
 
 test('rebuild coverage completion only acknowledges matching project component identity partition and watermark', async () => {
@@ -1165,7 +1168,7 @@ test('rebuild coverage completion records exact high-water acks before dirty wor
   )
 
   expect(result.completedCount).toBe(0)
-  expect(skipped.skipped).toBe(true)
+  expect(skipped.skipped).toBe(false)
   expect(notSkipped.skipped).toBe(false)
   expect(acks.size).toBe(2)
   expect(
@@ -1175,7 +1178,7 @@ test('rebuild coverage completion records exact high-water acks before dirty wor
       })
       .sort(),
   ).toEqual(['reviewChange:project-1', 'reviewChange:project-2'])
-  expect(dirtyWork.size).toBe(1)
+  expect(dirtyWork.size).toBe(2)
   expect(dirtySourceWatermarks.get('project-1:reviewChange:project-1')).toMatchObject({
     projectId: 'project-1',
     sourceHighWaterMark: 5,
@@ -1276,8 +1279,10 @@ test('ack compaction creates a component high-water row and removes covered poin
   const compactedAckInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('dirty_work_id')
   })
-  expect(compactedAckInsert).toContain('WHERE NOT EXISTS')
-  expect(compactedAckInsert).toContain('existing.dirty_ack_id = incoming.dirty_ack_id')
+  expect(compactedAckInsert).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(statements.join('\n')).toContain('FROM app.review_serving_dirty_work_ack_id_lookup')
+  expect(compactedAckInsert).not.toContain('WHERE NOT EXISTS')
+  expect(compactedAckInsert).not.toContain('existing.dirty_ack_id = incoming.dirty_ack_id')
   expect(compactedAckInsert).not.toContain('DO UPDATE SET')
 })
 
@@ -1314,8 +1319,10 @@ test('ack compaction replays the same high-water row without updating it', async
 
   expect(secondResult.dirtyAckId).toBe(firstResult.dirtyAckId)
   expect(compactedAckInserts).toHaveLength(2)
-  expect(compactedAckInserts.join('\n')).toContain('WHERE NOT EXISTS')
-  expect(compactedAckInserts.join('\n')).toContain('existing.dirty_ack_id = incoming.dirty_ack_id')
+  expect(compactedAckInserts.join('\n')).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(statements.join('\n')).toContain('FROM app.review_serving_dirty_work_ack_id_lookup')
+  expect(compactedAckInserts.join('\n')).not.toContain('WHERE NOT EXISTS')
+  expect(compactedAckInserts.join('\n')).not.toContain('existing.dirty_ack_id = incoming.dirty_ack_id')
   expect(compactedAckInserts.join('\n')).not.toContain('DO UPDATE SET')
   expect(remainingAcks).toHaveLength(1)
   expect(remainingAcks[0]).toMatchObject({
