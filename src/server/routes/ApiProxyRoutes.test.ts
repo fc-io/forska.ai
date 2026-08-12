@@ -259,7 +259,7 @@ apiProxyServerTest(
 )
 
 apiProxyServerTest(
-  'DuckDB owner connections endpoint lists follower api processes',
+  'DuckDB owner connections endpoint stays ownerless and lists follower api processes',
   async () => {
     const ownerPort = 34993
     const apiPort = 34994
@@ -307,8 +307,8 @@ apiProxyServerTest(
       expect(response.ok).toBe(true)
       expect(body.data.owner.apiServerPort).toBe(ownerPort)
       expect(follower?.lastHeartbeatAt ?? null).not.toBe(null)
-      expect(follower?.lastRequestPath ?? null).toBe('/api/duckdb_owner_connections')
-      expect((follower?.proxyCount ?? 0) > 0).toBe(true)
+      expect(follower?.lastRequestPath ?? null).toBe(null)
+      expect(follower?.proxyCount ?? 0).toBe(0)
     } finally {
       await stopServer(apiServer)
       await stopServer(ownerServer)
