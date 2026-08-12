@@ -66,7 +66,10 @@ import {
   getReviewServingSnapshotManifest,
   type ReviewServingSnapshotManifest,
 } from '../reviewServing/reviewServingManifestRepository.ts'
-import {getReviewServingSourcePartitionWatermarks} from '../reviewServing/reviewServingProjectorDomain.ts'
+import {
+  getReviewServingSourcePartitionWatermarks,
+  getSnapshotComponentProjectionIdentityPredicate,
+} from '../reviewServing/reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRunner,
   type ReviewServingProjectorServiceDependencies,
@@ -1281,7 +1284,11 @@ const getLlmStatusRebuildChunkOutputChecksum = async (
         FROM app.review_serving_snapshot_manifest snapshot
         WHERE snapshot.project_id = serving.project_id
           AND snapshot.snapshot_id = serving.snapshot_id
-          AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+          AND ${getSnapshotComponentProjectionIdentityPredicate(
+            'snapshot',
+            'llmStatus',
+            getSqlLiteral(input.chunk.projectionIdentity),
+          )}
       )
   `)
 
@@ -1303,7 +1310,11 @@ const getLlmStatusRebuildChunkOutputCount = async (
         FROM app.review_serving_snapshot_manifest snapshot
         WHERE snapshot.project_id = serving.project_id
           AND snapshot.snapshot_id = serving.snapshot_id
-          AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+          AND ${getSnapshotComponentProjectionIdentityPredicate(
+            'snapshot',
+            'llmStatus',
+            getSqlLiteral(input.chunk.projectionIdentity),
+          )}
       )
   `)
 
@@ -1333,7 +1344,11 @@ const getHumanStatusRebuildChunkOutputChecksum = async (
         FROM app.review_serving_snapshot_manifest snapshot
         WHERE snapshot.project_id = serving.project_id
           AND snapshot.snapshot_id = serving.snapshot_id
-          AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+          AND ${getSnapshotComponentProjectionIdentityPredicate(
+            'snapshot',
+            'humanStatus',
+            getSqlLiteral(input.chunk.projectionIdentity),
+          )}
       )
   `)
 
@@ -1355,7 +1370,11 @@ const getHumanStatusRebuildChunkOutputCount = async (
         FROM app.review_serving_snapshot_manifest snapshot
         WHERE snapshot.project_id = serving.project_id
           AND snapshot.snapshot_id = serving.snapshot_id
-          AND json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = ${getSqlLiteral(input.chunk.projectionIdentity)}
+          AND ${getSnapshotComponentProjectionIdentityPredicate(
+            'snapshot',
+            'humanStatus',
+            getSqlLiteral(input.chunk.projectionIdentity),
+          )}
       )
   `)
 

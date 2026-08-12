@@ -5994,16 +5994,14 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
 
       if (
         statement.includes('AS actualChecksum')
-        && statement.includes("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
+        && statement.includes("json_extract_string(component_state.value, '$.component') = 'llmStatus'")
       ) {
         return [{actualChecksum: 'checksum-llm-status', actualCount: 1}] as T[]
       }
 
       if (
         statement.includes('AS actualChecksum')
-        && statement.includes(
-          "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity')",
-        )
+        && statement.includes("json_extract_string(component_state.value, '$.component') = 'humanStatus'")
       ) {
         return [{actualChecksum: 'checksum-human-status', actualCount: 1}] as T[]
       }
@@ -6066,8 +6064,14 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
       return {status: 'completed'}
     }),
   )
-  expect(joined).toContain("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
-  expect(joined).toContain("json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity')")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'llmStatus'")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'humanStatus'")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.required'))")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.optional'))")
+  expect(joined).not.toContain("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
+  expect(joined).not.toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity')",
+  )
   expect(joined).not.toContain('llm_status_identity')
   expect(joined).not.toContain('human_status_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')

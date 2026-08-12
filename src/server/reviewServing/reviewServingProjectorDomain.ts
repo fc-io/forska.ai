@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto'
 
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
   type ReviewServingChangeKind,
@@ -63,6 +64,25 @@ export type ReviewServingDirtyWorkScopeInput = ReviewServingSourcePartitionHighW
   dirtyRangeStart?: string | null
   projectionKey?: string | null
   values: Record<string, ReviewServingIdentityValue>
+}
+
+export const getSnapshotComponentProjectionIdentityPredicate = (
+  snapshotAlias: string,
+  component: ReviewServingProjectionComponent,
+  projectionIdentitySql: string,
+) => {
+  return `EXISTS (
+             SELECT 1
+             FROM (
+               SELECT required_state.value
+               FROM json_each(json_extract(${snapshotAlias}.component_state_json, '$.required')) required_state
+               UNION ALL
+               SELECT optional_state.value
+               FROM json_each(json_extract(${snapshotAlias}.component_state_json, '$.optional')) optional_state
+             ) component_state
+             WHERE json_extract_string(component_state.value, '$.component') = ${getSqlLiteral(component)}
+               AND json_extract_string(component_state.value, '$.projectionIdentity') = ${projectionIdentitySql}
+           )`
 }
 
 const getReviewServingDomainHash = (label: string, value: ReviewServingIdentityValue) => {
