@@ -2,6 +2,43 @@ import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {getReviewServingDynamicFilteredCountSql} from './reviewServingDynamicCountSql.ts'
+import {projectReviewServingHumanStatusRanges} from './reviewServingHumanStatusProjector.ts'
+import {
+  projectReviewServingLlmStatusRanges,
+  type ReviewServingLlmStatusProjectorDatabase,
+} from './reviewServingLlmStatusProjector.ts'
+
+type DuckdbProjectorDatabase = ReviewServingLlmStatusProjectorDatabase
+
+const getDuckdbProjectorDatabase = (
+  connection: Awaited<ReturnType<Awaited<ReturnType<typeof DuckDBInstance.create>>['connect']>>,
+): DuckdbProjectorDatabase => {
+  const database: DuckdbProjectorDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  return database
+}
+
+const getDynamicCount = async (
+  connection: Awaited<ReturnType<Awaited<ReturnType<typeof DuckDBInstance.create>>['connect']>>,
+  input: Parameters<typeof getReviewServingDynamicFilteredCountSql>[0],
+) => {
+  const reader = await connection.runAndReadAll(getReviewServingDynamicFilteredCountSql(input))
+  const [row] = reader.getRowObjectsJson() as Array<{totalCount?: string | number | null}>
+
+  return Number(row?.totalCount ?? 0)
+}
 
 test('dynamic filtered counts use posting-only fast path for one posting group', () => {
   const sql = getReviewServingDynamicFilteredCountSql({
@@ -662,6 +699,252 @@ test('dynamic state-only counts ignore orphan list-mode-state rows without base 
 
     expect(humanReader.getRowObjectsJson()).toEqual([{totalCount: '1'}])
     expect(bothReader.getRowObjectsJson()).toEqual([{totalCount: '1'}])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('imported summary-human status rebuild materializes tab-count state from source truth', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+  const projectId = 'imported-summary-project-1'
+  const reviewConfigHash = 'review-config-imported-summary-1'
+  const snapshotId = 'snapshot-imported-summary-1'
+  const componentStateJson = JSON.stringify({
+    optional: [],
+    required: [
+      {baseGeneration: '1', component: 'display', projectionIdentity: 'display:imported-summary-1'},
+      {baseGeneration: '1', component: 'llmStatus', projectionIdentity: 'llmStatus:imported-summary-1'},
+      {baseGeneration: '1', component: 'humanStatus', projectionIdentity: 'humanStatus:imported-summary-1'},
+      {baseGeneration: '1', component: 'posting', projectionIdentity: 'posting:imported-summary-1'},
+      {baseGeneration: '1', component: 'queue', projectionIdentity: 'queue:imported-summary-1'},
+      {baseGeneration: '1', component: 'selectedImport', projectionIdentity: 'selectedImport:imported-summary-1'},
+    ],
+  })
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE SCHEMA mart;
+
+      CREATE TABLE app.project (
+        id VARCHAR,
+        model_id VARCHAR,
+        use_title BOOLEAN,
+        use_abstract BOOLEAN,
+        use_fulltext BOOLEAN,
+        use_fulltext_no_images BOOLEAN,
+        human_judgment_mode VARCHAR
+      );
+      CREATE TABLE app.project_prompt (
+        project_id VARCHAR,
+        prompt_id VARCHAR,
+        enabled BOOLEAN,
+        archived BOOLEAN
+      );
+      CREATE TABLE app.prompt (
+        id VARCHAR,
+        archived BOOLEAN
+      );
+      CREATE TABLE app."judgment" (
+        id VARCHAR,
+        article_id VARCHAR,
+        prompt_id VARCHAR,
+        model_id VARCHAR,
+        use_title BOOLEAN,
+        use_abstract BOOLEAN,
+        use_fulltext BOOLEAN,
+        use_fulltext_no_images BOOLEAN,
+        is_answered BOOLEAN,
+        created_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ
+      );
+      CREATE TABLE app."judgment_human" (
+        id VARCHAR,
+        project_id VARCHAR,
+        article_id VARCHAR,
+        prompt_id VARCHAR
+      );
+      CREATE TABLE app."judgment_human_summary" (
+        id VARCHAR,
+        project_id VARCHAR,
+        article_id VARCHAR,
+        answer VARCHAR
+      );
+      CREATE TABLE app.review_serving_snapshot_manifest (
+        project_id VARCHAR,
+        snapshot_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_status VARCHAR,
+        component_state_json JSON,
+        composed_identity_json JSON
+      );
+
+      CREATE TABLE mart.review_article_serving_base_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        base_generation BIGINT,
+        article_id VARCHAR
+      );
+      CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        article_id VARCHAR,
+        has_llm_list_mode BOOLEAN,
+        has_human_list_mode BOOLEAN,
+        has_both_list_mode BOOLEAN,
+        has_unassessed_list_mode BOOLEAN,
+        duplicate_flag BOOLEAN DEFAULT FALSE,
+        conflict_flag BOOLEAN DEFAULT FALSE,
+        llm_status VARCHAR,
+        human_status VARCHAR,
+        llm_has_judgment BOOLEAN DEFAULT FALSE,
+        llm_patch_watermark BIGINT DEFAULT 0,
+        human_patch_watermark BIGINT DEFAULT 0,
+        both_patch_watermark BIGINT DEFAULT 0,
+        unassessed_patch_watermark BIGINT DEFAULT 0
+      );
+      CREATE TABLE mart.review_unassessed_queue_article_rank_serving_v4 (
+        project_id VARCHAR,
+        review_config_hash VARCHAR,
+        snapshot_id VARCHAR,
+        queue_kind VARCHAR,
+        article_id VARCHAR
+      );
+
+      INSERT INTO app.project VALUES
+        ('${projectId}', 'model-1', TRUE, TRUE, FALSE, FALSE, 'summary');
+      INSERT INTO app.project_prompt VALUES
+        ('${projectId}', 'prompt-1', TRUE, FALSE),
+        ('${projectId}', 'prompt-2', TRUE, FALSE);
+      INSERT INTO app.prompt VALUES
+        ('prompt-1', FALSE),
+        ('prompt-2', FALSE);
+      INSERT INTO app.review_serving_snapshot_manifest VALUES
+        (
+          '${projectId}',
+          '${snapshotId}',
+          '${reviewConfigHash}',
+          'active',
+          '${componentStateJson}'::JSON,
+          '{"componentSet":["display","llmStatus","humanStatus","posting","queue","selectedImport"],"requestKind":"v4-review-serving-bootstrap"}'::JSON
+        );
+
+      INSERT INTO mart.review_article_serving_base_v4 VALUES
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 1, 'article-1'),
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 1, 'article-2'),
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 1, 'article-3'),
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 1, 'article-4');
+      INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        has_llm_list_mode,
+        has_human_list_mode,
+        has_both_list_mode,
+        has_unassessed_list_mode
+      ) VALUES
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 'article-1', TRUE, TRUE, TRUE, FALSE),
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 'article-2', TRUE, TRUE, TRUE, FALSE),
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 'article-3', TRUE, TRUE, TRUE, FALSE),
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 'article-4', TRUE, TRUE, TRUE, TRUE);
+      INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 VALUES
+        ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 'unassessed', 'article-4');
+
+      INSERT INTO app."judgment" VALUES
+        ('llm-1-prompt-1', 'article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:00Z', NULL),
+        ('llm-1-prompt-2', 'article-1', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:01Z', NULL),
+        ('llm-2-prompt-1', 'article-2', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:02Z', NULL),
+        ('llm-2-prompt-2', 'article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:03Z', NULL),
+        ('llm-3-prompt-1', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:04Z', NULL);
+      INSERT INTO app."judgment_human_summary" VALUES
+        ('human-summary-1', '${projectId}', 'article-1', 'include'),
+        ('human-summary-2', '${projectId}', 'article-2', 'exclude'),
+        ('human-summary-3', '${projectId}', 'article-3', '');
+    `)
+
+    const database = getDuckdbProjectorDatabase(connection)
+    const range = {
+      baseGeneration: 1,
+      claims: [],
+      definitionVersion: 'imported-summary-status-regression-test',
+      projectId,
+      status: 'completed' as const,
+    }
+
+    await projectReviewServingLlmStatusRanges(
+      {
+        ranges: [
+          {
+            ...range,
+            chunkEndArticleId: 'article-4',
+            chunkStartArticleId: 'article-1',
+            listModeKeys: ['llm', 'both'],
+            projectionIdentity: 'llmStatus:imported-summary-1',
+          },
+        ],
+      },
+      database,
+    )
+    await projectReviewServingHumanStatusRanges(
+      {
+        ranges: [
+          {
+            ...range,
+            chunkEndArticleId: 'article-4',
+            chunkStartArticleId: 'article-1',
+            listModeKeys: ['human', 'both'],
+            projectionIdentity: 'humanStatus:imported-summary-1',
+          },
+        ],
+      },
+      database,
+    )
+
+    const stateReader = await connection.runAndReadAll(`
+      SELECT
+        COUNT(*) AS rows,
+        SUM(CASE WHEN llm_has_judgment THEN 1 ELSE 0 END) AS llm_assessed,
+        SUM(CASE WHEN llm_status = 'answered' THEN 1 ELSE 0 END) AS llm_complete,
+        SUM(CASE WHEN llm_status = 'unanswered' THEN 1 ELSE 0 END) AS llm_partial_or_unanswered,
+        SUM(CASE WHEN human_status = 'answered' THEN 1 ELSE 0 END) AS human_answered
+      FROM mart.review_article_serving_list_mode_state_v4
+      WHERE project_id = '${projectId}'
+        AND review_config_hash = '${reviewConfigHash}'
+        AND snapshot_id = '${snapshotId}'
+    `)
+    expect(stateReader.getRowObjectsJson()).toEqual([
+      {human_answered: '2', llm_assessed: '3', llm_complete: '2', llm_partial_or_unanswered: '2', rows: '4'},
+    ])
+
+    const baseCountInput = {projectId, reviewConfigHash, snapshotId}
+    const counts = {
+      both: await getDynamicCount(connection, {
+        ...baseCountInput,
+        listModeKey: 'both',
+        postingFilterGroups: [
+          {filterKind: 'llmStatus', filterValues: ['answered']},
+          {filterKind: 'humanStatus', filterValues: ['answered']},
+        ],
+      }),
+      human: await getDynamicCount(connection, {
+        ...baseCountInput,
+        listModeKey: 'human',
+        postingFilterGroups: [{filterKind: 'humanStatus', filterValues: ['answered']}],
+      }),
+      llm: await getDynamicCount(connection, {...baseCountInput, listModeKey: 'llm', requireLlmJudgment: true}),
+      unassessed: await getDynamicCount(connection, {
+        ...baseCountInput,
+        includeUnassessedQueue: true,
+        listModeKey: 'unassessed',
+      }),
+    }
+
+    expect(counts).toEqual({both: 2, human: 2, llm: 3, unassessed: 1})
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()
