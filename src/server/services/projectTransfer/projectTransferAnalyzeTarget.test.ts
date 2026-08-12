@@ -194,6 +194,10 @@ test('analyzes target rows with staged joins and recomputed prompt hashes', asyn
     }
 
     await writeStagedPayloads({cwd, layout, payloads})
+    await globalThis.Bun.write(
+      join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.judgments),
+      '{this is intentionally not valid jsonl}\n',
+    )
     await database.run(
       "INSERT INTO app.article (id, article_id, article_title) VALUES ('target-set-based-article', 'target-legacy-set-based', 'Set-Based Target')",
     )

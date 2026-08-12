@@ -40,6 +40,7 @@ type ProjectTransferOperationTableInput = RuntimePathOptions & {
   database?: ProjectTransferOperationTableDatabase
   layout: ProjectTransferImportTempLayout
   operationId?: string
+  payloadKeys?: readonly ProjectTransferPayloadKey[]
   runner?: ProjectTransferOperationTableRunner
   workloadContext?: DuckdbWorkloadContext
 }
@@ -161,16 +162,18 @@ const getCreateOperationTableSql = ({
 export const loadProjectTransferOperationTables = async ({
   layout,
   operationId,
+  payloadKeys = projectTransferPayloadKeys,
   runner,
   ...runtimeOptions
 }: RuntimePathOptions & {
   layout: ProjectTransferImportTempLayout
   operationId?: string
+  payloadKeys?: readonly ProjectTransferPayloadKey[]
   runner: ProjectTransferOperationTableRunner
 }): Promise<ProjectTransferOperationTableSet> => {
   const tables = getProjectTransferOperationTableNames(operationId)
 
-  await projectTransferPayloadKeys.reduce<Promise<void>>(async (previous, key) => {
+  await payloadKeys.reduce<Promise<void>>(async (previous, key) => {
     await previous
     const tableName = tables.tableNames[key]
 
