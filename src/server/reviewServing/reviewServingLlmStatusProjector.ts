@@ -10,7 +10,10 @@ import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
 } from './reviewServingManifestRepository.ts'
-import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
+import {
+  getReviewServingSourcePartitionWatermarks,
+  getSnapshotComponentProjectionIdentityPredicate,
+} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorWriterDatabase,
   type ReviewServingProjectorWriterDiagnostics,
@@ -798,7 +801,11 @@ const getApplyLlmStatusServingStatement = (input: {
             AND serving.snapshot_id = state.snapshot_id
             AND serving.article_id = state.article_id
             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
+            AND ${getSnapshotComponentProjectionIdentityPredicate(
+              'snapshot',
+              'llmStatus',
+              getSqlLiteral(input.projectionIdentity),
+            )}
             AND snapshot.snapshot_status IN ('candidate', 'active')
         )`
 }
@@ -903,7 +910,11 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
            WHERE snapshot.project_id = serving.project_id
              AND snapshot.snapshot_id = serving.snapshot_id
              AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-             AND json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = ${getSqlLiteral(firstRange.projectionIdentity)}
+             AND ${getSnapshotComponentProjectionIdentityPredicate(
+               'snapshot',
+               'llmStatus',
+               getSqlLiteral(firstRange.projectionIdentity),
+             )}
              AND snapshot.snapshot_status IN ('candidate', 'active')
          )
        GROUP BY serving.project_id, serving.review_config_hash, serving.snapshot_id, serving.article_id, enabled_prompt_count.prompt_count

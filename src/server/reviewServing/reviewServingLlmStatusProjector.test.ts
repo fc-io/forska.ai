@@ -312,9 +312,13 @@ test('LLM direct full rebuild chunks copy-replace serving without patch rows', a
   expect(joined).not.toContain('DELETE FROM mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_llm_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.required'))")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.optional'))")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'llmStatus'")
   expect(joined).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'llmStatus:identity-1'",
   )
+  expect(joined).not.toContain("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
   expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
   expect(joined).toContain('serving.base_generation = 5')
 })
@@ -345,9 +349,13 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
   expect(resetStatement).toContain('serving.article_id >= range.chunk_start_article_id')
   expect(resetStatement).toContain('serving.article_id <= range.chunk_end_article_id')
   expect(resetStatement).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.required'))")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.optional'))")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'llmStatus'")
   expect(joined).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'llmStatus:identity-1'",
   )
+  expect(joined).not.toContain("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
   expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
   expect(joined).toContain('serving.base_generation = 5')
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
@@ -365,9 +373,13 @@ test('LLM rebuild chunks copy-replace serving without scoped patch rows', async 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.required'))")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.optional'))")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'llmStatus'")
   expect(joined).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity') = 'llmStatus:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'llmStatus:identity-1'",
   )
+  expect(joined).not.toContain("json_extract_string(snapshot.composed_identity_json, '$.llmStatus.projectionIdentity')")
   expect(joined).not.toContain('replacement.llm_status_identity = serving.llm_status_identity')
   expect(joined).toContain('serving.base_generation = 5')
 })

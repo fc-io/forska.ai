@@ -326,8 +326,14 @@ test('human rebuild chunks copy-replace serving without scoped patch rows', asyn
   expect(joined).toContain('serving.article_id <= range.chunk_end_article_id')
   expect(joined).toContain('SET human_status = article_status.human_status')
   expect(joined).toContain('human_patch_watermark =')
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.required'))")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.optional'))")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'humanStatus'")
   expect(joined).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = 'humanStatus:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'humanStatus:identity-1'",
+  )
+  expect(joined).not.toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity')",
   )
   expect(joined).not.toContain('replacement.human_status_identity = serving.human_status_identity')
   expect(joined).toContain('serving.base_generation = 5')
@@ -347,8 +353,14 @@ test('human direct full rebuild chunks copy-replace serving without patch rows',
   expect(joined).not.toContain('INSERT INTO mart.review_human_status_patch_v4')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.required'))")
+  expect(joined).toContain("json_each(json_extract(snapshot.component_state_json, '$.optional'))")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'humanStatus'")
   expect(joined).toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity') = 'humanStatus:identity-1'",
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'humanStatus:identity-1'",
+  )
+  expect(joined).not.toContain(
+    "json_extract_string(snapshot.composed_identity_json, '$.humanStatus.projectionIdentity')",
   )
   expect(joined).not.toContain('replacement.human_status_identity = serving.human_status_identity')
   expect(joined).toContain('serving.base_generation = 5')
