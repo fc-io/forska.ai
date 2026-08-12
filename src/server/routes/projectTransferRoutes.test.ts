@@ -67,6 +67,7 @@ const progressArtifactImportSessionId = getRouteTestSessionId('import-progress-a
 const commitProgressArtifactImportSessionId = getRouteTestSessionId('import-commit-progress-artifact')
 const completedArtifactImportSessionId = getRouteTestSessionId('import-completed-artifact')
 const staleProgressTerminalImportSessionId = getRouteTestSessionId('import-stale-progress-terminal')
+const failedProgressTerminalImportSessionId = getRouteTestSessionId('import-failed-progress-terminal')
 const largeBackgroundAnalyzeSessionId = getRouteTestSessionId('import-large-background-analyze')
 const missingArtifactsGetSessionId = getRouteTestSessionId('import-missing-get')
 const resolveSessionId = getRouteTestSessionId('import-resolve')
@@ -83,6 +84,7 @@ const artifactSessionIds = [
   commitProgressArtifactImportSessionId,
   completedArtifactImportSessionId,
   staleProgressTerminalImportSessionId,
+  failedProgressTerminalImportSessionId,
   largeBackgroundAnalyzeSessionId,
   missingArtifactsGetSessionId,
   resolveSessionId,
@@ -1373,6 +1375,40 @@ test('project transfer import get returns terminal session rows over stale activ
   expect(response.status).toBe(200)
   expect(body).toMatchObject({data: {error: {message: 'Recovered stale import session'}, state: 'failed'}, error: null})
   expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: staleProgressTerminalImportSessionId})
+})
+
+test('project transfer import get returns terminal session rows over failed progress artifacts', async () => {
+  const app = await getProjectTransferApp()
+  routeState.sessions[failedProgressTerminalImportSessionId] = getImportSessionRecord({
+    errorJson: {message: 'Commit writer invariant failed'},
+    id: failedProgressTerminalImportSessionId,
+    state: 'failed',
+  })
+  mkdirSync(getImportRootPath(failedProgressTerminalImportSessionId), {recursive: true})
+  writeFileSync(
+    getImportProgressPath(failedProgressTerminalImportSessionId),
+    JSON.stringify({
+      message: 'Commit failed; rollback cleanup completed or was not required',
+      phase: 'commit',
+      rowCountProcessed: 0,
+      rowCountTotal: 142616,
+      status: 'failed',
+      updatedAt: '2030-01-01T00:00:00.000Z',
+    }),
+  )
+
+  const response = await getRouteResponse(app, `/api/projects/import/${failedProgressTerminalImportSessionId}`, 'GET')
+  const body = (await response.json()) as {
+    data: {error: unknown; progress: unknown; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {error: {message: 'Commit writer invariant failed'}, progress: null, state: 'failed'},
+    error: null,
+  })
+  expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: failedProgressTerminalImportSessionId})
 })
 
 test('project transfer import get compacts completed import warning details for status polling', async () => {

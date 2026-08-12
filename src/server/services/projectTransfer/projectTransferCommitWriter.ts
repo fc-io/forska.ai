@@ -3119,7 +3119,7 @@ const insertArticleIdentifiers = async ({
 
 const getRouteIdBySourceId = (projectRoutePlan: readonly ProjectRoutePlanEntry[]) => {
   return projectRoutePlan.reduce<Record<string, string>>((mapped, route) => {
-    if (route.action === 'link' && route.targetImportRouteId !== null) {
+    if (route.targetImportRouteId !== null) {
       mapped[route.sourceImportRouteId] = route.targetImportRouteId
     }
 

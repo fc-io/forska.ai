@@ -299,7 +299,7 @@ const getArticleIdBySourceId = ({
 
 const getRouteIdBySourceId = (projectRoutePlan: readonly ProjectTransferTargetPlan['projectRoutePlan'][number][]) => {
   return projectRoutePlan.reduce<Record<string, string>>((mapped, route) => {
-    if (route.action === 'link' && route.targetImportRouteId !== null) {
+    if (route.targetImportRouteId !== null) {
       mapped[route.sourceImportRouteId] = route.targetImportRouteId
     }
 

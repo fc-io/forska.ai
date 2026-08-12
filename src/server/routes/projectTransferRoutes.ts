@@ -1767,6 +1767,18 @@ const getImportSession = async (
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
   const artifactResponse = await getImportSessionArtifactResponse(sessionId)
 
+  if (artifactResponse !== null && artifactResponse.data.state === 'failed') {
+    const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
+
+    if (record !== null && terminalImportSessionStates.has(record.state)) {
+      const response = await getImportSessionResponseFromRecord(set, record, undefined, includePlan)
+
+      return response ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
+    }
+
+    return artifactResponse
+  }
+
   if (artifactResponse !== null && shouldUseImportSessionArtifactResponse(artifactResponse)) {
     return artifactResponse
   }
