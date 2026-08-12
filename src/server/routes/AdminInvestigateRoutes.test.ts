@@ -129,6 +129,76 @@ test('admin append metrics route returns append lane metrics', () => {
   }
 })
 
+test('admin duckdb runtime workloads route returns non-querying active work diagnostics', () => {
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {Elysia} = await import('elysia')
+
+        const duckdbServiceModulePath = new URL('./src/server/utils/duckdbService.ts', 'file://' + process.cwd() + '/').pathname
+        const actualDuckdbService = await import('./src/server/utils/duckdbService.ts?runtime-workloads-route-test=' + Date.now())
+
+        void mock.module(duckdbServiceModulePath, () => {
+          return {
+            ...actualDuckdbService,
+            getDuckdbBackgroundRuntimeDiagnostics: async () => {
+              throw new Error('maintenance settings diagnostics should not be queried')
+            },
+            getDuckdbRuntimeWorkloadDiagnosticsSnapshot: () => ({
+              activeMainWork: {
+                durationMs: 42,
+                operation: 'mainQuery',
+                queue: 'main',
+                queueDepthAtStart: 1,
+                queueWaitMs: 7,
+                routeOrJobKey: 'llmStatus.route',
+                startedAt: '2026-08-12T12:00:00.000Z',
+                statementHash: 'abcdef123456',
+                statementKind: 'SELECT',
+                workloadClass: 'foreground-diagnostic',
+              },
+              queues: {main: {queueDepth: 1}, background: {queueDepth: 0}},
+              workloads: [],
+            }),
+          }
+        })
+
+        const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
+        const app = new Elysia().use(adminInvestigateRoutes)
+        const response = await app.handle(new Request('http://localhost/api/admin/duckdb-runtime-workloads'))
+        console.log(await response.text())
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, API_SERVER_PORT: '3001', SERVER_ROLE: 'maintenance-worker', VITE_PORT: '3000'},
+    },
+  )
+
+  if (runRoute.exitCode !== 0) {
+    throw new Error(
+      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin DuckDB runtime workloads route test failed',
+    )
+  }
+
+  const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+    activeMainWork: {routeOrJobKey: string; statementHash: string; workloadClass: string}
+    queues: {main: {queueDepth: number}}
+    workloads: unknown[]
+  }
+
+  expect(responseBody.activeMainWork).toMatchObject({
+    routeOrJobKey: 'llmStatus.route',
+    statementHash: 'abcdef123456',
+    workloadClass: 'foreground-diagnostic',
+  })
+  expect(responseBody.queues.main.queueDepth).toBe(1)
+  expect(responseBody.workloads).toEqual([])
+})
+
 test('admin clear databases route rebuilds DuckDB and removes judgment job SQLite files', () => {
   const runtimeRoot = `/tmp/f1-admin-clear-databases-route-${Date.now()}`
   const duckdbPath = `${runtimeRoot}/forska.duckdb`

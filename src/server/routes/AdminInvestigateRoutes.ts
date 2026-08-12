@@ -10,7 +10,10 @@ import {
   type JudgmentJobSqliteHealthProjectionReader,
 } from '../services/judgmentJobSqliteHealthProjectionService.ts'
 import {type DuckdbOwnerConnectionRecord, getDuckdbOwnerConnectionsOverview} from '../utils/duckdbOwnerConnections.ts'
-import {getDuckdbBackgroundRuntimeDiagnostics} from '../utils/duckdbService.ts'
+import {
+  getDuckdbBackgroundRuntimeDiagnostics,
+  getDuckdbRuntimeWorkloadDiagnosticsSnapshot,
+} from '../utils/duckdbService.ts'
 import {getOwnerlessRouteBackendSelections} from '../utils/ownerlessReadableBackends.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
@@ -687,6 +690,9 @@ export const adminInvestigateRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/admin/duckdb-append-metrics', async () => {
     return appDatabaseService.getAppendMetrics()
+  })
+  .get('/api/admin/duckdb-runtime-workloads', async () => {
+    return getDuckdbRuntimeWorkloadDiagnosticsSnapshot()
   })
   .get('/api/admin/maintenance-runtime-diagnostics', async () => {
     const processMemory = process.memoryUsage()

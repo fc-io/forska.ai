@@ -50,6 +50,7 @@ const duckdbOwnerProxyHopByHopResponseHeaders = new Set([
   'upgrade',
 ])
 const duckdbOwnerDiagnosticProxyTimeoutPathnames = new Set([
+  '/api/admin/duckdb-runtime-workloads',
   `${duckdbOwnerPrivateApiPrefix}/api/llmstatus`,
   `${duckdbOwnerPrivateApiPrefix}/api/nvidiasmi`,
   '/api/duckdb_owner_connections',
