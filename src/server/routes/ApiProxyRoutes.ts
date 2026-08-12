@@ -39,6 +39,7 @@ type DuckdbOwnerStreamingProxyRequestTemplate = {
 
 const duckdbOwnerProxyRetryDelayMs = 250
 const duckdbOwnerProxyRetryTimeoutMs = 4000
+const duckdbOwnerDiagnosticProxyTimeoutMs = 3000
 const duckdbOwnerProxyRetryableMethods = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'])
 const duckdbOwnerProxyHopByHopResponseHeaders = new Set([
   'connection',
@@ -47,6 +48,11 @@ const duckdbOwnerProxyHopByHopResponseHeaders = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+])
+const duckdbOwnerDiagnosticProxyTimeoutPathnames = new Set([
+  `${duckdbOwnerPrivateApiPrefix}/api/llmstatus`,
+  `${duckdbOwnerPrivateApiPrefix}/api/nvidiasmi`,
+  '/api/duckdb_owner_connections',
 ])
 
 const getCurrentServerHostAliases = () => {
@@ -124,11 +130,16 @@ const getDuckdbOwnerStreamingProxyRequestTemplate = (
       }
 }
 
-const getDuckdbOwnerProxyRequest = (requestTemplate: DuckdbOwnerProxyRequestTemplate, duckdbOwnerUrl: string) => {
+const getDuckdbOwnerProxyRequest = (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  duckdbOwnerUrl: string,
+  signal?: AbortSignal,
+) => {
   return new Request(`${duckdbOwnerUrl}${requestTemplate.pathname}${requestTemplate.search}`, {
     body: requestTemplate.body === null ? undefined : requestTemplate.body.slice(0),
     headers: requestTemplate.headers,
     method: requestTemplate.method,
+    signal,
   })
 }
 
@@ -147,6 +158,39 @@ const getIncompatibleDuckdbOwnerTargetResponse = async (duckdbOwnerUrl: string) 
   const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'DuckDB owner proxy target')
 
   return result.status === 'incompatible' ? Response.json({data: null, error: result.message}, {status: 426}) : null
+}
+
+const getDuckdbOwnerProxyTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return requestTemplate.method === 'GET' && duckdbOwnerDiagnosticProxyTimeoutPathnames.has(requestTemplate.pathname)
+    ? duckdbOwnerDiagnosticProxyTimeoutMs
+    : null
+}
+
+const getDuckdbOwnerProxyTimeoutResponse = (timeoutMs: number) => {
+  return Response.json({data: null, error: `DuckDB owner proxy target timed out after ${timeoutMs} ms`}, {status: 504})
+}
+
+const fetchDuckdbOwnerProxyRequest = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  duckdbOwnerUrl: string,
+) => {
+  const timeoutMs = getDuckdbOwnerProxyTimeoutMs(requestTemplate)
+
+  if (timeoutMs === null) {
+    return fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
+  }
+
+  const signal = AbortSignal.timeout(timeoutMs)
+
+  try {
+    return await fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl, signal))
+  } catch (error) {
+    if (signal.aborted) {
+      return getDuckdbOwnerProxyTimeoutResponse(timeoutMs)
+    }
+
+    throw error
+  }
 }
 
 const waitForDuckdbOwnerProxyTarget = async (
@@ -177,7 +221,11 @@ const fetchDuckdbOwnerProxyResponse = async (
 ) => {
   const incompatibleTargetResponse = await getIncompatibleDuckdbOwnerTargetResponse(duckdbOwnerUrl)
 
-  return incompatibleTargetResponse ?? fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
+  if (incompatibleTargetResponse !== null) {
+    return incompatibleTargetResponse
+  }
+
+  return fetchDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl)
 }
 
 const fetchNonRetryableDuckdbOwnerProxyResponse = async (
@@ -186,7 +234,11 @@ const fetchNonRetryableDuckdbOwnerProxyResponse = async (
 ) => {
   const targetFailureResponse = await waitForDuckdbOwnerProxyTarget(duckdbOwnerUrl)
 
-  return targetFailureResponse ?? fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
+  if (targetFailureResponse !== null) {
+    return targetFailureResponse
+  }
+
+  return fetchDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl)
 }
 
 const fetchDuckdbOwnerStreamingProxyResponse = async (
