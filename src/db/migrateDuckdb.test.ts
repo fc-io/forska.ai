@@ -412,6 +412,24 @@ test('DuckDB migration refreshes dirty-source watermarks and leaves dirty-work p
   expect(migrationSql).not.toContain("status = 'failed'")
 })
 
+test('DuckDB migration rebuilds dirty-work hot table without mutable indexes', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0222_rebuildReviewServingDirtyWorkWithoutIndexes.sql'),
+    'utf8',
+  )
+
+  expect(migrationSql).toContain('CREATE TABLE app.review_serving_dirty_work_noindex_repair_0222')
+  expect(migrationSql).toContain('INSERT INTO app.review_serving_dirty_work_noindex_repair_0222 BY NAME')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_dirty_work_lookup')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_review_serving_dirty_work_lookup')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_dirty_work_id_lookup')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_review_serving_dirty_work_id_lookup')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_dirty_work_ack_id_lookup')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_review_serving_dirty_work_ack_id_lookup')
+  expect(migrationSql).not.toContain('PRIMARY KEY')
+  expect(migrationSql).not.toContain('CREATE INDEX')
+})
+
 test('DuckDB migration retires review article serving compatibility view without touching base/state tables', () => {
   const migrationSql = readFileSync(
     resolve(migrationsFolder, '0196_dropReviewArticleServingCompatibilityView.sql'),

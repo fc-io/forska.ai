@@ -259,7 +259,7 @@ const waitForExclusiveWorkReadiness = async (
       continue
     }
 
-    if (isReadyForExclusiveWork(readiness)) {
+    if (isReadyForExclusiveWork(readiness) || (recycled && isQueueAndMaintenanceDrained(readiness))) {
       setAdmissionState(token, 'ready', now)
       updateMessage(token, 'DuckDB exclusive work is ready to start', now)
       return

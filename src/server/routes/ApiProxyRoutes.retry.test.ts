@@ -27,6 +27,7 @@ const originalFetch = globalThis.fetch
 const originalAbortSignalTimeoutDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout')
 const textEncoder = new TextEncoder()
 const importArtifactTestRoot = join(process.cwd(), 'tmp/project-transfer/import/api-proxy-status-artifact-test')
+const exportArtifactTestRoot = join(process.cwd(), 'tmp/project-transfer/export/api-proxy-export-artifact-test')
 
 const state: {ownerUrls: string[]; shouldProxy: boolean} = {ownerUrls: ['http://owner-1:34991'], shouldProxy: true}
 
@@ -172,6 +173,7 @@ afterEach(() => {
     Object.defineProperty(AbortSignal, 'timeout', originalAbortSignalTimeoutDescriptor)
   }
   rmSync(importArtifactTestRoot, {force: true, recursive: true})
+  rmSync(exportArtifactTestRoot, {force: true, recursive: true})
 })
 
 test.serial('api proxy retries idempotent GET requests after a transport failure', async () => {
@@ -362,6 +364,42 @@ test.serial('api proxy falls through stale active project import status artifact
   expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
     'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
   )
+})
+
+test.serial('api proxy serves project export status from progress artifact before contacting owner', async () => {
+  const app = await loadRoutes()
+  mkdirSync(exportArtifactTestRoot, {recursive: true})
+  writeFileSync(
+    join(exportArtifactTestRoot, 'progress.json'),
+    JSON.stringify({
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      phase: 'export_assembly',
+      rowCountProcessed: 10,
+      rowCountTotal: 123_830,
+      status: 'running',
+      updatedAt: '2026-08-12T15:53:00.000Z',
+    }),
+  )
+  const fetchMock = mock(async () => {
+    throw new Error('owner proxy should not be contacted when a running export progress artifact exists')
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/export/api-proxy-export-artifact-test', {method: 'GET'}),
+  )
+  const body = (await response.json()) as {
+    data: {exportId: string; progress: {rowCountProcessed: number; rowCountTotal: number}; status: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.error).toBe(null)
+  expect(body.data.exportId).toBe('api-proxy-export-artifact-test')
+  expect(body.data.status).toBe('assembling')
+  expect(body.data.progress.rowCountProcessed).toBe(10)
+  expect(body.data.progress.rowCountTotal).toBe(123_830)
+  expect(fetchMock).toHaveBeenCalledTimes(0)
 })
 
 test.serial('api proxy does not retry non-idempotent POST requests after a transport failure', async () => {

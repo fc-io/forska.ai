@@ -187,12 +187,17 @@ export const getReviewServingFilteredCountValue = async (input: GetReviewServing
     getReviewServingFilteredCountReadSql(input),
   )
   const countFound = Boolean(cachedRow?.countFound ?? cachedRow?.count_found ?? false)
+  const cachedCountValue = Number(cachedRow?.countValue ?? cachedRow?.count_value ?? 0)
 
-  if (countFound) {
-    return Number(cachedRow?.countValue ?? cachedRow?.count_value ?? 0)
+  if (countFound && cachedCountValue > 0) {
+    return cachedCountValue
   }
 
   const countValue = await input.computeCount()
+
+  if (countValue === 0) {
+    return countValue
+  }
 
   for (const statement of getReviewServingFilteredCountWriteSqls({...input, countValue})) {
     await executeCountServingStatement(input.database, statement)

@@ -1570,7 +1570,7 @@ const getExportPendingStatusFromProgress = (
   return progress.phase === 'export_package_write' ? 'packaging' : 'assembling'
 }
 
-const getExportSessionArtifactResponse = async (
+export const getExportSessionArtifactResponse = async (
   set: RouteSet,
   exportId: string,
 ): Promise<ProjectTransferApiResponse<ProjectTransferExportSessionData> | null> => {

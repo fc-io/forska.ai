@@ -60,7 +60,6 @@ import {
   type ProjectTransferExportTempLayout,
 } from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
-import {projectTransferExportTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
 import {
   getProjectTransferZipCrc32Digest,
   type ProjectTransferZipEntryInput,
@@ -956,16 +955,12 @@ export const buildProjectTransferExportPackage = async (
                   resolvedPath: buildPath,
                   tempRootPath: input.layout.rootPath,
                 })
-                const stagedRows = (await database.transaction((runner) => {
-                  return stageProjectTransferExportPayloadRows({
-                    database: runner,
-                    projectId: input.projectId,
-                    rawArticleProvenanceMode: input.rawArticleProvenanceMode,
-                    rootPath: buildPath,
-                  })
-                }, projectTransferExportTransactionWorkloadContext)) as Awaited<
-                  ReturnType<typeof stageProjectTransferExportPayloadRows>
-                >
+                const stagedRows = await stageProjectTransferExportPayloadRows({
+                  database,
+                  projectId: input.projectId,
+                  rawArticleProvenanceMode: input.rawArticleProvenanceMode,
+                  rootPath: buildPath,
+                })
                 await publishExportBuildProgress({
                   expiresAt,
                   input,

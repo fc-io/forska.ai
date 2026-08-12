@@ -332,6 +332,27 @@ const getImportSessionIdFromProxyPathname = (requestTemplate: DuckdbOwnerProxyRe
   }
 }
 
+const getExportSessionIdFromProxyPathname = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  if (requestTemplate.method !== 'GET') {
+    return null
+  }
+
+  const publicPathname = requestTemplate.pathname.startsWith(duckdbOwnerPrivateApiPrefix)
+    ? requestTemplate.pathname.slice(duckdbOwnerPrivateApiPrefix.length)
+    : requestTemplate.pathname
+  const match = publicPathname.match(/^\/api\/projects\/export\/([^/]+)$/)
+
+  if (match === null) {
+    return null
+  }
+
+  try {
+    return decodeURIComponent(match[1] ?? '')
+  } catch {
+    return null
+  }
+}
+
 const getProjectTransferImportArtifactProxyResponse = async (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
   const sessionId = getImportSessionIdFromProxyPathname(requestTemplate)
 
@@ -346,6 +367,29 @@ const getProjectTransferImportArtifactProxyResponse = async (requestTemplate: Du
   return artifactResponse === null || !shouldUseImportSessionArtifactResponse(artifactResponse)
     ? null
     : Response.json(artifactResponse)
+}
+
+const getProjectTransferExportArtifactProxyResponse = async (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  const exportId = getExportSessionIdFromProxyPathname(requestTemplate)
+
+  if (exportId === null) {
+    return null
+  }
+
+  const {getExportSessionArtifactResponse} = await import('./projectTransferRoutes.ts')
+  const routeSet: {status?: number | string} = {}
+  const artifactResponse = await getExportSessionArtifactResponse(routeSet, exportId)
+
+  return artifactResponse === null
+    ? null
+    : Response.json(artifactResponse, {status: typeof routeSet.status === 'number' ? routeSet.status : undefined})
+}
+
+const getProjectTransferArtifactProxyResponse = async (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return (
+    (await getProjectTransferImportArtifactProxyResponse(requestTemplate))
+    ?? (await getProjectTransferExportArtifactProxyResponse(requestTemplate))
+  )
 }
 
 const getDuckdbOwnerProxyResponseHeaders = (response: Response) => {
@@ -421,7 +465,7 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
     return null
   }
 
-  const artifactResponse = await getProjectTransferImportArtifactProxyResponse(requestTemplate)
+  const artifactResponse = await getProjectTransferArtifactProxyResponse(requestTemplate)
 
   if (artifactResponse !== null) {
     return artifactResponse

@@ -402,6 +402,9 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work;
     `,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairPrimaryKeyColumns: ['dirty_work_id'],
     schemaName: 'app',
     tableName: 'review_serving_dirty_work',
   },
@@ -4878,8 +4881,6 @@ const getDuckdbSetMemoryLimitStatement = (memoryLimit: string) => {
 }
 
 const projectTransferForegroundMemoryHeadroomRouteOrJobKeys = new Set([
-  'projectTransfer.export.queries',
-  'projectTransfer.export.transaction',
   'projectTransfer.import.analyze.operationTables',
   'projectTransfer.import.commit.transaction',
 ])

@@ -163,6 +163,36 @@ test('prepareDuckdbExclusiveWork recycles before ready when queues are drained b
   expect(getActiveDuckdbExclusiveWorkSnapshot()).toMatchObject({admissionState: 'ready'})
 })
 
+test('prepareDuckdbExclusiveWork admits after recycle when allocator RSS remains high but queues are drained', async () => {
+  let recycleCount = 0
+  const highRssReadiness = {
+    activeMaintenance: [],
+    appendQueueDepth: 0,
+    backgroundQueueDepth: 0,
+    foregroundQueueDepth: 0,
+    recycleRecommended: true,
+    rssBytes: 95,
+    rssReady: false,
+  } satisfies DuckdbExclusiveWorkReadinessSnapshot
+
+  await prepareDuckdbExclusiveWork(getInput(), {
+    dependencies: {
+      getReadinessSnapshot: () => {
+        return highRssReadiness
+      },
+      recycleDuckdbRuntime: async () => {
+        recycleCount += 1
+      },
+      sleep: async () => {},
+    },
+    pollIntervalMs: 1,
+    timeoutMs: 1,
+  })
+
+  expect(recycleCount).toBe(1)
+  expect(getActiveDuckdbExclusiveWorkSnapshot()).toMatchObject({admissionState: 'ready', blockedBy: {rssReady: false}})
+})
+
 test('prepareDuckdbExclusiveWork exposes requested, recycling, and releasing states', async () => {
   const states: string[] = []
   const readinessValues: DuckdbExclusiveWorkReadinessSnapshot[] = [
