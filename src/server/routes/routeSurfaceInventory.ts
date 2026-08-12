@@ -226,14 +226,9 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     'Process id, server role, runtime version, and Bun HTTP cap.',
     [['GET', '/api/runtime/state']],
   ),
-  ...routeGroup(
-    {
-      category: 'sensitive-local-api',
-      proxyClassification: 'duckdb-owner-diagnostics',
-      releaseDecision: sensitiveProductDecision,
-      routeModule: 'DuckdbOwnerConnectionsRoutes.ts',
-      sensitivity: 'DuckDB owner, follower, host, process, and mart throughput metadata.',
-    },
+  ...ownerlessSettingsDiagnostics(
+    'DuckdbOwnerConnectionsRoutes.ts',
+    'DuckDB owner, follower, host, process, and mart throughput metadata.',
     [['GET', '/api/duckdb_owner_connections']],
   ),
   ...routeGroup(
