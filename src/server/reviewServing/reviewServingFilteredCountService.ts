@@ -37,12 +37,6 @@ export type GetReviewServingFilteredCountInput = ReviewServingFilteredCountLooku
 
 const defaultMaxRowsPerScope = 2048
 
-const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, component: string) => {
-  return [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
-    return entry.component === component
-  })?.projectionIdentity
-}
-
 const executeCountServingStatement = async (database: ReviewServingFilteredCountDatabase, statement: string) => {
   if (database.run) {
     await database.run(statement)
@@ -68,7 +62,18 @@ export const getReviewServingFilteredCountComponentIdentities = (
       return countIdentityComponents.has(component)
     })
     .map((component) => {
-      return [component, getManifestComponentIdentity(manifest, component) ?? ''] as const
+      const state = [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
+        return entry.component === component
+      })
+
+      return [
+        component,
+        {
+          baseGeneration: state?.baseGeneration ?? '',
+          patchWatermark: state?.patchWatermark ?? '',
+          projectionIdentity: state?.projectionIdentity ?? '',
+        },
+      ] as const
     })
     .sort(([leftComponent], [rightComponent]) => {
       return leftComponent.localeCompare(rightComponent)

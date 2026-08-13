@@ -24,10 +24,14 @@ const lookup: ReviewServingFilteredCountLookup = {
   snapshotId: 'snapshot-1',
 }
 
-const getManifest = (
-  payloadIdentity: string,
-  postingIdentity = 'posting:identity-1',
-): ReviewServingSnapshotManifest => {
+const getManifest = (input: {
+  payloadIdentity: string
+  postingIdentity?: string
+  postingPatchWatermark?: string
+}): ReviewServingSnapshotManifest => {
+  const postingIdentity = input.postingIdentity ?? 'posting:identity-1'
+  const postingPatchWatermark = input.postingPatchWatermark ?? '2'
+
   return {
     componentRequirements: {
       optionalComponents: ['payload', 'search'],
@@ -39,7 +43,7 @@ const getManifest = (
           baseGeneration: '1',
           component: 'payload',
           patchWatermark: '2',
-          projectionIdentity: payloadIdentity,
+          projectionIdentity: input.payloadIdentity,
           requirement: 'optional',
         },
         {
@@ -63,7 +67,7 @@ const getManifest = (
         return {
           baseGeneration: '1',
           component,
-          patchWatermark: '2',
+          patchWatermark: component === 'posting' ? postingPatchWatermark : '2',
           projectionIdentity,
           requirement: 'required' as const,
         }
@@ -118,15 +122,26 @@ test('filtered count serving write records composed component identity without i
 
 test('filtered count component identities ignore payload churn and track count dependencies', () => {
   const components = ['display', 'projectScope', 'selectedImport', 'llmStatus', 'posting', 'search', 'payload'] as const
-  const payloadV1 = getReviewServingFilteredCountComponentIdentities(getManifest('payload:identity-1'), components)
-  const payloadV2 = getReviewServingFilteredCountComponentIdentities(getManifest('payload:identity-2'), components)
+  const payloadV1 = getReviewServingFilteredCountComponentIdentities(
+    getManifest({payloadIdentity: 'payload:identity-1'}),
+    components,
+  )
+  const payloadV2 = getReviewServingFilteredCountComponentIdentities(
+    getManifest({payloadIdentity: 'payload:identity-2'}),
+    components,
+  )
   const postingV2 = getReviewServingFilteredCountComponentIdentities(
-    getManifest('payload:identity-2', 'posting:identity-2'),
+    getManifest({payloadIdentity: 'payload:identity-2', postingIdentity: 'posting:identity-2'}),
+    components,
+  )
+  const postingWatermarkV2 = getReviewServingFilteredCountComponentIdentities(
+    getManifest({payloadIdentity: 'payload:identity-2', postingPatchWatermark: '3'}),
     components,
   )
 
   expect(payloadV2.componentIdentity).toBe(payloadV1.componentIdentity)
   expect(postingV2.componentIdentity).not.toBe(payloadV1.componentIdentity)
+  expect(postingWatermarkV2.componentIdentity).not.toBe(payloadV1.componentIdentity)
 })
 
 test('filtered count serving returns cache hits without computing or writing', async () => {
