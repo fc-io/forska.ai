@@ -21,8 +21,8 @@ const getPendingRefreshMetaLabel = (params: {
   const segments = [
     params.pendingProjectRefreshCount > 0
       ? params.pendingProjectRefreshCount === 1
-        ? '1 maintenance task remaining'
-        : `${params.pendingProjectRefreshCount} maintenance tasks remaining`
+        ? '1 review-serving task remaining'
+        : `${params.pendingProjectRefreshCount} review-serving tasks remaining`
       : null,
     params.pendingArticleRefreshCount > 0
       ? params.pendingArticleRefreshCount === 1
@@ -78,18 +78,19 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
         : 'bg-sky-50 border-sky-200 text-sky-900'
   })
 
-  const indexingBannerTitle = createMemo(() => {
+  const indexingBannerCopy = createMemo(() => {
     const data = warningsData()
     return data === null
       ? null
-      : getReviewIndexingStateCopy({indexing: data.indexing, projectId: props.projectId, surface: 'banner'}).title
+      : getReviewIndexingStateCopy({indexing: data.indexing, projectId: data.projectId, surface: 'banner'})
+  })
+
+  const indexingBannerTitle = createMemo(() => {
+    return indexingBannerCopy()?.title ?? null
   })
 
   const indexingBannerBody = createMemo(() => {
-    const data = warningsData()
-    return data === null
-      ? null
-      : getReviewIndexingStateCopy({indexing: data.indexing, projectId: props.projectId, surface: 'banner'}).description
+    return indexingBannerCopy()?.description ?? null
   })
 
   const indexingBannerMeta = createMemo(() => {
@@ -114,6 +115,7 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
           <div class={`rounded-lg border p-4 ${indexingBannerTone()}`}>
             <p class="font-medium">{indexingBannerTitle()}</p>
             <p class="mt-1 text-sm opacity-90">{indexingBannerBody()}</p>
+            <p class="mt-2 break-all text-xs opacity-75">Project ID: {warningsData()?.projectId ?? props.projectId}</p>
             <Show when={warningsData()?.indexing ?? null}>
               {(indexing) => {
                 return <ReviewsIndexingProgress indexing={indexing()} />
