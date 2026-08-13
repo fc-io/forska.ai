@@ -70,6 +70,15 @@ const hasReadyReviewPages = (indexing: ReviewsWarningsData['indexing']) => {
   )
 }
 
+const hasReadyReviewSurfaces = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return (
+    hasReadyReviewPages(indexing)
+    && (indexing.coverage.searchReadyArticleCount === null
+      || indexing.coverage.searchReadyArticleCount === totalArticleCount)
+  )
+}
+
 const getArticleRefreshQueuedDescription = (surface: ReviewIndexingCopySurface) => {
   return surface === 'unassessedEmpty'
     ? "New judgments are queued to be folded into this project's review index. This list may change once the backlog clears."
@@ -116,12 +125,30 @@ const getCleanupReviewIndexingCopy = (): ReviewIndexingCopy => {
 }
 
 const getQueuedReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {
-  return hasOnlyArticleRefreshWork(params.indexing)
-    ? {
-        description: getArticleRefreshQueuedDescription(params.surface),
-        title: 'New judgments are queued for incorporation',
-      }
-    : {description: getReviewIndexingQueuedBody(), title: getReviewIndexingQueuedTitle(params.projectId)}
+  if (hasOnlyArticleRefreshWork(params.indexing)) {
+    return {
+      description: getArticleRefreshQueuedDescription(params.surface),
+      title: 'New judgments are queued for incorporation',
+    }
+  }
+
+  if (hasReadyReviewSurfaces(params.indexing)) {
+    return {
+      description:
+        'Review pages, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
+      title: 'Background review maintenance queued',
+    }
+  }
+
+  if (hasReadyReviewPages(params.indexing)) {
+    return {
+      description:
+        'Review pages and details are ready. Search and remaining review-serving maintenance are queued in the background.',
+      title: 'Background review indexing queued',
+    }
+  }
+
+  return {description: getReviewIndexingQueuedBody(), title: getReviewIndexingQueuedTitle(params.projectId)}
 }
 
 const getProcessingReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {

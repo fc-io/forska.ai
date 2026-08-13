@@ -109,6 +109,30 @@ test('ready review pages describe processing as background work', () => {
   expect(copy.description).not.toContain('partial or empty')
 })
 
+test('fully ready review surfaces describe queued work as background maintenance', () => {
+  const copy = getReviewIndexingStateCopy({
+    indexing: getIndexing({
+      coverage: {
+        detailReadyArticleCount: 100,
+        reviewPageReadyArticleCount: 100,
+        searchReadyArticleCount: 100,
+        totalArticleCount: 100,
+      },
+      pendingProjectRefreshCount: 87550,
+      pendingRefreshCount: 87550,
+      progressState: 'queued',
+    }),
+    projectId: 'project-1',
+    surface: 'banner',
+  })
+
+  expect(copy.title).toBe('Background review maintenance queued')
+  expect(copy.description).toBe(
+    'Review pages, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
+  )
+  expect(copy.title).not.toContain('Review indexing queued')
+})
+
 test('review indexing stalled copy does not claim active progress', () => {
   expect(getReviewIndexingStalledTitle()).toBe('Review indexing stalled')
   expect(getReviewIndexingStalledTitle()).not.toContain('in progress')
