@@ -47,12 +47,37 @@ const getReviewWarningsWorkloadContext = (projectId: string, operation: string):
 }
 
 const getReviewWarningsScopeState = async (projectId: string) => {
+  const [martScope] = await getApiReadOnlyAppDatabaseService().queryJson<{totalArticleCount: number}>(
+    `
+    SELECT CAST(COUNT(DISTINCT scope.article_id) AS INTEGER) AS totalArticleCount
+    FROM mart.project_scope_article scope
+    WHERE scope.project_id = '${escapeSqlString(projectId)}'
+      AND (scope.in_curated_scope OR scope.in_route_scope)
+  `,
+    getReviewWarningsWorkloadContext(projectId, 'scopeMartState'),
+  )
+  const martScopeArticleCount = Number(martScope?.totalArticleCount ?? 0)
   const [state] = await getApiReadOnlyAppDatabaseService().queryJson<{
     enabledPromptCount: number
     hasAnyArticlesInScope: boolean
-    totalArticleCount: number
+    totalArticleCount?: number
   }>(
-    `
+    martScopeArticleCount > 0
+      ? `
+    SELECT
+      CAST((
+        SELECT COUNT(*)
+        FROM app.project_prompt project_prompt
+        INNER JOIN app.prompt prompt
+          ON prompt.id = project_prompt.prompt_id
+        WHERE project_prompt.project_id = '${escapeSqlString(projectId)}'
+          AND project_prompt.enabled = TRUE
+          AND NOT project_prompt.archived
+          AND COALESCE(prompt.archived, FALSE) = FALSE
+      ) AS INTEGER) AS enabledPromptCount,
+      TRUE AS hasAnyArticlesInScope
+  `
+      : `
     WITH enabled_prompt AS (
       SELECT COUNT(*) AS enabledPromptCount
       FROM app.project_prompt project_prompt
@@ -91,7 +116,7 @@ const getReviewWarningsScopeState = async (projectId: string) => {
   return {
     enabledPromptCount: Number(state?.enabledPromptCount ?? 0),
     hasAnyArticlesInScope: state?.hasAnyArticlesInScope ?? false,
-    totalArticleCount: Number(state?.totalArticleCount ?? 0),
+    totalArticleCount: martScopeArticleCount > 0 ? martScopeArticleCount : Number(state?.totalArticleCount ?? 0),
   }
 }
 
@@ -180,6 +205,7 @@ const getReviewsWarningsCoverage = async (input: {
 
   const canMaterializePayload = getReviewWarningsComponentCanMaterialize(input.manifest, 'payload')
   const canMaterializeSearch = getReviewWarningsComponentCanMaterialize(input.manifest, 'search')
+  const searchComponentState = getReviewWarningsComponentState(input.manifest, 'search')
   const [coverage] = await getApiReadOnlyAppDatabaseService().queryJson<{
     detailReadyArticleCount: number | null
     reviewPageReadyArticleCount: number
@@ -213,13 +239,59 @@ const getReviewsWarningsCoverage = async (input: {
         !canMaterializeSearch
           ? 'NULL'
           : `CAST((
-              SELECT COUNT(DISTINCT article_id)
-              FROM (
-                SELECT UNNEST(search.article_ids) AS article_id
-                FROM mart.review_title_search_serving_v4 search
-                WHERE search.project_id = '${escapeSqlString(input.projectId)}'
-                  AND search.snapshot_id = '${escapeSqlString(snapshotId)}'
-              ) search_articles
+              WITH latest_search_request AS (
+                SELECT request.request_id
+                FROM app.review_rebuild_request request
+                WHERE request.project_id = '${escapeSqlString(input.projectId)}'
+                  AND request.admission_state = 'admitted'
+                  AND request.status IN ('admitted', 'running')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM app.review_rebuild_chunk_manifest request_chunk
+                    WHERE request_chunk.request_id IS NOT DISTINCT FROM request.request_id
+                      AND request_chunk.project_id IS NOT DISTINCT FROM request.project_id
+                      AND request_chunk.projection_component = 'search'
+                  )
+                ORDER BY request.priority DESC, request.updated_at DESC, request.request_id DESC
+                LIMIT 1
+              )
+              SELECT COALESCE((
+                WITH completed_search_range AS (
+                  SELECT search_chunk.chunk_start_key, search_chunk.chunk_end_key
+                  FROM app.review_rebuild_chunk_manifest search_chunk
+                  INNER JOIN latest_search_request
+                    ON latest_search_request.request_id IS NOT DISTINCT FROM search_chunk.request_id
+                  WHERE search_chunk.project_id = '${escapeSqlString(input.projectId)}'
+                    AND search_chunk.projection_component = 'search'
+                    ${
+                      searchComponentState?.projectionIdentity === undefined
+                        ? ''
+                        : `AND search_chunk.projection_identity = '${escapeSqlString(searchComponentState.projectionIdentity)}'`
+                    }
+                    AND search_chunk.status = 'completed'
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM app.review_rebuild_chunk_manifest child_chunk
+                      WHERE child_chunk.parent_chunk_id IS NOT DISTINCT FROM search_chunk.chunk_id
+                        AND child_chunk.project_id IS NOT DISTINCT FROM search_chunk.project_id
+                    )
+                )
+                SELECT CASE
+                  WHEN NOT EXISTS (SELECT 1 FROM latest_search_request) THEN ${input.totalArticleCount}
+                  ELSE (
+                    SELECT COUNT(DISTINCT scope.article_id)
+                    FROM mart.project_scope_article scope
+                    WHERE scope.project_id = '${escapeSqlString(input.projectId)}'
+                      AND (scope.in_curated_scope OR scope.in_route_scope)
+                      AND EXISTS (
+                        SELECT 1
+                        FROM completed_search_range search_range
+                        WHERE scope.article_id >= search_range.chunk_start_key
+                          AND scope.article_id <= search_range.chunk_end_key
+                      )
+                  )
+                END
+              ), ${input.totalArticleCount})
             ) AS INTEGER)`
       } AS searchReadyArticleCount
     `,

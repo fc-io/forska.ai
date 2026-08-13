@@ -10,6 +10,7 @@ import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoo
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
   maxCompletedRebuildChunksPerRun?: number | null
+  maxRowsPerWake?: number
   maxRunMs?: number | null
   pollIntervalMs?: number
   rebuildChunkBatchMaxRssBytes?: number
@@ -23,9 +24,8 @@ const reviewServingProjectorWorkerComponent = 'reviewServingProjectorWorker'
 const defaultReviewServingProjectorWorkerHeartbeatBatchSize = 2
 const gibibyte = 1024 ** 3
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
-const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
+const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
-const lowMemoryReviewServingProjectorWorkerRssCapRatio = 0.75
 const highRssRestartGraceBytes = gibibyte
 let foregroundWorkRecycleDeferStartedAtMs: number | null = null
 let foregroundWorkRecycleDeferCount = 0
@@ -65,19 +65,10 @@ const getReviewServingProjectorWorkerMaxCompletedChunksPerRun = (
 const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
   options: ReviewServingProjectorWorkerHeartbeatOptions,
 ) => {
-  const configuredMaxRssBytes =
+  return (
     options.rebuildChunkBatchMaxRssBytes
     ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
     ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
-  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
-
-  if (duckdbLimitMiB === null || duckdbLimitMiB > lowMemoryMaintenanceDuckdbLimitMiB) {
-    return configuredMaxRssBytes
-  }
-
-  return Math.min(
-    configuredMaxRssBytes,
-    Math.floor(duckdbLimitMiB * 1024 ** 2 * lowMemoryReviewServingProjectorWorkerRssCapRatio),
   )
 }
 
@@ -250,6 +241,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
         ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
       maxCompletedRebuildChunksPerRun: getReviewServingProjectorWorkerMaxCompletedChunksPerRun(options),
+      maxRowsPerWake: options.maxRowsPerWake ?? null,
       maxRunMs: getReviewServingProjectorWorkerMaxRunMs(options),
       startCount: 1,
     },
@@ -319,6 +311,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
         ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
       maxCompletedRebuildChunksPerRun,
+      maxRowsPerWake: options.maxRowsPerWake,
       signal: loopController.signal,
     })
       .then(async (result) => {

@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {getReviewServingProjectorWorkerHardRestartRssBytes} from './reviewServingProjectorWorkerHeartbeat.ts'
 
 const getLastJsonLine = (value: string) => {
@@ -189,7 +190,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
   }
 
   expect(result.events).toEqual([
-    {rebuildChunkBatchMaxRssBytes: Math.floor(6400 * 1024 ** 2 * 0.75), rebuildChunkBatchSize: 2},
+    {rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(), rebuildChunkBatchSize: 2},
   ])
 })
 

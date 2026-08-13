@@ -93,6 +93,7 @@ export type ReviewServingDirtyWorkClaim = {
   scopeKind: string
   sourcePartition: string
   status: ReviewServingDirtyWorkStatus
+  storageRowId?: number | null
 }
 
 export type ReviewServingDirtyWorkRecord = ReviewServingDirtyWorkClaim & {
@@ -118,6 +119,7 @@ type DirtyWorkRow = {
   scopeKind: string
   sourcePartition: string
   status: ReviewServingDirtyWorkStatus
+  storageRowId?: number | null
   updatedAt: unknown
 }
 
@@ -351,6 +353,7 @@ const getDirtyWorkRecordFromRow = (row: DirtyWorkRow): ReviewServingDirtyWorkRec
     scopeKind: row.scopeKind,
     sourcePartition: row.sourcePartition,
     status: row.status,
+    storageRowId: row.storageRowId === undefined || row.storageRowId === null ? null : Number(row.storageRowId),
     updatedAt: getDateValue(row.updatedAt),
   }
 }
@@ -358,6 +361,7 @@ const getDirtyWorkRecordFromRow = (row: DirtyWorkRow): ReviewServingDirtyWorkRec
 const getDirtyWorkSelect = () => {
   return `
     SELECT
+      rowid AS storageRowId,
       dirty_work_id AS dirtyWorkId,
       project_id AS projectId,
       scope_kind AS scopeKind,
@@ -381,6 +385,7 @@ const getDirtyWorkSelect = () => {
 const getQualifiedDirtyWorkSelect = (dirtyWorkSql: string) => {
   return `
     SELECT
+      ${dirtyWorkSql}.rowid AS storageRowId,
       ${dirtyWorkSql}.dirty_work_id AS dirtyWorkId,
       ${dirtyWorkSql}.project_id AS projectId,
       ${dirtyWorkSql}.scope_kind AS scopeKind,
@@ -608,6 +613,32 @@ const getHighWaterAckCoverages = (coverages: readonly ReviewServingDirtyWorkCove
   return coverages.filter((coverage) => {
     return coverage.sourcePartition.includes(':')
   })
+}
+
+const getDirtyWorkUpdatePredicate = (
+  claims: readonly Pick<ReviewServingDirtyWorkClaim, 'dirtyWorkId' | 'storageRowId'>[],
+) => {
+  const rowIds = [
+    ...new Set(
+      claims
+        .map((claim) => {
+          return claim.storageRowId
+        })
+        .filter((rowId): rowId is number => {
+          return rowId !== null && rowId !== undefined && Number.isFinite(rowId)
+        }),
+    ),
+  ]
+
+  if (rowIds.length > 0) {
+    return `rowid IN (${rowIds.join(', ')})`
+  }
+
+  return `dirty_work_id IN (${claims
+    .map((claim) => {
+      return getSqlLiteral(claim.dirtyWorkId)
+    })
+    .join(', ')})`
 }
 
 const isClaimCoveredByHighWaterAckCoverage = (
@@ -838,6 +869,7 @@ export const claimReviewServingDirtyWork = async (
     )
       AND ${eligiblePredicate}
     RETURNING
+      rowid AS storageRowId,
       dirty_work_id AS dirtyWorkId,
       project_id AS projectId,
       scope_kind AS scopeKind,
@@ -922,11 +954,7 @@ export const completeReviewServingDirtyWorkClaims = async (
     await database.run(`
       UPDATE app.review_serving_dirty_work
       SET status = 'completed', updated_at = current_timestamp
-      WHERE dirty_work_id IN (${uniqueClaims
-        .map((claim) => {
-          return getSqlLiteral(claim.dirtyWorkId)
-        })
-        .join(', ')})
+      WHERE ${getDirtyWorkUpdatePredicate(uniqueClaims)}
         AND status = 'running'
     `)
   }
@@ -988,16 +1016,14 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
     database,
   )
 
-  await database.run(`
-    WITH rebuild_dirty_work_coverage AS (
-      ${coverageCteSql}
-    )
-    UPDATE app.review_serving_dirty_work
-    SET status = 'completed', updated_at = current_timestamp
-    FROM rebuild_dirty_work_coverage coverage
-    WHERE ${getDirtyWorkCoverageMatchSql('app.review_serving_dirty_work')}
-      AND app.review_serving_dirty_work.status <> 'completed'
-  `)
+  if (coveredClaims.length > 0) {
+    await database.run(`
+      UPDATE app.review_serving_dirty_work
+      SET status = 'completed', updated_at = current_timestamp
+      WHERE ${getDirtyWorkUpdatePredicate(coveredClaims)}
+        AND status <> 'completed'
+    `)
+  }
 
   return {completedCount: coveredClaims.length}
 }

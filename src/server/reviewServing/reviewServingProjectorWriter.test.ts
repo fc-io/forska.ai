@@ -213,11 +213,11 @@ test('queue rebuild rows ignore overlapping split chunk boundary rows', async ()
   expect(articleRankInsertStatement).toContain('WHERE article_rank = 1')
 })
 
-test('title search rebuild ranges merge rows with bounded update and insert-missing statements', async () => {
+test('title search rebuild ranges append chunk-local rows without existing-mart scans', async () => {
   const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
   const baseRange = {
     articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
-    articleTitleSql: 'article.title',
+    articleTitleSql: 'scope.article_title',
     projectId: 'project-1',
     projectScopeIdentity: 'scope:identity-1',
     searchIdentity: 'search:identity-1',
@@ -244,31 +244,31 @@ test('title search rebuild ranges merge rows with bounded update and insert-miss
     statements.filter((statement) => {
       return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
     }),
-  ).toHaveLength(1)
+  ).toHaveLength(2)
   expect(
     statements.filter((statement) => {
-      return statement.includes('UPDATE mart.review_title_search_serving_v4')
+      return statement.includes('DELETE FROM mart.review_title_search_serving_v4 existing')
     }),
-  ).toHaveLength(1)
-  expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_title_search_serving_v4')
-  expect(statements.join('\n')).toContain('WHERE NOT EXISTS')
+  ).toHaveLength(0)
+  expect(statements.join('\n')).not.toContain('FROM mart.review_title_search_serving_v4 existing')
+  expect(statements.join('\n')).not.toContain('UPDATE mart.review_title_search_serving_v4')
+  expect(statements.join('\n')).not.toContain('WHERE NOT EXISTS')
   expect(statements.join('\n')).not.toContain(
     'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET',
   )
-  expect(statements.join('\n')).toContain(
-    'SET article_ids = (SELECT LIST(DISTINCT merged_article_id ORDER BY merged_article_id)',
-  )
-  expect(statements.join('\n')).toContain('COALESCE(final_rows.article_ids, []::VARCHAR[])')
+  expect(statements.join('\n')).not.toContain('SET article_ids')
   expect(statements.join('\n')).toContain(
     'LIST(DISTINCT tokenized.article_id ORDER BY tokenized.article_id) AS article_ids',
   )
   expect(statements.join('\n')).toContain("scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'")
-  expect(statements.join('\n')).toContain("OR (scope.article_id >= 'article-3' AND scope.article_id <= 'article-4')")
+  expect(statements.join('\n')).not.toContain(
+    "OR (scope.article_id >= 'article-3' AND scope.article_id <= 'article-4')",
+  )
   expect(statements.join('\n')).not.toContain("existing.project_id || ''")
   expect(statements.join('\n')).not.toContain("existing.token || ''")
 })
 
-test('title search rebuild range merge executes against compact DuckDB token postings', async () => {
+test('title search rebuild range append executes against compact DuckDB token postings', async () => {
   const {database, statements} = createWriterDatabase()
   const duckdbPath = join(workspaceRoot, '.tmp', `title-search-rebuild-merge-${Date.now()}.duckdb`)
   mkdirSync(dirname(duckdbPath), {recursive: true})
@@ -280,10 +280,10 @@ test('title search rebuild range merge executes against compact DuckDB token pos
       `
         CREATE SCHEMA app;
         CREATE SCHEMA mart;
-        CREATE TABLE app.article(id VARCHAR, title VARCHAR);
         CREATE TABLE mart.project_scope_article(
           project_id VARCHAR,
           article_id VARCHAR,
+          article_title VARCHAR,
           in_curated_scope BOOLEAN,
           in_route_scope BOOLEAN
         );
@@ -295,12 +295,9 @@ test('title search rebuild range merge executes against compact DuckDB token pos
           token VARCHAR,
           article_ids VARCHAR[]
         );
-        INSERT INTO app.article VALUES
-          ('article-1', 'Alpha Beta'),
-          ('article-2', 'Beta Gamma');
         INSERT INTO mart.project_scope_article VALUES
-          ('project-1', 'article-1', TRUE, FALSE),
-          ('project-1', 'article-2', TRUE, FALSE);
+          ('project-1', 'article-1', 'Alpha Beta', TRUE, FALSE),
+          ('project-1', 'article-2', 'Beta Gamma', TRUE, FALSE);
         INSERT INTO mart.review_title_search_serving_v4 VALUES
           ('project-1', 'search:identity-1', 'scope:identity-1', 'snapshot-1', 'beta', ['article-0']);
       `,
@@ -311,7 +308,7 @@ test('title search rebuild range merge executes against compact DuckDB token pos
         ranges: [
           {
             articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
-            articleTitleSql: 'article.title',
+            articleTitleSql: 'scope.article_title',
             projectId: 'project-1',
             projectScopeIdentity: 'scope:identity-1',
             searchIdentity: 'search:identity-1',
@@ -324,10 +321,7 @@ test('title search rebuild range merge executes against compact DuckDB token pos
     )
 
     const mergeStatements = statements.filter((statement) => {
-      return (
-        statement.includes('UPDATE mart.review_title_search_serving_v4')
-        || statement.includes('INSERT INTO mart.review_title_search_serving_v4')
-      )
+      return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
     })
     runDuckdbSql(duckdbPath, mergeStatements.join(';\n'))
 
@@ -341,7 +335,8 @@ test('title search rebuild range merge executes against compact DuckDB token pos
     )
     expect(rowsJson).toContain('alpha')
     expect(rowsJson).toContain('gamma')
-    expect(rowsJson).toContain('[article-0, article-1, article-2]')
+    expect(rowsJson).toContain('[article-0]')
+    expect(rowsJson).toContain('[article-1, article-2]')
   } finally {
     removeFileIfExists(duckdbPath)
   }
@@ -351,7 +346,7 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
   const {database, statements} = createWriterDatabase()
   const baseRange = {
     articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
-    articleTitleSql: 'article.title',
+    articleTitleSql: 'scope.article_title',
     projectId: 'project-1',
     projectScopeIdentity: 'scope:identity-1',
     searchIdentity: 'search:identity-1',
@@ -366,7 +361,7 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
         {
           ...baseRange,
           articleRangePredicateSql: "AND scope.article_id >= 'article-3' AND scope.article_id <= 'article-4'",
-          articleTitleSql: 'COALESCE(article.title, article.abstract)',
+          articleTitleSql: 'COALESCE(scope.article_title, scope.article_id)',
         },
       ],
     },
@@ -377,15 +372,15 @@ test('title search rebuild ranges keep per-range inserts when source inputs are 
     return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
   })
   const updateStatements = statements.filter((statement) => {
-    return statement.includes('UPDATE mart.review_title_search_serving_v4')
+    return statement.includes('DELETE FROM mart.review_title_search_serving_v4 existing')
   })
 
   expect(insertStatements).toHaveLength(2)
-  expect(updateStatements).toHaveLength(2)
+  expect(updateStatements).toHaveLength(0)
   expect(insertStatements.join('\n')).not.toContain(
     'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token) DO UPDATE SET',
   )
-  expect(insertStatements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(insertStatements.join('\n')).not.toContain('WHERE NOT EXISTS')
   expect(insertStatements.join('\n')).not.toContain("OR (scope.article_id >= 'article-3'")
 })
 

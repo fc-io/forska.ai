@@ -173,22 +173,30 @@ const getArticleRangePredicate = (
 }
 
 const getSelectedImportTitleSql = (input: SelectedImportTitleSqlInput) => {
+  const baseTitleSql = 'COALESCE(scope.article_title, article.article_title)'
+
   if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
-    return 'article.article_title'
+    return baseTitleSql
   }
 
   return `CASE
-        WHEN COALESCE(selected_base.tombstone, FALSE) THEN article.article_title
-        ELSE COALESCE(selected_hot.article_title, article.article_title)
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN ${baseTitleSql}
+        ELSE COALESCE(selected_hot.article_title, ${baseTitleSql})
       END`
 }
 
 const getSelectedImportTitleJoinSql = (input: SelectedImportTitleSqlInput) => {
+  const articleTitleFallbackJoinSql = `
+    LEFT JOIN app."article" article
+      ON scope.article_title IS NULL
+      AND article.id = scope.article_id`
+
   if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
-    return ''
+    return articleTitleFallbackJoinSql
   }
 
-  const selectedBaseJoinSql = `
+  return `
+    ${articleTitleFallbackJoinSql}
     LEFT JOIN mart.review_selected_article_import_current_v4 selected_base
       ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
       AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
@@ -205,8 +213,6 @@ const getSelectedImportTitleJoinSql = (input: SelectedImportTitleSqlInput) => {
         ELSE selected_base.source_record_key
       END
       AND NOT selected_hot.tombstone`
-
-  return selectedBaseJoinSql
 }
 
 const getNormalizedTitleToken = (value: string) => {
@@ -242,11 +248,9 @@ const getTitleSearchRows = async (
     SELECT
       scope.article_id AS articleId,
       ${getSelectedImportTitleSql(input)} AS articleTitle,
-      article.id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS tombstone
+      NOT (scope.in_curated_scope OR scope.in_route_scope) AS tombstone
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
-    LEFT JOIN app."article" article
-      ON article.id = scope.article_id
     ${getSelectedImportTitleJoinSql(input)}
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope OR ${articleIds.length > 0 ? 'TRUE' : 'FALSE'})
@@ -424,11 +428,14 @@ export const projectReviewServingTitleSearchRebuildRows = async (
   database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
-  await measure('writerMs', async () => {
+  const writer = await measure('writerMs', async () => {
     return writeReviewServingTitleSearchRebuildRows(getReviewServingTitleSearchRebuildWriterInput(input), database)
   })
 
-  return withDiagnosticsJson({patchWatermark: 0}, getTitleSearchDiagnosticsJson({phaseTimings}))
+  return withDiagnosticsJson(
+    {patchWatermark: 0, validationResult: writer.validationResult},
+    getTitleSearchDiagnosticsJson({phaseTimings}),
+  )
 }
 
 const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServingTitleSearchRebuildInput) => {
