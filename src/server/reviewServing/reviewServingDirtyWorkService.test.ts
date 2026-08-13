@@ -62,6 +62,12 @@ const getInLiterals = (statement: string, columnName: string) => {
   return getSqlStrings(inList)
 }
 
+const getInNumbers = (statement: string, columnName: string) => {
+  const inList = statement.match(new RegExp(`${columnName}\\s+IN\\s+\\(([^)]*)\\)`, 'u'))?.[1] ?? ''
+
+  return getNumbers(inList)
+}
+
 const getStartsWithLiteral = (statement: string, columnName: string) => {
   return (
     statement.match(new RegExp(`starts_with\\(${columnName},\\s*'((?:''|[^'])*)'\\)`, 'u'))?.[1]?.replaceAll("''", "'")
@@ -129,6 +135,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       scopeKind: row.scopeKind,
       sourcePartition: row.sourcePartition,
       status: row.status,
+      storageRowId: row.storageRowId,
       updatedAt: row.updatedAt,
     }
   }
@@ -162,6 +169,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       scopeKind: strings[2] ?? 'article',
       sourcePartition: strings[7] ?? '',
       status: 'pending' as const,
+      storageRowId: dirtyWork.size + 1,
       updatedAt: now,
     }
 
@@ -207,11 +215,22 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     status: FakeDirtyWorkRow['status'],
     expectedStatus: FakeDirtyWorkRow['status'],
   ) => {
-    getInLiterals(statement, 'dirty_work_id').forEach((dirtyWorkId) => {
-      const existing = dirtyWork.get(dirtyWorkId)
+    const dirtyWorkIds = getInLiterals(statement, 'dirty_work_id')
+    const rowIds = getInNumbers(statement, 'rowid')
+    const matchingRows =
+      rowIds.length > 0
+        ? [...dirtyWork.values()].filter((row) => {
+            return row.storageRowId !== undefined && rowIds.includes(row.storageRowId)
+          })
+        : dirtyWorkIds.flatMap((dirtyWorkId) => {
+            const row = dirtyWork.get(dirtyWorkId)
 
-      if (existing?.status === expectedStatus) {
-        dirtyWork.set(dirtyWorkId, {...existing, status, updatedAt: getClock(statements)})
+            return row === undefined ? [] : [row]
+          })
+
+    matchingRows.forEach((existing) => {
+      if (existing.status === expectedStatus) {
+        dirtyWork.set(existing.dirtyWorkId, {...existing, status, updatedAt: getClock(statements)})
       }
     })
   }
@@ -681,6 +700,25 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         getCoverageRows(statement).forEach((row) => {
           dirtyWork.set(row.dirtyWorkId, {...row, status: 'completed', updatedAt: getClock(statements)})
         })
+      } else {
+        const rowIds = getInNumbers(statement, 'rowid')
+        const dirtyWorkIds = getInLiterals(statement, 'dirty_work_id')
+        const matchingRows =
+          rowIds.length > 0
+            ? [...dirtyWork.values()].filter((row) => {
+                return row.storageRowId !== undefined && rowIds.includes(row.storageRowId)
+              })
+            : dirtyWorkIds.flatMap((dirtyWorkId) => {
+                const row = dirtyWork.get(dirtyWorkId)
+
+                return row === undefined ? [] : [row]
+              })
+
+        matchingRows.forEach((existing) => {
+          if (existing.status !== 'completed') {
+            dirtyWork.set(existing.dirtyWorkId, {...existing, status: 'completed', updatedAt: getClock(statements)})
+          }
+        })
       }
     }
   }
@@ -1070,6 +1108,14 @@ test('rebuild coverage completion only acknowledges matching project component i
   expect(dirtyWork.size).toBe(5)
   expect(statements.join('\n')).toContain('WITH rebuild_dirty_work_coverage AS')
   expect(statements.join('\n')).toContain('latest_source_high_water_mark <= coverage.completed_source_high_water_mark')
+  const coverageCompletionUpdate = statements.findLast((statement) => {
+    return statement.includes('UPDATE app.review_serving_dirty_work')
+  })
+  expect(coverageCompletionUpdate).toContain('WHERE rowid IN (')
+  expect(coverageCompletionUpdate).not.toContain('WITH rebuild_dirty_work_coverage AS')
+  expect(coverageCompletionUpdate).not.toContain(
+    'latest_source_high_water_mark <= coverage.completed_source_high_water_mark',
+  )
 })
 
 test('rebuild coverage completion matches promotion source watermark aliases', async () => {

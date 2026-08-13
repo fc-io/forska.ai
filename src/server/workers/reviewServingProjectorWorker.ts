@@ -1864,7 +1864,6 @@ const runSearchRebuildChunk = async (
     {
       ...input.chunk,
       leaseOwner: input.leaseOwner,
-      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1879,8 +1878,8 @@ const runSearchRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
-          const diagnostics = await previous
+        const snapshotResults = await snapshots.reduce<Promise<object[]>>(async (previous, snapshot) => {
+          const results = await previous
           const result = await projectReviewServingTitleSearchRebuildRows(
             {
               baseGeneration: input.chunk.outputBaseGeneration,
@@ -1895,10 +1894,26 @@ const runSearchRebuildChunk = async (
             chunkDatabase,
           )
 
-          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...getProjectorResultDiagnosticsJson(result)}]
+          return [...results, {snapshotId: snapshot.snapshotId, ...result}]
         }, Promise.resolve([]))
+        const snapshotDiagnostics = snapshotResults.map((result) => {
+          return {
+            snapshotId: (result as {snapshotId?: string}).snapshotId,
+            ...getProjectorResultDiagnosticsJson(result),
+          }
+        })
+        const validationResults = snapshotResults
+          .map((result) => {
+            return (result as {validationResult?: ReviewServingRebuildChunkValidationResult}).validationResult
+          })
+          .filter((result): result is ReviewServingRebuildChunkValidationResult => {
+            return result !== undefined
+          })
 
-        return {diagnosticsJson: {titleSearchProjectorSnapshots: snapshotDiagnostics}}
+        return {
+          diagnosticsJson: {titleSearchProjectorSnapshots: snapshotDiagnostics},
+          validationResult: validationResults.length === 1 ? validationResults[0] : undefined,
+        }
       },
     },
     database,
@@ -2647,6 +2662,7 @@ const getProjectScopeRebuildChunkOutputChecksum = async (
         CAST(scope.article_id AS VARCHAR) || ':' ||
         CAST(scope.in_curated_scope AS VARCHAR) || ':' ||
         CAST(scope.in_route_scope AS VARCHAR) || ':' ||
+        COALESCE(scope.article_title, '') || ':' ||
         COALESCE(CAST(scope.article_created_at AS VARCHAR), '') || ':' ||
         COALESCE(CAST(scope.article_updated_at AS VARCHAR), ''),
         '|' ORDER BY scope.article_id
@@ -2690,6 +2706,7 @@ const writeProjectScopeRebuildChunkRows = async (
       article_id,
       in_curated_scope,
       in_route_scope,
+      article_title,
       article_created_at,
       article_updated_at
     )
@@ -2734,6 +2751,7 @@ const writeProjectScopeRebuildChunkRows = async (
       aggregated_scope.article_id,
       aggregated_scope.in_curated_scope,
       aggregated_scope.in_route_scope,
+      article.article_title,
       article.article_created_at,
       article.article_updated_at
     FROM aggregated_scope
@@ -5190,6 +5208,10 @@ const getPositiveInteger = (value: number | null | undefined, fallback: number) 
   return value !== null && value !== undefined && Number.isInteger(value) && value > 0 ? Math.trunc(value) : fallback
 }
 
+const getNonNegativeInteger = (value: number | null | undefined, fallback: number) => {
+  return value !== null && value !== undefined && Number.isInteger(value) && value >= 0 ? Math.trunc(value) : fallback
+}
+
 const getDefaultMaxCompletedRebuildChunksPerRun = () => {
   const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
 
@@ -6300,7 +6322,7 @@ const getWakeInput = (
     maxActiveImportCount: options.maxActiveImportCount,
     maxPendingDirtyWorkCount: options.maxPendingDirtyWorkCount,
     maxRetries: getPositiveInteger(options.maxRetries, defaultReviewServingProjectorWorkerMaxRetries),
-    maxRowsPerWake: getPositiveInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake),
+    maxRowsPerWake: getNonNegativeInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake),
     maxWakeMs: getPositiveInteger(options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs),
     wakeId,
   }
@@ -8823,7 +8845,11 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }): Promise<ReviewServingProjectorWorkerDeltaIntakeResult> => {
-  const limit = getPositiveInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake)
+  const limit = getNonNegativeInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake)
+  if (limit === 0) {
+    return getIdleReviewServingProjectorWorkerDeltaIntakeResult()
+  }
+
   const intakeReviewChangeDeltas = dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork
   const intakeImportDeltas = dependencies.intakeImportDeltas ?? intakeReviewImportDeltasToDirtyWork
   const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta', limit)

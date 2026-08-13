@@ -811,12 +811,9 @@ const getReviewServingTitleSearchRebuildRowsCteSql = (input: WriteReviewServingT
         scope.article_id,
         lower(strip_accents(COALESCE(${input.articleTitleSql}, ''))) AS normalized_title
       FROM mart.project_scope_article scope
-      LEFT JOIN app."article" article
-        ON article.id = scope.article_id
       ${input.selectedImportJoinSql}
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
         AND (scope.in_curated_scope OR scope.in_route_scope)
-        AND article.id IS NOT NULL
         ${input.articleRangePredicateSql}
     ), source AS (
       SELECT
@@ -856,34 +853,6 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
 
   return [
     `
-    UPDATE mart.review_title_search_serving_v4 existing
-    SET article_ids = (SELECT LIST(DISTINCT merged_article_id ORDER BY merged_article_id)
-      FROM (
-        SELECT existing_article.article_id AS merged_article_id
-        FROM unnest(COALESCE(existing.article_ids, []::VARCHAR[])) AS existing_article(article_id)
-        UNION ALL
-        SELECT final_article.article_id AS merged_article_id
-        FROM unnest(COALESCE(final_rows.article_ids, []::VARCHAR[])) AS final_article(article_id)
-      ) merged_article_ids
-    )
-    FROM (
-      ${finalRowsCteSql}
-      SELECT
-        final_rows.project_id,
-        final_rows.search_identity,
-        final_rows.project_scope_identity,
-        final_rows.snapshot_id,
-        final_rows.token,
-        final_rows.article_ids
-      FROM final_rows
-    ) final_rows
-    WHERE existing.project_id IS NOT DISTINCT FROM final_rows.project_id
-      AND existing.search_identity IS NOT DISTINCT FROM final_rows.search_identity
-      AND existing.project_scope_identity IS NOT DISTINCT FROM final_rows.project_scope_identity
-      AND existing.snapshot_id IS NOT DISTINCT FROM final_rows.snapshot_id
-      AND existing.token IS NOT DISTINCT FROM final_rows.token
-  `,
-    `
     INSERT INTO mart.review_title_search_serving_v4 (
       project_id,
       search_identity,
@@ -901,84 +870,62 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       final_rows.token,
       final_rows.article_ids
     FROM final_rows
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM mart.review_title_search_serving_v4 existing
-      WHERE existing.project_id IS NOT DISTINCT FROM final_rows.project_id
-        AND existing.search_identity IS NOT DISTINCT FROM final_rows.search_identity
-        AND existing.project_scope_identity IS NOT DISTINCT FROM final_rows.project_scope_identity
-        AND existing.snapshot_id IS NOT DISTINCT FROM final_rows.snapshot_id
-        AND existing.token IS NOT DISTINCT FROM final_rows.token
-    )
   `,
   ]
 }
 
-const getReviewServingTitleSearchRebuildRangeExpression = (predicateSql: string) => {
-  const trimmed = predicateSql.trim()
+const getReviewServingTitleSearchRebuildRowsValidationSql = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
+  const finalRowsCteSql = getReviewServingTitleSearchRebuildRowsCteSql(input)
 
-  if (trimmed.length === 0) {
-    return 'TRUE'
-  }
-
-  if (trimmed.match(/^AND\b/i) === null) {
-    return null
-  }
-
-  return `(${trimmed.replace(/^AND\b/i, '').trim()})`
-}
-
-const getReviewServingTitleSearchRebuildCombinedRangeInput = (
-  ranges: readonly WriteReviewServingTitleSearchRebuildRowsInput[],
-) => {
-  const [firstRange] = ranges
-
-  if (firstRange === undefined) {
-    return null
-  }
-
-  const expressions = ranges.map((range) => {
-    return getReviewServingTitleSearchRebuildRangeExpression(range.articleRangePredicateSql)
-  })
-
-  if (
-    expressions.some((expression) => {
-      return expression === null
-    })
-  ) {
-    return null
-  }
-
-  const isCompatible = ranges.every((range) => {
-    return (
-      range.articleTitleSql === firstRange.articleTitleSql
-      && range.projectId === firstRange.projectId
-      && range.projectScopeIdentity === firstRange.projectScopeIdentity
-      && range.searchIdentity === firstRange.searchIdentity
-      && range.selectedImportJoinSql === firstRange.selectedImportJoinSql
-      && range.snapshotId === firstRange.snapshotId
+  return `
+    ${finalRowsCteSql},
+    search_posting AS (
+      SELECT
+        final_rows.snapshot_id,
+        final_rows.project_scope_identity,
+        final_rows.token,
+        search_article.article_id
+      FROM final_rows
+      CROSS JOIN unnest(final_rows.article_ids) AS search_article(article_id)
     )
-  })
-
-  if (!isCompatible) {
-    return null
-  }
-
-  return {
-    ...firstRange,
-    articleRangePredicateSql: `
-        AND (${expressions.join(' OR ')})`,
-  }
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(project_scope_identity AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        CAST(token AS VARCHAR),
+        '|' ORDER BY snapshot_id, project_scope_identity, article_id, token
+      ), '')) AS actualChecksum
+    FROM search_posting
+  `
 }
 
 export const writeReviewServingTitleSearchRebuildRows = async (
   input: WriteReviewServingTitleSearchRebuildRowsInput,
-  database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
+  database: Pick<ReviewServingProjectorWriterDatabase, 'queryJson' | 'run'> = getAppDatabaseService(),
 ) => {
+  const [validation] = await database.queryJson<{actualChecksum: string; actualCount: number}>(
+    getReviewServingTitleSearchRebuildRowsValidationSql(input),
+  )
+
   await getReviewServingTitleSearchRebuildRowsStatements(input).reduce<Promise<void>>(async (previous, statement) => {
     await previous
     await database.run(statement)
   }, Promise.resolve())
+
+  return {
+    validationResult:
+      validation === undefined
+        ? undefined
+        : {
+            actualChecksum: validation.actualChecksum,
+            actualCount: Number(validation.actualCount),
+            diagnosticsJson: {validationMode: 'projector-output'},
+            expectedChecksum: validation.actualChecksum,
+            expectedCount: Number(validation.actualCount),
+          },
+  }
 }
 
 export const writeReviewServingTitleSearchRebuildRanges = async (
@@ -987,13 +934,9 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
 ) => {
   const phaseTimings: Record<string, number> = {}
   const startedAtMs = Date.now()
-  const combinedRangeInput = getReviewServingTitleSearchRebuildCombinedRangeInput(input.ranges)
-  const statements =
-    combinedRangeInput === null
-      ? input.ranges.flatMap((range) => {
-          return getReviewServingTitleSearchRebuildRowsStatements(range)
-        })
-      : getReviewServingTitleSearchRebuildRowsStatements(combinedRangeInput)
+  const statements = input.ranges.flatMap((range) => {
+    return getReviewServingTitleSearchRebuildRowsStatements(range)
+  })
 
   await statements.reduce<Promise<void>>(async (previous, statement) => {
     await previous

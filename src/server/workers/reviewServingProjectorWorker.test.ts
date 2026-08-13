@@ -4937,6 +4937,8 @@ test('high-fanout rebuild chunks commit idempotent output separately from comple
   ]) {
     expect(getFunctionSource(functionName)).toContain("writeMode: 'idempotent-output'")
   }
+
+  expect(getFunctionSource('runSearchRebuildChunk')).not.toContain("writeMode: 'idempotent-output'")
 })
 
 test('status rebuild chunks emit patch rows for later incremental aggregation', () => {

@@ -91,7 +91,11 @@ test('title search projection writes compact token postings and search-only comp
   expect(selectStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
-  expect(selectStatement).toContain('ELSE COALESCE(selected_hot.article_title, article.article_title)')
+  expect(selectStatement).toContain(
+    'ELSE COALESCE(selected_hot.article_title, COALESCE(scope.article_title, article.article_title))',
+  )
+  expect(selectStatement).toContain('LEFT JOIN app."article" article')
+  expect(selectStatement).toContain('scope.article_title IS NULL')
   expect(selectStatement).not.toContain('selected_base.article_title')
   expect(updateStatement).toContain('list_filter(article_ids')
   expect(updateStatement).toContain("list_contains(['article-1']::VARCHAR[], article_id)")
@@ -153,13 +157,17 @@ test('title search direct projection reads selected import base rows without pat
     database,
   )
   const selectStatement = statements.find((statement) => {
-    return statement.includes('FROM mart.project_scope_article scope')
+    return statement.includes('FROM mart.project_scope_article scope') && statement.includes('AS articleTitle')
   })
 
   expect(result).toEqual({patchWatermark: 0, searchRowCount: 2})
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
-  expect(selectStatement).toContain('ELSE COALESCE(selected_hot.article_title, article.article_title)')
+  expect(selectStatement).toContain(
+    'ELSE COALESCE(selected_hot.article_title, COALESCE(scope.article_title, article.article_title))',
+  )
+  expect(selectStatement).toContain('LEFT JOIN app."article" article')
+  expect(selectStatement).toContain('scope.article_title IS NULL')
   expect(selectStatement).not.toContain('selected_base.article_title')
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
@@ -191,7 +199,7 @@ test('project-scoped title search rebuilds scoped articles and clears snapshot s
     database,
   )
   const selectStatement = statements.find((statement) => {
-    return statement.includes('FROM mart.project_scope_article scope')
+    return statement.includes('FROM mart.project_scope_article scope') && statement.includes('AS articleTitle')
   })
   const deleteStatement = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_title_search_serving_v4')
@@ -207,7 +215,7 @@ test('project-scoped title search rebuilds scoped articles and clears snapshot s
   expect(deleteStatement).not.toContain('article_id IN')
 })
 
-test('sql-native title search rebuild inserts chunk tokens with conflict-ignore and no indexed deletes', async () => {
+test('sql-native title search rebuild appends chunk-local rows without existing-mart scans', async () => {
   const {database, statements} = createTitleSearchDatabase()
 
   await projectReviewServingTitleSearchRebuildRows(
@@ -230,16 +238,18 @@ test('sql-native title search rebuild inserts chunk tokens with conflict-ignore 
     return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
   })
   const updateStatement = statements.find((statement) => {
-    return statement.includes('UPDATE mart.review_title_search_serving_v4')
+    return statement.includes('DELETE FROM mart.review_title_search_serving_v4 existing')
   })
 
   expect(deleteStatement).toBeUndefined()
-  expect(updateStatement).toContain(
-    'SET article_ids = (SELECT LIST(DISTINCT merged_article_id ORDER BY merged_article_id)',
-  )
+  expect(updateStatement).toBeUndefined()
   expect(insertStatement).toContain('LEFT JOIN mart.review_selected_article_import_current_v4 selected_base')
   expect(insertStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
-  expect(insertStatement).toContain('COALESCE(selected_hot.article_title, article.article_title)')
+  expect(insertStatement).toContain('LEFT JOIN app."article" article')
+  expect(insertStatement).toContain('scope.article_title IS NULL')
+  expect(insertStatement).toContain(
+    'COALESCE(selected_hot.article_title, COALESCE(scope.article_title, article.article_title))',
+  )
   expect(insertStatement).not.toContain('selected_base.article_title')
   expect(insertStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(insertStatement).not.toContain('selected_patch')
@@ -256,7 +266,7 @@ test('sql-native title search rebuild inserts chunk tokens with conflict-ignore 
   expect(insertStatement).not.toContain('activity_sort_at')
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
-  expect(insertStatement).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).not.toContain('WHERE NOT EXISTS')
   expect(insertStatement).not.toContain("existing.project_id || ''")
 })
 

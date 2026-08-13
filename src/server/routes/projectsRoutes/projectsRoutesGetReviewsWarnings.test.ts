@@ -292,6 +292,7 @@ const insertReviewRebuildChunk = async (input: {
   chunkId: string
   component?: ReviewServingProjectionComponent
   createdAt: string
+  estimatedInputRows?: number | null
   lastError?: string | null
   leaseExpiresAt?: string | null
   leaseOwner?: string | null
@@ -319,6 +320,7 @@ const insertReviewRebuildChunk = async (input: {
       chunk_start_key,
       chunk_end_key,
       output_base_generation,
+      estimated_input_rows,
       status,
       lease_owner,
       lease_expires_at,
@@ -337,6 +339,7 @@ const insertReviewRebuildChunk = async (input: {
       'article-a',
       'article-z',
       1,
+      ${input.estimatedInputRows === undefined || input.estimatedInputRows === null ? 'NULL' : input.estimatedInputRows},
       '${input.status}',
       ${input.leaseOwner === undefined || input.leaseOwner === null ? 'NULL' : `'${input.leaseOwner}'`},
       ${input.leaseExpiresAt === undefined || input.leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${input.leaseExpiresAt}'`},
@@ -1961,6 +1964,15 @@ test('reviews warnings exposes article coverage for review page details and sear
       ['${articleId}']
     )
   `)
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-coverage-search-ready',
+    component: 'search',
+    createdAt: '2026-06-23T10:00:00.000Z',
+    estimatedInputRows: 1,
+    projectId,
+    status: 'completed',
+    updatedAt: '2026-06-23T10:01:00.000Z',
+  })
 
   const {body, response} = await postWarningsRequest(projectId)
 
