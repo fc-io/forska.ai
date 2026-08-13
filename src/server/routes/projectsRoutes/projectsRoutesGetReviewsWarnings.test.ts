@@ -976,6 +976,40 @@ test('reviews warnings expose optional search diagnostic without blocking ready 
   expect(body.data.indexing.status).toBe('ready')
 })
 
+test('reviews warnings report active search snapshot as indexing while search rebuild chunks remain visible', async () => {
+  const projectId = 'project-search-diagnostic-pending-rebuild-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: true,
+    optionalComponents: ['search'],
+    projectId,
+    snapshotId: 'snapshot-search-pending-rebuild-warning',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'search-rebuild-chunk-pending-warning',
+    component: 'search',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.search).toEqual({
+    availability: 'indexing',
+    optionalComponent: true,
+    snapshotId: 'snapshot-search-pending-rebuild-warning',
+  })
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings fold V4 rebuild chunks into visible progress', async () => {
   const projectId = 'project-v4-rebuild-progress-warning'
 

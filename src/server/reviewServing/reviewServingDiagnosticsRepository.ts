@@ -124,6 +124,7 @@ type DiagnosticsSummaryRow = {
   rebuildChunkFailedCount: number
   rebuildChunkOldestClaimableQueuedAt: string | null
   rebuildChunkOldestQueuedAt: string | null
+  rebuildChunkSearchIndexingCount: number
   rebuildChunkPendingCount: number
   rebuildChunkQuarantinedCount: number
   rebuildChunkTerminalQuarantinedCount: number
@@ -359,13 +360,14 @@ const getSearchDiagnostics = (activeSnapshot: ActiveSnapshotRow | undefined): Re
       return state.component === 'search'
     },
   )
+  const availability = getSearchAvailability({
+    optionalComponents,
+    optionalStatePresent,
+    snapshotPresent: activeSnapshot !== undefined,
+  })
 
   return {
-    availability: getSearchAvailability({
-      optionalComponents,
-      optionalStatePresent,
-      snapshotPresent: activeSnapshot !== undefined,
-    }),
+    availability,
     optionalComponent: optionalComponents.includes('search'),
     snapshotId: activeSnapshot?.snapshotId ?? null,
   }
@@ -577,6 +579,10 @@ const getDiagnosticsSummaryRowsEffect = (
           COALESCE((SELECT failed_count FROM terminal_request), 0) AS failedCount,
           CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'completed') AS INTEGER) AS completedCount,
           CAST(COUNT(*) FILTER (WHERE classified_chunk.claimable = 1) AS INTEGER) AS claimableCount,
+          CAST(COUNT(*) FILTER (
+            WHERE classified_chunk.projection_component = 'search'
+              AND (classified_chunk.status IN ('pending', 'running') OR classified_chunk.claimable = 1)
+          ) AS INTEGER) AS searchIndexingCount,
           CAST(COUNT(*) FILTER (WHERE classified_chunk.queued = 1 AND classified_chunk.claimable = 0) AS INTEGER) AS blockedQueuedCount,
           CAST(COUNT(*) FILTER (
             WHERE classified_chunk.status = 'blocked_over_budget'
@@ -674,6 +680,7 @@ const getDiagnosticsSummaryRowsEffect = (
         rebuild_chunk.expiredLeaseCount AS rebuildChunkExpiredLeaseCount,
         rebuild_chunk.oldestQueuedAt AS rebuildChunkOldestQueuedAt,
         rebuild_chunk.oldestClaimableQueuedAt AS rebuildChunkOldestClaimableQueuedAt,
+        rebuild_chunk.searchIndexingCount AS rebuildChunkSearchIndexingCount,
         rebuild_chunk.updatedAt AS rebuildChunkUpdatedAt,
         quarantine_state.unresolvedOutboxCount AS unresolvedOutboxCount,
         quarantine_state.quarantinedOutboxCount AS quarantinedOutboxCount,
@@ -797,6 +804,7 @@ export const getReviewServingDiagnosticsEffect = (
     const activeSnapshot = getDiagnosticsActiveSnapshot(summaryRow)
     const dirtyWork = getDiagnosticsCountState(summaryRow, 'dirtyWork')
     const rebuildChunks = getDiagnosticsRebuildChunkState(summaryRow)
+    const searchDiagnostics = getSearchDiagnostics(activeSnapshot)
 
     return {
       dirtyWork,
@@ -810,7 +818,13 @@ export const getReviewServingDiagnosticsEffect = (
       quarantine: getDiagnosticsQuarantine(summaryRow),
       rebuildChunks,
       reviewConfigHash: input.reviewConfigHash ?? null,
-      search: getSearchDiagnostics(activeSnapshot),
+      search: {
+        ...searchDiagnostics,
+        availability:
+          Number(summaryRow?.rebuildChunkSearchIndexingCount ?? 0) > 0 && searchDiagnostics.availability === 'ready'
+            ? 'indexing'
+            : searchDiagnostics.availability,
+      },
       snapshot: getDiagnosticsSnapshot(summaryRow),
     }
   })
