@@ -130,6 +130,21 @@ test('renders active review indexing only for processing progress', async () => 
   }
 })
 
+test('renders payload project id for active review indexing warnings', async () => {
+  const warningsData = {
+    ...getWarningsData({activeConsumerCount: 1, activeWorkCount: 1, progressState: 'processing'}),
+    projectId: 'payload-project-123',
+  }
+  const {container, dispose} = await renderWarnings(warningsData)
+
+  try {
+    expect(container.textContent).toContain('Review indexing in progress for project payload-project-123')
+    expect(container.textContent).toContain('Project ID: payload-project-123')
+  } finally {
+    dispose()
+  }
+})
+
 test('renders stalled review indexing without active progress copy', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({pendingProjectRefreshCount: 0, pendingRefreshCount: 0, progressState: 'stalled', status: 'stale'}),
@@ -336,9 +351,24 @@ test('renders user-facing counts and progress timestamps for review indexing wor
     expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
     expect(container.textContent).not.toContain('Large rebuild')
     expect(container.textContent).toContain(
-      'Background work: 1 maintenance task remaining and 2 article judgment refreshes remaining',
+      'Background work: 1 review-serving task remaining and 2 article judgment refreshes remaining',
     )
     expect(container.textContent).not.toContain('project refresh')
+  } finally {
+    dispose()
+  }
+})
+
+test('renders project id in the indexing banner for debugging', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({progressState: 'processing', status: 'refreshing'}),
+  )
+
+  try {
+    expect(container.textContent).toContain('Project ID: project-1')
+    expect(container.textContent?.indexOf('Project ID: project-1')).toBeLessThan(
+      container.textContent?.indexOf('Background work:'),
+    )
   } finally {
     dispose()
   }
