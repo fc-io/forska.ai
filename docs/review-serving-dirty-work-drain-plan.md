@@ -66,10 +66,51 @@ Acceptance criteria:
 
 - Operators can tell whether a large backlog is active useful work, superseded
   by a rebuild, blocked by lower watermarks, or failed/quarantined.
+- Diagnostics classify redundant high-water lanes before normal dirty-work
+  drain is re-enabled, so implementation effort is not spent replaying obsolete
+  rows one by one.
 - The warning API can continue showing compact counts while diagnostics expose
   the actual component/lane split.
 
-### 2. Make Completion Exact-Row Based
+### 2. Make Lane Predicates Cheap In Storage
+
+Add or validate a storage shape that makes dirty-work lane predicates cheap
+before relying on exact-row completion, coalescing, or covered-row retirement.
+
+The implementation should avoid repeatedly parsing or comparing compressed
+string/JSON projection keys in hot completion paths. Persist or materialize the
+fields needed to identify a lane:
+
+- project id
+- component
+- projection identity or compact projection identity key
+- source partition / lane
+- dirty status
+- dirty source watermark / high-water range
+- terminal reason, when applicable
+
+Tasks:
+
+- Decide whether the existing lookup tables from prior dirty-work/ACK work are
+  sufficient or whether a new compact lane table / numeric lane key is needed.
+- Add a migration/backfill path for current rows without a startup-wide
+  blocking scan.
+- Keep the write path authoritative: new dirty rows must carry the same compact
+  lane keys at creation time.
+- Prove with query plans and current-DB timing that claim, coalesce, ACK, and
+  retirement predicates use the compact lane shape instead of full-table
+  compressed string scans.
+
+Acceptance criteria:
+
+- Hot dirty-work queries no longer depend on decompression-heavy string/JSON
+  predicates for project/component/projection/source/status/watermark lanes.
+- Current-DB `EXPLAIN` or equivalent query-plan evidence shows bounded scans or
+  keyed joins for claim, coalescing, completion, and covered-row retirement.
+- Backfill/migration can run incrementally or under an explicit maintenance
+  window without monopolizing the foreground owner.
+
+### 3. Make Completion Exact-Row Based
 
 Refactor dirty-work completion and ACK updates so the worker:
 
@@ -88,7 +129,7 @@ Acceptance criteria:
   the update after exact ids were already selected.
 - Source watermark and component ACK semantics remain atomic.
 
-### 3. Coalesce Superseded High-Water Work
+### 4. Coalesce Superseded High-Water Work
 
 Add a coalescing pass for pending dirty work where only the latest high-water
 row matters for a given lane/project/component/projection identity.
@@ -102,6 +143,8 @@ Rules:
 - Never delete failed/quarantined evidence silently.
 - Do not coalesce across incompatible projection identities or source
   partitions.
+- Record an explicit lifecycle reason for rows retired by coalescing, such as
+  `superseded_by_high_water`.
 
 Acceptance criteria:
 
@@ -110,10 +153,25 @@ Acceptance criteria:
 - Coalescing is idempotent.
 - Historical diagnostic evidence remains queryable.
 
-### 4. Retire Rows Covered By Full Rebuilds
+### 5. Retire Rows Covered By Full Rebuilds
 
 When a full component rebuild has promoted a component generation at or beyond a
 dirty source watermark, retire dirty-work rows that are now provably covered.
+
+This must not reintroduce the current failure mode by joining coverage back to
+`app.review_serving_dirty_work` through broad project/projection/source
+predicates. The covered candidate set must be materialized as bounded exact ids
+first, then terminal state must be updated by those ids.
+
+Tasks:
+
+- Select covered candidate ids in bounded batches using compact lane keys.
+- Materialize exact `dirty_work_id` / physical row identities before terminal
+  update.
+- Mark covered rows with an explicit reason such as `covered_by_rebuild`.
+- Preserve non-covered, failed, quarantined, and incompatible-projection rows.
+- Capture `EXPLAIN` / current-DB timing evidence for both candidate selection
+  and terminal update.
 
 Acceptance criteria:
 
@@ -121,9 +179,36 @@ Acceptance criteria:
   each obsolete dirty row through the projector.
 - Coverage checks use manifest/component watermarks and projection identities,
   not wall-clock assumptions.
+- Covered-row retirement updates exact materialized ids only; no final update
+  step may rescan the million-row dirty-work backlog by string-key predicates.
 - Rows not covered by the promoted rebuild remain pending.
 
-### 5. Re-enable Low-Memory Dirty-Work Drain
+### 6. Define Dirty-Work Lifecycle Reasons
+
+Make row lifecycle semantics explicit so diagnostics can distinguish useful
+work from cleanup decisions.
+
+Suggested terminal or audit reasons:
+
+- `projected`: the row was claimed, projected, and acknowledged normally
+- `superseded_by_high_water`: a newer high-water row covers the same compatible
+  lane
+- `covered_by_rebuild`: a promoted full rebuild covered the row's dirty source
+  watermark
+- `failed`: projection failed and needs retry/operator attention
+- `quarantined`: work is blocked by preserved quarantine evidence
+- `moved_to_audit`: detailed evidence was retained outside the hot dirty-work
+  table
+
+Acceptance criteria:
+
+- Diagnostic queries can count and sample each lifecycle reason.
+- Operators can distinguish replayed rows, coalesced rows, rebuild-covered rows,
+  failed rows, and quarantined rows.
+- Retention cleanup never erases the only evidence explaining why a row stopped
+  being pending.
+
+### 7. Re-enable Low-Memory Dirty-Work Drain
 
 After exact-row completion and coalescing are in place, re-enable dirty-work
 drain under the low-memory owner with a conservative bounded budget.
@@ -138,7 +223,11 @@ Suggested initial policy:
 Acceptance criteria:
 
 - The primary stack drains dirty work without warning/API route timeouts.
-- Foreground review routes remain responsive during drain.
+- Foreground warning, review-list, detail, and search routes remain responsive
+  during drain. Define the concrete threshold in the PR using the current route
+  timeout budget; at minimum, report timeout count, sampled p95/p99 latency, and
+  maximum DuckDB foreground queue wait while drain is active.
+- DuckDB foreground queue depth returns near zero between dirty-work batches.
 - Backlog count decreases across live samples.
 
 ## Operational Mitigation
@@ -148,24 +237,29 @@ backlog drain, but it should be treated as a mitigation, not the durable fix.
 
 Use it only when:
 
-- exact-row completion/coalescing has landed or the drain is explicitly
-  operator-supervised
+- exact-row completion/coalescing has landed, or the drain is explicitly
+  operator-supervised and bounded
 - foreground API reads are isolated from the heavy owner
-- before/after backlog and owner responsiveness are recorded
+- before/after backlog, route latency, owner RSS, and DuckDB queue metrics are
+  recorded
 
 Do not rely on a higher-memory profile to justify keeping a table-scan
 completion path.
+
+Unsupervised higher-memory drain requires the same exact-row/coalescing
+acceptance evidence as the low-memory drain.
 
 ## Verification
 
 Focused tests:
 
 - dirty-work claim/coalescing/completion tests
+- dirty-work lifecycle reason and diagnostic sampling tests
 - projector worker low-memory budget tests
 - review warning route/component tests for ready visible surfaces plus
   background maintenance backlog
 - SQL-shape tests that guard against full dirty-work table scans in completion
-  updates
+  updates and rebuild-covered retirement updates
 
 Quality gates:
 
@@ -189,16 +283,22 @@ after a short interval:
 - API, maintenance owner, and judge worker readiness
 - dirty-work pending/running/completed counts by component
 - rebuild pending/running/completed counts
-- route latency or timeout evidence for the warning endpoint
+- sampled route latency or timeout evidence for warning, review list, detail,
+  and search endpoints
+- DuckDB foreground queue wait/depth while dirty-work drain is active
 - no new failed/quarantined chunks or dirty-work rows
 
 ## Rollout
 
 1. Land diagnostics first if the implementation cannot be finished in one
    coherent PR.
-2. Land exact-row completion and coalescing together if they touch the same ACK
-   semantics.
-3. Re-enable low-memory dirty-work drain only after live current-DB evidence
+2. Land or validate the compact lane storage shape before changing drain
+   budgets.
+3. Use diagnostics to classify redundant lanes, then run coalescing and
+   rebuild-covered retirement before normal dirty-work drain.
+4. Land exact-row completion with lifecycle reasons in the same coherent slice
+   as coalescing/retirement if they touch the same ACK semantics.
+5. Re-enable low-memory dirty-work drain only after live current-DB evidence
    shows completion no longer pins the owner.
-4. Keep the warning copy from PR #372: visible review/search readiness and
+6. Keep the warning copy from PR #372: visible review/search readiness and
    background maintenance backlog remain separate concepts.
