@@ -1,52 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to Forska.
-
-## Development Setup
-
-Install dependencies:
-
-```bash
-bun install
-```
-
-Initialize the local database:
-
-```bash
-bun run db:mig
-```
-
-Start the local API/server stack:
-
-```bash
-bun run dev:server
-```
-
-Start the web app:
-
-```bash
-bun run dev:app
-```
-
-Default local endpoints:
-
-- Web app: `http://127.0.0.1:3000`
-- API: `http://127.0.0.1:3001`
-
-## Checks
-
-Run the relevant checks before opening a pull request:
-
-```bash
-bun test
-bun run lint
-```
-
-For UI or runtime-path changes, also run:
-
-```bash
-bun run build
-```
+Thanks for your interest in contributing to Forska. Please let me now beforehand if you'd like to contribute.
 
 ## Development Notes
 
