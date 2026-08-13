@@ -20,8 +20,13 @@ import {
   type ReviewServingDirtyWorkScope,
 } from './reviewServingProjectorDomain.ts'
 
-type FakeDirtyWorkRow = Omit<ReviewServingDirtyWorkRecord, 'createdAt' | 'updatedAt'> & {
+type FakeDirtyWorkRow = Omit<
+  ReviewServingDirtyWorkRecord,
+  'createdAt' | 'projectionComponent' | 'projectionIdentity' | 'updatedAt'
+> & {
   createdAt: string
+  projectionComponent: ReviewServingDirtyWorkRecord['projectionComponent'] | null
+  projectionIdentity: string | null
   projectionKey: string
   updatedAt: string
 }
@@ -68,10 +73,21 @@ const getInNumbers = (statement: string, columnName: string) => {
   return getNumbers(inList)
 }
 
-const getStartsWithLiteral = (statement: string, columnName: string) => {
-  return (
-    statement.match(new RegExp(`starts_with\\(${columnName},\\s*'((?:''|[^'])*)'\\)`, 'u'))?.[1]?.replaceAll("''", "'")
-    ?? null
+const getEqualLiterals = (statement: string, columnName: string) => {
+  return [...statement.matchAll(new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s*=\\s*'((?:''|[^'])*)'`, 'gu'))].map(
+    (match) => {
+      return match[1]?.replaceAll("''", "'") ?? ''
+    },
+  )
+}
+
+const getEqualNumbers = (statement: string, columnName: string) => {
+  const unquotedStatement = statement.replace(/'((?:''|[^'])*)'/g, "''")
+
+  return [...unquotedStatement.matchAll(new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s*=\\s*(-?\\d+)`, 'gu'))].map(
+    (match) => {
+      return Number(match[1] ?? 0)
+    },
   )
 }
 
@@ -95,7 +111,11 @@ const getClock = (statements: string[]) => {
   return new Date(Date.UTC(2026, 5, 16, 12, statements.length)).toISOString()
 }
 
-const getBaseScope = (sourceHighWaterMark: number, dirtyRangeStart = '1', dirtyRangeEnd = '1') => {
+const getBaseScope = (
+  sourceHighWaterMark: number,
+  dirtyRangeStart: string | null = '1',
+  dirtyRangeEnd: string | null = '1',
+) => {
   const scope = getReviewServingDirtyWorkScopeForChange({
     changeKind: 'article.display.updated',
     dirtyRangeEnd,
@@ -129,7 +149,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       firstSourceHighWaterMark: row.firstSourceHighWaterMark,
       latestDeltaId: row.latestDeltaId,
       latestSourceHighWaterMark: row.latestSourceHighWaterMark,
+      lifecycleReason: row.lifecycleReason,
       projectId: row.projectId,
+      projectionComponent: row.projectionComponent,
+      projectionIdentity: row.projectionIdentity,
       projectionKey: row.projectionKey,
       scopeId: row.scopeId,
       scopeKind: row.scopeKind,
@@ -151,23 +174,26 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     const now = getClock(statements)
     const projection = getProjectionFromKey(strings[5] ?? '{}')
-    const row = {
+    const row: FakeDirtyWorkRow = {
       articleId: strings[4] ?? null,
       createdAt: now,
-      dirtyKind: strings[6] ?? 'article.display.updated',
-      dirtyRangeEnd: strings[10] ?? null,
-      dirtyRangeStart: strings[9] ?? null,
+      dirtyKind: strings[8] ?? 'article.display.updated',
+      dirtyRangeEnd: strings[12] ?? null,
+      dirtyRangeStart: strings[11] ?? null,
       dirtyWorkId,
       firstSourceHighWaterMark: numbers[0] ?? 0,
-      latestDeltaId: strings[8] ?? null,
+      latestDeltaId: strings[10] ?? null,
       latestSourceHighWaterMark: numbers[1] ?? 0,
+      lifecycleReason: null,
       projectId: strings[1] ?? null,
-      projectionComponent: projection.projectionComponent,
-      projectionIdentity: projection.projectionIdentity,
+      projectionComponent:
+        (strings[6] as ReviewServingDirtyWorkRecord['projectionComponent'] | undefined)
+        ?? projection.projectionComponent,
+      projectionIdentity: strings[7] ?? projection.projectionIdentity,
       projectionKey: strings[5] ?? '',
       scopeId: strings[3] ?? '',
       scopeKind: strings[2] ?? 'article',
-      sourcePartition: strings[7] ?? '',
+      sourcePartition: strings[9] ?? '',
       status: 'pending' as const,
       storageRowId: dirtyWork.size + 1,
       updatedAt: now,
@@ -185,8 +211,8 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     const strings = getSqlStrings(statement)
     const numbers = getNumbers(statement)
-    const dirtyRangeStartCandidate = strings[1] ?? null
-    const dirtyRangeEndCandidate = strings[4] ?? null
+    const dirtyRangeStartCandidate = strings[3] ?? null
+    const dirtyRangeEndCandidate = strings[6] ?? null
     const dirtyRangeStart = [existing.dirtyRangeStart, dirtyRangeStartCandidate]
       .filter((value): value is string => {
         return value !== null
@@ -206,6 +232,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       firstSourceHighWaterMark: Math.min(existing.firstSourceHighWaterMark, numbers[0] ?? 0),
       latestDeltaId: strings[0] ?? null,
       latestSourceHighWaterMark: Math.max(existing.latestSourceHighWaterMark, numbers[1] ?? 0),
+      lifecycleReason: null,
+      projectionComponent:
+        (strings[1] as ReviewServingDirtyWorkRecord['projectionComponent'] | undefined) ?? existing.projectionComponent,
+      projectionIdentity: strings[2] ?? existing.projectionIdentity,
       status: 'pending',
       updatedAt: getClock(statements),
     })
@@ -220,7 +250,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     const matchingRows =
       rowIds.length > 0
         ? [...dirtyWork.values()].filter((row) => {
-            return row.storageRowId !== undefined && rowIds.includes(row.storageRowId)
+            return row.storageRowId !== undefined && row.storageRowId !== null && rowIds.includes(row.storageRowId)
           })
         : dirtyWorkIds.flatMap((dirtyWorkId) => {
             const row = dirtyWork.get(dirtyWorkId)
@@ -230,7 +260,12 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     matchingRows.forEach((existing) => {
       if (existing.status === expectedStatus) {
-        dirtyWork.set(existing.dirtyWorkId, {...existing, status, updatedAt: getClock(statements)})
+        const lifecycleReason =
+          (statement.match(/lifecycle_reason\s*=\s*'((?:''|[^'])*)'/u)?.[1] as
+            | FakeDirtyWorkRow['lifecycleReason']
+            | undefined) ?? existing.lifecycleReason
+
+        dirtyWork.set(existing.dirtyWorkId, {...existing, lifecycleReason, status, updatedAt: getClock(statements)})
       }
     })
   }
@@ -413,6 +448,171 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       >= row.latestSourceHighWaterMark
     )
   }
+  const getFixedNow = (statement: string) => {
+    const timestamp = statement.match(/TIMESTAMPTZ\s+'([^']+)'/u)?.[1]
+
+    return timestamp === undefined ? null : new Date(timestamp)
+  }
+  const getStaleSeconds = (statement: string) => {
+    return Number(statement.match(/INTERVAL\s+'(\d+) seconds'/u)?.[1] ?? 900)
+  }
+  const isStaleForStatement = (row: FakeDirtyWorkRow, statement: string) => {
+    const fixedNow = getFixedNow(statement)
+
+    if (fixedNow === null) {
+      return false
+    }
+
+    return new Date(row.updatedAt).getTime() <= fixedNow.getTime() - getStaleSeconds(statement) * 1000
+  }
+  const isClaimEligibleForStatement = (row: FakeDirtyWorkRow, statement: string) => {
+    return (
+      row.status === 'pending'
+      || ((row.status === 'running' || row.status === 'failed') && isStaleForStatement(row, statement))
+    )
+  }
+  const getClaimStateRow = (row: FakeDirtyWorkRow) => {
+    return {
+      dirtyRangeEnd: row.dirtyRangeEnd,
+      dirtyRangeStart: row.dirtyRangeStart,
+      dirtyWorkId: row.dirtyWorkId,
+      latestSourceHighWaterMark: row.latestSourceHighWaterMark,
+      projectId: row.projectId ?? '',
+      projectionComponent: row.projectionComponent ?? 'display',
+      projectionIdentity: row.projectionIdentity ?? '',
+      sourcePartition: row.sourcePartition,
+      status: row.status,
+      storageRowId: row.storageRowId ?? null,
+      updatedAt: row.updatedAt,
+    }
+  }
+  const getClaimStateRows = (statement: string) => {
+    const projectionComponent = getWhereLiteral(statement, 'projection_component') ?? ''
+    const eligibleRows = [...dirtyWork.values()]
+      .filter((row) => {
+        return (
+          row.projectionComponent === projectionComponent
+          && row.projectionIdentity !== null
+          && isClaimEligibleForStatement(row, statement)
+        )
+      })
+      .sort((left, right) => {
+        return (
+          left.updatedAt.localeCompare(right.updatedAt)
+          || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
+          || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+        )
+      })
+    const oldest = eligibleRows.find((row) => {
+      return ![...dirtyWork.values()].some((blocker) => {
+        return (
+          (blocker.status === 'running' || blocker.status === 'failed')
+          && !isStaleForStatement(blocker, statement)
+          && (blocker.projectId ?? '') === (row.projectId ?? '')
+          && blocker.projectionComponent === row.projectionComponent
+          && blocker.projectionIdentity === row.projectionIdentity
+          && blocker.sourcePartition === row.sourcePartition
+          && blocker.latestSourceHighWaterMark < row.latestSourceHighWaterMark
+        )
+      })
+    })
+
+    if (oldest === undefined) {
+      return []
+    }
+
+    return eligibleRows
+      .filter((row) => {
+        return (
+          (row.projectId ?? '') === (oldest.projectId ?? '')
+          && row.projectionComponent === oldest.projectionComponent
+          && row.projectionIdentity === oldest.projectionIdentity
+          && row.sourcePartition === oldest.sourcePartition
+        )
+      })
+      .slice(0, getLimit(statement))
+      .map(getClaimStateRow)
+  }
+  const getCoalescableClaimStateRows = () => {
+    return [...dirtyWork.values()]
+      .filter((older) => {
+        return (
+          older.status === 'pending'
+          && older.dirtyRangeStart === null
+          && older.dirtyRangeEnd === null
+          && [...dirtyWork.values()].some((newer) => {
+            return (
+              newer.dirtyWorkId !== older.dirtyWorkId
+              && (newer.status === 'pending' || newer.status === 'running')
+              && newer.projectId === older.projectId
+              && newer.projectionComponent === older.projectionComponent
+              && newer.projectionIdentity === older.projectionIdentity
+              && newer.sourcePartition === older.sourcePartition
+              && newer.dirtyRangeStart === null
+              && newer.dirtyRangeEnd === null
+              && (newer.latestSourceHighWaterMark > older.latestSourceHighWaterMark
+                || newer.updatedAt > older.updatedAt
+                || newer.dirtyWorkId > older.dirtyWorkId)
+            )
+          })
+        )
+      })
+      .sort((left, right) => {
+        return (
+          left.updatedAt.localeCompare(right.updatedAt)
+          || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
+          || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+        )
+      })
+      .slice(0, 1)
+      .map(getClaimStateRow)
+  }
+  const getTargetDirtyWorkRows = (statement: string) => {
+    const dirtyWorkIds = [
+      ...new Set([...getInLiterals(statement, 'dirty_work_id'), ...getEqualLiterals(statement, 'dirty_work_id')]),
+    ]
+    const rowIds = [...new Set([...getInNumbers(statement, 'rowid'), ...getEqualNumbers(statement, 'rowid')])]
+
+    return [...dirtyWork.values()].filter((row) => {
+      return (
+        dirtyWorkIds.includes(row.dirtyWorkId)
+        || (row.storageRowId !== undefined && row.storageRowId !== null && rowIds.includes(row.storageRowId))
+      )
+    })
+  }
+  const updateDirtyWorkReturningRows = (
+    statement: string,
+    status: FakeDirtyWorkRow['status'],
+    expectedStatus: FakeDirtyWorkRow['status'] | 'claimable',
+  ) => {
+    options.beforeClaimUpdate?.()
+
+    return getTargetDirtyWorkRows(statement).flatMap((existing) => {
+      const current = dirtyWork.get(existing.dirtyWorkId)
+
+      if (current === undefined) {
+        return []
+      }
+
+      const matchesExpected =
+        expectedStatus === 'claimable'
+          ? isClaimEligibleForStatement(current, statement)
+          : current.status === expectedStatus
+
+      if (!matchesExpected) {
+        return []
+      }
+
+      const lifecycleReason =
+        (statement.match(/lifecycle_reason\s*=\s*'((?:''|[^'])*)'/u)?.[1] as
+          | FakeDirtyWorkRow['lifecycleReason']
+          | undefined) ?? current.lifecycleReason
+      const updated = {...current, lifecycleReason, status, updatedAt: getClock(statements)}
+      dirtyWork.set(current.dirtyWorkId, updated)
+
+      return [getQueryRow(updated)]
+    })
+  }
   const hasLowerRetentionBlocker = (row: FakeDirtyWorkRow, highWaterMark = row.latestSourceHighWaterMark) => {
     return [...dirtyWork.values()].some((blocker) => {
       return (
@@ -454,8 +654,8 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
           existing?.completedSourceHighWaterMark ?? 0,
           row.latestSourceHighWaterMark,
         ),
-        projectionComponent: row.projectionComponent,
-        projectionIdentity: row.projectionIdentity,
+        projectionComponent: row.projectionComponent ?? 'display',
+        projectionIdentity: row.projectionIdentity ?? '',
         sourcePartition: row.sourcePartition,
       })
     })
@@ -494,12 +694,12 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       })
       .slice(0, getLimit(statement))
   }
-  const deleteRetentionAcks = (statement: string) => {
+  const getRetentionAckRows = (statement: string) => {
     const limit = getLimit(statement)
     const syntheticAcks = [...acks.values()].filter((ack) => {
       return ack.status === 'completed' && ack.dirtyWorkId === null
     })
-    const deletable = [...acks.values()]
+    return [...acks.values()]
       .filter((ack) => {
         return syntheticAcks.some((highWaterAck) => {
           return (
@@ -519,17 +719,9 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         )
       })
       .slice(0, limit)
-
-    deletable.forEach((ack) => {
-      acks.delete(ack.dirtyAckId)
-    })
-
-    return deletable.map((ack) => {
-      return {dirtyAckId: ack.dirtyAckId}
-    })
   }
-  const deleteRetentionDirtyWork = (statement: string) => {
-    const deletable = getRetentionReadyRows()
+  const getRetentionDirtyWorkRows = (statement: string) => {
+    return getRetentionReadyRows()
       .sort((left, right) => {
         return (
           left.updatedAt.localeCompare(right.updatedAt)
@@ -538,6 +730,78 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         )
       })
       .slice(0, getLimit(statement))
+  }
+  const getLaneRepairRows = (statement: string) => {
+    return [...dirtyWork.values()]
+      .filter((row) => {
+        return row.projectionComponent === null || row.projectionIdentity === null
+      })
+      .slice(0, getLimit(statement))
+      .map((row) => {
+        return {storageRowId: row.storageRowId ?? 0}
+      })
+  }
+  const repairLaneRowsByIds = (statement: string) => {
+    const rowIds = getInNumbers(statement, 'rowid')
+
+    ;[...dirtyWork.values()]
+      .filter((row) => {
+        return row.storageRowId !== undefined && row.storageRowId !== null && rowIds.includes(row.storageRowId)
+      })
+      .forEach((row) => {
+        const projection = getProjectionFromKey(row.projectionKey)
+
+        dirtyWork.set(row.dirtyWorkId, {
+          ...row,
+          projectionComponent: projection.projectionComponent,
+          projectionIdentity: projection.projectionIdentity,
+        })
+      })
+  }
+  const getCoalescableDirtyWorkRows = (statement: string) => {
+    return [...dirtyWork.values()]
+      .filter((older) => {
+        return (
+          older.status === 'pending'
+          && older.dirtyRangeStart === null
+          && older.dirtyRangeEnd === null
+          && [...dirtyWork.values()].some((newer) => {
+            return (
+              newer.dirtyWorkId !== older.dirtyWorkId
+              && (newer.status === 'pending' || newer.status === 'running')
+              && newer.projectId === older.projectId
+              && newer.projectionComponent === older.projectionComponent
+              && newer.projectionIdentity === older.projectionIdentity
+              && newer.sourcePartition === older.sourcePartition
+              && newer.dirtyRangeStart === null
+              && newer.dirtyRangeEnd === null
+              && newer.latestSourceHighWaterMark >= older.latestSourceHighWaterMark
+              && (newer.latestSourceHighWaterMark > older.latestSourceHighWaterMark
+                || newer.updatedAt > older.updatedAt
+                || newer.dirtyWorkId > older.dirtyWorkId)
+            )
+          })
+        )
+      })
+      .sort((left, right) => {
+        return (
+          left.updatedAt.localeCompare(right.updatedAt)
+          || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
+          || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+        )
+      })
+      .slice(0, getLimit(statement))
+      .map((row) => {
+        return {dirtyWorkId: row.dirtyWorkId}
+      })
+  }
+  const deleteDirtyWorkByIds = (statement: string) => {
+    const dirtyWorkIds = getInLiterals(statement, 'dirty_work_id')
+    const deletable = dirtyWorkIds.flatMap((dirtyWorkId) => {
+      const row = dirtyWork.get(dirtyWorkId)
+
+      return row === undefined ? [] : [row]
+    })
 
     deletable.forEach((row) => {
       dirtyWork.delete(row.dirtyWorkId)
@@ -547,6 +811,46 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       return {dirtyWorkId: row.dirtyWorkId}
     })
   }
+  const getCompactedAckRows = (statement: string) => {
+    const strings = getSqlStrings(statement)
+    const numbers = getNumbers(statement)
+    const keepDirtyAckId = strings[0] ?? ''
+    const projectionComponent = strings[1] ?? ''
+    const projectionIdentity = strings[2] ?? ''
+    const sourcePartition = strings[3] ?? ''
+    const completedSourceHighWaterMark = numbers[0] ?? 0
+
+    return [...acks.values()]
+      .filter((ack) => {
+        return (
+          ack.dirtyAckId !== keepDirtyAckId
+          && ack.dirtyWorkId !== null
+          && ack.projectionComponent === projectionComponent
+          && ack.projectionIdentity === projectionIdentity
+          && ack.sourcePartition === sourcePartition
+          && ack.completedSourceHighWaterMark <= completedSourceHighWaterMark
+        )
+      })
+      .map((ack) => {
+        return {dirtyAckId: ack.dirtyAckId}
+      })
+  }
+  const deleteAcksByIds = (statement: string) => {
+    const dirtyAckIds = getInLiterals(statement, 'dirty_ack_id')
+    const deletable = dirtyAckIds.flatMap((dirtyAckId) => {
+      const ack = acks.get(dirtyAckId)
+
+      return ack === undefined ? [] : [ack]
+    })
+
+    deletable.forEach((ack) => {
+      acks.delete(ack.dirtyAckId)
+    })
+
+    return deletable.map((ack) => {
+      return {dirtyAckId: ack.dirtyAckId}
+    })
+  }
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
 
@@ -554,8 +858,89 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       return (options.barrier === undefined || options.barrier === null ? [] : [options.barrier]) as T[]
     }
 
+    if (
+      statement.includes('FROM app.review_serving_dirty_work_claim_state state')
+      && statement.includes('oldest_claimable AS')
+    ) {
+      return getClaimStateRows(statement) as T[]
+    }
+
+    if (
+      statement.includes('FROM app.review_serving_dirty_work_claim_state older')
+      && statement.includes('older.dirty_range_start IS NULL')
+    ) {
+      return getCoalescableClaimStateRows() as T[]
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('RETURNING')
+      && statement.includes('first_source_high_water_mark = LEAST')
+    ) {
+      updateDirtyWork(statement)
+
+      return getTargetDirtyWorkRows(statement).map(getQueryRow) as T[]
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('RETURNING')
+      && statement.includes("SET status = 'running'")
+    ) {
+      return updateDirtyWorkReturningRows(statement, 'running', 'claimable') as T[]
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('RETURNING')
+      && statement.includes("SET status = 'pending'")
+    ) {
+      return updateDirtyWorkReturningRows(statement, 'pending', 'running') as T[]
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('RETURNING')
+      && statement.includes("SET status = 'failed'")
+    ) {
+      return updateDirtyWorkReturningRows(statement, 'failed', 'running') as T[]
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('RETURNING')
+      && statement.includes("SET status = 'completed'")
+      && statement.includes("lifecycle_reason = 'superseded_by_high_water'")
+    ) {
+      return updateDirtyWorkReturningRows(statement, 'completed', 'pending') as T[]
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('RETURNING')
+      && statement.includes("json_extract_string(projection_key, '$.projectionComponent')")
+    ) {
+      repairLaneRowsByIds(statement)
+
+      return getTargetDirtyWorkRows(statement).map(getQueryRow) as T[]
+    }
+
     if (statement.includes('WITH retention_ready_dirty_work AS')) {
       return getRetentionReadyLanes(statement) as T[]
+    }
+
+    if (
+      statement.includes('SELECT rowid AS storageRowId')
+      && statement.includes('(projection_component IS NULL OR projection_identity IS NULL)')
+    ) {
+      return getLaneRepairRows(statement) as T[]
+    }
+
+    if (
+      statement.includes('SELECT older.dirty_work_id AS dirtyWorkId')
+      && statement.includes('superseded_by_high_water') === false
+    ) {
+      return getCoalescableDirtyWorkRows(statement) as T[]
     }
 
     if (statement.includes('WITH rebuild_dirty_work_coverage AS')) {
@@ -563,17 +948,44 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     }
 
     if (
+      statement.includes('SELECT dirty_work.dirty_work_id AS dirtyWorkId')
+      && statement.includes('FROM app.review_serving_dirty_work dirty_work')
+    ) {
+      return getRetentionDirtyWorkRows(statement).map((row) => {
+        return {dirtyWorkId: row.dirtyWorkId}
+      }) as T[]
+    }
+
+    if (
+      statement.includes('SELECT dirty_ack_id AS dirtyAckId')
+      && statement.includes('FROM app.review_serving_dirty_work_ack')
+      && statement.includes('ORDER BY completed_source_high_water_mark ASC')
+    ) {
+      return getRetentionAckRows(statement).map((ack) => {
+        return {dirtyAckId: ack.dirtyAckId}
+      }) as T[]
+    }
+
+    if (
+      statement.includes('SELECT dirty_ack_id AS dirtyAckId')
+      && statement.includes('FROM app.review_serving_dirty_work_ack')
+      && statement.includes('dirty_ack_id <>')
+    ) {
+      return getCompactedAckRows(statement) as T[]
+    }
+
+    if (
       statement.includes('DELETE FROM app.review_serving_dirty_work_ack')
       && statement.includes('RETURNING dirty_ack_id AS dirtyAckId')
     ) {
-      return deleteRetentionAcks(statement) as T[]
+      return deleteAcksByIds(statement) as T[]
     }
 
     if (
       statement.includes('DELETE FROM app.review_serving_dirty_work')
       && statement.includes('RETURNING dirty_work_id AS dirtyWorkId')
     ) {
-      return deleteRetentionDirtyWork(statement) as T[]
+      return deleteDirtyWorkByIds(statement) as T[]
     }
 
     if (statement.includes('FROM app.review_serving_dirty_work_ack')) {
@@ -602,11 +1014,13 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       return (row === undefined ? [] : [getQueryRow(row)]) as T[]
     }
 
-    if (statement.includes("status = 'pending'") && statement.includes('starts_with(projection_key')) {
-      const prefix = getStartsWithLiteral(statement, 'projection_key') ?? ''
+    if (statement.includes("status = 'pending'") && statement.includes('projection_component =')) {
+      const projectionComponent = getWhereLiteral(statement, 'projection_component') ?? ''
       const eligibleRows = [...dirtyWork.values()]
         .filter((row) => {
-          return (row.status === 'pending' || row.status === 'running') && row.projectionKey.startsWith(prefix)
+          return (
+            (row.status === 'pending' || row.status === 'running') && row.projectionComponent === projectionComponent
+          )
         })
         .sort((left, right) => {
           return (
@@ -619,14 +1033,14 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       const usesBoundedLane = statement.includes('eligible_lane')
       const sourcePartition =
         usesBoundedLane || statement.includes('source_partition = (') ? eligibleRows[0]?.sourcePartition : null
-      const projectionKey =
-        usesBoundedLane || statement.includes('projection_key = (') ? eligibleRows[0]?.projectionKey : null
+      const projectionIdentity =
+        usesBoundedLane || statement.includes('projection_identity = (') ? eligibleRows[0]?.projectionIdentity : null
 
       const rows = eligibleRows
         .filter((row) => {
           return (
             (sourcePartition === null || row.sourcePartition === sourcePartition)
-            && (projectionKey === null || row.projectionKey === projectionKey)
+            && (projectionIdentity === null || row.projectionIdentity === projectionIdentity)
           )
         })
         .slice(0, getLimit(statement))
@@ -656,8 +1070,19 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
   const run = async (statement: string) => {
     statements.push(statement)
 
-    if (statement.includes('UPDATE app.review_serving_dirty_work') && !statement.includes('RETURNING')) {
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('first_source_high_water_mark')
+      && !statement.includes('RETURNING')
+    ) {
       updateDirtyWork(statement)
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes("json_extract_string(projection_key, '$.projectionComponent')")
+    ) {
+      repairLaneRowsByIds(statement)
     }
 
     if (statement.includes('INSERT INTO app.review_serving_dirty_work (')) {
@@ -706,7 +1131,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         const matchingRows =
           rowIds.length > 0
             ? [...dirtyWork.values()].filter((row) => {
-                return row.storageRowId !== undefined && rowIds.includes(row.storageRowId)
+                return row.storageRowId !== undefined && row.storageRowId !== null && rowIds.includes(row.storageRowId)
               })
             : dirtyWorkIds.flatMap((dirtyWorkId) => {
                 const row = dirtyWork.get(dirtyWorkId)
@@ -716,7 +1141,17 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
         matchingRows.forEach((existing) => {
           if (existing.status !== 'completed') {
-            dirtyWork.set(existing.dirtyWorkId, {...existing, status: 'completed', updatedAt: getClock(statements)})
+            const lifecycleReason =
+              (statement.match(/lifecycle_reason\s*=\s*'((?:''|[^'])*)'/u)?.[1] as
+                | FakeDirtyWorkRow['lifecycleReason']
+                | undefined) ?? existing.lifecycleReason
+
+            dirtyWork.set(existing.dirtyWorkId, {
+              ...existing,
+              lifecycleReason,
+              status: 'completed',
+              updatedAt: getClock(statements),
+            })
           }
         })
       }
@@ -867,11 +1302,11 @@ test('claim query blocks newer lane work behind lower running or backoff waterma
 
   expect(claimSelect).toContain("blocker.status IN ('running', 'failed')")
   expect(claimSelect).toContain("blocker.updated_at > current_timestamp - INTERVAL '900 seconds'")
-  expect(claimSelect).toContain('blocker.latest_source_high_water_mark < oldest.latest_source_high_water_mark')
-  expect(claimSelect).toContain('blocker.latest_source_high_water_mark < candidate.latest_source_high_water_mark')
+  expect(claimSelect).toContain('blocker.latest_source_high_water_mark < oldest.latestSourceHighWaterMark')
+  expect(claimSelect).toContain('FROM app.review_serving_dirty_work_claim_state blocker')
 })
 
-test('claims dirty work with one atomic update returning statement', async () => {
+test('claims dirty work from bounded per-row claim state with one exact update returning statement', async () => {
   const {database, statements} = createFakeDirtyWorkDatabase()
 
   await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
@@ -885,20 +1320,28 @@ test('claims dirty work with one atomic update returning statement', async () =>
       && statement.includes('RETURNING')
     )
   })
+  const claimStateSelect = statements.find((statement) => {
+    return (
+      statement.includes('FROM app.review_serving_dirty_work_claim_state state')
+      && statement.includes('oldest_claimable AS')
+    )
+  })
 
   expect(claims).toHaveLength(2)
+  expect(claimStateSelect).toContain('WITH claim_state_window AS (')
+  expect(claimStateSelect).toContain('FROM app.review_serving_dirty_work_claim_state state')
+  expect(claimStateSelect).toContain('oldest_claimable AS')
+  expect(claimStateSelect).toContain('LIMIT 2048')
+  expect(claimStateSelect).not.toContain('FROM app.review_serving_dirty_work ')
+  expect(claimStateSelect).not.toContain('projection_key')
+  expect(claimStateSelect).not.toContain('json_extract_string')
   expect(claimUpdates).toHaveLength(1)
-  expect(claimUpdates[0]).toContain('WITH claim_lane_window AS (')
-  expect(claimUpdates[0]).toContain('eligible_lane AS (')
-  expect(claimUpdates[0]).toContain('FROM claim_lane_window oldest')
-  expect(claimUpdates[0]).toContain('claim_candidate_window AS (')
-  expect(claimUpdates[0]).toContain('FROM claim_candidate_window candidate')
-  expect(claimUpdates[0]).toContain('LIMIT 2048')
-  expect(claimUpdates[0]).toContain('claim_candidates AS (')
-  expect(claimUpdates[0]).toContain('eligible_lane.source_partition = app.review_serving_dirty_work.source_partition')
-  expect(claimUpdates[0]).toContain('eligible_lane.projection_key = app.review_serving_dirty_work.projection_key')
-  expect(claimUpdates[0]).not.toContain('AND source_partition = (')
-  expect(claimUpdates[0]).not.toContain('AND projection_key = (')
+  expect(claimUpdates[0]).toContain('rowid =')
+  expect(claimUpdates[0]).toContain('dirty_work_id =')
+  expect(claimUpdates[0]).not.toContain('WITH claim_state_window AS')
+  expect(claimUpdates[0]).not.toContain('SELECT dirty_work_id')
+  expect(claimUpdates[0]).not.toContain('projection_key =')
+  expect(claimUpdates[0]).not.toContain('json_extract_string')
 })
 
 test('claims only return rows whose atomic update succeeded', async () => {
@@ -952,13 +1395,15 @@ test('claims stale running work after the running lease expires', async () => {
   )
   const claimSelect = statements
     .filter((statement) => {
-      return statement.includes('FROM app.review_serving_dirty_work') && statement.includes("status = 'running'")
+      return (
+        statement.includes('FROM app.review_serving_dirty_work_claim_state state')
+        && statement.includes("state.status IN ('running', 'failed')")
+      )
     })
     .at(-1)
 
   expect(claims).toHaveLength(1)
-  expect(claimSelect).toContain("status = 'running'")
-  expect(claimSelect).toContain("status = 'failed'")
+  expect(claimSelect).toContain("state.status IN ('running', 'failed')")
   expect(claimSelect).toContain("INTERVAL '60 seconds'")
   expect(claimSelect).toContain("TIMESTAMPTZ '2026-06-16T13:00:00.000Z'")
 })
@@ -987,6 +1432,57 @@ test('completion and failure move running claims into retention-ready terminal s
   expect(completed?.status).toBe('completed')
   expect(failed?.status).toBe('failed')
   expect(acks.size).toBe(1)
+})
+
+test('completion release and failure terminal updates target exact dirty work rows', async () => {
+  const {database, statements} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  await upsertDisplayWork(database, {...getBaseScope(2, '2', '2'), scopeId: 'project-1:article-2'}, 'delta-2')
+  await upsertDisplayWork(database, {...getBaseScope(3, '3', '3'), scopeId: 'project-1:article-3'}, 'delta-3')
+  const claims = await claimReviewServingDirtyWork({limit: 3, projectionComponent: 'display'}, database)
+
+  await completeReviewServingDirtyWorkClaims(claims.slice(0, 1), database)
+  await releaseReviewServingDirtyWorkClaims(
+    claims.slice(1, 2).map((claim) => {
+      return claim.dirtyWorkId
+    }),
+    database,
+  )
+  await failReviewServingDirtyWorkClaims(
+    claims.slice(2, 3).map((claim) => {
+      return claim.dirtyWorkId
+    }),
+    database,
+  )
+
+  const completionUpdate = statements.findLast((statement) => {
+    return (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes("SET status = 'completed'")
+      && !statement.includes('WITH rebuild_dirty_work_coverage AS')
+    )
+  })
+  const releaseUpdate = statements.findLast((statement) => {
+    return statement.includes('UPDATE app.review_serving_dirty_work') && statement.includes("SET status = 'pending'")
+  })
+  const failUpdate = statements.findLast((statement) => {
+    return statement.includes('UPDATE app.review_serving_dirty_work') && statement.includes("SET status = 'failed'")
+  })
+  const terminalPredicates = [completionUpdate, releaseUpdate, failUpdate]
+    .map((statement) => {
+      return statement?.split('RETURNING')[0] ?? ''
+    })
+    .join('\n')
+
+  expect(completionUpdate).toContain('rowid IN (')
+  expect(completionUpdate).toContain('OR dirty_work_id IN (')
+  expect(releaseUpdate).toContain('WHERE dirty_work_id IN (')
+  expect(failUpdate).toContain('WHERE dirty_work_id IN (')
+  expect(terminalPredicates).not.toContain('projection_key =')
+  expect(terminalPredicates).not.toContain('source_partition =')
+  expect(terminalPredicates).not.toContain('project_id =')
+  expect(terminalPredicates).not.toContain('latest_source_high_water_mark <=')
 })
 
 test('completion advances dirty source watermarks by project and source partition without dropping acknowledgements', async () => {
@@ -1107,11 +1603,17 @@ test('rebuild coverage completion only acknowledges matching project component i
   })
   expect(dirtyWork.size).toBe(5)
   expect(statements.join('\n')).toContain('WITH rebuild_dirty_work_coverage AS')
+  expect(statements.join('\n')).toContain('FROM app.review_serving_dirty_work_claim_state claim_state')
+  expect(statements.join('\n')).toContain('LIMIT 2048')
   expect(statements.join('\n')).toContain('latest_source_high_water_mark <= coverage.completed_source_high_water_mark')
   const coverageCompletionUpdate = statements.findLast((statement) => {
-    return statement.includes('UPDATE app.review_serving_dirty_work')
+    return (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && !statement.includes('UPDATE app.review_serving_dirty_work_claim_state')
+    )
   })
-  expect(coverageCompletionUpdate).toContain('WHERE rowid IN (')
+  expect(coverageCompletionUpdate).toContain('rowid IN (')
+  expect(coverageCompletionUpdate).toContain('OR dirty_work_id IN (')
   expect(coverageCompletionUpdate).not.toContain('WITH rebuild_dirty_work_coverage AS')
   expect(coverageCompletionUpdate).not.toContain(
     'latest_source_high_water_mark <= coverage.completed_source_high_water_mark',
@@ -1330,6 +1832,15 @@ test('ack compaction creates a component high-water row and removes covered poin
   expect(compactedAckInsert).not.toContain('WHERE NOT EXISTS')
   expect(compactedAckInsert).not.toContain('existing.dirty_ack_id = incoming.dirty_ack_id')
   expect(compactedAckInsert).not.toContain('DO UPDATE SET')
+
+  const compactedAckDelete = statements.findLast((statement) => {
+    return statement.includes('DELETE FROM app.review_serving_dirty_work_ack')
+  })
+
+  expect(compactedAckDelete).toContain('WHERE dirty_ack_id IN (')
+  expect(compactedAckDelete).not.toContain('projection_component =')
+  expect(compactedAckDelete).not.toContain('projection_identity =')
+  expect(compactedAckDelete).not.toContain('source_partition =')
 })
 
 test('ack compaction replays the same high-water row without updating it', async () => {
@@ -1402,6 +1913,100 @@ test('retention cleanup preserves pending running and failed dirty work rows', a
 
   expect(result.deletedDirtyWorkCount).toBe(1)
   expect(statuses.sort()).toEqual(['failed', 'pending', 'running'])
+})
+
+test('default retention cleanup avoids broad retention compaction and delete scans', async () => {
+  const {database, statements} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const result = await cleanupReviewServingDirtyWorkRetention({}, database)
+  const cleanupStatements = statements.slice(
+    statements.findLastIndex((statement) => {
+      return (
+        statement.includes('UPDATE app.review_serving_dirty_work')
+        && statement.includes("SET status = 'completed', lifecycle_reason = 'projected'")
+      )
+    }) + 1,
+  )
+
+  expect(result).toMatchObject({compactedLaneCount: 0, deletedAcknowledgementCount: 0, deletedDirtyWorkCount: 0})
+  expect(cleanupStatements.join('\n')).not.toContain('WITH retention_ready_dirty_work AS')
+  expect(cleanupStatements.join('\n')).not.toContain('DELETE FROM app.review_serving_dirty_work')
+  expect(cleanupStatements.join('\n')).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
+})
+
+test('retention cleanup repairs compact lane columns before dirty work drain', async () => {
+  const {database, dirtyWork, statements} = createFakeDirtyWorkDatabase({barrier: null})
+
+  const created = await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  const existing = dirtyWork.get(created.dirtyWorkId)
+
+  if (existing !== undefined) {
+    dirtyWork.set(created.dirtyWorkId, {...existing, projectionComponent: null, projectionIdentity: null})
+  }
+
+  const result = await cleanupReviewServingDirtyWorkRetention(
+    {coalesceDirtyWorkLimit: 0, dirtyWorkDeleteLimit: 0, laneCompactionLimit: 0, laneRepairLimit: 10},
+    database,
+  )
+  const repaired = dirtyWork.get(created.dirtyWorkId)
+  const repairUpdate = statements.findLast((statement) => {
+    return (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes("json_extract_string(projection_key, '$.projectionComponent')")
+    )
+  })
+
+  expect(result.repairedLaneColumnCount).toBe(1)
+  expect(repaired).toMatchObject({projectionComponent: 'display', projectionIdentity: 'display:identity-1'})
+  expect(repairUpdate).toContain('WHERE rowid IN (')
+  expect(repairUpdate).not.toContain('dirty_work_id IN')
+})
+
+test('retention cleanup coalesces superseded high-water dirty work by exact selected ids', async () => {
+  const {database, dirtyWork, statements} = createFakeDirtyWorkDatabase({barrier: null})
+  const oldHighWater = await upsertDisplayWork(
+    database,
+    {...getBaseScope(3, null, null), dirtyRangeEnd: null, dirtyRangeStart: null},
+    'delta-3',
+  )
+
+  await upsertDisplayWork(
+    database,
+    {...getBaseScope(9, null, null), dirtyRangeEnd: null, dirtyRangeStart: null, scopeId: 'project-1:high-water-2'},
+    'delta-9',
+  )
+  ;[...dirtyWork.values()].forEach((row) => {
+    dirtyWork.set(row.dirtyWorkId, {...row, dirtyRangeEnd: null, dirtyRangeStart: null})
+  })
+
+  const result = await cleanupReviewServingDirtyWorkRetention(
+    {coalesceDirtyWorkLimit: 10, dirtyWorkDeleteLimit: 0, laneCompactionLimit: 0, laneRepairLimit: 0},
+    database,
+  )
+  const coalesced = dirtyWork.get(oldHighWater.dirtyWorkId)
+  const coalesceUpdate = statements.findLast((statement) => {
+    return (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes("lifecycle_reason = 'superseded_by_high_water'")
+    )
+  })
+  const coalesceSelect = statements.findLast((statement) => {
+    return statement.includes('FROM app.review_serving_dirty_work_claim_state older')
+  })
+
+  expect(result.coalescedDirtyWorkCount).toBe(1)
+  expect(coalesced).toMatchObject({lifecycleReason: 'superseded_by_high_water', status: 'completed'})
+  expect(coalesceSelect).toContain('older.dirty_range_start IS NULL')
+  expect(coalesceSelect).toContain('FROM app.review_serving_dirty_work_claim_state older')
+  expect(coalesceSelect).not.toContain('FROM app.review_serving_dirty_work dirty_work')
+  expect(coalesceUpdate).toContain('rowid =')
+  expect(coalesceUpdate).toContain('dirty_work_id =')
+  expect(coalesceUpdate).not.toContain('EXISTS (')
+  expect(coalesceUpdate).not.toContain('projection_component =')
 })
 
 test('retention cleanup inserts high-water ack and removes point and older synthetic acknowledgements', async () => {
@@ -1479,6 +2084,47 @@ test('retention cleanup deletes only completed dirty rows covered by ack and pro
 
   expect(result.deletedDirtyWorkCount).toBe(1)
   expect(remainingHighWaters).toEqual([8])
+})
+
+test('retention cleanup deletes exact selected dirty work and acknowledgement ids only', async () => {
+  const {database, statements} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(3, '3', '3'), 'delta-3')
+  let claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+  await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+
+  await upsertDisplayWork(database, getBaseScope(5, '5', '5'), 'delta-5')
+  claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+  await cleanupReviewServingDirtyWorkRetention(
+    {acknowledgementDeleteLimit: 10, dirtyWorkDeleteLimit: 10, laneCompactionLimit: 10},
+    database,
+  )
+
+  const dirtyWorkDelete = statements.findLast((statement) => {
+    return (
+      statement.includes('DELETE FROM app.review_serving_dirty_work')
+      && !statement.includes('DELETE FROM app.review_serving_dirty_work_ack')
+    )
+  })
+  const ackDelete = statements.findLast((statement) => {
+    return statement.includes('DELETE FROM app.review_serving_dirty_work_ack')
+  })
+  const terminalDeletes = [dirtyWorkDelete, ackDelete].join('\n')
+
+  expect(dirtyWorkDelete).toContain('WHERE dirty_work_id IN (')
+  expect(ackDelete).toContain('WHERE dirty_ack_id IN (')
+  expect(terminalDeletes).not.toContain('SELECT dirty_work.dirty_work_id')
+  expect(terminalDeletes).not.toContain('SELECT dirty_ack_id')
+  expect(terminalDeletes).not.toContain('projection_component =')
+  expect(terminalDeletes).not.toContain('projection_identity =')
+  expect(terminalDeletes).not.toContain('source_partition =')
+  expect(terminalDeletes).not.toContain('json_extract_string')
+  expect(terminalDeletes).not.toContain('latest_source_high_water_mark <=')
 })
 
 test('retention cleanup does not let point acknowledgements cover other dirty rows', async () => {

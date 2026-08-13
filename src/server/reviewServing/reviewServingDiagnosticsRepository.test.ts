@@ -31,8 +31,28 @@ const createDiagnosticsDatabase = () => {
             activeSnapshotOptionalComponentsJson: ['search'],
             activeSnapshotSnapshotId: 'snapshot-1',
             activeSnapshotUpdatedAt: '2026-06-18T10:00:00.000Z',
+            dirtyWorkBucketsJson: JSON.stringify([
+              {
+                highWaterRowCount: '2',
+                latestSourceHighWaterMarkMax: '42',
+                latestSourceHighWaterMarkMin: '30',
+                lifecycleReason: null,
+                oldestQueuedAt: '2026-06-18T08:45:00.000Z',
+                pointRowCount: '1',
+                projectId: 'project-1',
+                projectionComponent: 'llmStatus',
+                projectionIdentity: 'llmStatus:project-1',
+                rowCount: '3',
+                sourcePartition: 'reviewChange:project-1',
+                status: 'pending',
+              },
+            ]),
             dirtyWorkCompletedCount: 5,
             dirtyWorkFailedCount: 1,
+            dirtyWorkLifecycleReasonCountsJson: JSON.stringify([
+              {lifecycleReason: null, rowCount: '3', status: 'pending'},
+              {lifecycleReason: 'projected', rowCount: '5', status: 'completed'},
+            ]),
             dirtyWorkOldestQueuedAt: '2026-06-18T09:00:00.000Z',
             dirtyWorkPendingCount: 3,
             dirtyWorkRunningCount: 2,
@@ -170,7 +190,31 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   )
 
   expect(diagnostics).toMatchObject({
-    dirtyWork: {failedCount: 1, pendingCount: 3, runningCount: 2},
+    dirtyWork: {
+      buckets: [
+        {
+          highWaterRowCount: 2,
+          latestSourceHighWaterMarkMax: 42,
+          latestSourceHighWaterMarkMin: 30,
+          lifecycleReason: null,
+          oldestQueuedAt: '2026-06-18T08:45:00.000Z',
+          pointRowCount: 1,
+          projectId: 'project-1',
+          projectionComponent: 'llmStatus',
+          projectionIdentity: 'llmStatus:project-1',
+          rowCount: 3,
+          sourcePartition: 'reviewChange:project-1',
+          status: 'pending',
+        },
+      ],
+      failedCount: 1,
+      lifecycleReasonCounts: [
+        {lifecycleReason: null, rowCount: 3, status: 'pending'},
+        {lifecycleReason: 'projected', rowCount: 5, status: 'completed'},
+      ],
+      pendingCount: 3,
+      runningCount: 2,
+    },
     maintenance: {
       dirtyWorkRunningCount: 2,
       expiredRebuildChunkLeaseCount: 1,
@@ -235,6 +279,23 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
     "source_watermark.key IN ('reviewChange', 'review-change', 'importRunArticle'",
   )
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
+  expect(statements.join('\n')).toContain('app.review_serving_dirty_work_claim_state')
+  expect(statements.join('\n')).toContain('dirty_work_bucket AS')
+  expect(statements.join('\n')).toContain('projection_component AS projectionComponent')
+  expect(statements.join('\n')).toContain('projection_identity AS projectionIdentity')
+  expect(statements.join('\n')).toContain('source_partition AS sourcePartition')
+  expect(statements.join('\n')).toContain('CAST(NULL AS VARCHAR) AS lifecycleReason')
+  expect(statements.join('\n')).toContain(
+    'COUNT(*) FILTER (WHERE dirty_range_start IS NULL AND dirty_range_end IS NULL)',
+  )
+  expect(statements.join('\n')).toContain(
+    'COUNT(*) FILTER (WHERE dirty_range_start IS NOT NULL OR dirty_range_end IS NOT NULL)',
+  )
+  expect(statements.join('\n')).toContain('MIN(latest_source_high_water_mark) AS latestSourceHighWaterMarkMin')
+  expect(statements.join('\n')).toContain('MAX(latest_source_high_water_mark) AS latestSourceHighWaterMarkMax')
+  expect(statements.join('\n')).toContain('dirty_work_lifecycle_reason AS')
+  expect(statements.join('\n')).toContain('AS dirtyWorkBucketsJson')
+  expect(statements.join('\n')).toContain('AS dirtyWorkLifecycleReasonCountsJson')
   expect(statements.join('\n')).toContain("status IN ('failed', 'running')")
   expect(statements.join('\n')).toContain('CAST(0 AS INTEGER) AS failedCount')
   expect(statements.join('\n')).toContain("INTERVAL '900 seconds'")

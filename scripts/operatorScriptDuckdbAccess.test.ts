@@ -64,7 +64,16 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
   'db:duck:inspect-review-serving-project-state': {
     commandIncludes: ['DUCKDB_PATH=', 'runtime/primary/forska.duckdb'],
     description: 'V4 project state readonly snapshot diagnostics',
-    mustContain: ['createDuckdbSnapshotForCli', 'getReadOnlyDuckdbRuntimeOptions', 'DuckDBInstance.create'],
+    mustContain: [
+      'createDuckdbSnapshotForCli',
+      'getReadOnlyDuckdbRuntimeOptions',
+      'DuckDBInstance.create',
+      'dirtyWorkBacklogBuckets',
+      'dirtyWorkLifecycleReasonCounts',
+      'review_serving_dirty_work_claim_state',
+      'dirtyWorkBucketLifecycleReasonSql',
+      'latestSourceHighWaterMarkMax',
+    ],
     path: 'scripts/inspectReviewServingProjectState.ts',
   },
   'db:duck:inspect-review-serving-physical-evidence': {

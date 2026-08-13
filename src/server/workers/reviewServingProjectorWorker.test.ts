@@ -5074,6 +5074,8 @@ test('selected import runner releases dirty work while base projection is still 
   })
   const database: TestDatabase = {
     queryJson: async <T>(statement: string) => {
+      runStatements.push(statement)
+
       if (statement.includes('FROM app.review_projection_identity_manifest')) {
         return [
           {

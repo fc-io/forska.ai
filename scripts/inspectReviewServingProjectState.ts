@@ -84,6 +84,27 @@ const getTableExists = async (runtime: Awaited<ReturnType<typeof getSnapshotQuer
   return rows.length > 0
 }
 
+const getColumnExists = async (
+  runtime: Awaited<ReturnType<typeof getSnapshotQueryRuntime>>,
+  table: string,
+  column: string,
+) => {
+  const [schemaName, tableName] = table.split('.')
+  const rows = await runReadonlyQuery(
+    runtime,
+    `
+      SELECT 1 AS columnExists
+      FROM information_schema.columns
+      WHERE table_schema = ${getSqlLiteral(schemaName ?? '')}
+        AND table_name = ${getSqlLiteral(tableName ?? '')}
+        AND column_name = ${getSqlLiteral(column)}
+      LIMIT 1
+    `,
+  )
+
+  return rows.length > 0
+}
+
 const querySection = async (
   runtime: Awaited<ReturnType<typeof getSnapshotQueryRuntime>>,
   sql: string,
@@ -121,6 +142,32 @@ const inspectProjectState = async (
   const limit = options.limit
 
   const sections: Record<string, QuerySection> = {}
+  const dirtyWorkClaimStateExists = await getTableExists(runtime, 'app.review_serving_dirty_work_claim_state')
+  const dirtyWorkHasProjectionColumns =
+    (await getColumnExists(runtime, 'app.review_serving_dirty_work', 'projection_component'))
+    && (await getColumnExists(runtime, 'app.review_serving_dirty_work', 'projection_identity'))
+  const dirtyWorkHasLifecycleReason = await getColumnExists(
+    runtime,
+    'app.review_serving_dirty_work',
+    'lifecycle_reason',
+  )
+  const dirtyWorkProjectionComponentSql = dirtyWorkHasProjectionColumns
+    ? 'projection_component'
+    : 'CAST(NULL AS VARCHAR)'
+  const dirtyWorkProjectionIdentitySql = dirtyWorkHasProjectionColumns ? 'projection_identity' : 'CAST(NULL AS VARCHAR)'
+  const dirtyWorkLifecycleReasonSql = dirtyWorkHasLifecycleReason ? 'lifecycle_reason' : 'CAST(NULL AS VARCHAR)'
+  const dirtyWorkBucketTable = dirtyWorkClaimStateExists
+    ? 'app.review_serving_dirty_work_claim_state'
+    : 'app.review_serving_dirty_work'
+  const dirtyWorkBucketProjectionComponentSql = dirtyWorkClaimStateExists
+    ? 'projection_component'
+    : dirtyWorkProjectionComponentSql
+  const dirtyWorkBucketProjectionIdentitySql = dirtyWorkClaimStateExists
+    ? 'projection_identity'
+    : dirtyWorkProjectionIdentitySql
+  const dirtyWorkBucketLifecycleReasonSql = dirtyWorkClaimStateExists
+    ? 'CAST(NULL AS VARCHAR)'
+    : dirtyWorkLifecycleReasonSql
 
   sections.project = await querySection(
     runtime,
@@ -291,6 +338,49 @@ const inspectProjectState = async (
         AND (status <> 'completed' OR last_error IS NOT NULL)
       ORDER BY updated_at DESC, chunk_id DESC
       LIMIT ${limit}
+    `,
+  )
+  sections.dirtyWorkBacklogBuckets = await querySection(
+    runtime,
+    `
+      SELECT
+        project_id AS projectId,
+        ${dirtyWorkBucketProjectionComponentSql} AS projectionComponent,
+        ${dirtyWorkBucketProjectionIdentitySql} AS projectionIdentity,
+        source_partition AS sourcePartition,
+        status,
+        ${dirtyWorkBucketLifecycleReasonSql} AS lifecycleReason,
+        CAST(COUNT(*) AS BIGINT) AS rowCount,
+        CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NOT NULL OR dirty_range_end IS NOT NULL) AS BIGINT) AS pointRowCount,
+        CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NULL AND dirty_range_end IS NULL) AS BIGINT) AS highWaterRowCount,
+        MIN(created_at) AS oldestQueuedAt,
+        MIN(latest_source_high_water_mark) AS latestSourceHighWaterMarkMin,
+        MAX(latest_source_high_water_mark) AS latestSourceHighWaterMarkMax
+      FROM ${dirtyWorkBucketTable}
+      WHERE project_id = ${projectIdSql}
+      GROUP BY
+        project_id,
+        projectionComponent,
+        projectionIdentity,
+        source_partition,
+        status,
+        lifecycleReason
+      ORDER BY rowCount DESC, projectionComponent ASC NULLS LAST, sourcePartition ASC, status ASC
+      LIMIT ${limit * 4}
+    `,
+  )
+  sections.dirtyWorkLifecycleReasonCounts = await querySection(
+    runtime,
+    `
+      SELECT
+        status,
+        ${dirtyWorkBucketLifecycleReasonSql} AS lifecycleReason,
+        CAST(COUNT(*) AS BIGINT) AS rowCount
+      FROM ${dirtyWorkBucketTable}
+      WHERE project_id = ${projectIdSql}
+      GROUP BY status, lifecycleReason
+      ORDER BY rowCount DESC, status ASC, lifecycleReason ASC NULLS LAST
+      LIMIT ${limit * 4}
     `,
   )
   sections.titleSearchDuplicateKeys = await querySection(

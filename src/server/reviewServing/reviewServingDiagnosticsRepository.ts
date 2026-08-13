@@ -32,6 +32,32 @@ export type ReviewServingDiagnosticsCountState = {
   updatedAt: string | null
 }
 
+export type ReviewServingDiagnosticsDirtyWorkBucket = {
+  highWaterRowCount: number
+  latestSourceHighWaterMarkMax: number | null
+  latestSourceHighWaterMarkMin: number | null
+  lifecycleReason: string | null
+  oldestQueuedAt: string | null
+  pointRowCount: number
+  projectId: string | null
+  projectionComponent: string | null
+  projectionIdentity: string | null
+  rowCount: number
+  sourcePartition: string
+  status: string
+}
+
+export type ReviewServingDiagnosticsDirtyWorkLifecycleReasonCount = {
+  lifecycleReason: string | null
+  rowCount: number
+  status: string
+}
+
+export type ReviewServingDiagnosticsDirtyWorkState = ReviewServingDiagnosticsCountState & {
+  buckets: ReviewServingDiagnosticsDirtyWorkBucket[]
+  lifecycleReasonCounts: ReviewServingDiagnosticsDirtyWorkLifecycleReasonCount[]
+}
+
 export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnosticsCountState & {
   blockedQueuedCount: number
   blockedOverBudgetCount: number
@@ -50,7 +76,7 @@ export type ReviewServingDiagnosticsQuarantineBarrier = {
 }
 
 export type ReviewServingDiagnostics = {
-  dirtyWork: ReviewServingDiagnosticsCountState
+  dirtyWork: ReviewServingDiagnosticsDirtyWorkState
   maintenance: {
     dirtyWorkRunningCount: number
     expiredRebuildChunkLeaseCount: number
@@ -105,7 +131,9 @@ type DiagnosticsSummaryRow = {
   activeSnapshotSnapshotId: string | null
   activeSnapshotUpdatedAt: string | null
   dirtyWorkCompletedCount: number
+  dirtyWorkBucketsJson: unknown
   dirtyWorkFailedCount: number
+  dirtyWorkLifecycleReasonCountsJson: unknown
   dirtyWorkOldestQueuedAt: string | null
   dirtyWorkPendingCount: number
   dirtyWorkRunningCount: number
@@ -153,6 +181,7 @@ type OldestBarrierRow = {
 type SnapshotComponentStateEntry = {component: ReviewServingProjectionComponent}
 
 const terminalOutboxStatuses = ['operator_terminal', 'reconciled'] as const
+const dirtyWorkDiagnosticsBucketLimit = 100
 const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, readonly string[]> = {
   display: ['reviewChange', 'review-change'],
   humanStatus: [
@@ -201,6 +230,11 @@ const emptyCountState: ReviewServingDiagnosticsCountState = {
   pendingCount: 0,
   runningCount: 0,
   updatedAt: null,
+}
+const emptyDirtyWorkState: ReviewServingDiagnosticsDirtyWorkState = {
+  ...emptyCountState,
+  buckets: [],
+  lifecycleReasonCounts: [],
 }
 const emptyRebuildChunkState: ReviewServingDiagnosticsRebuildChunkState = {
   ...emptyCountState,
@@ -327,6 +361,71 @@ const isSnapshotComponentStateEntry = (value: unknown): value is SnapshotCompone
 
 const getUnknownArray = (value: unknown): readonly unknown[] => {
   return Array.isArray(value) ? (value as readonly unknown[]) : []
+}
+
+const getNullableString = (value: unknown) => {
+  return typeof value === 'string' ? value : null
+}
+
+const getRequiredString = (value: unknown) => {
+  return typeof value === 'string' ? value : ''
+}
+
+const getNumberValue = (value: unknown) => {
+  return typeof value === 'number' || typeof value === 'string' || typeof value === 'bigint' ? Number(value) : 0
+}
+
+const getNullableNumberValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  const numberValue = getNumberValue(value)
+
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+const getDirtyWorkBucket = (value: unknown): ReviewServingDiagnosticsDirtyWorkBucket | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  return {
+    highWaterRowCount: getNumberValue(value.highWaterRowCount),
+    latestSourceHighWaterMarkMax: getNullableNumberValue(value.latestSourceHighWaterMarkMax),
+    latestSourceHighWaterMarkMin: getNullableNumberValue(value.latestSourceHighWaterMarkMin),
+    lifecycleReason: getNullableString(value.lifecycleReason),
+    oldestQueuedAt: getNullableString(value.oldestQueuedAt),
+    pointRowCount: getNumberValue(value.pointRowCount),
+    projectId: getNullableString(value.projectId),
+    projectionComponent: getNullableString(value.projectionComponent),
+    projectionIdentity: getNullableString(value.projectionIdentity),
+    rowCount: getNumberValue(value.rowCount),
+    sourcePartition: getRequiredString(value.sourcePartition),
+    status: getRequiredString(value.status),
+  }
+}
+
+const getDirtyWorkLifecycleReasonCount = (
+  value: unknown,
+): ReviewServingDiagnosticsDirtyWorkLifecycleReasonCount | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  return {
+    lifecycleReason: getNullableString(value.lifecycleReason),
+    rowCount: getNumberValue(value.rowCount),
+    status: getRequiredString(value.status),
+  }
+}
+
+const getTypedJsonArray = <T>(value: unknown, mapper: (entry: unknown) => T | null) => {
+  return getUnknownArray(getJsonValue(value))
+    .map(mapper)
+    .filter((entry): entry is T => {
+      return entry !== null
+    })
 }
 
 const getSnapshotComponentStateEntries = (componentStateJson: unknown) => {
@@ -532,6 +631,36 @@ const getDiagnosticsSummaryRowsEffect = (
           MAX(updated_at) FILTER (WHERE status IN ('failed', 'running', 'completed')) AS updatedAt
         FROM app.review_serving_dirty_work
         WHERE project_id = ${getSqlLiteral(input.projectId)}
+      ), dirty_work_bucket AS (
+        SELECT
+          project_id AS projectId,
+          projection_component AS projectionComponent,
+          projection_identity AS projectionIdentity,
+          source_partition AS sourcePartition,
+          status,
+          CAST(NULL AS VARCHAR) AS lifecycleReason,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NOT NULL OR dirty_range_end IS NOT NULL) AS BIGINT) AS pointRowCount,
+          CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NULL AND dirty_range_end IS NULL) AS BIGINT) AS highWaterRowCount,
+          MIN(created_at) AS oldestQueuedAt,
+          MIN(latest_source_high_water_mark) AS latestSourceHighWaterMarkMin,
+          MAX(latest_source_high_water_mark) AS latestSourceHighWaterMarkMax
+        FROM app.review_serving_dirty_work_claim_state
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+        GROUP BY
+          project_id,
+          projectionComponent,
+          projectionIdentity,
+          source_partition,
+          status
+      ), dirty_work_lifecycle_reason AS (
+        SELECT
+          status,
+          CAST(NULL AS VARCHAR) AS lifecycleReason,
+          CAST(COUNT(*) AS BIGINT) AS rowCount
+        FROM app.review_serving_dirty_work_claim_state
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+        GROUP BY status
       ), latest_request AS (
         SELECT request_id, admission_state, reason, status
         FROM app.review_rebuild_request
@@ -662,6 +791,40 @@ const getDiagnosticsSummaryRowsEffect = (
         snapshot_status_counts.missingRequiredCandidateCount AS snapshotMissingRequiredCandidateCount,
         snapshot_status_counts.invalidRequiredStateCandidateCount AS snapshotInvalidRequiredStateCandidateCount,
         snapshot_status_counts.invalidOptionalStateCandidateCount AS snapshotInvalidOptionalStateCandidateCount,
+        COALESCE((
+          SELECT to_json(LIST(STRUCT_PACK(
+            projectId := projectId,
+            projectionComponent := projectionComponent,
+            projectionIdentity := projectionIdentity,
+            sourcePartition := sourcePartition,
+            status := status,
+            lifecycleReason := lifecycleReason,
+            rowCount := rowCount,
+            pointRowCount := pointRowCount,
+            highWaterRowCount := highWaterRowCount,
+            oldestQueuedAt := oldestQueuedAt,
+            latestSourceHighWaterMarkMin := latestSourceHighWaterMarkMin,
+            latestSourceHighWaterMarkMax := latestSourceHighWaterMarkMax
+          )))
+          FROM (
+            SELECT *
+            FROM dirty_work_bucket
+            ORDER BY rowCount DESC, projectId ASC NULLS LAST, projectionComponent ASC NULLS LAST, sourcePartition ASC, status ASC
+            LIMIT ${dirtyWorkDiagnosticsBucketLimit}
+          )
+        ), '[]') AS dirtyWorkBucketsJson,
+        COALESCE((
+          SELECT to_json(LIST(STRUCT_PACK(
+            status := status,
+            lifecycleReason := lifecycleReason,
+            rowCount := rowCount
+          )))
+          FROM (
+            SELECT *
+            FROM dirty_work_lifecycle_reason
+            ORDER BY rowCount DESC, status ASC, lifecycleReason ASC NULLS LAST
+          )
+        ), '[]') AS dirtyWorkLifecycleReasonCountsJson,
         dirty_work.pendingCount AS dirtyWorkPendingCount,
         dirty_work.runningCount AS dirtyWorkRunningCount,
         dirty_work.failedCount AS dirtyWorkFailedCount,
@@ -717,6 +880,20 @@ const getDiagnosticsCountState = (
     pendingCount: Number(row[`${prefix}PendingCount`]),
     runningCount: Number(row[`${prefix}RunningCount`]),
     updatedAt: row[`${prefix}UpdatedAt`],
+  }
+}
+
+const getDiagnosticsDirtyWorkState = (
+  row: DiagnosticsSummaryRow | undefined,
+): ReviewServingDiagnosticsDirtyWorkState => {
+  if (row === undefined) {
+    return emptyDirtyWorkState
+  }
+
+  return {
+    ...getDiagnosticsCountState(row, 'dirtyWork'),
+    buckets: getTypedJsonArray(row.dirtyWorkBucketsJson, getDirtyWorkBucket),
+    lifecycleReasonCounts: getTypedJsonArray(row.dirtyWorkLifecycleReasonCountsJson, getDirtyWorkLifecycleReasonCount),
   }
 }
 
@@ -802,7 +979,7 @@ export const getReviewServingDiagnosticsEffect = (
   return Effect.gen(function* () {
     const [summaryRow] = yield* getDiagnosticsSummaryRowsEffect(input, database)
     const activeSnapshot = getDiagnosticsActiveSnapshot(summaryRow)
-    const dirtyWork = getDiagnosticsCountState(summaryRow, 'dirtyWork')
+    const dirtyWork = getDiagnosticsDirtyWorkState(summaryRow)
     const rebuildChunks = getDiagnosticsRebuildChunkState(summaryRow)
     const searchDiagnostics = getSearchDiagnostics(activeSnapshot)
 
