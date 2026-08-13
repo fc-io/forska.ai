@@ -32,6 +32,41 @@ backlog.
   system still needs explicit evidence-preserving ACK/coalescing semantics
   before retiring them.
 
+## Root-Cause Hypothesis To Prove
+
+The working root cause is a storage/access-path problem, not an exception
+handling problem:
+
+1. Dirty-work lane identity is still represented primarily through wide string
+   keys such as `projection_key` plus source-partition predicates.
+2. Completion, retention, and rebuild-covered retirement can find candidate rows
+   by re-evaluating those broad lane predicates against the hot
+   `app.review_serving_dirty_work` table.
+3. On the current million-row class backlog, those predicates make DuckDB scan
+   and decompress too much dirty-work state before it can update a small number
+   of rows.
+4. Because the DuckDB owner is serialized, that scan monopolizes the owner and
+   delays unrelated foreground API reads.
+
+The fix is complete only when evidence shows this access path is gone from hot
+maintenance work. The replacement model must identify work by compact lane keys
+and then update bounded exact row ids.
+
+## Explicit Non-Fixes
+
+These may be useful as diagnostics or short-term mitigations, but they do not
+complete this plan:
+
+- adding more error catching, retries, or timeout handling around dirty-work
+  drain
+- reducing dirty-work batch size while preserving the same broad predicate
+  update/retirement path
+- running the same scan-heavy path under a higher-memory owner without
+  operator supervision and route-latency evidence
+- hiding dirty-work backlog from the warning API without fixing drainability
+- marking dirty rows complete solely because a visible surface looks ready,
+  without manifest/watermark coverage evidence
+
 ## Principles
 
 - Do not solve this by catching more timeouts or hiding errors.
