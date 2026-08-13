@@ -312,6 +312,46 @@ test('labels ready review page processing as background work', async () => {
   }
 })
 
+test('labels fully ready queued work as background maintenance with concrete remaining buckets', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      coverage: {
+        detailReadyArticleCount: 18784,
+        reviewPageReadyArticleCount: 18784,
+        searchReadyArticleCount: 18784,
+        totalArticleCount: 18784,
+      },
+      pendingProjectRefreshCount: 87550,
+      pendingRefreshCount: 87550,
+      progressState: 'queued',
+      queuedProjectRefreshCount: 87550,
+      queuedRefreshCount: 87550,
+      serving: {
+        diagnostics: {
+          dirtyWork: {pendingCount: 87544, runningCount: 0},
+          rebuildChunks: {pendingCount: 6, runningCount: 0},
+        },
+        manifest: {},
+        readable: true,
+        usable: true,
+      },
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Background review maintenance queued')
+    expect(container.textContent).toContain(
+      'Review pages, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
+    )
+    expect(container.textContent).toContain('Search: 18,784 / 18,784 articles ready')
+    expect(container.textContent).toContain('Background work: 6 rebuild chunks and 87,544 incremental row updates')
+    expect(container.textContent).not.toContain('Review indexing queued for project')
+    expect(container.textContent).not.toContain('87,550 review-serving tasks remaining')
+  } finally {
+    dispose()
+  }
+})
+
 test('renders user-facing counts and progress timestamps for review indexing work', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({

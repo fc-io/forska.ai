@@ -4,7 +4,7 @@ import {createMemo, Show} from 'solid-js'
 
 import {getReviewIndexingStateCopy} from './getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
-import {createReviewsWarningsQueryOptions} from './reviewsWarningsQuery.ts'
+import {createReviewsWarningsQueryOptions, type ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
 const formatQueuedAt = (value: string | null) => {
   const parsed = value ? new Date(value) : null
@@ -14,20 +14,62 @@ const formatQueuedAt = (value: string | null) => {
     : new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'}).format(parsed)
 }
 
+const formatCount = (value: number) => {
+  return new Intl.NumberFormat().format(value)
+}
+
+const getReadySurfaceMaintenanceSegments = (params: {indexing: ReviewsWarningsData['indexing']}) => {
+  const diagnostics = params.indexing.serving.diagnostics
+  const pendingRebuildChunkCount =
+    (diagnostics.rebuildChunks?.pendingCount ?? 0) + (diagnostics.rebuildChunks?.runningCount ?? 0)
+  const pendingDirtyWorkCount = (diagnostics.dirtyWork?.pendingCount ?? 0) + (diagnostics.dirtyWork?.runningCount ?? 0)
+  const segments = [
+    pendingRebuildChunkCount > 0
+      ? pendingRebuildChunkCount === 1
+        ? '1 rebuild chunk'
+        : `${formatCount(pendingRebuildChunkCount)} rebuild chunks`
+      : null,
+    pendingDirtyWorkCount > 0
+      ? pendingDirtyWorkCount === 1
+        ? '1 incremental row update'
+        : `${formatCount(pendingDirtyWorkCount)} incremental row updates`
+      : null,
+  ].filter((value): value is string => {
+    return value !== null
+  })
+
+  return segments.length === 0 ? null : segments
+}
+
+const hasReadyReviewSurfaces = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return (
+    totalArticleCount > 0
+    && indexing.coverage.reviewPageReadyArticleCount === totalArticleCount
+    && indexing.coverage.detailReadyArticleCount === totalArticleCount
+    && (indexing.coverage.searchReadyArticleCount === null
+      || indexing.coverage.searchReadyArticleCount === totalArticleCount)
+  )
+}
+
 const getPendingRefreshMetaLabel = (params: {
+  indexing: ReviewsWarningsData['indexing']
   pendingArticleRefreshCount: number
   pendingProjectRefreshCount: number
 }) => {
+  const readySurfaceMaintenanceSegments = hasReadyReviewSurfaces(params.indexing)
+    ? getReadySurfaceMaintenanceSegments({indexing: params.indexing})
+    : null
   const segments = [
-    params.pendingProjectRefreshCount > 0
+    readySurfaceMaintenanceSegments === null && params.pendingProjectRefreshCount > 0
       ? params.pendingProjectRefreshCount === 1
         ? '1 review-serving task remaining'
-        : `${params.pendingProjectRefreshCount} review-serving tasks remaining`
-      : null,
+        : `${formatCount(params.pendingProjectRefreshCount)} review-serving tasks remaining`
+      : readySurfaceMaintenanceSegments?.join(' and '),
     params.pendingArticleRefreshCount > 0
       ? params.pendingArticleRefreshCount === 1
         ? '1 article judgment refresh remaining'
-        : `${params.pendingArticleRefreshCount} article judgment refreshes remaining`
+        : `${formatCount(params.pendingArticleRefreshCount)} article judgment refreshes remaining`
       : null,
   ].filter((value): value is string => {
     return value !== null
@@ -98,7 +140,14 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
     if (!data) return null
 
     const queuedAtLabel = formatQueuedAt(data.indexing.oldestQueuedAt)
-    const pendingLabel = data.indexing.pendingRefreshCount === 0 ? null : getPendingRefreshMetaLabel(data.indexing)
+    const pendingLabel =
+      data.indexing.pendingRefreshCount === 0
+        ? null
+        : getPendingRefreshMetaLabel({
+            indexing: data.indexing,
+            pendingArticleRefreshCount: data.indexing.pendingArticleRefreshCount,
+            pendingProjectRefreshCount: data.indexing.pendingProjectRefreshCount,
+          })
     const parts = [
       pendingLabel ? (queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel) : null,
     ].filter((value): value is string => {
