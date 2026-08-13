@@ -343,9 +343,11 @@ test('labels fully ready queued work as background maintenance with concrete rem
     expect(container.textContent).toContain(
       'Review pages, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
     )
+    expect(container.textContent).toContain('Background work: background maintenance queued')
     expect(container.textContent).toContain('Search: 18,784 / 18,784 articles ready')
     expect(container.textContent).toContain('Background work: 6 rebuild chunks and 87,544 incremental row updates')
     expect(container.textContent).not.toContain('Review indexing queued for project')
+    expect(container.textContent).not.toContain('Indexing status: queued for the maintenance worker')
     expect(container.textContent).not.toContain('87,550 review-serving tasks remaining')
   } finally {
     dispose()

@@ -49,6 +49,15 @@ const hasReadyReviewPages = (indexing: ReviewsIndexing) => {
   )
 }
 
+const hasReadyReviewSurfaces = (indexing: ReviewsIndexing) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return (
+    hasReadyReviewPages(indexing)
+    && (indexing.coverage.searchReadyArticleCount === null
+      || indexing.coverage.searchReadyArticleCount === totalArticleCount)
+  )
+}
+
 export const getProjectRefreshLabel = (indexing: ReviewsIndexing) => {
   return joinLabelParts([
     getCoverageCountLabel(indexing.coverage.reviewPageReadyArticleCount, indexing.coverage.totalArticleCount),
@@ -81,27 +90,42 @@ export const getCleanupLabel = (indexing: ReviewsIndexing) => {
 }
 
 export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
-  return (indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0 && indexing.progressState === 'completed'
-    ? 'old index cleanup running'
-    : indexing.progressState === 'processing'
-      ? hasReadyReviewPages(indexing)
-        ? 'updating search and enrichment in the background'
-        : 'maintenance worker is updating the review page index'
-      : indexing.progressState === 'queued'
-        ? 'queued for the maintenance worker'
-        : indexing.progressState === 'blocked' && indexing.blockedReason === 'paused_by_policy'
-          ? 'recovering after memory pressure'
-          : indexing.progressState === 'blocked'
-            ? 'waiting for maintenance worker'
-            : indexing.progressState === 'stalled'
-              ? 'stalled with no active processing'
-              : indexing.progressState === 'failed'
-                ? 'failed'
-                : 'completed'
+  if ((indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0 && indexing.progressState === 'completed') {
+    return 'old index cleanup running'
+  }
+
+  if (indexing.progressState === 'processing') {
+    if (hasReadyReviewSurfaces(indexing)) {
+      return 'running background maintenance'
+    }
+
+    return hasReadyReviewPages(indexing)
+      ? 'updating search and enrichment in the background'
+      : 'maintenance worker is updating the review page index'
+  }
+
+  if (indexing.progressState === 'queued') {
+    if (hasReadyReviewSurfaces(indexing)) {
+      return 'background maintenance queued'
+    }
+
+    return hasReadyReviewPages(indexing) ? 'search and enrichment queued' : 'queued for the maintenance worker'
+  }
+
+  return indexing.progressState === 'blocked' && indexing.blockedReason === 'paused_by_policy'
+    ? 'recovering after memory pressure'
+    : indexing.progressState === 'blocked'
+      ? 'waiting for maintenance worker'
+      : indexing.progressState === 'stalled'
+        ? 'stalled with no active processing'
+        : indexing.progressState === 'failed'
+          ? 'failed'
+          : 'completed'
 }
 
 export const getIndexingStatusHeading = (indexing: ReviewsIndexing) => {
-  return hasReadyReviewPages(indexing) && indexing.progressState === 'processing'
+  return hasReadyReviewPages(indexing)
+    && (indexing.progressState === 'processing' || indexing.progressState === 'queued')
     ? 'Background work'
     : 'Indexing status'
 }
