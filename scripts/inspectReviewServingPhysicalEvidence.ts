@@ -1698,12 +1698,13 @@ const getDirtyWorkRetentionEvidenceReport = async (
       `
         WITH project_lanes AS (
           SELECT DISTINCT
-            json_extract_string(projection_key, '$.projectionComponent') AS projection_component,
-            json_extract_string(projection_key, '$.projectionIdentity') AS projection_identity,
+            projection_component,
+            projection_identity,
             source_partition
           FROM ${dirtyWorkTable}
           WHERE ${projectPredicate}
-            AND projection_key IS NOT NULL
+            AND projection_component IS NOT NULL
+            AND projection_identity IS NOT NULL
         )
         SELECT
           CASE WHEN ack.dirty_work_id IS NULL THEN 'synthetic_high_water' ELSE 'point' END AS ackKind,
@@ -1734,8 +1735,8 @@ const getDirtyWorkRetentionEvidenceReport = async (
       `
         SELECT
           COALESCE(project_id, 'NULL') AS projectId,
-          COALESCE(json_extract_string(projection_key, '$.projectionComponent'), 'NULL') AS projectionComponent,
-          COALESCE(json_extract_string(projection_key, '$.projectionIdentity'), 'NULL') AS projectionIdentity,
+          COALESCE(projection_component, 'NULL') AS projectionComponent,
+          COALESCE(projection_identity, 'NULL') AS projectionIdentity,
           COALESCE(dirty_kind, 'unknown') AS dirtyKind,
           COALESCE(source_partition, 'unknown') AS sourcePartition,
           COALESCE(status, 'unknown') AS status,

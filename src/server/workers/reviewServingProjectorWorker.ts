@@ -8972,6 +8972,9 @@ export const runReviewServingProjectorWorkerCycle = async (
   const deltaIntake = shouldRunOnlyRebuildChunk
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     : await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
+  const cleanup = shouldRunOnlyRebuildChunk
+    ? {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
+    : await runReviewServingProjectorWorkerCleanup({database, dependencies, options})
   const projectorServiceDependencies = {
     getQueueState: async () => {
       return {foregroundDuckdbQueueDepth: dependencies.getForegroundQueueDepth()}
@@ -8988,9 +8991,6 @@ export const runReviewServingProjectorWorkerCycle = async (
           return getWorkerNowMs(dependencies, options)
         },
       })
-  const cleanup = shouldRunOnlyRebuildChunk
-    ? {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
-    : await runReviewServingProjectorWorkerCleanup({database, dependencies, options})
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
 

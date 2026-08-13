@@ -430,6 +430,21 @@ test('DuckDB migration rebuilds dirty-work hot table without mutable indexes', (
   expect(migrationSql).not.toContain('CREATE INDEX')
 })
 
+test('DuckDB migration creates dirty-work claim state without startup backfill', () => {
+  const migrationSql = readFileSync(resolve(migrationsFolder, '0224_reviewServingDirtyWorkLifecycleReason.sql'), 'utf8')
+
+  expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS app.review_serving_dirty_work_claim_state')
+  expect(migrationSql).toContain('dirty_work_id VARCHAR PRIMARY KEY')
+  expect(migrationSql).toContain('storage_row_id BIGINT')
+  expect(migrationSql).toContain('projection_component VARCHAR NOT NULL')
+  expect(migrationSql).toContain('projection_identity VARCHAR NOT NULL')
+  expect(migrationSql).toContain('latest_source_high_water_mark BIGINT NOT NULL')
+  expect(migrationSql).not.toContain('review_serving_dirty_work_lane_state')
+  expect(migrationSql).not.toContain('INSERT INTO app.review_serving_dirty_work_claim_state')
+  expect(migrationSql).not.toContain('UPDATE app.review_serving_dirty_work_claim_state')
+  expect(migrationSql).not.toContain("json_extract_string(projection_key, '$.projectionComponent')")
+})
+
 test('DuckDB migration retires review article serving compatibility view without touching base/state tables', () => {
   const migrationSql = readFileSync(
     resolve(migrationsFolder, '0196_dropReviewArticleServingCompatibilityView.sql'),

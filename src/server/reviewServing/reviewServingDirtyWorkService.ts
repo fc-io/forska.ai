@@ -13,6 +13,13 @@ import {getReviewServingDirtyWorkScopeKey, type ReviewServingDirtyWorkScope} fro
 
 export type ReviewServingDirtyWorkStatus = 'completed' | 'failed' | 'pending' | 'running'
 
+export type ReviewServingDirtyWorkLifecycleReason =
+  | 'covered_by_rebuild'
+  | 'failed'
+  | 'projected'
+  | 'released'
+  | 'superseded_by_high_water'
+
 export type ReviewServingDirtyWorkDatabase = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
@@ -42,6 +49,7 @@ export type ClaimReviewServingDirtyWorkParams = {
 
 export const defaultReviewServingDirtyWorkStaleClaimSeconds = 15 * 60
 const reviewServingDirtyWorkLaneWindowLimit = 2_048
+const reviewServingDirtyWorkCoverageCompletionLimit = 2_048
 
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   completedSourceHighWaterMark: number
@@ -52,8 +60,11 @@ export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
 
 export type CleanupReviewServingDirtyWorkRetentionParams = {
   acknowledgementDeleteLimit?: number
+  coalesceDirtyWorkLimit?: number
   dirtyWorkDeleteLimit?: number
   laneCompactionLimit?: number
+  laneRepairLimit?: number
+  laneStateRepairLimit?: number
 }
 
 export type CleanupReviewServingDirtyWorkRetentionCompaction = CompactReviewServingDirtyWorkAcknowledgementsParams & {
@@ -61,10 +72,13 @@ export type CleanupReviewServingDirtyWorkRetentionCompaction = CompactReviewServ
 }
 
 export type CleanupReviewServingDirtyWorkRetentionResult = {
+  coalescedDirtyWorkCount?: number
   compactedAcknowledgements: CleanupReviewServingDirtyWorkRetentionCompaction[]
   compactedLaneCount: number
   deletedAcknowledgementCount: number
   deletedDirtyWorkCount: number
+  repairedLaneColumnCount?: number
+  repairedLaneStateCount?: number
 }
 
 export type ReviewServingDirtyWorkCoverage = {
@@ -86,6 +100,7 @@ export type ReviewServingDirtyWorkClaim = {
   firstSourceHighWaterMark: number
   latestDeltaId: string | null
   latestSourceHighWaterMark: number
+  lifecycleReason?: ReviewServingDirtyWorkLifecycleReason | null
   projectId: string | null
   projectionComponent: ReviewServingProjectionComponent
   projectionIdentity: string
@@ -93,7 +108,7 @@ export type ReviewServingDirtyWorkClaim = {
   scopeKind: string
   sourcePartition: string
   status: ReviewServingDirtyWorkStatus
-  storageRowId?: number | null
+  storageRowId?: number | string | null
 }
 
 export type ReviewServingDirtyWorkRecord = ReviewServingDirtyWorkClaim & {
@@ -113,13 +128,16 @@ type DirtyWorkRow = {
   firstSourceHighWaterMark: number
   latestDeltaId: string | null
   latestSourceHighWaterMark: number
+  lifecycleReason?: ReviewServingDirtyWorkLifecycleReason | null
   projectId: string | null
+  projectionComponent?: ReviewServingProjectionComponent | null
+  projectionIdentity?: string | null
   projectionKey: string | null
   scopeId: string
   scopeKind: string
   sourcePartition: string
   status: ReviewServingDirtyWorkStatus
-  storageRowId?: number | null
+  storageRowId?: number | string | null
   updatedAt: unknown
 }
 
@@ -127,6 +145,20 @@ type DirtyWorkSourceWatermarkCompletion = {
   projectId: string | null
   sourceHighWaterMark: number
   sourcePartition: string
+}
+
+type DirtyWorkClaimStateRow = {
+  dirtyRangeEnd: string | null
+  dirtyRangeStart: string | null
+  dirtyWorkId: string
+  latestSourceHighWaterMark: number
+  projectId: string
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+  sourcePartition: string
+  status: ReviewServingDirtyWorkStatus
+  storageRowId: number | string | null
+  updatedAt: unknown
 }
 
 const getReviewServingHash = (label: string, value: ReviewServingIdentityValue) => {
@@ -142,8 +174,12 @@ const getProjectionKey = (input: {
   return getStableReviewServingJson(input)
 }
 
-const getProjectionKeyPrefix = (projectionComponent: ReviewServingProjectionComponent) => {
-  return getStableReviewServingJson({projectionComponent}).replace(/\}$/u, ',"projectionIdentity":')
+const getProjectionComponentSql = (dirtyWorkSql: string) => {
+  return `${dirtyWorkSql}.projection_component`
+}
+
+const getProjectionIdentitySql = (dirtyWorkSql: string) => {
+  return `${dirtyWorkSql}.projection_identity`
 }
 
 const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams, claimNowSql: string) => {
@@ -160,25 +196,7 @@ const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams
         AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
       )
     )
-    AND starts_with(projection_key, ${getSqlLiteral(getProjectionKeyPrefix(params.projectionComponent))})`
-}
-
-const getLowerWatermarkLaneBlockerPredicate = (
-  params: ClaimReviewServingDirtyWorkParams,
-  claimNowSql: string,
-  dirtyWorkSql = 'app.review_serving_dirty_work',
-) => {
-  const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
-
-  return `NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_dirty_work blocker
-      WHERE blocker.projection_key = ${dirtyWorkSql}.projection_key
-        AND blocker.source_partition = ${dirtyWorkSql}.source_partition
-        AND blocker.status IN ('running', 'failed')
-        AND blocker.updated_at > ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
-        AND blocker.latest_source_high_water_mark < ${dirtyWorkSql}.latest_source_high_water_mark
-    )`
+    AND projection_component = ${getSqlLiteral(params.projectionComponent)}`
 }
 
 const getDirtyWorkId = (input: ReviewServingDirtyWorkInput) => {
@@ -346,16 +364,21 @@ const getDirtyWorkRecordFromRow = (row: DirtyWorkRow): ReviewServingDirtyWorkRec
     firstSourceHighWaterMark: Number(row.firstSourceHighWaterMark),
     latestDeltaId: row.latestDeltaId,
     latestSourceHighWaterMark: Number(row.latestSourceHighWaterMark),
+    lifecycleReason: row.lifecycleReason ?? null,
     projectId: row.projectId,
-    projectionComponent: projection?.projectionComponent ?? 'display',
-    projectionIdentity: projection?.projectionIdentity ?? '',
+    projectionComponent: row.projectionComponent ?? projection?.projectionComponent ?? 'display',
+    projectionIdentity: row.projectionIdentity ?? projection?.projectionIdentity ?? '',
     scopeId: row.scopeId,
     scopeKind: row.scopeKind,
     sourcePartition: row.sourcePartition,
     status: row.status,
-    storageRowId: row.storageRowId === undefined || row.storageRowId === null ? null : Number(row.storageRowId),
+    storageRowId: row.storageRowId ?? null,
     updatedAt: getDateValue(row.updatedAt),
   }
+}
+
+const getStorageRowIdSql = (storageRowId: number | string) => {
+  return typeof storageRowId === 'number' ? String(storageRowId) : `CAST(${getSqlLiteral(storageRowId)} AS BIGINT)`
 }
 
 const getDirtyWorkSelect = () => {
@@ -372,9 +395,12 @@ const getDirtyWorkSelect = () => {
       source_partition AS sourcePartition,
       first_source_high_water_mark AS firstSourceHighWaterMark,
       latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
       latest_delta_id AS latestDeltaId,
       dirty_range_start AS dirtyRangeStart,
       dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
       status,
       created_at AS createdAt,
       updated_at AS updatedAt
@@ -396,9 +422,12 @@ const getQualifiedDirtyWorkSelect = (dirtyWorkSql: string) => {
       ${dirtyWorkSql}.source_partition AS sourcePartition,
       ${dirtyWorkSql}.first_source_high_water_mark AS firstSourceHighWaterMark,
       ${dirtyWorkSql}.latest_source_high_water_mark AS latestSourceHighWaterMark,
+      ${dirtyWorkSql}.lifecycle_reason AS lifecycleReason,
       ${dirtyWorkSql}.latest_delta_id AS latestDeltaId,
       ${dirtyWorkSql}.dirty_range_start AS dirtyRangeStart,
       ${dirtyWorkSql}.dirty_range_end AS dirtyRangeEnd,
+      ${dirtyWorkSql}.projection_component AS projectionComponent,
+      ${dirtyWorkSql}.projection_identity AS projectionIdentity,
       ${dirtyWorkSql}.status,
       ${dirtyWorkSql}.created_at AS createdAt,
       ${dirtyWorkSql}.updated_at AS updatedAt
@@ -599,7 +628,8 @@ const getDirtyWorkCoverageMatchSql = (dirtyWorkSql: string) => {
 
   return `
     ${dirtyWorkSql}.project_id = coverage.project_id
-    AND ${dirtyWorkSql}.projection_key = coverage.projection_key
+    AND ${getProjectionComponentSql(dirtyWorkSql)} = coverage.projection_component
+    AND ${getProjectionIdentitySql(dirtyWorkSql)} = coverage.projection_identity
     AND (
       ${dirtyWorkSql}.source_partition = coverage.source_partition
       OR ${sourceKeySql} = coverage.source_partition
@@ -618,27 +648,203 @@ const getHighWaterAckCoverages = (coverages: readonly ReviewServingDirtyWorkCove
 const getDirtyWorkUpdatePredicate = (
   claims: readonly Pick<ReviewServingDirtyWorkClaim, 'dirtyWorkId' | 'storageRowId'>[],
 ) => {
+  const dirtyWorkIds = [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.dirtyWorkId
+      }),
+    ),
+  ]
   const rowIds = [
     ...new Set(
       claims
         .map((claim) => {
           return claim.storageRowId
         })
-        .filter((rowId): rowId is number => {
-          return rowId !== null && rowId !== undefined && Number.isFinite(rowId)
+        .filter((rowId): rowId is number | string => {
+          return rowId !== null && rowId !== undefined && String(rowId).trim().length > 0
         }),
     ),
   ]
 
   if (rowIds.length > 0) {
-    return `rowid IN (${rowIds.join(', ')})`
+    return `(
+      rowid IN (${rowIds
+        .map((rowId) => {
+          return getStorageRowIdSql(rowId)
+        })
+        .join(', ')})
+      OR dirty_work_id IN (${dirtyWorkIds.map(getSqlLiteral).join(', ')})
+    )`
   }
 
-  return `dirty_work_id IN (${claims
-    .map((claim) => {
-      return getSqlLiteral(claim.dirtyWorkId)
+  return `dirty_work_id IN (${dirtyWorkIds.map(getSqlLiteral).join(', ')})`
+}
+
+const getDirtyWorkLaneProjectId = (projectId: string | null) => {
+  return projectId ?? ''
+}
+
+const getDirtyWorkClaimStateValuesSql = (
+  claims: readonly Pick<
+    ReviewServingDirtyWorkClaim,
+    | 'dirtyRangeEnd'
+    | 'dirtyRangeStart'
+    | 'dirtyWorkId'
+    | 'latestSourceHighWaterMark'
+    | 'projectId'
+    | 'projectionComponent'
+    | 'projectionIdentity'
+    | 'sourcePartition'
+    | 'status'
+    | 'storageRowId'
+  >[],
+) => {
+  return claims
+    .filter((claim) => {
+      return claim.projectionIdentity.trim().length > 0 && claim.sourcePartition.trim().length > 0
     })
-    .join(', ')})`
+    .map((claim) => {
+      return `(
+        ${getSqlLiteral(claim.dirtyWorkId)},
+        ${
+          claim.storageRowId === null || claim.storageRowId === undefined
+            ? 'NULL'
+            : getStorageRowIdSql(claim.storageRowId)
+        },
+        ${getSqlLiteral(getDirtyWorkLaneProjectId(claim.projectId))},
+        ${getSqlLiteral(claim.projectionComponent)},
+        ${getSqlLiteral(claim.projectionIdentity)},
+        ${getSqlLiteral(claim.sourcePartition)},
+        ${getSqlLiteral(claim.status)},
+        ${getSqlLiteral(claim.latestSourceHighWaterMark)},
+        ${getSqlLiteral(claim.dirtyRangeStart)},
+        ${getSqlLiteral(claim.dirtyRangeEnd)}
+      )`
+    })
+    .join(',\n      ')
+}
+
+const maintainReviewServingDirtyWorkClaimStates = async (
+  claims: readonly Pick<
+    ReviewServingDirtyWorkClaim,
+    | 'dirtyRangeEnd'
+    | 'dirtyRangeStart'
+    | 'dirtyWorkId'
+    | 'latestSourceHighWaterMark'
+    | 'projectId'
+    | 'projectionComponent'
+    | 'projectionIdentity'
+    | 'sourcePartition'
+    | 'status'
+    | 'storageRowId'
+  >[],
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  const valuesSql = getDirtyWorkClaimStateValuesSql(claims)
+
+  if (valuesSql.length === 0) {
+    return
+  }
+
+  const changedRowsSql = `
+    SELECT
+      dirty_work_id,
+      storage_row_id,
+      project_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      status,
+      latest_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end
+    FROM (
+      VALUES
+      ${valuesSql}
+    ) AS changed(
+      dirty_work_id,
+      storage_row_id,
+      project_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      status,
+      latest_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end
+    )
+  `
+
+  await database.run(`
+    UPDATE app.review_serving_dirty_work_claim_state existing
+    SET
+      storage_row_id = COALESCE(changed.storage_row_id, existing.storage_row_id),
+      project_id = changed.project_id,
+      projection_component = changed.projection_component,
+      projection_identity = changed.projection_identity,
+      source_partition = changed.source_partition,
+      status = changed.status,
+      latest_source_high_water_mark = changed.latest_source_high_water_mark,
+      dirty_range_start = changed.dirty_range_start,
+      dirty_range_end = changed.dirty_range_end,
+      updated_at = current_timestamp
+    FROM (
+      ${changedRowsSql}
+    ) AS changed
+    WHERE existing.dirty_work_id = changed.dirty_work_id
+  `)
+
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work_claim_state (
+      dirty_work_id,
+      storage_row_id,
+      project_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      status,
+      latest_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end,
+      updated_at
+    )
+    SELECT
+      changed.dirty_work_id,
+      changed.storage_row_id,
+      changed.project_id,
+      changed.projection_component,
+      changed.projection_identity,
+      changed.source_partition,
+      changed.status,
+      changed.latest_source_high_water_mark,
+      changed.dirty_range_start,
+      changed.dirty_range_end,
+      current_timestamp
+    FROM (
+      ${changedRowsSql}
+    ) AS changed
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_claim_state existing
+      WHERE existing.dirty_work_id = changed.dirty_work_id
+    )
+  `)
+}
+
+const getDirtyWorkClaimStatePredicate = (
+  claims: readonly Pick<DirtyWorkClaimStateRow, 'dirtyWorkId' | 'storageRowId'>[],
+) => {
+  const predicates = claims.map((claim) => {
+    return claim.storageRowId === null || claim.storageRowId === undefined
+      ? `dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)}`
+      : `(
+          (rowid = ${getStorageRowIdSql(claim.storageRowId)} AND dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)})
+          OR dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)}
+        )`
+  })
+
+  return predicates.length === 0 ? 'FALSE' : `(${predicates.join(' OR ')})`
 }
 
 const isClaimCoveredByHighWaterAckCoverage = (
@@ -730,7 +936,7 @@ export const upsertReviewServingDirtyWork = async (
     projectionIdentity: input.projectionIdentity,
   })
 
-  await database.run(`
+  const updatedRows = await database.queryJson<DirtyWorkRow>(`
     UPDATE app.review_serving_dirty_work
     SET
       first_source_high_water_mark = LEAST(
@@ -742,6 +948,8 @@ export const upsertReviewServingDirtyWork = async (
         ${getSqlLiteral(input.scope.sourceHighWaterMark)}
       ),
       latest_delta_id = ${getSqlLiteral(input.latestDeltaId ?? null)},
+      projection_component = ${getSqlLiteral(input.projectionComponent)},
+      projection_identity = ${getSqlLiteral(input.projectionIdentity)},
       dirty_range_start = CASE
         WHEN dirty_range_start IS NULL THEN ${getSqlLiteral(input.scope.dirtyRangeStart)}
         WHEN ${getSqlLiteral(input.scope.dirtyRangeStart)} IS NULL THEN dirty_range_start
@@ -753,11 +961,45 @@ export const upsertReviewServingDirtyWork = async (
         ELSE GREATEST(dirty_range_end, ${getSqlLiteral(input.scope.dirtyRangeEnd)})
       END,
       status = 'pending',
+      lifecycle_reason = NULL,
       updated_at = current_timestamp
     WHERE dirty_work_id = ${getSqlLiteral(dirtyWorkId)}
+    RETURNING
+      CAST(NULL AS BIGINT) AS storageRowId,
+      dirty_work_id AS dirtyWorkId,
+      project_id AS projectId,
+      scope_kind AS scopeKind,
+      scope_id AS scopeId,
+      article_id AS articleId,
+      projection_key AS projectionKey,
+      dirty_kind AS dirtyKind,
+      source_partition AS sourcePartition,
+      first_source_high_water_mark AS firstSourceHighWaterMark,
+      latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
+      latest_delta_id AS latestDeltaId,
+      dirty_range_start AS dirtyRangeStart,
+      dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
+      status,
+      created_at AS createdAt,
+      updated_at AS updatedAt
   `)
 
+  if (updatedRows.length > 0) {
+    await maintainReviewServingDirtyWorkClaimStates(updatedRows.map(getDirtyWorkRecordFromRow), database)
+
+    return {dirtyWorkId, skipped}
+  }
+
   if (!(await reserveReviewServingDirtyWorkId(dirtyWorkId, database))) {
+    const existing = await getReviewServingDirtyWork(dirtyWorkId, database)
+
+    if (existing !== null) {
+      await maintainReviewServingDirtyWorkClaimStates([existing], database)
+    }
+
     return {dirtyWorkId, skipped}
   }
 
@@ -769,6 +1011,8 @@ export const upsertReviewServingDirtyWork = async (
       scope_id,
       article_id,
       projection_key,
+      projection_component,
+      projection_identity,
       dirty_kind,
       source_partition,
       first_source_high_water_mark,
@@ -777,6 +1021,7 @@ export const upsertReviewServingDirtyWork = async (
       dirty_range_start,
       dirty_range_end,
       status,
+      lifecycle_reason,
       updated_at
     )
     VALUES (
@@ -786,6 +1031,8 @@ export const upsertReviewServingDirtyWork = async (
       ${getSqlLiteral(input.scope.scopeId)},
       ${getSqlLiteral(getArticleId(input))},
       ${getSqlLiteral(projectionKey)},
+      ${getSqlLiteral(input.projectionComponent)},
+      ${getSqlLiteral(input.projectionIdentity)},
       ${getSqlLiteral(input.scope.dirtyKind)},
       ${getSqlLiteral(input.scope.sourcePartition)},
       ${getSqlLiteral(input.scope.sourceHighWaterMark)},
@@ -794,9 +1041,16 @@ export const upsertReviewServingDirtyWork = async (
       ${getSqlLiteral(input.scope.dirtyRangeStart)},
       ${getSqlLiteral(input.scope.dirtyRangeEnd)},
       'pending',
+      NULL,
       current_timestamp
     )
   `)
+
+  const inserted = await getReviewServingDirtyWork(dirtyWorkId, database)
+
+  if (inserted !== null) {
+    await maintainReviewServingDirtyWorkClaimStates([inserted], database)
+  }
 
   return {dirtyWorkId, skipped}
 }
@@ -826,50 +1080,77 @@ export const claimReviewServingDirtyWork = async (
     return []
   }
 
-  const rows = await database.queryJson<DirtyWorkRow>(`
-    WITH claim_lane_window AS (
-      SELECT dirty_work_id, source_partition, projection_key, updated_at, latest_source_high_water_mark
-      FROM app.review_serving_dirty_work
-      WHERE ${eligiblePredicate}
-      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-      LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
-    ),
-    eligible_lane AS (
-      SELECT source_partition, projection_key
-      FROM claim_lane_window oldest
-      WHERE ${getLowerWatermarkLaneBlockerPredicate(params, claimNowSql, 'oldest')}
-      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-      LIMIT 1
-    ),
-    claim_candidate_window AS (
-      SELECT dirty_work_id, source_partition, projection_key, updated_at, latest_source_high_water_mark
-      FROM app.review_serving_dirty_work
-      WHERE ${eligiblePredicate}
-        AND EXISTS (
+  const rows = await database.transaction(async (tx) => {
+    const claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
+      WITH claim_state_window AS (
+        SELECT
+          state.dirty_work_id AS dirtyWorkId,
+          state.storage_row_id AS storageRowId,
+          state.project_id AS projectId,
+          state.projection_component AS projectionComponent,
+          state.projection_identity AS projectionIdentity,
+          state.source_partition AS sourcePartition,
+          state.status,
+          state.latest_source_high_water_mark AS latestSourceHighWaterMark,
+          state.dirty_range_start AS dirtyRangeStart,
+          state.dirty_range_end AS dirtyRangeEnd,
+          state.updated_at AS updatedAt
+        FROM app.review_serving_dirty_work_claim_state state
+        WHERE state.projection_component = ${getSqlLiteral(params.projectionComponent)}
+          AND (
+            state.status = 'pending'
+            OR (
+              state.status IN ('running', 'failed')
+              AND state.updated_at <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
+            )
+          )
+        ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC
+        LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
+      ),
+      oldest_claimable AS (
+        SELECT *
+        FROM claim_state_window oldest
+        WHERE NOT EXISTS (
           SELECT 1
-          FROM eligible_lane
-          WHERE eligible_lane.source_partition = app.review_serving_dirty_work.source_partition
-            AND eligible_lane.projection_key = app.review_serving_dirty_work.projection_key
+          FROM app.review_serving_dirty_work_claim_state blocker
+          WHERE blocker.project_id = oldest.projectId
+            AND blocker.projection_component = oldest.projectionComponent
+            AND blocker.projection_identity = oldest.projectionIdentity
+            AND blocker.source_partition = oldest.sourcePartition
+            AND blocker.status IN ('running', 'failed')
+            AND blocker.updated_at > ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
+            AND blocker.latest_source_high_water_mark < oldest.latestSourceHighWaterMark
         )
-      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-      LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
-    ),
-    claim_candidates AS (
-      SELECT dirty_work_id
-      FROM claim_candidate_window candidate
-      WHERE ${getLowerWatermarkLaneBlockerPredicate(params, claimNowSql, 'candidate')}
-      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+        ORDER BY oldest.updatedAt ASC, oldest.latestSourceHighWaterMark ASC, oldest.dirtyWorkId ASC
+        LIMIT 1
+      ),
+      selected_lane AS (
+        SELECT projectId, projectionComponent, projectionIdentity, sourcePartition
+        FROM oldest_claimable
+      )
+      SELECT *
+      FROM claim_state_window candidate
+      INNER JOIN selected_lane lane
+        ON candidate.projectId = lane.projectId
+        AND candidate.projectionComponent = lane.projectionComponent
+        AND candidate.projectionIdentity = lane.projectionIdentity
+        AND candidate.sourcePartition = lane.sourcePartition
+      ORDER BY candidate.updatedAt ASC, candidate.latestSourceHighWaterMark ASC, candidate.dirtyWorkId ASC
       LIMIT ${limit}
-    )
+    `)
+
+    if (claimStateRows.length === 0) {
+      return []
+    }
+
+    const candidatePredicate = getDirtyWorkClaimStatePredicate(claimStateRows)
+    const claimedRows = await tx.queryJson<DirtyWorkRow>(`
     UPDATE app.review_serving_dirty_work
     SET status = 'running', updated_at = current_timestamp
-    WHERE dirty_work_id IN (
-      SELECT dirty_work_id
-      FROM claim_candidates
-    )
+    WHERE ${candidatePredicate}
       AND ${eligiblePredicate}
     RETURNING
-      rowid AS storageRowId,
+      CAST(NULL AS BIGINT) AS storageRowId,
       dirty_work_id AS dirtyWorkId,
       project_id AS projectId,
       scope_kind AS scopeKind,
@@ -880,13 +1161,20 @@ export const claimReviewServingDirtyWork = async (
       source_partition AS sourcePartition,
       first_source_high_water_mark AS firstSourceHighWaterMark,
       latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
       latest_delta_id AS latestDeltaId,
       dirty_range_start AS dirtyRangeStart,
       dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
       status,
       created_at AS createdAt,
       updated_at AS updatedAt
   `)
+    await maintainReviewServingDirtyWorkClaimStates(claimedRows.map(getDirtyWorkRecordFromRow), tx)
+
+    return claimedRows
+  })
   const claims = rows.map(getDirtyWorkRecordFromRow)
 
   return claims.map((claim) => {
@@ -901,12 +1189,34 @@ export const releaseReviewServingDirtyWorkClaims = async (
   const uniqueDirtyWorkIds = [...new Set(dirtyWorkIds)]
 
   if (uniqueDirtyWorkIds.length > 0) {
-    await database.run(`
+    const rows = await database.queryJson<DirtyWorkRow>(`
       UPDATE app.review_serving_dirty_work
-      SET status = 'pending', updated_at = current_timestamp
+      SET status = 'pending', lifecycle_reason = 'released', updated_at = current_timestamp
       WHERE dirty_work_id IN (${uniqueDirtyWorkIds.map(getSqlLiteral).join(', ')})
         AND status = 'running'
+      RETURNING
+        CAST(NULL AS BIGINT) AS storageRowId,
+        dirty_work_id AS dirtyWorkId,
+        project_id AS projectId,
+        scope_kind AS scopeKind,
+        scope_id AS scopeId,
+        article_id AS articleId,
+        projection_key AS projectionKey,
+        dirty_kind AS dirtyKind,
+        source_partition AS sourcePartition,
+        first_source_high_water_mark AS firstSourceHighWaterMark,
+        latest_source_high_water_mark AS latestSourceHighWaterMark,
+        lifecycle_reason AS lifecycleReason,
+        latest_delta_id AS latestDeltaId,
+        dirty_range_start AS dirtyRangeStart,
+        dirty_range_end AS dirtyRangeEnd,
+        projection_component AS projectionComponent,
+        projection_identity AS projectionIdentity,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt
     `)
+    await maintainReviewServingDirtyWorkClaimStates(rows.map(getDirtyWorkRecordFromRow), database)
   }
 
   return {releasedCount: uniqueDirtyWorkIds.length}
@@ -919,12 +1229,34 @@ export const failReviewServingDirtyWorkClaims = async (
   const uniqueDirtyWorkIds = [...new Set(dirtyWorkIds)]
 
   if (uniqueDirtyWorkIds.length > 0) {
-    await database.run(`
+    const rows = await database.queryJson<DirtyWorkRow>(`
       UPDATE app.review_serving_dirty_work
-      SET status = 'failed', updated_at = current_timestamp
+      SET status = 'failed', lifecycle_reason = 'failed', updated_at = current_timestamp
       WHERE dirty_work_id IN (${uniqueDirtyWorkIds.map(getSqlLiteral).join(', ')})
         AND status = 'running'
+      RETURNING
+        CAST(NULL AS BIGINT) AS storageRowId,
+        dirty_work_id AS dirtyWorkId,
+        project_id AS projectId,
+        scope_kind AS scopeKind,
+        scope_id AS scopeId,
+        article_id AS articleId,
+        projection_key AS projectionKey,
+        dirty_kind AS dirtyKind,
+        source_partition AS sourcePartition,
+        first_source_high_water_mark AS firstSourceHighWaterMark,
+        latest_source_high_water_mark AS latestSourceHighWaterMark,
+        lifecycle_reason AS lifecycleReason,
+        latest_delta_id AS latestDeltaId,
+        dirty_range_start AS dirtyRangeStart,
+        dirty_range_end AS dirtyRangeEnd,
+        projection_component AS projectionComponent,
+        projection_identity AS projectionIdentity,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt
     `)
+    await maintainReviewServingDirtyWorkClaimStates(rows.map(getDirtyWorkRecordFromRow), database)
   }
 
   return {failedCount: uniqueDirtyWorkIds.length}
@@ -953,10 +1285,16 @@ export const completeReviewServingDirtyWorkClaims = async (
 
     await database.run(`
       UPDATE app.review_serving_dirty_work
-      SET status = 'completed', updated_at = current_timestamp
+      SET status = 'completed', lifecycle_reason = 'projected', updated_at = current_timestamp
       WHERE ${getDirtyWorkUpdatePredicate(uniqueClaims)}
         AND status = 'running'
     `)
+    await maintainReviewServingDirtyWorkClaimStates(
+      uniqueClaims.map((claim) => {
+        return {...claim, status: 'completed' as const}
+      }),
+      database,
+    )
   }
 
   return {completedCount: uniqueClaims.length}
@@ -973,59 +1311,94 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
   }
 
   const coverageCteSql = getDirtyWorkCoverageCteSql(normalizedCoverages)
-  const rows = await database.queryJson<DirtyWorkRow>(`
-    WITH rebuild_dirty_work_coverage AS (
-      ${coverageCteSql}
-    )
-    ${getQualifiedDirtyWorkSelect('dirty_work')}
-    INNER JOIN rebuild_dirty_work_coverage coverage
-      ON ${getDirtyWorkCoverageMatchSql('dirty_work')}
-    WHERE dirty_work.status <> 'completed'
-  `)
-  const coveredClaims = rows.map(getDirtyWorkRecordFromRow)
   const highWaterAckCoverages = getHighWaterAckCoverages(normalizedCoverages)
-  const pointAckClaims = coveredClaims.filter((claim) => {
-    return !isClaimCoveredByHighWaterAckCoverage(claim, highWaterAckCoverages)
-  })
 
-  await pointAckClaims.reduce<Promise<void>>((previousCompletion, claim) => {
-    return previousCompletion.then(async () => {
-      await acknowledgeReviewServingDirtyWorkClaim(claim, database)
-    })
-  }, Promise.resolve())
+  let completedCount = 0
 
   await insertReviewServingDirtyWorkCoverageAcknowledgements(highWaterAckCoverages, database)
 
-  await advanceReviewServingDirtySourceWatermarkEntries(
-    [
-      ...coveredClaims.map((claim) => {
+  while (true) {
+    const rows = await database.queryJson<DirtyWorkRow>(`
+      WITH rebuild_dirty_work_coverage AS (
+        ${coverageCteSql}
+      ),
+      covered_claim_state AS (
+        SELECT
+          claim_state.dirty_work_id
+        FROM app.review_serving_dirty_work_claim_state claim_state
+        INNER JOIN rebuild_dirty_work_coverage coverage
+          ON ${getDirtyWorkCoverageMatchSql('claim_state')}
+        WHERE claim_state.status <> 'completed'
+        ORDER BY
+          claim_state.updated_at ASC,
+          claim_state.latest_source_high_water_mark ASC,
+          claim_state.dirty_work_id ASC
+        LIMIT ${reviewServingDirtyWorkCoverageCompletionLimit}
+      )
+      ${getQualifiedDirtyWorkSelect('dirty_work')}
+      INNER JOIN covered_claim_state covered
+        ON dirty_work.dirty_work_id = covered.dirty_work_id
+      WHERE dirty_work.status <> 'completed'
+    `)
+    const coveredClaims = rows.map(getDirtyWorkRecordFromRow)
+
+    if (coveredClaims.length === 0) {
+      break
+    }
+
+    const pointAckClaims = coveredClaims.filter((claim) => {
+      return !isClaimCoveredByHighWaterAckCoverage(claim, highWaterAckCoverages)
+    })
+
+    await pointAckClaims.reduce<Promise<void>>((previousCompletion, claim) => {
+      return previousCompletion.then(async () => {
+        await acknowledgeReviewServingDirtyWorkClaim(claim, database)
+      })
+    }, Promise.resolve())
+
+    await advanceReviewServingDirtySourceWatermarkEntries(
+      coveredClaims.map((claim) => {
         return {
           projectId: claim.projectId,
           sourceHighWaterMark: claim.latestSourceHighWaterMark,
           sourcePartition: claim.sourcePartition,
         }
       }),
-      ...highWaterAckCoverages.map((coverage) => {
-        return {
-          projectId: coverage.projectId,
-          sourceHighWaterMark: coverage.completedSourceHighWaterMark,
-          sourcePartition: coverage.sourcePartition,
-        }
-      }),
-    ],
-    database,
-  )
+      database,
+    )
 
-  if (coveredClaims.length > 0) {
     await database.run(`
       UPDATE app.review_serving_dirty_work
-      SET status = 'completed', updated_at = current_timestamp
+      SET status = 'completed', lifecycle_reason = 'covered_by_rebuild', updated_at = current_timestamp
       WHERE ${getDirtyWorkUpdatePredicate(coveredClaims)}
         AND status <> 'completed'
     `)
+    await maintainReviewServingDirtyWorkClaimStates(
+      coveredClaims.map((claim) => {
+        return {...claim, status: 'completed' as const}
+      }),
+      database,
+    )
+
+    completedCount += coveredClaims.length
+
+    if (coveredClaims.length < reviewServingDirtyWorkCoverageCompletionLimit) {
+      break
+    }
   }
 
-  return {completedCount: coveredClaims.length}
+  await advanceReviewServingDirtySourceWatermarkEntries(
+    highWaterAckCoverages.map((coverage) => {
+      return {
+        projectId: coverage.projectId,
+        sourceHighWaterMark: coverage.completedSourceHighWaterMark,
+        sourcePartition: coverage.sourcePartition,
+      }
+    }),
+    database,
+  )
+
+  return {completedCount}
 }
 
 export const completeReviewServingDirtyWorkClaimsAndAdvanceWatermark = async (
@@ -1077,8 +1450,9 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
     `)
   }
 
-  await database.run(`
-    DELETE FROM app.review_serving_dirty_work_ack
+  const compactedDirtyAckIds = await database.queryJson<{dirtyAckId: string}>(`
+    SELECT dirty_ack_id AS dirtyAckId
+    FROM app.review_serving_dirty_work_ack
     WHERE dirty_ack_id <> ${getSqlLiteral(dirtyAckId)}
       AND dirty_work_id IS NOT NULL
       AND projection_component = ${getSqlLiteral(input.projectionComponent)}
@@ -1088,12 +1462,19 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
       AND completed_source_high_water_mark <= ${input.completedSourceHighWaterMark}
   `)
 
+  await deleteReviewServingDirtyWorkAcknowledgementsByIds(
+    compactedDirtyAckIds.map((row) => {
+      return row.dirtyAckId
+    }),
+    database,
+  )
+
   return {compactedThroughHighWaterMark: input.completedSourceHighWaterMark, dirtyAckId}
 }
 
 const getCompletedDirtyWorkCoveredByAckPredicate = (dirtyWorkSql: string) => {
-  const projectionComponentSql = `json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionComponent')`
-  const projectionIdentitySql = `json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionIdentity')`
+  const projectionComponentSql = getProjectionComponentSql(dirtyWorkSql)
+  const projectionIdentitySql = getProjectionIdentitySql(dirtyWorkSql)
 
   return `EXISTS (
       SELECT 1
@@ -1136,10 +1517,8 @@ const getNoLowerRetentionBlockerPredicate = (dirtyWorkSql: string, highWaterMark
   return `NOT EXISTS (
       SELECT 1
       FROM app.review_serving_dirty_work blocker
-      WHERE json_extract_string(blocker.projection_key, '$.projectionComponent')
-          = json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionComponent')
-        AND json_extract_string(blocker.projection_key, '$.projectionIdentity')
-          = json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionIdentity')
+      WHERE ${getProjectionComponentSql('blocker')} = ${getProjectionComponentSql(dirtyWorkSql)}
+        AND ${getProjectionIdentitySql('blocker')} = ${getProjectionIdentitySql(dirtyWorkSql)}
         AND blocker.source_partition = ${dirtyWorkSql}.source_partition
         AND blocker.status <> 'completed'
         AND blocker.latest_source_high_water_mark <= ${highWaterMarkSql}
@@ -1162,13 +1541,14 @@ const getReviewServingDirtyWorkRetentionLanes = async (
   }>(`
     WITH retention_ready_dirty_work AS (
       SELECT
-        json_extract_string(dirty_work.projection_key, '$.projectionComponent') AS projectionComponent,
-        json_extract_string(dirty_work.projection_key, '$.projectionIdentity') AS projectionIdentity,
+        ${getProjectionComponentSql('dirty_work')} AS projectionComponent,
+        ${getProjectionIdentitySql('dirty_work')} AS projectionIdentity,
         dirty_work.source_partition AS sourcePartition,
         MAX(dirty_work.latest_source_high_water_mark) AS completedSourceHighWaterMark
       FROM app.review_serving_dirty_work dirty_work
       WHERE dirty_work.status = 'completed'
-        AND dirty_work.projection_key IS NOT NULL
+        AND ${getProjectionComponentSql('dirty_work')} IS NOT NULL
+        AND ${getProjectionIdentitySql('dirty_work')} IS NOT NULL
         AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('dirty_work')}
         AND ${getCompletedDirtyWorkCoveredByAckPredicate('dirty_work')}
         AND ${getNoLowerRetentionBlockerPredicate('dirty_work', 'dirty_work.latest_source_high_water_mark')}
@@ -1188,8 +1568,8 @@ const getReviewServingDirtyWorkRetentionLanes = async (
       AND NOT EXISTS (
         SELECT 1
         FROM app.review_serving_dirty_work blocker
-        WHERE json_extract_string(blocker.projection_key, '$.projectionComponent') = retention_lane.projectionComponent
-          AND json_extract_string(blocker.projection_key, '$.projectionIdentity') = retention_lane.projectionIdentity
+        WHERE ${getProjectionComponentSql('blocker')} = retention_lane.projectionComponent
+          AND ${getProjectionIdentitySql('blocker')} = retention_lane.projectionIdentity
           AND blocker.source_partition = retention_lane.sourcePartition
           AND blocker.status <> 'completed'
           AND blocker.latest_source_high_water_mark <= retention_lane.completedSourceHighWaterMark
@@ -1197,15 +1577,14 @@ const getReviewServingDirtyWorkRetentionLanes = async (
       AND NOT EXISTS (
         SELECT 1
         FROM app.review_serving_dirty_work uncovered_completed
-        WHERE json_extract_string(uncovered_completed.projection_key, '$.projectionComponent')
-            = retention_lane.projectionComponent
-          AND json_extract_string(uncovered_completed.projection_key, '$.projectionIdentity')
-            = retention_lane.projectionIdentity
+        WHERE ${getProjectionComponentSql('uncovered_completed')} = retention_lane.projectionComponent
+          AND ${getProjectionIdentitySql('uncovered_completed')} = retention_lane.projectionIdentity
           AND uncovered_completed.source_partition = retention_lane.sourcePartition
           AND uncovered_completed.status = 'completed'
           AND uncovered_completed.latest_source_high_water_mark <= retention_lane.completedSourceHighWaterMark
           AND NOT (
-            uncovered_completed.projection_key IS NOT NULL
+            ${getProjectionComponentSql('uncovered_completed')} IS NOT NULL
+            AND ${getProjectionIdentitySql('uncovered_completed')} IS NOT NULL
             AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('uncovered_completed')}
             AND ${getCompletedDirtyWorkCoveredByAckPredicate('uncovered_completed')}
           )
@@ -1236,16 +1615,38 @@ const deleteReviewServingDirtyWorkAcknowledgementsForRetention = async (
     .join('\n        OR ')
 
   const rows = await database.queryJson<{dirtyAckId: string}>(`
+    SELECT dirty_ack_id AS dirtyAckId
+    FROM app.review_serving_dirty_work_ack
+    WHERE status = 'completed'
+      AND (
+        ${lanePredicate}
+      )
+    ORDER BY completed_source_high_water_mark ASC, dirty_ack_id ASC
+    LIMIT ${params.limit}
+  `)
+
+  return deleteReviewServingDirtyWorkAcknowledgementsByIds(
+    rows.map((row) => {
+      return row.dirtyAckId
+    }),
+    database,
+  )
+}
+
+const deleteReviewServingDirtyWorkAcknowledgementsByIds = async (
+  dirtyAckIds: readonly string[],
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  const uniqueDirtyAckIds = [...new Set(dirtyAckIds)]
+
+  if (uniqueDirtyAckIds.length === 0) {
+    return 0
+  }
+
+  const rows = await database.queryJson<{dirtyAckId: string}>(`
     DELETE FROM app.review_serving_dirty_work_ack
     WHERE dirty_ack_id IN (
-      SELECT dirty_ack_id
-      FROM app.review_serving_dirty_work_ack
-      WHERE status = 'completed'
-        AND (
-          ${lanePredicate}
-        )
-      ORDER BY completed_source_high_water_mark ASC, dirty_ack_id ASC
-      LIMIT ${params.limit}
+      ${uniqueDirtyAckIds.map(getSqlLiteral).join(', ')}
     )
     RETURNING dirty_ack_id AS dirtyAckId
   `)
@@ -1262,33 +1663,254 @@ const deleteReviewServingDirtyWorkRowsForRetention = async (
   }
 
   const rows = await database.queryJson<{dirtyWorkId: string}>(`
+    SELECT dirty_work.dirty_work_id AS dirtyWorkId
+    FROM app.review_serving_dirty_work dirty_work
+    WHERE dirty_work.status = 'completed'
+      AND ${getProjectionComponentSql('dirty_work')} IS NOT NULL
+      AND ${getProjectionIdentitySql('dirty_work')} IS NOT NULL
+      AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('dirty_work')}
+      AND ${getCompletedDirtyWorkCoveredByAckPredicate('dirty_work')}
+      AND ${getNoLowerRetentionBlockerPredicate('dirty_work', 'dirty_work.latest_source_high_water_mark')}
+    ORDER BY dirty_work.updated_at ASC, dirty_work.latest_source_high_water_mark ASC, dirty_work.dirty_work_id ASC
+    LIMIT ${params.limit}
+  `)
+
+  const dirtyWorkIds = rows.map((row) => {
+    return row.dirtyWorkId
+  })
+
+  if (dirtyWorkIds.length === 0) {
+    return 0
+  }
+
+  const deletedRows = await database.queryJson<{dirtyWorkId: string}>(`
     DELETE FROM app.review_serving_dirty_work
     WHERE dirty_work_id IN (
-      SELECT dirty_work.dirty_work_id
-      FROM app.review_serving_dirty_work dirty_work
-      WHERE dirty_work.status = 'completed'
-        AND dirty_work.projection_key IS NOT NULL
-        AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('dirty_work')}
-        AND ${getCompletedDirtyWorkCoveredByAckPredicate('dirty_work')}
-        AND ${getNoLowerRetentionBlockerPredicate('dirty_work', 'dirty_work.latest_source_high_water_mark')}
-      ORDER BY dirty_work.updated_at ASC, dirty_work.latest_source_high_water_mark ASC, dirty_work.dirty_work_id ASC
-      LIMIT ${params.limit}
+      ${dirtyWorkIds.map(getSqlLiteral).join(', ')}
     )
     RETURNING dirty_work_id AS dirtyWorkId
   `)
 
+  return deletedRows.length
+}
+
+const repairReviewServingDirtyWorkLaneColumns = async (
+  params: {limit: number},
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  if (params.limit === 0) {
+    return 0
+  }
+
+  const rows = await database.queryJson<{storageRowId: number | string}>(`
+    SELECT rowid AS storageRowId
+    FROM app.review_serving_dirty_work
+    WHERE (projection_component IS NULL OR projection_identity IS NULL)
+    LIMIT ${params.limit}
+  `)
+  const rowIds = rows
+    .map((row) => {
+      return row.storageRowId
+    })
+    .filter((rowId): rowId is number | string => {
+      return rowId !== null && rowId !== undefined && String(rowId).trim().length > 0
+    })
+
+  if (rowIds.length === 0) {
+    return 0
+  }
+
+  const repairedRows = await database.queryJson<DirtyWorkRow>(`
+    UPDATE app.review_serving_dirty_work
+    SET
+      projection_component = json_extract_string(projection_key, '$.projectionComponent'),
+      projection_identity = json_extract_string(projection_key, '$.projectionIdentity'),
+      updated_at = updated_at
+    WHERE rowid IN (${rowIds.map(getStorageRowIdSql).join(', ')})
+    RETURNING
+      CAST(NULL AS BIGINT) AS storageRowId,
+      dirty_work_id AS dirtyWorkId,
+      project_id AS projectId,
+      scope_kind AS scopeKind,
+      scope_id AS scopeId,
+      article_id AS articleId,
+      projection_key AS projectionKey,
+      dirty_kind AS dirtyKind,
+      source_partition AS sourcePartition,
+      first_source_high_water_mark AS firstSourceHighWaterMark,
+      latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
+      latest_delta_id AS latestDeltaId,
+      dirty_range_start AS dirtyRangeStart,
+      dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
+      status,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+  `)
+  await maintainReviewServingDirtyWorkClaimStates(repairedRows.map(getDirtyWorkRecordFromRow), database)
+
+  return rowIds.length
+}
+
+const repairReviewServingDirtyWorkLaneState = async (
+  params: {limit: number},
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  if (params.limit === 0) {
+    return 0
+  }
+
+  const rows = await database.queryJson<DirtyWorkRow>(`
+    WITH repair_cursor AS (
+      SELECT COALESCE(MAX(storage_row_id), -1) AS max_storage_row_id
+      FROM app.review_serving_dirty_work_claim_state
+      WHERE storage_row_id IS NOT NULL
+    )
+    SELECT
+      rowid AS storageRowId,
+      dirty_work_id AS dirtyWorkId,
+      project_id AS projectId,
+      scope_kind AS scopeKind,
+      scope_id AS scopeId,
+      article_id AS articleId,
+      projection_key AS projectionKey,
+      dirty_kind AS dirtyKind,
+      source_partition AS sourcePartition,
+      first_source_high_water_mark AS firstSourceHighWaterMark,
+      latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
+      latest_delta_id AS latestDeltaId,
+      dirty_range_start AS dirtyRangeStart,
+      dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
+      status,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM app.review_serving_dirty_work dirty_work, repair_cursor
+    WHERE dirty_work.rowid > repair_cursor.max_storage_row_id
+      AND status IN ('pending', 'running', 'failed')
+    ORDER BY dirty_work.rowid ASC
+    LIMIT ${params.limit}
+  `)
+
+  await maintainReviewServingDirtyWorkClaimStates(rows.map(getDirtyWorkRecordFromRow), database)
+
   return rows.length
+}
+
+const coalesceReviewServingDirtyWorkHighWaterRows = async (
+  params: {limit: number},
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  if (params.limit === 0) {
+    return 0
+  }
+
+  let coalescedCount = 0
+
+  while (coalescedCount < params.limit) {
+    const [candidate] = await database.queryJson<DirtyWorkClaimStateRow>(`
+      SELECT
+        older.dirty_work_id AS dirtyWorkId,
+        older.storage_row_id AS storageRowId,
+        older.project_id AS projectId,
+        older.projection_component AS projectionComponent,
+        older.projection_identity AS projectionIdentity,
+        older.source_partition AS sourcePartition,
+        older.status,
+        older.latest_source_high_water_mark AS latestSourceHighWaterMark,
+        older.dirty_range_start AS dirtyRangeStart,
+        older.dirty_range_end AS dirtyRangeEnd,
+        older.updated_at AS updatedAt
+      FROM app.review_serving_dirty_work_claim_state older
+      WHERE older.status = 'pending'
+        AND older.dirty_range_start IS NULL
+        AND older.dirty_range_end IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_serving_dirty_work_claim_state newer
+          WHERE newer.project_id = older.project_id
+            AND newer.projection_component = older.projection_component
+            AND newer.projection_identity = older.projection_identity
+            AND newer.source_partition = older.source_partition
+            AND newer.status IN ('pending', 'running')
+            AND newer.dirty_range_start IS NULL
+            AND newer.dirty_range_end IS NULL
+            AND (
+              newer.latest_source_high_water_mark > older.latest_source_high_water_mark
+              OR newer.updated_at > older.updated_at
+              OR newer.dirty_work_id > older.dirty_work_id
+            )
+        )
+      ORDER BY older.updated_at ASC, older.latest_source_high_water_mark ASC, older.dirty_work_id ASC
+      LIMIT 1
+    `)
+
+    if (candidate === undefined) {
+      return coalescedCount
+    }
+
+    const coalescedRows = await database.queryJson<DirtyWorkRow>(`
+      UPDATE app.review_serving_dirty_work
+      SET status = 'completed', lifecycle_reason = 'superseded_by_high_water', updated_at = current_timestamp
+      WHERE ${getDirtyWorkClaimStatePredicate([candidate])}
+        AND status = 'pending'
+      RETURNING
+        CAST(NULL AS BIGINT) AS storageRowId,
+        dirty_work_id AS dirtyWorkId,
+        project_id AS projectId,
+        scope_kind AS scopeKind,
+        scope_id AS scopeId,
+        article_id AS articleId,
+        projection_key AS projectionKey,
+        dirty_kind AS dirtyKind,
+        source_partition AS sourcePartition,
+        first_source_high_water_mark AS firstSourceHighWaterMark,
+        latest_source_high_water_mark AS latestSourceHighWaterMark,
+        lifecycle_reason AS lifecycleReason,
+        latest_delta_id AS latestDeltaId,
+        dirty_range_start AS dirtyRangeStart,
+        dirty_range_end AS dirtyRangeEnd,
+        projection_component AS projectionComponent,
+        projection_identity AS projectionIdentity,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+    `)
+
+    await maintainReviewServingDirtyWorkClaimStates(coalescedRows.map(getDirtyWorkRecordFromRow), database)
+
+    if (coalescedRows.length === 0) {
+      return coalescedCount
+    }
+
+    coalescedCount += coalescedRows.length
+  }
+
+  return coalescedCount
 }
 
 export const cleanupReviewServingDirtyWorkRetention = async (
   params: CleanupReviewServingDirtyWorkRetentionParams = {},
   database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
 ): Promise<CleanupReviewServingDirtyWorkRetentionResult> => {
-  const laneCompactionLimit = getNormalizedCleanupLimit(params.laneCompactionLimit, 50)
-  const acknowledgementDeleteLimit = getNormalizedCleanupLimit(params.acknowledgementDeleteLimit, 1000)
-  const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(params.dirtyWorkDeleteLimit, 1000)
+  const laneCompactionLimit = getNormalizedCleanupLimit(params.laneCompactionLimit, 0)
+  const acknowledgementDeleteLimit = getNormalizedCleanupLimit(params.acknowledgementDeleteLimit, 0)
+  const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, 64)
+  const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(params.dirtyWorkDeleteLimit, 0)
+  const laneRepairLimit = getNormalizedCleanupLimit(params.laneRepairLimit, 0)
+  const laneStateRepairLimit = getNormalizedCleanupLimit(params.laneStateRepairLimit, 256)
 
   return database.transaction(async (tx) => {
+    const repairedLaneColumnCount = await repairReviewServingDirtyWorkLaneColumns({limit: laneRepairLimit}, tx)
+    const repairedLaneStateCount = await repairReviewServingDirtyWorkLaneState({limit: laneStateRepairLimit}, tx)
+    const coalescedDirtyWorkCount = await coalesceReviewServingDirtyWorkHighWaterRows(
+      {limit: coalesceDirtyWorkLimit},
+      tx,
+    )
     const lanes = await getReviewServingDirtyWorkRetentionLanes({limit: laneCompactionLimit}, tx)
     const deletedDirtyWorkCount = await deleteReviewServingDirtyWorkRowsForRetention({limit: dirtyWorkDeleteLimit}, tx)
     const compactedAcknowledgements = await lanes.reduce<Promise<CleanupReviewServingDirtyWorkRetentionCompaction[]>>(
@@ -1336,10 +1958,13 @@ export const cleanupReviewServingDirtyWorkRetention = async (
     )
 
     return {
+      coalescedDirtyWorkCount,
       compactedAcknowledgements,
       compactedLaneCount: compactedAcknowledgements.length,
       deletedAcknowledgementCount,
       deletedDirtyWorkCount,
+      repairedLaneColumnCount,
+      repairedLaneStateCount,
     }
   })
 }

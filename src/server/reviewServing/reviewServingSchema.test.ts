@@ -119,6 +119,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0220_reviewServingDirtyWorkIdLookupIndexes.sql',
   '../../db/duckdbMigrations/0221_reviewServingDirtyWorkIdLookupTables.sql',
   '../../db/duckdbMigrations/0222_rebuildReviewServingDirtyWorkWithoutIndexes.sql',
+  '../../db/duckdbMigrations/0224_reviewServingDirtyWorkLifecycleReason.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -349,6 +350,7 @@ const reviewServingPhase1Tables = [
   'app.review_import_article_hot_field',
   'app.review_serving_dirty_work',
   'app.review_serving_dirty_work_ack',
+  'app.review_serving_dirty_work_claim_state',
   'app.review_serving_project_dirty_source_watermark',
   'app.review_serving_projector_watermark',
   'app.review_projection_identity_manifest',
