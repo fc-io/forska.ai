@@ -347,9 +347,9 @@ const EditProject = (): JSX.Element => {
   const projectData = useQuery(
     () => {
       return {
-        queryKey: ['project', projectId, 'with-prompts'],
+        queryKey: ['project', projectId, 'with-prompts', 'include-importable-prompts'],
         queryFn: () => {
-          return fetchProjectWithPrompts(projectId)
+          return fetchProjectWithPrompts(projectId, {includeImportablePrompts: true})
         },
         enabled: projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
         // Disable auto-refetch on window focus since this is a form with user-editable state.
@@ -701,7 +701,7 @@ const EditProject = (): JSX.Element => {
     setPromptCleanupSummary(result.promptCleanupSummary ?? null)
 
     // Keep related caches in sync so subsequent views show fresh data immediately
-    queryClient.setQueryData(['project', projectId, 'with-prompts'], (prev: unknown) => {
+    const updateProjectPromptCache = (prev: unknown) => {
       const previous = prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : {}
       return {
         ...previous,
@@ -713,7 +713,12 @@ const EditProject = (): JSX.Element => {
         model: Object.prototype.hasOwnProperty.call(previous, 'model') ? previous.model : null,
         importRoutes: Array.isArray(previous.importRoutes) ? previous.importRoutes : [],
       }
-    })
+    }
+    queryClient.setQueryData(['project', projectId, 'with-prompts'], updateProjectPromptCache)
+    queryClient.setQueryData(
+      ['project', projectId, 'with-prompts', 'include-importable-prompts'],
+      updateProjectPromptCache,
+    )
     void queryClient.invalidateQueries({queryKey: ['project', projectId]})
     void queryClient.invalidateQueries({queryKey: ['projects']})
     return result
