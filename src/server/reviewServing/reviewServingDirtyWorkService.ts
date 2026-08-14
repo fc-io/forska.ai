@@ -50,6 +50,10 @@ export type ClaimReviewServingDirtyWorkParams = {
 export const defaultReviewServingDirtyWorkStaleClaimSeconds = 15 * 60
 const reviewServingDirtyWorkLaneWindowLimit = 2_048
 const reviewServingDirtyWorkCoverageCompletionLimit = 2_048
+const reviewServingDirtyWorkClaimStateCursorByDatabase = new WeakMap<
+  ReviewServingDirtyWorkDatabase,
+  Map<ReviewServingProjectionComponent, number>
+>()
 
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   completedSourceHighWaterMark: number
@@ -148,6 +152,7 @@ type DirtyWorkSourceWatermarkCompletion = {
 }
 
 type DirtyWorkClaimStateRow = {
+  claimStateRowId?: number | string | null
   dirtyRangeEnd: string | null
   dirtyRangeStart: string | null
   dirtyWorkId: string
@@ -286,6 +291,92 @@ const getStaleRunningClaimSeconds = (params: ClaimReviewServingDirtyWorkParams) 
 
 const getClaimNowSql = (params: ClaimReviewServingDirtyWorkParams) => {
   return params.now === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(params.now.toISOString())}`
+}
+
+const getDirtyWorkClaimStateCursorMap = (database: ReviewServingDirtyWorkDatabase) => {
+  const existing = reviewServingDirtyWorkClaimStateCursorByDatabase.get(database)
+
+  if (existing !== undefined) {
+    return existing
+  }
+
+  const cursorByComponent = new Map<ReviewServingProjectionComponent, number>()
+  reviewServingDirtyWorkClaimStateCursorByDatabase.set(database, cursorByComponent)
+
+  return cursorByComponent
+}
+
+const getClaimNowMs = (params: ClaimReviewServingDirtyWorkParams) => {
+  return (params.now ?? new Date()).getTime()
+}
+
+const getDirtyWorkClaimStateUpdatedAtMs = (row: DirtyWorkClaimStateRow) => {
+  const value = getDateValue(row.updatedAt)
+
+  return value === null ? 0 : value.getTime()
+}
+
+const isDirtyWorkClaimStateEligible = (params: ClaimReviewServingDirtyWorkParams, row: DirtyWorkClaimStateRow) => {
+  if (row.status === 'pending') {
+    return true
+  }
+
+  return (
+    (row.status === 'running' || row.status === 'failed')
+    && getDirtyWorkClaimStateUpdatedAtMs(row) <= getClaimNowMs(params) - getStaleRunningClaimSeconds(params) * 1000
+  )
+}
+
+const compareDirtyWorkClaimStateRows = (left: DirtyWorkClaimStateRow, right: DirtyWorkClaimStateRow) => {
+  return (
+    getDirtyWorkClaimStateUpdatedAtMs(left) - getDirtyWorkClaimStateUpdatedAtMs(right)
+    || Number(left.latestSourceHighWaterMark) - Number(right.latestSourceHighWaterMark)
+    || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+  )
+}
+
+const getClaimableDirtyWorkClaimStateRows = (
+  params: ClaimReviewServingDirtyWorkParams,
+  claimStateRows: readonly DirtyWorkClaimStateRow[],
+  limit: number,
+) => {
+  const eligibleRows = claimStateRows.filter((row) => {
+    return (
+      row.projectionComponent === params.projectionComponent
+      && (row.status === 'pending' || row.status === 'running' || row.status === 'failed')
+      && isDirtyWorkClaimStateEligible(params, row)
+    )
+  })
+  const [oldest] = [...eligibleRows].sort(compareDirtyWorkClaimStateRows)
+
+  if (oldest === undefined) {
+    return []
+  }
+
+  const staleCutoffMs = getClaimNowMs(params) - getStaleRunningClaimSeconds(params) * 1000
+
+  return eligibleRows
+    .filter((candidate) => {
+      return (
+        candidate.projectId === oldest.projectId
+        && candidate.projectionComponent === oldest.projectionComponent
+        && candidate.projectionIdentity === oldest.projectionIdentity
+        && candidate.sourcePartition === oldest.sourcePartition
+        && !claimStateRows.some((blocker) => {
+          return (
+            blocker.projectId === candidate.projectId
+            && blocker.projectionComponent === candidate.projectionComponent
+            && blocker.projectionIdentity === candidate.projectionIdentity
+            && blocker.sourcePartition === candidate.sourcePartition
+            && (blocker.status === 'running' || blocker.status === 'failed')
+            && getDirtyWorkClaimStateUpdatedAtMs(blocker) > staleCutoffMs
+            && Number(blocker.latestSourceHighWaterMark) < Number(candidate.latestSourceHighWaterMark)
+          )
+        })
+      )
+    })
+    .sort(compareDirtyWorkClaimStateRows)
+    .slice(0, limit)
 }
 
 const getArticleId = (input: ReviewServingDirtyWorkInput) => {
@@ -1080,10 +1171,32 @@ export const claimReviewServingDirtyWork = async (
     return []
   }
 
+  const claimStateCursorByComponent = getDirtyWorkClaimStateCursorMap(database)
   const rows = await database.transaction(async (tx) => {
-    const claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
-      WITH claim_state_window AS (
+    const cursor = claimStateCursorByComponent.get(params.projectionComponent) ?? -1
+    let claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
+      SELECT
+        state.rowid AS claimStateRowId,
+        state.dirty_work_id AS dirtyWorkId,
+        state.storage_row_id AS storageRowId,
+        state.project_id AS projectId,
+        state.projection_component AS projectionComponent,
+        state.projection_identity AS projectionIdentity,
+        state.source_partition AS sourcePartition,
+        state.status,
+        state.latest_source_high_water_mark AS latestSourceHighWaterMark,
+        state.dirty_range_start AS dirtyRangeStart,
+        state.dirty_range_end AS dirtyRangeEnd,
+        state.updated_at AS updatedAt
+      FROM app.review_serving_dirty_work_claim_state state
+      WHERE state.rowid > ${cursor}
+      LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
+    `)
+
+    if (claimStateRows.length === 0 && cursor >= 0) {
+      claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
         SELECT
+          state.rowid AS claimStateRowId,
           state.dirty_work_id AS dirtyWorkId,
           state.storage_row_id AS storageRowId,
           state.project_id AS projectId,
@@ -1096,48 +1209,23 @@ export const claimReviewServingDirtyWork = async (
           state.dirty_range_end AS dirtyRangeEnd,
           state.updated_at AS updatedAt
         FROM app.review_serving_dirty_work_claim_state state
-        WHERE state.projection_component = ${getSqlLiteral(params.projectionComponent)}
-          AND (
-            state.status = 'pending'
-            OR (
-              state.status IN ('running', 'failed')
-              AND state.updated_at <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
-            )
-          )
-        ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC
+        WHERE state.rowid >= 0
         LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
-      ),
-      oldest_claimable AS (
-        SELECT *
-        FROM claim_state_window oldest
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM app.review_serving_dirty_work_claim_state blocker
-          WHERE blocker.project_id = oldest.projectId
-            AND blocker.projection_component = oldest.projectionComponent
-            AND blocker.projection_identity = oldest.projectionIdentity
-            AND blocker.source_partition = oldest.sourcePartition
-            AND blocker.status IN ('running', 'failed')
-            AND blocker.updated_at > ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
-            AND blocker.latest_source_high_water_mark < oldest.latestSourceHighWaterMark
-        )
-        ORDER BY oldest.updatedAt ASC, oldest.latestSourceHighWaterMark ASC, oldest.dirtyWorkId ASC
-        LIMIT 1
-      ),
-      selected_lane AS (
-        SELECT projectId, projectionComponent, projectionIdentity, sourcePartition
-        FROM oldest_claimable
-      )
-      SELECT *
-      FROM claim_state_window candidate
-      INNER JOIN selected_lane lane
-        ON candidate.projectId = lane.projectId
-        AND candidate.projectionComponent = lane.projectionComponent
-        AND candidate.projectionIdentity = lane.projectionIdentity
-        AND candidate.sourcePartition = lane.sourcePartition
-      ORDER BY candidate.updatedAt ASC, candidate.latestSourceHighWaterMark ASC, candidate.dirtyWorkId ASC
-      LIMIT ${limit}
-    `)
+      `)
+    }
+
+    const maxClaimStateRowId = Math.max(
+      cursor,
+      ...claimStateRows.map((row) => {
+        return Number(row.claimStateRowId ?? -1)
+      }),
+    )
+
+    if (Number.isFinite(maxClaimStateRowId)) {
+      claimStateCursorByComponent.set(params.projectionComponent, maxClaimStateRowId)
+    }
+
+    claimStateRows = getClaimableDirtyWorkClaimStateRows(params, claimStateRows, limit)
 
     if (claimStateRows.length === 0) {
       return []

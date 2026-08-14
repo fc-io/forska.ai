@@ -473,6 +473,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
   }
   const getClaimStateRow = (row: FakeDirtyWorkRow) => {
     return {
+      claimStateRowId: row.storageRowId ?? null,
       dirtyRangeEnd: row.dirtyRangeEnd,
       dirtyRangeStart: row.dirtyRangeStart,
       dirtyWorkId: row.dirtyWorkId,
@@ -487,50 +488,16 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     }
   }
   const getClaimStateRows = (statement: string) => {
-    const projectionComponent = getWhereLiteral(statement, 'projection_component') ?? ''
-    const eligibleRows = [...dirtyWork.values()]
+    const cursor = Number(statement.match(/state\.rowid\s*>\s*(-?\d+)/u)?.[1] ?? -1)
+
+    return [...dirtyWork.values()]
       .filter((row) => {
-        return (
-          row.projectionComponent === projectionComponent
-          && row.projectionIdentity !== null
-          && isClaimEligibleForStatement(row, statement)
-        )
+        return (row.storageRowId ?? -1) > cursor
       })
       .sort((left, right) => {
-        return (
-          left.updatedAt.localeCompare(right.updatedAt)
-          || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
-          || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
-        )
+        return (left.storageRowId ?? 0) - (right.storageRowId ?? 0)
       })
-    const oldest = eligibleRows.find((row) => {
-      return ![...dirtyWork.values()].some((blocker) => {
-        return (
-          (blocker.status === 'running' || blocker.status === 'failed')
-          && !isStaleForStatement(blocker, statement)
-          && (blocker.projectId ?? '') === (row.projectId ?? '')
-          && blocker.projectionComponent === row.projectionComponent
-          && blocker.projectionIdentity === row.projectionIdentity
-          && blocker.sourcePartition === row.sourcePartition
-          && blocker.latestSourceHighWaterMark < row.latestSourceHighWaterMark
-        )
-      })
-    })
-
-    if (oldest === undefined) {
-      return []
-    }
-
-    return eligibleRows
-      .filter((row) => {
-        return (
-          (row.projectId ?? '') === (oldest.projectId ?? '')
-          && row.projectionComponent === oldest.projectionComponent
-          && row.projectionIdentity === oldest.projectionIdentity
-          && row.sourcePartition === oldest.sourcePartition
-        )
-      })
-      .slice(0, getLimit(statement))
+      .slice(0, statement.includes('LIMIT 2048') ? 2048 : getLimit(statement))
       .map(getClaimStateRow)
   }
   const getCoalescableClaimStateRows = () => {
@@ -860,7 +827,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     if (
       statement.includes('FROM app.review_serving_dirty_work_claim_state state')
-      && statement.includes('oldest_claimable AS')
+      && statement.includes('state.rowid AS claimStateRowId')
     ) {
       return getClaimStateRows(statement) as T[]
     }
@@ -1289,7 +1256,7 @@ test('claims pending work from one projection identity per batch', async () => {
   expect(claims[0]?.projectionIdentity).toBe('display:identity-1')
 })
 
-test('claim query blocks newer lane work behind lower running or backoff watermarks', async () => {
+test('claim query keeps candidate discovery bounded to the claim-state window', async () => {
   const {database, statements} = createFakeDirtyWorkDatabase()
 
   await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
@@ -1297,13 +1264,21 @@ test('claim query blocks newer lane work behind lower running or backoff waterma
 
   await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
   const claimSelect = statements.find((statement) => {
-    return statement.includes('NOT EXISTS') && statement.includes('blocker.latest_source_high_water_mark')
+    return (
+      statement.includes('FROM app.review_serving_dirty_work_claim_state state')
+      && statement.includes('state.rowid AS claimStateRowId')
+    )
   })
 
-  expect(claimSelect).toContain("blocker.status IN ('running', 'failed')")
-  expect(claimSelect).toContain("blocker.updated_at > current_timestamp - INTERVAL '900 seconds'")
-  expect(claimSelect).toContain('blocker.latest_source_high_water_mark < oldest.latestSourceHighWaterMark')
-  expect(claimSelect).toContain('FROM app.review_serving_dirty_work_claim_state blocker')
+  expect(claimSelect).toContain('SELECT')
+  expect(claimSelect).toContain('state.rowid AS claimStateRowId')
+  expect(claimSelect).toContain('WHERE state.rowid >')
+  expect(claimSelect).toContain('LIMIT 2048')
+  expect(claimSelect).not.toContain('ORDER BY state.rowid')
+  expect(claimSelect).not.toContain('ORDER BY state.updated_at')
+  expect(claimSelect).not.toContain('state.projection_component =')
+  expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
+  expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work ')
 })
 
 test('claims dirty work from bounded per-row claim state with one exact update returning statement', async () => {
@@ -1323,15 +1298,17 @@ test('claims dirty work from bounded per-row claim state with one exact update r
   const claimStateSelect = statements.find((statement) => {
     return (
       statement.includes('FROM app.review_serving_dirty_work_claim_state state')
-      && statement.includes('oldest_claimable AS')
+      && statement.includes('state.rowid AS claimStateRowId')
     )
   })
 
   expect(claims).toHaveLength(2)
-  expect(claimStateSelect).toContain('WITH claim_state_window AS (')
   expect(claimStateSelect).toContain('FROM app.review_serving_dirty_work_claim_state state')
-  expect(claimStateSelect).toContain('oldest_claimable AS')
+  expect(claimStateSelect).toContain('state.rowid AS claimStateRowId')
+  expect(claimStateSelect).toContain('WHERE state.rowid >')
   expect(claimStateSelect).toContain('LIMIT 2048')
+  expect(claimStateSelect).not.toContain('ORDER BY state.rowid')
+  expect(claimStateSelect).not.toContain('ORDER BY state.updated_at')
   expect(claimStateSelect).not.toContain('FROM app.review_serving_dirty_work ')
   expect(claimStateSelect).not.toContain('projection_key')
   expect(claimStateSelect).not.toContain('json_extract_string')
@@ -1393,19 +1370,17 @@ test('claims stale running work after the running lease expires', async () => {
     },
     database,
   )
-  const claimSelect = statements
+  const claimUpdate = statements
     .filter((statement) => {
-      return (
-        statement.includes('FROM app.review_serving_dirty_work_claim_state state')
-        && statement.includes("state.status IN ('running', 'failed')")
-      )
+      return statement.includes('UPDATE app.review_serving_dirty_work') && statement.includes("INTERVAL '60 seconds'")
     })
     .at(-1)
 
   expect(claims).toHaveLength(1)
-  expect(claimSelect).toContain("state.status IN ('running', 'failed')")
-  expect(claimSelect).toContain("INTERVAL '60 seconds'")
-  expect(claimSelect).toContain("TIMESTAMPTZ '2026-06-16T13:00:00.000Z'")
+  expect(claimUpdate).toContain("status = 'running'")
+  expect(claimUpdate).toContain("status = 'failed'")
+  expect(claimUpdate).toContain("INTERVAL '60 seconds'")
+  expect(claimUpdate).toContain("TIMESTAMPTZ '2026-06-16T13:00:00.000Z'")
 })
 
 test('completion and failure move running claims into retention-ready terminal states', async () => {

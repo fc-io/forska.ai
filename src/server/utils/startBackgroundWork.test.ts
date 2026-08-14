@@ -72,9 +72,11 @@ const runStartBackgroundWork = (input: {
           return {
             startReviewServingProjectorWorkerHeartbeat: (options = {}) => {
               const exitsAfterBoundedRun = Object.hasOwn(options, 'exitProcessAfterBoundedRun')
+              const batchSize = options.batchSize ?? 'default'
               const maxCompletedRebuildChunksPerRun = options.maxCompletedRebuildChunksPerRun ?? 'default'
               const maxRowsPerWake = options.maxRowsPerWake ?? 'default'
               const maxRunMs = options.maxRunMs ?? 'default'
+              const maxWakeMs = options.maxWakeMs ?? 'default'
               const rebuildChunkBatchSize = options.rebuildChunkBatchSize ?? 'default'
               calls.push(
                 'reviewServingProjectorWorkerHeartbeat:'
@@ -82,7 +84,11 @@ const runStartBackgroundWork = (input: {
                 + ':'
                 + maxCompletedRebuildChunksPerRun
                 + ':'
+                + batchSize
+                + ':'
                 + maxRowsPerWake
+                + ':'
+                + maxWakeMs
                 + ':'
                 + rebuildChunkBatchSize
                 + ':'
@@ -238,7 +244,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
     'comparisonProjectServingMaintenanceWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:false',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:false',
   ])
 })
 
@@ -257,7 +263,7 @@ test('startBackgroundWork starts maintenance work after auto owner promotion', (
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
     'comparisonProjectServingMaintenanceWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:false',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:false',
   ])
 })
 
@@ -278,7 +284,7 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under low-memor
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:8:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
   ])
 })
 
@@ -288,7 +294,7 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under normalize
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:8:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
   ])
 })
 
@@ -298,7 +304,7 @@ test('startBackgroundWork keeps low-memory dev-single review serving restarts in
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:8:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
   ])
 })
 
@@ -330,7 +336,7 @@ test('startBackgroundWork auto-resumes paused review serving projector when queu
     'duckdbOwnerConnectionHeartbeat',
     'review-serving-projector.paused',
     'review-serving-projector.pause-recovered',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:8:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
   ])
 })
 
@@ -350,7 +356,7 @@ test('startBackgroundWork keeps paused review serving projector stopped while Du
     'review-serving-projector.paused',
     'review-serving-projector.pause-recovery-wait',
   ])
-  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:8:default:false')
+  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false')
 })
 
 test('startBackgroundWork recycles DuckDB once before resuming paused review serving projector above RSS cap', () => {
@@ -365,7 +371,7 @@ test('startBackgroundWork recycles DuckDB once before resuming paused review ser
 
   expect(result.calls).toContain('review-serving-projector.pause-recovery-recycle-duckdb')
   expect(result.calls).toContain('closeDuckdbService')
-  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:8:default:false')
+  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false')
 })
 
 test('startBackgroundWork skips all background work when server mutations are disabled', () => {
