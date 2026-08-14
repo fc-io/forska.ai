@@ -59,6 +59,24 @@ type ReviewServingProgressSnapshot = {
   rebuildUpdatedAt: string | null
 }
 type ReviewServingProgressCandidate = {body: ReviewsWarningsBody; projectId: string}
+type LlmStatusRawResponse = {body: unknown; ok: boolean; status: number; text: string}
+type MaintenanceRuntimeDiagnosticsRawResponse = {body: unknown; ok: boolean; status: number; text: string}
+type ReviewServingWarningRawResponse = {body: ReviewsWarningsBody | null; ok: boolean; status: number; text: string}
+type ForegroundRouteResponsivenessSample = {
+  durationMs: number
+  error: string | null
+  ok: boolean
+  route: string
+  status: number | null
+}
+type ReviewServingWarningRouteResponsivenessSample = {
+  body: ReviewsWarningsBody | null
+  durationMs: number
+  error: string | null
+  ok: boolean
+  projectId: string
+  status: number | null
+}
 type RuntimePids = [number, number, number]
 type RuntimeStabilityObservation = {
   output: string
@@ -98,6 +116,11 @@ const reviewServingWarningRouteProbeProjectId =
   process.env.FORSKA_REVIEW_SERVING_WARNING_ROUTE_PROBE_PROJECT_ID ?? '4ec939b2-47bb-48dd-ad62-ad9f4b5acecf'
 const staleReviewServingQueuedProgressMs = 10 * 60_000
 const reviewServingWarningFetchTimeoutMs = 60_000
+const reviewServingWarningResponsivenessTimeoutMs = 10_000
+const maintenanceRuntimeDiagnosticsResponsivenessTimeoutMs = 3_000
+const reviewServingWarningResponsivenessPollMs = 1_000
+const reviewServingWarningResponsivenessMinimumSamples = 3
+const reviewServingWarningResponsivenessMaximumSamples = 45
 const currentDbReviewServingQueuedWorkProgressTimeoutMs = 75_000
 const currentDbReviewServingQueuedWorkProgressPollMs = 5_000
 const forbiddenDevServerOutputPatterns = [
@@ -698,6 +721,60 @@ const postReviewWarnings = async (apiPort: number, projectId: string) => {
   )
 }
 
+const postReviewWarningsRaw = async (
+  apiPort: number,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ReviewServingWarningRawResponse> => {
+  const response = await fetch(`http://127.0.0.1:${apiPort}/api/projectsreviewswarnings`, {
+    body: JSON.stringify({projectId}),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+    signal,
+  })
+  const text = await response.text()
+  let body: ReviewsWarningsBody | null
+
+  try {
+    body = JSON.parse(text) as ReviewsWarningsBody
+  } catch {
+    body = null
+  }
+
+  return {body, ok: response.ok, status: response.status, text}
+}
+
+const getLlmStatusRaw = async (apiPort: number, signal?: AbortSignal): Promise<LlmStatusRawResponse> => {
+  const response = await fetch(`http://127.0.0.1:${apiPort}/api/llmstatus`, {signal})
+  const text = await response.text()
+  let body: unknown
+
+  try {
+    body = JSON.parse(text) as unknown
+  } catch {
+    body = null
+  }
+
+  return {body, ok: response.ok, status: response.status, text}
+}
+
+const getMaintenanceRuntimeDiagnosticsRaw = async (
+  apiPort: number,
+  signal?: AbortSignal,
+): Promise<MaintenanceRuntimeDiagnosticsRawResponse> => {
+  const response = await fetch(`http://127.0.0.1:${apiPort}/api/admin/maintenance-runtime-diagnostics`, {signal})
+  const text = await response.text()
+  let body: unknown
+
+  try {
+    body = JSON.parse(text) as unknown
+  } catch {
+    body = null
+  }
+
+  return {body, ok: response.ok, status: response.status, text}
+}
+
 const getReviewServingWarningProbe = async (
   configuredProjectId: string,
   postWarnings: (projectId: string) => Promise<ReviewsWarningsBody>,
@@ -729,7 +806,9 @@ const getReviewServingWarningProbe = async (
     }
   }
 
-  throw new AggregateError(errors, 'Review-serving warning route failed for the configured and active projects')
+  throw new AggregateError(errors, 'Review-serving warning route failed for the configured and active projects', {
+    cause: errors[0],
+  })
 }
 
 const getReviewServingProgressSnapshot = (body: ReviewsWarningsBody): ReviewServingProgressSnapshot => {
@@ -1303,6 +1382,433 @@ test('current-db warning route probe falls back from an unusable configured proj
   expect(result).toEqual({body: expectedBody, projectId: 'active-project'})
 })
 
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const hasOwnerStateStartupOrRepair = (value: unknown): boolean => {
+  if (value === null || typeof value !== 'object') {
+    return false
+  }
+
+  if ('ownerState' in value && (value as {ownerState?: unknown}).ownerState === 'startup-or-repair') {
+    return true
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(hasOwnerStateStartupOrRepair)
+  }
+
+  return Object.values(value).some(hasOwnerStateStartupOrRepair)
+}
+
+const isOwnerProxyTimeoutText = (text: string) => {
+  return text.includes('DuckDB owner proxy target timed out')
+}
+
+const getReviewServingWarningRouteResponsivenessSample = async ({
+  createTimeoutSignal = (timeoutMs) => {
+    return AbortSignal.timeout(timeoutMs)
+  },
+  now = () => {
+    return Date.now()
+  },
+  postWarningsRaw,
+  projectId,
+  timeoutMs = reviewServingWarningResponsivenessTimeoutMs,
+}: {
+  createTimeoutSignal?: (timeoutMs: number) => AbortSignal
+  now?: () => number
+  postWarningsRaw: (projectId: string, signal: AbortSignal) => Promise<ReviewServingWarningRawResponse>
+  projectId: string
+  timeoutMs?: number
+}): Promise<ReviewServingWarningRouteResponsivenessSample> => {
+  const startedAtMs = now()
+  const signal = createTimeoutSignal(timeoutMs)
+
+  try {
+    const response = await postWarningsRaw(projectId, signal)
+    return {
+      body: response.body,
+      durationMs: now() - startedAtMs,
+      error: response.ok ? null : response.text,
+      ok: response.ok && response.body?.data?.indexing?.status !== undefined,
+      projectId,
+      status: response.status,
+    }
+  } catch (error) {
+    return {
+      body: null,
+      durationMs: now() - startedAtMs,
+      error: getErrorMessage(error),
+      ok: false,
+      projectId,
+      status: null,
+    }
+  }
+}
+
+const expectReviewServingWarningRouteResponsivenessSample = (
+  sample: ReviewServingWarningRouteResponsivenessSample,
+  timeoutMs: number,
+) => {
+  expect(
+    sample.ok && sample.durationMs <= timeoutMs,
+    'Review warning route exceeded the foreground responsiveness budget while maintenance was active. '
+      + `sample=${JSON.stringify(sample)} timeoutMs=${timeoutMs}`,
+  ).toBe(true)
+}
+
+const getForegroundRouteResponsivenessSample = async ({
+  createTimeoutSignal = (timeoutMs) => {
+    return AbortSignal.timeout(timeoutMs)
+  },
+  fetchRoute,
+  isOk,
+  now = () => {
+    return Date.now()
+  },
+  route,
+  timeoutMs,
+}: {
+  createTimeoutSignal?: (timeoutMs: number) => AbortSignal
+  fetchRoute: (signal: AbortSignal) => Promise<{body?: unknown; ok: boolean; status: number; text: string}>
+  isOk?: (response: {body?: unknown; ok: boolean; status: number; text: string}) => boolean
+  now?: () => number
+  route: string
+  timeoutMs: number
+}): Promise<ForegroundRouteResponsivenessSample> => {
+  const startedAtMs = now()
+  const signal = createTimeoutSignal(timeoutMs)
+
+  try {
+    const response = await fetchRoute(signal)
+
+    return {
+      durationMs: now() - startedAtMs,
+      error: response.ok ? null : response.text,
+      ok: isOk?.(response) ?? response.ok,
+      route,
+      status: response.status,
+    }
+  } catch (error) {
+    return {durationMs: now() - startedAtMs, error: getErrorMessage(error), ok: false, route, status: null}
+  }
+}
+
+const expectForegroundRouteResponsivenessSample = (sample: ForegroundRouteResponsivenessSample, timeoutMs: number) => {
+  expect(
+    sample.ok && sample.durationMs <= timeoutMs,
+    'Foreground route exceeded the responsiveness budget while maintenance was active. '
+      + `sample=${JSON.stringify(sample)} timeoutMs=${timeoutMs}`,
+  ).toBe(true)
+}
+
+const expectMaintenanceRuntimeDiagnosticsRemainsResponsive = async ({
+  apiPort,
+  createTimeoutSignal,
+  fetchDiagnostics = (signal) => {
+    return getMaintenanceRuntimeDiagnosticsRaw(apiPort, signal)
+  },
+  isDone = () => {
+    return false
+  },
+  maxSamples = reviewServingWarningResponsivenessMaximumSamples,
+  minSamples = reviewServingWarningResponsivenessMinimumSamples,
+  now = Date.now,
+  pollMs = reviewServingWarningResponsivenessPollMs,
+  timeoutMs = maintenanceRuntimeDiagnosticsResponsivenessTimeoutMs,
+  wait = waitFor,
+}: {
+  apiPort: number
+  createTimeoutSignal?: (timeoutMs: number) => AbortSignal
+  fetchDiagnostics?: (signal: AbortSignal) => Promise<MaintenanceRuntimeDiagnosticsRawResponse>
+  isDone?: () => boolean
+  maxSamples?: number
+  minSamples?: number
+  now?: () => number
+  pollMs?: number
+  timeoutMs?: number
+  wait?: (ms: number) => Promise<void>
+}) => {
+  let sampleCount = 0
+
+  while (sampleCount < maxSamples && (sampleCount < minSamples || !isDone())) {
+    if (sampleCount > 0) {
+      await wait(pollMs)
+    }
+
+    const sample = await getForegroundRouteResponsivenessSample({
+      createTimeoutSignal,
+      fetchRoute: fetchDiagnostics,
+      isOk: (response) => {
+        return response.ok && !hasOwnerStateStartupOrRepair(response.body) && !isOwnerProxyTimeoutText(response.text)
+      },
+      now,
+      route: '/api/admin/maintenance-runtime-diagnostics',
+      timeoutMs,
+    })
+
+    sampleCount += 1
+    expectForegroundRouteResponsivenessSample(sample, timeoutMs)
+  }
+}
+
+const expectLlmStatusRouteRemainsResponsive = async ({
+  apiPort,
+  createTimeoutSignal,
+  fetchLlmStatus = (signal) => {
+    return getLlmStatusRaw(apiPort, signal)
+  },
+  isDone = () => {
+    return false
+  },
+  maxSamples = reviewServingWarningResponsivenessMaximumSamples,
+  minSamples = reviewServingWarningResponsivenessMinimumSamples,
+  now = Date.now,
+  pollMs = reviewServingWarningResponsivenessPollMs,
+  timeoutMs = 3_000,
+  wait = waitFor,
+}: {
+  apiPort: number
+  createTimeoutSignal?: (timeoutMs: number) => AbortSignal
+  fetchLlmStatus?: (signal: AbortSignal) => Promise<LlmStatusRawResponse>
+  isDone?: () => boolean
+  maxSamples?: number
+  minSamples?: number
+  now?: () => number
+  pollMs?: number
+  timeoutMs?: number
+  wait?: (ms: number) => Promise<void>
+}) => {
+  let sampleCount = 0
+
+  while (sampleCount < maxSamples && (sampleCount < minSamples || !isDone())) {
+    if (sampleCount > 0) {
+      await wait(pollMs)
+    }
+
+    const sample = await getForegroundRouteResponsivenessSample({
+      createTimeoutSignal,
+      fetchRoute: fetchLlmStatus,
+      isOk: (response) => {
+        return response.ok
+      },
+      now,
+      route: '/api/llmstatus',
+      timeoutMs,
+    })
+
+    sampleCount += 1
+    expectForegroundRouteResponsivenessSample(sample, timeoutMs)
+  }
+}
+
+const expectReviewServingWarningRouteRemainsResponsive = async ({
+  apiPort,
+  createTimeoutSignal,
+  getProjects = () => {
+    return fetchJson<ProjectsBody>(`http://127.0.0.1:${apiPort}/api/projects`)
+  },
+  isDone = () => {
+    return false
+  },
+  maxSamples = reviewServingWarningResponsivenessMaximumSamples,
+  minSamples = reviewServingWarningResponsivenessMinimumSamples,
+  now = Date.now,
+  pollMs = reviewServingWarningResponsivenessPollMs,
+  postWarningsRaw: postWarningsRawInput = (projectId, signal) => {
+    return postReviewWarningsRaw(apiPort, projectId, signal)
+  },
+  wait = waitFor,
+  warningRouteProbeProjectId = reviewServingWarningRouteProbeProjectId,
+  timeoutMs = reviewServingWarningResponsivenessTimeoutMs,
+}: {
+  apiPort: number
+  createTimeoutSignal?: (timeoutMs: number) => AbortSignal
+  getProjects?: () => Promise<ProjectsBody>
+  isDone?: () => boolean
+  maxSamples?: number
+  minSamples?: number
+  now?: () => number
+  pollMs?: number
+  postWarningsRaw?: (projectId: string, signal: AbortSignal) => Promise<ReviewServingWarningRawResponse>
+  wait?: (ms: number) => Promise<void>
+  warningRouteProbeProjectId?: string
+  timeoutMs?: number
+}) => {
+  const errors: unknown[] = []
+  const getResponsiveProbe = async (projectId: string) => {
+    const sample = await getReviewServingWarningRouteResponsivenessSample({
+      createTimeoutSignal,
+      now,
+      postWarningsRaw: postWarningsRawInput,
+      projectId,
+      timeoutMs,
+    })
+
+    expectReviewServingWarningRouteResponsivenessSample(sample, timeoutMs)
+
+    if (sample.body === null) {
+      throw new Error(sample.error || `Review warning route returned ${sample.status ?? 'unknown status'}`)
+    }
+
+    return {body: sample.body, projectId}
+  }
+  let probe: {body: ReviewsWarningsBody; projectId: string} | null = null
+
+  try {
+    probe = await getResponsiveProbe(warningRouteProbeProjectId)
+  } catch (error) {
+    errors.push(error)
+    const projects = await getProjects()
+    const activeProjectIds =
+      projects.data
+        ?.filter((project) => {
+          return project.archived === false && project.id && project.id !== warningRouteProbeProjectId
+        })
+        .map((project) => {
+          return project.id as string
+        }) ?? []
+
+    for (const projectId of activeProjectIds) {
+      try {
+        probe = await getResponsiveProbe(projectId)
+        break
+      } catch (fallbackError) {
+        errors.push(fallbackError)
+      }
+    }
+
+    if (probe === null) {
+      if (errors.length === 1) {
+        throw errors[0]
+      }
+
+      throw new Error('Review-serving warning route failed for the configured and active projects', {cause: error})
+    }
+  }
+  let sampleCount = 1
+  const responsiveProjectId = probe.projectId
+
+  while (sampleCount < maxSamples && (sampleCount < minSamples || !isDone())) {
+    await wait(pollMs)
+    const sample = await getReviewServingWarningRouteResponsivenessSample({
+      createTimeoutSignal,
+      now,
+      postWarningsRaw: postWarningsRawInput,
+      projectId: responsiveProjectId,
+      timeoutMs,
+    })
+
+    sampleCount += 1
+    expectReviewServingWarningRouteResponsivenessSample(sample, timeoutMs)
+  }
+}
+
+test('current-db warning route responsiveness probe fails on a slow owner-held route response', async () => {
+  let nowMs = 0
+  const signal = new AbortController().signal
+
+  return expect(
+    expectReviewServingWarningRouteRemainsResponsive({
+      apiPort: 3001,
+      createTimeoutSignal: () => {
+        return signal
+      },
+      getProjects: async () => {
+        return {data: []}
+      },
+      now: () => {
+        return nowMs
+      },
+      postWarningsRaw: async () => {
+        nowMs += reviewServingWarningResponsivenessTimeoutMs + 1
+        return {body: createReviewServingProgressCandidateBody({status: 'ready'}), ok: true, status: 200, text: ''}
+      },
+      wait: async () => {},
+      warningRouteProbeProjectId: 'project-a',
+    }),
+  ).rejects.toThrow('Review warning route exceeded the foreground responsiveness budget')
+})
+
+test('current-db warning route responsiveness probe fails on owner proxy 504s', async () => {
+  const signal = new AbortController().signal
+
+  return expect(
+    expectReviewServingWarningRouteRemainsResponsive({
+      apiPort: 3001,
+      createTimeoutSignal: () => {
+        return signal
+      },
+      getProjects: async () => {
+        return {data: []}
+      },
+      postWarningsRaw: async () => {
+        return {body: null, ok: false, status: 504, text: 'DuckDB owner proxy target timed out after 60000 ms'}
+      },
+      wait: async () => {},
+      warningRouteProbeProjectId: 'project-a',
+    }),
+  ).rejects.toThrow('Review warning route exceeded the foreground responsiveness budget')
+})
+
+test('current-db llmstatus responsiveness probe fails on owner proxy 504s', async () => {
+  const signal = new AbortController().signal
+
+  return expect(
+    expectLlmStatusRouteRemainsResponsive({
+      apiPort: 3001,
+      createTimeoutSignal: () => {
+        return signal
+      },
+      fetchLlmStatus: async () => {
+        return {body: null, ok: false, status: 504, text: 'DuckDB owner proxy target timed out after 3000 ms'}
+      },
+      wait: async () => {},
+    }),
+  ).rejects.toThrow('Foreground route exceeded the responsiveness budget')
+})
+
+test('current-db maintenance diagnostics responsiveness probe fails on ownerState startup-or-repair', async () => {
+  const signal = new AbortController().signal
+
+  return expect(
+    expectMaintenanceRuntimeDiagnosticsRemainsResponsive({
+      apiPort: 3001,
+      createTimeoutSignal: () => {
+        return signal
+      },
+      fetchDiagnostics: async () => {
+        return {
+          body: {data: {warnings: [{ownerState: 'startup-or-repair'}]}},
+          ok: true,
+          status: 200,
+          text: '{"data":{"warnings":[{"ownerState":"startup-or-repair"}]}}',
+        }
+      },
+      wait: async () => {},
+    }),
+  ).rejects.toThrow('Foreground route exceeded the responsiveness budget')
+})
+
+test('current-db maintenance diagnostics responsiveness probe fails on owner proxy 504s', async () => {
+  const signal = new AbortController().signal
+
+  return expect(
+    expectMaintenanceRuntimeDiagnosticsRemainsResponsive({
+      apiPort: 3001,
+      createTimeoutSignal: () => {
+        return signal
+      },
+      fetchDiagnostics: async () => {
+        return {body: null, ok: false, status: 504, text: 'DuckDB owner proxy target timed out after 3000 ms'}
+      },
+      wait: async () => {},
+    }),
+  ).rejects.toThrow('Foreground route exceeded the responsiveness budget')
+})
+
 const getRuntimeState = async (port: number): Promise<RuntimeStateBody> => {
   const response = await fetch(`http://127.0.0.1:${port}/api/runtime/state`)
 
@@ -1846,7 +2352,32 @@ realDevServerSmokeTest(
       ])
 
       await Promise.race([
-        expectCurrentDbReviewServingQueuedWorkProgresses(3001),
+        (async () => {
+          let progressProbeDone = false
+          await Promise.all([
+            expectCurrentDbReviewServingQueuedWorkProgresses(3001).finally(() => {
+              progressProbeDone = true
+            }),
+            expectReviewServingWarningRouteRemainsResponsive({
+              apiPort: 3001,
+              isDone: () => {
+                return progressProbeDone
+              },
+            }),
+            expectLlmStatusRouteRemainsResponsive({
+              apiPort: 3001,
+              isDone: () => {
+                return progressProbeDone
+              },
+            }),
+            expectMaintenanceRuntimeDiagnosticsRemainsResponsive({
+              apiPort: 3001,
+              isDone: () => {
+                return progressProbeDone
+              },
+            }),
+          ])
+        })(),
         devServerProcess.exited.then((exitCode) => {
           throw new Error(`dev:server exited during review-serving progress probe with code ${String(exitCode)}`)
         }),
