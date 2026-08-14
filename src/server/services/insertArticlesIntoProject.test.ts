@@ -1,6 +1,6 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const appDatabaseServiceModulePath = new URL('./appDatabaseService.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('./appDatabaseService.ts', import.meta.url).href
 
 type MockDatabaseState = {
   committedProjectArticleStatements: string[]

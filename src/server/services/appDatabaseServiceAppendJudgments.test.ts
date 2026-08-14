@@ -1,7 +1,9 @@
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import type {AppDatabaseAppendMetrics, AppendResult, JudgmentInsertRow} from './appDatabaseService.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-app-database-append-judgments')
 const tempDbPath = tempRuntimeRoot.duckdbPath

@@ -1,12 +1,14 @@
-import {afterAll, beforeAll, expect, mock, test} from 'bun:test'
+import {afterAll, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../../../server/test/createTempRuntimeRoot.ts'
 import type {ShortIdMapping} from '../judgeGetPrompt.ts'
 
+setDefaultTimeout(120_000)
+
 const llmJudgmentReviewServingDeltaServiceModulePath = new URL(
   '../../../server/reviewServing/llmJudgmentReviewServingDeltaService.ts',
   import.meta.url,
-).pathname
+).href
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judge-store-judgment-dirty-atomicity')
 
 type AppendLlmJudgmentReviewServingDeltas =

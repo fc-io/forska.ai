@@ -1,6 +1,8 @@
 import {rmSync} from 'node:fs'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 type InvalidationResult = {markedIds: string[]; staleIds: string[]}
 

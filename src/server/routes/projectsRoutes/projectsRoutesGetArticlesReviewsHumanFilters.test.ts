@@ -1,12 +1,12 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
-const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
+const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).href
+const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).href
 const reviewServingFilterRouteServiceModulePath = new URL(
   '../../reviewServing/reviewServingFilterRouteService.ts',
   import.meta.url,
-).pathname
+).href
 
 const projectPromptRowsRef = {
   current: async (_projectId: string): Promise<unknown[]> => {

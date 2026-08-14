@@ -41,7 +41,7 @@ test('judge-worker running jobs come from the owner-backed API without local run
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
@@ -137,7 +137,7 @@ test('judge-worker running jobs fall back to local accepted claims when the owne
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
@@ -205,7 +205,7 @@ test('judge-worker running jobs skip a dispatch tick when the owner is unavailab
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
@@ -255,7 +255,7 @@ test('judge-worker running jobs classify owner startup timeout as owner not read
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')

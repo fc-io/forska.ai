@@ -1,20 +1,18 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const providerAuthServiceModulePath = new URL('../providers/providerAuthService.ts', import.meta.url).pathname
-const getCodexMaxInflightModulePath = new URL('../cron/judgmentsJobs/getCodexMaxInflight.ts', import.meta.url).pathname
-const getJudgmentsCapacityModulePath = new URL('../cron/judgmentsJobs/getJudgmentsCapacity.ts', import.meta.url)
-  .pathname
-const providerConnectionHelpersModulePath = new URL('../providers/providerConnectionHelpers.ts', import.meta.url)
-  .pathname
+const providerAuthServiceModulePath = new URL('../providers/providerAuthService.ts', import.meta.url).href
+const getCodexMaxInflightModulePath = new URL('../cron/judgmentsJobs/getCodexMaxInflight.ts', import.meta.url).href
+const getJudgmentsCapacityModulePath = new URL('../cron/judgmentsJobs/getJudgmentsCapacity.ts', import.meta.url).href
+const providerConnectionHelpersModulePath = new URL('../providers/providerConnectionHelpers.ts', import.meta.url).href
 const providerConnectionRepositoryModulePath = new URL('../providers/providerConnectionRepository.ts', import.meta.url)
-  .pathname
-const providerHealthServiceModulePath = new URL('../providers/providerHealthService.ts', import.meta.url).pathname
+  .href
+const providerHealthServiceModulePath = new URL('../providers/providerHealthService.ts', import.meta.url).href
 const providerRuntimeMatchResolverModulePath = new URL('../providers/providerRuntimeMatchResolver.ts', import.meta.url)
-  .pathname
-const providerRegistryModulePath = new URL('../providers/providerRegistry.ts', import.meta.url).pathname
-const providerSecretStoreModulePath = new URL('../providers/providerSecretStore.ts', import.meta.url).pathname
-const providerCatalogModulePath = new URL('../services/providerCatalog.ts', import.meta.url).pathname
+  .href
+const providerRegistryModulePath = new URL('../providers/providerRegistry.ts', import.meta.url).href
+const providerSecretStoreModulePath = new URL('../providers/providerSecretStore.ts', import.meta.url).href
+const providerCatalogModulePath = new URL('../services/providerCatalog.ts', import.meta.url).href
 
 type ProviderConnectionsRoutesModule = typeof import('./ProviderConnectionsRoutes.ts')
 

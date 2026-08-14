@@ -1,4 +1,6 @@
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const getLastJsonLine = (stdout: string) => {
   const lines = stdout
@@ -36,7 +38,7 @@ test('judgment jobs list allows stale health projections for drained jobs on api
         process.env.VITE_PORT = '3000'
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
         const appReadOnlyModulePath = getModulePath('./src/server/services/appReadOnlyDatabaseService.ts')
         const appDatabaseServiceModule = await import('./src/server/services/appDatabaseService.ts')

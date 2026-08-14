@@ -29,8 +29,8 @@ import {
 import {getProjectTransferExportTempLayout} from './projectTransferSession.ts'
 import {getProjectTransferZipCrc32Digest} from './projectTransferZip.ts'
 
-const exportModulePath = new URL('./projectTransferExport.ts', import.meta.url).pathname
-const sessionRepositoryModulePath = new URL('./projectTransferSessionRepository.ts', import.meta.url).pathname
+const exportModulePath = new URL('./projectTransferExport.ts', import.meta.url).href
+const sessionRepositoryModulePath = new URL('./projectTransferSessionRepository.ts', import.meta.url).href
 const textEncoder = new TextEncoder()
 
 type CreateProjectTransferSessionMockParams = {

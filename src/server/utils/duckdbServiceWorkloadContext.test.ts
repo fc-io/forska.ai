@@ -7,7 +7,7 @@ import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from './du
 type DuckdbServiceModule = typeof import('./duckdbService.ts')
 
 const getImportedDuckdbService = async (label: string) => {
-  const duckdbServiceModulePath = new URL('./duckdbService.ts', import.meta.url).pathname
+  const duckdbServiceModulePath = new URL('./duckdbService.ts', import.meta.url).href
 
   return (await import(`${duckdbServiceModulePath}?${label}=${Date.now()}`)) as DuckdbServiceModule
 }
@@ -25,7 +25,7 @@ test('project transfer memory headroom stays off lightweight session work', () =
   const source = readFileSync(new URL('./duckdbService.ts', import.meta.url), 'utf8')
   const [allowlistSource] = source.match(/projectTransferForegroundMemoryHeadroomRouteOrJobKeys[\s\S]*?\]\)/u) ?? []
 
-  expect(allowlistSource).toContain('projectTransfer.export.transaction')
+  expect(allowlistSource).not.toContain('projectTransfer.export.transaction')
   expect(allowlistSource).toContain('projectTransfer.import.analyze.operationTables')
   expect(allowlistSource).toContain('projectTransfer.import.commit.transaction')
   expect(allowlistSource).not.toContain('projectTransfer.recovery')
@@ -110,7 +110,7 @@ const getServerRuntimeRoleMock = ({
 }
 
 test('duckdb workload context rejects over-budget query results and records metrics', async () => {
-  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   const previousDuckdbPath = process.env.DUCKDB_PATH
   const previousServerRole = process.env.SERVER_ROLE
@@ -199,7 +199,7 @@ test('duckdb workload context rejects over-budget query results and records metr
 })
 
 test('api-role foreground DuckDB work requires workload context before connection acquisition by default', async () => {
-  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
   const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   const previousDuckdbPath = process.env.DUCKDB_PATH
@@ -314,7 +314,7 @@ test('active DuckDB exclusive work rejects non-project-transfer contextual work 
 })
 
 test('api-role foreground DuckDB workload-context guard has an explicit rollout opt-out', async () => {
-  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
   const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   const previousDuckdbPath = process.env.DUCKDB_PATH
@@ -380,8 +380,8 @@ test('api-role foreground DuckDB workload-context guard has an explicit rollout 
 })
 
 test('app database foreground wrappers inherit API-role missing-context rejection', async () => {
-  const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
-  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
+  const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
   const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   const previousDuckdbPath = process.env.DUCKDB_PATH
@@ -472,7 +472,7 @@ test('app database foreground wrappers inherit API-role missing-context rejectio
 })
 
 test('owner and background DuckDB scopes remain allowed without foreground workload enforcement', async () => {
-  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
   const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   const previousDuckdbPath = process.env.DUCKDB_PATH

@@ -11,6 +11,7 @@ import {
   requestReviewServingV4Rebuild,
   type RequestReviewServingV4RebuildInput,
 } from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
+import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../../utils/duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../../utils/duckdbMemoryLimit.ts'
 import {
   closeDuckdbService,
@@ -1675,11 +1676,15 @@ const cleanupStaleLiveImportStagingRevisions = async ({
   }, Promise.resolve(0))
 }
 
-const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionRecoveryParams = {}) => {
+const runProjectTransferSessionRecoveryAttempt = async (params: ProjectTransferSessionRecoveryParams = {}) => {
   const isActiveWriter = params.isActiveWriter ?? canCurrentServerOwnDuckdb
 
   if (!isActiveWriter()) {
     return emptyRecoveryResult(true)
+  }
+
+  if (hasActiveDuckdbExclusiveWork()) {
+    return emptyRecoveryResult(false)
   }
 
   if (params.runner === undefined) {
@@ -1769,6 +1774,18 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
       cleanupResultCounts.cleanupStaleStagingRevisionCount + cleanupStaleStagingRevisionCount,
     scannedSessionCount: sessions.length,
     skippedActiveWriterCheck: false,
+  }
+}
+
+const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionRecoveryParams = {}) => {
+  try {
+    return await runProjectTransferSessionRecoveryAttempt(params)
+  } catch (error) {
+    if (isDuckdbExclusiveWorkAdmissionError(error)) {
+      return emptyRecoveryResult(false)
+    }
+
+    throw error
   }
 }
 

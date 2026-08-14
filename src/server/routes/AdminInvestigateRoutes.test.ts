@@ -1,6 +1,10 @@
 import {readFileSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -21,7 +25,7 @@ const getLastJsonLine = (stdout: string) => {
 }
 
 test('admin append metrics route returns append lane metrics', () => {
-  const duckdbPath = `/tmp/f1-admin-append-metrics-route-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-admin-append-metrics-route-${Date.now()}.duckdb`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -138,7 +142,7 @@ test('admin duckdb runtime workloads route returns non-querying active work diag
         const {mock} = await import('bun:test')
         const {Elysia} = await import('elysia')
 
-        const duckdbServiceModulePath = new URL('./src/server/utils/duckdbService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbServiceModulePath = new URL('./src/server/utils/duckdbService.ts', 'file://' + process.cwd() + '/').href
         const actualDuckdbService = await import('./src/server/utils/duckdbService.ts?runtime-workloads-route-test=' + Date.now())
 
         void mock.module(duckdbServiceModulePath, () => {
@@ -200,8 +204,8 @@ test('admin duckdb runtime workloads route returns non-querying active work diag
 })
 
 test('admin clear databases route rebuilds DuckDB and removes judgment job SQLite files', () => {
-  const runtimeRoot = `/tmp/f1-admin-clear-databases-route-${Date.now()}`
-  const duckdbPath = `${runtimeRoot}/forska.duckdb`
+  const runtimeRoot = join(tmpdir(), `f1-admin-clear-databases-route-${Date.now()}`)
+  const duckdbPath = join(runtimeRoot, 'forska.duckdb')
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -231,7 +235,7 @@ test('admin clear databases route rebuilds DuckDB and removes judgment job SQLit
         const [migrationCountRow] = await database.queryJson(\`SELECT COUNT(*)::INTEGER AS count FROM app_schema_migration\`)
 
         console.log(JSON.stringify({
-          leaseExists: existsSync(\`${duckdbPath}.duckdb-owner.lock\`),
+          leaseExists: existsSync(process.env.DUCKDB_PATH + '.duckdb-owner.lock'),
           migrationCount: migrationCountRow?.count ?? 0,
           promptCount: promptCountRow?.count ?? 0,
           projectsBody,
@@ -290,8 +294,8 @@ test('admin clear databases route rebuilds DuckDB and removes judgment job SQLit
 })
 
 test('admin maintenance runtime diagnostics route reports effective duckdb settings and process memory', () => {
-  const duckdbPath = `/tmp/f1-admin-maintenance-runtime-diagnostics-${Date.now()}.duckdb`
-  const tempDirectory = `/tmp/f1-admin-maintenance-runtime-diagnostics-temp-${Date.now()}`
+  const duckdbPath = join(tmpdir(), `f1-admin-maintenance-runtime-diagnostics-${Date.now()}.duckdb`)
+  const tempDirectory = join(tmpdir(), `f1-admin-maintenance-runtime-diagnostics-temp-${Date.now()}`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -417,7 +421,7 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
 })
 
 test('admin worker runtime diagnostics route reports local capabilities, registry state, and shared ack visibility', () => {
-  const duckdbPath = `/tmp/f1-admin-worker-runtime-diagnostics-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-admin-worker-runtime-diagnostics-${Date.now()}.duckdb`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -506,7 +510,7 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
             },
             duckdbOwnerUrl: 'http://127.0.0.1:4101',
           },
-          {databasePath: '${duckdbPath}'},
+          {databasePath: process.env.DUCKDB_PATH},
         )
         await upsertDuckdbOwnerConnectionHeartbeat(
           {
@@ -525,7 +529,7 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
             startedAt: nowIso,
             duckdbOwnerUrl: 'http://127.0.0.1:4101',
           },
-          {databasePath: '${duckdbPath}'},
+          {databasePath: process.env.DUCKDB_PATH},
         )
         await validateOwnerlessRouteBackends()
 

@@ -1,8 +1,8 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
-const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).pathname
-const providerRuntimeRecordsModulePath = new URL('../../utils/providerRuntimeRecords.ts', import.meta.url).pathname
+const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).href
+const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).href
+const providerRuntimeRecordsModulePath = new URL('../../utils/providerRuntimeRecords.ts', import.meta.url).href
 
 type ProviderRuntimeDetectorModule = typeof import('./providerRuntimeDetector.ts')
 

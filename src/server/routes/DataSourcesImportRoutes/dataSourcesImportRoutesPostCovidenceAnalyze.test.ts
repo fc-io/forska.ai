@@ -24,7 +24,7 @@ test('Covidence analyze route returns service analysis data and 400 errors', () 
       `
         const {mock} = await import('bun:test')
 
-        const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
+        const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').href
 
         const state = {
           error: null,

@@ -1,11 +1,11 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
 const providerConnectionRepositoryModulePath = new URL('../providers/providerConnectionRepository.ts', import.meta.url)
-  .pathname
-const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
-const providerSyncServiceModulePath = new URL('../providers/providerSyncService.ts', import.meta.url).pathname
+  .href
+const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).href
+const providerSyncServiceModulePath = new URL('../providers/providerSyncService.ts', import.meta.url).href
 
 type ProviderModelsRoutesModule = typeof import('./ProviderModelsRoutes.ts')
 

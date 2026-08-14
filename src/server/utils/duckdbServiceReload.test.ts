@@ -95,6 +95,21 @@ const parseJsonSubprocessStdout = <T>(stdout: string): T => {
   return JSON.parse(jsonLine) as T
 }
 
+const directDuckdbStartupChildProcessMockSource = `
+  const duckdbStartupChildProcessModulePath = new URL(
+    './src/server/utils/duckdbStartupChildProcess.ts',
+    import.meta.url,
+  ).href
+
+  void mock.module(duckdbStartupChildProcessModulePath, () => {
+    return {
+      getDuckdbStartupChildProcessInput: ({executablePath, script, serializedArguments}) => {
+        return {command: [executablePath, '-e', script, ...serializedArguments], stdin: 'ignore'}
+      },
+    }
+  })
+`
+
 test('duckdb snapshots checkpoint before copying without copy-from-database', () => {
   const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
   const copySnapshotSource = source.slice(
@@ -106,6 +121,12 @@ test('duckdb snapshots checkpoint before copying without copy-from-database', ()
   expect(source).toContain('checkpointBeforeDuckdbSnapshotCopy')
   expect(copySnapshotSource).toContain('shouldCheckpointBeforeDuckdbSnapshotCopy(runtimeConfig)')
   expect(copySnapshotSource).toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
+  expect(copySnapshotSource).toContain("process.platform !== 'win32'")
+  expect(copySnapshotSource).toContain('closeDuckdbRuntimeForSnapshotCopy()')
+  expect(copySnapshotSource).toContain('await ensureStartedDuckdbProcess()')
+  expect(copySnapshotSource).toContain('[snapshotError, restartError]')
+  expect(copySnapshotSource).toContain('{cause: restartError}')
+  expect(copySnapshotSource).toContain('cleanupDuckdbSnapshotAfterRestartFailure(snapshot)')
   expect(copySnapshotSource).not.toContain('copyFile(sourceWalPath, snapshotWalPath)')
   expect(copySnapshotSource).toContain('materializeCopiedDuckdbSnapshot(snapshotPath, runtimeConfig)')
   expect(copySnapshotSource).not.toContain('COPY FROM DATABASE')
@@ -121,7 +142,7 @@ test('duckdb snapshot creation fails when the pre-copy checkpoint fails', () => 
       `
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
         const runStatements = []
 
         void mock.module(serverRuntimeRoleModulePath, () => {
@@ -185,8 +206,8 @@ test('duckdb snapshot creation fails when the pre-copy checkpoint fails', () => 
         ...process.env,
         API_SERVER_PORT: '3999',
         DUCKDB_MEMORY_LIMIT: '20GB',
-        DUCKDB_PATH: '/tmp/f1-duckdb-service-snapshot-checkpoint-failure-test.duckdb',
-        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-snapshot-checkpoint-failure-test-temp',
+        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-snapshot-checkpoint-failure-test-${Date.now()}.duckdb`),
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-service-snapshot-checkpoint-failure-test-temp-${Date.now()}`),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',
@@ -206,9 +227,254 @@ test('duckdb snapshot creation fails when the pre-copy checkpoint fails', () => 
   expect(parsed.runStatements).toEqual(['CHECKPOINT'])
 })
 
+test('duckdb snapshot close failures still restart the Windows embedded runtime', () => {
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        Object.defineProperty(process, 'platform', {configurable: true, value: 'win32'})
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        let createCount = 0
+        let shouldFailClose = true
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {
+              if (shouldFailClose) {
+                shouldFailClose = false
+                throw new Error('snapshot connection close failed')
+              }
+            }
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?snapshot-close-failure-test=' + Date.now())
+        let errorMessage = null
+
+        try {
+          await duckdbService.createDuckdbSnapshot()
+        } catch (error) {
+          errorMessage = error instanceof Error ? error.message : String(error)
+        }
+
+        const createCountAfterSnapshot = createCount
+        const [row] = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+
+        console.log(JSON.stringify({createCountAfterQuery: createCount, createCountAfterSnapshot, errorMessage, row}))
+        await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-snapshot-close-failure-test-${Date.now()}.duckdb`),
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-service-snapshot-close-failure-test-temp-${Date.now()}`),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB snapshot close subprocess failed')
+  }
+
+  const parsed = parseJsonSubprocessStdout<{
+    createCountAfterQuery: number
+    createCountAfterSnapshot: number
+    errorMessage: string | null
+    row: {value: number}
+  }>(result.stdout.toString())
+
+  expect(parsed.errorMessage).toContain('snapshot connection close failed')
+  expect(parsed.createCountAfterSnapshot).toBe(2)
+  expect(parsed.row).toEqual({value: 1})
+  expect(parsed.createCountAfterQuery).toBe(2)
+})
+
+test('duckdb snapshot restart failure removes the completed Windows snapshot and WAL', () => {
+  if (process.platform !== 'win32') {
+    const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
+
+    expect(source).toContain("process.platform !== 'win32'")
+    expect(source).toContain('cleanupDuckdbSnapshotAfterRestartFailure(snapshot)')
+    expect(source).toContain('DuckDB embedded runtime restart failed and the completed snapshot could not be removed')
+    return
+  }
+
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-snapshot-restart-failure-test-${Date.now()}.duckdb`)
+  const duckdbTempDirectory = join(tmpdir(), `f1-duckdb-service-snapshot-restart-failure-test-temp-${Date.now()}`)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {existsSync, writeFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+        const {DuckDBInstance: RealDuckDBInstance} = await import('@duckdb/node-api')
+
+        const sourceInstance = await RealDuckDBInstance.create(process.env.DUCKDB_PATH)
+        const sourceConnection = await sourceInstance.connect()
+        await sourceConnection.run('CREATE TABLE snapshot_source (id INTEGER)')
+        sourceConnection.closeSync()
+        sourceInstance.closeSync()
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        let snapshotPath = null
+        let sourceCreateCount = 0
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create(databasePath) {
+              if (databasePath === process.env.DUCKDB_PATH) {
+                sourceCreateCount += 1
+
+                if (sourceCreateCount > 1) {
+                  throw new Error('snapshot runtime restart failed')
+                }
+              } else {
+                snapshotPath = databasePath
+                writeFileSync(snapshotPath + '.wal', 'snapshot wal')
+              }
+
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?snapshot-restart-failure-test=' + Date.now())
+        let errorMessage = null
+
+        try {
+          await duckdbService.createDuckdbSnapshot()
+        } catch (error) {
+          errorMessage = error instanceof Error ? error.message : String(error)
+        }
+
+        console.log(JSON.stringify({
+          errorMessage,
+          snapshotExists: snapshotPath === null ? null : existsSync(snapshotPath),
+          snapshotPath,
+          snapshotWalExists: snapshotPath === null ? null : existsSync(snapshotPath + '.wal'),
+          sourceCreateCount,
+        }))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: duckdbTempDirectory,
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  removePathIfExists(duckdbPath)
+  removePathIfExists(duckdbTempDirectory)
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB snapshot restart subprocess failed')
+  }
+
+  const parsed = parseJsonSubprocessStdout<{
+    errorMessage: string | null
+    snapshotExists: boolean | null
+    snapshotPath: string | null
+    snapshotWalExists: boolean | null
+    sourceCreateCount: number
+  }>(`${result.stdout.toString()}\n${result.stderr.toString()}`)
+
+  expect(parsed.errorMessage).toContain('snapshot runtime restart failed')
+  expect(parsed.snapshotPath).not.toBeNull()
+  expect(parsed.snapshotExists).toBe(false)
+  expect(parsed.snapshotWalExists).toBe(false)
+  expect(parsed.sourceCreateCount).toBe(2)
+})
+
 test('duckdb snapshot WAL materialization makes read-only copies see committed WAL rows', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-snapshot-wal-source-${Date.now()}.duckdb`
-  const dataRoot = `/tmp/f1-duckdb-snapshot-wal-data-${Date.now()}`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-snapshot-wal-source-${Date.now()}.duckdb`)
+  const dataRoot = join(tmpdir(), `f1-duckdb-snapshot-wal-data-${Date.now()}`)
 
   removeFileIfExists(duckdbPath)
   removeFileIfExists(`${duckdbPath}.wal`)
@@ -266,8 +532,8 @@ test('duckdb snapshot WAL materialization makes read-only copies see committed W
 })
 
 test('duckdb snapshot checkpoint prevents copied DDL WAL replay failures', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-snapshot-ddl-wal-source-${Date.now()}.duckdb`
-  const dataRoot = `/tmp/f1-duckdb-snapshot-ddl-wal-data-${Date.now()}`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-snapshot-ddl-wal-source-${Date.now()}.duckdb`)
+  const dataRoot = join(tmpdir(), `f1-duckdb-snapshot-ddl-wal-data-${Date.now()}`)
 
   removeFileIfExists(duckdbPath)
   removeFileIfExists(`${duckdbPath}.wal`)
@@ -324,7 +590,7 @@ test('duckdb snapshot checkpoint prevents copied DDL WAL replay failures', async
 })
 
 test('duckdb service reuses the same embedded runtime across module reloads', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-reload-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-reload-${Date.now()}.duckdb`)
   const duckdbInstance = await DuckDBInstance.create(duckdbPath)
   const connection = await duckdbInstance.connect()
 
@@ -364,7 +630,7 @@ test('duckdb service reuses the same embedded runtime across module reloads', as
 })
 
 test('duckdb service can close and reopen the database cleanly', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-reopen-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-reopen-${Date.now()}.duckdb`)
   const duckdbInstance = await DuckDBInstance.create(duckdbPath)
   const connection = await duckdbInstance.connect()
 
@@ -409,7 +675,7 @@ test('duckdb service checkpoints before close', () => {
       `
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
         const runStatements = []
 
         void mock.module(serverRuntimeRoleModulePath, () => {
@@ -464,8 +730,8 @@ test('duckdb service checkpoints before close', () => {
         ...process.env,
         API_SERVER_PORT: '3999',
         DUCKDB_MEMORY_LIMIT: '20GB',
-        DUCKDB_PATH: '/tmp/f1-duckdb-service-checkpoint-close-test.duckdb',
-        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-checkpoint-close-test-temp',
+        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-checkpoint-close-test-${Date.now()}.duckdb`),
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-service-checkpoint-close-test-temp-${Date.now()}`),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',
@@ -504,7 +770,8 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
         const {statSync} = await import('node:fs')
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
         const walPath = ${JSON.stringify(walPath)}
 
         const createOptionsHistory = []
@@ -669,7 +936,8 @@ test('duckdb service skips proactive startup mutation preflight on low-memory wo
         const {Buffer} = await import('node:buffer')
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -814,7 +1082,7 @@ test('duckdb service skips compact filter posting startup repair before compact 
       `
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
@@ -902,7 +1170,7 @@ test('duckdb service skips compact unassessed queue startup repair before compac
       `
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
@@ -977,7 +1245,8 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
         const walPath = ${JSON.stringify(`${duckdbPath}.wal`)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let checkpointCount = 0
         let createCount = 0
@@ -1174,7 +1443,8 @@ test('duckdb service retries stale mutation-probe repair markers before rebuildi
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -1347,7 +1617,8 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
         const recoveryDirectory = ${JSON.stringify(recoveryDirectory)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -1518,7 +1789,8 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
         const {mock} = await import('bun:test')
 
         const walPath = ${JSON.stringify(walPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let checkpointCount = 0
         const checkpointOptionsHistory = []
@@ -1676,7 +1948,7 @@ test('duckdb service startup repair strips table primary key constraints once', 
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
         const recoveryDirectory = ${JSON.stringify(recoveryDirectory)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         const getRecoveryManifestCount = () => {
           return existsSync(recoveryDirectory)
@@ -1819,7 +2091,7 @@ test('duckdb service startup indexed-table repair preserves unrelated app tables
         const {DuckDBInstance} = await import('@duckdb/node-api')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
@@ -1989,7 +2261,7 @@ test('duckdb service startup repair rebuilds comparison serving generation as st
         const {DuckDBInstance} = await import('@duckdb/node-api')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
@@ -2166,7 +2438,8 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let runCount = 0
@@ -2341,7 +2614,8 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         const originalSpawnSync = globalThis.Bun.spawnSync
 
@@ -2464,7 +2738,8 @@ test('duckdb service marks judgment job after fatal index-delete import status u
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         const originalSpawnSync = globalThis.Bun.spawnSync
 
@@ -2557,7 +2832,9 @@ test('duckdb service marks judgment job after fatal index-delete import status u
   try {
     if (result.exitCode !== 0) {
       throw new Error(
-        result.stderr.toString() || result.stdout.toString() || 'DuckDB judgment job fatal index marker subprocess failed',
+        result.stderr.toString()
+          || result.stdout.toString()
+          || 'DuckDB judgment job fatal index marker subprocess failed',
       )
     }
 
@@ -2593,7 +2870,8 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         const originalSpawnSync = globalThis.Bun.spawnSync
@@ -2714,6 +2992,7 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
       reason: 'index-delete',
       repairSpecs: [
         {schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},
+        {schemaName: 'app', tableName: 'review_serving_dirty_work'},
         {schemaName: 'app', tableName: 'review_serving_projector_watermark'},
       ],
       schemaName: 'mart',
@@ -2742,7 +3021,8 @@ test('duckdb service marks insert-ignore indexed targets when a duplicate-key tr
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         const originalSpawnSync = globalThis.Bun.spawnSync
@@ -2893,7 +3173,8 @@ test('duckdb service prefers fatal error table name before stale mutating target
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         const originalSpawnSync = globalThis.Bun.spawnSync
 
@@ -3005,7 +3286,7 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
       `
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         let createCount = 0
 
@@ -3065,8 +3346,8 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
         ...process.env,
         API_SERVER_PORT: '3999',
         DUCKDB_MEMORY_LIMIT: '20GB',
-        DUCKDB_PATH: '/tmp/f1-duckdb-service-retry-test.duckdb',
-        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-retry-test-temp',
+        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-retry-test-${Date.now()}.duckdb`),
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-service-retry-test-temp-${Date.now()}`),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',
@@ -3109,7 +3390,7 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
         const {mock} = await import('bun:test')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         let createCount = 0
 
@@ -3236,7 +3517,8 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
         const {mock} = await import('bun:test')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -3397,7 +3679,8 @@ test('duckdb service starts with replayable WAL when startup checkpoint fails', 
         const {mock} = await import('bun:test')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let checkpointCount = 0
         let createCount = 0
@@ -3566,7 +3849,8 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
         const {mock} = await import('bun:test')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -3734,7 +4018,8 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
         const {mock} = await import('bun:test')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -3899,7 +4184,8 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
         const {mock} = await import('bun:test')
 
         const duckdbPath = ${JSON.stringify(duckdbPath)}
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -4603,7 +4889,7 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
       `
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         let createCount = 0
         let firstReadInvalidated = false
@@ -4686,8 +4972,8 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
         ...process.env,
         API_SERVER_PORT: '3999',
         DUCKDB_MEMORY_LIMIT: '20GB',
-        DUCKDB_PATH: '/tmp/f1-duckdb-service-fatal-restart-test.duckdb',
-        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-fatal-restart-test-temp',
+        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-fatal-restart-test-${Date.now()}.duckdb`),
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-service-fatal-restart-test-temp-${Date.now()}`),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',
@@ -4714,7 +5000,7 @@ test('duckdb service restarts and retries after a fatal rollback OOM', () => {
       `
         const {mock} = await import('bun:test')
 
-        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
 
         let createCount = 0
         let firstInsertRollbackOom = false
@@ -4800,8 +5086,8 @@ test('duckdb service restarts and retries after a fatal rollback OOM', () => {
         ...process.env,
         API_SERVER_PORT: '3999',
         DUCKDB_MEMORY_LIMIT: '6400MiB',
-        DUCKDB_PATH: '/tmp/f1-duckdb-service-fatal-rollback-oom-test.duckdb',
-        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-fatal-rollback-oom-test-temp',
+        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-fatal-rollback-oom-test-${Date.now()}.duckdb`),
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-service-fatal-rollback-oom-test-temp-${Date.now()}`),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',

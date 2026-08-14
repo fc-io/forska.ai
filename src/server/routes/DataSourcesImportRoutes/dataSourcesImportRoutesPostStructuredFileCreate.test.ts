@@ -38,10 +38,10 @@ test('structured file datasource create runs import inside a transaction without
       `
         const {mock} = await import('bun:test')
 
-        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
-        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const structuredFileImportServiceModulePath = new URL('./src/server/services/structuredFileImportService.ts', 'file://' + process.cwd() + '/').pathname
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').href
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
+        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').href
+        const structuredFileImportServiceModulePath = new URL('./src/server/services/structuredFileImportService.ts', 'file://' + process.cwd() + '/').href
 
         const state = {
           getDataSourceCallCount: 0,
@@ -186,10 +186,10 @@ test('structured file datasource create does not queue refreshes when the transa
       `
         const {mock} = await import('bun:test')
 
-        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
-        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const structuredFileImportServiceModulePath = new URL('./src/server/services/structuredFileImportService.ts', 'file://' + process.cwd() + '/').pathname
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').href
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
+        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').href
+        const structuredFileImportServiceModulePath = new URL('./src/server/services/structuredFileImportService.ts', 'file://' + process.cwd() + '/').href
 
         const state = {
           errorMessage: null,

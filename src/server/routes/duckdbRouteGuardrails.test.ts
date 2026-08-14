@@ -30,7 +30,7 @@ const getProductionSourceFiles = () => {
 }
 
 const getRelativeWorkspacePath = (filePath: string) => {
-  return relative(workspaceRoot, filePath)
+  return relative(workspaceRoot, filePath).replaceAll('\\', '/')
 }
 
 const forbiddenDuckdbImportPatterns = [
@@ -181,8 +181,8 @@ test('serverMain low-memory cron deferral follows maintenance-capable roles and 
 })
 
 test('api proxy onRequest intercepts owner-dependent routes before product handlers execute', async () => {
-  const apiProxyRoutesModulePath = new URL('./ApiProxyRoutes.ts', import.meta.url).pathname
-  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname
+  const apiProxyRoutesModulePath = new URL('./ApiProxyRoutes.ts', import.meta.url).href
+  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).href
   let productHandlerCalled = false
 
   void mock.module(serverRuntimeRoleModulePath, () => {

@@ -2,7 +2,7 @@ import {beforeEach, expect, mock, test} from 'bun:test'
 
 import {ProviderInvocationError} from '../providerTypes.ts'
 
-const getCodexAppServerClientModulePath = new URL('../../utils/getCodexAppServerClient.ts', import.meta.url).pathname
+const getCodexAppServerClientModulePath = new URL('../../utils/getCodexAppServerClient.ts', import.meta.url).href
 
 const runJsonTurn = mock(async (): Promise<{text: string; usage: unknown}> => {
   return {text: 'codex-response', usage: null}

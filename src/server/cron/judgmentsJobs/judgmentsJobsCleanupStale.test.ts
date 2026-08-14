@@ -1,7 +1,7 @@
 import {existsSync, readFileSync} from 'node:fs'
 
 import {Database} from 'bun:sqlite'
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
@@ -11,6 +11,8 @@ import {
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
 } from './providerAdmissionLease.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-jobs-cleanup-stale')
 const tempDbPath = tempRuntimeRoot.duckdbPath

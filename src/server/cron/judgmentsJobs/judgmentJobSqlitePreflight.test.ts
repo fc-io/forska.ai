@@ -12,7 +12,7 @@ test('judge worker preflight quarantine writes through the DuckDB owner', async 
         console.error = () => undefined
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const preflightModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqlitePreflight.ts')

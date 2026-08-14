@@ -551,7 +551,7 @@ test('Phase 3 V4 serving readers are not migrated into product review routes', (
     }
 
     const source = readFileSync(filePath, 'utf8')
-    const repoPath = relative(workspaceRoot, filePath)
+    const repoPath = relative(workspaceRoot, filePath).replaceAll('\\', '/')
     const v4RouteReadMarkers = [
       'mart.review_article_serving_v4',
       'mart.review_article_count_serving_v4',
@@ -585,7 +585,7 @@ test('selected-import compatibility view stays out of non-migration runtime and 
       return !filePath.endsWith('.test.ts')
     })
   const offenders = sourceFiles.flatMap((filePath) => {
-    const repoPath = relative(workspaceRoot, filePath)
+    const repoPath = relative(workspaceRoot, filePath).replaceAll('\\', '/')
     if (allowedRuntimeReferences.has(repoPath)) {
       return []
     }

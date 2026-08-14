@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs'
 import {expect, test} from 'bun:test'
 
 const readSource = (path: string) => {
-  return readFileSync(path, 'utf8')
+  return readFileSync(path, 'utf8').replaceAll('\r\n', '\n')
 }
 
 const countMatches = (source: string, pattern: RegExp) => {

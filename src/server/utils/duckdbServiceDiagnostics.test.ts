@@ -46,8 +46,8 @@ test('duckdb active main work diagnostics expose in-flight workload without SQL 
         `
           const {mock} = await import('bun:test')
 
-          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').pathname
-          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').href
+          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
           let connectCount = 0
           let unblockActiveQuery
 
@@ -209,8 +209,8 @@ test('duckdb native statement diagnostics identify workload and connection witho
         `
           const {mock} = await import('bun:test')
 
-          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').pathname
-          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').href
+          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
           const events = []
           let connectCount = 0
           let progressReadCount = 0
@@ -475,8 +475,8 @@ test('duckdb native statement lifecycle diagnostics are opt-in while errors stay
         `
           const {mock} = await import('bun:test')
 
-          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').pathname
-          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+          const runtimeLoggerModulePath = new URL('./src/server/utils/runtimeLogger.ts', 'file://' + process.cwd() + '/').href
+          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
           const events = []
           let connectCount = 0
 

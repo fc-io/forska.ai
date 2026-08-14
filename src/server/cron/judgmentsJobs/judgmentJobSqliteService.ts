@@ -1516,6 +1516,11 @@ const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed']
 const deleteJobFiles = (jobId: string) => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
 
+  closeOpenDatabase(jobId)
+  if (process.platform === 'win32') {
+    globalThis.Bun.gc(true)
+  }
+
   rmSync(sqlitePath, {force: true})
   rmSync(`${sqlitePath}-shm`, {force: true})
   rmSync(`${sqlitePath}-wal`, {force: true})

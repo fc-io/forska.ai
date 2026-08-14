@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto'
 
+import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {getProviderConnection} from '../../providers/providerConnectionRepository.ts'
 import {testProviderConnectionHealth} from '../../providers/providerHealthService.ts'
 import type {ProviderConnectionRecord} from '../../providers/providerTypes.ts'
@@ -602,10 +603,21 @@ const releaseProviderRequestAdmissionLease = async (lease: ProviderRequestAdmiss
 }
 
 const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmissionLease): (() => void) => {
+  let heartbeatInFlight = false
+
   const heartbeat = (): void => {
-    void heartbeatProviderAdmissionLeaseThroughOwner(lease).catch(() => {
-      return undefined
-    })
+    if (heartbeatInFlight) {
+      return
+    }
+
+    heartbeatInFlight = true
+    void heartbeatProviderAdmissionLeaseThroughOwner(lease)
+      .catch(() => {
+        return undefined
+      })
+      .finally(() => {
+        heartbeatInFlight = false
+      })
   }
   const interval = setInterval(heartbeat, providerAdmissionLeaseHeartbeatIntervalMs)
 
@@ -771,7 +783,9 @@ const probeDefaultEndpointAvailability = async ({
   }
 
   try {
-    const response = await fetch(getDefaultEndpointProbeUrl(baseURL), {signal: AbortSignal.timeout(10_000)})
+    const response = await withAbortSignalTimeout(10_000, (signal) => {
+      return fetch(getDefaultEndpointProbeUrl(baseURL), {signal})
+    })
     const failure = classifyConnectionFailure({
       context: {effectiveBaseURL: baseURL, endpointPath, providerKind: provider ?? null},
       error: {status: response.status},

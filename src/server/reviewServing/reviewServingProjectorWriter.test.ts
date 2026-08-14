@@ -19,6 +19,10 @@ import {
 
 const workspaceRoot = join(import.meta.dir, '../../..')
 
+const getRepoPath = (filePath: string) => {
+  return relative(workspaceRoot, filePath).replaceAll('\\', '/')
+}
+
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     rmSync(filePath, {force: true, recursive: true})
@@ -1255,7 +1259,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
   ])
   const offenders = getTypeScriptFiles(join(workspaceRoot, 'src/server'))
     .filter((filePath) => {
-      const repoPath = relative(workspaceRoot, filePath)
+      const repoPath = getRepoPath(filePath)
 
       return (
         repoPath !== 'src/server/reviewServing/reviewServingProjectorWriter.ts'
@@ -1280,7 +1284,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
           return new RegExp(marker, 'u').test(source)
         })
         .map((marker) => {
-          return `${relative(workspaceRoot, filePath)}: ${marker}`
+          return `${getRepoPath(filePath)}: ${marker}`
         })
     })
 
@@ -1290,7 +1294,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
 test('legacy mart maintenance paths do not write V4 review-serving snapshots', () => {
   const legacyMartMaintenanceFiles = getTypeScriptFiles(join(workspaceRoot, 'src/server'))
     .map((filePath) => {
-      return relative(workspaceRoot, filePath)
+      return getRepoPath(filePath)
     })
     .filter((repoPath) => {
       return (

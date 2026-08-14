@@ -1,6 +1,6 @@
 import {rmSync} from 'node:fs'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {
   getProjectTransferDirtyTokenRevalidationDecision,
@@ -14,6 +14,8 @@ import {
   type ProjectTransferTargetStateSafetySurface,
   projectTransferTargetStateSafetySurfaces,
 } from './projectTransferTargetStateDirtyTokenService.ts'
+
+setDefaultTimeout(120_000)
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})

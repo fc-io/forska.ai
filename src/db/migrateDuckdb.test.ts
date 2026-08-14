@@ -1,7 +1,9 @@
 import {existsSync, readdirSync, readFileSync, unlinkSync} from 'node:fs'
 import {resolve} from 'node:path'
 
-import {expect, mock, test} from 'bun:test'
+import {expect, mock, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
 type MigrateDuckdbModule = {migrateDuckdb: () => Promise<void>}
@@ -1353,7 +1355,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewTitleSearchTokenPostingSlimSql).not.toContain('PRIMARY KEY')
   expect(reviewTitleSearchTokenPostingSlimSql).not.toContain('token, article_id)')
-  expect(reviewTitleSearchTokenLookupIndexDropSql).toBe(
+  expect(reviewTitleSearchTokenLookupIndexDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       'DROP INDEX IF EXISTS mart.idx_review_title_search_serving_v4_token;',
       'DROP INDEX IF EXISTS idx_review_title_search_serving_v4_token;',
@@ -1437,7 +1439,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewRemainingHotTableIndexDropSql).toContain(
     'DROP INDEX IF EXISTS mart.idx_review_filter_option_serving_v4_repaired_pk;',
   )
-  expect(reviewFilterPostingStatsDerivedColumnDropSql).toBe(
+  expect(reviewFilterPostingStatsDerivedColumnDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       '-- Retired by 0147_dropReviewFilterPostingStats.sql.',
       '-- Filter-posting stats are no longer materialized, so the old derived-column',
@@ -1447,7 +1449,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('selectivity')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('posting_identity')
-  expect(reviewFilterPostingStatsDropSql).toBe(
+  expect(reviewFilterPostingStatsDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       'DROP INDEX IF EXISTS mart.idx_review_filter_posting_stats_v4_lookup;',
       'DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_lookup;',
@@ -1478,13 +1480,13 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewSummaryOptionUpdatedAtDropSql).not.toContain('count_updated_at TIMESTAMPTZ')
   expect(reviewSummaryOptionUpdatedAtDropSql).not.toContain('facet_updated_at TIMESTAMPTZ')
   expect(reviewSummaryOptionUpdatedAtDropSql).not.toContain('option_updated_at TIMESTAMPTZ')
-  expect(reviewFilterOptionLookupIndexDropSql).toBe(
+  expect(reviewFilterOptionLookupIndexDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       'DROP INDEX IF EXISTS mart.idx_review_filter_option_serving_v4_lookup;',
       'DROP INDEX IF EXISTS idx_review_filter_option_serving_v4_lookup;',
     ].join('\n'),
   )
-  expect(reviewFilteredCountLookupIndexDropSql).toBe(
+  expect(reviewFilteredCountLookupIndexDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       'DROP INDEX IF EXISTS mart.idx_review_filtered_count_serving_v4_lookup;',
       'DROP INDEX IF EXISTS idx_review_filtered_count_serving_v4_lookup;',
@@ -1581,7 +1583,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewFilterPostingServingSortKeyDropSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup',
   )
-  expect(reviewFilterPostingServingLookupIndexDropSql).toBe(
+  expect(reviewFilterPostingServingLookupIndexDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       'DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_lookup;',
       'DROP INDEX IF EXISTS idx_review_article_filter_posting_serving_v4_lookup;',
@@ -1633,7 +1635,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('duplicate_flag')
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('conflict_flag')
   expect(reviewSelectedImportPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_selected_import_patch_v4;')
-  expect(reviewSummaryContributionServingDropSql).toBe(
+  expect(reviewSummaryContributionServingDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       'DROP INDEX IF EXISTS mart.idx_review_article_summary_contribution_v4_lookup;',
       'DROP INDEX IF EXISTS idx_review_article_summary_contribution_v4_lookup;',
@@ -1653,7 +1655,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewSelectedImportBaseFlagDropSql).not.toContain('PRIMARY KEY')
   expect(reviewSelectedImportBaseFlagDropSql).not.toContain('duplicate_flag')
   expect(reviewSelectedImportBaseFlagDropSql).not.toContain('conflict_flag')
-  expect(reviewProjectImportDeltaCursorDropSql).toBe(
+  expect(reviewProjectImportDeltaCursorDropSql.replaceAll('\r\n', '\n')).toBe(
     [
       'DROP INDEX IF EXISTS app.idx_review_project_import_delta_cursor_route;',
       'DROP INDEX IF EXISTS idx_review_project_import_delta_cursor_route;',
@@ -6761,7 +6763,7 @@ test('DuckDB migration drops judgment detail physical list-mode key and preserve
             answered_original AS answeredOriginal,
             human_comment AS humanComment
           FROM mart.review_article_judgment_detail_serving_v4
-          ORDER BY article_id, payload_kind
+          ORDER BY article_id, payload_kind, prompt_id
         \`)
         const indexRows = await database.queryJson(
           "SELECT index_name AS indexName, sql FROM duckdb_indexes() WHERE schema_name = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' ORDER BY index_name"
@@ -10003,8 +10005,8 @@ test('migrateDuckdb preserves the original failure when rollback is already inac
     'Catalog Error: Type with name "project_prompt_criteria_disposition_v2" already exists!',
   )
   const rollbackError = new Error('TransactionContext Error: cannot rollback - no transaction is active')
-  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
-  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).href
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).href
   const runStatements: string[] = []
 
   void mock.module(appDatabaseServiceModulePath, () => {
@@ -10065,8 +10067,8 @@ test('migrateDuckdb applies comparison serving conflict filter migration outside
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return fileName !== targetMigrationFile
   })
-  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
-  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).href
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).href
   const maintenanceCommands: string[] = []
   const runStatements: string[] = []
 
@@ -10116,8 +10118,8 @@ test('migrateDuckdb skips checkpoint when no migration files are applied', async
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-checkpoint-skip-test.duckdb'
 
   const appliedNames = getDuckdbMigrationFiles()
-  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
-  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).href
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).href
   const maintenanceCommands: string[] = []
 
   void mock.module(appDatabaseServiceModulePath, () => {
@@ -10318,8 +10320,8 @@ test('migrateDuckdb skips post-migration checkpoint under low-memory DuckDB prof
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return fileName !== targetMigrationFile
   })
-  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
-  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).href
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).href
   const maintenanceCommands: string[] = []
   const runStatements: string[] = []
 

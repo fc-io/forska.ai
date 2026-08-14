@@ -1,11 +1,11 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
+const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).href
 const reviewServingRouteServiceModulePath = new URL(
   '../../reviewServing/reviewServingHumanBothUnassessedRouteService.ts',
   import.meta.url,
-).pathname
+).href
 
 const humanReviewArticlesFromServingRef = {
   current: async (_params: unknown): Promise<unknown> => {

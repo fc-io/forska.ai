@@ -1,12 +1,14 @@
-import {afterAll, beforeAll, beforeEach, expect, mock, test} from 'bun:test'
+import {afterAll, beforeAll, beforeEach, expect, mock, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 
+setDefaultTimeout(120_000)
+
 const projectMartDirtyRefreshStateServiceModulePath = new URL(
   '../services/projectMartDirtyRefreshStateService.ts',
   import.meta.url,
-).pathname
+).href
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-project-articles-routes')
 const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')

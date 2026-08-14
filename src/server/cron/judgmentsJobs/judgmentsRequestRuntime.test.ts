@@ -24,18 +24,17 @@ type ProviderHealthResult = {lastError: string | null; message: string; modelCou
 const providerConnectionRepositoryModulePath = new URL(
   '../../providers/providerConnectionRepository.ts',
   import.meta.url,
-).pathname
-const providerHealthServiceModulePath = new URL('../../providers/providerHealthService.ts', import.meta.url).pathname
-const judgmentsCapacityModulePath = new URL('./getJudgmentsCapacity.ts', import.meta.url).pathname
-const judgeModulePath = new URL('../../../agent/judge.ts', import.meta.url).pathname
+).href
+const providerHealthServiceModulePath = new URL('../../providers/providerHealthService.ts', import.meta.url).href
+const judgmentsCapacityModulePath = new URL('./getJudgmentsCapacity.ts', import.meta.url).href
+const judgeModulePath = new URL('../../../agent/judge.ts', import.meta.url).href
 const appReadOnlyDatabaseServiceModulePath = new URL('../../services/appReadOnlyDatabaseService.ts', import.meta.url)
-  .pathname
-const appReadOnlyQueryServiceModulePath = new URL('../../services/getAppReadOnlyQueryService.ts', import.meta.url)
-  .pathname
-const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).pathname
-const judgeWorkerCompletionJournalModulePath = new URL('./judgeWorkerCompletionJournal.ts', import.meta.url).pathname
-const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).pathname
-const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).pathname
+  .href
+const appReadOnlyQueryServiceModulePath = new URL('../../services/getAppReadOnlyQueryService.ts', import.meta.url).href
+const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).href
+const judgeWorkerCompletionJournalModulePath = new URL('./judgeWorkerCompletionJournal.ts', import.meta.url).href
+const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).href
+const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).href
 const getRealJudgeWorkerReadOnlyAppDatabaseService = realReadOnlyDatabaseModule.getJudgeWorkerReadOnlyAppDatabaseService
 const getRealJudgeWorkerReadOnlyAppQueryService = realReadOnlyQueryModule.getJudgeWorkerReadOnlyAppQueryService
 const getRealJudgmentJobSqliteService = realSqliteModule.getJudgmentJobSqliteService

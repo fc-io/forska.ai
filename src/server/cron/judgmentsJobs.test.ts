@@ -35,6 +35,121 @@ test('import-only judgment cron module does not import maintenance cron dependen
   expect(source).not.toContain('judgmentsJobsCheckLLMStatus')
   expect(source).not.toContain('judgmentsJobsCleanupStale')
   expect(source).not.toContain('judgmentsJobsSampleProviderTelemetry')
+  expect(source).toContain('hasActiveDuckdbExclusiveWork() || hasActiveProjectTransferBackgroundActivity()')
+})
+
+test('judgment maintenance crons pause while DuckDB exclusive work is active', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {resolve} = await import('node:path')
+        const {pathToFileURL} = await import('node:url')
+
+        const getModulePath = (relativePath) => {
+          return pathToFileURL(resolve(relativePath)).href
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const sampleTelemetryModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')
+        const importCronModulePath = getModulePath('./src/server/cron/judgmentsJobsImportCron.ts')
+        const exclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const cronConfigs = []
+        const calls = []
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              use() {
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              cronConfigs.push(config)
+              return () => {}
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-exclusive-work'}
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {judgmentsJobsAddToQueue: async () => calls.push('add-to-queue')}
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {judgmentsJobsCheckLLMStatus: async () => calls.push('check-status')}
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {judgmentsJobsCleanupStale: async () => calls.push('cleanup-stale')}
+        })
+        void mock.module(sampleTelemetryModulePath, () => {
+          return {judgmentsJobsSampleProviderTelemetry: async () => calls.push('sample-telemetry')}
+        })
+        void mock.module(importCronModulePath, () => {
+          return {importJudgmentsCron: async () => calls.push('import')}
+        })
+        void mock.module(exclusiveWorkModulePath, () => {
+          return {
+            hasActiveDuckdbExclusiveWork: () => true,
+            isDuckdbExclusiveWorkAdmissionError: () => false,
+          }
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => calls.push('failure-log'),
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        await import(judgmentsJobsModulePath)
+
+        for (const name of [
+          'judgments-jobs-add-to-queue',
+          'judgments-jobs-cleanup-stale',
+          'judgments-jobs-sample-provider-telemetry',
+          'judgments-jobs-check-llm-status',
+        ]) {
+          const cronConfig = cronConfigs.find((config) => {
+            return config.name === name
+          })
+          await cronConfig.run()
+        }
+
+        console.log(JSON.stringify({calls}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Judgment maintenance exclusive-work test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {calls: string[]}
+
+  expect(result.calls).toEqual([])
 })
 
 test('judgment import cron stays enabled at the low-memory cap', () => {
@@ -46,7 +161,7 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobsImportCron.ts')
@@ -167,7 +282,7 @@ test('judgment import cron skips while project transfer background work is activ
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobsImportCron.ts')
@@ -251,7 +366,7 @@ test('add-to-queue overlap warning waits for sustained running time', () => {
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
@@ -403,7 +518,7 @@ test('llm status cron is owned by maintenance worker instead of judge worker', (
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
@@ -548,7 +663,7 @@ test('provider telemetry sampler cron is owned by maintenance worker and role ga
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
@@ -698,7 +813,7 @@ test('provider telemetry sampler cron prevents overlapping runs', () => {
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
@@ -839,7 +954,7 @@ test('provider telemetry sampler discovers running jobs without runtime match an
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const samplerModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')

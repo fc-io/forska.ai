@@ -3,19 +3,19 @@ import {readFileSync} from 'node:fs'
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
-const appQueryServiceModulePath = new URL('../services/getAppQueryService.ts', import.meta.url).pathname
-const projectAccessGuardModulePath = new URL('./projectsRoutes/projectAccessGuard.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
+const appQueryServiceModulePath = new URL('../services/getAppQueryService.ts', import.meta.url).href
+const projectAccessGuardModulePath = new URL('./projectsRoutes/projectAccessGuard.ts', import.meta.url).href
 const reviewBulkOperationServiceModulePath = new URL('../reviewServing/reviewBulkOperationService.ts', import.meta.url)
-  .pathname
+  .href
 const reviewServingManifestRepositoryModulePath = new URL(
   '../reviewServing/reviewServingManifestRepository.ts',
   import.meta.url,
-).pathname
+).href
 const reviewServingProjectConfigIdentityModulePath = new URL(
   '../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
-).pathname
+).href
 const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')
 const articleServingListModeStateFixtureTable = ['mart', 'review_article_serving_list_mode_state_v4'].join('.')
 const judgmentDetailServingFixtureTable = ['mart', 'review_article_judgment_detail_serving_v4'].join('.')

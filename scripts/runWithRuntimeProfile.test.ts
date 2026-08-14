@@ -118,6 +118,8 @@ const staleReviewServingQueuedProgressMs = 10 * 60_000
 const reviewServingWarningFetchTimeoutMs = 60_000
 const reviewServingWarningResponsivenessTimeoutMs = 10_000
 const maintenanceRuntimeDiagnosticsResponsivenessTimeoutMs = 3_000
+const serverStackReadyTimeoutMs = process.platform === 'win32' ? 60_000 : 20_000
+const serverStackTestTimeoutMs = process.platform === 'win32' ? 90_000 : 30_000
 const reviewServingWarningResponsivenessPollMs = 1_000
 const reviewServingWarningResponsivenessMinimumSamples = 3
 const reviewServingWarningResponsivenessMaximumSamples = 45
@@ -129,6 +131,7 @@ const forbiddenDevServerOutputPatterns = [
   {label: 'review-serving projector recovery pause', pattern: /paused by operator recovery marker/},
   {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/},
   {label: 'review bulk worker loop failure', pattern: /\[reviewBulkOperationWorker\] background loop failed/},
+  {label: 'server stack lock refresh failure', pattern: /\[server:stack\] failed to refresh supervisor lock/},
   {label: 'maintenance restart', pattern: /\[server:stack\] restarting maintenance/},
   {label: 'maintenance unexpected exit', pattern: /\[server:stack\] maintenance pid=\d+ exited unexpectedly/},
   {label: 'judge duplicate replacement', pattern: /judge replacement is already ready after SIGTERM/},
@@ -162,6 +165,8 @@ test('current-db network smoke includes read-only browser and mutation-enabled s
   )
   expect(scripts['test:network-smoke:current-db']).not.toContain('setTimeout')
   expect(scripts['test:network-smoke:current-db:readonly']).toContain('FORSKA_DISABLE_SERVER_MUTATIONS=true')
+  expect(scripts['test:network-smoke:current-db:readonly']).toContain('bun scripts/runPlaywright.ts')
+  expect(scripts['test:network-smoke:current-db:readonly']).not.toContain('bunx playwright')
   expect(scripts['test:dev-server:current-db']).toContain('FORSKA_REAL_DEV_SERVER_SMOKE=true')
   expect(scripts['test:dev-server:current-db']).toContain('-t "real primary dev:server startup')
 
@@ -175,11 +180,16 @@ test('stacked server allows DuckDB startup recovery to finish before maintenance
 
   expect(source).toContain('const maintenanceStartupTimeoutMs = 1_800_000')
   expect(source).toContain('deadlineMs = Date.now() + maintenanceStartupTimeoutMs')
-  expect(source).toContain("spawnSync(['pgrep', '-P', String(pid)]")
-  expect(source).toContain('const descendantPids = pid === undefined ? [] : getDescendantProcessIds(pid)')
+  expect(source).toContain("process.platform === 'win32'")
+  expect(source).toContain('Get-CimInstance Win32_Process')
+  expect(source).toContain(": ['pgrep', '-P', String(pid)]")
+  expect(source).toContain('const survivingPids = await waitForProcessIdsExit(capturedPids)')
+  expect(source).toContain('const forcedKillSurvivors = await waitForProcessIdsExit(')
   expect(source).toContain("killProcessIds([...descendantPids, pid], 'SIGTERM')")
-  expect(source).toContain('isJsonSyntaxError(error)')
+  expect(source).toContain('readProcessLockForAcquisition({')
+  expect(source).toContain('processLockMalformedStaleAfterMs')
   expect(source).toContain('rename(temporaryPath, serverStackLockPath)')
+  expect(source).toContain('if (currentLock?.pid === process.pid)')
   expect(source).not.toContain('deadlineMs = Date.now() + startupTimeoutMs')
   expect(source).not.toContain('currentLease.apiServerPort !== config.maintenancePort')
 })
@@ -192,7 +202,24 @@ test('dev server watcher explains busy stack restart timeouts without raw source
   expect(source).toContain('another terminal/screen still has `bun run dev:server` running')
   expect(source).toContain('FORSKA_DEV_SERVER_WATCH_ACTION=restart bun run dev:server')
   expect(source).toContain('logDevServerFatalError(error)')
+  expect(source).toContain('if (currentLock?.pid === process.pid)')
+  expect(source).toContain('readProcessLockForAcquisition({')
+  expect(source).toContain('processLockMalformedStaleAfterMs')
   expect(source).not.toContain('Timed out waiting for server stack pid=${currentLock.pid} to release lock')
+})
+
+test('server stack watchdog replaces dead or persistently unhealthy judge processes', () => {
+  const source = readFileSync(new URL('./startServerStack.ts', import.meta.url), 'utf8')
+
+  expect(source).toContain('const judgeHealthWatchdogFailureThreshold = 3')
+  expect(source).toContain('const processAlive = isManagedServerProcessAlive(serverProcess)')
+  expect(source).toContain('const healthy = processAlive ? await isJudgeLocallyHealthy() : false')
+  expect(source).toContain('isJudgeWatchdogResponseHealthy(probe) && probe.body?.data?.ready === true')
+  expect(source).toContain('await restartJudgeFromHealthWatchdog({')
+  expect(source).toContain("await stopManagedServerProcess('judge', serverProcess)")
+  expect(source).toContain("await stopProcessTree({pid, processName: 'server process'})")
+  expect(source).toContain('startJudgeHealthWatchdog()')
+  expect(source).toContain('stopJudgeHealthWatchdog()')
 })
 
 const removePathIfExists = (path: string) => {
@@ -1992,22 +2019,34 @@ const getStackStartedPids = (output: string): StackStartedPids => {
   }
 }
 
-const waitForProcessExit = async (processToWaitFor: SpawnedProcess, timeoutMs: number) => {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`Timed out waiting for pid=${processToWaitFor.pid ?? 'unknown'} to exit`))
-    }, timeoutMs)
+const isSpawnedProcessRunning = (processToCheck: SpawnedProcess) => {
+  if (processToCheck.pid === undefined) {
+    return false
+  }
 
-    processToWaitFor.exited
-      .then(() => {
-        clearTimeout(timeout)
-        resolve()
-      })
-      .catch((error) => {
-        clearTimeout(timeout)
-        reject(error)
-      })
-  })
+  try {
+    process.kill(processToCheck.pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const waitForProcessExitUntil = async (processToWaitFor: SpawnedProcess, deadlineMs: number): Promise<void> => {
+  if (!isSpawnedProcessRunning(processToWaitFor)) {
+    return
+  }
+
+  if (Date.now() >= deadlineMs) {
+    throw new Error(`Timed out waiting for pid=${processToWaitFor.pid ?? 'unknown'} to exit`)
+  }
+
+  await waitFor(100)
+  return waitForProcessExitUntil(processToWaitFor, deadlineMs)
+}
+
+const waitForProcessExit = async (processToWaitFor: SpawnedProcess, timeoutMs: number) => {
+  return waitForProcessExitUntil(processToWaitFor, Date.now() + timeoutMs)
 }
 
 const getAvailableLocalPorts = async (count: number) => {
@@ -2180,9 +2219,9 @@ test(
     try {
       const pidsAfterReady = await (async (): Promise<[number, number, number]> => {
         const [apiReady, maintenanceReady, judgeReady] = await Promise.all([
-          waitForRuntimeReady(apiPort, 20_000),
-          waitForRuntimeReady(maintenancePort, 20_000),
-          waitForRuntimeReady(judgePort, 20_000),
+          waitForRuntimeReady(apiPort, serverStackReadyTimeoutMs),
+          waitForRuntimeReady(maintenancePort, serverStackReadyTimeoutMs),
+          waitForRuntimeReady(judgePort, serverStackReadyTimeoutMs),
         ])
 
         expect(apiReady.data).toMatchObject({ready: true, role: 'api'})
@@ -2216,7 +2255,7 @@ test(
       removePathIfExists(dataRoot)
     }
   },
-  {timeout: 30_000},
+  {timeout: serverStackTestTimeoutMs},
 )
 
 test(
@@ -2257,14 +2296,16 @@ test(
 
     try {
       await Promise.all([
-        waitForRuntimeReady(apiPort, 20_000),
-        waitForRuntimeReady(maintenancePort, 20_000),
-        waitForRuntimeReady(judgePort, 20_000),
+        waitForRuntimeReady(apiPort, 30_000),
+        waitForRuntimeReady(maintenancePort, 30_000),
+        waitForRuntimeReady(judgePort, 30_000),
       ])
       const [, maintenancePid] = await getRequiredRuntimePids([apiPort, maintenancePort, judgePort])
+      const expectedExitCode = process.platform === 'win32' ? 1 : 137
+      const expectedSignal = process.platform === 'win32' ? null : 'SIGKILL'
 
       process.kill(maintenancePid, 'SIGKILL')
-      await waitForRuntimeReady(maintenancePort, 20_000)
+      await waitForRuntimeReady(maintenancePort, 30_000)
       const [, replacementMaintenancePid] = await getRequiredRuntimePids([apiPort, maintenancePort, judgePort])
 
       expect(replacementMaintenancePid).not.toBe(maintenancePid)
@@ -2276,22 +2317,22 @@ test(
       )
 
       const output = getCollectedProcessOutput(collectors)
-      const logPath = join(logDir, `maintenance-worker-server-${new Date().toISOString().slice(0, 10)}.jsonl`)
-      const records = readFileSync(logPath, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          return JSON.parse(line) as RuntimeLogRecord
-        })
+      const records = getRuntimeLogRecordsSince({logDir, snapshot: {}})
       const exitRecord = records.find((record) => {
         return record.event === 'server.stack.managed-process-unexpected-exit'
       })
 
       expect(output).toContain(
-        `[server:stack] maintenance pid=${maintenancePid} exited unexpectedly with code 137 signal=SIGKILL; restart planned`,
+        `[server:stack] maintenance pid=${maintenancePid} exited unexpectedly with code ${expectedExitCode} signal=${expectedSignal ?? 'none'}; restart planned`,
       )
       expect(exitRecord).toMatchObject({
-        attrs: {exitCode: 137, pid: maintenancePid, restartPlanned: true, role: 'maintenance', signal: 'SIGKILL'},
+        attrs: {
+          exitCode: expectedExitCode,
+          pid: maintenancePid,
+          restartPlanned: true,
+          role: 'maintenance',
+          signal: expectedSignal,
+        },
         runtime: {pid: maintenancePid, service: 'maintenance-worker-server'},
         severity: 'ERROR',
       })
@@ -2300,7 +2341,7 @@ test(
       removePathIfExists(dataRoot)
     }
   },
-  {timeout: 30_000},
+  {timeout: 60_000},
 )
 
 realDevServerSmokeTest(
@@ -2433,7 +2474,7 @@ test(
     let stackProcess: SpawnedProcess | null = null
 
     try {
-      await waitForRuntimeReady(standaloneJudgePort, 20_000)
+      await waitForRuntimeReady(standaloneJudgePort, serverStackReadyTimeoutMs)
 
       stackProcess = globalThis.Bun.spawn([bunExecutablePath, 'scripts/startServerStack.ts'], {
         cwd: process.cwd(),
@@ -2454,10 +2495,10 @@ test(
       })
 
       const [apiReady, maintenanceReady, judgeReady] = await Promise.all([
-        waitForRuntimeReady(apiPort, 20_000),
-        waitForRuntimeReady(maintenancePort, 20_000),
-        waitForRuntimeReady(judgePort, 20_000),
-        waitForProcessExit(conflictingJudgeProcess, 20_000),
+        waitForRuntimeReady(apiPort, serverStackReadyTimeoutMs),
+        waitForRuntimeReady(maintenancePort, serverStackReadyTimeoutMs),
+        waitForRuntimeReady(judgePort, serverStackReadyTimeoutMs),
+        waitForProcessExit(conflictingJudgeProcess, serverStackReadyTimeoutMs),
       ])
 
       expect(apiReady.data).toMatchObject({ready: true, role: 'api'})
@@ -2472,7 +2513,7 @@ test(
       removePathIfExists(dataRoot)
     }
   },
-  {timeout: 30_000},
+  {timeout: serverStackTestTimeoutMs},
 )
 
 test(
@@ -2508,7 +2549,7 @@ test(
     let stackProcess: SpawnedProcess | null = null
 
     try {
-      await waitForRuntimeReady(maintenancePort, 20_000)
+      await waitForRuntimeReady(maintenancePort, serverStackReadyTimeoutMs)
 
       stackProcess = globalThis.Bun.spawn([bunExecutablePath, 'scripts/startServerStack.ts'], {
         cwd: process.cwd(),
@@ -2529,10 +2570,10 @@ test(
       })
 
       const [apiReady, maintenanceReady, judgeReady] = await Promise.all([
-        waitForRuntimeReady(apiPort, 20_000),
-        waitForRuntimeReady(maintenancePort, 20_000),
-        waitForRuntimeReady(judgePort, 20_000),
-        waitForProcessExit(conflictingMaintenanceProcess, 20_000),
+        waitForRuntimeReady(apiPort, serverStackReadyTimeoutMs),
+        waitForRuntimeReady(maintenancePort, serverStackReadyTimeoutMs),
+        waitForRuntimeReady(judgePort, serverStackReadyTimeoutMs),
+        waitForProcessExit(conflictingMaintenanceProcess, serverStackReadyTimeoutMs),
       ])
 
       expect(apiReady.data).toMatchObject({ready: true, role: 'api'})
@@ -2547,5 +2588,5 @@ test(
       removePathIfExists(dataRoot)
     }
   },
-  {timeout: 30_000},
+  {timeout: serverStackTestTimeoutMs},
 )

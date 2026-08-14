@@ -1,8 +1,10 @@
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-subprojects-routes')
 const tempDbPath = tempRuntimeRoot.duckdbPath

@@ -3,7 +3,9 @@ import {dirname, join} from 'node:path'
 
 import {DuckDBInstance} from '@duckdb/node-api'
 import {Database} from 'bun:sqlite'
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
 const defaultEnv = {

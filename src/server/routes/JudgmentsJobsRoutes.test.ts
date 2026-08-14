@@ -1,5 +1,5 @@
 import {Database} from 'bun:sqlite'
-import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 import {existsSync, rmSync, writeFileSync} from 'fs'
 
@@ -10,7 +10,10 @@ import {
 } from '../services/judgmentProviderTelemetryHistoryService.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from '../utils/duckdbExclusiveWork.ts'
 import {HttpError} from '../utils/httpError.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-jobs-routes')
 const tempDbPath = tempRuntimeRoot.duckdbPath
@@ -20,14 +23,12 @@ process.env.DUCKDB_PATH = tempDbPath
 process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
-const providerRuntimeModelGuardModulePath = new URL('../providers/providerRuntimeModelGuard.ts', import.meta.url)
-  .pathname
+const providerRuntimeModelGuardModulePath = new URL('../providers/providerRuntimeModelGuard.ts', import.meta.url).href
 const providerRuntimeMatchResolverModulePath = new URL('../providers/providerRuntimeMatchResolver.ts', import.meta.url)
-  .pathname
+  .href
 const judgmentDispatchRuntimeModulePath = new URL('../cron/judgmentsJobs/judgmentDispatchRuntime.ts', import.meta.url)
-  .pathname
-const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
-  .pathname
+  .href
+const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url).href
 
 let testReadOnlyDatabase: {queryJson: <T>(statement: string, workloadContext?: unknown) => Promise<T[]>} | null = null
 let readOnlyDatabaseCalls: Array<{statement: string; workloadContext: unknown}> = []
@@ -211,6 +212,7 @@ afterAll(async () => {
 })
 
 afterEach(async () => {
+  resetDuckdbExclusiveWorkForTests()
   readOnlyDatabaseCalls = []
   state.assertStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {})
   state.getStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {
@@ -1461,6 +1463,29 @@ test('owner-backed running jobs route returns provider bucket snapshots', async 
   })
 })
 
+test('owner-backed running jobs route pauses cleanly during exclusive DuckDB work', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const lease = await prepareDuckdbExclusiveWork({
+    kind: 'project_transfer_import',
+    phase: 'commit',
+    sessionId: 'running-jobs-exclusive-work',
+  })
+
+  try {
+    const response = await app.handle(new Request('http://localhost/api/judgmentsjobs-running'))
+    const body = (await response.json()) as {data: {jobs: unknown[]}; error: null}
+
+    expect(response.status).toBe(200)
+    expect(body).toEqual({data: {jobs: []}, error: null})
+    expect(readOnlyDatabaseCalls).toEqual([])
+  } finally {
+    await lease.release()
+  }
+})
+
 test('provider telemetry history route returns empty aligned buckets for valid ranges', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
@@ -1805,10 +1830,13 @@ test('starting a judgments job quarantines corrupt SQLite state after isolated p
   expect(healthBody.recommendedNextAction).toBe('repair_offline_required')
   expect(healthBody.quarantine.quarantineReason).toContain('missing table queue_prompt')
 
-  rmSync(getJudgmentJobSqlitePath(jobId), {force: true})
-  rmSync(`${getJudgmentJobSqlitePath(jobId)}-shm`, {force: true})
-  rmSync(`${getJudgmentJobSqlitePath(jobId)}-wal`, {force: true})
   await sqliteService.closeAll()
+  if (process.platform === 'win32') {
+    globalThis.Bun.gc(true)
+  }
+  rmSync(getJudgmentJobSqlitePath(jobId), {force: true, maxRetries: 5, recursive: true, retryDelay: 50})
+  rmSync(`${getJudgmentJobSqlitePath(jobId)}-shm`, {force: true, maxRetries: 5, recursive: true, retryDelay: 50})
+  rmSync(`${getJudgmentJobSqlitePath(jobId)}-wal`, {force: true, maxRetries: 5, recursive: true, retryDelay: 50})
 })
 
 test('starting a draining judgments job returns an actionable error', async () => {
@@ -4194,8 +4222,14 @@ test('repair route captures explicit system sqlite fallback results without chan
     expect(existsSync(exportPath)).toBe(true)
   } finally {
     globalThis.Bun.spawnSync = originalSpawnSync
+    const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+
+    await getJudgmentJobSqliteService().closeAll()
+    if (process.platform === 'win32') {
+      globalThis.Bun.gc(true)
+    }
     rmSync(exportPath, {force: true})
-    rmSync(sqlitePath, {force: true})
+    rmSync(sqlitePath, {force: true, maxRetries: 5, recursive: true, retryDelay: 50})
   }
 })
 

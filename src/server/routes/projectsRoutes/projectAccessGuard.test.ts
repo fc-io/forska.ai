@@ -1,7 +1,7 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
-const serverRuntimeRoleModulePath = new URL('../../utils/serverRuntimeRole.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).href
+const serverRuntimeRoleModulePath = new URL('../../utils/serverRuntimeRole.ts', import.meta.url).href
 
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {

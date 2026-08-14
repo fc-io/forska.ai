@@ -1,3 +1,4 @@
+import {withAbortSignalTimeout} from '../../utils/withAbortSignalTimeout.ts'
 import {runtimeReadyPath} from './runtimeReadyContract.ts'
 
 export const splitRuntimeCutoverVersion = 'split-runtime-v1'
@@ -90,8 +91,10 @@ export const probeDuckdbOwnerCutoverCompatibility = async (
   context: string,
 ): Promise<RuntimeCutoverProbeResult> => {
   try {
-    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(1_000)})
-    const runtimeVersion = getRuntimeCutoverVersionFromPeerResponse(await readResponseJson(response))
+    const runtimeVersion = await withAbortSignalTimeout(1_000, async (signal) => {
+      const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal})
+      return getRuntimeCutoverVersionFromPeerResponse(await readResponseJson(response))
+    })
 
     return isRuntimeCutoverVersionCompatible(runtimeVersion)
       ? {runtimeVersion: splitRuntimeCutoverVersion, status: 'compatible'}
@@ -110,8 +113,10 @@ export const probeDuckdbOwnerRuntimeReadiness = async (
   context: string,
 ): Promise<RuntimeCutoverProbeResult> => {
   try {
-    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(10_000)})
-    const parsed = await readResponseJson(response)
+    const parsed = await withAbortSignalTimeout(10_000, async (signal) => {
+      const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal})
+      return readResponseJson(response)
+    })
     const runtimeVersion = getRuntimeCutoverVersionFromPeerResponse(parsed)
     const data = getObjectValue(getObjectValue(parsed)?.data)
     const ready = getBooleanProperty(data, 'ready')

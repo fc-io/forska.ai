@@ -1,5 +1,5 @@
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
-import {hostname} from 'node:os'
+import {hostname, tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -20,7 +20,7 @@ const getLastJsonLine = (output: string) => {
 }
 
 test('auto follower exits when another local process already owns the same writer port', () => {
-  const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'f1-server-runtime-role-'))
   const duckdbPath = join(tempDirectory, 'test.duckdb')
   const leasePath = `${duckdbPath}.duckdb-owner.lock`
   const now = new Date().toISOString()
@@ -79,7 +79,7 @@ test('auto follower exits when another local process already owns the same write
 })
 
 test('auto role resumes writer when the existing lease belongs to the current process', () => {
-  const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'f1-server-runtime-role-'))
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {
@@ -137,7 +137,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
 })
 
 test('auto role keeps ownership when a promotion handler fails', () => {
-  const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'f1-server-runtime-role-'))
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {
@@ -187,7 +187,7 @@ test('auto role keeps ownership when a promotion handler fails', () => {
 })
 
 test('explicit owner role refreshes its DuckDB owner lease heartbeat after acquisition', {timeout: 15_000}, () => {
-  const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'f1-server-runtime-role-'))
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {
@@ -244,7 +244,7 @@ test('explicit owner role refreshes its DuckDB owner lease heartbeat after acqui
 })
 
 test('explicit owner role demotes after DuckDB owner lease loss', {timeout: 15_000}, () => {
-  const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'f1-server-runtime-role-'))
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {

@@ -32,7 +32,7 @@ test('review serving projector worker heartbeat logs original loop failure and r
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -128,7 +128,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -203,7 +203,7 @@ test('review serving projector worker heartbeat does not start a loop while Duck
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const exclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
@@ -277,7 +277,7 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -367,7 +367,7 @@ test('review serving projector worker heartbeat recycles DuckDB before high-RSS 
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -458,7 +458,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle while for
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -564,7 +564,7 @@ test('review serving projector worker heartbeat keeps skipping high-RSS recycle 
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -675,7 +675,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle during pr
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const activityModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferBackgroundActivity.ts')
@@ -781,7 +781,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle during ac
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -883,7 +883,7 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -964,7 +964,7 @@ test('review serving projector worker heartbeat restarts native-heavy completion
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -1043,7 +1043,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
@@ -1146,7 +1146,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
@@ -1249,7 +1249,7 @@ test('review serving projector worker heartbeat cancels pending native-heavy res
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -1322,7 +1322,7 @@ test('review serving projector worker heartbeat ignores obsolete immediate bound
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
@@ -1392,7 +1392,7 @@ test('review serving projector worker heartbeat preserves explicit null burst ca
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')

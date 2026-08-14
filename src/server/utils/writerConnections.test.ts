@@ -1,4 +1,6 @@
 import {rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -30,7 +32,7 @@ const getDuckdbOwnerHeaders = (startedAt: string) => {
 }
 
 test('worker registry overview reads persisted maintenance heartbeats across processes', async () => {
-  const duckdbPath = `/tmp/f1-worker-registry-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-worker-registry-${Date.now()}.duckdb`)
   const startedAt = new Date().toISOString()
 
   try {
@@ -96,7 +98,7 @@ test('worker registry overview reads persisted maintenance heartbeats across pro
 })
 
 test('worker registry overview surfaces takeover in progress from ownerless-readable records', async () => {
-  const duckdbPath = `/tmp/f1-worker-registry-takeover-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-worker-registry-takeover-${Date.now()}.duckdb`)
   const startedAt = new Date().toISOString()
 
   try {
@@ -141,7 +143,7 @@ test('worker registry overview surfaces takeover in progress from ownerless-read
 })
 
 test('worker registry persists concurrent proxied requests that share the same millisecond timestamp', async () => {
-  const duckdbPath = `/tmp/f1-worker-registry-concurrent-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-worker-registry-concurrent-${Date.now()}.duckdb`)
   const startedAt = new Date().toISOString()
   const headers = getDuckdbOwnerHeaders(startedAt)
   const originalDateNow = Date.now

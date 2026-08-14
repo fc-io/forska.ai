@@ -1,4 +1,6 @@
 import {existsSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -35,7 +37,7 @@ const waitForFile = async (filePath: string, timeoutMs: number): Promise<void> =
 }
 
 test('second process cannot acquire DuckDB owner lease', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-lease-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-lease-${Date.now()}.duckdb`)
   const leasePath = `${duckdbPath}.duckdb-owner.lock`
   const holder = globalThis.Bun.spawn(
     [

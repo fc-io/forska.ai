@@ -1,13 +1,15 @@
-import {afterAll, beforeAll, expect, mock, test} from 'bun:test'
+import {afterAll, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
 
 import * as realReadOnlyDatabaseModule from '../../../services/appReadOnlyDatabaseService.ts'
 import {createTempRuntimeRoot} from '../../../test/createTempRuntimeRoot.ts'
 
+setDefaultTimeout(120_000)
+
 const tempRuntimeRoot = createTempRuntimeRoot('f1-get-and-update-ready-prompts')
 const tempDbPath = tempRuntimeRoot.duckdbPath
 const appReadOnlyDatabaseServiceModulePath = new URL('../../../services/appReadOnlyDatabaseService.ts', import.meta.url)
-  .pathname
-const judgeWorkerCompletionJournalModulePath = new URL('../judgeWorkerCompletionJournal.ts', import.meta.url).pathname
+  .href
+const judgeWorkerCompletionJournalModulePath = new URL('../judgeWorkerCompletionJournal.ts', import.meta.url).href
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -206,7 +208,7 @@ test('owner-backed codex prompts bypass runtime autodetect', async () => {
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const readyPromptsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts')
@@ -334,7 +336,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const readyPromptsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts')

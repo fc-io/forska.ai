@@ -10,22 +10,22 @@ import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 type RouteTestApp = {handle: (request: Request) => Promise<Response> | Response}
 type SourceProjectRow = {deletePendingAt: unknown; id: string}
 
-const analyzeModulePath = new URL('../services/projectTransfer/projectTransferAnalyze.ts', import.meta.url).pathname
-const commitModulePath = new URL('../services/projectTransfer/projectTransferCommit.ts', import.meta.url).pathname
-const exportModulePath = new URL('../services/projectTransfer/projectTransferExport.ts', import.meta.url).pathname
+const analyzeModulePath = new URL('../services/projectTransfer/projectTransferAnalyze.ts', import.meta.url).href
+const commitModulePath = new URL('../services/projectTransfer/projectTransferCommit.ts', import.meta.url).href
+const exportModulePath = new URL('../services/projectTransfer/projectTransferExport.ts', import.meta.url).href
 const exportPackageModulePath = new URL('../services/projectTransfer/projectTransferExportPackage.ts', import.meta.url)
-  .pathname
+  .href
 const actualCommitModule = (await import(
   `${commitModulePath}?projectTransferRoutesActual=${Date.now()}-${Math.random()}`
 )) as typeof import('../services/projectTransfer/projectTransferCommit.ts')
 const dependencyResolutionModulePath = new URL(
   '../services/projectTransfer/projectTransferDependencyResolution.ts',
   import.meta.url,
-).pathname
+).href
 const sessionRepositoryModulePath = new URL(
   '../services/projectTransfer/projectTransferSessionRepository.ts',
   import.meta.url,
-).pathname
+).href
 
 const textEncoder = new TextEncoder()
 const futureDate = new Date('2035-01-01T00:00:00.000Z')

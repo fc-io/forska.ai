@@ -1,3 +1,5 @@
+import {resolve} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes, loadEnv} from './env.ts'
@@ -17,7 +19,7 @@ test('uses local dev port defaults without env files', () => {
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(2)
   expect(resolvedEnv.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED).toBe(false)
   expect(resolvedEnv.FORSKA_RUNTIME_PROFILE).toBe('local')
-  expect(resolvedEnv.LOG_DIR).toBe(`${process.cwd()}/logs/runtime/local`)
+  expect(resolvedEnv.LOG_DIR).toBe(resolve(process.cwd(), 'logs', 'runtime', 'local'))
   expect(resolvedEnv.LOG_LEVEL).toBe('INFO')
   expect(resolvedEnv.LOG_STDERR_LEVEL).toBe('WARN')
 })
@@ -55,7 +57,7 @@ test('uses configured runtime log filtering and profile values', () => {
   })
 
   expect(resolvedEnv.FORSKA_RUNTIME_PROFILE).toBe('secondary')
-  expect(resolvedEnv.LOG_DIR).toBe('/repo/forska/logs/runtime/secondary')
+  expect(resolvedEnv.LOG_DIR).toBe(resolve('/repo/forska', 'logs', 'runtime', 'secondary'))
   expect(resolvedEnv.LOG_LEVEL).toBe('DEBUG')
   expect(resolvedEnv.LOG_STDERR_LEVEL).toBe('ERROR')
 })

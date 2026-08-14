@@ -1,44 +1,63 @@
 import {existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs'
-import {hostname} from 'node:os'
+import {hostname, tmpdir} from 'node:os'
 import {join} from 'node:path'
 
+import {DuckDBInstance} from '@duckdb/node-api'
 import {Database} from 'bun:sqlite'
-import {expect, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {upsertDuckdbOwnerConnectionHeartbeat} from './utils/duckdbOwnerConnections.ts'
 import {getRuntimeCutoverVersion} from './utils/runtimeCutover.ts'
 
 type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
+const integrationTestTimeoutMs = 120_000
+const serverExitTimeoutMs = 10_000
+const serverStartupTimeoutMs = 30_000
 const bunExecutablePath = realpathSync(process.execPath)
+const spawnedServers = new Set<SpawnedServer>()
 
-const removeFileIfExists = (filePath: string) => {
-  if (existsSync(filePath)) {
-    rmSync(filePath, {force: true, recursive: true})
+setDefaultTimeout(integrationTestTimeoutMs)
+
+const removeTestDirectory = (directoryPath: string) => {
+  if (existsSync(directoryPath)) {
+    rmSync(directoryPath, {force: true, maxRetries: 10, recursive: true, retryDelay: 100})
   }
 }
 
-const waitForServer = async (port: number, timeoutMs: number): Promise<void> => {
+const waitForServer = async (port: number, timeoutMs: number, signal?: AbortSignal): Promise<void> => {
   const startedAt = Date.now()
 
-  await new Promise<void>((resolve, reject) => {
-    const check = async () => {
-      try {
-        await fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
-        resolve()
-      } catch (error) {
-        if (Date.now() - startedAt >= timeoutMs) {
-          reject(error)
-          return
-        }
-
-        setTimeout(() => {
-          void check()
-        }, 50)
-      }
+  const check = async (): Promise<void> => {
+    if (signal?.aborted === true) {
+      throw signal.reason
     }
 
-    void check()
-  })
+    const remainingMs = timeoutMs - (Date.now() - startedAt)
+
+    if (remainingMs <= 0) {
+      throw new Error(`Timed out waiting for server on port ${port}`)
+    }
+
+    const attemptTimeoutSignal = AbortSignal.timeout(Math.max(1, Math.min(1_000, remainingMs)))
+    const fetchSignal = signal === undefined ? attemptTimeoutSignal : AbortSignal.any([signal, attemptTimeoutSignal])
+
+    try {
+      await fetch(`http://127.0.0.1:${port}/api/runtime/ready`, {signal: fetchSignal})
+    } catch (error) {
+      if (signal?.aborted === true) {
+        throw signal.reason
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw error
+      }
+
+      await globalThis.Bun.sleep(50)
+      return check()
+    }
+  }
+
+  await check()
 }
 
 const waitForCondition = async (input: {condition: () => boolean; timeoutMs: number}): Promise<void> => {
@@ -63,19 +82,79 @@ const waitForCondition = async (input: {condition: () => boolean; timeoutMs: num
   })
 }
 
+const waitForServerExit = async (server: SpawnedServer, timeoutMs: number) => {
+  if (server.exitCode !== null) {
+    return true
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => {
+      resolve(false)
+    }, timeoutMs)
+
+    void server.exited.then(
+      () => {
+        clearTimeout(timeout)
+        resolve(true)
+      },
+      () => {
+        clearTimeout(timeout)
+        resolve(true)
+      },
+    )
+  })
+}
+
 const stopServer = async (server: SpawnedServer) => {
+  if (server.exitCode !== null) {
+    spawnedServers.delete(server)
+    return
+  }
+
   server.kill('SIGTERM')
-  await server.exited
+
+  if (!(await waitForServerExit(server, serverExitTimeoutMs))) {
+    if (process.platform === 'win32') {
+      globalThis.Bun.spawnSync(['taskkill', '/PID', String(server.pid), '/T', '/F'], {
+        stderr: 'ignore',
+        stdout: 'ignore',
+      })
+    } else {
+      server.kill('SIGKILL')
+    }
+
+    if (!(await waitForServerExit(server, serverExitTimeoutMs))) {
+      throw new Error(`Timed out stopping server pid=${server.pid}`)
+    }
+  }
+
+  spawnedServers.delete(server)
 }
 
 const startServer = (envValues: Record<string, string>) => {
-  return globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
+  const server = globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
     cwd: process.cwd(),
     env: {...process.env, ...envValues},
     stdout: 'pipe',
     stderr: 'pipe',
   })
+
+  spawnedServers.add(server)
+  void server.exited.then(
+    () => {
+      spawnedServers.delete(server)
+    },
+    () => {
+      spawnedServers.delete(server)
+    },
+  )
+
+  return server
 }
+
+afterAll(async () => {
+  await Promise.all(Array.from(spawnedServers).map(stopServer))
+})
 
 const readPipeText = async (pipe: ReadableStream<Uint8Array> | null) => {
   return pipe === null ? '' : await new Response(pipe).text()
@@ -88,6 +167,10 @@ const getStartupTestDirectory = () => {
   return mkdtempSync(join(startupTestRoot, 'index-startup-'))
 }
 
+const getTemporaryTestDirectory = (prefix: string) => {
+  return mkdtempSync(join(tmpdir(), prefix))
+}
+
 const expectServerStartupFailure = async ({
   envValues,
   expectedMessage,
@@ -98,18 +181,23 @@ const expectServerStartupFailure = async ({
   port: number
 }) => {
   const server = startServer(envValues)
+  const readinessAbortController = new AbortController()
+  const readinessResult = waitForServer(port, serverStartupTimeoutMs, readinessAbortController.signal)
+    .then(() => {
+      return {exitCode: null, status: 'started' as const}
+    })
+    .catch(() => {
+      return {exitCode: null, status: 'timeout' as const}
+    })
   const result = await Promise.race([
     server.exited.then((exitCode) => {
       return {exitCode, status: 'exited' as const}
     }),
-    waitForServer(port, 2_000)
-      .then(() => {
-        return {exitCode: null, status: 'started' as const}
-      })
-      .catch(() => {
-        return {exitCode: null, status: 'timeout' as const}
-      }),
+    readinessResult,
   ])
+
+  readinessAbortController.abort(new Error(`Stopped waiting for server startup on port ${port}`))
+  await readinessResult
 
   if (result.status !== 'exited') {
     await stopServer(server)
@@ -133,6 +221,19 @@ const runStartupCommand = (args: string[], envValues: Record<string, string>, fa
 
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.toString() || result.stdout.toString() || failureMessage)
+  }
+}
+
+const runDuckdbStatement = async (duckdbPath: string, statement: string) => {
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath, {memory_limit: '20GB'})
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`SET memory_limit = '20GB'`)
+    await connection.run(statement)
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
   }
 }
 
@@ -270,7 +371,7 @@ test('judge-worker startup refuses a missing durable journal identity', async ()
       port: apiPort,
     })
   } finally {
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -289,12 +390,13 @@ test('judge-worker startup refuses an unstable journal worker id', async () => {
       port: apiPort,
     })
   } finally {
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
 test('judge-worker startup refuses a non-durable explicit journal path', async () => {
   const testDirectory = getStartupTestDirectory()
+  const temporaryDirectory = getTemporaryTestDirectory('forska-judge-worker-')
   const apiPort = 34993
 
   try {
@@ -302,14 +404,15 @@ test('judge-worker startup refuses a non-durable explicit journal path', async (
       envValues: getJudgeWorkerStartupEnv({
         apiPort,
         duckdbPath: join(testDirectory, 'forska.duckdb'),
-        journalPath: `/tmp/forska-judge-worker-${Date.now()}.sqlite`,
+        journalPath: join(temporaryDirectory, 'journal.sqlite'),
         workerId: 'startup-nondurable-worker',
       }),
       expectedMessage: 'JUDGE_WORKER_JOURNAL_PATH must be on durable app-data storage',
       port: apiPort,
     })
   } finally {
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(temporaryDirectory)
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -332,7 +435,7 @@ test('judge-worker startup refuses an unwritable journal target', async () => {
       port: apiPort,
     })
   } finally {
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -372,7 +475,7 @@ test('judge-worker startup refuses a journal target held by another live worker'
       port: apiPort,
     })
   } finally {
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -391,7 +494,7 @@ test('second judge-worker startup refuses the same live journal path', async () 
   )
 
   try {
-    await waitForServer(firstPort, 10_000)
+    await waitForServer(firstPort, serverStartupTimeoutMs)
 
     await expectServerStartupFailure({
       envValues: getJudgeWorkerStartupEnv({
@@ -405,7 +508,7 @@ test('second judge-worker startup refuses the same live journal path', async () 
     })
   } finally {
     await stopServer(firstServer)
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -446,7 +549,7 @@ test('judge-worker startup replays unacked completions for the same durable iden
   })
 
   try {
-    await waitForServer(apiPort, 20_000)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
     await waitForCondition({
       condition: () => {
         return completionRequests.length === 1
@@ -459,7 +562,7 @@ test('judge-worker startup replays unacked completions for the same durable iden
   } finally {
     await stopServer(server)
     await ownerServer.stop(true)
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -501,7 +604,7 @@ test('judge-worker startup skips rollout cleanup when server mutations are disab
   })
 
   try {
-    await waitForServer(apiPort, 20_000)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
     await new Promise((resolve) => {
       setTimeout(resolve, 250)
     })
@@ -511,7 +614,7 @@ test('judge-worker startup skips rollout cleanup when server mutations are disab
   } finally {
     await stopServer(server)
     await ownerServer.stop(true)
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -550,7 +653,7 @@ test('judge-worker startup replays unacked completions from worker-id durable jo
   })
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
     await waitForCondition({
       condition: () => {
         return completionRequests.length === 1
@@ -563,13 +666,14 @@ test('judge-worker startup replays unacked completions from worker-id durable jo
   } finally {
     await stopServer(server)
     await ownerServer.stop(true)
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
 test('maintenance-worker startup migrates DuckDB before judgment health queries run', async () => {
+  const testDirectory = getTemporaryTestDirectory('f1-index-startup-')
   const apiPort = 34988
-  const duckdbPath = `/tmp/f1-index-startup-${Date.now()}.duckdb`
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
   const server = startServer({
     API_SERVER_PORT: String(apiPort),
     DUCKDB_PATH: duckdbPath,
@@ -580,7 +684,7 @@ test('maintenance-worker startup migrates DuckDB before judgment health queries 
   })
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
 
     const response = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/judgmentsjobs-health`, {
       signal: AbortSignal.timeout(5_000),
@@ -611,16 +715,14 @@ test('maintenance-worker startup migrates DuckDB before judgment health queries 
     })
   } finally {
     await stopServer(server)
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeTestDirectory(testDirectory)
   }
 })
 
 test('maintenance-worker startup migrates pre-cutover user config naming', async () => {
+  const testDirectory = getTemporaryTestDirectory('f1-index-startup-user-config-cutover-')
   const apiPort = 34990
-  const duckdbPath = `/tmp/f1-index-startup-user-config-cutover-${Date.now()}.duckdb`
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
   const envValues = {
     API_SERVER_PORT: String(apiPort),
     DUCKDB_PATH: duckdbPath,
@@ -630,34 +732,33 @@ test('maintenance-worker startup migrates pre-cutover user config naming', async
     VITE_PORT: '4310',
   }
 
-  runStartupCommand(['bun', 'src/db/migrateDuckdb.ts'], envValues, 'Failed to prepare migrated DuckDB test database')
   runStartupCommand(
-    [
-      'duckdb',
-      duckdbPath,
-      `
-        SET memory_limit = '20GB';
-        ALTER TABLE app.user_config RENAME COLUMN maintenance_worker_duckdb_memory_limit TO background_writer_duckdb_memory_limit;
-        DELETE FROM app_schema_migration WHERE name = '0044_maintenanceWorkerUserConfigNaming.sql';
-        INSERT INTO app.user_config (
-          id,
-          name,
-          email,
-          role,
-          background_writer_duckdb_memory_limit,
-          project_mart_large_rebuild_tuning_mode
-        )
-        VALUES ('local-user', 'Local User', 'local@example.com', NULL, '12GB', 'automatic');
-      `,
-    ],
+    [bunExecutablePath, 'src/db/migrateDuckdb.ts'],
     envValues,
-    'Failed to prepare pre-cutover user config test database',
+    'Failed to prepare migrated DuckDB test database',
+  )
+  await runDuckdbStatement(
+    duckdbPath,
+    `
+      ALTER TABLE app.user_config RENAME COLUMN maintenance_worker_duckdb_memory_limit TO background_writer_duckdb_memory_limit;
+      DELETE FROM app_schema_migration WHERE name = '0044_maintenanceWorkerUserConfigNaming.sql';
+      INSERT INTO app.user_config (
+        id,
+        name,
+        email,
+        role,
+        background_writer_duckdb_memory_limit,
+        project_mart_large_rebuild_tuning_mode
+      )
+      VALUES ('local-user', 'Local User', 'local@example.com', NULL, '12GB', 'automatic');
+    `,
   )
 
   const server = startServer(envValues)
 
   try {
-    await waitForServer(apiPort, 20_000).catch(async (error) => {
+    await waitForServer(apiPort, serverStartupTimeoutMs).catch(async (error) => {
+      await stopServer(server)
       const stderr = await readPipeText(server.stderr)
       const stdout = await readPipeText(server.stdout)
 
@@ -677,16 +778,14 @@ test('maintenance-worker startup migrates pre-cutover user config naming', async
     expect(user?.backgroundWriterDuckdbMemoryLimit).toBeUndefined()
   } finally {
     await stopServer(server)
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeTestDirectory(testDirectory)
   }
-}, 30_000)
+})
 
 test('maintenance-worker startup tolerates malformed DuckDB lease metadata files', async () => {
+  const testDirectory = getTemporaryTestDirectory('f1-index-startup-malformed-lease-')
   const apiPort = 34989
-  const duckdbPath = `/tmp/f1-index-startup-malformed-lease-${Date.now()}.duckdb`
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
 
   writeFileSync(`${duckdbPath}.duckdb-owner.lock`, '')
   writeFileSync(`${duckdbPath}.duckdb-owner.history.json`, '[{"event":"acquired"')
@@ -701,7 +800,7 @@ test('maintenance-worker startup tolerates malformed DuckDB lease metadata files
   })
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
 
     const response = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/judgmentsjobs-health`, {
       signal: AbortSignal.timeout(5_000),
@@ -725,16 +824,14 @@ test('maintenance-worker startup tolerates malformed DuckDB lease metadata files
     expect(existsSync(`${duckdbPath}.duckdb-owner.history.json`)).toBe(true)
   } finally {
     await stopServer(server)
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeTestDirectory(testDirectory)
   }
 })
 
 test('maintenance-worker keeps product routes private to owner RPC', async () => {
+  const testDirectory = getTemporaryTestDirectory('f1-index-startup-private-surface-')
   const apiPort = 34984
-  const duckdbPath = `/tmp/f1-index-startup-private-surface-${Date.now()}.duckdb`
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
   const server = startServer({
     API_SERVER_PORT: String(apiPort),
     DUCKDB_PATH: duckdbPath,
@@ -745,7 +842,7 @@ test('maintenance-worker keeps product routes private to owner RPC', async () =>
   })
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
 
     const publicResponse = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
     const privateResponse = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/users`, {
@@ -759,16 +856,14 @@ test('maintenance-worker keeps product routes private to owner RPC', async () =>
     expect(Array.isArray(privateBody.data)).toBe(true)
   } finally {
     await stopServer(server)
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeTestDirectory(testDirectory)
   }
 })
 
 test('api readiness stays usable while ownerless registry reports missing maintenance and takeover', async () => {
+  const testDirectory = getTemporaryTestDirectory('f1-index-startup-ownerless-registry-')
   const apiPort = 34983
-  const duckdbPath = `/tmp/f1-index-startup-ownerless-registry-${Date.now()}.duckdb`
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
   const nowIso = new Date().toISOString()
 
   await upsertDuckdbOwnerConnectionHeartbeat(
@@ -813,7 +908,7 @@ test('api readiness stays usable while ownerless registry reports missing mainte
   })
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
 
     const readyResponse = await fetch(`http://127.0.0.1:${apiPort}/api/runtime/ready`, {
       signal: AbortSignal.timeout(5_000),
@@ -839,10 +934,7 @@ test('api readiness stays usable while ownerless registry reports missing mainte
     expect(registryBody.data.registry.takeover.status).toBe('takeover_in_progress')
   } finally {
     await stopServer(server)
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.worker-registry`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -872,8 +964,8 @@ test('api judgment health falls back to owner proxy when live read-only DuckDB i
   })
 
   try {
-    await waitForServer(maintenancePort, 10_000)
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(maintenancePort, serverStartupTimeoutMs)
+    await waitForServer(apiPort, serverStartupTimeoutMs)
 
     const response = await fetch(`http://127.0.0.1:${apiPort}/api/judgmentsjobs-health`, {
       signal: AbortSignal.timeout(5_000),
@@ -913,13 +1005,14 @@ test('api judgment health falls back to owner proxy when live read-only DuckDB i
   } finally {
     await stopServer(apiServer)
     await stopServer(maintenanceServer)
-    rmSync(testDirectory, {force: true, recursive: true})
+    removeTestDirectory(testDirectory)
   }
 })
 
 test('api startup refuses a reachable pre-cutover DuckDB owner peer', async () => {
+  const testDirectory = getTemporaryTestDirectory('f1-index-startup-cutover-peer-')
   const apiPort = 34987
-  const duckdbPath = `/tmp/f1-index-startup-cutover-peer-${Date.now()}.duckdb`
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
   const preCutoverOwner = globalThis.Bun.serve({
     port: 0,
     fetch: () => {
@@ -943,9 +1036,7 @@ test('api startup refuses a reachable pre-cutover DuckDB owner peer', async () =
     })
   } finally {
     await preCutoverOwner.stop(true)
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeTestDirectory(testDirectory)
   }
 })
 
@@ -968,8 +1059,9 @@ test('api startup refuses ownerless routes without a file-backed ownerless-reada
 })
 
 test('maintenance-worker startup refuses a fresh pre-cutover legacy writer lease', async () => {
+  const testDirectory = getTemporaryTestDirectory('f1-index-startup-legacy-writer-cutover-')
   const apiPort = 34986
-  const duckdbPath = `/tmp/f1-index-startup-legacy-writer-cutover-${Date.now()}.duckdb`
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
   const now = new Date().toISOString()
 
   writeFileSync(
@@ -1005,10 +1097,6 @@ test('maintenance-worker startup refuses a fresh pre-cutover legacy writer lease
       port: apiPort,
     })
   } finally {
-    removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
-    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeTestDirectory(testDirectory)
   }
 })

@@ -2,9 +2,16 @@ import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {afterEach, expect, setDefaultTimeout, test} from 'bun:test'
 
+import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from '../../utils/duckdbExclusiveWork.ts'
 import {getProjectTransferSessionRecoveryService} from './projectTransferSessionRecovery.ts'
+
+setDefaultTimeout(120_000)
+
+afterEach(() => {
+  resetDuckdbExclusiveWorkForTests()
+})
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -167,6 +174,38 @@ test('project transfer recovery keeps initial stale-session scan narrow', async 
   expect(initialStaleScan).not.toContain('progress_json')
   expect(routeOrJobKeys).toContain('projectTransfer.recovery.scan')
   expect(routeOrJobKeys).not.toContain('projectTransfer.recovery')
+})
+
+test('project transfer recovery skips database work while exclusive import work is active', async () => {
+  const statements: string[] = []
+  const recovery = getProjectTransferSessionRecoveryService()
+  const lease = await prepareDuckdbExclusiveWork({
+    kind: 'project_transfer_import',
+    phase: 'analyze',
+    sessionId: 'active-import-session',
+  })
+
+  try {
+    const result = await recovery.runProjectTransferTtlRecovery({
+      isActiveWriter: () => {
+        return true
+      },
+      runner: {
+        queryJson: async (statement: string) => {
+          statements.push(statement)
+          return []
+        },
+        run: async (statement: string) => {
+          statements.push(statement)
+        },
+      },
+    })
+
+    expect(result).toMatchObject({scannedSessionCount: 0, skippedActiveWriterCheck: false})
+    expect(statements).toEqual([])
+  } finally {
+    await lease.release()
+  }
 })
 
 test('project transfer recovery runs only on active writer and batch-limits stale scans', () => {

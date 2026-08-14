@@ -1,12 +1,12 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
 const projectMartDirtyRefreshStateServiceModulePath = new URL(
   '../services/projectMartDirtyRefreshStateService.ts',
   import.meta.url,
-).pathname
-const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
+).href
+const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).href
 
 type MockDatabaseState = {
   committedProjectArticleStatements: string[]

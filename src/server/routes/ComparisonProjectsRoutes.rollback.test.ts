@@ -17,16 +17,16 @@ import {
   comparisonProjectConflictResolutionTransferVersion,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
 const comparisonProjectServingRebuildServiceModulePath = new URL(
   '../services/comparisonProjectServingRebuildService.ts',
   import.meta.url,
-).pathname
+).href
 const comparisonProjectServingGenerationServiceModulePath = new URL(
   '../services/comparisonProjectServingGenerationService.ts',
   import.meta.url,
-).pathname
-const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
+).href
+const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).href
 
 type MockServingStatus = {
   activeGeneration: number | null

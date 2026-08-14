@@ -2,14 +2,13 @@ import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const reviewBulkOperationServiceModulePath = new URL('../reviewServing/reviewBulkOperationService.ts', import.meta.url)
-  .pathname
+  .href
 const reviewServingProjectConfigIdentityModulePath = new URL(
   '../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
-).pathname
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
-const insertArticlesIntoProjectModulePath = new URL('../services/insertArticlesIntoProject.ts', import.meta.url)
-  .pathname
+).href
+const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
+const insertArticlesIntoProjectModulePath = new URL('../services/insertArticlesIntoProject.ts', import.meta.url).href
 
 afterEach(() => {
   mock.restore()

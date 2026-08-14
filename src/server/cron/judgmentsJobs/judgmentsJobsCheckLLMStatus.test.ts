@@ -22,8 +22,8 @@ test('llm status marks shared worker model attribution as multiple', () => {
       `
         const {mock} = await import('bun:test')
 
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
-        const metricsModulePath = new URL('./src/server/cron/judgmentsJobs/judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts', 'file://' + process.cwd() + '/').pathname
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
+        const metricsModulePath = new URL('./src/server/cron/judgmentsJobs/judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts', 'file://' + process.cwd() + '/').href
         const insertStatements = []
 
         void mock.module(appDatabaseServiceModulePath, () => {

@@ -3,10 +3,12 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {Database} from 'bun:sqlite'
-import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import type {JudgeWorkerTokenUseSummary} from './judgeWorkerCompletionJournal.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judgment-legacy-evidence-repair')
 const tempDbPath = tempRuntimeRoot.duckdbPath
@@ -177,7 +179,10 @@ afterAll(async () => {
 afterEach(async () => {
   await sqliteService?.().closeAll()
   journalModule?.resetJudgeWorkerCompletionJournalForTests()
-  rmSync(tempJobDir, {force: true, recursive: true})
+  if (process.platform === 'win32') {
+    globalThis.Bun.gc(true)
+  }
+  rmSync(tempJobDir, {force: true, maxRetries: 5, recursive: true, retryDelay: 50})
   journalDirectories.splice(0, journalDirectories.length).forEach((directory) => {
     rmSync(directory, {force: true, recursive: true})
   })

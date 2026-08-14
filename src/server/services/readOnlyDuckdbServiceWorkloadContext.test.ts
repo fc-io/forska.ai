@@ -17,9 +17,9 @@ const restoreEnvValue = (key: string, value: string | undefined) => {
 }
 
 test('read-only DuckDB workload context records metrics without using the owner queue', async () => {
-  const duckdbServiceModulePath = new URL('../utils/duckdbService.ts', import.meta.url).pathname
-  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).pathname
-  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname
+  const duckdbServiceModulePath = new URL('../utils/duckdbService.ts', import.meta.url).href
+  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).href
+  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).href
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   const previousDuckdbPath = process.env.DUCKDB_PATH
   const previousServerDuckdbOwnerUrl = process.env.SERVER_DUCKDB_OWNER_URL
@@ -112,9 +112,9 @@ test('read-only DuckDB workload context records metrics without using the owner 
 })
 
 test('api read-only DuckDB uses the owner background query path when this process owns DuckDB', async () => {
-  const duckdbServiceModulePath = new URL('../utils/duckdbService.ts', import.meta.url).pathname
-  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).pathname
-  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname
+  const duckdbServiceModulePath = new URL('../utils/duckdbService.ts', import.meta.url).href
+  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).href
+  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).href
   const calls: Array<{statement: string; workloadContext: unknown}> = []
 
   void mock.module(serverRuntimeRoleModulePath, () => {
@@ -165,8 +165,8 @@ test('api read-only DuckDB uses the owner background query path when this proces
 })
 
 test('app read-only database service forwards workload context', async () => {
-  const appReadOnlyDatabaseServiceModulePath = new URL('./appReadOnlyDatabaseService.ts', import.meta.url).pathname
-  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).pathname
+  const appReadOnlyDatabaseServiceModulePath = new URL('./appReadOnlyDatabaseService.ts', import.meta.url).href
+  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).href
   const calls: Array<{context: string; statement: string; workloadContext: unknown}> = []
 
   void mock.module(readOnlyDuckdbServiceModulePath, () => {

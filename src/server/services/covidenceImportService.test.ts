@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto'
 import {existsSync, unlinkSync} from 'node:fs'
 import path from 'node:path'
 
-import {afterEach, expect, test} from 'bun:test'
+import {afterEach, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {
   analyzeCovidencePackageFiles,
@@ -18,6 +18,8 @@ import {
   parseCovidenceReferenceRows,
   storeCovidencePackageFiles,
 } from './covidenceImportService.ts'
+
+setDefaultTimeout(120_000)
 
 const datasourceIdsToDelete = new Set<string>()
 const getCovidenceFallbackHash = (value: string) => {
@@ -3035,12 +3037,7 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
     expect(parsed.articleRows).toHaveLength(1)
     expect(parsed.articleRows[0]?.legacyArticleId).toBeNull()
     expect(parsed.currentLinkRows[0]?.count).toBe(1)
-    expect(parsed.summaryRows).toEqual([
-      {
-        answer: 'yes',
-        externalArticleId: `${importRoute}:covidence%3A%231002`,
-      },
-    ])
+    expect(parsed.summaryRows).toEqual([{answer: 'yes', externalArticleId: `${importRoute}:covidence%3A%231002`}])
     expect(parsed.sourceRecordRows).toHaveLength(2)
     expect(
       parsed.sourceRecordRows.every((row) => {

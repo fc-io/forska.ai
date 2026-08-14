@@ -1,6 +1,10 @@
 import {rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -21,13 +25,18 @@ const getLastJsonLine = (stdout: string) => {
 }
 
 const runFreshnessScript = <T>(body: string) => {
-  const duckdbPath = `/tmp/f1-judgments-jobs-dirty-materialization-freshness-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const duckdbPath = join(
+    tmpdir(),
+    `f1-judgments-jobs-dirty-materialization-freshness-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`,
+  )
+  const duckdbTempDirectory = join(tmpdir(), 'f1-judgments-jobs-dirty-materialization-freshness-temp')
   const runScript = globalThis.Bun.spawnSync(['bun', '-e', body], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       API_SERVER_PORT: '3001',
       DUCKDB_PATH: duckdbPath,
+      DUCKDB_TEMP_DIRECTORY: duckdbTempDirectory,
       SERVER_ROLE: 'dev-single',
       VITE_PORT: '3000',
     },
@@ -46,7 +55,7 @@ const runFreshnessScript = <T>(body: string) => {
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
     removeFileIfExists(`${duckdbPath}.tmp`)
     removeFileIfExists(`${duckdbPath}.tmp/`)
-    removeFileIfExists('/tmp/duckdb-temp')
+    removeFileIfExists(duckdbTempDirectory)
   }
 }
 

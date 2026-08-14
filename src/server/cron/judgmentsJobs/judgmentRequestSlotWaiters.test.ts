@@ -11,11 +11,10 @@ type ProviderAdmissionLeaseReleaseInput = Parameters<
 >[0]
 type JudgmentRequestInput = Parameters<JudgmentsRequestRuntimeModule['withJudgmentRequest']>[0]
 
-const codexMaxInflightModulePath = new URL('./getCodexMaxInflight.ts', import.meta.url).pathname
-const judgmentsCapacityModulePath = new URL('./getJudgmentsCapacity.ts', import.meta.url).pathname
-const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).pathname
-const requestAttemptManifestStoreModulePath = new URL('./judgmentRequestAttemptManifestStore.ts', import.meta.url)
-  .pathname
+const codexMaxInflightModulePath = new URL('./getCodexMaxInflight.ts', import.meta.url).href
+const judgmentsCapacityModulePath = new URL('./getJudgmentsCapacity.ts', import.meta.url).href
+const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).href
+const requestAttemptManifestStoreModulePath = new URL('./judgmentRequestAttemptManifestStore.ts', import.meta.url).href
 
 const getCodexMaxInflightMock = mock(() => {
   return 1

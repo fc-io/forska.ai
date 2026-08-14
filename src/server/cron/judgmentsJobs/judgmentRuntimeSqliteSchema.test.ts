@@ -1,8 +1,10 @@
 import {Database} from 'bun:sqlite'
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-request-attempt-sqlite-schema')
 const originalEnv = {

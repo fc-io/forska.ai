@@ -123,7 +123,7 @@ const reviewServingPhase1MigrationPaths = [
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
-    return [migrationPath, readFileSync(resolve(import.meta.dir, migrationPath), 'utf8')]
+    return [migrationPath, readFileSync(resolve(import.meta.dir, migrationPath), 'utf8').replaceAll('\r\n', '\n')]
   }),
 )
 const schemaMigrationSql = reviewServingPhase1MigrationPaths

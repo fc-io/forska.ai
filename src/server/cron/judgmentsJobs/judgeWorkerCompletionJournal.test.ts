@@ -17,6 +17,7 @@ import {
   replayJudgeWorkerCompletionOutbox,
   resetJudgeWorkerCompletionJournalForTests,
 } from './judgeWorkerCompletionJournal.ts'
+import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 
 const originalEnv = {
@@ -308,10 +309,11 @@ const getQueuePromptState = (testDirectory: string, payload: JudgeWorkerCompleti
 }
 
 afterEach(async () => {
+  await getJudgmentJobSqliteService().closeAll()
   resetJudgeWorkerCompletionJournalForTests()
   globalThis.fetch = originalFetch
   testDirectories.splice(0, testDirectories.length).forEach((directory) => {
-    rmSync(directory, {force: true, recursive: true})
+    rmSync(directory, {force: true, maxRetries: 5, recursive: true, retryDelay: 50})
   })
   process.env.API_SERVER_PORT = originalEnv.API_SERVER_PORT
   process.env.DUCKDB_PATH = originalEnv.DUCKDB_PATH

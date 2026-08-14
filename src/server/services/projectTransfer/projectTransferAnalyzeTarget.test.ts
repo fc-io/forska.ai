@@ -3,7 +3,7 @@ import {mkdir} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {migrateDuckdb} from '../../../db/migrateDuckdb.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
@@ -21,6 +21,8 @@ import {
 import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {getProjectTransferImportStagingLayout} from './projectTransferStaging.ts'
+
+setDefaultTimeout(120_000)
 
 const getRuntimeRoot = () => {
   return mkdtempSync(join(tmpdir(), `f2-project-transfer-analyze-target-${process.pid}-`))

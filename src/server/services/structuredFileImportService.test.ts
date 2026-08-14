@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const articleImportStoreServiceModulePath = new URL('./articleImportStoreService.ts', import.meta.url).pathname
+const articleImportStoreServiceModulePath = new URL('./articleImportStoreService.ts', import.meta.url).href
 
 type StructuredFileImportServiceModule = typeof import('./structuredFileImportService.ts')
 

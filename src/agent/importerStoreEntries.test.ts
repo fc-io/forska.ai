@@ -4,8 +4,8 @@ import {join, relative} from 'node:path'
 import {afterEach, expect, mock, test} from 'bun:test'
 
 const articleImportStoreServiceModulePath = new URL('../server/services/articleImportStoreService.ts', import.meta.url)
-  .pathname
-const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
+  .href
+const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).href
 
 type StoredArticleRow = Record<string, unknown>
 
@@ -305,7 +305,7 @@ test('fhir importer stores synthesized article payloads through the import servi
     >('./fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts')
 
     const result = await fhirEhrPatientsWorkflowStoreEntries({
-      assetsFolder: relative(process.cwd(), tempAssetsPath),
+      assetsFolder: relative(process.cwd(), tempAssetsPath).replaceAll('\\', '/'),
       importRoute: 'fhir:test-suite',
       dryRun: false,
     })

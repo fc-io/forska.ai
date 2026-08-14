@@ -1,4 +1,6 @@
 import {existsSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -23,7 +25,7 @@ const getLastJsonLine = (stdout: string) => {
 }
 
 test('duckdb transaction keeps the original error when rollback fails', () => {
-  const duckdbPath = `/tmp/f1-duckdb-transaction-rollback-test-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-transaction-rollback-test-${Date.now()}.duckdb`)
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -53,7 +55,7 @@ test('duckdb transaction keeps the original error when rollback fails', () => {
         API_SERVER_PORT: '3999',
         DUCKDB_MEMORY_LIMIT: '20GB',
         DUCKDB_PATH: duckdbPath,
-        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-transaction-rollback-test-temp',
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-transaction-rollback-test-temp-${Date.now()}`),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',
@@ -77,7 +79,7 @@ test('duckdb transaction keeps the original error when rollback fails', () => {
 })
 
 test('duckdb background statement rolls back a failed explicit transaction before the next read', () => {
-  const duckdbPath = `/tmp/f1-duckdb-background-rollback-test-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-background-rollback-test-${Date.now()}.duckdb`)
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -111,7 +113,7 @@ test('duckdb background statement rolls back a failed explicit transaction befor
         API_SERVER_PORT: '3999',
         DUCKDB_MEMORY_LIMIT: '20GB',
         DUCKDB_PATH: duckdbPath,
-        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-background-rollback-test-temp',
+        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-background-rollback-test-temp-${Date.now()}`),
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',

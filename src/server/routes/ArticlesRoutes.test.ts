@@ -1,16 +1,15 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
-const articleImportStoreServiceModulePath = new URL('../services/articleImportStoreService.ts', import.meta.url)
-  .pathname
-const appQueryServiceModulePath = new URL('../services/getAppQueryService.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
+const articleImportStoreServiceModulePath = new URL('../services/articleImportStoreService.ts', import.meta.url).href
+const appQueryServiceModulePath = new URL('../services/getAppQueryService.ts', import.meta.url).href
 const reviewServingProjectConfigIdentityModulePath = new URL(
   '../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
-).pathname
+).href
 const reviewBulkOperationServiceModulePath = new URL('../reviewServing/reviewBulkOperationService.ts', import.meta.url)
-  .pathname
+  .href
 
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {

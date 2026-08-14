@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto'
 
+import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -766,16 +767,15 @@ const getProviderAdmissionLeaseOwnerUrl = async (): Promise<string> => {
 
 const requestProviderAdmissionLeaseOwner = async <T>({body, path}: {body: unknown; path: string}): Promise<T> => {
   const ownerUrl = await getProviderAdmissionLeaseOwnerUrl()
-  const response = await fetch(
-    `${ownerUrl}${duckdbOwnerPrivateApiPrefix}${providerAdmissionLeaseOwnerApiPath}${path}`,
-    {
-      body: JSON.stringify(body),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-      signal: AbortSignal.timeout(providerAdmissionLeaseOwnerRequestTimeoutMs),
-    },
-  )
-  const text = await response.text()
+  const {response, text} = await withAbortSignalTimeout(providerAdmissionLeaseOwnerRequestTimeoutMs, async (signal) => {
+    const response = await fetch(
+      `${ownerUrl}${duckdbOwnerPrivateApiPrefix}${providerAdmissionLeaseOwnerApiPath}${path}`,
+      {body: JSON.stringify(body), headers: {'content-type': 'application/json'}, method: 'POST', signal},
+    )
+    const text = await response.text()
+
+    return {response, text}
+  })
   const parsed = text.trim().length === 0 ? null : (JSON.parse(text) as {data?: T; error?: unknown})
   const error = parsed && 'error' in parsed ? parsed.error : null
 

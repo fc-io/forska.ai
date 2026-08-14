@@ -1,6 +1,6 @@
 import {rmSync} from 'node:fs'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {
   type ComparisonProjectDifferenceColumn,
@@ -18,6 +18,8 @@ import {
   getComparisonProjectRequiredColumnIds,
 } from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
 import {getComparisonProjectServingRollupBuilder} from './comparisonProjectServingRollupBuilder.ts'
+
+setDefaultTimeout(120_000)
 
 type FixtureArticle = {
   articleCreatedAt: string

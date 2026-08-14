@@ -97,8 +97,35 @@ export type DuckdbExclusiveWorkHandle = DuckdbExclusiveWorkLease
 
 const defaultPollIntervalMs = 250
 const defaultTimeoutMs = 60_000
+const duckdbExclusiveWorkAdmissionErrorPrefix = 'DuckDB is reserved for project-transfer '
 
 let activeDuckdbExclusiveWork: DuckdbExclusiveWorkSnapshot | null = null
+
+export class DuckdbExclusiveWorkAdmissionError extends Error {}
+
+export const getDuckdbExclusiveWorkAdmissionError = ({
+  operation,
+  phase,
+  routeOrJobKey,
+}: {
+  operation: string
+  phase: DuckdbExclusiveWorkPhase
+  routeOrJobKey: string
+}) => {
+  return new DuckdbExclusiveWorkAdmissionError(
+    `${duckdbExclusiveWorkAdmissionErrorPrefix}${phase} work; `
+      + `rejecting ${operation} for ${routeOrJobKey} until the import phase completes`,
+  )
+}
+
+export const isDuckdbExclusiveWorkAdmissionError = (error: unknown) => {
+  return (
+    error instanceof DuckdbExclusiveWorkAdmissionError
+    || (error instanceof Error
+      && error.message.includes(duckdbExclusiveWorkAdmissionErrorPrefix)
+      && error.message.includes('until the import phase completes'))
+  )
+}
 
 const emptyBlockedBy = (): DuckdbExclusiveWorkBlockedBy => {
   return {appendQueueDepth: 0, backgroundQueueDepth: 0, foregroundQueueDepth: 0, rssReady: true}

@@ -1,21 +1,20 @@
 import {expect, mock, test} from 'bun:test'
 
-const envModulePath = new URL('../../server/utils/env.ts', import.meta.url).pathname
-const apiClientModulePath = new URL('../../services/apiClient.ts', import.meta.url).pathname
+const envModulePath = new URL('../../server/utils/env.ts', import.meta.url).href
+const apiClientModulePath = new URL('../../services/apiClient.ts', import.meta.url).href
 const judgeWorkerCompletionJournalModulePath = new URL(
   '../../server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts',
   import.meta.url,
-).pathname
+).href
 const judgmentRequestAttemptManifestStoreModulePath = new URL(
   '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts',
   import.meta.url,
-).pathname
+).href
 const judgmentsRequestRuntimeModulePath = new URL(
   '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts',
   import.meta.url,
-).pathname
-const tokenUseQueryServiceModulePath = new URL('../../server/services/tokenUseQueryService.ts', import.meta.url)
-  .pathname
+).href
+const tokenUseQueryServiceModulePath = new URL('../../server/services/tokenUseQueryService.ts', import.meta.url).href
 
 const markJudgmentRequestAttemptsClosed = mock(() => {
   return undefined
