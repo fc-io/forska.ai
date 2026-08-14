@@ -50,10 +50,6 @@ export type ClaimReviewServingDirtyWorkParams = {
 export const defaultReviewServingDirtyWorkStaleClaimSeconds = 15 * 60
 const reviewServingDirtyWorkLaneWindowLimit = 2_048
 const reviewServingDirtyWorkCoverageCompletionLimit = 2_048
-const reviewServingDirtyWorkClaimStateCursorByDatabase = new WeakMap<
-  ReviewServingDirtyWorkDatabase,
-  Map<ReviewServingProjectionComponent, number>
->()
 
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   completedSourceHighWaterMark: number
@@ -291,19 +287,6 @@ const getStaleRunningClaimSeconds = (params: ClaimReviewServingDirtyWorkParams) 
 
 const getClaimNowSql = (params: ClaimReviewServingDirtyWorkParams) => {
   return params.now === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(params.now.toISOString())}`
-}
-
-const getDirtyWorkClaimStateCursorMap = (database: ReviewServingDirtyWorkDatabase) => {
-  const existing = reviewServingDirtyWorkClaimStateCursorByDatabase.get(database)
-
-  if (existing !== undefined) {
-    return existing
-  }
-
-  const cursorByComponent = new Map<ReviewServingProjectionComponent, number>()
-  reviewServingDirtyWorkClaimStateCursorByDatabase.set(database, cursorByComponent)
-
-  return cursorByComponent
 }
 
 const getClaimNowMs = (params: ClaimReviewServingDirtyWorkParams) => {
@@ -1171,12 +1154,9 @@ export const claimReviewServingDirtyWork = async (
     return []
   }
 
-  const claimStateCursorByComponent = getDirtyWorkClaimStateCursorMap(database)
   const rows = await database.transaction(async (tx) => {
-    const cursor = claimStateCursorByComponent.get(params.projectionComponent) ?? -1
-    let claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
+    const claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
       SELECT
-        state.rowid AS claimStateRowId,
         state.dirty_work_id AS dirtyWorkId,
         state.storage_row_id AS storageRowId,
         state.project_id AS projectId,
@@ -1189,49 +1169,16 @@ export const claimReviewServingDirtyWork = async (
         state.dirty_range_end AS dirtyRangeEnd,
         state.updated_at AS updatedAt
       FROM app.review_serving_dirty_work_claim_state state
-      WHERE state.rowid > ${cursor}
       LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
     `)
 
-    if (claimStateRows.length === 0 && cursor >= 0) {
-      claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
-        SELECT
-          state.rowid AS claimStateRowId,
-          state.dirty_work_id AS dirtyWorkId,
-          state.storage_row_id AS storageRowId,
-          state.project_id AS projectId,
-          state.projection_component AS projectionComponent,
-          state.projection_identity AS projectionIdentity,
-          state.source_partition AS sourcePartition,
-          state.status,
-          state.latest_source_high_water_mark AS latestSourceHighWaterMark,
-          state.dirty_range_start AS dirtyRangeStart,
-          state.dirty_range_end AS dirtyRangeEnd,
-          state.updated_at AS updatedAt
-        FROM app.review_serving_dirty_work_claim_state state
-        WHERE state.rowid >= 0
-        LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
-      `)
-    }
+    const selectedClaimStateRows = getClaimableDirtyWorkClaimStateRows(params, claimStateRows, limit)
 
-    const maxClaimStateRowId = Math.max(
-      cursor,
-      ...claimStateRows.map((row) => {
-        return Number(row.claimStateRowId ?? -1)
-      }),
-    )
-
-    if (Number.isFinite(maxClaimStateRowId)) {
-      claimStateCursorByComponent.set(params.projectionComponent, maxClaimStateRowId)
-    }
-
-    claimStateRows = getClaimableDirtyWorkClaimStateRows(params, claimStateRows, limit)
-
-    if (claimStateRows.length === 0) {
+    if (selectedClaimStateRows.length === 0) {
       return []
     }
 
-    const candidatePredicate = getDirtyWorkClaimStatePredicate(claimStateRows)
+    const candidatePredicate = getDirtyWorkClaimStatePredicate(selectedClaimStateRows)
     const claimedRows = await tx.queryJson<DirtyWorkRow>(`
     UPDATE app.review_serving_dirty_work
     SET status = 'running', updated_at = current_timestamp
@@ -1987,7 +1934,7 @@ export const cleanupReviewServingDirtyWorkRetention = async (
 ): Promise<CleanupReviewServingDirtyWorkRetentionResult> => {
   const laneCompactionLimit = getNormalizedCleanupLimit(params.laneCompactionLimit, 0)
   const acknowledgementDeleteLimit = getNormalizedCleanupLimit(params.acknowledgementDeleteLimit, 0)
-  const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, 64)
+  const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, 0)
   const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(params.dirtyWorkDeleteLimit, 0)
   const laneRepairLimit = getNormalizedCleanupLimit(params.laneRepairLimit, 0)
   const laneStateRepairLimit = getNormalizedCleanupLimit(params.laneStateRepairLimit, 256)

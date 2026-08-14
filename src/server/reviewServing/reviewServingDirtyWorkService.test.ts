@@ -488,15 +488,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     }
   }
   const getClaimStateRows = (statement: string) => {
-    const cursor = Number(statement.match(/state\.rowid\s*>\s*(-?\d+)/u)?.[1] ?? -1)
-
     return [...dirtyWork.values()]
-      .filter((row) => {
-        return (row.storageRowId ?? -1) > cursor
-      })
-      .sort((left, right) => {
-        return (left.storageRowId ?? 0) - (right.storageRowId ?? 0)
-      })
       .slice(0, statement.includes('LIMIT 2048') ? 2048 : getLimit(statement))
       .map(getClaimStateRow)
   }
@@ -827,7 +819,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     if (
       statement.includes('FROM app.review_serving_dirty_work_claim_state state')
-      && statement.includes('state.rowid AS claimStateRowId')
+      && statement.includes('state.dirty_work_id AS dirtyWorkId')
     ) {
       return getClaimStateRows(statement) as T[]
     }
@@ -1266,19 +1258,45 @@ test('claim query keeps candidate discovery bounded to the claim-state window', 
   const claimSelect = statements.find((statement) => {
     return (
       statement.includes('FROM app.review_serving_dirty_work_claim_state state')
-      && statement.includes('state.rowid AS claimStateRowId')
+      && statement.includes('state.dirty_work_id AS dirtyWorkId')
     )
   })
 
   expect(claimSelect).toContain('SELECT')
-  expect(claimSelect).toContain('state.rowid AS claimStateRowId')
-  expect(claimSelect).toContain('WHERE state.rowid >')
+  expect(claimSelect).not.toContain('state.rowid AS claimStateRowId')
   expect(claimSelect).toContain('LIMIT 2048')
+  expect(claimSelect).not.toContain('WHERE state.')
+  expect(claimSelect).not.toContain('ORDER BY')
   expect(claimSelect).not.toContain('ORDER BY state.rowid')
   expect(claimSelect).not.toContain('ORDER BY state.updated_at')
   expect(claimSelect).not.toContain('state.projection_component =')
   expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
   expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work ')
+})
+
+test('claim query samples claim-state without ordered cursor scans', async () => {
+  const {database, statements} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  const claimSelects = statements.filter((statement) => {
+    return (
+      statement.includes('FROM app.review_serving_dirty_work_claim_state state')
+      && statement.includes('state.dirty_work_id AS dirtyWorkId')
+    )
+  })
+  const nextBucketSelect = claimSelects.at(-1)
+
+  expect(nextBucketSelect).toContain('LIMIT 2048')
+  expect(nextBucketSelect).not.toContain('WHERE state.')
+  expect(nextBucketSelect).not.toContain('ORDER BY')
+  expect(nextBucketSelect).not.toContain('state.rowid')
+  expect(nextBucketSelect).not.toContain('ORDER BY state.updated_at')
+  expect(nextBucketSelect).not.toContain('state.projection_component =')
+  expect(nextBucketSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
+  expect(nextBucketSelect).not.toContain('FROM app.review_serving_dirty_work ')
 })
 
 test('claims dirty work from bounded per-row claim state with one exact update returning statement', async () => {
@@ -1298,15 +1316,16 @@ test('claims dirty work from bounded per-row claim state with one exact update r
   const claimStateSelect = statements.find((statement) => {
     return (
       statement.includes('FROM app.review_serving_dirty_work_claim_state state')
-      && statement.includes('state.rowid AS claimStateRowId')
+      && statement.includes('state.dirty_work_id AS dirtyWorkId')
     )
   })
 
   expect(claims).toHaveLength(2)
   expect(claimStateSelect).toContain('FROM app.review_serving_dirty_work_claim_state state')
-  expect(claimStateSelect).toContain('state.rowid AS claimStateRowId')
-  expect(claimStateSelect).toContain('WHERE state.rowid >')
+  expect(claimStateSelect).not.toContain('state.rowid AS claimStateRowId')
   expect(claimStateSelect).toContain('LIMIT 2048')
+  expect(claimStateSelect).not.toContain('WHERE state.')
+  expect(claimStateSelect).not.toContain('ORDER BY')
   expect(claimStateSelect).not.toContain('ORDER BY state.rowid')
   expect(claimStateSelect).not.toContain('ORDER BY state.updated_at')
   expect(claimStateSelect).not.toContain('FROM app.review_serving_dirty_work ')
@@ -1908,7 +1927,9 @@ test('default retention cleanup avoids broad retention compaction and delete sca
   )
 
   expect(result).toMatchObject({compactedLaneCount: 0, deletedAcknowledgementCount: 0, deletedDirtyWorkCount: 0})
+  expect(result.coalescedDirtyWorkCount).toBe(0)
   expect(cleanupStatements.join('\n')).not.toContain('WITH retention_ready_dirty_work AS')
+  expect(cleanupStatements.join('\n')).not.toContain('FROM app.review_serving_dirty_work_claim_state older')
   expect(cleanupStatements.join('\n')).not.toContain('DELETE FROM app.review_serving_dirty_work')
   expect(cleanupStatements.join('\n')).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
 })
