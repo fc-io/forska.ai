@@ -1,3 +1,4 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {
@@ -130,6 +131,111 @@ const getBaseScope = (
   }
 
   return scope
+}
+
+const createDuckdbDirtyWorkDatabase = async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  await connection.run('CREATE SCHEMA app')
+  await connection.run(`
+    CREATE TABLE app.review_serving_dirty_work (
+      dirty_work_id VARCHAR NOT NULL,
+      project_id VARCHAR,
+      scope_kind VARCHAR NOT NULL,
+      scope_id VARCHAR NOT NULL,
+      article_id VARCHAR,
+      projection_key VARCHAR,
+      projection_component VARCHAR,
+      projection_identity VARCHAR,
+      dirty_kind VARCHAR NOT NULL,
+      source_partition VARCHAR NOT NULL,
+      first_source_high_water_mark BIGINT NOT NULL,
+      latest_source_high_water_mark BIGINT NOT NULL,
+      latest_delta_id VARCHAR,
+      dirty_range_start VARCHAR,
+      dirty_range_end VARCHAR,
+      status VARCHAR NOT NULL DEFAULT 'pending',
+      lifecycle_reason VARCHAR,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    )
+  `)
+  await connection.run(`
+    CREATE TABLE app.review_serving_dirty_work_claim_state (
+      dirty_work_id VARCHAR PRIMARY KEY,
+      storage_row_id BIGINT,
+      project_id VARCHAR NOT NULL,
+      projection_component VARCHAR NOT NULL,
+      projection_identity VARCHAR NOT NULL,
+      source_partition VARCHAR NOT NULL,
+      status VARCHAR NOT NULL,
+      latest_source_high_water_mark BIGINT NOT NULL,
+      dirty_range_start VARCHAR,
+      dirty_range_end VARCHAR,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    )
+  `)
+  await connection.run(`
+    CREATE TABLE app.review_serving_dirty_work_ack_id_lookup (
+      dirty_ack_id VARCHAR NOT NULL
+    )
+  `)
+  await connection.run(`
+    CREATE TABLE app.review_serving_dirty_work_ack (
+      dirty_ack_id VARCHAR NOT NULL,
+      dirty_work_id VARCHAR,
+      projection_component VARCHAR NOT NULL,
+      projection_identity VARCHAR NOT NULL,
+      source_partition VARCHAR NOT NULL,
+      completed_source_high_water_mark BIGINT NOT NULL,
+      dirty_range_start VARCHAR,
+      dirty_range_end VARCHAR,
+      status VARCHAR NOT NULL,
+      completed_at TIMESTAMPTZ NOT NULL
+    )
+  `)
+  await connection.run(`
+    CREATE TABLE app.review_serving_project_dirty_source_watermark (
+      project_id VARCHAR NOT NULL,
+      source_partition VARCHAR NOT NULL,
+      source_high_water_mark BIGINT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    )
+  `)
+
+  const database: ReviewServingDirtyWorkDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      await connection.run('BEGIN')
+
+      try {
+        const result = await operation(database)
+        await connection.run('COMMIT')
+
+        return result
+      } catch (error) {
+        await connection.run('ROLLBACK')
+        throw error
+      }
+    },
+  }
+
+  return {
+    close: () => {
+      connection.closeSync()
+      duckdbInstance.closeSync()
+    },
+    database,
+  }
 }
 
 const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; beforeClaimUpdate?: () => void} = {}) => {
@@ -1338,6 +1444,98 @@ test('claims dirty work from bounded per-row claim state with one exact update r
   expect(claimUpdates[0]).not.toContain('SELECT dirty_work_id')
   expect(claimUpdates[0]).not.toContain('projection_key =')
   expect(claimUpdates[0]).not.toContain('json_extract_string')
+})
+
+test('claims rebuilt dirty work in DuckDB without returning hidden rowid', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    await database.run(`
+      INSERT INTO app.review_serving_dirty_work (
+        dirty_work_id,
+        project_id,
+        scope_kind,
+        scope_id,
+        article_id,
+        projection_key,
+        projection_component,
+        projection_identity,
+        dirty_kind,
+        source_partition,
+        first_source_high_water_mark,
+        latest_source_high_water_mark,
+        latest_delta_id,
+        dirty_range_start,
+        dirty_range_end
+      )
+      VALUES (
+        'dirty-work-duckdb-1',
+        'project-1',
+        'article',
+        'project-1:article-1',
+        'article-1',
+        '{"projectionComponent":"display","projectionIdentity":"display:identity-1"}',
+        'display',
+        'display:identity-1',
+        'article.display.updated',
+        'article:display',
+        1,
+        1,
+        'delta-1',
+        '1',
+        '1'
+      )
+    `)
+    await database.run(`
+      INSERT INTO app.review_serving_dirty_work_claim_state (
+        dirty_work_id,
+        storage_row_id,
+        project_id,
+        projection_component,
+        projection_identity,
+        source_partition,
+        status,
+        latest_source_high_water_mark,
+        dirty_range_start,
+        dirty_range_end
+      )
+      VALUES (
+        'dirty-work-duckdb-1',
+        NULL,
+        'project-1',
+        'display',
+        'display:identity-1',
+        'article:display',
+        'pending',
+        1,
+        '1',
+        '1'
+      )
+    `)
+
+    const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+    const runningRows = await database.queryJson<{status: string}>(`
+      SELECT status
+      FROM app.review_serving_dirty_work
+      WHERE dirty_work_id = 'dirty-work-duckdb-1'
+    `)
+
+    expect(claims).toHaveLength(1)
+    expect(claims[0]).toMatchObject({dirtyWorkId: 'dirty-work-duckdb-1', status: 'running', storageRowId: null})
+    expect(runningRows).toEqual([{status: 'running'}])
+
+    const completion = await completeReviewServingDirtyWorkClaims(claims, database)
+    const completedRows = await database.queryJson<{status: string}>(`
+      SELECT status
+      FROM app.review_serving_dirty_work
+      WHERE dirty_work_id = 'dirty-work-duckdb-1'
+    `)
+
+    expect(completion).toEqual({completedCount: 1})
+    expect(completedRows).toEqual([{status: 'completed'}])
+  } finally {
+    close()
+  }
 })
 
 test('claims only return rows whose atomic update succeeded', async () => {

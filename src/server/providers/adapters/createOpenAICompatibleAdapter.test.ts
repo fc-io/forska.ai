@@ -2,7 +2,7 @@ import {expect, mock, test} from 'bun:test'
 
 import {classifyConnectionFailure} from '../../cron/judgmentsJobs/connectionHealth.ts'
 
-const openAIChatTransportModulePath = new URL('../transports/openaiChatTransport.ts', import.meta.url).pathname
+const openAIChatTransportModulePath = new URL('../transports/openaiChatTransport.ts', import.meta.url).href
 
 const transportState = {
   invoke: mock(async (_input: unknown) => {

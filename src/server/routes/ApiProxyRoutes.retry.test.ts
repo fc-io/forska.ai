@@ -4,10 +4,10 @@ import {join} from 'node:path'
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const envModulePath = new URL('../utils/env.ts', import.meta.url).pathname
-const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname
-const duckdbOwnerConnectionsModulePath = new URL('../utils/duckdbOwnerConnections.ts', import.meta.url).pathname
-const runtimeCutoverModulePath = new URL('../utils/runtimeCutover.ts', import.meta.url).pathname
+const envModulePath = new URL('../utils/env.ts', import.meta.url).href
+const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).href
+const duckdbOwnerConnectionsModulePath = new URL('../utils/duckdbOwnerConnections.ts', import.meta.url).href
+const runtimeCutoverModulePath = new URL('../utils/runtimeCutover.ts', import.meta.url).href
 type EnvModule = typeof import('../utils/env.ts')
 type ServerRuntimeRoleModule = typeof import('../utils/serverRuntimeRole.ts')
 type DuckdbOwnerConnectionsModule = typeof import('../utils/duckdbOwnerConnections.ts')
@@ -657,6 +657,50 @@ test.serial('api proxy times out wedged project transfer upload streams without 
     'http://owner-1:34991/api/runtime/ready',
     'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/session-1/upload?replace=true',
   ])
+})
+
+test.serial('api proxy keeps the timeout active while an owner response body is streaming', async () => {
+  const app = await loadRoutes()
+  const timeoutMock = installFastAbortSignalTimeoutMock()
+  const request = getStreamingUploadRequest({onPull: () => {}})
+  let forwardedSignal: AbortSignal | null = null
+  const fetchMock = mock(async (forwardedRequest: Request | URL | string) => {
+    const url = getRequestUrl(forwardedRequest)
+
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
+    forwardedSignal = (forwardedRequest as Request).signal
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          forwardedSignal?.addEventListener(
+            'abort',
+            () => {
+              controller.error(new Error('owner response aborted'))
+            },
+            {once: true},
+          )
+        },
+      }),
+    )
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(request)
+  let bodyError: unknown = null
+
+  try {
+    await response.text()
+  } catch (error) {
+    bodyError = error
+  }
+
+  expect(bodyError).toBeInstanceOf(Error)
+  expect(String(bodyError)).toContain('owner response aborted')
+  expect(forwardedSignal?.aborted).toBe(true)
+  expect(timeoutMock).toHaveBeenCalledWith(600000)
 })
 
 test.serial('api proxy keeps project transfer export downloads streaming from the owner response', async () => {

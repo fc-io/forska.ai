@@ -4,11 +4,11 @@ import type {ProviderConnectionRecord, ProviderModelRecord} from './providerType
 
 type ProviderInvocationServiceModule = typeof import('./providerInvocationService.ts')
 
-const providerAuthServiceModulePath = new URL('./providerAuthService.ts', import.meta.url).pathname
-const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
-const providerModelRepositoryModulePath = new URL('./providerModelRepository.ts', import.meta.url).pathname
-const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).pathname
-const providerInvocationServiceModulePath = new URL('./providerInvocationService.ts', import.meta.url).pathname
+const providerAuthServiceModulePath = new URL('./providerAuthService.ts', import.meta.url).href
+const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).href
+const providerModelRepositoryModulePath = new URL('./providerModelRepository.ts', import.meta.url).href
+const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).href
+const providerInvocationServiceModulePath = new URL('./providerInvocationService.ts', import.meta.url).href
 
 const getProviderConnectionForStoredModel = mock(async (_modelId: string) => {
   throw new Error('stored connection lookup should not run')

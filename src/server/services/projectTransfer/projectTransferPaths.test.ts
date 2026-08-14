@@ -1,3 +1,5 @@
+import {resolve} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {projectTransferResourceGateLimits} from './projectTransferContracts.ts'
@@ -160,30 +162,31 @@ test('accepts valid runtime asset paths and rejects unsafe persisted asset paths
 })
 
 test('resolves temp, extraction, promotion, and persisted paths through the correct runtime helper contract', () => {
-  const runtimeOptions = {cwd: '/runtime/root', envValues: {}}
+  const runtimeRoot = resolve('/runtime/root')
+  const runtimeOptions = {cwd: runtimeRoot, envValues: {}}
 
   expect(
     resolveProjectTransferTempWritablePath({
       ...runtimeOptions,
       pathValue: 'tmp/project-transfer/import/session-1/upload.zip',
     }),
-  ).toBe('/runtime/root/tmp/project-transfer/import/session-1/upload.zip')
+  ).toBe(resolve(runtimeRoot, 'tmp/project-transfer/import/session-1/upload.zip'))
   expect(
     resolveProjectTransferArchiveMemberWritablePath({
       ...runtimeOptions,
       archiveMemberPath: 'assets/article-pdfs/article-1.pdf',
       extractionRootPath: 'tmp/project-transfer/import/session-1/extracted',
     }),
-  ).toBe('/runtime/root/tmp/project-transfer/import/session-1/extracted/assets/article-pdfs/article-1.pdf')
+  ).toBe(resolve(runtimeRoot, 'tmp/project-transfer/import/session-1/extracted/assets/article-pdfs/article-1.pdf'))
   expect(
     resolveProjectTransferPromotionWritablePath({
       ...runtimeOptions,
       pathValue: 'assets/project-transfer/session-1/article-1.pdf',
     }),
-  ).toBe('/runtime/root/assets/project-transfer/session-1/article-1.pdf')
+  ).toBe(resolve(runtimeRoot, 'assets/project-transfer/session-1/article-1.pdf'))
   expect(
     resolveProjectTransferPersistedRuntimeAssetPath({...runtimeOptions, pathValue: 'assets/article_pdfs/test.pdf'}),
-  ).toBe('/runtime/root/assets/article_pdfs/test.pdf')
+  ).toBe(resolve(runtimeRoot, 'assets/article_pdfs/test.pdf'))
 })
 
 test('rejects unsafe runtime writable and persisted file resolutions', () => {

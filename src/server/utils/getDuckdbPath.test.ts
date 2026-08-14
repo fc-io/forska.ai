@@ -1,3 +1,5 @@
+import {resolve} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {getDuckdbPath} from './getDuckdbPath.ts'
@@ -33,5 +35,5 @@ test('defaults to the Windows Local AppData DuckDB path', () => {
 test('keeps an explicit repo-relative DuckDB path override', () => {
   const duckdbPath = getDuckdbPath({cwd: '/repo/f1', duckdbPath: 'data/dev.duckdb', homeDir: '/Users/tester'})
 
-  expect(duckdbPath).toBe('/repo/f1/data/dev.duckdb')
+  expect(duckdbPath).toBe(resolve('/repo/f1', 'data', 'dev.duckdb'))
 })

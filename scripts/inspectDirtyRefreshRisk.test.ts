@@ -1,5 +1,5 @@
 import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -156,42 +156,47 @@ const seedDatabase = (duckdbPath: string) => {
 }
 
 test('inspectDirtyRefreshRisk reports materialization, quarantine, scope, and large rebuild state', () => {
-  const duckdbPath = join(projectRoot, '.tmp', `inspect-dirty-refresh-risk-${Date.now()}.duckdb`)
-  removeFileIfExists(dirname(duckdbPath))
-  seedDatabase(duckdbPath)
+  const workingDirectory = join(projectRoot, '.tmp', `inspect-dirty-refresh-risk-${Date.now()}`)
+  const duckdbPath = join(workingDirectory, 'forska.duckdb')
 
-  const runScript = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/inspectDirtyRefreshRisk.ts', '--project-id=inspect-dirty-project'],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
-  )
+  try {
+    seedDatabase(duckdbPath)
 
-  if (runScript.exitCode !== 0) {
-    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'inspect dirty refresh failed')
-  }
+    const runScript = globalThis.Bun.spawnSync(
+      ['bun', 'scripts/inspectDirtyRefreshRisk.ts', '--project-id=inspect-dirty-project'],
+      {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+    )
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    dirtyMaterialization: {blockingCount: number; totalCount: number}
-    largeRebuild: {
-      legacyStatus: string
-      rebuildPhase: string
-      recommendedWork: string
-      refreshStatus: string
-      refreshToken: string
+    if (runScript.exitCode !== 0) {
+      throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'inspect dirty refresh failed')
     }
-    plannedWork: string
-    quarantine: {unresolvedBarrierCount: number}
-    scope: {articleCount: number; dirtyArticleCount: number}
-  }
 
-  expect(result.dirtyMaterialization).toMatchObject({blockingCount: 1, totalCount: 1})
-  expect(result.quarantine.unresolvedBarrierCount).toBe(1)
-  expect(result.scope).toEqual({articleCount: 1, dirtyArticleCount: 1})
-  expect(result.largeRebuild).toMatchObject({
-    legacyStatus: 'retired',
-    rebuildPhase: 'project_scope_article',
-    recommendedWork: 'request-review-serving-v4-rebuild',
-    refreshStatus: 'running',
-    refreshToken: '3',
-  })
-  expect(result.plannedWork).not.toBe('large-rebuild')
-})
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      dirtyMaterialization: {blockingCount: number; totalCount: number}
+      largeRebuild: {
+        legacyStatus: string
+        rebuildPhase: string
+        recommendedWork: string
+        refreshStatus: string
+        refreshToken: string
+      }
+      plannedWork: string
+      quarantine: {unresolvedBarrierCount: number}
+      scope: {articleCount: number; dirtyArticleCount: number}
+    }
+
+    expect(result.dirtyMaterialization).toMatchObject({blockingCount: 1, totalCount: 1})
+    expect(result.quarantine.unresolvedBarrierCount).toBe(1)
+    expect(result.scope).toEqual({articleCount: 1, dirtyArticleCount: 1})
+    expect(result.largeRebuild).toMatchObject({
+      legacyStatus: 'retired',
+      rebuildPhase: 'project_scope_article',
+      recommendedWork: 'request-review-serving-v4-rebuild',
+      refreshStatus: 'running',
+      refreshToken: '3',
+    })
+    expect(result.plannedWork).not.toBe('large-rebuild')
+  } finally {
+    removeFileIfExists(workingDirectory)
+  }
+}, 120_000)

@@ -4,7 +4,7 @@ type GetCodexMaxInflightModule = typeof import('./getCodexMaxInflight.ts')
 type GetJudgmentsCapacityModule = typeof import('./getJudgmentsCapacity.ts')
 
 const getModulePath = (relativePath: string) => {
-  return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+  return new URL(relativePath, 'file://' + process.cwd() + '/').href
 }
 
 const getCodexMaxInflightModulePath = getModulePath('./src/server/cron/judgmentsJobs/getCodexMaxInflight.ts')

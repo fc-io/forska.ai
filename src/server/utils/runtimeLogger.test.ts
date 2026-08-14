@@ -1,8 +1,8 @@
-import {existsSync, mkdtempSync, readFileSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {dirname, join, normalize, resolve} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {afterEach, expect, test} from 'bun:test'
 
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {getRuntimeServiceNameForServerRole} from './runtimeBootstrap.ts'
@@ -27,9 +27,45 @@ import {
   resolveRuntimeProcessIdentity,
 } from './runtimeProcessIdentity.ts'
 
-const getCurrentUtcLogDate = () => {
-  return new Date().toISOString().slice(0, 10)
+const runtimeLoggerTestDirectories = new Set<string>()
+
+const createRuntimeLoggerTestDirectory = (prefix: string) => {
+  const logDir = mkdtempSync(join(tmpdir(), prefix))
+  runtimeLoggerTestDirectories.add(logDir)
+  return logDir
 }
+
+const getRuntimeJsonlFilePaths = (logDir: string) => {
+  return readdirSync(logDir, {withFileTypes: true})
+    .filter((dirent) => {
+      return dirent.isFile() && dirent.name.endsWith('.jsonl')
+    })
+    .map((dirent) => {
+      return join(logDir, dirent.name)
+    })
+    .sort()
+}
+
+const getOnlyRuntimeJsonlFilePath = (logDir: string) => {
+  const logPaths = getRuntimeJsonlFilePaths(logDir)
+  expect(logPaths).toHaveLength(1)
+  const [logPath] = logPaths
+
+  if (logPath === undefined) {
+    throw new Error(`Expected one runtime JSONL file in ${logDir}`)
+  }
+
+  return logPath
+}
+
+afterEach(() => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  for (const logDir of runtimeLoggerTestDirectories) {
+    rmSync(logDir, {force: true, recursive: true})
+  }
+  runtimeLoggerTestDirectories.clear()
+})
 
 test('defaults unresolved runtime log profile to local', () => {
   expect(getRuntimeLogProfile({envValues: {}})).toBe('local')
@@ -38,7 +74,7 @@ test('defaults unresolved runtime log profile to local', () => {
 
 test('resolves default runtime log dir under writable root and profile', () => {
   expect(getDefaultRuntimeLogDir({cwd: '/repo/forska', envValues: {FORSKA_RUNTIME_PROFILE: 'primary'}})).toBe(
-    '/repo/forska/logs/runtime/primary',
+    resolve('/repo/forska', 'logs', 'runtime', 'primary'),
   )
 })
 
@@ -48,7 +84,7 @@ test('resolves test runtime log dirs under temp when no explicit log dir is conf
     envValues: {FORSKA_RUNTIME_PROFILE: 'secondary', FORSKA_TEST_LOG_ROOT: '/tmp/forska-tests', NODE_ENV: 'test'},
   }).logDir
 
-  expect(logDir).toBe(`/tmp/forska-tests/forska-runtime-logs/${process.pid}/secondary`)
+  expect(logDir).toBe(join('/tmp/forska-tests', 'forska-runtime-logs', String(process.pid), 'secondary'))
 })
 
 test('resolves desktop runtime log dir under desktop writable root', () => {
@@ -58,8 +94,10 @@ test('resolves desktop runtime log dir under desktop writable root', () => {
     FORSKA_RUNTIME_PROFILE: 'local',
   }
 
+  const desktopWritableRoot = dirname(normalize(envValues.DUCKDB_PATH))
+
   expect(getDefaultRuntimeLogDir({cwd: '/repo/forska', envValues})).toBe(
-    '/Users/tester/Library/Application Support/Forska/desktop/logs/runtime/local',
+    resolve(desktopWritableRoot, 'logs', 'runtime', 'local'),
   )
 })
 
@@ -70,7 +108,7 @@ test('normalizes runtime log filtering env and resolves explicit log dirs', () =
       envValues: {LOG_DIR: 'tmp/logs', LOG_LEVEL: 'debug', LOG_STDERR_LEVEL: 'error'},
     }),
   ).toEqual({
-    logDir: '/repo/forska/tmp/logs',
+    logDir: resolve('/repo/forska', 'tmp', 'logs'),
     logLevel: 'DEBUG',
     logStderrLevel: 'ERROR',
     maxFileBytes: 104_857_600,
@@ -140,7 +178,7 @@ test('omits serverRole for app-server runtime log identity', () => {
 test('runtime JSONL sink writes one structured record to the service daily file', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   const timestamp = '2026-04-20T12:30:00.000Z'
   initializeRuntimeProcessIdentity({
     envValues: {FORSKA_RUNTIME_PROFILE: 'primary'},
@@ -169,7 +207,7 @@ test('runtime JSONL sink writes one structured record to the service daily file'
     }),
   ).toBe(true)
 
-  const logContent = readFileSync(join(logDir, 'maintenance-worker-server-2026-04-20.jsonl'), 'utf8')
+  const logContent = readFileSync(getOnlyRuntimeJsonlFilePath(logDir), 'utf8')
   const lines = logContent.split('\n').filter(Boolean)
   const [record] = lines.map((line) => {
     return JSON.parse(line) as Record<string, unknown>
@@ -200,8 +238,7 @@ test('runtime JSONL sink writes one structured record to the service daily file'
 test('runtime JSONL sink truncates active log file when size cap is reached', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
-  const logPath = join(logDir, 'maintenance-worker-server-2026-04-20.jsonl')
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   const timestamp = '2026-04-20T12:30:00.000Z'
 
   initializeRuntimeProcessIdentity({
@@ -215,6 +252,15 @@ test('runtime JSONL sink truncates active log file when size cap is reached', ()
     envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', RUNTIME_LOG_MAX_BYTES: '128', SERVER_ROLE: 'maintenance-worker'},
     timestamp,
   })
+  expect(
+    writeRuntimeLogEvent({
+      event: 'runtime.logger.before-truncate',
+      message: 'before truncate',
+      severity: 'INFO',
+      timestamp,
+    }),
+  ).toBe(true)
+  const logPath = getOnlyRuntimeJsonlFilePath(logDir)
   writeFileSync(logPath, `${'x'.repeat(256)}\n`, 'utf8')
 
   expect(
@@ -247,7 +293,7 @@ test('runtime JSONL sink truncates active log file when size cap is reached', ()
 test('runtime JSONL sink preserves one JSONL record per append during burst writes', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   initializeRuntimeProcessIdentity({
     hostnameValue: 'test-host',
     listenPort: 4017,
@@ -269,7 +315,7 @@ test('runtime JSONL sink preserves one JSONL record per append during burst writ
       timestamp: `2026-04-20T12:00:${String(index).padStart(2, '0')}.000Z`,
     })
   })
-  const records = readFileSync(join(logDir, 'api-server-2026-04-20.jsonl'), 'utf8')
+  const records = readFileSync(getOnlyRuntimeJsonlFilePath(logDir), 'utf8')
     .split('\n')
     .filter(Boolean)
     .map((line) => {
@@ -299,7 +345,7 @@ test('runtime JSONL sink preserves one JSONL record per append during burst writ
 test('desktop dev-single runtime writes JSONL under the desktop writable root', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const dataRoot = mkdtempSync(join(tmpdir(), 'forska-desktop-runtime-logger-'))
+  const dataRoot = createRuntimeLoggerTestDirectory('forska-desktop-runtime-logger-')
   const duckdbPath = join(dataRoot, 'forska.duckdb')
   const timestamp = '2026-04-20T12:30:00.000Z'
   initializeRuntimeProcessIdentity({
@@ -331,8 +377,8 @@ test('desktop dev-single runtime writes JSONL under the desktop writable root', 
     }),
   ).toBe(true)
 
-  const logPath = join(dataRoot, 'logs', 'runtime', 'local', 'dev-single-server-2026-04-20.jsonl')
-  const logContent = readFileSync(logPath, 'utf8')
+  const runtimeLogDir = join(dataRoot, 'logs', 'runtime', 'local')
+  const logContent = readFileSync(getOnlyRuntimeJsonlFilePath(runtimeLogDir), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)
@@ -356,7 +402,7 @@ test('desktop dev-single runtime writes JSONL under the desktop writable root', 
 test('runtime JSONL sink uses instance suffixed fallback files when shared append is disabled', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   initializeRuntimeProcessIdentity({
     hostnameValue: 'test-host',
     listenPort: 4012,
@@ -395,7 +441,7 @@ test('runtime JSONL sink uses instance suffixed fallback files when shared appen
 test('runtime JSONL sink prunes managed files older than seven UTC days at bootstrap and rollover', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   const oldFile = 'maintenance-worker-server-2026-04-11.jsonl'
   const retainedFile = 'maintenance-worker-server-2026-04-13.jsonl'
   const unmanagedFile = 'notes-2026-04-01.jsonl'
@@ -434,7 +480,7 @@ test('runtime JSONL sink prunes managed files older than seven UTC days at boots
 })
 
 test('runtime log pruning returns deleted managed files', () => {
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   writeFileSync(join(logDir, 'api-server-2026-04-10-api_server_instance.jsonl'), '{}\n', 'utf8')
   writeFileSync(join(logDir, 'api-server-2026-04-20.jsonl'), '{}\n', 'utf8')
 
@@ -446,7 +492,7 @@ test('runtime log pruning returns deleted managed files', () => {
 test('runtime JSONL sink remains opt-in and honors the configured log level', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   initializeRuntimeProcessIdentity({
     hostnameValue: 'test-host',
     listenPort: 3001,
@@ -474,7 +520,7 @@ test('runtime JSONL sink remains opt-in and honors the configured log level', ()
       timestamp: '2026-04-20T12:01:00.000Z',
     }),
   ).toBe(false)
-  expect(existsSync(join(logDir, 'api-server-2026-04-20.jsonl'))).toBe(false)
+  expect(getRuntimeJsonlFilePaths(logDir)).toEqual([])
 
   expect(
     writeRuntimeLogEvent({
@@ -484,7 +530,7 @@ test('runtime JSONL sink remains opt-in and honors the configured log level', ()
       timestamp: '2026-04-20T12:02:00.000Z',
     }),
   ).toBe(true)
-  expect(existsSync(join(logDir, 'api-server-2026-04-20.jsonl'))).toBe(true)
+  expect(getRuntimeJsonlFilePaths(logDir)).toHaveLength(1)
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })
@@ -492,7 +538,7 @@ test('runtime JSONL sink remains opt-in and honors the configured log level', ()
 test('operator-visible INFO events write to terminal and JSONL below configured file level', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   const originalLog = console.log
   const logs: unknown[][] = []
   console.log = ((...args: unknown[]) => {
@@ -520,7 +566,7 @@ test('operator-visible INFO events write to terminal and JSONL below configured 
     }),
   ).toBe(true)
 
-  const logContent = readFileSync(join(logDir, 'api-server-2026-04-20.jsonl'), 'utf8')
+  const logContent = readFileSync(getOnlyRuntimeJsonlFilePath(logDir), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)
@@ -540,7 +586,7 @@ test('operator-visible INFO events write to terminal and JSONL below configured 
 test('failure-visible events always write terminal stderr and may duplicate to JSONL', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   const originalError = console.error
   const errors: unknown[][] = []
   console.error = ((...args: unknown[]) => {
@@ -569,7 +615,7 @@ test('failure-visible events always write terminal stderr and may duplicate to J
     }),
   ).toBe(true)
 
-  const logContent = readFileSync(join(logDir, 'maintenance-worker-server-2026-04-20.jsonl'), 'utf8')
+  const logContent = readFileSync(getOnlyRuntimeJsonlFilePath(logDir), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)
@@ -613,7 +659,7 @@ test('file-only rate-limited logs fall back to terminal when the runtime sink is
 test('file-only rate-limited logs write runtime JSONL without terminal output when the sink is installed', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   const originalWarn = console.warn
   const warnings: unknown[][] = []
   console.warn = ((...args: unknown[]) => {
@@ -634,7 +680,7 @@ test('file-only rate-limited logs write runtime JSONL without terminal output wh
 
   logger.warn('runtime.logger.file-only-installed', 'file warning', {batch: 1})
 
-  const logContent = readFileSync(join(logDir, `maintenance-worker-server-${getCurrentUtcLogDate()}.jsonl`), 'utf8')
+  const logContent = readFileSync(getOnlyRuntimeJsonlFilePath(logDir), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)
@@ -655,7 +701,7 @@ test('file-only rate-limited logs write runtime JSONL without terminal output wh
 test('both-sink rate-limited logs write terminal output and runtime JSONL', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
-  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logDir = createRuntimeLoggerTestDirectory('forska-runtime-logger-')
   const originalLog = console.log
   const logs: unknown[][] = []
   console.log = ((...args: unknown[]) => {
@@ -676,7 +722,7 @@ test('both-sink rate-limited logs write terminal output and runtime JSONL', () =
 
   logger.log('runtime.logger.both-sink', 'both sink log', {route: '/api/projects'})
 
-  const logContent = readFileSync(join(logDir, `dev-single-server-${getCurrentUtcLogDate()}.jsonl`), 'utf8')
+  const logContent = readFileSync(getOnlyRuntimeJsonlFilePath(logDir), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)

@@ -10,10 +10,9 @@ type FakeReadOnlyDatabase = {
 }
 type JudgmentJobQueueServiceModule = typeof import('./reviewServingJudgmentJobQueueService.ts')
 
-const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
-  .pathname
-const reviewServingReviewConfigModulePath = new URL('./reviewServingReviewConfig.ts', import.meta.url).pathname
-const serviceModulePath = new URL('./reviewServingJudgmentJobQueueService.ts', import.meta.url).pathname
+const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url).href
+const reviewServingReviewConfigModulePath = new URL('./reviewServingReviewConfig.ts', import.meta.url).href
+const serviceModulePath = new URL('./reviewServingJudgmentJobQueueService.ts', import.meta.url).href
 
 const getScopeRow = () => {
   return {

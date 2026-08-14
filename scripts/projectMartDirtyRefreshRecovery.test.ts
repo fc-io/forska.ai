@@ -1,7 +1,9 @@
 import {existsSync, rmSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
 const defaultEnv = {

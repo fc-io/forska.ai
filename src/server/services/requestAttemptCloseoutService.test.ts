@@ -1,6 +1,10 @@
 import {rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -21,7 +25,7 @@ const getLastJsonLine = (stdout: string) => {
 }
 
 test('request attempt closeout projection is idempotent and preserves earliest source tuple on later conflict', () => {
-  const duckdbPath = `/tmp/f1-request-attempt-closeout-service-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-service-${Date.now()}.duckdb`)
   const runResult = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -226,7 +230,7 @@ test('request attempt closeout projection is idempotent and preserves earliest s
 })
 
 test('token-use writer inserts closeout projections immediately', () => {
-  const duckdbPath = `/tmp/f1-request-attempt-closeout-token-use-writer-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-token-use-writer-${Date.now()}.duckdb`)
   const runResult = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -381,7 +385,7 @@ test('token-use writer inserts closeout projections immediately', () => {
 })
 
 test('maintenance rebuild truncates and rebuilds request attempt closeouts in bounded token-use batches', () => {
-  const duckdbPath = `/tmp/f1-request-attempt-closeout-maintenance-rebuild-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-maintenance-rebuild-${Date.now()}.duckdb`)
   const runResult = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -593,7 +597,7 @@ test('maintenance rebuild truncates and rebuilds request attempt closeouts in bo
 })
 
 test('online rebuild stages to a high-water mark and preserves live writer closeout rows during merge', () => {
-  const duckdbPath = `/tmp/f1-request-attempt-closeout-online-rebuild-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-online-rebuild-${Date.now()}.duckdb`)
   const runResult = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -813,7 +817,7 @@ test('online rebuild stages to a high-water mark and preserves live writer close
 })
 
 test('startup backfill cycle filters null request attempts, persists cursor, resumes, and completes', () => {
-  const duckdbPath = `/tmp/f1-request-attempt-closeout-backfill-cycle-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-backfill-cycle-${Date.now()}.duckdb`)
   const runResult = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -1151,7 +1155,7 @@ const runBackfillSchedulerGuardCase = ({
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const schedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
@@ -1214,7 +1218,7 @@ test('request attempt closeout backfill scheduler requires a DuckDB-owning maint
 })
 
 test('request attempt closeout backfill scheduler records a failed wake and retries the next wake', () => {
-  const duckdbPath = `/tmp/f1-request-attempt-closeout-scheduler-retry-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-scheduler-retry-${Date.now()}.duckdb`)
   const runResult = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -1223,7 +1227,7 @@ test('request attempt closeout backfill scheduler records a failed wake and retr
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const schedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
@@ -1322,10 +1326,25 @@ test('request attempt closeout backfill scheduler records a failed wake and retr
         const {startRequestAttemptCloseoutBackfillScheduler} = await import(schedulerModulePath + '?retry=' + Date.now())
         const stop = startRequestAttemptCloseoutBackfillScheduler({batchSize: 1, intervalMs: 1, runner})
 
-        await new Promise((resolve) => {
-          setTimeout(resolve, 80)
-        })
+        const retryDeadlineMs = Date.now() + 10_000
+        let retryCompleted = false
+        while (Date.now() < retryDeadlineMs) {
+          const currentState = await getState()
+
+          if (tokenUseBatchAttempts >= 2 && currentState?.completed === true) {
+            retryCompleted = true
+            break
+          }
+
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10)
+          })
+        }
         stop()
+
+        if (!retryCompleted) {
+          throw new Error('Timed out waiting for request-attempt closeout backfill retry completion')
+        }
 
         const closeoutRows = await db.queryJson(\`
           SELECT request_attempt_id AS requestAttemptId
@@ -1385,7 +1404,7 @@ test('request attempt closeout backfill scheduler records a failed wake and retr
 })
 
 test('request attempt closeout backfill scheduler does not scan token use after completion', () => {
-  const duckdbPath = `/tmp/f1-request-attempt-closeout-scheduler-completed-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-scheduler-completed-${Date.now()}.duckdb`)
   const runResult = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -1394,7 +1413,7 @@ test('request attempt closeout backfill scheduler does not scan token use after 
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const schedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')

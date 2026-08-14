@@ -17,7 +17,7 @@ import {DuckDBConnection, DuckDBInstance, type DuckDBType, type DuckDBValue} fro
 import {Effect} from 'effect'
 
 import {getSelectedImportCurrentStartupMutationProbeSql} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
-import {getActiveDuckdbExclusiveWorkSnapshot} from './duckdbExclusiveWork.ts'
+import {getActiveDuckdbExclusiveWorkSnapshot, getDuckdbExclusiveWorkAdmissionError} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
 import {getEnv} from './env.ts'
@@ -6095,10 +6095,7 @@ const assertDuckdbExclusiveWorkAllowsWorkload = (
   }
 
   const routeOrJobKey = context?.routeOrJobKey ?? 'unknown'
-  throw new Error(
-    `DuckDB is reserved for project-transfer ${exclusiveWork.phase} work; `
-      + `rejecting ${operation} for ${routeOrJobKey} until the import phase completes`,
-  )
+  throw getDuckdbExclusiveWorkAdmissionError({operation, phase: exclusiveWork.phase, routeOrJobKey})
 }
 
 const assertDuckdbWorkloadContextIsAllowed = (operation: DuckdbWorkloadOperation, context?: DuckdbWorkloadContext) => {
@@ -6628,6 +6625,49 @@ const checkpointBeforeDuckdbSnapshotCopy = async () => {
   })
 }
 
+const closeDuckdbRuntimeForSnapshotCopy = () => {
+  const activeConnection = duckdbServiceState.controlConnection
+  const activeAppendConnections = [...duckdbServiceState.appendConnections]
+  const activeBackgroundConnection = duckdbServiceState.backgroundConnection
+  const activeInstance = duckdbServiceState.duckdbInstance
+
+  duckdbServiceState.appendConnections = []
+  duckdbServiceState.backgroundConnection = null
+  duckdbServiceState.controlConnection = null
+  duckdbServiceState.duckdbInstance = null
+
+  const closeError = getCombinedCloseError([
+    getCloseSyncError(
+      activeConnection === null
+        ? null
+        : () => {
+            activeConnection.interrupt()
+            activeConnection.closeSync()
+          },
+    ),
+    ...getAppendConnectionCloseErrors(activeAppendConnections),
+    getCloseSyncError(
+      activeBackgroundConnection === null
+        ? null
+        : () => {
+            activeBackgroundConnection.interrupt()
+            activeBackgroundConnection.closeSync()
+          },
+    ),
+    getCloseSyncError(
+      activeInstance === null
+        ? null
+        : () => {
+            activeInstance.closeSync()
+          },
+    ),
+  ])
+
+  if (closeError !== null) {
+    throw closeError
+  }
+}
+
 const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<DuckdbSnapshot, unknown, never> => {
   return Effect.gen(function* () {
     if (runtimeConfig.databasePath === ':memory:') {
@@ -6644,11 +6684,6 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
     yield* Effect.tryPromise(() => {
       return rm(snapshotPath, {force: true})
     })
-    if (shouldCheckpointBeforeDuckdbSnapshotCopy(runtimeConfig)) {
-      yield* Effect.tryPromise(() => {
-        return checkpointBeforeDuckdbSnapshotCopy()
-      })
-    }
     yield* Effect.tryPromise(async () => {
       try {
         await copyFile(runtimeConfig.databasePath, snapshotPath)
@@ -6664,12 +6699,78 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
   })
 }
 
+const cleanupDuckdbSnapshotAfterRestartFailure = async (snapshot: DuckdbSnapshot) => {
+  const cleanupResults = await Promise.allSettled([
+    rm(snapshot.snapshotPath, {force: true}),
+    rm(`${snapshot.snapshotPath}.wal`, {force: true}),
+  ])
+
+  return cleanupResults.flatMap((result) => {
+    return result.status === 'rejected' ? [getNormalizedDuckdbError(result.reason)] : []
+  })
+}
+
+const copyDuckdbSnapshotWithRuntimeAccess = async (runtimeConfig: DuckdbRuntimeConfig) => {
+  if (shouldCheckpointBeforeDuckdbSnapshotCopy(runtimeConfig)) {
+    await checkpointBeforeDuckdbSnapshotCopy()
+  }
+
+  if (process.platform !== 'win32' || runtimeConfig.databasePath === ':memory:') {
+    return Effect.runPromise(copyDuckdbSnapshot(runtimeConfig))
+  }
+
+  let snapshot: DuckdbSnapshot | null = null
+  let snapshotError: unknown
+  let snapshotFailed = false
+  try {
+    closeDuckdbRuntimeForSnapshotCopy()
+    snapshot = await Effect.runPromise(copyDuckdbSnapshot(runtimeConfig))
+  } catch (error) {
+    snapshotError = error
+    snapshotFailed = true
+  }
+
+  try {
+    await ensureStartedDuckdbProcess()
+  } catch (restartError) {
+    if (snapshotFailed) {
+      throw new AggregateError(
+        [snapshotError, restartError],
+        'DuckDB snapshot failed and the embedded runtime could not be restarted',
+        {cause: restartError},
+      )
+    }
+
+    const cleanupErrors = snapshot === null ? [] : await cleanupDuckdbSnapshotAfterRestartFailure(snapshot)
+
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [restartError, ...cleanupErrors],
+        'DuckDB embedded runtime restart failed and the completed snapshot could not be removed',
+        {cause: restartError},
+      )
+    }
+
+    throw restartError
+  }
+
+  if (snapshotFailed) {
+    throw snapshotError
+  }
+
+  if (snapshot === null) {
+    throw new Error('DuckDB snapshot completed without a snapshot result')
+  }
+
+  return snapshot
+}
+
 export const createDuckdbSnapshot = async (): Promise<DuckdbSnapshot> => {
   return withNormalizedDuckdbError(() => {
     return enqueueDuckdbWork(async () => {
       await ensureStartedDuckdbProcess()
       return withDuckdbAppendBarrier(() => {
-        return Effect.runPromise(copyDuckdbSnapshot(getDuckdbRuntimeConfigValue()))
+        return copyDuckdbSnapshotWithRuntimeAccess(getDuckdbRuntimeConfigValue())
       })
     })
   })

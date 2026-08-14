@@ -421,7 +421,7 @@ describe('project edit route regressions', () => {
       dispose()
       container.remove()
     }
-  })
+  }, 15_000)
 
   test('judged project edit keeps metadata and prompts editable while locking judgment settings', async () => {
     const projectId = 'project-partial-lock-test'

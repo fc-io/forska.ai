@@ -1,4 +1,6 @@
 import {existsSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -29,8 +31,11 @@ const waitForProcessExit = async (childProcess: ReturnType<typeof globalThis.Bun
   ])
 }
 
+const terminateCurrentProcessSource =
+  process.platform === 'win32' ? "process.emit('SIGTERM')" : "process.kill(process.pid, 'SIGTERM')"
+
 test('duckdb shutdown hook bypasses a stuck queue on SIGTERM', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-shutdown-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-shutdown-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',
@@ -39,7 +44,7 @@ test('duckdb shutdown hook bypasses a stuck queue on SIGTERM', async () => {
         const {runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
         await runDuckdbJsonQuery('SELECT 1 AS value')
         globalThis.__forskaDuckdbServiceState.duckdbQueue = new Promise(() => {})
-        process.kill(process.pid, 'SIGTERM')
+        ${terminateCurrentProcessSource}
         setTimeout(() => {
           console.log('still alive')
         }, 3_000)
@@ -67,7 +72,7 @@ test('duckdb shutdown hook bypasses a stuck queue on SIGTERM', async () => {
 })
 
 test('duckdb shutdown hook bypasses a stuck append queue on SIGTERM', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-append-shutdown-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-append-shutdown-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',
@@ -76,7 +81,7 @@ test('duckdb shutdown hook bypasses a stuck append queue on SIGTERM', async () =
         const {runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
         await runDuckdbJsonQuery('SELECT 1 AS value')
         globalThis.__forskaDuckdbServiceState.appendQueues[0] = new Promise(() => {})
-        process.kill(process.pid, 'SIGTERM')
+        ${terminateCurrentProcessSource}
         setTimeout(() => {
           console.log('still alive')
         }, 3_000)
@@ -110,7 +115,7 @@ test('duckdb shutdown hook bypasses a stuck append queue on SIGTERM', async () =
 })
 
 test('duckdb shutdown hook skips checkpoint while control transaction is active', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-active-transaction-shutdown-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-active-transaction-shutdown-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',
@@ -120,7 +125,7 @@ test('duckdb shutdown hook skips checkpoint while control transaction is active'
 
         await runDuckdbTransaction(async (tx) => {
           await tx.run('CREATE TABLE sample (id INTEGER)')
-          process.kill(process.pid, 'SIGTERM')
+          ${terminateCurrentProcessSource}
           await new Promise(() => {})
         })
       `,
@@ -151,7 +156,7 @@ test('duckdb shutdown hook skips checkpoint while control transaction is active'
 })
 
 test('duckdb shutdown hook skips checkpoint while queued work is active', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-active-queue-shutdown-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-active-queue-shutdown-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',
@@ -166,7 +171,7 @@ test('duckdb shutdown hook skips checkpoint while queued work is active', async 
             throw new Error('checkpoint should not run while work is active')
           }
         }
-        process.kill(process.pid, 'SIGTERM')
+        ${terminateCurrentProcessSource}
         setTimeout(() => {
           console.log('still alive')
         }, 3_000)
@@ -197,7 +202,7 @@ test('duckdb shutdown hook skips checkpoint while queued work is active', async 
 })
 
 test('duckdb shutdown hook skips checkpoint and native close under low-memory maintenance profile', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-low-memory-shutdown-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-low-memory-shutdown-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',
@@ -217,7 +222,7 @@ test('duckdb shutdown hook skips checkpoint and native close under low-memory ma
         globalThis.__forskaDuckdbServiceState.duckdbInstance.closeSync = () => {
           throw new Error('instance close should not run under low-memory runtime')
         }
-        process.kill(process.pid, 'SIGTERM')
+        ${terminateCurrentProcessSource}
         setTimeout(() => {
           console.log('still alive')
         }, 3_000)
@@ -252,7 +257,7 @@ test('duckdb shutdown hook skips checkpoint and native close under low-memory ma
 })
 
 test('duckdb shutdown hook checkpoints on SIGTERM', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-signal-checkpoint-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-signal-checkpoint-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',
@@ -268,7 +273,7 @@ test('duckdb shutdown hook checkpoints on SIGTERM', async () => {
           }
           return originalRun(statement, ...args)
         }
-        process.kill(process.pid, 'SIGTERM')
+        ${terminateCurrentProcessSource}
         setTimeout(() => {
           console.log('still alive')
         }, 3_000)
@@ -302,7 +307,7 @@ test('duckdb shutdown hook checkpoints on SIGTERM', async () => {
 })
 
 test('duckdb close can skip shutdown checkpoint explicitly', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-skip-close-checkpoint-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-skip-close-checkpoint-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',

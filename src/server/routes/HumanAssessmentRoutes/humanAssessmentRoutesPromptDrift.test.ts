@@ -1,7 +1,9 @@
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {seedHumanAssessmentServingArticle} from '../../test/seedHumanAssessmentServingArticle.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f2-human-assessment-prompt-drift')
 

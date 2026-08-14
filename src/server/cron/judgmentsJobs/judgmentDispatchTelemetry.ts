@@ -1,3 +1,4 @@
+import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {
   type DuckdbOwnerConnectionRecord,
   getDuckdbOwnerConnectionsOverview,
@@ -1030,18 +1031,18 @@ const fetchWorkerJudgmentDispatchTelemetry = async (
   record: DuckdbOwnerConnectionRecord,
   input: JudgmentDispatchTelemetryInput,
 ): Promise<JudgmentDispatchTelemetrySnapshot | null> => {
-  const response = await fetch(getWorkerTelemetryUrl(record, input), {
-    signal: AbortSignal.timeout(workerTelemetryTimeoutMs),
+  return withAbortSignalTimeout(workerTelemetryTimeoutMs, async (signal) => {
+    const response = await fetch(getWorkerTelemetryUrl(record, input), {signal})
+    const body: unknown = response.ok
+      ? await readResponseJson(response).catch(() => {
+          return null
+        })
+      : null
+
+    return getTelemetrySnapshotFromResponseBody(body)
   }).catch(() => {
     return null
   })
-  const body: unknown = response?.ok
-    ? await readResponseJson(response).catch(() => {
-        return null
-      })
-    : null
-
-  return getTelemetrySnapshotFromResponseBody(body)
 }
 
 const getUniqueJudgingWorkerRecords = (records: DuckdbOwnerConnectionRecord[]): DuckdbOwnerConnectionRecord[] => {

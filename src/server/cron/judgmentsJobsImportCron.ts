@@ -2,6 +2,7 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
+import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
@@ -13,7 +14,7 @@ const START_DELAY_MS = 1000
 const serverJobId = getDefaultJudgmentServerJobId()
 
 const logImportCronError = (label: string, error: unknown) => {
-  if (!isExpectedDuckdbOwnerRoleLossError(error)) {
+  if (!isDuckdbExclusiveWorkAdmissionError(error) && !isExpectedDuckdbOwnerRoleLossError(error)) {
     writeRuntimeFailureLogEvent({
       attrs: {error},
       event: 'judgments.cron.failure',
@@ -25,7 +26,7 @@ const logImportCronError = (label: string, error: unknown) => {
 
 export const importJudgmentsCron = async (): Promise<void> => {
   if (!shouldCurrentServerRunMaintenanceLoops() || judgmentsJobsCronState.isImportingJudgments) return
-  if (hasActiveProjectTransferBackgroundActivity()) return
+  if (hasActiveDuckdbExclusiveWork() || hasActiveProjectTransferBackgroundActivity()) return
 
   judgmentsJobsCronState.isImportingJudgments = true
 

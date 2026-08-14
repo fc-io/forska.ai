@@ -5,12 +5,12 @@ import prettierConfig from 'eslint-config-prettier'
 import * as importPlugin from 'eslint-plugin-import'
 import * as prettierPlugin from 'eslint-plugin-prettier'
 import * as simpleImportSortPlugin from 'eslint-plugin-simple-import-sort'
-import * as solidPlugin from 'eslint-plugin-solid'
-import * as vitestPlugin from 'eslint-plugin-vitest'
+import solidPlugin from 'eslint-plugin-solid'
+import vitestPlugin from 'eslint-plugin-vitest'
 import globals from 'globals'
 
 const config = [
-  {ignores: ['src/routeTree.gen.ts']},
+  {ignores: ['src/app/routeTree.gen.ts']},
   // Add ESLint recommended rules as base configuration
   js.configs.recommended,
   {

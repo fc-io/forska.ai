@@ -3,7 +3,9 @@ import {afterEach, expect, test} from 'bun:test'
 import {
   type DuckdbExclusiveWorkReadinessSnapshot,
   getActiveDuckdbExclusiveWorkSnapshot,
+  getDuckdbExclusiveWorkAdmissionError,
   hasActiveDuckdbExclusiveWork,
+  isDuckdbExclusiveWorkAdmissionError,
   prepareDuckdbExclusiveWork,
   resetDuckdbExclusiveWorkForTests,
   runWithDuckdbExclusiveWork,
@@ -41,6 +43,20 @@ const getRejectedError = async (promise: Promise<unknown>) => {
     },
   )
 }
+
+test('exclusive-work admission errors remain recognizable after statement context is added', () => {
+  const error = getDuckdbExclusiveWorkAdmissionError({
+    operation: 'backgroundQuery',
+    phase: 'commit',
+    routeOrJobKey: 'review.bulk.worker',
+  })
+
+  expect(isDuckdbExclusiveWorkAdmissionError(error)).toBe(true)
+  expect(isDuckdbExclusiveWorkAdmissionError(new Error(`${error.message} -- duckdb background query: SELECT 1`))).toBe(
+    true,
+  )
+  expect(isDuckdbExclusiveWorkAdmissionError(new Error('unrelated DuckDB failure'))).toBe(false)
+})
 
 test('runWithDuckdbExclusiveWork publishes running snapshot and releases after success', async () => {
   let snapshotDuringOperation = null as ReturnType<typeof getActiveDuckdbExclusiveWorkSnapshot>

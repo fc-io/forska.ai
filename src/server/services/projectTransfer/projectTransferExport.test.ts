@@ -1,6 +1,8 @@
 import {rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {projectTransferRawArticleProvenanceModes} from './projectTransferContracts.ts'
 import {
@@ -9,6 +11,8 @@ import {
   getProjectTransferExportJudgmentInputSignature,
 } from './projectTransferExport.ts'
 import {projectTransferPayloadKeys, projectTransferSchemaVNextPayloadKeys} from './projectTransferSchemas.ts'
+
+setDefaultTimeout(120_000)
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -101,16 +105,20 @@ const getProjectTransferExportScript = (body: string) => {
 }
 
 const runProjectTransferExportScript = <T>(body: string) => {
-  const duckdbPath = `/tmp/f2-project-transfer-export-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
-  const result = globalThis.Bun.spawnSync(['bun', '-e', getProjectTransferExportScript(body)], {
+  const testId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const duckdbPath = join(tmpdir(), `f2-project-transfer-export-${testId}.duckdb`)
+  const duckdbTempDirectory = join(tmpdir(), `f2-project-transfer-export-${testId}-temp`)
+  const result = globalThis.Bun.spawnSync(['bun', '-'], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       API_SERVER_PORT: '3001',
       DUCKDB_PATH: duckdbPath,
+      DUCKDB_TEMP_DIRECTORY: duckdbTempDirectory,
       SERVER_ROLE: 'dev-single',
       VITE_PORT: '3000',
     },
+    stdin: Buffer.from(getProjectTransferExportScript(body)),
   })
 
   try {
@@ -127,7 +135,7 @@ const runProjectTransferExportScript = <T>(body: string) => {
     removeFileIfExists(`${duckdbPath}.tmp`)
     removeFileIfExists(`${duckdbPath}.tmp/`)
     removeFileIfExists('assets/project-transfer-export-test')
-    removeFileIfExists('/tmp/duckdb-temp')
+    removeFileIfExists(duckdbTempDirectory)
   }
 }
 

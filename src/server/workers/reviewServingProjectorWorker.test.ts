@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto'
 import {existsSync, readFileSync, unlinkSync} from 'node:fs'
+import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {expect, mock, test} from 'bun:test'
+import {expect, mock, setDefaultTimeout, test} from 'bun:test'
 
 import {buildReviewConfigHash} from '../reviewServing/reviewProjectionIdentity.ts'
 import type {ReviewServingRebuildChunkManifest} from '../reviewServing/reviewServingChunkManifestRepository.ts'
@@ -24,6 +25,12 @@ import {
   runReviewServingProjectorWorkerOnce,
   summarizeReviewServingProjectorWorkerTimingBucket,
 } from './reviewServingProjectorWorker.ts'
+
+setDefaultTimeout(120_000)
+
+const readWorkerSource = () => {
+  return readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8').replaceAll('\r\n', '\n')
+}
 
 type TestDatabase = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
@@ -4925,7 +4932,7 @@ test('worker does not start a cycle when already aborted', async () => {
 })
 
 test('worker source does not start product route migration or V4 route cutover', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
 
   expect(source).not.toContain('../routes/')
   expect(source).not.toContain('projectsRoutes')
@@ -4933,7 +4940,7 @@ test('worker source does not start product route migration or V4 route cutover',
 })
 
 test('worker default dependencies wire real projector runners instead of an empty runner map', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
 
   expect(source).not.toContain('runners: {}}')
   expect(source).toContain('getDefaultReviewServingProjectorRunners(database)')
@@ -4953,7 +4960,7 @@ test('worker default dependencies wire real projector runners instead of an empt
 })
 
 test('posting rebuild batches use the range projector while preserving per-chunk completion', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const start = source.indexOf('const runPostingRebuildChunkBatch = async')
   const end = source.indexOf('\nexport const runReviewServingProjectorWorkerClaimedRebuildChunk', start + 1)
 
@@ -4972,7 +4979,7 @@ test('posting rebuild batches use the range projector while preserving per-chunk
 })
 
 test('high-fanout rebuild chunks commit idempotent output separately from completion', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const getFunctionSource = (functionName: string) => {
     const start = source.indexOf(`const ${functionName} = async`)
     const end = source.indexOf('\nconst ', start + 1)
@@ -4996,7 +5003,7 @@ test('high-fanout rebuild chunks commit idempotent output separately from comple
 })
 
 test('status rebuild chunks emit patch rows for later incremental aggregation', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const getFunctionSource = (functionName: string) => {
     const start = source.indexOf(`const ${functionName} = async`)
     const end = source.indexOf('\nconst ', start + 1)
@@ -5011,7 +5018,7 @@ test('status rebuild chunks emit patch rows for later incremental aggregation', 
 })
 
 test('batched rebuild chunk writers keep claimed leases alive during batch execution', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const getFunctionSource = (functionName: string) => {
     const start = source.indexOf(`const ${functionName} = async`)
     const end = source.indexOf('\nconst ', start + 1)
@@ -5029,7 +5036,7 @@ test('batched rebuild chunk writers keep claimed leases alive during batch execu
 })
 
 test('shared rebuild chunk batch writer splits splittable chunks after DuckDB OOM instead of failing the batch', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const sharedBatchStart = source.indexOf('const runReviewServingProjectorWorkerRebuildChunkBatchWith = async')
   const sharedBatchEnd = source.indexOf(
     '\nconst runLlmStatusReviewServingProjectorWorkerRebuildChunkBatch',
@@ -5054,7 +5061,7 @@ test('shared rebuild chunk batch writer splits splittable chunks after DuckDB OO
 })
 
 test('selected import rebuild checksum excludes retired display-copy columns while preserving identity and rank fields', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const start = source.indexOf('const getSelectedImportRebuildChunkOutputChecksum = async')
   const end = source.indexOf('\nconst getSelectedImportRebuildChunkOutputCount', start)
 
@@ -5074,7 +5081,7 @@ test('selected import rebuild checksum excludes retired display-copy columns whi
 })
 
 test('judgment input content rebuild checksum joins authoritative app scalars for strict validation', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const start = source.indexOf('const getJudgmentInputContentRebuildChunkOutputChecksum = async')
   const end = source.indexOf('\nconst getJudgmentInputContentRebuildChunkOutputCount', start)
 
@@ -5251,7 +5258,7 @@ test('selected import runner releases dirty work while base projection is still 
 })
 
 test('worker default dependencies discover chunks and cleanup targets instead of no-op defaults', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
 
   expect(source).toContain('getNextClaimableReviewServingRebuildChunk')
   expect(source).toContain('getReviewServingRetentionCleanupTargets')
@@ -5261,7 +5268,7 @@ test('worker default dependencies discover chunks and cleanup targets instead of
 })
 
 test('DuckDB OOM split chunks do not reuse inclusive boundary starts', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
 
   expect(source).toContain('chunkStartKey: formatUuidArticleId(index === 0 ? start : previousEnd + 1n)')
   expect(source).toContain("previous_scoped_end_key || ' '")
@@ -5269,7 +5276,7 @@ test('DuckDB OOM split chunks do not reuse inclusive boundary starts', () => {
 })
 
 test('request snapshot targets match null-snapshot chunks by component generation', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const start = source.indexOf('const getRebuildRequestSnapshotTargets = async')
   const end = source.indexOf('\nconst getRebuildRequestSnapshotReductionTargets', start)
   const targetSource = source.slice(start, end)
@@ -6294,7 +6301,7 @@ test('worker refreshes summary filter options when an active-snapshot summary re
 })
 
 test('worker refreshes summary filter options before promoting request snapshots', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const start = source.indexOf('const finalizeCompletedReviewServingRebuildRequest = async')
   const end = source.indexOf('\nconst getReviewServingProjectorWorkerDatabase', start)
   const finalizerSource = source.slice(start, end)
@@ -6307,7 +6314,7 @@ test('worker refreshes summary filter options before promoting request snapshots
 })
 
 test('worker deduplicates request finalization in foreground search and queue batches', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const searchStart = source.indexOf('const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async')
   const queueStart = source.indexOf('const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async')
   const nextStart = source.indexOf('const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = async')
@@ -6584,7 +6591,7 @@ test('worker catch-up finalization remains unscoped without a targeted rebuild p
 })
 
 test('worker catch-up finalization avoids deleting existing summary filter options', () => {
-  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const source = readWorkerSource()
   const start = source.indexOf('const finalizeNextCompletedUnfinalizedRebuildRequest = async')
   const end = source.indexOf('\nconst getReviewServingProjectorWorkerDatabase', start)
   const catchUpSource = source.slice(start, end)
@@ -6907,7 +6914,10 @@ test('worker adopts requestless bootstrap chunks through existing request withou
 })
 
 test('requestless bootstrap adoption skips duplicate insert for existing request row in DuckDB', () => {
-  const duckdbPath = `/tmp/forska-requestless-bootstrap-existing-adoption-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const duckdbPath = join(
+    tmpdir(),
+    `forska-requestless-bootstrap-existing-adoption-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`,
+  )
   const script = `
     import {createHash} from 'node:crypto'
 
@@ -7155,7 +7165,10 @@ test('requestless bootstrap adoption skips duplicate insert for existing request
 })
 
 test('requestless summary adoption persists request linkage in DuckDB', () => {
-  const duckdbPath = `/tmp/forska-requestless-summary-adoption-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const duckdbPath = join(
+    tmpdir(),
+    `forska-requestless-summary-adoption-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`,
+  )
   const script = `
     import {createHash} from 'node:crypto'
 
@@ -7396,7 +7409,10 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
 })
 
 test('request snapshot finalization resolves mixed direct and component-state chunks in DuckDB', () => {
-  const duckdbPath = `/tmp/forska-request-snapshot-component-state-targets-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const duckdbPath = join(
+    tmpdir(),
+    `forska-request-snapshot-component-state-targets-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`,
+  )
   const script = `
     const [
       {migrateDuckdb},

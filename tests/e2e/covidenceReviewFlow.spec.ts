@@ -30,6 +30,7 @@ type ReviewsWarningsResponse = {
 }
 
 const apiBaseUrl = 'http://127.0.0.1:43101'
+const reviewServingReadinessPollIntervalMs = 10_000
 
 const duplicateStudyHref = 'https://example.test/duplicate-b'
 
@@ -141,7 +142,7 @@ const waitForReviewServingReadiness = async (projectId: string, deadlineMs: numb
   }
 
   await new Promise((resolve) => {
-    setTimeout(resolve, 2000)
+    setTimeout(resolve, reviewServingReadinessPollIntervalMs)
   })
 
   return waitForReviewServingReadiness(projectId, deadlineMs)

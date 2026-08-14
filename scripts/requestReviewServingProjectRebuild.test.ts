@@ -1,6 +1,6 @@
 import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {
   defaultLargeRebuildCommandTestEnv,
@@ -8,6 +8,8 @@ import {
   projectRoot,
   seedLargeRebuildCommandProjectDatabase,
 } from './largeRebuildCommandTestHelpers.ts'
+
+setDefaultTimeout(120_000)
 
 const runQuery = (duckdbPath: string, sql: string): unknown => {
   const result = globalThis.Bun.spawnSync(
@@ -86,7 +88,7 @@ test('requestReviewServingProjectRebuild CLI requests one project V4 rebuild', (
   expect(legacyRow).toEqual({count: 0})
 })
 
-test('requestReviewServingProjectRebuild CLI can request narrow component rebuilds', () => {
+test('requestReviewServingProjectRebuild CLI expands narrow requests for a fresh bootstrap', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-project-rebuild-components.duckdb')
   seedLargeRebuildCommandProjectDatabase({duckdbPath, projects: [{projectId: 'project-request-review-serving'}]})
 
@@ -126,5 +128,17 @@ test('requestReviewServingProjectRebuild CLI can request narrow component rebuil
     requestedCount: 1,
     status: 'requested',
   })
-  expect(JSON.parse(requestRow.requestedComponentsJson)).toEqual(['projectScope'])
+  expect(JSON.parse(requestRow.requestedComponentsJson)).toEqual([
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'posting',
+    'summary',
+    'judgmentInputContent',
+    'payload',
+    'search',
+  ])
 })

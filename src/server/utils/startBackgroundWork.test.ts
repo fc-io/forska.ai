@@ -1,3 +1,6 @@
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 const getLastJsonLine = (value: string) => {
@@ -24,6 +27,7 @@ const runStartBackgroundWork = (input: {
   activeDuckdbExclusiveWork?: boolean
   appendQueueDepth?: number
   backgroundQueueDepth?: number
+  defaultMaintenanceDuckdbMemoryLimit?: string
   disableServerMutations?: boolean
   duckdbMemoryLimit?: string
   foregroundQueueDepth?: number
@@ -34,7 +38,7 @@ const runStartBackgroundWork = (input: {
   role: 'api' | 'dev-single' | 'judge-worker' | 'maintenance-worker'
   waitAfterStartMs?: number
 }) => {
-  const duckdbPath = `/tmp/forska-start-background-work-${process.pid}-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `forska-start-background-work-${process.pid}-${Date.now()}.duckdb`)
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -44,22 +48,28 @@ const runStartBackgroundWork = (input: {
         const {rmSync, writeFileSync} = await import('node:fs')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const startBackgroundWorkModulePath = getModulePath('./src/server/utils/startBackgroundWork.ts')
         const duckdbExclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
         const reviewServingProjectorWorkerHeartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const comparisonProjectServingMaintenanceWorkerHeartbeatModulePath = getModulePath('./src/server/utils/comparisonProjectServingMaintenanceWorkerHeartbeat.ts')
+        const duckdbMemoryDefaultsModulePath = getModulePath('./src/server/utils/duckdbMemoryDefaults.ts')
         const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
         const requestAttemptCloseoutBackfillSchedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
         const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const serverMutationModeModulePath = getModulePath('./src/server/utils/serverMutationMode.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
+        const input = ${JSON.stringify(input)}
+        void mock.module(duckdbMemoryDefaultsModulePath, () => {
+          return {
+            getDefaultMaintenanceDuckdbMemoryLimit: () => input.defaultMaintenanceDuckdbMemoryLimit ?? '20GB',
+          }
+        })
         const runtimeLogger = await import(runtimeLoggerModulePath)
         const calls = []
-        const input = ${JSON.stringify(input)}
         const pauseMarkerPath = process.env.DUCKDB_PATH + '.review-serving-projector-paused'
         const promotionHandlers = []
         let currentRole = input.role
@@ -289,7 +299,11 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under low-memor
 })
 
 test('startBackgroundWork defers nonessential DuckDB maintenance under normalized default owner limit', () => {
-  const result = runStartBackgroundWork({duckdbMemoryLimit: '', role: 'maintenance-worker'})
+  const result = runStartBackgroundWork({
+    defaultMaintenanceDuckdbMemoryLimit: '6400MiB',
+    duckdbMemoryLimit: '',
+    role: 'maintenance-worker',
+  })
 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',

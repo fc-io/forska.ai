@@ -20,6 +20,8 @@ const LLM_PROCESSING_INTERVAL = '*/1 * * * * *'
 const START_DELAY_MS = 1000
 const lowMemoryJudgmentsWorkerDuckdbLimitMiB = 6400
 
+let isSendingToLLM = false
+
 const logJudgingCronError = (label: string, error: unknown) => {
   if (!isExpectedDuckdbOwnerRoleLossError(error)) {
     writeRuntimeFailureLogEvent({
@@ -47,7 +49,9 @@ const shouldUseLowMemoryJudgmentsCronMode = () => {
 const sendToLLM = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
   if (judgmentsJobsCronState.isImportingJudgments) return
+  if (isSendingToLLM) return
 
+  isSendingToLLM = true
   try {
     const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
     if (shouldRunJudgmentMaintenanceCron()) {
@@ -74,6 +78,8 @@ const sendToLLM = async (): Promise<void> => {
     }
   } catch (err) {
     logJudgingCronError('[cron] sendToLLM error:', err)
+  } finally {
+    isSendingToLLM = false
   }
 }
 

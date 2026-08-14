@@ -1,6 +1,6 @@
 import {spawnSync} from 'node:child_process'
 import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
-import {hostname} from 'node:os'
+import {hostname, tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -14,7 +14,7 @@ import {
 import {getRuntimeCutoverVersion} from './runtimeCutover.ts'
 
 const createLeasePaths = () => {
-  const tempDirectory = mkdtempSync('/tmp/f1-duckdb-owner-lease-')
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'f1-duckdb-owner-lease-'))
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   return {

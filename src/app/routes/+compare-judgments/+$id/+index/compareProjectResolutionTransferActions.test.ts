@@ -6,7 +6,7 @@ import type {ComparisonProjectConflictResolutionExportResult} from '../../../../
 const comparisonProjectsServiceModulePath = new URL(
   '../../../../../services/comparisonProjectsService.ts',
   import.meta.url,
-).pathname
+).href
 const fetchComparisonProjectConflictResolutionExportArtifact = mock(
   async (_comparisonProjectId: string): Promise<ComparisonProjectConflictResolutionExportResult> => {
     return exportResult

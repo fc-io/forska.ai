@@ -2,17 +2,17 @@ import {readFileSync} from 'node:fs'
 
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
-const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).href
+const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).href
 const reviewServingManifestRepositoryModulePath = new URL(
   '../../reviewServing/reviewServingManifestRepository.ts',
   import.meta.url,
-).pathname
-const reviewServingReaderModulePath = new URL('../../reviewServing/reviewServingReader.ts', import.meta.url).pathname
+).href
+const reviewServingReaderModulePath = new URL('../../reviewServing/reviewServingReader.ts', import.meta.url).href
 const reviewServingProjectConfigIdentityModulePath = new URL(
   '../../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
-).pathname
+).href
 
 const projectReviewConfigRef = {
   current: async (_projectId: string): Promise<unknown> => {

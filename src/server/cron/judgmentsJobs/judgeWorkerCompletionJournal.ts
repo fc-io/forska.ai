@@ -3,6 +3,7 @@ import {dirname} from 'node:path'
 
 import {Database} from 'bun:sqlite'
 
+import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecutionSnapshotService.ts'
 import {getEnv} from '../../utils/env.ts'
@@ -576,13 +577,17 @@ const requestOwnerJsonOnce = async <T>({
   path: string
 }): Promise<T> => {
   const hasBody = body !== undefined
-  const response = await fetch(`${getOwnerUrl()}${duckdbOwnerPrivateApiPrefix}${path}`, {
-    body: hasBody ? JSON.stringify(body) : undefined,
-    headers: hasBody ? {'content-type': 'application/json'} : undefined,
-    method,
-    signal: AbortSignal.timeout(getOwnerBackedRequestTimeoutMs(path)),
+  const {response, text} = await withAbortSignalTimeout(getOwnerBackedRequestTimeoutMs(path), async (signal) => {
+    const response = await fetch(`${getOwnerUrl()}${duckdbOwnerPrivateApiPrefix}${path}`, {
+      body: hasBody ? JSON.stringify(body) : undefined,
+      headers: hasBody ? {'content-type': 'application/json'} : undefined,
+      method,
+      signal,
+    })
+    const text = await response.text()
+
+    return {response, text}
   })
-  const text = await response.text()
   const parsed = tryParseOwnerResponse<T>(text)
   const parsedError = parsed && 'error' in parsed ? parsed.error : undefined
 

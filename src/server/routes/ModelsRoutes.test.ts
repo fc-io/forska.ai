@@ -3,11 +3,11 @@ import {Elysia} from 'elysia'
 
 import type {ProviderConnectionRecord, ProviderModelRecord} from '../providers/providerTypes.ts'
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
-const codexAppTransportModulePath = new URL('../providers/transports/codexAppTransport.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
+const codexAppTransportModulePath = new URL('../providers/transports/codexAppTransport.ts', import.meta.url).href
 const providerConnectionRepositoryModulePath = new URL('../providers/providerConnectionRepository.ts', import.meta.url)
-  .pathname
-const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
+  .href
+const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).href
 
 type ModelsRoutesModule = typeof import('./ModelsRoutes.ts')
 

@@ -155,7 +155,7 @@ const runDataSourcesRoute = (params: {
         const {mock} = await import('bun:test')
         const {Elysia} = await import('elysia')
 
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
         const row = ${JSON.stringify(params.row)}
         const covidenceProjectLinks = ${JSON.stringify(params.covidenceProjectLinks ?? [])}
         const covidencePromptLinks = ${JSON.stringify(params.covidencePromptLinks ?? [])}
@@ -374,7 +374,7 @@ test('structured file datasource patch rejects non-archive edits', () => {
         const {mock} = await import('bun:test')
         const {Elysia} = await import('elysia')
 
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
         const row = ${JSON.stringify(structuredRow)}
         const state = {transactionCallCount: 0}
 
@@ -434,7 +434,7 @@ test('covidence datasource patch rejects non-archive edits', () => {
         const {mock} = await import('bun:test')
         const {Elysia} = await import('elysia')
 
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
         const row = ${JSON.stringify(covidenceRow)}
         const state = {transactionCallCount: 0}
 

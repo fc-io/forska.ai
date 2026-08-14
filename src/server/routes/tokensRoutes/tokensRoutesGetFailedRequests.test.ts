@@ -1,6 +1,6 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const tokenUseQueryServiceModulePath = new URL('../../services/tokenUseQueryService.ts', import.meta.url).pathname
+const tokenUseQueryServiceModulePath = new URL('../../services/tokenUseQueryService.ts', import.meta.url).href
 type TokensRoutesGetFailedRequestByIdModule = typeof import('./tokensRoutesGetFailedRequestById.ts')
 type TokensRoutesGetFailedRequestsModule = typeof import('./tokensRoutesGetFailedRequests.ts')
 

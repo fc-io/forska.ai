@@ -19,7 +19,7 @@ type ProviderAdmissionLeaseReleaseInput = Parameters<
   typeof realProviderAdmissionLeaseModule.releaseProviderAdmissionLeaseWithResultThroughOwner
 >[0]
 
-const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).pathname
+const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).href
 
 const acquireProviderAdmissionLeasePersisted = async (input: ProviderAdmissionLeaseAcquireInput) => {
   return realProviderAdmissionLeaseModule.acquireProviderAdmissionLease(input)

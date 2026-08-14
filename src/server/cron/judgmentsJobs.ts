@@ -1,6 +1,7 @@
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
+import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
@@ -17,7 +18,7 @@ const serverJobId = getDefaultJudgmentServerJobId()
 const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const logJudgingCronError = (label: string, error: unknown) => {
-  if (!isExpectedDuckdbOwnerRoleLossError(error)) {
+  if (!isDuckdbExclusiveWorkAdmissionError(error) && !isExpectedDuckdbOwnerRoleLossError(error)) {
     writeRuntimeFailureLogEvent({
       attrs: {error},
       event: 'judgments.cron.failure',
@@ -28,7 +29,7 @@ const logJudgingCronError = (label: string, error: unknown) => {
 }
 
 const shouldRunJudgmentMaintenanceCron = (): boolean => {
-  return shouldCurrentServerRunMaintenanceLoops()
+  return shouldCurrentServerRunMaintenanceLoops() && !hasActiveDuckdbExclusiveWork()
 }
 
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'

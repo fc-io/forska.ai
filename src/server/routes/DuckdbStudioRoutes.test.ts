@@ -1,16 +1,18 @@
 import {existsSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
-    rmSync(filePath, {force: true})
+    rmSync(filePath, {force: true, recursive: true})
   }
 }
 
 test('duckdb studio route creates a readable snapshot', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-studio-route-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-studio-route-${Date.now()}.duckdb`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -54,11 +56,13 @@ test('duckdb studio route creates a readable snapshot', async () => {
     removeFileIfExists(`${snapshotPath}.wal`)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.startup-recovery`)
   }
 })
 
 test('duckdb studio route creates a readable snapshot after uncheckpointed DDL', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-studio-route-ddl-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-studio-route-ddl-${Date.now()}.duckdb`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -98,5 +102,7 @@ test('duckdb studio route creates a readable snapshot after uncheckpointed DDL',
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.startup-recovery`)
   }
 })

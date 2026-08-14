@@ -9,17 +9,17 @@ type JudgeModule = typeof import('../judge.ts')
 type JudgeSinglePromptInput = Parameters<JudgeModule['judgeSinglePrompt']>[0]
 type MockJsonRpcRequest = {id?: number; method?: string; params?: {input?: Array<{text?: string}>; threadId?: string}}
 
-const judgeModulePath = new URL('../judge.ts', import.meta.url).pathname
+const judgeModulePath = new URL('../judge.ts', import.meta.url).href
 const judgmentsRequestRuntimeModulePath = new URL(
   '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts',
   import.meta.url,
-).pathname
+).href
 const providerInvocationServiceModulePath = new URL(
   '../../server/providers/providerInvocationService.ts',
   import.meta.url,
-).pathname
-const judgeStoreTokenUseModulePath = new URL('./judgeStoreTokenUse.ts', import.meta.url).pathname
-const storeSinglePromptJudgmentModulePath = new URL('./storeSinglePromptJudgment.ts', import.meta.url).pathname
+).href
+const judgeStoreTokenUseModulePath = new URL('./judgeStoreTokenUse.ts', import.meta.url).href
+const storeSinglePromptJudgmentModulePath = new URL('./storeSinglePromptJudgment.ts', import.meta.url).href
 
 const createArticle = ({
   id,

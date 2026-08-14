@@ -133,7 +133,7 @@ test('production app code no longer writes through the legacy dirty-refresh ledg
     '-g',
     '!*.test.ts',
   ])
-  const output = result.stdout.toString().trim()
+  const output = result.stdout.toString().trim().replaceAll('\\', '/')
   const offenders = output
     .split('\n')
     .filter(Boolean)

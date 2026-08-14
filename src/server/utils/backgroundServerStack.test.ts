@@ -1,5 +1,6 @@
 import {readFileSync} from 'node:fs'
 import {rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {DuckDBInstance} from '@duckdb/node-api'
@@ -203,7 +204,7 @@ test('background server stack passes machine-local maintenance-worker DuckDB mem
 })
 
 test('background server stack async config reads maintenance-worker DuckDB memory from app.user_config', async () => {
-  const duckdbPath = `/tmp/f1-background-server-stack-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-background-server-stack-${Date.now()}.duckdb`)
   const duckdbInstance = await DuckDBInstance.create(duckdbPath)
   const connection = await duckdbInstance.connect()
 

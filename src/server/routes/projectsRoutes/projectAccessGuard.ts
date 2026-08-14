@@ -1,3 +1,4 @@
+import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
@@ -19,13 +20,17 @@ const getProjectAccessFromDuckdbOwner = async (projectId: string): Promise<Proje
     throw new Error(projectAccessUnavailableErrorMessage)
   }
 
-  const response = await fetch(
-    `${ownerUrl}${duckdbOwnerPrivateApiPrefix}/api/projects/${encodeURIComponent(projectId)}/access`,
-    {signal: AbortSignal.timeout(5_000)},
-  )
-  const body = (await response.json().catch(() => {
-    return null
-  })) as ProjectAccessResponse | null
+  const {body, response} = await withAbortSignalTimeout(5_000, async (signal) => {
+    const response = await fetch(
+      `${ownerUrl}${duckdbOwnerPrivateApiPrefix}/api/projects/${encodeURIComponent(projectId)}/access`,
+      {signal},
+    )
+    const body = (await response.json().catch(() => {
+      return null
+    })) as ProjectAccessResponse | null
+
+    return {body, response}
+  })
 
   if (body?.error === 'Project not found') {
     return null

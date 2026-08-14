@@ -1,11 +1,11 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const providerAuthServiceModulePath = new URL('./providerAuthService.ts', import.meta.url).pathname
-const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
-const providerRuntimeDetectorModulePath = new URL('./providerRuntimeDetector.ts', import.meta.url).pathname
-const providerModelRepositoryModulePath = new URL('./providerModelRepository.ts', import.meta.url).pathname
-const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).pathname
-const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).pathname
+const providerAuthServiceModulePath = new URL('./providerAuthService.ts', import.meta.url).href
+const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).href
+const providerRuntimeDetectorModulePath = new URL('./providerRuntimeDetector.ts', import.meta.url).href
+const providerModelRepositoryModulePath = new URL('./providerModelRepository.ts', import.meta.url).href
+const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).href
+const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).href
 
 type ProviderRuntimeModelGuardModule = typeof import('./providerRuntimeModelGuard.ts')
 

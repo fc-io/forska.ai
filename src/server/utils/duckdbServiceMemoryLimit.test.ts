@@ -1,4 +1,6 @@
 import {existsSync, readFileSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -30,7 +32,7 @@ const getSpawnOutput = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => 
 }
 
 test('duckdb service defaults maintenance owners to the bounded maintenance memory profile', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-default-memory-limit-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-default-memory-limit-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -59,7 +61,7 @@ test('duckdb service defaults maintenance owners to the bounded maintenance memo
 })
 
 test('duckdb service keeps the 20GB default for non-owner API processes', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-api-default-memory-limit-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-api-default-memory-limit-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -88,7 +90,7 @@ test('duckdb service keeps the 20GB default for non-owner API processes', () => 
 })
 
 test('duckdb service applies the configured startup tuning', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-memory-limit-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-memory-limit-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -132,7 +134,7 @@ test('duckdb service applies the configured startup tuning', () => {
 })
 
 test('duckdb service uses one thread and deferred checkpoints for the 6400MiB worker profile', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-6400mib-threads-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-6400mib-threads-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -172,7 +174,7 @@ test('duckdb service uses one thread and deferred checkpoints for the 6400MiB wo
 })
 
 test('duckdb service preserves explicit manual checkpoints on low-memory workers', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-manual-checkpoint-low-memory-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-manual-checkpoint-low-memory-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -183,7 +185,7 @@ test('duckdb service preserves explicit manual checkpoints on low-memory workers
           `
             const {mock} = await import('bun:test')
 
-            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
             const runStatements = []
 
             void mock.module(serverRuntimeRoleModulePath, () => {
@@ -256,7 +258,7 @@ test('duckdb service preserves explicit manual checkpoints on low-memory workers
 })
 
 test('duckdb service serializes owner route reads with maintenance work regardless of memory limit', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-serialized-background-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-serialized-background-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -267,7 +269,7 @@ test('duckdb service serializes owner route reads with maintenance work regardle
           `
             const {mock} = await import('bun:test')
 
-            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
 
             let activeOperations = 0
             const overlaps = []
@@ -357,7 +359,7 @@ test('duckdb service serializes owner route reads with maintenance work regardle
 })
 
 test('duckdb service serializes append work with the main queue on low-memory workers', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-serialized-append-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-serialized-append-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -368,7 +370,7 @@ test('duckdb service serializes append work with the main queue on low-memory wo
           `
             const {mock} = await import('bun:test')
 
-            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
 
             let activeReads = 0
             const overlaps = []
@@ -456,7 +458,7 @@ test('duckdb service serializes append work with the main queue on low-memory wo
 })
 
 test('duckdb recycle barrier blocks foreground work until background work drains', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-recycle-foreground-barrier-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-recycle-foreground-barrier-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -467,7 +469,7 @@ test('duckdb recycle barrier blocks foreground work until background work drains
           `
             const {mock} = await import('bun:test')
 
-            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
 
             let releaseBackground = () => {}
             const events = []
@@ -607,7 +609,7 @@ test('duckdb recycle barrier survives nested barriers in queued main work', () =
 })
 
 test('duckdb main transaction blocks append-lane work until commit finishes', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-transaction-append-barrier-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-transaction-append-barrier-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -618,7 +620,7 @@ test('duckdb main transaction blocks append-lane work until commit finishes', ()
           `
             const {mock} = await import('bun:test')
 
-            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
 
             let connectCount = 0
             let releaseTransactionBody = () => {}
@@ -758,7 +760,7 @@ test('duckdb main transaction blocks append-lane work until commit finishes', ()
 })
 
 test('duckdb append transactions are opt-in and stay serialized with main transactions on low-memory workers', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-serialized-append-transaction-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-serialized-append-transaction-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -769,7 +771,7 @@ test('duckdb append transactions are opt-in and stay serialized with main transa
           `
             const {mock} = await import('bun:test')
 
-            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
 
             let activeStatements = 0
             let connectCount = 0
@@ -885,7 +887,7 @@ test('duckdb append transactions are opt-in and stay serialized with main transa
 })
 
 test('duckdb append transactions roll back failed append-lane work before the next append transaction', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-append-transaction-rollback-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-append-transaction-rollback-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -896,7 +898,7 @@ test('duckdb append transactions roll back failed append-lane work before the ne
           `
             const {mock} = await import('bun:test')
 
-            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').href
 
             let connectCount = 0
             const statements = []
@@ -999,7 +1001,7 @@ test('duckdb append transactions roll back failed append-lane work before the ne
 })
 
 test('duckdb service treats empty interactive json output as an empty row set', () => {
-  const duckdbPath = `/tmp/f1-duckdb-service-empty-result-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-empty-result-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(

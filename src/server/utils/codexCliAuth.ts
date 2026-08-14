@@ -7,6 +7,8 @@ type CodexLoginMethod = 'chatgpt' | 'api-key'
 
 type CodexCliLoginStatus = {ok: boolean; loggedIn: boolean; method: CodexLoginMethod | null; raw: string}
 
+type CodexCliLoginStatusOptions = {spawnProcess?: typeof spawn}
+
 type CodexDeviceLoginJobState = 'running' | 'completed' | 'failed'
 
 export type CodexDeviceLoginJob = {
@@ -40,13 +42,23 @@ const getCodexLoginMethod = (raw: string): CodexLoginMethod | null => {
   return lower.includes('chatgpt') ? 'chatgpt' : lower.includes('api key') ? 'api-key' : null
 }
 
-export const getCodexCliLoginStatus = async (): Promise<CodexCliLoginStatus> => {
+const getCodexCliUnavailableStatus = (error: unknown): CodexCliLoginStatus => {
+  return {loggedIn: false, method: null, ok: false, raw: error instanceof Error ? error.message : String(error)}
+}
+
+export const getCodexCliLoginStatus = async ({
+  spawnProcess = spawn,
+}: CodexCliLoginStatusOptions = {}): Promise<CodexCliLoginStatus> => {
   const codexBin = getCodexBinPath()
-  return await new Promise((resolve) => {
-    const proc = spawn(codexBin, ['login', 'status'], {stdio: ['ignore', 'pipe', 'pipe']})
+  return await new Promise<CodexCliLoginStatus>((resolve) => {
+    const proc = spawnProcess(codexBin, ['login', 'status'], {stdio: ['ignore', 'pipe', 'pipe']})
     let out = ''
     let err = ''
+    let settled = false
     const done = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
       const combined = [out, err].filter(Boolean).join('\n')
       const raw = stripAnsi(combined).trim()
       const loggedIn = raw.toLowerCase().includes('logged in')
@@ -64,15 +76,14 @@ export const getCodexCliLoginStatus = async (): Promise<CodexCliLoginStatus> => 
     proc.stderr.on('data', (d: Buffer) => {
       err += d.toString('utf8')
     })
-    proc.on('error', () => {
-      clearTimeout(timeout)
+    proc.on('error', (error) => {
+      err += `${err ? '\n' : ''}${error.message}`
       done(false)
     })
     proc.on('exit', (code) => {
-      clearTimeout(timeout)
       done(code === 0)
     })
-  })
+  }).catch(getCodexCliUnavailableStatus)
 }
 
 const MAX_OUTPUT_LINES = 160

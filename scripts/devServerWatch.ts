@@ -23,6 +23,13 @@ import {
 } from '../src/server/utils/duckdbOwnerLease.ts'
 import {loadEnv} from '../src/server/utils/env.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
+import {withAbortSignalTimeout} from '../src/utils/withAbortSignalTimeout.ts'
+import {
+  processLockMalformedRetryIntervalMs,
+  processLockMalformedStaleAfterMs,
+  readJsonProcessLockState,
+  readProcessLockForAcquisition,
+} from './processLockAcquisition.ts'
 
 const watchedPaths = ['src', 'package.json', 'tsconfig.json']
 const restartDelayMs = 150
@@ -47,6 +54,41 @@ type ServerStackLockMetadata = {
   maintenancePort: number
   pid: number
   startedAt: string
+}
+
+const isPositiveInteger = (value: unknown) => {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+const isNonEmptyString = (value: unknown) => {
+  return typeof value === 'string' && value.length > 0
+}
+
+const isProcessLockMetadata = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+
+  const metadata = value as Record<string, unknown>
+
+  return (
+    isPositiveInteger(metadata.apiPort)
+    && isPositiveInteger(metadata.maintenancePort)
+    && isPositiveInteger(metadata.pid)
+    && isNonEmptyString(metadata.startedAt)
+  )
+}
+
+const isDevWatcherLockMetadata = (value: unknown): value is DevWatcherLockMetadata => {
+  return isProcessLockMetadata(value) && isPositiveInteger(value.judgePort)
+}
+
+const isServerStackLockMetadata = (value: unknown): value is ServerStackLockMetadata => {
+  return (
+    isProcessLockMetadata(value)
+    && isNonEmptyString(value.cwd)
+    && (value.judgePort === undefined || isPositiveInteger(value.judgePort))
+  )
 }
 type ExistingAction = 'attach' | 'cancel' | 'restart' | 'stop'
 type ExistingStackState = {
@@ -153,27 +195,15 @@ const logDevServerFatalError = (error: unknown) => {
 }
 
 const readServerStackLock = async () => {
-  try {
-    return JSON.parse(await readFile(serverStackLockPath, 'utf8')) as ServerStackLockMetadata
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return null
-    }
+  const state = await readJsonProcessLockState(serverStackLockPath, isServerStackLockMetadata)
 
-    throw error
-  }
+  return state.kind === 'valid' ? state.metadata : null
 }
 
 const readDevWatcherLock = async () => {
-  try {
-    return JSON.parse(await readFile(devWatcherLockPath, 'utf8')) as DevWatcherLockMetadata
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return null
-    }
+  const state = await readJsonProcessLockState(devWatcherLockPath, isDevWatcherLockMetadata)
 
-    throw error
-  }
+  return state.kind === 'valid' ? state.metadata : null
 }
 
 const getDevWatcherLockMetadata = (): DevWatcherLockMetadata => {
@@ -197,6 +227,10 @@ const refreshDevWatcherLock = async () => {
   }
 
   const currentLock = await readDevWatcherLock()
+
+  if (currentLock?.pid === process.pid) {
+    return
+  }
 
   if (currentLock !== null && currentLock.pid !== process.pid && isProcessAlive(currentLock.pid)) {
     return
@@ -238,8 +272,10 @@ const getActionOverride = (): ExistingAction | null => {
 
 const fetchJson = async <T>(url: string): Promise<T | null> => {
   try {
-    const response = await fetch(url, {signal: AbortSignal.timeout(healthProbeTimeoutMs)})
-    return response.ok ? ((await response.json()) as T) : null
+    return await withAbortSignalTimeout(healthProbeTimeoutMs, async (signal) => {
+      const response = await fetch(url, {signal})
+      return response.ok ? ((await response.json()) as T) : null
+    })
   } catch {
     return null
   }
@@ -486,13 +522,36 @@ const stopExternalProcess = async ({pid, processName}: {pid: number; processName
   throw new Error(`Timed out waiting for ${processName} pid=${pid} to exit`)
 }
 
+const getProcessInfoCommand = (pid: number) => {
+  return process.platform === 'win32'
+    ? [
+        'powershell.exe',
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; `
+          + 'if ($null -ne $processInfo) { '
+          + 'Write-Output "$($processInfo.ParentProcessId)`t$($processInfo.CommandLine)" }',
+      ]
+    : ['ps', '-o', 'ppid=', '-o', 'command=', '-p', String(pid)]
+}
+
 const getProcessInfo = (pid: number): ProcessInfo | null => {
-  const result = globalThis.Bun.spawnSync(['ps', '-o', 'ppid=', '-o', 'command=', '-p', String(pid)], {
-    stderr: 'pipe',
-    stdout: 'pipe',
-  })
+  let result: ReturnType<typeof globalThis.Bun.spawnSync>
+
+  try {
+    result = globalThis.Bun.spawnSync(getProcessInfoCommand(pid), {stderr: 'pipe', stdout: 'pipe'})
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return null
+    }
+
+    throw error
+  }
+
   const output = result.stdout.toString().trim()
-  const match = /^(\d+)\s+([\s\S]+)$/.exec(output)
+  const match = /^(\d+)(?:\t|\s+)([\s\S]+)$/.exec(output)
 
   if (result.exitCode !== 0 || match === null || match[1] === undefined || match[2] === undefined) {
     return null
@@ -590,7 +649,16 @@ const acquireDevWatcherLock = async (): Promise<void> => {
       throw error
     }
 
-    const currentLock = await readDevWatcherLock()
+    const currentLock = await readProcessLockForAcquisition({
+      lockPath: devWatcherLockPath,
+      now: Date.now,
+      readState: () => {
+        return readJsonProcessLockState(devWatcherLockPath, isDevWatcherLockMetadata)
+      },
+      retryIntervalMs: processLockMalformedRetryIntervalMs,
+      staleAfterMs: processLockMalformedStaleAfterMs,
+      wait: waitFor,
+    })
 
     if (!currentLock) {
       return acquireDevWatcherLock()

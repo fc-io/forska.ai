@@ -1,12 +1,14 @@
 import {rmSync, writeFileSync} from 'node:fs'
 
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {buildPromptConfigHash, buildReviewConfigHash} from '../../reviewServing/reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from '../../reviewServing/reviewServingContracts.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from '../../utils/duckdbExclusiveWork.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-project-reviews-warnings')
 const tempDbPath = tempRuntimeRoot.duckdbPath

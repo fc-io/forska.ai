@@ -1,4 +1,6 @@
 import {existsSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
@@ -10,7 +12,7 @@ const removeFileIfExists = (filePath: string) => {
 }
 
 test('duckdb node-api opens cached instance with multiple connections', async () => {
-  const duckdbPath = `/tmp/f1-duckdb-node-api-spike-${Date.now()}.duckdb`
+  const duckdbPath = join(tmpdir(), `f1-duckdb-node-api-spike-${Date.now()}.duckdb`)
 
   try {
     const duckdbInstance = await DuckDBInstance.fromCache(duckdbPath, {memory_limit: '128MiB'})

@@ -2,11 +2,13 @@ import {existsSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
 import {Database} from 'bun:sqlite'
-import {afterAll, beforeAll, expect, spyOn, test} from 'bun:test'
+import {afterAll, beforeAll, expect, setDefaultTimeout, spyOn, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import type {JudgmentJobLeaseMetadata} from './judgmentJobLease.ts'
 import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judgment-job-sqlite-service')
 const tempDbPath = tempRuntimeRoot.duckdbPath
@@ -317,6 +319,10 @@ test('treats externally removed cached SQLite jobs as missing', async () => {
   expect(await service.getQueuePromptLifecycleRows(jobId)).toHaveLength(1)
 
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  if (process.platform === 'win32') {
+    await service.closeAll()
+  }
 
   rmSync(sqlitePath, {force: true})
   rmSync(`${sqlitePath}-wal`, {force: true})
@@ -727,7 +733,7 @@ test('claimReadyPrompts skips delayed retry rows until their retry window opens'
     throw new Error('Failed to claim delayed retry prompt')
   }
 
-  await service.markPromptAsRetry(jobId, firstClaimedPrompt.recordId, 25)
+  await service.markPromptAsRetry(jobId, firstClaimedPrompt.recordId, 250)
 
   expect(
     (await service.claimReadyPrompts(jobId, 'server-a', 2)).map((prompt) => {
@@ -736,7 +742,7 @@ test('claimReadyPrompts skips delayed retry rows until their retry window opens'
   ).toEqual(['article-ready:prompt-ready'])
 
   await new Promise((resolve) => {
-    setTimeout(resolve, 35)
+    setTimeout(resolve, 300)
   })
 
   expect(

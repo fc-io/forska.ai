@@ -2,7 +2,10 @@ import {readFileSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
-const routeSource = readFileSync(new URL('./ComparisonProjectsRoutes.ts', import.meta.url), 'utf8')
+const routeSource = readFileSync(new URL('./ComparisonProjectsRoutes.ts', import.meta.url), 'utf8').replace(
+  /\r\n?/gu,
+  '\n',
+)
 
 const getFunctionBody = (functionName: string) => {
   const start = routeSource.indexOf(`const ${functionName} =`)

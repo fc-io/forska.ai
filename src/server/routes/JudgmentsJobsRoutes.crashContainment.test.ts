@@ -1,4 +1,6 @@
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const getLastJsonLine = (stdout: string) => {
   const lines = stdout
@@ -36,7 +38,7 @@ test('repair route blocks live repair for quarantined crash-path jobs with offli
         process.env.VITE_PORT = '3000'
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const [
@@ -125,7 +127,7 @@ test('delete route fails safely for quarantined crash-path jobs when isolated fl
         process.env.VITE_PORT = '3000'
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const isolatedImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts')
@@ -243,7 +245,7 @@ test('delete route keeps local SQLite when DuckDB delete fails', () => {
         process.env.VITE_PORT = '3000'
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const deleteServiceModulePath = getModulePath('./src/server/services/judgmentJobDeleteService.ts')

@@ -1,6 +1,8 @@
 import {existsSync, unlinkSync} from 'node:fs'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {

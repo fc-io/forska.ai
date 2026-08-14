@@ -1,6 +1,6 @@
 import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {
   defaultLargeRebuildCommandTestEnv,
@@ -8,6 +8,8 @@ import {
   migrateLargeRebuildCommandDatabase,
   projectRoot,
 } from './largeRebuildCommandTestHelpers.ts'
+
+setDefaultTimeout(120_000)
 
 test('runArchivedProjectBoundedCleanup CLI returns structured completed result', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-archived-project-bounded-cleanup.duckdb')

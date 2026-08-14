@@ -1,5 +1,6 @@
 import {Effect} from 'effect'
 
+import {withAbortSignalTimeout} from '../../utils/withAbortSignalTimeout.ts'
 import {type AppDatabaseSnapshot, getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   getDuckdbOwnerLeaseUrl,
@@ -68,8 +69,10 @@ const isStudioServerUnavailable = (error: unknown) => {
 
 const isDuckdbOwnerResponsive = async (duckdbOwnerUrl: string) => {
   try {
-    const response = await fetch(getDuckdbOwnerHealthUrl(duckdbOwnerUrl), {signal: AbortSignal.timeout(1_000)})
-    return response.ok
+    return await withAbortSignalTimeout(1_000, async (signal) => {
+      const response = await fetch(getDuckdbOwnerHealthUrl(duckdbOwnerUrl), {signal})
+      return response.ok
+    })
   } catch {
     return false
   }
@@ -119,7 +122,13 @@ const getSnapshotFromResponse = async (response: Response): Promise<AppDatabaseS
     throw new DuckdbSnapshotRouteUnavailableError('DuckDB snapshot route is unavailable')
   }
 
-  const body = JSON.parse(text) as DuckdbScriptAccessSnapshotResponse
+  let body: DuckdbScriptAccessSnapshotResponse
+
+  try {
+    body = JSON.parse(text) as DuckdbScriptAccessSnapshotResponse
+  } catch {
+    throw new Error(`DuckDB snapshot request failed with status ${response.status}: ${text}`)
+  }
 
   if (!response.ok || !body.data) {
     throw new Error(body.error ?? `DuckDB snapshot request failed with status ${response.status}`)

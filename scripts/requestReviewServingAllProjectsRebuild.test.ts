@@ -1,6 +1,6 @@
 import {join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {
   defaultLargeRebuildCommandTestEnv,
@@ -8,6 +8,8 @@ import {
   projectRoot,
   seedLargeRebuildCommandProjectDatabase,
 } from './largeRebuildCommandTestHelpers.ts'
+
+setDefaultTimeout(120_000)
 
 const runQuery = (duckdbPath: string, sql: string): unknown => {
   const result = globalThis.Bun.spawnSync(

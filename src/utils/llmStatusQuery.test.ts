@@ -2,7 +2,7 @@ import {expect, mock, test} from 'bun:test'
 
 import type {LlmStatusRow} from './llmStatusQuery.ts'
 
-const apiClientModulePath = new URL('../services/apiClient.ts', import.meta.url).pathname
+const apiClientModulePath = new URL('../services/apiClient.ts', import.meta.url).href
 
 let llmStatusResponse: {error?: unknown; data?: {data?: Record<string, unknown>[]}} = {data: {data: []}}
 

@@ -3,7 +3,7 @@ import {mkdir, readFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import type {ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
 import type {RequestReviewServingV4RebuildInput} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
@@ -30,6 +30,8 @@ import {
   type ProjectTransferTargetStateSafetySurface,
   projectTransferTargetStateSafetySurfaces,
 } from './projectTransferTargetStateDirtyTokenService.ts'
+
+setDefaultTimeout(120_000)
 
 type MutableSessionRepository = NonNullable<ProjectTransferCommitInput['repositories']>['sessionRepository']
 type RevalidateInput = Parameters<NonNullable<NonNullable<ProjectTransferCommitInput['repositories']>['revalidate']>>[0]

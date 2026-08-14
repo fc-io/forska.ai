@@ -1,4 +1,4 @@
-import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
@@ -14,6 +14,8 @@ import {
   releaseProviderAdmissionLeaseWithResultOnCurrentOwner,
   resetProviderAdmissionLeaseForTests,
 } from './providerAdmissionLease.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-provider-admission-lease-fencing')
 

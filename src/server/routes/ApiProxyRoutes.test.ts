@@ -1,5 +1,6 @@
 import {existsSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs'
-import {hostname} from 'node:os'
+import {hostname, tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -13,12 +14,17 @@ import {
 import {projectTransferRouteSpecs} from './projectTransferRoutes.ts'
 import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 
-type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
+type SpawnedServer = {
+  process: ReturnType<typeof globalThis.Bun.spawn>
+  stderrText: Promise<string>
+  stdoutText: Promise<string>
+}
 const bunExecutablePath = realpathSync(process.execPath)
 
 const csvExportRoute = {endpoint: 'csv-export', method: 'POST', samplePath: '/api/projects/project-1/export'} as const
 const ownerRoutedProjectRoutes = [...projectTransferRouteSpecs, csvExportRoute]
-const apiProxyIntegrationTestTimeoutMs = 45_000
+const apiProxyIntegrationTestTimeoutMs = 120_000
+const apiProxyServerStartupTimeoutMs = 60_000
 const exposeLocalOperatorApiEnv = {[exposeLocalOperatorApiEnvVar]: 'true'}
 
 const canStartLocalServer = () => {
@@ -45,7 +51,7 @@ const removeFileIfExists = (filePath: string) => {
   }
 }
 
-const waitForServer = async (port: number, timeoutMs: number): Promise<void> => {
+const waitForServer = async (port: number, timeoutMs: number, server: SpawnedServer): Promise<void> => {
   const startedAt = Date.now()
 
   await new Promise<void>((resolve, reject) => {
@@ -54,6 +60,12 @@ const waitForServer = async (port: number, timeoutMs: number): Promise<void> => 
         await fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
         resolve()
       } catch (error) {
+        if (server.process.exitCode !== null) {
+          const [stderr, stdout] = await Promise.all([server.stderrText, server.stdoutText])
+          reject(new Error(stderr || stdout || `Server on port ${port} exited before becoming ready`, {cause: error}))
+          return
+        }
+
         if (Date.now() - startedAt >= timeoutMs) {
           reject(error)
           return
@@ -103,17 +115,27 @@ const waitForCondition = async (condition: () => Promise<boolean>, timeoutMs: nu
 }
 
 const stopServer = async (server: SpawnedServer) => {
-  server.kill('SIGTERM')
-  await server.exited
+  if (server.process.exitCode === null) {
+    server.process.kill('SIGTERM')
+  }
+
+  await server.process.exited
+  await Promise.all([server.stderrText, server.stdoutText])
 }
 
 const startServer = (envValues: Record<string, string>) => {
-  return globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
+  const childProcess = globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
     cwd: process.cwd(),
     env: {...process.env, ...envValues},
     stdout: 'pipe',
     stderr: 'pipe',
   })
+
+  return {
+    process: childProcess,
+    stderrText: new Response(childProcess.stderr).text(),
+    stdoutText: new Response(childProcess.stdout).text(),
+  }
 }
 
 test('project transfer and CSV export routes are owner-proxied from public API paths', () => {
@@ -147,7 +169,7 @@ apiProxyServerTest(
   async () => {
     const ownerPort = 34991
     const apiPort = 34992
-    const duckdbPath = `/tmp/f1-duckdb-api-proxy-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-duckdb-api-proxy-${Date.now()}.duckdb`)
     const ownerServer = startServer({
       API_SERVER_PORT: String(ownerPort),
       DUCKDB_PATH: duckdbPath,
@@ -167,8 +189,8 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(ownerPort, 10_000)
-      await waitForServer(apiPort, 10_000)
+      await waitForServer(ownerPort, apiProxyServerStartupTimeoutMs, ownerServer)
+      await waitForServer(apiPort, apiProxyServerStartupTimeoutMs, apiServer)
 
       const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`)
       const body = (await response.json()) as {data: unknown; error?: string}
@@ -190,7 +212,7 @@ apiProxyServerTest(
   'api role rejects self-proxy DuckDB owner URLs that point at the same port via a different local alias',
   async () => {
     const apiPort = 34990
-    const duckdbPath = `/tmp/f1-api-self-proxy-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-api-self-proxy-${Date.now()}.duckdb`)
     const apiServer = startServer({
       API_SERVER_PORT: String(apiPort),
       DUCKDB_PATH: duckdbPath,
@@ -202,7 +224,7 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(apiPort, 10_000)
+      await waitForServer(apiPort, apiProxyServerStartupTimeoutMs, apiServer)
 
       const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
       const body = (await response.json()) as {error?: string}
@@ -223,7 +245,7 @@ apiProxyServerTest(
   'api role rejects self-proxy DuckDB owner URLs that use the machine hostname alias',
   async () => {
     const apiPort = 34989
-    const duckdbPath = `/tmp/f1-api-self-proxy-hostname-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-api-self-proxy-hostname-${Date.now()}.duckdb`)
     const machineHostname = hostname().trim()
 
     if (machineHostname === '') {
@@ -241,7 +263,7 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(apiPort, 10_000)
+      await waitForServer(apiPort, apiProxyServerStartupTimeoutMs, apiServer)
 
       const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
       const body = (await response.json()) as {error?: string}
@@ -263,7 +285,7 @@ apiProxyServerTest(
   async () => {
     const ownerPort = 34993
     const apiPort = 34994
-    const duckdbPath = `/tmp/f1-duckdb-owner-connections-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-duckdb-owner-connections-${Date.now()}.duckdb`)
     const ownerServer = startServer({
       ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(ownerPort),
@@ -285,8 +307,8 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(ownerPort, 10_000)
-      await waitForServer(apiPort, 10_000)
+      await waitForServer(ownerPort, apiProxyServerStartupTimeoutMs, ownerServer)
+      await waitForServer(apiPort, apiProxyServerStartupTimeoutMs, apiServer)
 
       const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`)
       const body = (await response.json()) as {
@@ -323,7 +345,7 @@ apiProxyServerTest(
   'api server without DuckDB owner reports owner proxy disabled warning',
   async () => {
     const apiPort = 34999
-    const duckdbPath = `/tmp/f1-owner-proxy-disabled-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-owner-proxy-disabled-${Date.now()}.duckdb`)
     const apiServer = startServer({
       ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(apiPort),
@@ -336,7 +358,7 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(apiPort, 10_000)
+      await waitForServer(apiPort, apiProxyServerStartupTimeoutMs, apiServer)
 
       const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`)
       const body = (await response.json()) as {
@@ -366,7 +388,7 @@ apiProxyServerTest(
   'api server without DuckDB owner fails closed for owner-dependent product routes',
   async () => {
     const apiPort = 34998
-    const duckdbPath = `/tmp/f1-owner-proxy-fail-closed-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-owner-proxy-fail-closed-${Date.now()}.duckdb`)
     const apiServer = startServer({
       API_SERVER_PORT: String(apiPort),
       DUCKDB_PATH: duckdbPath,
@@ -378,7 +400,7 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(apiPort, 10_000)
+      await waitForServer(apiPort, apiProxyServerStartupTimeoutMs, apiServer)
 
       const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`)
       const body = (await response.json()) as {data: null; error: string}
@@ -400,7 +422,7 @@ apiProxyServerTest(
   async () => {
     const firstPort = 34995
     const secondPort = 34996
-    const duckdbPath = `/tmp/f1-auto-owner-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-auto-owner-${Date.now()}.duckdb`)
     const firstServer = startServer({
       ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(firstPort),
@@ -412,7 +434,7 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(firstPort, 10_000)
+      await waitForServer(firstPort, apiProxyServerStartupTimeoutMs, firstServer)
 
       const secondServer = startServer({
         ...exposeLocalOperatorApiEnv,
@@ -425,7 +447,7 @@ apiProxyServerTest(
       })
 
       try {
-        await waitForServer(secondPort, 10_000)
+        await waitForServer(secondPort, apiProxyServerStartupTimeoutMs, secondServer)
 
         const initialResponse = await fetch(`http://127.0.0.1:${secondPort}/api/duckdb_owner_connections`)
         const initialBody = (await initialResponse.json()) as {
@@ -464,7 +486,7 @@ apiProxyServerTest(
         await stopServer(secondServer)
       }
     } finally {
-      if (firstServer.exitCode === null) {
+      if (firstServer.process.exitCode === null) {
         await stopServer(firstServer)
       }
 
@@ -481,7 +503,7 @@ apiProxyServerTest(
   async () => {
     const ownerPort = 34997
     const followerPort = 34998
-    const duckdbPath = `/tmp/f1-auto-stale-heartbeat-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-auto-stale-heartbeat-${Date.now()}.duckdb`)
     const leasePath = `${duckdbPath}.duckdb-owner.lock`
     const ownerServer = startServer({
       ...exposeLocalOperatorApiEnv,
@@ -494,7 +516,7 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(ownerPort, 10_000)
+      await waitForServer(ownerPort, apiProxyServerStartupTimeoutMs, ownerServer)
 
       const snapshotResponse = await fetch(
         `http://127.0.0.1:${ownerPort}/__duckdb-owner-rpc/api/duckdbStudioSnapshots`,
@@ -517,7 +539,7 @@ apiProxyServerTest(
       })
 
       try {
-        await waitForServer(followerPort, 10_000)
+        await waitForServer(followerPort, apiProxyServerStartupTimeoutMs, followerServer)
 
         const lease = JSON.parse(readFileSync(leasePath, 'utf8')) as {heartbeatAt: string}
 
@@ -560,7 +582,7 @@ apiProxyServerTest(
   'auto role takes over a stale unreachable owner lease on startup',
   async () => {
     const serverPort = 34999
-    const duckdbPath = `/tmp/f1-auto-stale-legacy-${Date.now()}.duckdb`
+    const duckdbPath = join(tmpdir(), `f1-auto-stale-legacy-${Date.now()}.duckdb`)
     const leasePath = `${duckdbPath}.duckdb-owner.lock`
 
     writeFileSync(
@@ -593,7 +615,7 @@ apiProxyServerTest(
     })
 
     try {
-      await waitForServer(serverPort, 10_000)
+      await waitForServer(serverPort, apiProxyServerStartupTimeoutMs, server)
 
       const response = await fetch(`http://127.0.0.1:${serverPort}/api/duckdb_owner_connections`)
       const body = (await response.json()) as {

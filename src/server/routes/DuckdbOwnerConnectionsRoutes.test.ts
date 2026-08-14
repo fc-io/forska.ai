@@ -1,7 +1,7 @@
 import {expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const duckdbOwnerConnectionsModulePath = new URL('../utils/duckdbOwnerConnections.ts', import.meta.url).pathname
+const duckdbOwnerConnectionsModulePath = new URL('../utils/duckdbOwnerConnections.ts', import.meta.url).href
 
 void mock.module(duckdbOwnerConnectionsModulePath, () => {
   return {

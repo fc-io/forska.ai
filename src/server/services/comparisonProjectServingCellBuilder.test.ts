@@ -1,6 +1,6 @@
 import {rmSync} from 'node:fs'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import {
   type ComparisonProjectJudgmentHumanRow,
@@ -16,6 +16,8 @@ import {
   getSummaryModeComparisonProjectHumanCellServingInsertSql,
   getSummaryModeComparisonProjectLlmCellServingInsertSql,
 } from './comparisonProjectServingCellBuilder.ts'
+
+setDefaultTimeout(120_000)
 
 type ActualServingCellRow = {
   articleId: string

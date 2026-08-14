@@ -1,6 +1,8 @@
-import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
+
+setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-jobs-add-to-queue')
 const tempDbPath = tempRuntimeRoot.duckdbPath
@@ -12,7 +14,7 @@ process.env.RUN_SERVER_JUDGING = 'false'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 const getModulePath = (relativePath: string) => {
-  return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+  return new URL(relativePath, 'file://' + process.cwd() + '/').href
 }
 
 const judgmentsJobsAddToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')

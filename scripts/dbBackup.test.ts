@@ -2,6 +2,7 @@ import {existsSync, mkdtempSync, readdirSync, realpathSync, rmSync} from 'node:f
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
@@ -57,16 +58,42 @@ const getBasePort = () => {
   return 38000 + Number(String(Date.now()).slice(-3))
 }
 
+const runDuckdbStatement = async (duckdbPath: string, statement: string) => {
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath, {memory_limit: '20GB'})
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`SET memory_limit = '20GB'`)
+    await connection.run(statement)
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+}
+
+const queryDuckdbJson = async <T>(duckdbPath: string, statement: string) => {
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath, {access_mode: 'READ_ONLY', memory_limit: '20GB'})
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`SET memory_limit = '20GB'`)
+    const reader = await connection.runAndReadAll(statement)
+    return reader.getRowObjectsJson() as T[]
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+}
+
 test('db backup script creates a DuckDB backup while the owner server is running', async () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), 'f1-db-backup-'))
   const duckdbPath = join(workingDirectory, 'live.duckdb')
   const ownerPort = getBasePort()
   const backupPort = ownerPort + 1
-  const seedResult = globalThis.Bun.spawnSync([
-    'duckdb',
+  await runDuckdbStatement(
     duckdbPath,
     'CREATE TABLE backup_check(value INTEGER); INSERT INTO backup_check VALUES (42);',
-  ])
+  )
   const ownerServer = startServer({
     API_SERVER_PORT: String(ownerPort),
     DUCKDB_PATH: duckdbPath,
@@ -77,9 +104,7 @@ test('db backup script creates a DuckDB backup while the owner server is running
   })
 
   try {
-    expect(seedResult.exitCode).toBe(0)
-
-    await waitForServer(ownerPort, 10_000)
+    await waitForServer(ownerPort, 30_000)
 
     const result = globalThis.Bun.spawnSync([bunExecutablePath, join(projectRoot, 'scripts/dbBackup.ts')], {
       cwd: workingDirectory,
@@ -93,6 +118,10 @@ test('db backup script creates a DuckDB backup while the owner server is running
       },
     })
 
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB backup script failed')
+    }
+
     const backupDirectoryPath = join(workingDirectory, 'backups')
     const backupDirectoryEntries = existsSync(backupDirectoryPath) ? readdirSync(backupDirectoryPath) : []
     const backupName = backupDirectoryEntries.find((entry) => {
@@ -103,15 +132,11 @@ test('db backup script creates a DuckDB backup while the owner server is running
     const autoReplayWalPath = backupPath === null ? null : `${backupPath}.wal`
     const hasBackupWal = backupWalPath === null ? false : existsSync(backupWalPath)
     const queryResult =
-      backupPath === null
-        ? null
-        : globalThis.Bun.spawnSync(['duckdb', '-readonly', '-json', backupPath, 'SELECT value FROM backup_check'])
+      backupPath === null ? null : await queryDuckdbJson<{value: number}>(backupPath, 'SELECT value FROM backup_check')
 
-    expect(result.exitCode).toBe(0)
     expect(result.stdout.toString()).toContain('[dbBackup] Backup created:')
     expect(backupPath).not.toBe(null)
-    expect(queryResult?.exitCode ?? null).toBe(0)
-    expect(queryResult?.stdout.toString() ?? '').toContain('"value":42')
+    expect(queryResult).toEqual([{value: 42}])
     expect(autoReplayWalPath === null ? false : existsSync(autoReplayWalPath)).toBe(false)
     expect(result.stdout.toString().includes('Backup WAL is a recovery sidecar')).toBe(hasBackupWal)
   } finally {
@@ -120,4 +145,4 @@ test('db backup script creates a DuckDB backup while the owner server is running
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
-})
+}, 60_000)

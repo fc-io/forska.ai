@@ -1,12 +1,12 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
-const rateLimitedLoggerModulePath = new URL('../../utils/rateLimitedLogger.ts', import.meta.url).pathname
+const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).href
+const rateLimitedLoggerModulePath = new URL('../../utils/rateLimitedLogger.ts', import.meta.url).href
 const reviewServingRouteServiceModulePath = new URL(
   '../../reviewServing/reviewServingLlmReviewRouteService.ts',
   import.meta.url,
-).pathname
+).href
 
 const countRef = {
   current: async (_input: unknown): Promise<unknown> => {

@@ -1,3 +1,4 @@
+import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -45,16 +46,20 @@ const getDuckdbOwnerUrlForQuarantine = async (): Promise<string> => {
 
 const requestOwnerJobQuarantine = async ({errorMessage, jobId}: {errorMessage: string; jobId: string}) => {
   const ownerUrl = await getDuckdbOwnerUrlForQuarantine()
-  const response = await fetch(
-    `${ownerUrl}${duckdbOwnerPrivateApiPrefix}/api/judgmentsjobs/${encodeURIComponent(jobId)}/quarantine`,
-    {
-      body: JSON.stringify({reason: errorMessage}),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-      signal: AbortSignal.timeout(10_000),
-    },
-  )
-  const text = await response.text()
+  const {response, text} = await withAbortSignalTimeout(10_000, async (signal) => {
+    const response = await fetch(
+      `${ownerUrl}${duckdbOwnerPrivateApiPrefix}/api/judgmentsjobs/${encodeURIComponent(jobId)}/quarantine`,
+      {
+        body: JSON.stringify({reason: errorMessage}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+        signal,
+      },
+    )
+    const text = await response.text()
+
+    return {response, text}
+  })
   const parsed = text.trim() === '' ? null : (JSON.parse(text) as {error?: unknown})
   const error = parsed && 'error' in parsed ? parsed.error : null
 

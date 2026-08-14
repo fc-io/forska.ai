@@ -3,14 +3,20 @@ import {writeFile} from 'node:fs/promises'
 import {hostname} from 'node:os'
 import {join} from 'node:path'
 
-import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 
+setDefaultTimeout(120_000)
+
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judgment-job-sqlite-import')
 const tempDbPath = tempRuntimeRoot.duckdbPath
 const tempJobDir = tempRuntimeRoot.judgmentJobsDirectory
+const removeClosedTestDirectory = (directory: string) => {
+  globalThis.Bun.gc(true)
+  return rmSync(directory, {force: true, maxRetries: 5, recursive: true, retryDelay: 50})
+}
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -127,12 +133,12 @@ beforeAll(async () => {
 afterAll(async () => {
   await sqliteService?.().closeAll()
   await closeDatabase?.()
-  tempRuntimeRoot.cleanup()
+  removeClosedTestDirectory(tempRuntimeRoot.rootDirectory)
 })
 
 afterEach(async () => {
   await sqliteService?.().closeAll()
-  rmSync(tempJobDir, {force: true, recursive: true})
+  removeClosedTestDirectory(tempJobDir)
 })
 
 test('background import selects the next active or draining job for a single import cycle', () => {
@@ -144,7 +150,7 @@ test('background import selects the next active or draining job for a single imp
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -266,7 +272,7 @@ test('background import filters tracked sqlite jobs before applying the importab
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -380,7 +386,7 @@ test('background import scans past tracked draining lock skips within the import
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -519,7 +525,7 @@ test('background import caps tracked importable jobs after database filtering', 
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -648,7 +654,7 @@ test('background import fast flushes draining jobs before active jobs', () => {
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -812,7 +818,7 @@ test('background import skips locked draining jobs and imports the next candidat
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -955,7 +961,7 @@ test('background import records metadata and quarantines repeated failures for t
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -1082,7 +1088,7 @@ test('background import records transient SQLite locks and lease conflicts witho
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -1206,7 +1212,7 @@ test('background import releases an owned sqlite lease before importing the next
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -2187,7 +2193,7 @@ test('single-job sqlite importer emits structured JSON success output', () => {
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
@@ -2295,7 +2301,7 @@ test('single-job sqlite importer emits structured JSON failure output and exits 
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
         }
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')

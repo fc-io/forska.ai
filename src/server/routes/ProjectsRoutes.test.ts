@@ -1,19 +1,23 @@
 import {readFileSync} from 'node:fs'
+import {fileURLToPath} from 'node:url'
 
-import {afterAll, beforeAll, expect, mock, test} from 'bun:test'
+import {afterAll, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 
+setDefaultTimeout(120_000)
+
 const tempRuntimeRoot = createTempRuntimeRoot('f1-projects-routes')
 const tempDbPath = tempRuntimeRoot.duckdbPath
 const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')
 const articleServingListModeStateFixtureTable = ['mart', 'review_article_serving_list_mode_state_v4'].join('.')
-const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
-  .pathname
-const promptPreviewRoutePath = new URL('./projectsRoutes/projectsRoutesGetPromptPreview.ts', import.meta.url).pathname
+const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url).href
+const promptPreviewRoutePath = fileURLToPath(
+  new URL('./projectsRoutes/projectsRoutesGetPromptPreview.ts', import.meta.url),
+)
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath

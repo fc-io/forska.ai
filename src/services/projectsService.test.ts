@@ -1,6 +1,6 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-const apiClientModulePath = new URL('./apiClient.ts', import.meta.url).pathname
+const apiClientModulePath = new URL('./apiClient.ts', import.meta.url).href
 
 let fetchProjectsResponse: {data?: unknown; error?: unknown; status?: number} = {data: {data: []}}
 let fetchArchivedProjectsResponse: {data?: unknown; error?: unknown; status?: number} = {data: {data: []}}

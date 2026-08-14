@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs'
 import {expect, test} from 'bun:test'
 
 const readSource = (relativePath: string) => {
-  return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
+  return readFileSync(new URL(relativePath, import.meta.url), 'utf8').replaceAll('\r\n', '\n')
 }
 
 test('project transfer heavy DuckDB flows carry workload contexts', () => {

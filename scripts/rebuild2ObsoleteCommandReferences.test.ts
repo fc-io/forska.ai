@@ -5,6 +5,10 @@ import {expect, test} from 'bun:test'
 
 const projectRoot = process.cwd()
 
+const normalizeProjectPath = (filePath: string) => {
+  return filePath.replaceAll('\\', '/')
+}
+
 const scanRoots = [
   'package.json',
   'AGENTS.md',
@@ -115,7 +119,7 @@ const getScanFiles = (rootPath: string): string[] => {
   const entries = readdirSync(absolutePath, {withFileTypes: true})
 
   return entries.reduce<string[]>((acc, entry) => {
-    const entryPath = join(rootPath, entry.name)
+    const entryPath = normalizeProjectPath(join(rootPath, entry.name))
 
     if (entry.isDirectory()) {
       return [...acc, ...getScanFiles(entryPath)]
@@ -151,7 +155,7 @@ const getObsoleteReferenceMatches = () => {
           return pattern.test(content)
         })
         .map((pattern) => {
-          return {path: relative(projectRoot, join(projectRoot, filePath)), pattern: String(pattern)}
+          return {path: normalizeProjectPath(relative(projectRoot, join(projectRoot, filePath))), pattern: String(pattern)}
         })
     })
 }
@@ -169,7 +173,7 @@ const getNonCutoverStateClearingMatches = () => {
           return pattern.test(content)
         })
         .map(({label}) => {
-          return {label, path: relative(projectRoot, join(projectRoot, filePath))}
+          return {label, path: normalizeProjectPath(relative(projectRoot, join(projectRoot, filePath)))}
         })
     })
 }
@@ -180,4 +184,8 @@ test('obsolete mart refresh queue command, docs, and runtime references are gone
 
 test('rebuild2 cutover is the only operator script that clears obsolete rebuild2 state', () => {
   expect(getNonCutoverStateClearingMatches()).toEqual([])
+})
+
+test('obsolete reference scans normalize Windows project paths', () => {
+  expect(normalizeProjectPath('scripts\\rebuild2Cutover.ts')).toBe('scripts/rebuild2Cutover.ts')
 })

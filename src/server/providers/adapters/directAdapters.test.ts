@@ -1,14 +1,13 @@
 import {expect, mock, test} from 'bun:test'
 
-const openAIResponsesTransportModulePath = new URL('../transports/openaiResponsesTransport.ts', import.meta.url)
-  .pathname
+const openAIResponsesTransportModulePath = new URL('../transports/openaiResponsesTransport.ts', import.meta.url).href
 const anthropicMessagesTransportModulePath = new URL('../transports/anthropicMessagesTransport.ts', import.meta.url)
-  .pathname
+  .href
 const geminiGenerateContentTransportModulePath = new URL(
   '../transports/geminiGenerateContentTransport.ts',
   import.meta.url,
-).pathname
-const codexAppTransportModulePath = new URL('../transports/codexAppTransport.ts', import.meta.url).pathname
+).href
+const codexAppTransportModulePath = new URL('../transports/codexAppTransport.ts', import.meta.url).href
 
 const openAIResponsesState = {
   invoke: mock(async (_input: unknown) => {

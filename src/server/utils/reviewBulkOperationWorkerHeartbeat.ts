@@ -1,6 +1,5 @@
-import {Effect} from 'effect'
-
 import {runReviewBulkOperationWorker} from '../workers/reviewBulkOperationWorker.ts'
+import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from './duckdbExclusiveWork.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
@@ -22,12 +21,6 @@ const logReviewBulkOperationWorkerError = (error: unknown) => {
   )
 }
 
-const runReviewBulkOperationWorkerEffect = (input: {pollIntervalMs?: number; signal: AbortSignal}) => {
-  return Effect.tryPromise(() => {
-    return runReviewBulkOperationWorker({pollIntervalMs: input.pollIntervalMs, signal: input.signal})
-  })
-}
-
 export const startReviewBulkOperationWorkerHeartbeat = (options: ReviewBulkOperationWorkerHeartbeatOptions = {}) => {
   if (!shouldCurrentServerRunMaintenanceLoops()) {
     return () => {}
@@ -36,6 +29,7 @@ export const startReviewBulkOperationWorkerHeartbeat = (options: ReviewBulkOpera
   const controller = new AbortController()
   let stopped = false
   let restartTimer: ReturnType<typeof setTimeout> | null = null
+  const exclusiveWorkPollIntervalMs = options.pollIntervalMs ?? 2_000
 
   reviewBulkOperationWorkerLogger.log(
     'review-bulk-operation-worker:loop-start',
@@ -48,19 +42,42 @@ export const startReviewBulkOperationWorkerHeartbeat = (options: ReviewBulkOpera
     },
   )
 
-  const startLoop = () => {
-    void Effect.runPromise(
-      runReviewBulkOperationWorkerEffect({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}),
-    ).catch((error) => {
-      logReviewBulkOperationWorkerError(error)
+  let startLoop: () => void
+  const scheduleRestart = (delayMs: number) => {
+    if (stopped || controller.signal.aborted) {
+      return
+    }
 
-      if (stopped || controller.signal.aborted) {
-        return
-      }
+    restartTimer = setTimeout(startLoop, delayMs)
+    restartTimer.unref()
+  }
 
-      restartTimer = setTimeout(startLoop, options.pollIntervalMs ?? 0)
-      restartTimer.unref()
-    })
+  startLoop = () => {
+    if (stopped || controller.signal.aborted) {
+      return
+    }
+
+    if (hasActiveDuckdbExclusiveWork()) {
+      scheduleRestart(exclusiveWorkPollIntervalMs)
+      return
+    }
+
+    void runReviewBulkOperationWorker({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}).catch(
+      (error) => {
+        if (isDuckdbExclusiveWorkAdmissionError(error)) {
+          scheduleRestart(exclusiveWorkPollIntervalMs)
+          return
+        }
+
+        logReviewBulkOperationWorkerError(error)
+
+        if (stopped || controller.signal.aborted) {
+          return
+        }
+
+        scheduleRestart(options.pollIntervalMs ?? 0)
+      },
+    )
   }
 
   startLoop()

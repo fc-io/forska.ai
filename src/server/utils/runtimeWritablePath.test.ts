@@ -1,3 +1,5 @@
+import {dirname, normalize, resolve} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {getDefaultRuntimeLogDir} from './runtimeLogger.ts'
@@ -8,25 +10,22 @@ test('keeps repo cwd as the writable root outside desktop mode', () => {
 })
 
 test('uses the DuckDB parent directory as the writable root in desktop mode', () => {
-  const envValues = {
-    DUCKDB_PATH: '/Users/tester/Library/Application Support/Forska/desktop/forska.duckdb',
-    FORSKA_DESKTOP_MODE: 'true',
-  }
+  const duckdbPath = '/Users/tester/Library/Application Support/Forska/desktop/forska.duckdb'
+  const envValues = {DUCKDB_PATH: duckdbPath, FORSKA_DESKTOP_MODE: 'true'}
+  const writableRoot = dirname(normalize(duckdbPath))
 
-  expect(getRuntimeWritableRoot({cwd: '/repo/forska', envValues})).toBe(
-    '/Users/tester/Library/Application Support/Forska/desktop',
-  )
+  expect(getRuntimeWritableRoot({cwd: '/repo/forska', envValues})).toBe(writableRoot)
   expect(resolveRuntimeWritablePath({cwd: '/repo/forska', envValues, pathValue: 'assets/article_pdfs/test.pdf'})).toBe(
-    '/Users/tester/Library/Application Support/Forska/desktop/assets/article_pdfs/test.pdf',
+    resolve(writableRoot, 'assets', 'article_pdfs', 'test.pdf'),
   )
 })
 
 test('preserves absolute file paths when resolving runtime files', () => {
-  expect(resolveRuntimeFilePath({pathValue: '/tmp/forska.pdf'})).toBe('/tmp/forska.pdf')
+  expect(resolveRuntimeFilePath({pathValue: '/tmp/forska.pdf'})).toBe(normalize('/tmp/forska.pdf'))
 })
 
 test('resolves runtime log roots through the writable root', () => {
   expect(getDefaultRuntimeLogDir({cwd: '/repo/forska', envValues: {FORSKA_RUNTIME_PROFILE: 'secondary'}})).toBe(
-    '/repo/forska/logs/runtime/secondary',
+    resolve('/repo/forska', 'logs', 'runtime', 'secondary'),
   )
 })

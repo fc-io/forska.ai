@@ -1,5 +1,5 @@
 import {realpathSync} from 'node:fs'
-import {mkdir, readFile, rename, unlink, writeFile} from 'node:fs/promises'
+import {mkdir, rename, unlink, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
@@ -14,6 +14,18 @@ import {isLockOwnedByCurrentMachine} from '../src/server/utils/localMachineIdent
 import {installRuntimeJsonlSink, writeRuntimeLogEvent} from '../src/server/utils/runtimeLogger.ts'
 import {resolveRuntimeProcessIdentity, type RuntimeProcessIdentity} from '../src/server/utils/runtimeProcessIdentity.ts'
 import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
+import {withAbortSignalTimeout} from '../src/utils/withAbortSignalTimeout.ts'
+import {
+  getNextJudgeWatchdogState,
+  isJudgeWatchdogResponseHealthy,
+  type JudgeRuntimeReadyBody,
+} from './getNextJudgeWatchdogState.ts'
+import {
+  processLockMalformedRetryIntervalMs,
+  processLockMalformedStaleAfterMs,
+  readJsonProcessLockState,
+  readProcessLockForAcquisition,
+} from './processLockAcquisition.ts'
 
 type ManagedRole = 'api' | 'judge' | 'maintenance'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
@@ -24,6 +36,31 @@ type ServerStackLockMetadata = {
   maintenancePort: number
   pid: number
   startedAt: string
+}
+
+const isPositiveInteger = (value: unknown) => {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+const isNonEmptyString = (value: unknown) => {
+  return typeof value === 'string' && value.length > 0
+}
+
+const isServerStackLockMetadata = (value: unknown): value is ServerStackLockMetadata => {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+
+  const metadata = value as Record<string, unknown>
+
+  return (
+    isPositiveInteger(metadata.apiPort)
+    && isNonEmptyString(metadata.cwd)
+    && isPositiveInteger(metadata.judgePort)
+    && isPositiveInteger(metadata.maintenancePort)
+    && isPositiveInteger(metadata.pid)
+    && isNonEmptyString(metadata.startedAt)
+  )
 }
 
 type ManagedServerState = {
@@ -44,6 +81,8 @@ const judgeStartupTimeoutMs = 90_000
 const shutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
 const duckdbOwnerPollIntervalMs = 250
+const judgeHealthWatchdogFailureThreshold = 3
+const judgeHealthWatchdogIntervalMs = 5_000
 const parentMonitorIntervalMs = 1_000
 const serverStackLockHeartbeatIntervalMs = 1_000
 
@@ -77,10 +116,6 @@ const isExistingFileError = (error: unknown) => {
   return error instanceof Error && 'code' in error && error.code === 'EEXIST'
 }
 
-const isJsonSyntaxError = (error: unknown) => {
-  return error instanceof SyntaxError || (error instanceof Error && error.name === 'SyntaxError')
-}
-
 const isProcessAlive = (pid: number) => {
   try {
     process.kill(pid, 0)
@@ -90,8 +125,31 @@ const isProcessAlive = (pid: number) => {
   }
 }
 
+const getChildProcessIdsCommand = (pid: number) => {
+  return process.platform === 'win32'
+    ? [
+        'powershell.exe',
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${pid}" | Select-Object -ExpandProperty ProcessId`,
+      ]
+    : ['pgrep', '-P', String(pid)]
+}
+
 const getChildProcessIds = (pid: number) => {
-  const result = spawnSync(['pgrep', '-P', String(pid)], {stderr: 'pipe', stdin: 'ignore', stdout: 'pipe'})
+  let result: ReturnType<typeof spawnSync>
+
+  try {
+    result = spawnSync(getChildProcessIdsCommand(pid), {stderr: 'pipe', stdin: 'ignore', stdout: 'pipe'})
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return []
+    }
+
+    throw error
+  }
 
   if (result.exitCode !== 0) {
     return []
@@ -131,19 +189,13 @@ const killProcessIds = (pids: number[], signal: 'SIGTERM' | 'SIGKILL') => {
 }
 
 const readServerStackLock = async () => {
-  try {
-    const raw = await readFile(serverStackLockPath, 'utf8')
-    const trimmed = raw.trim()
+  const state = await readJsonProcessLockState(serverStackLockPath, isServerStackLockMetadata)
 
-    return trimmed === '' ? null : (JSON.parse(trimmed) as ServerStackLockMetadata)
-  } catch (error) {
-    if (isJsonSyntaxError(error)) {
-      console.error(`[server:stack] ignoring malformed supervisor lock at ${serverStackLockPath}`, error)
-      return null
-    }
-
-    return isMissingFileError(error) ? null : Promise.reject(error)
+  if (state.kind === 'malformed') {
+    console.error(`[server:stack] ignoring malformed supervisor lock at ${serverStackLockPath}`)
   }
+
+  return state.kind === 'valid' ? state.metadata : null
 }
 
 const releaseServerStackLock = async () => {
@@ -170,7 +222,16 @@ const acquireServerStackLock = async (): Promise<void> => {
       throw error
     }
 
-    const currentLock = await readServerStackLock()
+    const currentLock = await readProcessLockForAcquisition({
+      lockPath: serverStackLockPath,
+      now: Date.now,
+      readState: () => {
+        return readJsonProcessLockState(serverStackLockPath, isServerStackLockMetadata)
+      },
+      retryIntervalMs: processLockMalformedRetryIntervalMs,
+      staleAfterMs: processLockMalformedStaleAfterMs,
+      wait: waitFor,
+    })
 
     if (!currentLock) {
       return acquireServerStackLock()
@@ -206,6 +267,9 @@ const managedServerState: ManagedServerState = {
 
 let parentMonitor: ReturnType<typeof setInterval> | null = null
 let serverStackLockHeartbeat: ReturnType<typeof setInterval> | null = null
+let judgeHealthWatchdog: ReturnType<typeof setInterval> | null = null
+let judgeHealthWatchdogCheck: Promise<void> | null = null
+let judgeHealthWatchdogFailureCount = 0
 
 const parentPid = process.ppid
 const bunExecutablePath = realpathSync(process.execPath)
@@ -244,7 +308,12 @@ const writeServerStackLock = async (metadata: ServerStackLockMetadata, flag: 'w'
     await unlink(temporaryPath).catch(() => {})
     await writeFile(temporaryPath, payload, {flag: 'wx'})
   }
-  await rename(temporaryPath, serverStackLockPath)
+  try {
+    await rename(temporaryPath, serverStackLockPath)
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => {})
+    throw error
+  }
 }
 
 const refreshServerStackLock = async () => {
@@ -253,6 +322,10 @@ const refreshServerStackLock = async () => {
   }
 
   const currentLock = await readServerStackLock()
+
+  if (currentLock?.pid === process.pid) {
+    return
+  }
 
   if (currentLock !== null && currentLock.pid !== process.pid && isProcessAlive(currentLock.pid)) {
     return
@@ -307,16 +380,59 @@ const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + shutdow
   return waitForProcessExit(pid, deadlineMs)
 }
 
+const waitForProcessIdsExit = async (pids: number[], deadlineMs = Date.now() + shutdownTimeoutMs) => {
+  const uniquePids = [...new Set(pids)]
+
+  await Promise.all(
+    uniquePids.map((pid) => {
+      return waitForProcessExit(pid, deadlineMs)
+    }),
+  )
+
+  return uniquePids.filter((pid) => {
+    return isProcessAlive(pid)
+  })
+}
+
+const stopProcessTree = async ({pid, processName}: {pid: number; processName: string}) => {
+  const descendantPids = getDescendantProcessIds(pid)
+  const capturedPids = [...descendantPids, pid]
+
+  killProcessIds([...descendantPids, pid], 'SIGTERM')
+
+  const survivingPids = await waitForProcessIdsExit(capturedPids)
+
+  if (survivingPids.length === 0) {
+    return
+  }
+
+  console.error(
+    `[server:stack] ${processName} pids=${survivingPids.join(',')} did not exit after SIGTERM; sending SIGKILL`,
+  )
+
+  const forcedKillPids = [...getDescendantProcessIds(pid), ...capturedPids]
+
+  killProcessIds(forcedKillPids, 'SIGKILL')
+
+  const forcedKillSurvivors = await waitForProcessIdsExit(forcedKillPids, Date.now() + forcedKillTimeoutMs)
+
+  if (forcedKillSurvivors.length > 0) {
+    throw new Error(`Timed out waiting for ${processName} pids=${forcedKillSurvivors.join(',')} to exit`)
+  }
+}
+
 const isDuckdbOwnerReady = async (duckdbOwnerUrl: string) => {
   try {
-    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(1_000)})
-    const body = response.ok
-      ? ((await response.json().catch(() => {
-          return null
-        })) as {data?: {duckdbOwner?: unknown; ready?: unknown}} | null)
-      : null
+    return await withAbortSignalTimeout(1_000, async (signal) => {
+      const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal})
+      const body = response.ok
+        ? ((await response.json().catch(() => {
+            return null
+          })) as {data?: {duckdbOwner?: unknown; ready?: unknown}} | null)
+        : null
 
-    return body?.data?.ready === true && body?.data?.duckdbOwner === true
+      return body?.data?.ready === true && body?.data?.duckdbOwner === true
+    })
   } catch {
     return false
   }
@@ -337,6 +453,12 @@ const waitForDuckdbOwner = async (
 
 const isServerProcessRunning = (serverProcess: ServerProcess | null): serverProcess is ServerProcess => {
   return serverProcess !== null && serverProcess.exitCode === null
+}
+
+const isManagedServerProcessAlive = (serverProcess: ServerProcess) => {
+  const pid = serverProcess.pid
+
+  return isServerProcessRunning(serverProcess) && (pid === undefined || isProcessAlive(pid))
 }
 
 const getManagedServerProcess = (role: ManagedRole) => {
@@ -370,33 +492,7 @@ const stopExternalProcess = async ({pid, processName}: {pid: number; processName
     return
   }
 
-  const descendantPids = getDescendantProcessIds(pid)
-
-  killProcessIds([...descendantPids, pid], 'SIGTERM')
-
-  if (await waitForProcessExit(pid)) {
-    await Promise.all(
-      descendantPids.map((descendantPid) => {
-        return waitForProcessExit(descendantPid)
-      }),
-    )
-    return
-  }
-
-  console.error(`[server:stack] ${processName} pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
-
-  killProcessIds([...getDescendantProcessIds(pid), ...descendantPids, pid], 'SIGKILL')
-
-  if (await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs)) {
-    await Promise.all(
-      descendantPids.map((descendantPid) => {
-        return waitForProcessExit(descendantPid, Date.now() + forcedKillTimeoutMs)
-      }),
-    )
-    return
-  }
-
-  throw new Error(`Timed out waiting for ${processName} pid=${pid} to exit`)
+  await stopProcessTree({pid, processName})
 }
 
 const removeFileIfExists = async (filePath: string) => {
@@ -515,29 +611,13 @@ const stopServerProcess = async (serverProcess: ServerProcess | null) => {
   }
 
   const pid = serverProcess.pid
-  const descendantPids = pid === undefined ? [] : getDescendantProcessIds(pid)
 
   if (pid === undefined) {
     serverProcess.kill('SIGTERM')
   } else {
-    killProcessIds([...descendantPids, pid], 'SIGTERM')
+    await stopProcessTree({pid, processName: 'server process'})
+    return
   }
-
-  if (pid !== undefined && !(await waitForProcessExit(pid))) {
-    console.error(`[server:stack] pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
-
-    killProcessIds([...getDescendantProcessIds(pid), ...descendantPids, pid], 'SIGKILL')
-
-    if (!(await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs))) {
-      throw new Error(`Timed out waiting for pid=${pid} to exit`)
-    }
-  }
-
-  await Promise.all(
-    descendantPids.map((descendantPid) => {
-      return waitForProcessExit(descendantPid, Date.now() + forcedKillTimeoutMs)
-    }),
-  )
 
   try {
     await serverProcess.exited
@@ -617,13 +697,31 @@ const getJudgeRuntimeReadyUrl = () => {
   return `http://127.0.0.1:${config.judgePort}/api/runtime/ready`
 }
 
-const isJudgeReady = async () => {
+const probeJudgeRuntimeReady = async (): Promise<{body: JudgeRuntimeReadyBody | null; responseOk: boolean}> => {
   try {
-    const response = await fetch(getJudgeRuntimeReadyUrl(), {signal: AbortSignal.timeout(1_000)})
-    return response.ok
+    return await withAbortSignalTimeout(1_000, async (signal) => {
+      const response = await fetch(getJudgeRuntimeReadyUrl(), {signal})
+      const body = response.ok
+        ? ((await response.json().catch(() => {
+            return null
+          })) as JudgeRuntimeReadyBody | null)
+        : null
+
+      return {body, responseOk: response.ok}
+    })
   } catch {
-    return false
+    return {body: null, responseOk: false}
   }
+}
+
+const isJudgeReady = async () => {
+  const probe = await probeJudgeRuntimeReady()
+
+  return isJudgeWatchdogResponseHealthy(probe) && probe.body?.data?.ready === true
+}
+
+const isJudgeLocallyHealthy = async () => {
+  return isJudgeWatchdogResponseHealthy(await probeJudgeRuntimeReady())
 }
 
 const waitForJudgeReady = async (deadlineMs = Date.now() + judgeStartupTimeoutMs): Promise<void> => {
@@ -673,6 +771,130 @@ const ensureJudgeReady = () => {
   })
 
   return managedServerState.judgeReadyPromise
+}
+
+const writeJudgeHealthWatchdogRestartEvent = ({
+  consecutiveFailureCount,
+  processAlive,
+  serverProcess,
+}: {
+  consecutiveFailureCount: number
+  processAlive: boolean
+  serverProcess: ServerProcess
+}) => {
+  const pid = serverProcess.pid ?? null
+  const reason = processAlive ? 'health checks failed' : 'process is no longer alive'
+  const message = `[server:stack] judge pid=${pid ?? 'unknown'} ${reason}; watchdog restart planned`
+
+  console.error(message)
+
+  try {
+    writeRuntimeLogEvent({
+      attrs: {consecutiveFailureCount, pid, processAlive, restartPlanned: true, role: 'judge'},
+      event: 'server.stack.managed-process-watchdog-restart',
+      message,
+      runtimeIdentity: managedProcessRuntimeIdentities.get(serverProcess),
+      serverRole: 'judge-worker',
+      severity: 'ERROR',
+    })
+  } catch (error) {
+    console.error('[server:stack] failed to write judge watchdog restart to runtime log', error)
+  }
+}
+
+const restartJudgeFromHealthWatchdog = async ({
+  consecutiveFailureCount,
+  processAlive,
+  serverProcess,
+}: {
+  consecutiveFailureCount: number
+  processAlive: boolean
+  serverProcess: ServerProcess
+}) => {
+  if (managedServerState.shuttingDown || getManagedServerProcess('judge') !== serverProcess) {
+    return
+  }
+
+  writeJudgeHealthWatchdogRestartEvent({consecutiveFailureCount, processAlive, serverProcess})
+  setLastExitedManagedProcess('judge', serverProcess)
+  await stopManagedServerProcess('judge', serverProcess)
+  await waitFor(restartDelayMs)
+
+  if (!managedServerState.shuttingDown) {
+    await ensureJudgeReady()
+  }
+}
+
+const runJudgeHealthWatchdogCheck = async () => {
+  if (managedServerState.shuttingDown || managedServerState.judgeReadyPromise !== null) {
+    return
+  }
+
+  const serverProcess = getManagedServerProcess('judge')
+
+  if (serverProcess === null) {
+    judgeHealthWatchdogFailureCount = 0
+    await ensureJudgeReady()
+    return
+  }
+
+  const processAlive = isManagedServerProcessAlive(serverProcess)
+  const healthy = processAlive ? await isJudgeLocallyHealthy() : false
+
+  if (managedServerState.shuttingDown || getManagedServerProcess('judge') !== serverProcess) {
+    return
+  }
+
+  const watchdogState = getNextJudgeWatchdogState({
+    consecutiveFailureCount: judgeHealthWatchdogFailureCount,
+    healthy,
+    processAlive,
+    restartThreshold: judgeHealthWatchdogFailureThreshold,
+  })
+  judgeHealthWatchdogFailureCount = watchdogState.consecutiveFailureCount
+
+  if (!watchdogState.shouldRestart) {
+    return
+  }
+
+  judgeHealthWatchdogFailureCount = 0
+  await restartJudgeFromHealthWatchdog({
+    consecutiveFailureCount: watchdogState.consecutiveFailureCount,
+    processAlive,
+    serverProcess,
+  })
+}
+
+const triggerJudgeHealthWatchdogCheck = () => {
+  if (judgeHealthWatchdogCheck !== null || managedServerState.shuttingDown) {
+    return
+  }
+
+  judgeHealthWatchdogCheck = runJudgeHealthWatchdogCheck()
+    .catch((error) => {
+      console.error('[server:stack] judge health watchdog failed', error)
+    })
+    .finally(() => {
+      judgeHealthWatchdogCheck = null
+    })
+}
+
+const startJudgeHealthWatchdog = () => {
+  if (judgeHealthWatchdog !== null) {
+    return
+  }
+
+  judgeHealthWatchdog = setInterval(triggerJudgeHealthWatchdogCheck, judgeHealthWatchdogIntervalMs)
+  judgeHealthWatchdog.unref?.()
+}
+
+const stopJudgeHealthWatchdog = () => {
+  if (judgeHealthWatchdog === null) {
+    return
+  }
+
+  clearInterval(judgeHealthWatchdog)
+  judgeHealthWatchdog = null
 }
 
 const monitorManagedServerExit = async (role: ManagedRole, serverProcess: ServerProcess): Promise<void> => {
@@ -770,6 +992,7 @@ const shutdown = async (exitCode = 0) => {
   managedServerState.shuttingDown = true
   stopParentMonitor()
   stopServerStackLockHeartbeat()
+  stopJudgeHealthWatchdog()
   await Promise.all([
     stopManagedServerProcess('api'),
     stopManagedServerProcess('judge'),
@@ -794,6 +1017,7 @@ try {
   startServerStackLockHeartbeat()
   await ensureMaintenanceReady()
   await Promise.all([ensureApiReady(), ensureJudgeReady()])
+  startJudgeHealthWatchdog()
   await new Promise(() => {})
 } catch (error) {
   console.error('[server:stack] failed to start', error)

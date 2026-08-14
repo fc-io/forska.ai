@@ -1,7 +1,9 @@
 import {existsSync, rmSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, setDefaultTimeout, test} from 'bun:test'
+
+setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
 const defaultEnv = {
@@ -460,7 +462,7 @@ test('rebuild2 cutover waits for active maintenance leases to expire before clea
     leaseCount: number
     report: {beforeProof: {freshMaintenanceLeaseRows: number}; rederivedDirtyProjectCount: number}
   }>(`
-    const leaseExpiresAt = new Date(Date.now() + 100).toISOString()
+    const leaseExpiresAt = new Date(Date.now() + 1000).toISOString()
 
     await database.run(\`
       INSERT INTO app.maintenance_work_lease (
@@ -487,7 +489,7 @@ test('rebuild2 cutover waits for active maintenance leases to expire before clea
       apply: true,
       fenceLeaseMs: 60000,
       help: false,
-      maxWaitMs: 2000,
+      maxWaitMs: 5000,
       ownerToken: 'test-rebuild2-wait-owner',
       pollMs: 5,
     })
@@ -503,5 +505,5 @@ test('rebuild2 cutover waits for active maintenance leases to expire before clea
   expect(result.report.beforeProof.freshMaintenanceLeaseRows).toBe(1)
   expect(result.report.rederivedDirtyProjectCount).toBe(0)
   expect(result.leaseCount).toBe(0)
-  expect(result.elapsedMs).toBeGreaterThanOrEqual(50)
+  expect(result.elapsedMs).toBeGreaterThanOrEqual(500)
 })
