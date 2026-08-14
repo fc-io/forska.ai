@@ -9,9 +9,11 @@ import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
+  batchSize?: number
   maxCompletedRebuildChunksPerRun?: number | null
   maxRowsPerWake?: number
   maxRunMs?: number | null
+  maxWakeMs?: number
   pollIntervalMs?: number
   rebuildChunkBatchMaxRssBytes?: number
   rebuildChunkBatchSize?: number
@@ -241,7 +243,9 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
         ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
       maxCompletedRebuildChunksPerRun: getReviewServingProjectorWorkerMaxCompletedChunksPerRun(options),
+      batchSize: options.batchSize ?? null,
       maxRowsPerWake: options.maxRowsPerWake ?? null,
+      maxWakeMs: options.maxWakeMs ?? null,
       maxRunMs: getReviewServingProjectorWorkerMaxRunMs(options),
       startCount: 1,
     },
@@ -310,8 +314,10 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         options.rebuildChunkBatchSize
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
         ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
+      batchSize: options.batchSize,
       maxCompletedRebuildChunksPerRun,
       maxRowsPerWake: options.maxRowsPerWake,
+      maxWakeMs: options.maxWakeMs,
       signal: loopController.signal,
     })
       .then(async (result) => {

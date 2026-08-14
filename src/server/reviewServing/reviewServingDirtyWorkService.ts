@@ -1099,10 +1099,7 @@ export const claimReviewServingDirtyWork = async (
         WHERE state.projection_component = ${getSqlLiteral(params.projectionComponent)}
           AND (
             state.status = 'pending'
-            OR (
-              state.status IN ('running', 'failed')
-              AND state.updated_at <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
-            )
+            OR state.status IN ('running', 'failed')
           )
         ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC
         LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
@@ -1110,16 +1107,23 @@ export const claimReviewServingDirtyWork = async (
       oldest_claimable AS (
         SELECT *
         FROM claim_state_window oldest
-        WHERE NOT EXISTS (
+        WHERE (
+          oldest.status = 'pending'
+          OR (
+            oldest.status IN ('running', 'failed')
+            AND oldest.updatedAt <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
+          )
+        )
+        AND NOT EXISTS (
           SELECT 1
-          FROM app.review_serving_dirty_work_claim_state blocker
-          WHERE blocker.project_id = oldest.projectId
-            AND blocker.projection_component = oldest.projectionComponent
-            AND blocker.projection_identity = oldest.projectionIdentity
-            AND blocker.source_partition = oldest.sourcePartition
+          FROM claim_state_window blocker
+          WHERE blocker.projectId = oldest.projectId
+            AND blocker.projectionComponent = oldest.projectionComponent
+            AND blocker.projectionIdentity = oldest.projectionIdentity
+            AND blocker.sourcePartition = oldest.sourcePartition
             AND blocker.status IN ('running', 'failed')
-            AND blocker.updated_at > ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
-            AND blocker.latest_source_high_water_mark < oldest.latestSourceHighWaterMark
+            AND blocker.updatedAt > ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
+            AND blocker.latestSourceHighWaterMark < oldest.latestSourceHighWaterMark
         )
         ORDER BY oldest.updatedAt ASC, oldest.latestSourceHighWaterMark ASC, oldest.dirtyWorkId ASC
         LIMIT 1
@@ -1135,6 +1139,13 @@ export const claimReviewServingDirtyWork = async (
         AND candidate.projectionComponent = lane.projectionComponent
         AND candidate.projectionIdentity = lane.projectionIdentity
         AND candidate.sourcePartition = lane.sourcePartition
+      WHERE (
+        candidate.status = 'pending'
+        OR (
+          candidate.status IN ('running', 'failed')
+          AND candidate.updatedAt <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
+        )
+      )
       ORDER BY candidate.updatedAt ASC, candidate.latestSourceHighWaterMark ASC, candidate.dirtyWorkId ASC
       LIMIT ${limit}
     `)

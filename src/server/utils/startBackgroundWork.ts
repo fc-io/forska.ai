@@ -28,9 +28,11 @@ import {startRequestAttemptCloseoutBackfillScheduler} from './startRequestAttemp
 
 let maintenanceBackgroundWorkStops: Array<() => void> | null = null
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
+const lowMemoryReviewServingProjectorWorkerBatchSize = 1
 const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
-const lowMemoryReviewServingProjectorWorkerMaxRowsPerWake = 8
+const lowMemoryReviewServingProjectorWorkerMaxRowsPerWake = 1
 const lowMemoryReviewServingProjectorWorkerMaxRunMs = 60_000
+const lowMemoryReviewServingProjectorWorkerMaxWakeMs = 1_500
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const reviewServingProjectorPauseRecoveryPollIntervalMs = 30_000
 const reviewServingProjectorPauseRecoveryMinAgeMs = 5 * 60_000
@@ -59,9 +61,11 @@ const shouldDeferNonessentialDuckdbMaintenanceWork = () => {
 const getReviewServingProjectorWorkerHeartbeatOptions = () => {
   return shouldDeferNonessentialDuckdbMaintenanceWork()
     ? {
+        batchSize: lowMemoryReviewServingProjectorWorkerBatchSize,
         maxCompletedRebuildChunksPerRun: lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun,
         maxRowsPerWake: lowMemoryReviewServingProjectorWorkerMaxRowsPerWake,
         maxRunMs: lowMemoryReviewServingProjectorWorkerMaxRunMs,
+        maxWakeMs: lowMemoryReviewServingProjectorWorkerMaxWakeMs,
         restartDelayMs: lowMemoryReviewServingProjectorWorkerRestartDelayMs,
       }
     : {}

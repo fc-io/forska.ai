@@ -503,19 +503,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
           || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
         )
       })
-    const oldest = eligibleRows.find((row) => {
-      return ![...dirtyWork.values()].some((blocker) => {
-        return (
-          (blocker.status === 'running' || blocker.status === 'failed')
-          && !isStaleForStatement(blocker, statement)
-          && (blocker.projectId ?? '') === (row.projectId ?? '')
-          && blocker.projectionComponent === row.projectionComponent
-          && blocker.projectionIdentity === row.projectionIdentity
-          && blocker.sourcePartition === row.sourcePartition
-          && blocker.latestSourceHighWaterMark < row.latestSourceHighWaterMark
-        )
-      })
-    })
+    const oldest = eligibleRows[0]
 
     if (oldest === undefined) {
       return []
@@ -1289,7 +1277,7 @@ test('claims pending work from one projection identity per batch', async () => {
   expect(claims[0]?.projectionIdentity).toBe('display:identity-1')
 })
 
-test('claim query blocks newer lane work behind lower running or backoff watermarks', async () => {
+test('claim query keeps candidate discovery bounded to the claim-state window', async () => {
   const {database, statements} = createFakeDirtyWorkDatabase()
 
   await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
@@ -1297,13 +1285,17 @@ test('claim query blocks newer lane work behind lower running or backoff waterma
 
   await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
   const claimSelect = statements.find((statement) => {
-    return statement.includes('NOT EXISTS') && statement.includes('blocker.latest_source_high_water_mark')
+    return (
+      statement.includes('FROM app.review_serving_dirty_work_claim_state state')
+      && statement.includes('oldest_claimable AS')
+    )
   })
 
-  expect(claimSelect).toContain("blocker.status IN ('running', 'failed')")
-  expect(claimSelect).toContain("blocker.updated_at > current_timestamp - INTERVAL '900 seconds'")
-  expect(claimSelect).toContain('blocker.latest_source_high_water_mark < oldest.latestSourceHighWaterMark')
-  expect(claimSelect).toContain('FROM app.review_serving_dirty_work_claim_state blocker')
+  expect(claimSelect).toContain('WITH claim_state_window AS (')
+  expect(claimSelect).toContain('LIMIT 2048')
+  expect(claimSelect).toContain('FROM claim_state_window blocker')
+  expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
+  expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work ')
 })
 
 test('claims dirty work from bounded per-row claim state with one exact update returning statement', async () => {
