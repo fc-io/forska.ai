@@ -232,6 +232,7 @@ const reviewServingProjectorWorkerTimingLogger = createRateLimitedLogger({
   sink: 'file-only',
   windowMs: 0,
 })
+const reviewServingRetentionCleanupEnabledEnv = 'FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED'
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -239,6 +240,10 @@ const getNonNegativeElapsedMs = (startedAtMs: number) => {
 
 const getProjectorResultDiagnosticsJson = (result: object) => {
   return (result as {diagnosticsJson?: unknown}).diagnosticsJson ?? {}
+}
+
+const isReviewServingRetentionCleanupEnabled = () => {
+  return process.env[reviewServingRetentionCleanupEnabledEnv] === 'true'
 }
 
 type ReviewServingProjectorWorkerCycleOptions = {
@@ -8764,9 +8769,19 @@ const runReviewServingProjectorWorkerCleanup = async ({
     return {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped'}
   }
 
-  const cleanupTargets = await dependencies.getCleanupTargets?.(database)
-  const cleanupRetentionState = dependencies.cleanupRetentionState
   const dirtyWorkRetentionCleanup = (await dependencies.cleanupDirtyWorkRetention?.({}, database)) ?? null
+  const cleanupRetentionState = dependencies.cleanupRetentionState
+
+  if (!isReviewServingRetentionCleanupEnabled()) {
+    return {
+      dirtyWorkRetentionCleanup,
+      retentionCleanups: [],
+      retentionScopes: [],
+      status: dirtyWorkRetentionCleanup === null ? 'skipped' : 'completed',
+    }
+  }
+
+  const cleanupTargets = await dependencies.getCleanupTargets?.(database)
 
   if (!cleanupRetentionState || cleanupTargets === undefined || cleanupTargets.length === 0) {
     return {

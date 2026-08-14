@@ -158,7 +158,10 @@ const expectNoEditRouteFetches = () => {
 
 const seedEditRouteQueries = (queryClient: QueryClient, projectId: string) => {
   queryClient.setQueryData(['project', projectId, 'access'], getProjectAccess(projectId))
-  queryClient.setQueryData(['project', projectId, 'with-prompts'], getProjectDetails(projectId))
+  queryClient.setQueryData(
+    ['project', projectId, 'with-prompts', 'include-importable-prompts'],
+    getProjectDetails(projectId),
+  )
   queryClient.setQueryData(['models'], mockState.models)
   queryClient.setQueryData(['provider-connections', 'project-edit', projectId], mockState.providerConnectionsPayload)
   queryClient.setQueryData(['import-routes'], mockState.importRoutes)

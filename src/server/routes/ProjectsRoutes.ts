@@ -1255,27 +1255,30 @@ export const projectsRoutes = new Elysia()
 
     return {data: project}
   })
-  .get('/api/projects/:id', async ({params}) => {
-    await assertProjectIsActive(params.id)
+  .get(
+    '/api/projects/:id',
+    async ({params, query}) => {
+      await assertProjectIsActive(params.id)
+      const includeImportablePrompts = query.includeImportablePrompts === 'true'
 
-    const [project] = await getAppDatabaseService()
-      .queryJson<{
-        id: string
-        name: string
-        description: string | null
-        modelId: string
-        useTitle: boolean
-        useAbstract: boolean
-        useFulltext: boolean
-        useFulltextNoImages: boolean
-        humanJudgmentMode: 'prompt' | 'summary' | null
-        dateFrom: unknown
-        dateTo: unknown
-        archived: boolean
-        createdAt: unknown
-        updatedAt: unknown
-      }>(
-        `
+      const [project] = await getAppDatabaseService()
+        .queryJson<{
+          id: string
+          name: string
+          description: string | null
+          modelId: string
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          humanJudgmentMode: 'prompt' | 'summary' | null
+          dateFrom: unknown
+          dateTo: unknown
+          archived: boolean
+          createdAt: unknown
+          updatedAt: unknown
+        }>(
+          `
       SELECT
         id,
         name,
@@ -1302,74 +1305,41 @@ export const projectsRoutes = new Elysia()
         )
       LIMIT 1
     `,
-      )
-      .then((rows) => {
-        return rows.map((row) => {
-          return {
-            ...row,
-            dateFrom: getDateValue(row.dateFrom),
-            dateTo: getDateValue(row.dateTo),
-            createdAt: getDateValue(row.createdAt),
-            updatedAt: getDateValue(row.updatedAt),
-          }
+        )
+        .then((rows) => {
+          return rows.map((row) => {
+            return {
+              ...row,
+              dateFrom: getDateValue(row.dateFrom),
+              dateTo: getDateValue(row.dateTo),
+              createdAt: getDateValue(row.createdAt),
+              updatedAt: getDateValue(row.updatedAt),
+            }
+          })
         })
-      })
 
-    if (!project) {
-      throw new Error('Project not found')
-    }
+      if (!project) {
+        throw new Error('Project not found')
+      }
 
-    const [projectPromptsList, importablePrompts, existingJob, projectModelRows, linkedImportRoutes] =
-      await Promise.all([
-        getAppDatabaseService().queryJson<{
-          id: string
-          originalText: string
-          transformedText: string | null
-          promptHeading: string | null
-          order: number | null
-          archived: boolean
-          promptArchived: boolean
-          type: string | null
-          enabled: boolean
-          originProjectId: string | null
-          linkedToProject: boolean
-          contentHash: string | null
-          createdAt: unknown
-        }>(`
-        SELECT
-          p.id AS id,
-          p.original_text AS originalText,
-          p.transformed_text AS transformedText,
-          p.prompt_heading AS promptHeading,
-          pp.prompt_order AS "order",
-          pp.archived AS archived,
-          p.archived AS promptArchived,
-          p.type AS type,
-          pp.enabled AS enabled,
-          pp.origin_project_id AS originProjectId,
-          TRUE AS linkedToProject,
-          p.content_hash AS contentHash,
-          p.created_at AS createdAt
-        FROM app.project_prompt pp
-        INNER JOIN app.prompt p ON pp.prompt_id = p.id
-        WHERE pp.project_id = '${escapeSqlString(params.id)}'
-        ORDER BY pp.prompt_order ASC NULLS LAST
-      `),
-        getAppDatabaseService().queryJson<{
-          id: string
-          originalText: string
-          transformedText: string | null
-          promptHeading: string | null
-          order: number | null
-          archived: boolean
-          promptArchived: boolean
-          type: string | null
-          enabled: boolean
-          originProjectId: string | null
-          linkedToProject: boolean
-          contentHash: string | null
-          createdAt: unknown
-        }>(`
+      type ProjectPromptRouteRow = {
+        id: string
+        originalText: string
+        transformedText: string | null
+        promptHeading: string | null
+        order: number | null
+        archived: boolean
+        promptArchived: boolean
+        type: string | null
+        enabled: boolean
+        originProjectId: string | null
+        linkedToProject: boolean
+        contentHash: string | null
+        createdAt: unknown
+      }
+
+      const importablePromptsPromise = includeImportablePrompts
+        ? getAppDatabaseService().queryJson<ProjectPromptRouteRow>(`
         SELECT
           p.id AS id,
           p.original_text AS originalText,
@@ -1398,22 +1368,47 @@ export const projectsRoutes = new Elysia()
               AND COALESCE(linked_prompt.prompt_heading, '') = COALESCE(p.prompt_heading, '')
               AND COALESCE(linked_prompt.type, '') = COALESCE(p.type, '')
           )
+      `)
+        : Promise.resolve<ProjectPromptRouteRow[]>([])
+
+      const [projectPromptsList, importablePrompts, existingJob, projectModelRows, linkedImportRoutes] =
+        await Promise.all([
+          getAppDatabaseService().queryJson<ProjectPromptRouteRow>(`
+        SELECT
+          p.id AS id,
+          p.original_text AS originalText,
+          p.transformed_text AS transformedText,
+          p.prompt_heading AS promptHeading,
+          pp.prompt_order AS "order",
+          pp.archived AS archived,
+          p.archived AS promptArchived,
+          p.type AS type,
+          pp.enabled AS enabled,
+          pp.origin_project_id AS originProjectId,
+          TRUE AS linkedToProject,
+          p.content_hash AS contentHash,
+          p.created_at AS createdAt
+        FROM app.project_prompt pp
+        INNER JOIN app.prompt p ON pp.prompt_id = p.id
+        WHERE pp.project_id = '${escapeSqlString(params.id)}'
+        ORDER BY pp.prompt_order ASC NULLS LAST
       `),
-        getAppDatabaseService().queryJson<{id: string}>(`
+          importablePromptsPromise,
+          getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.judgment_job
         WHERE project_id = '${escapeSqlString(params.id)}'
         LIMIT 1
       `),
-        getAppDatabaseService().queryJson<{
-          id: string
-          name: string
-          provider: string | null
-          modelName: string | null
-          modelMetadataJson: unknown
-          baseURL: string | null
-          version: string | null
-        }>(`
+          getAppDatabaseService().queryJson<{
+            id: string
+            name: string
+            provider: string | null
+            modelName: string | null
+            modelMetadataJson: unknown
+            baseURL: string | null
+            version: string | null
+          }>(`
         SELECT
           m.id AS id,
           COALESCE(m.display_name, m.name, m.remote_model_id) AS name,
@@ -1427,54 +1422,56 @@ export const projectsRoutes = new Elysia()
         WHERE m.id = '${escapeSqlString(project.modelId)}'
         LIMIT 1
       `),
-        getAppDatabaseService().queryJson<{route: string; name: string | null}>(`
+          getAppDatabaseService().queryJson<{route: string; name: string | null}>(`
         SELECT ir.route AS route, ir.name AS name
         FROM app.project_import_route pir
         INNER JOIN app.import_route ir ON pir.import_route_id = ir.id
         WHERE pir.project_id = '${escapeSqlString(params.id)}'
       `),
-      ])
+        ])
 
-    const promptsCombined = [...projectPromptsList, ...importablePrompts].map((row) => {
-      return {...row, createdAt: getDateValue(row.createdAt)}
-    })
+      const promptsCombined = [...projectPromptsList, ...importablePrompts].map((row) => {
+        return {...row, createdAt: getDateValue(row.createdAt)}
+      })
 
-    const hasJudgedArticles = existingJob.length > 0
-    const [projectModelRow] = projectModelRows
-    const projectModel = projectModelRow
-      ? {
-          ...(({modelMetadataJson: _modelMetadataJson, ...modelRow}) => {
-            return modelRow
-          })(projectModelRow),
-          name: getProjectModelLabel({
-            metadataJson: projectModelRow.modelMetadataJson,
-            modelName: projectModelRow.name,
-            provider: projectModelRow.provider,
-            version: projectModelRow.version,
-          }),
-        }
-      : undefined
+      const hasJudgedArticles = existingJob.length > 0
+      const [projectModelRow] = projectModelRows
+      const projectModel = projectModelRow
+        ? {
+            ...(({modelMetadataJson: _modelMetadataJson, ...modelRow}) => {
+              return modelRow
+            })(projectModelRow),
+            name: getProjectModelLabel({
+              metadataJson: projectModelRow.modelMetadataJson,
+              modelName: projectModelRow.name,
+              provider: projectModelRow.provider,
+              version: projectModelRow.version,
+            }),
+          }
+        : undefined
 
-    const importRoutes = linkedImportRoutes.map((r) => {
-      return r.route
-    })
+      const importRoutes = linkedImportRoutes.map((r) => {
+        return r.route
+      })
 
-    const importRouteNamesByRoute = linkedImportRoutes.reduce<Record<string, string | null>>((acc, row) => {
-      acc[row.route] = row.name ?? null
-      return acc
-    }, {})
+      const importRouteNamesByRoute = linkedImportRoutes.reduce<Record<string, string | null>>((acc, row) => {
+        acc[row.route] = row.name ?? null
+        return acc
+      }, {})
 
-    return {
-      data: {
-        project,
-        prompts: promptsCombined,
-        hasJudgedArticles,
-        model: projectModel ?? null,
-        importRoutes,
-        importRouteNamesByRoute,
-      },
-    }
-  })
+      return {
+        data: {
+          project,
+          prompts: promptsCombined,
+          hasJudgedArticles,
+          model: projectModel ?? null,
+          importRoutes,
+          importRouteNamesByRoute,
+        },
+      }
+    },
+    {query: t.Object({includeImportablePrompts: t.Optional(t.String())})},
+  )
   .post(
     '/api/projects',
     async ({body}) => {

@@ -203,9 +203,14 @@ export const updateProject = async (
   }
 }
 
-export const fetchProjectWithPrompts = async (projectId: string) => {
+export const fetchProjectWithPrompts = async (
+  projectId: string,
+  options: {includeImportablePrompts?: boolean} = {},
+) => {
   try {
-    const response = await apiClient.api.projects({id: projectId}).get()
+    const response = await apiClient.api
+      .projects({id: projectId})
+      .get({query: options.includeImportablePrompts ? {includeImportablePrompts: 'true'} : {}})
 
     return getResponseData(response, 'Project not found')
   } catch (err) {

@@ -4574,9 +4574,22 @@ test('clone route reuses prompt ids and hides duplicate importable prompts', asy
   expect(matchingPrompts.length).toBe(1)
   expect(matchingPrompts[0]?.originProjectId).toBe(null)
   expect(matchingPrompts[0]?.linkedToProject).toBe(true)
-  expect(unrelatedPrompts.length).toBe(1)
-  expect(unrelatedPrompts[0]?.originProjectId).toBe(null)
-  expect(unrelatedPrompts[0]?.linkedToProject).toBe(false)
+  expect(unrelatedPrompts.length).toBe(0)
+
+  const editDetailsResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${clonedProjectId}?includeImportablePrompts=true`),
+  )
+  const editDetailsBody = (await editDetailsResponse.json()) as {
+    data: {prompts: Array<{id: string; linkedToProject: boolean; originalText: string; originProjectId: string | null}>}
+  }
+  const editUnrelatedPrompts = editDetailsBody.data.prompts.filter((prompt) => {
+    return prompt.originalText === 'Unrelated prompt'
+  })
+
+  expect(editDetailsResponse.status).toBe(200)
+  expect(editUnrelatedPrompts.length).toBe(1)
+  expect(editUnrelatedPrompts[0]?.originProjectId).toBe(null)
+  expect(editUnrelatedPrompts[0]?.linkedToProject).toBe(false)
 
   await flushMartRefreshes()
 })
