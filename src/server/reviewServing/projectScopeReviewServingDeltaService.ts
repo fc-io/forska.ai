@@ -1,5 +1,7 @@
 import {
   appendReviewServingChangeDelta,
+  appendReviewServingChangeDeltas,
+  type ReviewServingDeltaAppendInput,
   type ReviewServingDeltaLedgerTransaction,
   type ReviewServingSourceOperation,
 } from './reviewServingDeltaLedger.ts'
@@ -22,13 +24,12 @@ export type AppendProjectScopeArticleReviewServingDeltaInput = ProjectScopeArtic
   sourceTable?: string
 }
 
-export const appendProjectScopeArticleReviewServingDelta = async (
-  tx: ReviewServingDeltaLedgerTransaction,
+const getProjectScopeArticleReviewServingDeltaInput = (
   input: AppendProjectScopeArticleReviewServingDeltaInput,
-) => {
+): ReviewServingDeltaAppendInput => {
   const typedKey = {articleId: input.articleId, projectArticleId: input.projectArticleId, projectId: input.projectId}
 
-  await appendReviewServingChangeDelta(tx, {
+  return {
     articleId: input.articleId,
     changeKind: input.changeKind,
     payloadJson: typedKey,
@@ -41,15 +42,19 @@ export const appendProjectScopeArticleReviewServingDelta = async (
     sourceTable: input.sourceTable ?? 'app.project_article',
     sourceUpdatedAt: input.sourceUpdatedAt,
     typedKey,
-  })
+  }
+}
+
+export const appendProjectScopeArticleReviewServingDelta = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: AppendProjectScopeArticleReviewServingDeltaInput,
+) => {
+  await appendReviewServingChangeDelta(tx, getProjectScopeArticleReviewServingDeltaInput(input))
 }
 
 export const appendProjectScopeArticleReviewServingDeltas = async (
   tx: ReviewServingDeltaLedgerTransaction,
   inputs: readonly AppendProjectScopeArticleReviewServingDeltaInput[],
 ) => {
-  await inputs.reduce<Promise<void>>(async (previousRun, input) => {
-    await previousRun
-    await appendProjectScopeArticleReviewServingDelta(tx, input)
-  }, Promise.resolve())
+  await appendReviewServingChangeDeltas(tx, inputs.map(getProjectScopeArticleReviewServingDeltaInput))
 }

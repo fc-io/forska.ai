@@ -1,4 +1,4 @@
-import {createHash} from 'node:crypto'
+import {createHash, randomUUID} from 'node:crypto'
 
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
@@ -88,6 +88,61 @@ type ExistingDeltaRow = {deltaId: string; sourceHighWaterMark: number}
 type ExistingOutboxRow = {outboxId: string; sourceHighWaterMark: number}
 type SourceHighWaterRow = {sourceHighWaterMark: number}
 
+type BulkExistingDeltaRow = ExistingDeltaRow & {idempotencyKey: string}
+type BulkSourceHighWaterRow = SourceHighWaterRow & {sourcePartition: string}
+type BulkDeltaAppendInput = ReviewServingDeltaAppendInput | ReviewServingImportRunArticleDeltaAppendInput
+type PreparedBulkDelta<TInput extends BulkDeltaAppendInput> = {
+  changeKind: ReviewServingChangeKind
+  deltaId: string
+  idempotencyKey: string
+  input: TInput
+  inputIndex: number
+}
+type ResolvedBulkDelta<TInput extends BulkDeltaAppendInput> = PreparedBulkDelta<TInput> & {
+  advanceCursor: boolean
+  sourceHighWaterMark: number
+}
+type BulkDeltaTarget<TInput extends BulkDeltaAppendInput> = {
+  getRowValuesSql: (row: ResolvedBulkDelta<TInput>) => string
+  getTargetInsertSql: (tableName: string) => string
+  table: ReviewServingDeltaTable
+}
+
+const reviewServingBulkValuesChunkSize = 500
+const reviewServingBulkTempColumns = [
+  'input_index',
+  'delta_id',
+  'change_kind',
+  'source_table',
+  'source_row_id',
+  'source_operation',
+  'source_partition',
+  'source_high_water_mark',
+  'source_updated_at',
+  'idempotency_key',
+  'payload_version',
+  'tombstone',
+  'payload_json',
+  'advance_cursor',
+  'project_id',
+  'article_id',
+  'prompt_id',
+  'model_id',
+  'use_title',
+  'use_abstract',
+  'use_fulltext',
+  'use_fulltext_no_images',
+  'judgment_id',
+  'human_judgment_key',
+  'config_field_set',
+  'import_run_id',
+  'import_route_id',
+  'source_record_key',
+  'source_record_hash',
+  'selected_rank_key',
+  'publication_year',
+] as const
+
 const getReviewServingHash = (label: string, value: ReviewServingIdentityValue) => {
   return createHash('sha256')
     .update(`${label}:${getStableReviewServingJson(value)}`)
@@ -175,6 +230,557 @@ export const getReviewServingDeltaIdempotencyKey = (input: ReviewServingIdempote
     'review-serving-delta-idempotency',
     getReviewServingIdempotencyIdentityValue(input),
   )}`
+}
+
+const getReviewServingBulkValueChunks = <TValue>(values: readonly TValue[]) => {
+  return Array.from({length: Math.ceil(values.length / reviewServingBulkValuesChunkSize)}, (_, index) => {
+    const start = index * reviewServingBulkValuesChunkSize
+
+    return values.slice(start, start + reviewServingBulkValuesChunkSize)
+  })
+}
+
+const getBulkSourceHighWaterMarkNumber = (value: number) => {
+  const sourceHighWaterMark = Number(value)
+
+  if (!Number.isSafeInteger(sourceHighWaterMark)) {
+    throw new Error(`invalid review-serving source high-water mark: ${String(value)}`)
+  }
+
+  return sourceHighWaterMark
+}
+
+const getPreparedBulkDeltas = <TInput extends BulkDeltaAppendInput>(inputs: readonly TInput[]) => {
+  return inputs.map((input, inputIndex): PreparedBulkDelta<TInput> => {
+    const idempotencyKey = getReviewServingDeltaIdempotencyKey(input)
+
+    return {
+      changeKind: validateReviewServingChangeKind(input.changeKind),
+      deltaId: getDeterministicReviewServingLedgerId('delta', idempotencyKey),
+      idempotencyKey,
+      input,
+      inputIndex,
+    }
+  })
+}
+
+const getUniquePreparedBulkDeltas = <TInput extends BulkDeltaAppendInput>(
+  prepared: readonly PreparedBulkDelta<TInput>[],
+) => {
+  const seen = new Set<string>()
+
+  return prepared.filter((row) => {
+    const isFirst = !seen.has(row.idempotencyKey)
+    seen.add(row.idempotencyKey)
+
+    return isFirst
+  })
+}
+
+const getExistingBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
+  prepared,
+  table,
+  tx,
+}: {
+  prepared: readonly PreparedBulkDelta<TInput>[]
+  table: ReviewServingDeltaTable
+  tx: ReviewServingDeltaLedgerTransaction
+}) => {
+  const existingByIdempotencyKey = new Map<string, ExistingDeltaRow>()
+
+  await getReviewServingBulkValueChunks(prepared).reduce<Promise<void>>(async (previous, chunk) => {
+    await previous
+    const rows = await tx.queryJson<BulkExistingDeltaRow>(`
+      SELECT
+        existing.delta_id AS deltaId,
+        existing.idempotency_key AS idempotencyKey,
+        existing.source_high_water_mark AS sourceHighWaterMark
+      FROM (VALUES ${chunk
+        .map((row) => {
+          return `(${row.inputIndex}, ${getSqlLiteral(row.idempotencyKey)})`
+        })
+        .join(', ')}) AS candidates(input_index, idempotency_key)
+      INNER JOIN ${table} existing
+        ON existing.idempotency_key = candidates.idempotency_key
+      ORDER BY candidates.input_index ASC
+    `)
+
+    rows.reduce((mapped, row) => {
+      mapped.set(row.idempotencyKey, {
+        deltaId: row.deltaId,
+        sourceHighWaterMark: getBulkSourceHighWaterMarkNumber(row.sourceHighWaterMark),
+      })
+
+      return mapped
+    }, existingByIdempotencyKey)
+  }, Promise.resolve())
+
+  return existingByIdempotencyKey
+}
+
+const getBulkSourceHighWaterMarks = async ({
+  sourcePartitions,
+  tx,
+}: {
+  sourcePartitions: readonly string[]
+  tx: ReviewServingDeltaLedgerTransaction
+}) => {
+  const sourceHighWaterByPartition = new Map<string, number>()
+
+  await getReviewServingBulkValueChunks(sourcePartitions).reduce<Promise<void>>(async (previous, chunk) => {
+    await previous
+    const rows = await tx.queryJson<BulkSourceHighWaterRow>(`
+      SELECT
+        candidates.source_partition AS sourcePartition,
+        COALESCE(cursor.source_high_water_mark, 0) AS sourceHighWaterMark
+      FROM (VALUES ${chunk
+        .map((sourcePartition) => {
+          return `(${getSqlLiteral(sourcePartition)})`
+        })
+        .join(', ')}) AS candidates(source_partition)
+      LEFT JOIN app.review_delta_reconciliation_cursor cursor
+        ON cursor.source_partition = candidates.source_partition
+    `)
+
+    rows.reduce((mapped, row) => {
+      mapped.set(row.sourcePartition, getBulkSourceHighWaterMarkNumber(row.sourceHighWaterMark))
+
+      return mapped
+    }, sourceHighWaterByPartition)
+  }, Promise.resolve())
+
+  return sourceHighWaterByPartition
+}
+
+const getResolvedBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
+  prepared,
+  tx,
+}: {
+  prepared: readonly PreparedBulkDelta<TInput>[]
+  tx: ReviewServingDeltaLedgerTransaction
+}) => {
+  const autoAllocatedPartitions = [
+    ...new Set(
+      prepared
+        .filter((row) => {
+          return row.input.allocatedSourceHighWaterMark === null || row.input.allocatedSourceHighWaterMark === undefined
+        })
+        .map((row) => {
+          return row.input.sourcePartition
+        }),
+    ),
+  ]
+  const sourceHighWaterByPartition = await getBulkSourceHighWaterMarks({sourcePartitions: autoAllocatedPartitions, tx})
+
+  return prepared.map((row): ResolvedBulkDelta<TInput> => {
+    const allocatedSourceHighWaterMark = row.input.allocatedSourceHighWaterMark
+
+    if (allocatedSourceHighWaterMark !== null && allocatedSourceHighWaterMark !== undefined) {
+      return {...row, advanceCursor: false, sourceHighWaterMark: allocatedSourceHighWaterMark}
+    }
+
+    const sourceHighWaterMark = (sourceHighWaterByPartition.get(row.input.sourcePartition) ?? 0) + 1
+    sourceHighWaterByPartition.set(row.input.sourcePartition, sourceHighWaterMark)
+
+    return {...row, advanceCursor: true, sourceHighWaterMark}
+  })
+}
+
+const getBulkDeltaTempTableName = () => {
+  return `temp_review_serving_delta_bulk_${randomUUID().replaceAll('-', '_')}`
+}
+
+const getCreateBulkDeltaTempTableSql = (tableName: string) => {
+  return `
+    CREATE TEMP TABLE ${tableName} (
+      input_index BIGINT NOT NULL,
+      delta_id VARCHAR NOT NULL,
+      change_kind VARCHAR NOT NULL,
+      source_table VARCHAR NOT NULL,
+      source_row_id VARCHAR NOT NULL,
+      source_operation VARCHAR NOT NULL,
+      source_partition VARCHAR NOT NULL,
+      source_high_water_mark BIGINT NOT NULL,
+      source_updated_at TIMESTAMPTZ,
+      idempotency_key VARCHAR NOT NULL,
+      payload_version INTEGER NOT NULL,
+      tombstone BOOLEAN NOT NULL,
+      payload_json JSON,
+      advance_cursor BOOLEAN NOT NULL,
+      project_id VARCHAR,
+      article_id VARCHAR,
+      prompt_id VARCHAR,
+      model_id VARCHAR,
+      use_title BOOLEAN,
+      use_abstract BOOLEAN,
+      use_fulltext BOOLEAN,
+      use_fulltext_no_images BOOLEAN,
+      judgment_id VARCHAR,
+      human_judgment_key VARCHAR,
+      config_field_set VARCHAR,
+      import_run_id VARCHAR,
+      import_route_id VARCHAR,
+      source_record_key VARCHAR,
+      source_record_hash VARCHAR,
+      selected_rank_key VARCHAR,
+      publication_year INTEGER
+    )
+  `
+}
+
+const getCommonBulkDeltaRowValues = <TInput extends BulkDeltaAppendInput>(row: ResolvedBulkDelta<TInput>) => {
+  return [
+    String(row.inputIndex),
+    getSqlLiteral(row.deltaId),
+    getSqlLiteral(row.changeKind),
+    getSqlLiteral(row.input.sourceTable),
+    getSqlLiteral(row.input.sourceRowId),
+    getSqlLiteral(row.input.sourceOperation),
+    getSqlLiteral(row.input.sourcePartition),
+    String(row.sourceHighWaterMark),
+    getReviewServingTimestampLiteral(row.input.sourceUpdatedAt),
+    getSqlLiteral(row.idempotencyKey),
+    String(row.input.payloadVersion),
+    getSqlLiteral(getReviewServingDeltaTombstone(row.input)),
+    getReviewServingJsonLiteral(getReviewServingPayloadValue(row.input.payloadJson)),
+    getSqlLiteral(row.advanceCursor),
+  ]
+}
+
+const getReviewChangeBulkRowValuesSql = (row: ResolvedBulkDelta<ReviewServingDeltaAppendInput>) => {
+  return `(${[
+    ...getCommonBulkDeltaRowValues(row),
+    getSqlLiteral(row.input.projectId),
+    getSqlLiteral(row.input.articleId),
+    getSqlLiteral(row.input.promptId),
+    getSqlLiteral(row.input.modelId),
+    getSqlLiteral(row.input.useTitle),
+    getSqlLiteral(row.input.useAbstract),
+    getSqlLiteral(row.input.useFulltext),
+    getSqlLiteral(row.input.useFulltextNoImages),
+    getSqlLiteral(row.input.judgmentId),
+    getSqlLiteral(row.input.humanJudgmentKey),
+    getSqlLiteral(row.input.configFieldSet),
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+  ].join(', ')})`
+}
+
+const getImportRunArticleBulkRowValuesSql = (row: ResolvedBulkDelta<ReviewServingImportRunArticleDeltaAppendInput>) => {
+  return `(${[
+    ...getCommonBulkDeltaRowValues(row),
+    'NULL',
+    getSqlLiteral(row.input.articleId),
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    'NULL',
+    getSqlLiteral(row.input.importRunId),
+    getSqlLiteral(row.input.importRouteId),
+    getSqlLiteral(row.input.sourceRecordKey),
+    getSqlLiteral(row.input.sourceRecordHash),
+    getSqlLiteral(row.input.selectedRankKey),
+    getSqlLiteral(row.input.publicationYear),
+  ].join(', ')})`
+}
+
+const getReviewChangeBulkInsertSql = (tableName: string) => {
+  return `
+    INSERT INTO app.review_change_delta (
+      delta_id,
+      change_kind,
+      source_table,
+      source_row_id,
+      source_operation,
+      source_partition,
+      source_high_water_mark,
+      source_updated_at,
+      idempotency_key,
+      payload_version,
+      project_id,
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      judgment_id,
+      human_judgment_key,
+      config_field_set,
+      tombstone,
+      payload_json,
+      created_at,
+      reconciled_at
+    )
+    SELECT
+      delta_id,
+      change_kind,
+      source_table,
+      source_row_id,
+      source_operation,
+      source_partition,
+      source_high_water_mark,
+      source_updated_at,
+      idempotency_key,
+      payload_version,
+      project_id,
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      judgment_id,
+      human_judgment_key,
+      config_field_set,
+      tombstone,
+      payload_json,
+      current_timestamp,
+      NULL
+    FROM ${tableName}
+    ORDER BY input_index ASC
+  `
+}
+
+const getImportRunArticleBulkInsertSql = (tableName: string) => {
+  return `
+    INSERT INTO app.import_run_article_delta (
+      delta_id,
+      change_kind,
+      source_table,
+      source_row_id,
+      source_operation,
+      source_partition,
+      source_high_water_mark,
+      source_updated_at,
+      idempotency_key,
+      payload_version,
+      import_run_id,
+      import_route_id,
+      article_id,
+      source_record_key,
+      source_record_hash,
+      selected_rank_key,
+      publication_year,
+      tombstone,
+      payload_json,
+      created_at,
+      reconciled_at
+    )
+    SELECT
+      delta_id,
+      change_kind,
+      source_table,
+      source_row_id,
+      source_operation,
+      source_partition,
+      source_high_water_mark,
+      source_updated_at,
+      idempotency_key,
+      payload_version,
+      import_run_id,
+      import_route_id,
+      article_id,
+      source_record_key,
+      source_record_hash,
+      selected_rank_key,
+      publication_year,
+      tombstone,
+      payload_json,
+      current_timestamp,
+      NULL
+    FROM ${tableName}
+    ORDER BY input_index ASC
+  `
+}
+
+const loadBulkDeltaTempRows = async <TInput extends BulkDeltaAppendInput>({
+  getRowValuesSql,
+  rows,
+  tableName,
+  tx,
+}: {
+  getRowValuesSql: (row: ResolvedBulkDelta<TInput>) => string
+  rows: readonly ResolvedBulkDelta<TInput>[]
+  tableName: string
+  tx: ReviewServingDeltaLedgerTransaction
+}) => {
+  await getReviewServingBulkValueChunks(rows).reduce<Promise<void>>(async (previous, chunk) => {
+    await previous
+    await tx.run(`
+      INSERT INTO ${tableName} (${reviewServingBulkTempColumns.join(', ')})
+      VALUES ${chunk.map(getRowValuesSql).join(', ')}
+    `)
+  }, Promise.resolve())
+}
+
+const advanceBulkDeltaSourceHighWaterMarks = async ({
+  tableName,
+  tx,
+}: {
+  tableName: string
+  tx: ReviewServingDeltaLedgerTransaction
+}) => {
+  await tx.run(`
+    INSERT INTO app.review_delta_reconciliation_cursor (source_partition, source_high_water_mark)
+    SELECT allocations.source_partition, 0
+    FROM (
+      SELECT DISTINCT source_partition
+      FROM ${tableName}
+      WHERE advance_cursor = TRUE
+    ) allocations
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_delta_reconciliation_cursor cursor
+      WHERE cursor.source_partition = allocations.source_partition
+    )
+  `)
+  await tx.run(`
+    UPDATE app.review_delta_reconciliation_cursor AS cursor
+    SET
+      source_high_water_mark = cursor.source_high_water_mark + allocations.increment_count,
+      updated_at = current_timestamp
+    FROM (
+      SELECT source_partition, COUNT(*)::BIGINT AS increment_count
+      FROM ${tableName}
+      WHERE advance_cursor = TRUE
+      GROUP BY source_partition
+    ) allocations
+    WHERE cursor.source_partition = allocations.source_partition
+  `)
+}
+
+const writeBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
+  rows,
+  target,
+  tx,
+}: {
+  rows: readonly ResolvedBulkDelta<TInput>[]
+  target: BulkDeltaTarget<TInput>
+  tx: ReviewServingDeltaLedgerTransaction
+}) => {
+  const tableName = getBulkDeltaTempTableName()
+  await tx.run(getCreateBulkDeltaTempTableSql(tableName))
+
+  try {
+    await loadBulkDeltaTempRows({getRowValuesSql: target.getRowValuesSql, rows, tableName, tx})
+
+    if (
+      rows.some((row) => {
+        return row.advanceCursor
+      })
+    ) {
+      await advanceBulkDeltaSourceHighWaterMarks({tableName, tx})
+    }
+
+    await tx.run(target.getTargetInsertSql(tableName))
+  } catch (error) {
+    await tx.run(`DROP TABLE IF EXISTS ${tableName}`).catch(() => {
+      return undefined
+    })
+    throw error
+  }
+
+  await tx.run(`DROP TABLE IF EXISTS ${tableName}`)
+}
+
+const getBulkDeltaResults = <TInput extends BulkDeltaAppendInput>({
+  existingByIdempotencyKey,
+  prepared,
+  resolved,
+}: {
+  existingByIdempotencyKey: ReadonlyMap<string, ExistingDeltaRow>
+  prepared: readonly PreparedBulkDelta<TInput>[]
+  resolved: readonly ResolvedBulkDelta<TInput>[]
+}) => {
+  const resolvedByIdempotencyKey = new Map(
+    resolved.map((row) => {
+      return [row.idempotencyKey, row] as const
+    }),
+  )
+
+  return prepared.map((row): ReviewServingDeltaAppendResult => {
+    const existing = existingByIdempotencyKey.get(row.idempotencyKey)
+
+    if (existing !== undefined) {
+      return {...existing, idempotencyKey: row.idempotencyKey, inserted: false}
+    }
+
+    const inserted = resolvedByIdempotencyKey.get(row.idempotencyKey)
+
+    if (inserted === undefined) {
+      throw new Error(`failed to resolve bulk review-serving delta ${row.idempotencyKey}`)
+    }
+
+    return {
+      deltaId: inserted.deltaId,
+      idempotencyKey: row.idempotencyKey,
+      inserted: inserted.inputIndex === row.inputIndex,
+      sourceHighWaterMark: inserted.sourceHighWaterMark,
+    }
+  })
+}
+
+const appendReviewServingBulkDeltas = async <TInput extends BulkDeltaAppendInput>(
+  tx: ReviewServingDeltaLedgerTransaction,
+  inputs: readonly TInput[],
+  target: BulkDeltaTarget<TInput>,
+): Promise<ReviewServingDeltaAppendResult[]> => {
+  const prepared = getPreparedBulkDeltas(inputs)
+
+  if (prepared.length === 0) {
+    return []
+  }
+
+  const uniquePrepared = getUniquePreparedBulkDeltas(prepared)
+  const existingByIdempotencyKey = await getExistingBulkDeltas({prepared: uniquePrepared, table: target.table, tx})
+  const pending = uniquePrepared.filter((row) => {
+    return !existingByIdempotencyKey.has(row.idempotencyKey)
+  })
+  const resolved = await getResolvedBulkDeltas({prepared: pending, tx})
+
+  if (resolved.length > 0) {
+    await writeBulkDeltas({rows: resolved, target, tx})
+  }
+
+  return getBulkDeltaResults({existingByIdempotencyKey, prepared, resolved})
+}
+
+const reviewChangeBulkTarget: BulkDeltaTarget<ReviewServingDeltaAppendInput> = {
+  getRowValuesSql: getReviewChangeBulkRowValuesSql,
+  getTargetInsertSql: getReviewChangeBulkInsertSql,
+  table: 'app.review_change_delta',
+}
+
+const importRunArticleBulkTarget: BulkDeltaTarget<ReviewServingImportRunArticleDeltaAppendInput> = {
+  getRowValuesSql: getImportRunArticleBulkRowValuesSql,
+  getTargetInsertSql: getImportRunArticleBulkInsertSql,
+  table: 'app.import_run_article_delta',
+}
+
+export const appendReviewServingChangeDeltas = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  inputs: readonly ReviewServingDeltaAppendInput[],
+): Promise<ReviewServingDeltaAppendResult[]> => {
+  return appendReviewServingBulkDeltas(tx, inputs, reviewChangeBulkTarget)
+}
+
+export const appendReviewServingImportRunArticleDeltas = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  inputs: readonly ReviewServingImportRunArticleDeltaAppendInput[],
+): Promise<ReviewServingDeltaAppendResult[]> => {
+  return appendReviewServingBulkDeltas(tx, inputs, importRunArticleBulkTarget)
 }
 
 export const allocateReviewServingSourceHighWaterMark = async (

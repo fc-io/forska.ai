@@ -2,7 +2,8 @@ import {createHash} from 'node:crypto'
 
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
-  appendReviewServingChangeDelta,
+  appendReviewServingChangeDeltas,
+  type ReviewServingDeltaAppendInput,
   type ReviewServingDeltaLedgerTransaction,
   type ReviewServingSourceOperation,
 } from './reviewServingDeltaLedger.ts'
@@ -37,8 +38,8 @@ export type ArticleReviewServingDeltaInput = {
 
 type ArticleReviewServingDeltaPlan = {
   changeKind: 'article.display.updated' | 'article.judgmentInput.updated' | 'article.searchText.updated'
-  payloadJson: Record<string, unknown>
-  typedKey: Record<string, unknown>
+  payloadJson: ReviewServingIdentityValue
+  typedKey: ReviewServingIdentityValue
 }
 
 const displayFieldNames = [
@@ -116,15 +117,9 @@ const getArticleReviewServingDeltaPlans = (input: ArticleReviewServingDeltaInput
   })
 }
 
-export const appendArticleReviewServingDeltas = async (
-  tx: ReviewServingDeltaLedgerTransaction,
-  input: ArticleReviewServingDeltaInput,
-) => {
-  const plans = getArticleReviewServingDeltaPlans(input)
-
-  await plans.reduce<Promise<void>>(async (previousRun, plan) => {
-    await previousRun
-    await appendReviewServingChangeDelta(tx, {
+const getArticleReviewServingDeltaInputs = (input: ArticleReviewServingDeltaInput): ReviewServingDeltaAppendInput[] => {
+  return getArticleReviewServingDeltaPlans(input).map((plan) => {
+    return {
       articleId: input.articleId,
       changeKind: plan.changeKind,
       payloadJson: plan.payloadJson,
@@ -136,8 +131,17 @@ export const appendArticleReviewServingDeltas = async (
       sourceTable: input.sourceTable ?? 'app.article',
       sourceUpdatedAt: input.sourceUpdatedAt,
       typedKey: plan.typedKey,
-    })
-  }, Promise.resolve())
+    }
+  })
+}
+
+export const appendArticleReviewServingDeltas = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: ArticleReviewServingDeltaInput,
+) => {
+  const deltaInputs = getArticleReviewServingDeltaInputs(input)
+
+  await appendReviewServingChangeDeltas(tx, deltaInputs)
 }
 
 export const getChangedArticleReviewServingFieldNames = <TCurrent extends Record<string, unknown>>(
@@ -161,17 +165,21 @@ export const getArticleReviewServingMutationValueHash = (value: unknown) => {
 
 export const appendArticleReviewServingDeltasForIds = async (
   tx: ReviewServingDeltaLedgerTransaction,
-  input: Omit<ArticleReviewServingDeltaInput, 'articleId' | 'sourceRowId'> & {articleIds: readonly string[]},
+  input: Omit<ArticleReviewServingDeltaInput, 'articleId' | 'sourceRowId'> & {
+    articleIds: readonly string[]
+    sourceMutationKeySuffix?: string
+  },
 ) => {
   const uniqueArticleIds = Array.from(new Set(input.articleIds))
+  const deltaInputs = uniqueArticleIds.flatMap((articleId) => {
+    const sourceMutationKey = [input.sourceMutationKey, articleId, input.sourceMutationKeySuffix]
+      .filter((part): part is string => {
+        return part !== undefined
+      })
+      .join('|')
 
-  await uniqueArticleIds.reduce<Promise<void>>(async (previousRun, articleId) => {
-    await previousRun
-    await appendArticleReviewServingDeltas(tx, {
-      ...input,
-      articleId,
-      sourceRowId: articleId,
-      sourceMutationKey: `${input.sourceMutationKey}|${articleId}`,
-    })
-  }, Promise.resolve())
+    return getArticleReviewServingDeltaInputs({...input, articleId, sourceRowId: articleId, sourceMutationKey})
+  })
+
+  await appendReviewServingChangeDeltas(tx, deltaInputs)
 }

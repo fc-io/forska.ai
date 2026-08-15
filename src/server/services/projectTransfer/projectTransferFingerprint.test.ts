@@ -5,6 +5,8 @@ import {
   getProjectTransferCanonicalNdjson,
   getProjectTransferLogicalPackageFingerprint,
   getProjectTransferSchemaVNextLogicalPackageFingerprintFromDigests,
+  getProjectTransferSchemaVNextLogicalPayloadDigest,
+  getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests,
   getProjectTransferSchemaVNextSingletonPayloadDigest,
   getProjectTransferSchemaVNextStagedRowDigest,
   getProjectTransferSha256Checksum,
@@ -526,6 +528,47 @@ test('schema-vNext staged row digests exclude ids and timestamps from sort keys'
   expect(firstDigest.sortKey).toBe(firstDigest.digestSha256)
   expect(secondDigest.sortKey).toBe(firstDigest.sortKey)
   expect(changedDigest.sortKey).not.toBe(firstDigest.sortKey)
+})
+
+test('schema-vNext logical payload digests stay order-independent without canonicalizing the full row set', () => {
+  const firstRows = [
+    {articleTitle: 'First', sourceArticleId: 'source-article-1'},
+    {articleTitle: 'Second', sourceArticleId: 'source-article-2'},
+  ]
+  const equivalentRows = [
+    {articleTitle: 'Second', sourceArticleId: 'changed-source-article-2'},
+    {articleTitle: 'First', sourceArticleId: 'changed-source-article-1'},
+  ]
+  const changedRows = [{articleTitle: 'Changed', sourceArticleId: 'source-article-1'}, firstRows[1]]
+
+  const firstDigest = getProjectTransferSchemaVNextLogicalPayloadDigest({payloadKey: 'articles', value: firstRows})
+  const equivalentDigest = getProjectTransferSchemaVNextLogicalPayloadDigest({
+    payloadKey: 'articles',
+    value: equivalentRows,
+  })
+  const changedDigest = getProjectTransferSchemaVNextLogicalPayloadDigest({payloadKey: 'articles', value: changedRows})
+  const stagedDigest = getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests({
+    payloadKey: 'articles',
+    rowDigestSha256: firstRows.map((row) => {
+      return getProjectTransferSchemaVNextStagedRowDigest({payloadKey: 'articles', row}).digestSha256
+    }),
+    singletonDigestSha256: null,
+  })
+
+  expect(equivalentDigest).toBe(firstDigest)
+  expect(stagedDigest).toBe(firstDigest)
+  expect(changedDigest).not.toBe(firstDigest)
+  expect(firstDigest).toMatch(/^[a-f0-9]{64}$/)
+})
+
+test('schema-vNext logical payload digest grouping stays bounded for large row sets', () => {
+  const rows = Array.from({length: 20_000}, (_entry, index) => {
+    return {articleTitle: `Article ${index}`, sourceArticleId: `source-article-${index}`}
+  })
+
+  expect(getProjectTransferSchemaVNextLogicalPayloadDigest({payloadKey: 'articles', value: rows})).toMatch(
+    /^[a-f0-9]{64}$/,
+  )
 })
 
 test('schema-vNext package fingerprints use staged row digests and singleton payload digests', () => {

@@ -14,7 +14,11 @@ import {
   type ProjectTransferImportPlanArtifact,
 } from '../services/projectTransfer/projectTransferAnalyze.ts'
 import {runWithProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
-import {commitProjectTransferImportSession} from '../services/projectTransfer/projectTransferCommit.ts'
+import {writeProjectTransferCanonicalJsonArtifact} from '../services/projectTransfer/projectTransferCanonicalJsonArtifact.ts'
+import {
+  commitProjectTransferImportSession,
+  isProjectTransferFailedCommitRetryCandidate,
+} from '../services/projectTransfer/projectTransferCommit.ts'
 import {
   getProjectTransferImportAnalyzeExecutionMode,
   type ProjectTransferApiResponse,
@@ -35,6 +39,7 @@ import {
   resolveProjectTransferDependencies,
   writeProjectTransferDependencyPlan,
 } from '../services/projectTransfer/projectTransferDependencyResolution.ts'
+import {runWithDuckdbExclusiveWork} from '../services/projectTransfer/projectTransferDuckdbExclusiveWork.ts'
 import {
   getProjectTransferExportSummary,
   type ProjectTransferExportSummary,
@@ -113,7 +118,7 @@ type ProjectTransferPackageHeaderMetadata = Pick<
 
 const importWorkerHeartbeatIntervalMs = 15_000
 const importWorkerHeartbeatLeaseMs = 60_000
-const staleActiveImportArtifactMaxAgeMs = 10 * 60 * 1000
+const staleActiveImportArtifactMaxAgeMs = 90 * 1000
 const terminalImportSessionStates = new Set<ProjectTransferSessionResponse['state']>([
   'cancelled',
   'completed',
@@ -532,8 +537,29 @@ const getImportPlanRowCount = (planSummary: ProjectTransferPlanSummary) => {
     : 0
 }
 
-const canCommitImportSession = (response: ProjectTransferSessionResponse) => {
-  return response.state === 'ready_to_commit' && validateProjectTransferPlanReadyToCommit(response.planSummary).ok
+const canCommitImportSession = (response: ProjectTransferSessionResponse, failedCommitArtifactsAvailable = false) => {
+  const isReadyToCommit =
+    response.state === 'ready_to_commit' && validateProjectTransferPlanReadyToCommit(response.planSummary).ok
+
+  return isReadyToCommit || (failedCommitArtifactsAvailable && isProjectTransferFailedCommitRetryCandidate(response))
+}
+
+const hasFailedCommitRetryArtifacts = async (response: ProjectTransferSessionResponse) => {
+  if (!isProjectTransferFailedCommitRetryCandidate(response)) {
+    return false
+  }
+
+  const layout = getProjectTransferCurrentImportStagingLayout({
+    layout: getProjectTransferImportTempLayout(response.id),
+    progress: response.progress,
+  })
+  const [hasAnalysis, hasPlan] = await Promise.all(
+    [layout.analysisPath, layout.planPath].map((pathValue) => {
+      return globalThis.Bun.file(resolveProjectTransferTempWritablePath({pathValue})).exists()
+    }),
+  )
+
+  return hasAnalysis && hasPlan
 }
 
 const readImportPlanArtifact = async (
@@ -553,8 +579,7 @@ const writeImportProgressArtifact = async (sessionId: string, progress: ProjectT
   const layout = getProjectTransferImportTempLayout(sessionId)
   const progressPath = resolveProjectTransferTempWritablePath({pathValue: layout.progressPath})
 
-  await mkdir(dirname(progressPath), {recursive: true})
-  await globalThis.Bun.write(progressPath, JSON.stringify(progress))
+  await writeProjectTransferCanonicalJsonArtifact({filePath: progressPath, value: progress})
 }
 
 const getImportSessionStateFromProgress = (
@@ -572,9 +597,8 @@ const getImportSessionStateFromProgress = (
     || progress.phase === 'app_table_writes'
     || progress.phase === 'asset_promotion'
     || progress.phase === 'history_write'
-    || progress.phase === 'staging_load'
     ? 'committing'
-    : progress.phase === 'extract' || progress.phase === 'package_scan'
+    : progress.phase === 'extract' || progress.phase === 'package_scan' || progress.phase === 'staging_load'
       ? 'extracting'
       : 'analyzing'
 }
@@ -653,7 +677,11 @@ export const shouldUseImportSessionArtifactResponse = (
   response: ProjectTransferApiResponse<ProjectTransferImportSessionData>,
   now = Date.now(),
 ) => {
-  if (response.error !== null || terminalImportSessionStates.has(response.data.state)) {
+  if (response.error !== null || response.data === null) {
+    return false
+  }
+
+  if (terminalImportSessionStates.has(response.data.state)) {
     return true
   }
 
@@ -677,6 +705,7 @@ const getImportSessionData = (
   response: ProjectTransferSessionResponse,
   plan: ProjectTransferImportPlanArtifact | null,
   executionMode?: ProjectTransferExecutionMode,
+  failedCommitArtifactsAvailable = false,
 ): ProjectTransferImportSessionData => {
   const completion = compactImportCompletionForApi(response.completion)
   const progress = compactImportProgressForApi(response.progress)
@@ -687,7 +716,7 @@ const getImportSessionData = (
     progress,
     ...getImportSessionUrls(response.id),
     blockers: getImportSessionBlockers(response.planSummary),
-    canCommit: canCommitImportSession(response),
+    canCommit: canCommitImportSession(response, failedCommitArtifactsAvailable),
     duplicatePackageWarnings: [],
     executionMode,
     overlapCounts: response.planSummary?.overlapCounts ?? null,
@@ -729,8 +758,9 @@ const getImportSessionResponseFromRecord = async (
   }
 
   const plan = includePlan ? await readImportPlanArtifact(response) : null
+  const failedCommitArtifactsAvailable = await hasFailedCommitRetryArtifacts(response)
 
-  return {data: getImportSessionData(response, plan, executionMode), error: null}
+  return {data: getImportSessionData(response, plan, executionMode, failedCommitArtifactsAvailable), error: null}
 }
 
 const importArtifactsUnavailableMessage =
@@ -1403,6 +1433,7 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
   })
 
   const nextState = getImportAnalyzeNextState(analysis.planSummary)
+  await writeImportProgressArtifact(sessionId, completedProgress)
   const planned = await repository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: ownerToken,
     expectedPlanRevision: analyzing.planRevision,
@@ -1433,7 +1464,7 @@ const failProjectTransferImportAnalyzeSession = async ({
   const upload =
     current === null ? null : getUploadMetadataFromProgress(toProjectTransferSessionResponse(current).progress)
 
-  return repository.transitionProjectTransferSessionState({
+  const failed = await repository.transitionProjectTransferSessionState({
     error: getErrorPayload(error),
     expectedOwnerToken: ownerToken,
     expectedState: ['extracting', 'analyzing'],
@@ -1442,6 +1473,17 @@ const failProjectTransferImportAnalyzeSession = async ({
     progress: getAnalyzeProgress({now: new Date(), phase: 'analyze', status: 'failed', upload}),
     sessionId,
   })
+
+  if (failed !== null) {
+    const progressPath = resolveProjectTransferTempWritablePath({
+      pathValue: getProjectTransferImportTempLayout(sessionId).progressPath,
+    })
+    await rm(progressPath, {force: true}).catch(() => {
+      return undefined
+    })
+  }
+
+  return failed
 }
 
 const getAnalyzeJobAttempt = async (params: {ownerToken: string; sessionId: string}) => {
@@ -1767,7 +1809,7 @@ const getImportSession = async (
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
   const artifactResponse = await getImportSessionArtifactResponse(sessionId)
 
-  if (artifactResponse !== null && artifactResponse.data.state === 'failed') {
+  if (artifactResponse !== null && artifactResponse.data?.state === 'failed') {
     const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
 
     if (record !== null && terminalImportSessionStates.has(record.state)) {
@@ -1789,10 +1831,6 @@ const getImportSession = async (
     const response = await getImportSessionResponseFromRecord(set, record, undefined, includePlan)
 
     return response ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
-  }
-
-  if (artifactResponse !== null) {
-    return artifactResponse
   }
 
   if (record !== null && (record.state === 'awaiting_resolution' || record.state === 'ready_to_commit')) {
@@ -1883,7 +1921,19 @@ const uploadImportPackage = async ({
   const uploadMeasurement = await measureProjectTransferPhase('upload', () => {
     return runProjectTransferImportWorkerHeartbeat({
       operation: () => {
-        return getUploadWriteAttempt({fileName: getUploadFileName(request), request, sessionId: params.sessionId})
+        return runWithDuckdbExclusiveWork(
+          {
+            estimatedRows: null,
+            kind: 'project_transfer_import',
+            message: 'Package upload running',
+            ownerToken,
+            phase: 'upload',
+            sessionId: params.sessionId,
+          },
+          () => {
+            return getUploadWriteAttempt({fileName: getUploadFileName(request), request, sessionId: params.sessionId})
+          },
+        )
       },
       ownerToken,
       sessionId: params.sessionId,

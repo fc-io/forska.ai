@@ -1,6 +1,7 @@
 import {
   appendReviewServingChangeDelta,
-  type ReviewServingDeltaAppendResult,
+  appendReviewServingChangeDeltas,
+  type ReviewServingDeltaAppendInput,
   type ReviewServingDeltaLedgerTransaction,
   type ReviewServingSourceOperation,
 } from './reviewServingDeltaLedger.ts'
@@ -38,13 +39,12 @@ const getContentFlags = (input: LlmJudgmentReviewServingDeltaRow) => {
   }
 }
 
-export const appendLlmJudgmentReviewServingDelta = async (
-  tx: ReviewServingDeltaLedgerTransaction,
+const getLlmJudgmentReviewServingDeltaInput = (
   input: AppendLlmJudgmentReviewServingDeltaInput,
-) => {
+): ReviewServingDeltaAppendInput => {
   const contentFlags = getContentFlags(input)
 
-  return appendReviewServingChangeDelta(tx, {
+  return {
     articleId: input.articleId,
     changeKind: input.changeKind,
     judgmentId: input.judgmentId,
@@ -78,18 +78,19 @@ export const appendLlmJudgmentReviewServingDelta = async (
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
     useTitle: input.useTitle,
-  })
+  }
+}
+
+export const appendLlmJudgmentReviewServingDelta = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: AppendLlmJudgmentReviewServingDeltaInput,
+) => {
+  return appendReviewServingChangeDelta(tx, getLlmJudgmentReviewServingDeltaInput(input))
 }
 
 export const appendLlmJudgmentReviewServingDeltas = async (
   tx: ReviewServingDeltaLedgerTransaction,
   inputs: readonly AppendLlmJudgmentReviewServingDeltaInput[],
 ) => {
-  const results: ReviewServingDeltaAppendResult[] = []
-
-  for (const input of inputs) {
-    results.push(await appendLlmJudgmentReviewServingDelta(tx, input))
-  }
-
-  return results
+  return appendReviewServingChangeDeltas(tx, inputs.map(getLlmJudgmentReviewServingDeltaInput))
 }

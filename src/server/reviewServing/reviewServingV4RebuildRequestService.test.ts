@@ -403,11 +403,12 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('FROM app.project_import_route')
   expect(joined).toContain('INNER JOIN app.article_import_route')
   expect(joined).toContain('scoped_article_id AS')
-  expect(joined).toContain('SELECT DISTINCT article_id')
+  expect(joined).toContain('CAST(COUNT(DISTINCT article_id) AS INTEGER) AS scopedArticleCount')
   expect(joined).toContain('LEFT JOIN app.model model ON model.id = project.model_id')
   expect(joined).toContain('LEFT JOIN app.provider_connection provider_connection')
   expect(joined).toContain('model_execution_identity_digest')
-  expect(joined).toContain('rebuild_prompt_source AS')
+  expect(joined).toContain('enabled_prompt AS')
+  expect(joined).toContain('rebuild_prompt AS')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
   expect(joined).toContain('FROM rebuild_prompt')
@@ -421,7 +422,7 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('COALESCE(prompt.content_hash, sha256(prompt.original_text))')
   expect(joined).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
   expect(joined).toContain('snapshot.review_config_hash IS NOT DISTINCT FROM')
-  expect(joined).toContain("WHERE snapshot_status = 'active'")
+  expect(joined).toContain("WHERE snapshot.snapshot_status = 'active'")
   expect(joined).toContain('judgment.model_id = project.model_id')
   expect(joined).not.toContain('judgment.project_id = project.id')
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
@@ -522,7 +523,7 @@ test('V4 bootstrap request transaction carries workload context for all publishe
   expect(transactionStatements).toHaveLength(1)
   expect(transactionStatements[0]?.join('\n')).toContain('INSERT INTO app.review_rebuild_request')
   expect(transactionStatements[0]?.join('\n')).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
-  expect(transactionStatements[0]?.join('\n')).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(transactionStatements[0]?.join('\n')).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
 test('V4 rebuild request service returns a no-op rebuild request when there are no scoped articles', async () => {
@@ -599,7 +600,8 @@ test('V4 rebuild request service preserves selected-import bootstrap watermarks 
     /'selectedImport',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*7,\s*'article-000-a'/u,
   )
   expect(statements.join('\n')).toContain('FROM app.review_serving_project_dirty_source_watermark')
-  expect(statements.join('\n')).toContain('UNION ALL')
+  expect(statements.join('\n')).toContain('GROUP BY source_partition')
+  expect(statements.join('\n')).not.toContain('UNION ALL')
   expect(statements.join('\n')).toContain("AND status <> 'completed'")
 })
 

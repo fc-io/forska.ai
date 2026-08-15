@@ -104,6 +104,21 @@ test('source partition watermarks map dirty partitions to promotion source keys'
   })
 })
 
+test('source partition watermarks stay bounded for large imported-project partition sets', {timeout: 5_000}, () => {
+  const partitionCount = 20_000
+  const watermarks = getReviewServingSourcePartitionWatermarks(
+    Array.from({length: partitionCount}, (_, index) => {
+      return {latestSourceHighWaterMark: index + 1, sourcePartition: `article:article-${index}`}
+    }),
+  )
+
+  expect(Object.keys(watermarks)).toHaveLength(partitionCount + 2)
+  expect(watermarks.article).toBe(partitionCount)
+  expect(watermarks.reviewChange).toBe(partitionCount)
+  expect(watermarks['article:article-0']).toBe(1)
+  expect(watermarks[`article:article-${partitionCount - 1}`]).toBe(partitionCount)
+})
+
 test('lease owner values are non-empty strings', () => {
   expect(getReviewServingLeaseOwner(' worker-a ')).toBe('worker-a')
   expect(getReviewServingLeaseOwner('   ')).toBeNull()

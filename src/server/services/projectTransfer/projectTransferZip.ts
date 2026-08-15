@@ -240,9 +240,9 @@ const getProjectTransferZipUint64 = (view: DataView, offset: number, context: st
   return getSafeProjectTransferZipNumber(view.getBigUint64(offset, true), context)
 }
 
-const getProjectTransferZipBytesSlice = (bytes: Uint8Array, offset: number, size: number, context: string) => {
+const getProjectTransferZipBytesView = (bytes: Uint8Array, offset: number, size: number, context: string) => {
   assertProjectTransferZipRange({byteLength: bytes.byteLength, context, offset, size})
-  return bytes.slice(offset, offset + size)
+  return bytes.subarray(offset, offset + size)
 }
 
 const assertProjectTransferZipPaths = (paths: readonly string[]) => {
@@ -1119,7 +1119,7 @@ const getProjectTransferZipExtraFields = (extraField: Uint8Array) => {
     const headerId = getProjectTransferZipUint16(view, offset, 'ZIP extra field id')
     const size = getProjectTransferZipUint16(view, offset + 2, 'ZIP extra field size')
     const dataOffset = offset + 4
-    const data = getProjectTransferZipBytesSlice(extraField, dataOffset, size, 'ZIP extra field data')
+    const data = getProjectTransferZipBytesView(extraField, dataOffset, size, 'ZIP extra field data')
 
     return readFields(dataOffset + size, [...fields, {data, headerId}])
   }
@@ -1210,13 +1210,13 @@ const readProjectTransferZipCentralDirectoryEntry = (
   const extraFieldOffset = filenameOffset + filenameLength
   const commentOffset = extraFieldOffset + extraFieldLength
   const nextOffset = commentOffset + commentLength
-  const filenameBytes = getProjectTransferZipBytesSlice(
+  const filenameBytes = getProjectTransferZipBytesView(
     bytes,
     filenameOffset,
     filenameLength,
     'ZIP central directory filename',
   )
-  const extraField = getProjectTransferZipBytesSlice(
+  const extraField = getProjectTransferZipBytesView(
     bytes,
     extraFieldOffset,
     extraFieldLength,
@@ -1352,7 +1352,7 @@ const readProjectTransferZipCentralDirectoryEntryBytes = (
     'ZIP local extra field length',
   )
   const dataOffset = entry.localHeaderOffset + 30 + filenameLength + extraFieldLength
-  const compressedBytes = getProjectTransferZipBytesSlice(bytes, dataOffset, entry.compressedSize, entry.path)
+  const compressedBytes = getProjectTransferZipBytesView(bytes, dataOffset, entry.compressedSize, entry.path)
   const entryBytes = inflateProjectTransferZipEntryBytes(compressedBytes, entry)
 
   if (entryBytes.byteLength !== entry.uncompressedSize) {

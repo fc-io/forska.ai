@@ -3,6 +3,8 @@ import {Effect} from 'effect'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingDeltaLedgerTransaction} from './reviewServingDeltaLedger.ts'
 
+const reviewImportHotFieldWriteChunkSize = 250
+
 export type ReviewImportHotFieldInput = {
   articleId: string
   articleTitle?: string | null
@@ -113,7 +115,9 @@ export const getReviewImportHotFieldRow = (input: ReviewImportHotFieldInput): Re
     tombstone: input.tombstone ?? false,
   }
 
-  if (!row.articleId || !row.importRouteId || !row.sourceRecordKey) {
+  const {articleId, importRouteId, sourceRecordKey} = row
+
+  if (!articleId || !importRouteId || !sourceRecordKey) {
     throw new Error('review import hot fields require importRouteId, articleId, and sourceRecordKey')
   }
 
@@ -121,11 +125,11 @@ export const getReviewImportHotFieldRow = (input: ReviewImportHotFieldInput): Re
 
   return {
     ...row,
-    articleId: row.articleId,
-    importRouteId: row.importRouteId,
-    selectedRankKey: getSelectedRankKey(selectedRankNumeric, row),
+    articleId,
+    importRouteId,
+    selectedRankKey: getSelectedRankKey(selectedRankNumeric, {articleId, sourceRecordKey}),
     selectedRankNumeric,
-    sourceRecordKey: row.sourceRecordKey,
+    sourceRecordKey,
   }
 }
 
@@ -190,4 +194,81 @@ export const upsertReviewImportArticleHotField = async (
   input: ReviewImportHotFieldInput,
 ) => {
   return Effect.runPromise(upsertReviewImportArticleHotFieldEffect(tx, input))
+}
+
+const getReviewImportHotFieldKey = (row: ReviewImportHotFieldRow) => {
+  return `${row.importRouteId}\u0000${row.articleId}\u0000${row.sourceRecordKey}`
+}
+
+const getReviewImportHotFieldValuesSql = (row: ReviewImportHotFieldRow) => {
+  return `(
+    ${getSqlLiteral(row.importRouteId)},
+    ${getSqlLiteral(row.articleId)},
+    ${getSqlLiteral(row.sourceRecordKey)},
+    ${getSqlLiteral(row.sourceKind)},
+    ${getSqlLiteral(row.selectedRankKey)},
+    ${getSqlLiteral(row.selectedRankNumeric)},
+    ${getSqlLiteral(row.publicationYear)},
+    ${getSqlLiteral(row.articleTitle)},
+    ${getSqlLiteral(row.journalTitle)},
+    ${getSqlLiteral(row.externalId)},
+    ${getSqlLiteral(row.duplicateFlag)},
+    ${getSqlLiteral(row.conflictFlag)},
+    ${getSqlLiteral(row.filterBucketKey)},
+    ${getSqlLiteral(row.filterBucketValue)},
+    ${getSqlLiteral(row.tombstone)}
+  )`
+}
+
+export const upsertReviewImportArticleHotFields = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  inputs: readonly ReviewImportHotFieldInput[],
+) => {
+  const rowByKey = inputs.reduce((rows, input) => {
+    const row = getReviewImportHotFieldRow(input)
+
+    rows.set(getReviewImportHotFieldKey(row), row)
+
+    return rows
+  }, new Map<string, ReviewImportHotFieldRow>())
+  const rows = [...rowByKey.values()]
+
+  for (let offset = 0; offset < rows.length; offset += reviewImportHotFieldWriteChunkSize) {
+    const chunk = rows.slice(offset, offset + reviewImportHotFieldWriteChunkSize)
+    const keyRowsSql = chunk
+      .map((row) => {
+        return `(${getSqlLiteral(row.importRouteId)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.sourceRecordKey)})`
+      })
+      .join(',\n')
+
+    await tx.run(`
+      DELETE FROM app.review_import_article_hot_field hot_field
+      WHERE EXISTS (
+        SELECT 1
+        FROM (VALUES ${keyRowsSql}) incoming(import_route_id, article_id, source_record_key)
+        WHERE incoming.import_route_id = hot_field.import_route_id
+          AND incoming.article_id = hot_field.article_id
+          AND incoming.source_record_key = hot_field.source_record_key
+      )
+    `)
+    await tx.run(`
+      INSERT INTO app.review_import_article_hot_field (
+        import_route_id,
+        article_id,
+        source_record_key,
+        source_kind,
+        selected_rank_key,
+        selected_rank_numeric,
+        publication_year,
+        article_title,
+        journal_title,
+        external_id,
+        duplicate_flag,
+        conflict_flag,
+        filter_bucket_key,
+        filter_bucket_value,
+        tombstone
+      ) VALUES ${chunk.map(getReviewImportHotFieldValuesSql).join(',\n')}
+    `)
+  }
 }

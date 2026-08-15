@@ -276,7 +276,7 @@ test('project transfer recovery runs only on active writer and batch-limits stal
   expect(result.tempAfterBatch).toEqual({'future-a': true, 'stale-a': false, 'stale-b': false, 'stale-c': true})
 })
 
-test('project transfer startup recovery uses a single-session automatic batch on low-memory owners', () => {
+test('project transfer startup recovery uses a single-session automatic batch on eight GiB owners', () => {
   const result = runRecoveryScript<{
     result: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
     states: Record<string, string>
@@ -304,7 +304,7 @@ test('project transfer startup recovery uses a single-session automatic batch on
 
       console.log(JSON.stringify({result, states}))
     `,
-    {DUCKDB_MEMORY_LIMIT: '6400MiB'},
+    {DUCKDB_MEMORY_LIMIT: '8192MiB'},
   )
 
   expect(result.result.scannedSessionCount).toBe(1)

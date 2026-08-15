@@ -76,7 +76,7 @@ const RootComponent = () => {
     <>
       <Navigation />
       <Switch>
-        <Match when={backendAvailabilityQuery.isError}>
+        <Match when={backendAvailabilityQuery.isError && backendAvailabilityQuery.data === undefined}>
           <BackendUnavailableSurface
             error={backendAvailabilityQuery.error}
             onRetry={() => {

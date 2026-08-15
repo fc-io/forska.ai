@@ -24,6 +24,7 @@ import {
 import {loadEnv} from '../src/server/utils/env.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {withAbortSignalTimeout} from '../src/utils/withAbortSignalTimeout.ts'
+import {getDevServerWatchFingerprint} from './devServerWatchFingerprint.ts'
 import {
   processLockMalformedRetryIntervalMs,
   processLockMalformedStaleAfterMs,
@@ -114,6 +115,7 @@ let shuttingDown = false
 let attachedToExistingStack = false
 let parentMonitor: ReturnType<typeof setInterval> | null = null
 let devWatcherLockHeartbeat: ReturnType<typeof setInterval> | null = null
+let watchedPathFingerprint: string | null = null
 
 const parentPid = process.ppid
 const bunExecutablePath = realpathSync(process.execPath)
@@ -787,6 +789,14 @@ const restartServer = () => {
   restartTimer = setTimeout(() => {
     void (async () => {
       restartTimer = null
+      const nextFingerprint = await getDevServerWatchFingerprint(watchedPaths)
+
+      if (nextFingerprint === watchedPathFingerprint) {
+        log('filesystem notification left no source change; keeping server stack running')
+        return
+      }
+
+      watchedPathFingerprint = nextFingerprint
       log('change detected, restarting')
       await stopServer()
       await startServer()
@@ -865,6 +875,8 @@ process.on('SIGTERM', () => {
 })
 
 startParentMonitor()
+
+watchedPathFingerprint = await getDevServerWatchFingerprint(watchedPaths)
 
 watchedPaths.forEach((watchedPath) => {
   createWatcher(watchedPath)

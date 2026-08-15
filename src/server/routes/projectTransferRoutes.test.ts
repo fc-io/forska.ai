@@ -1,10 +1,12 @@
 import {createHash} from 'node:crypto'
 import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
+import {setTimeout as sleep} from 'node:timers/promises'
 
 import {afterEach, beforeEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import type {ProjectTransferSessionRecord} from '../../db/schemaTypes.ts'
+import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 type RouteTestApp = {handle: (request: Request) => Promise<Response> | Response}
@@ -63,11 +65,16 @@ const uploadSessionId = getRouteTestSessionId('import-upload')
 const uploadPackagePath = getUploadPackagePath(uploadSessionId)
 const uploadArrayBufferSessionId = getRouteTestSessionId('import-upload-buffer')
 const readOnlyGetSessionId = getRouteTestSessionId('import-read-only-get')
+const inlineAnalyzeSessionId = getRouteTestSessionId('import-analyze')
+const analyzeLifecycleSessionId = getRouteTestSessionId('import-analyze-lifecycle')
 const progressArtifactImportSessionId = getRouteTestSessionId('import-progress-artifact')
 const commitProgressArtifactImportSessionId = getRouteTestSessionId('import-commit-progress-artifact')
 const completedArtifactImportSessionId = getRouteTestSessionId('import-completed-artifact')
 const staleProgressTerminalImportSessionId = getRouteTestSessionId('import-stale-progress-terminal')
+const staleProgressQueuedImportSessionId = getRouteTestSessionId('import-stale-progress-queued')
 const failedProgressTerminalImportSessionId = getRouteTestSessionId('import-failed-progress-terminal')
+const failedMissingRetryArtifactsSessionId = getRouteTestSessionId('import-failed-missing-retry-artifacts')
+const failedStaleWorkerSessionId = getRouteTestSessionId('import-failed-stale-worker')
 const largeBackgroundAnalyzeSessionId = getRouteTestSessionId('import-large-background-analyze')
 const missingArtifactsGetSessionId = getRouteTestSessionId('import-missing-get')
 const resolveSessionId = getRouteTestSessionId('import-resolve')
@@ -80,11 +87,16 @@ const artifactSessionIds = [
   uploadSessionId,
   uploadArrayBufferSessionId,
   readOnlyGetSessionId,
+  inlineAnalyzeSessionId,
+  analyzeLifecycleSessionId,
   progressArtifactImportSessionId,
   commitProgressArtifactImportSessionId,
   completedArtifactImportSessionId,
   staleProgressTerminalImportSessionId,
+  staleProgressQueuedImportSessionId,
   failedProgressTerminalImportSessionId,
+  failedMissingRetryArtifactsSessionId,
+  failedStaleWorkerSessionId,
   largeBackgroundAnalyzeSessionId,
   missingArtifactsGetSessionId,
   resolveSessionId,
@@ -121,6 +133,36 @@ const getFinalOverlapCounts = () => {
     snapshotVerifiedJudgmentCount: 0,
     storedSignatureHumanReviewCount: 0,
     storedSignatureJudgmentCount: 0,
+  }
+}
+
+const getReadyImportPlanSummary = () => {
+  return {
+    blockerCount: 0,
+    blockers: [],
+    conflictCounts: getFinalConflictCounts(),
+    dependencyStatuses: {},
+    judgmentConflictStatus: 'clear',
+    overlapCounts: getFinalOverlapCounts(),
+    packageCounts: {
+      articleImportRoutes: 0,
+      assetManifest: 0,
+      articles: 0,
+      humanJudgmentSummaries: 0,
+      humanJudgments: 0,
+      importRoutes: 0,
+      judgmentAssessments: 0,
+      judgments: 0,
+      models: 0,
+      project: 1,
+      projectArticles: 0,
+      projectImportRoutes: 0,
+      projectPrompts: 0,
+      prompts: 0,
+      providerConnections: 0,
+      reviews: 0,
+    },
+    warningCount: 0,
   }
 }
 
@@ -521,6 +563,7 @@ const installProjectTransferRouteMocks = () => {
   void mock.module(commitModulePath, () => {
     return {
       commitProjectTransferImportSession: commitProjectTransferImportSessionMock,
+      isProjectTransferFailedCommitRetryCandidate: actualCommitModule.isProjectTransferFailedCommitRetryCandidate,
       loadProjectTransferCommitArtifacts: actualCommitModule.loadProjectTransferCommitArtifacts,
       revalidateProjectTransferCommitPlan: actualCommitModule.revalidateProjectTransferCommitPlan,
     }
@@ -649,6 +692,15 @@ const expectCsvExportRouteValidationResponse = async (app: RouteTestApp, prefix 
   expect(body).toMatchObject({message: 'Expected array', property: '/promptIds', type: 'validation'})
 }
 
+const waitForProjectTransferBackgroundActivity = async () => {
+  const deadline = Date.now() + 2_000
+
+  await sleep(0)
+  while (hasActiveProjectTransferBackgroundActivity() && Date.now() < deadline) {
+    await sleep(5)
+  }
+}
+
 const resetProjectTransferRouteTestState = () => {
   analyzeProjectTransferImportPackageMock.mockClear()
   cancelProjectTransferImportSessionMock.mockClear()
@@ -704,6 +756,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  await waitForProjectTransferBackgroundActivity()
   resetProjectTransferRouteTestState()
   const {resetProjectTransferRoutesDependenciesForTests} = await import('./projectTransferRoutes.ts')
   resetProjectTransferRoutesDependenciesForTests()
@@ -1377,14 +1430,69 @@ test('project transfer import get returns terminal session rows over stale activ
   expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: staleProgressTerminalImportSessionId})
 })
 
+test('project transfer import get returns a recovered queued session over a stale active progress artifact', async () => {
+  const app = await getProjectTransferApp()
+  routeState.sessions[staleProgressQueuedImportSessionId] = getImportSessionRecord({
+    id: staleProgressQueuedImportSessionId,
+    progressJson: {
+      message: 'Analysis queued after worker restart',
+      phase: 'analyze',
+      status: 'pending',
+      updatedAt: '2030-01-01T00:00:10.000Z',
+      uploadMetadata: getUploadMetadata('zip-body'),
+    },
+    state: 'queued',
+  })
+  mkdirSync(getImportRootPath(staleProgressQueuedImportSessionId), {recursive: true})
+  writeFileSync(
+    getImportProgressPath(staleProgressQueuedImportSessionId),
+    JSON.stringify({
+      expiresAt: futureDate.toISOString(),
+      message: 'Loading package rows into staging',
+      phase: 'staging_load',
+      planRevision: 1,
+      status: 'running',
+      updatedAt: '2020-01-01T00:00:00.000Z',
+      uploadMetadata: getUploadMetadata('zip-body'),
+    }),
+  )
+
+  const response = await getRouteResponse(app, `/api/projects/import/${staleProgressQueuedImportSessionId}`, 'GET')
+  const body = (await response.json()) as {data: {progress: {message: string}; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {progress: {message: 'Analysis queued after worker restart'}, state: 'queued'},
+    error: null,
+  })
+  expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: staleProgressQueuedImportSessionId})
+})
+
 test('project transfer import get returns terminal session rows over failed progress artifacts', async () => {
   const app = await getProjectTransferApp()
   routeState.sessions[failedProgressTerminalImportSessionId] = getImportSessionRecord({
+    commitId: 'commit-previous',
     errorJson: {message: 'Commit writer invariant failed'},
     id: failedProgressTerminalImportSessionId,
+    planRevision: 1,
+    planSummaryJson: getReadyImportPlanSummary(),
+    progressJson: {
+      message: 'Commit failed; rollback cleanup completed or was not required',
+      phase: 'commit',
+      planRevision: 1,
+      rowCountProcessed: 0,
+      rowCountTotal: 142_616,
+      stagingRevision: 1,
+      status: 'failed',
+      updatedAt: '2030-01-01T00:00:00.000Z',
+    },
     state: 'failed',
   })
   mkdirSync(getImportRootPath(failedProgressTerminalImportSessionId), {recursive: true})
+  const failedStagingRoot = `${getImportRootPath(failedProgressTerminalImportSessionId)}/staging/revision-1`
+  mkdirSync(failedStagingRoot, {recursive: true})
+  writeFileSync(`${failedStagingRoot}/analysis.json`, '{}')
+  writeFileSync(`${failedStagingRoot}/plan.json`, '{}')
   writeFileSync(
     getImportProgressPath(failedProgressTerminalImportSessionId),
     JSON.stringify({
@@ -1399,16 +1507,111 @@ test('project transfer import get returns terminal session rows over failed prog
 
   const response = await getRouteResponse(app, `/api/projects/import/${failedProgressTerminalImportSessionId}`, 'GET')
   const body = (await response.json()) as {
-    data: {error: unknown; progress: unknown; state: string}
+    data: {canCommit: boolean; error: unknown; progress: {phase: string}; state: string}
     error: string | null
   }
 
   expect(response.status).toBe(200)
   expect(body).toMatchObject({
-    data: {error: {message: 'Commit writer invariant failed'}, progress: null, state: 'failed'},
+    data: {
+      canCommit: true,
+      error: {message: 'Commit writer invariant failed'},
+      progress: {phase: 'commit'},
+      state: 'failed',
+    },
     error: null,
   })
   expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: failedProgressTerminalImportSessionId})
+})
+
+test('project transfer import get does not enable failed commit retry without reviewed staging artifacts', async () => {
+  const sessionId = failedMissingRetryArtifactsSessionId
+  routeState.sessions[sessionId] = getImportSessionRecord({
+    commitId: 'commit-previous',
+    errorJson: {message: 'Commit writer invariant failed'},
+    id: sessionId,
+    planRevision: 1,
+    planSummaryJson: getReadyImportPlanSummary(),
+    progressJson: {
+      message: 'Commit failed; rollback cleanup completed or was not required',
+      phase: 'commit',
+      planRevision: 1,
+      stagingRevision: 1,
+      status: 'failed',
+      updatedAt: '2030-01-01T00:00:00.000Z',
+    },
+    state: 'failed',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await getRouteResponse(app, `/api/projects/import/${sessionId}`, 'GET')
+  const body = (await response.json()) as {data: {canCommit: boolean; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({data: {canCommit: false, state: 'failed'}, error: null})
+})
+
+test('project transfer import get does not enable stale-worker recovery failures for retry', async () => {
+  const sessionId = failedStaleWorkerSessionId
+  routeState.sessions[sessionId] = getImportSessionRecord({
+    commitId: 'commit-previous',
+    errorJson: {message: 'Recovered stale import commit'},
+    id: sessionId,
+    planRevision: 1,
+    planSummaryJson: getReadyImportPlanSummary(),
+    progressJson: {
+      message: 'Recovered stale import commit owner',
+      phase: 'commit',
+      planRevision: 1,
+      stagingRevision: 1,
+      status: 'failed',
+      updatedAt: '2030-01-01T00:00:00.000Z',
+    },
+    state: 'failed',
+  })
+  const stagingRoot = `${getImportRootPath(sessionId)}/staging/revision-1`
+  mkdirSync(stagingRoot, {recursive: true})
+  writeFileSync(`${stagingRoot}/analysis.json`, '{}')
+  writeFileSync(`${stagingRoot}/plan.json`, '{}')
+  const app = await getProjectTransferApp()
+
+  const response = await getRouteResponse(app, `/api/projects/import/${sessionId}`, 'GET')
+  const body = (await response.json()) as {data: {canCommit: boolean; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({data: {canCommit: false, state: 'failed'}, error: null})
+})
+
+test('project transfer import get does not enable commit for analysis-failed sessions', async () => {
+  const sessionId = getRouteTestSessionId('import-analysis-failed')
+  routeState.sessions[sessionId] = getImportSessionRecord({
+    commitId: 'analyze-attempt',
+    errorJson: {message: 'Analysis failed'},
+    id: sessionId,
+    planRevision: 1,
+    planSummaryJson: getReadyImportPlanSummary(),
+    progressJson: {
+      phase: 'analyze',
+      planRevision: 1,
+      stagingRevision: 1,
+      status: 'failed',
+      updatedAt: '2030-01-01T00:00:00.000Z',
+    },
+    state: 'failed',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await getRouteResponse(app, `/api/projects/import/${sessionId}`, 'GET')
+  const body = (await response.json()) as {
+    data: {canCommit: boolean; error: unknown; progress: {phase: string}; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {canCommit: false, error: {message: 'Analysis failed'}, progress: {phase: 'analyze'}, state: 'failed'},
+    error: null,
+  })
 })
 
 test('project transfer import get compacts completed import warning details for status polling', async () => {
@@ -1503,15 +1706,15 @@ test('project transfer import get fails the session when dependency artifacts ar
 })
 
 test('project transfer import analyze claims queued uploads and writes an inline contract plan', async () => {
-  routeState.sessions['import-analyze'] = getImportSessionRecord({
-    id: 'import-analyze',
+  routeState.sessions[inlineAnalyzeSessionId] = getImportSessionRecord({
+    id: inlineAnalyzeSessionId,
     progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
     state: 'queued',
   })
   const app = await getProjectTransferApp()
 
   const response = await app.handle(
-    new Request('http://localhost/api/projects/import/import-analyze/analyze', {
+    new Request(`http://localhost/api/projects/import/${inlineAnalyzeSessionId}/analyze`, {
       body: JSON.stringify({expandedBytes: 0}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -1537,13 +1740,64 @@ test('project transfer import analyze claims queued uploads and writes an inline
   expect(body.data.planSummary.blockerCount).toBe(1)
   expect(body.data.blockers).toHaveLength(1)
   expect(body.data.canCommit).toBe(false)
-  expect(routeState.sessions['import-analyze']?.ownerToken).toBeNull()
-  expect(routeState.sessions['import-analyze']?.packageFingerprint).toBe('analyzed-fingerprint')
-  expect(routeState.sessions['import-analyze']?.progressJson).toMatchObject({phase: 'analyze', status: 'completed'})
+  expect(routeState.sessions[inlineAnalyzeSessionId]?.ownerToken).toBeNull()
+  expect(routeState.sessions[inlineAnalyzeSessionId]?.packageFingerprint).toBe('analyzed-fingerprint')
+  expect(routeState.sessions[inlineAnalyzeSessionId]?.progressJson).toMatchObject({
+    phase: 'analyze',
+    status: 'completed',
+  })
+  expect(JSON.parse(readFileSync(getImportProgressPath(inlineAnalyzeSessionId), 'utf8'))).toMatchObject({
+    phase: 'analyze',
+    status: 'completed',
+  })
   expect(transitionProjectTransferSessionStateMock).toHaveBeenCalledTimes(2)
   expect(updateProjectTransferSessionPlanRevisionMock).toHaveBeenCalledWith(
     expect.objectContaining({nextOwnerToken: null, packageFingerprint: 'analyzed-fingerprint'}),
   )
+})
+
+test('project transfer import analyze replaces finalization progress before exposing the durable ready session', async () => {
+  const analyzeResult = getDefaultAnalyzeResult(1)
+  const readyAnalyzeResult = {
+    ...analyzeResult,
+    plan: {canCommit: true, planRevision: 1},
+    planSummary: {
+      ...analyzeResult.planSummary,
+      blockerCount: 0,
+      blockers: [],
+      conflictCounts: getFinalConflictCounts(),
+    },
+  }
+  routeState.analyzeResult = readyAnalyzeResult
+  routeState.sessions[analyzeLifecycleSessionId] = getImportSessionRecord({
+    id: analyzeLifecycleSessionId,
+    progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
+    state: 'queued',
+  })
+  const app = await getProjectTransferApp()
+
+  const analyzeResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${analyzeLifecycleSessionId}/analyze`, {
+      body: JSON.stringify({expandedBytes: 0}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  await globalThis.Bun.write(getImportPlanPath(analyzeLifecycleSessionId), JSON.stringify(readyAnalyzeResult.plan))
+  const progressArtifact = JSON.parse(readFileSync(getImportProgressPath(analyzeLifecycleSessionId), 'utf8')) as {
+    phase: string
+    status: string
+  }
+  const getResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${analyzeLifecycleSessionId}`, {method: 'GET'}),
+  )
+  const body = (await getResponse.json()) as {data: {canCommit: boolean; state: string}; error: string | null}
+
+  expect(analyzeResponse.status).toBe(200)
+  expect(progressArtifact).toMatchObject({phase: 'analyze', status: 'completed'})
+  expect(getResponse.status).toBe(200)
+  expect(body).toMatchObject({data: {canCommit: true, state: 'ready_to_commit'}, error: null})
+  expect(getProjectTransferSessionMock).toHaveBeenCalledWith({sessionId: analyzeLifecycleSessionId})
 })
 
 test('project transfer import analyze returns accepted when expanded size is unknown', async () => {

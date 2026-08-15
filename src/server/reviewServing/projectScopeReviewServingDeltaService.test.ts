@@ -85,16 +85,22 @@ test('project-scope article inserts and removals emit direct project membership 
     },
   ])
 
-  const inserts = getReviewChangeInsertStatements(statements).join('\n')
+  const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+    })
+    .join('\n')
 
-  expect(inserts).toContain('projectScope.article.added')
-  expect(inserts).toContain('projectScope.article.removed')
-  expect(inserts).toContain('app.project_article')
-  expect(inserts).toContain('projectScope:project-1')
-  expect(inserts).toContain('project-article-added')
-  expect(inserts).toContain('project-article-removed')
-  expect(inserts).toContain('FALSE')
-  expect(inserts).toContain('TRUE')
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows).toContain('projectScope.article.added')
+  expect(bulkRows).toContain('projectScope.article.removed')
+  expect(bulkRows).toContain('app.project_article')
+  expect(bulkRows).toContain('projectScope:project-1')
+  expect(bulkRows).toContain('project-article-added')
+  expect(bulkRows).toContain('project-article-removed')
+  expect(bulkRows).toContain('FALSE')
+  expect(bulkRows).toContain('TRUE')
 })
 
 test('project-scope remove deltas are tombstoned and replay idempotently after membership delete', async () => {

@@ -50,6 +50,12 @@ const getReviewChangeInsertStatements = (statements: string[]) => {
   })
 }
 
+const getReviewChangeBulkRowStatements = (statements: string[]) => {
+  return statements.filter((statement) => {
+    return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+  })
+}
+
 test('prompt config updates emit prompt scoped output-affecting fields', async () => {
   const {statements, tx} = createFakeLedgerTransaction()
 
@@ -107,14 +113,15 @@ test('provider model execution identity changes emit project review config delta
 
   const joined = statements.join('\n')
   const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = getReviewChangeBulkRowStatements(statements).join('\n')
 
   expect(joined).toContain('WHERE p.model_id IN')
   expect(joined).toContain("'model-1'")
   expect(joined).not.toContain('app.judgment')
   expect(joined).not.toContain('app.article')
-  expect(inserts).toHaveLength(2)
-  expect(inserts.join('\n')).toContain('modelExecutionIdentity')
-  expect(inserts.join('\n')).toContain('providerModelExecutionIdentity:model-1')
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows).toContain('modelExecutionIdentity')
+  expect(bulkRows).toContain('providerModelExecutionIdentity:model-1')
 })
 
 test('provider connection execution identity changes emit project review config deltas through scoped model join', async () => {
@@ -133,14 +140,15 @@ test('provider connection execution identity changes emit project review config 
 
   const joined = statements.join('\n')
   const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = getReviewChangeBulkRowStatements(statements).join('\n')
 
   expect(joined).toContain('WHERE m.provider_connection_id IN')
   expect(joined).toContain("'provider-1'")
   expect(joined).not.toContain('app.judgment')
   expect(joined).not.toContain('app.article')
-  expect(inserts).toHaveLength(2)
-  expect(inserts.join('\n')).toContain('modelExecutionIdentity')
-  expect(inserts.join('\n')).toContain('providerConnectionExecutionIdentity:provider-1')
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows).toContain('modelExecutionIdentity')
+  expect(bulkRows).toContain('providerConnectionExecutionIdentity:provider-1')
 })
 
 test('config delta invalidation includes project scope for date and import-route edits', () => {

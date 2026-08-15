@@ -10,7 +10,7 @@ import {
   getProjectTransferExportHumanReviewInputSignature,
   getProjectTransferExportJudgmentInputSignature,
 } from './projectTransferExport.ts'
-import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
+import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import type {
   ProjectTransferContentSettings,
   ProjectTransferPayloadByKey,
@@ -128,6 +128,11 @@ const fidelityBlockerCodePrefixes = [
   'review_',
 ] as const
 
+export const projectTransferJudgmentAnalysisFieldSignatureDigestField =
+  'judgmentAnalysisFieldSignatureDigestSha256' as const
+export const projectTransferJudgmentAnalysisInputSignatureDigestField =
+  'judgmentAnalysisInputSignatureDigestSha256' as const
+
 export const isProjectTransferFidelityBlocker = (blocker: ProjectTransferPlanBlocker) => {
   return fidelityBlockerCodePrefixes.some((prefix) => {
     return blocker.code.startsWith(prefix)
@@ -200,6 +205,24 @@ const getJudgmentFidelitySignature = (signature: unknown) => {
 
 const judgmentSignaturesEquivalent = (left: unknown, right: unknown) => {
   return valuesEquivalent(getJudgmentFidelitySignature(left), getJudgmentFidelitySignature(right))
+}
+
+export const getProjectTransferJudgmentAnalysisInputSignatureDigest = (signature: unknown) => {
+  return getProjectTransferSha256Checksum(getCanonicalValue(getJudgmentFidelitySignature(signature)))
+}
+
+const judgmentAnalysisInputSignatureMatches = ({
+  computedSignature,
+  judgment,
+}: {
+  computedSignature: unknown
+  judgment: ProjectTransferPayloadRecord
+}) => {
+  const compactDigest = getNullableStringField(judgment, projectTransferJudgmentAnalysisInputSignatureDigestField)
+
+  return compactDigest === null
+    ? judgmentSignaturesEquivalent(computedSignature, judgment.judgmentInputSignature)
+    : compactDigest === getProjectTransferJudgmentAnalysisInputSignatureDigest(computedSignature)
 }
 
 const getComparableContentSettings = (value: unknown): ProjectTransferContentSettings => {
@@ -858,6 +881,25 @@ const getImportedJudgmentFieldSignature = (judgment: ProjectTransferPayloadRecor
   }
 }
 
+export const getProjectTransferJudgmentAnalysisFieldSignatureDigest = (judgment: ProjectTransferPayloadRecord) => {
+  return getProjectTransferSha256Checksum(getCanonicalValue(getImportedJudgmentFieldSignature(judgment)))
+}
+
+const judgmentAnalysisFieldSignatureMatches = ({
+  judgment,
+  targetJudgment,
+}: {
+  judgment: ProjectTransferPayloadRecord
+  targetJudgment: TargetJudgmentRow
+}) => {
+  const compactDigest = getNullableStringField(judgment, projectTransferJudgmentAnalysisFieldSignatureDigestField)
+
+  return compactDigest === null
+    ? valuesEquivalent(getTargetJudgmentFieldSignature(targetJudgment), getImportedJudgmentFieldSignature(judgment))
+    : compactDigest
+        === getProjectTransferSha256Checksum(getCanonicalValue(getTargetJudgmentFieldSignature(targetJudgment)))
+}
+
 const getImportedAssessmentSignature = (assessment: ProjectTransferPayloadRecord) => {
   return {
     assessmentComment: getNullableStringField(assessment, 'assessmentComment'),
@@ -1076,13 +1118,9 @@ const getJudgmentPlan = async ({
       providerInputById,
     })
     const inputSignatureMatches =
-      computedSignature === null
-        ? null
-        : judgmentSignaturesEquivalent(computedSignature, judgment.judgmentInputSignature)
+      computedSignature === null ? null : judgmentAnalysisInputSignatureMatches({computedSignature, judgment})
     const fieldSignatureMatches =
-      targetJudgment === null
-        ? true
-        : valuesEquivalent(getTargetJudgmentFieldSignature(targetJudgment), getImportedJudgmentFieldSignature(judgment))
+      targetJudgment === null ? true : judgmentAnalysisFieldSignatureMatches({judgment, targetJudgment})
     const conflictCodes = [
       ...(targetArticleId === null || targetPromptId === null || targetModelId === null
         ? ['judgment_unique_key_unresolved']

@@ -8,6 +8,7 @@ import {expect, test} from 'bun:test'
 
 import {analyzeProjectTransferImportPackage} from './projectTransferAnalyze.ts'
 import type {ProjectTransferAnalyzeTargetRunner} from './projectTransferAnalyzeTarget.ts'
+import {writeProjectTransferCanonicalJsonArtifact} from './projectTransferCanonicalJsonArtifact.ts'
 import {
   getProjectTransferCanonicalJson,
   getProjectTransferPackageFingerprint,
@@ -400,6 +401,7 @@ const writeAnalyzeUpload = async ({
   return {
     layout,
     manifest,
+    serializedPayloads,
     uploadMetadata: {
       byteLength: zipPackage.bytes.byteLength,
       checksumSha256: zipPackage.checksumSha256,
@@ -677,6 +679,7 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     })
     expect(result.planSummary.judgmentConflictStatus).toBe('unknown')
     expect(result.analysis.payloads.articles.actualRecordCount).toBe(1)
+    expect(result.analysis.archive.packageSizeBytes).toBe(uploadMetadata.byteLength)
     expect(result.analysis.stagedPackage?.rowCounts.articles).toBe(1)
     expect(result.analysis.stagedPackage?.canonicalPayloadChecksums.articles).toBe(
       getProjectTransferSha256Checksum(extractedArticlesBytes),
@@ -704,11 +707,29 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
   }
 })
 
+test('releases raw archive buffers before target analysis', async () => {
+  const source = await readFile(new URL('./projectTransferAnalyze.ts', import.meta.url), 'utf8')
+  const releaseStart = source.indexOf(
+    'const archiveEntries = releaseProjectTransferAnalyzeArchiveBuffers(zipPackage.entries)',
+  )
+  const releaseEnd = source.indexOf('globalThis.Bun.gc(true)', releaseStart) + 'globalThis.Bun.gc(true)'.length
+  const targetAnalysisStart = source.indexOf('const targetAnalysisMeasurement =', releaseEnd)
+  const afterRelease = source.slice(releaseEnd)
+  const afterReleaseWithoutMetricKeys = afterRelease.replaceAll(/packageBytes\s*:/g, '')
+
+  expect(releaseStart).toBeGreaterThan(-1)
+  expect(releaseEnd).toBeGreaterThan(releaseStart)
+  expect(targetAnalysisStart).toBeGreaterThan(releaseEnd)
+  expect(afterReleaseWithoutMetricKeys).not.toContain('packageBytes')
+  expect(afterRelease).not.toContain('zipPackage')
+})
+
 test('auto-resolves provider and model dependencies during analyze when enabled', async () => {
   const cwd = getRuntimeRoot()
 
   try {
     const progressEvents: {phase: string; status: string}[] = []
+    const progressMessages: (string | null | undefined)[] = []
     const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd, useZipModule: false})
     const result = await analyzeProjectTransferImportPackage({
       autoResolveDependencies: true,
@@ -722,6 +743,7 @@ test('auto-resolves provider and model dependencies during analyze when enabled'
       layout,
       onProgress: (progress) => {
         progressEvents.push({phase: progress.phase, status: progress.status})
+        progressMessages.push(progress.message)
       },
       planRevision: 1,
       runner: getEmptyAnalyzeTargetRunner(),
@@ -757,7 +779,129 @@ test('auto-resolves provider and model dependencies during analyze when enabled'
     expect(planArtifact.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'new:model:model-1'})
     expect(progressEvents).toContainEqual({phase: 'dependency_resolution', status: 'running'})
     expect(progressEvents).toContainEqual({phase: 'dependency_resolution', status: 'completed'})
+    expect(progressMessages.indexOf('Planning import changes')).toBe(
+      progressMessages.indexOf('Target project analysis completed') + 1,
+    )
   } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('refreshes the atomic progress artifact while target analysis remains pending', async () => {
+  const cwd = getRuntimeRoot()
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const intervalCallbacks: (() => void)[] = []
+  const intervalDurations: number[] = []
+  let clearedIntervalCount = 0
+  let heartbeatPublishedCount = 0
+  let releaseHeartbeatUpdates = () => {}
+  let releaseTargetQuery = () => {}
+  let resolveFirstHeartbeat = () => {}
+  let resolveSecondHeartbeat = () => {}
+  let resolveTargetQueryStarted = () => {}
+  const heartbeatUpdatesReleased = new Promise<void>((resolve) => {
+    releaseHeartbeatUpdates = resolve
+  })
+  const firstHeartbeatPublished = new Promise<void>((resolve) => {
+    resolveFirstHeartbeat = resolve
+  })
+  const secondHeartbeatPublished = new Promise<void>((resolve) => {
+    resolveSecondHeartbeat = resolve
+  })
+  const targetQueryReleased = new Promise<void>((resolve) => {
+    releaseTargetQuery = resolve
+  })
+  const targetQueryStarted = new Promise<void>((resolve) => {
+    resolveTargetQueryStarted = resolve
+  })
+  let targetQueryPaused = false
+  let analyzeAttempt: ReturnType<typeof analyzeProjectTransferImportPackage> | null = null
+
+  globalThis.setInterval = ((callback: () => void, intervalMs?: number) => {
+    intervalCallbacks.push(callback)
+    intervalDurations.push(intervalMs ?? 0)
+    return {unref: () => {}}
+  }) as typeof setInterval
+  globalThis.clearInterval = (() => {
+    clearedIntervalCount += 1
+  }) as typeof clearInterval
+
+  try {
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd, useZipModule: false})
+    const progressPath = join(cwd, layout.progressPath)
+    const runner: ProjectTransferAnalyzeTargetRunner = {
+      queryJson: async <T>(_statement: string): Promise<T[]> => {
+        if (!targetQueryPaused) {
+          targetQueryPaused = true
+          resolveTargetQueryStarted()
+          await targetQueryReleased
+        }
+
+        return []
+      },
+    }
+    analyzeAttempt = analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      onProgress: async (progress) => {
+        await writeProjectTransferCanonicalJsonArtifact({filePath: progressPath, value: progress})
+
+        if (progress.message === 'Analyzing target project state') {
+          heartbeatPublishedCount += 1
+          const resolvePublished = heartbeatPublishedCount === 1 ? resolveFirstHeartbeat : resolveSecondHeartbeat
+          resolvePublished()
+          await heartbeatUpdatesReleased
+        }
+      },
+      planRevision: 1,
+      runner,
+      uploadMetadata,
+      zipModule,
+    })
+
+    await targetQueryStarted
+    expect(intervalCallbacks).toHaveLength(1)
+    expect(intervalDurations).toEqual([15_000])
+
+    intervalCallbacks[0]?.()
+    await firstHeartbeatPublished
+    const firstHeartbeat = JSON.parse(await readFile(progressPath, 'utf8')) as {
+      message: string
+      status: string
+      updatedAt: string
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5)
+    })
+    intervalCallbacks[0]?.()
+    await secondHeartbeatPublished
+    const secondHeartbeat = JSON.parse(await readFile(progressPath, 'utf8')) as {
+      message: string
+      status: string
+      updatedAt: string
+    }
+
+    expect(heartbeatPublishedCount).toBe(2)
+    expect(firstHeartbeat).toMatchObject({message: 'Analyzing target project state', status: 'running'})
+    expect(secondHeartbeat).toMatchObject({message: 'Analyzing target project state', status: 'running'})
+    expect(new Date(secondHeartbeat.updatedAt).getTime()).toBeGreaterThan(new Date(firstHeartbeat.updatedAt).getTime())
+    expect(clearedIntervalCount).toBe(0)
+
+    releaseHeartbeatUpdates()
+    releaseTargetQuery()
+    await analyzeAttempt
+    expect(clearedIntervalCount).toBe(1)
+  } finally {
+    releaseHeartbeatUpdates()
+    releaseTargetQuery()
+    await analyzeAttempt?.catch(() => {
+      return undefined
+    })
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
     rmSync(cwd, {force: true, recursive: true})
   }
 })
@@ -1355,6 +1499,35 @@ test('normalizes schema-vNext NDJSON payloads to legacy JSON artifacts for downs
     const parsedLegacyProjectPrompts = JSON.parse(legacyProjectPromptsText) as unknown
 
     expect(Array.isArray(parsedLegacyProjectPrompts)).toBe(true)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('keeps full staged judgments while planning from compact fidelity digests', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, manifest, serializedPayloads, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd})
+    const result = await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 10,
+      runner: getEmptyAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    const stagedJudgments = await readFile(
+      join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.judgments),
+      'utf8',
+    )
+    const [judgmentPlan] = result.plan.targetPlan.judgmentPlan ?? []
+
+    expect(stagedJudgments).toBe(serializedPayloads.judgments)
+    expect(result.analysis.computedPackageFingerprint).toBe(manifest.packageFingerprint)
+    expect(result.analysis.stagedPackage?.packageFingerprintInputs.checksumSha256).toBe(manifest.packageFingerprint)
+    expect(judgmentPlan?.inputSignatureMatches).toBe(true)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

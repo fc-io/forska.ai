@@ -351,7 +351,7 @@ test('rejects stream entries when precomputed metadata does not match written by
   )
 })
 
-test('reads and writes project-transfer packages without the optional zip module', async () => {
+test('reads STORE entry bytes as read-only views backed by the source archive', async () => {
   const manifestBytes = getBytes('{"schemaVersion":1}')
   const articleBytes = getBytes('article-one')
   const written = await writeProjectTransferZipPackage({
@@ -369,6 +369,7 @@ test('reads and writes project-transfer packages without the optional zip module
     }),
   ).toEqual(['manifest.json', 'assets/articles/article-1.txt'])
   expect(read.entries[1]?.bytes).toEqual(articleBytes)
+  expect(read.entries[1]?.bytes.buffer).toBe(written.bytes.buffer)
   expect(read.entries[1]?.compressedSize).toBe(articleBytes.byteLength)
 })
 

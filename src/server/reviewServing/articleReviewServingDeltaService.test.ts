@@ -1,6 +1,9 @@
 import {expect, test} from 'bun:test'
 
-import {appendArticleReviewServingDeltas} from './articleReviewServingDeltaService.ts'
+import {
+  appendArticleReviewServingDeltas,
+  appendArticleReviewServingDeltasForIds,
+} from './articleReviewServingDeltaService.ts'
 import {
   getReviewServingDeltaIdempotencyKey,
   type ReviewServingDeltaLedgerTransaction,
@@ -39,6 +42,12 @@ const getReviewChangeInsertStatements = (statements: string[]) => {
   })
 }
 
+const getReviewChangeBulkRowStatements = (statements: string[]) => {
+  return statements.filter((statement) => {
+    return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+  })
+}
+
 test('article title updates emit display search and judgment-input deltas in one transaction', async () => {
   const {statements, tx} = createFakeLedgerTransaction()
 
@@ -50,15 +59,16 @@ test('article title updates emit display search and judgment-input deltas in one
   })
 
   const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = getReviewChangeBulkRowStatements(statements).join('\n')
 
-  expect(inserts).toHaveLength(3)
-  expect(inserts.join('\n')).toContain('article.display.updated')
-  expect(inserts.join('\n')).toContain('article.searchText.updated')
-  expect(inserts.join('\n')).toContain('article.judgmentInput.updated')
-  expect(inserts.join('\n')).toContain('changedDisplayFieldNames')
-  expect(inserts.join('\n')).toContain('changedSearchableFieldNames')
-  expect(inserts.join('\n')).toContain('affectedContentFlags')
-  expect(inserts.join('\n')).toContain('useTitle')
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows).toContain('article.display.updated')
+  expect(bulkRows).toContain('article.searchText.updated')
+  expect(bulkRows).toContain('article.judgmentInput.updated')
+  expect(bulkRows).toContain('changedDisplayFieldNames')
+  expect(bulkRows).toContain('changedSearchableFieldNames')
+  expect(bulkRows).toContain('affectedContentFlags')
+  expect(bulkRows).toContain('useTitle')
 })
 
 test('display search and judgment-input content identities advance independently by changed field', async () => {
@@ -85,9 +95,9 @@ test('display search and judgment-input content identities advance independently
     sourceOperation: 'update',
   })
 
-  const displayOnlyInserts = getReviewChangeInsertStatements(displayOnly.statements).join('\n')
-  const searchAndJudgmentInserts = getReviewChangeInsertStatements(searchAndJudgment.statements).join('\n')
-  const judgmentOnlyInserts = getReviewChangeInsertStatements(judgmentOnly.statements).join('\n')
+  const displayOnlyInserts = getReviewChangeBulkRowStatements(displayOnly.statements).join('\n')
+  const searchAndJudgmentInserts = getReviewChangeBulkRowStatements(searchAndJudgment.statements).join('\n')
+  const judgmentOnlyInserts = getReviewChangeBulkRowStatements(judgmentOnly.statements).join('\n')
 
   expect(displayOnlyInserts).toContain('article.display.updated')
   expect(displayOnlyInserts).not.toContain('article.searchText.updated')
@@ -110,14 +120,16 @@ test('url and metadata-only article updates emit display payload deltas', async 
     sourceOperation: 'update',
   })
 
-  const inserts = getReviewChangeInsertStatements(statements).join('\n')
+  const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = getReviewChangeBulkRowStatements(statements).join('\n')
 
-  expect(inserts).toContain('article.display.updated')
-  expect(inserts).toContain('url')
-  expect(inserts).toContain('sourceMetadata')
-  expect(inserts).toContain('doi')
-  expect(inserts).not.toContain('article.searchText.updated')
-  expect(inserts).not.toContain('article.judgmentInput.updated')
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows).toContain('article.display.updated')
+  expect(bulkRows).toContain('url')
+  expect(bulkRows).toContain('sourceMetadata')
+  expect(bulkRows).toContain('doi')
+  expect(bulkRows).not.toContain('article.searchText.updated')
+  expect(bulkRows).not.toContain('article.judgmentInput.updated')
 })
 
 test('article delta idempotency separates display search and judgment-input identities', () => {
@@ -145,4 +157,26 @@ test('article delta idempotency separates display search and judgment-input iden
   })
 
   expect(new Set([displayKey, searchKey, judgmentInputKey]).size).toBe(3)
+})
+
+test('article id batches append all distinct article deltas in one review-change insert', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendArticleReviewServingDeltasForIds(tx, {
+    articleIds: ['article-1', 'article-2', 'article-1'],
+    changedFields: ['articleTitle'],
+    sourceMutationKey: 'article-batch',
+    sourceMutationKeySuffix: '2026-08-15T10:00:00.000Z',
+    sourceOperation: 'insert',
+  })
+
+  const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = getReviewChangeBulkRowStatements(statements).join('\n')
+
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows.match(/article\.display\.updated/g)).toHaveLength(2)
+  expect(bulkRows.match(/article\.searchText\.updated/g)).toHaveLength(2)
+  expect(bulkRows.match(/article\.judgmentInput\.updated/g)).toHaveLength(2)
+  expect(bulkRows).toContain('article-1')
+  expect(bulkRows).toContain('article-2')
 })

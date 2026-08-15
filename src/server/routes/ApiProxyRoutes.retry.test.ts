@@ -124,6 +124,21 @@ const waitForForwardedRequestAbort = async (request: Request) => {
   })
 }
 
+const writeFailedImportProgressArtifact = () => {
+  mkdirSync(importArtifactTestRoot, {recursive: true})
+  writeFileSync(
+    join(importArtifactTestRoot, 'progress.json'),
+    JSON.stringify({
+      message: 'Commit failed; rollback cleanup completed or was not required',
+      phase: 'commit',
+      rowCountProcessed: 0,
+      rowCountTotal: 142_616,
+      status: 'failed',
+      updatedAt: '2030-01-01T00:00:00.000Z',
+    }),
+  )
+}
+
 const getTextStream = (text: string, onPull: () => void) => {
   const streamState = {sent: false}
 
@@ -361,6 +376,152 @@ test.serial('api proxy falls through stale active project import status artifact
 
   expect(response.status).toBe(200)
   expect(body).toMatchObject({data: {state: 'failed'}, error: null})
+  expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
+  )
+})
+
+test.serial('api proxy prefers durable owner errors over failed project import status artifacts', async () => {
+  const app = await loadRoutes()
+  writeFailedImportProgressArtifact()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    return isRuntimeReadyUrl(url)
+      ? getCompatibleRuntimeReadyResponse()
+      : Response.json({
+          data: {
+            error: {message: 'Durable DuckDB out of memory error', name: 'Error'},
+            id: 'api-proxy-status-artifact-test',
+            state: 'failed',
+          },
+          error: null,
+        })
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/api-proxy-status-artifact-test', {method: 'GET'}),
+  )
+  const body = (await response.json()) as {data: {error: unknown; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {error: {message: 'Durable DuckDB out of memory error', name: 'Error'}, state: 'failed'},
+    error: null,
+  })
+  expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
+  )
+})
+
+test.serial('api proxy falls back to failed import progress when the DuckDB owner is unavailable', async () => {
+  const app = await loadRoutes()
+  writeFailedImportProgressArtifact()
+  state.ownerUrls = []
+  const fetchMock = mock(async () => {
+    throw new Error('owner proxy should not fetch without an owner target')
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/api-proxy-status-artifact-test', {method: 'GET'}),
+  )
+  const body = (await response.json()) as {data: {progress: {message: string}; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {progress: {message: 'Commit failed; rollback cleanup completed or was not required'}, state: 'failed'},
+    error: null,
+  })
+  expect(fetchMock).toHaveBeenCalledTimes(0)
+})
+
+test.serial('api proxy falls back to failed import progress when the DuckDB owner returns 502', async () => {
+  const app = await loadRoutes()
+  writeFailedImportProgressArtifact()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    return isRuntimeReadyUrl(url)
+      ? getCompatibleRuntimeReadyResponse()
+      : Response.json({data: null, error: 'DuckDB owner unavailable'}, {status: 502})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/api-proxy-status-artifact-test', {method: 'GET'}),
+  )
+  const body = (await response.json()) as {data: {state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({data: {state: 'failed'}, error: null})
+  expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
+  )
+})
+
+test.serial('api proxy falls back to failed import progress when the DuckDB owner returns 504', async () => {
+  const app = await loadRoutes()
+  writeFailedImportProgressArtifact()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    return isRuntimeReadyUrl(url)
+      ? getCompatibleRuntimeReadyResponse()
+      : Response.json({data: null, error: 'DuckDB owner timed out'}, {status: 504})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/api-proxy-status-artifact-test', {method: 'GET'}),
+  )
+  const body = (await response.json()) as {data: {state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({data: {state: 'failed'}, error: null})
+  expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
+  )
+})
+
+test.serial('api proxy falls back to stale active import progress when the DuckDB owner times out', async () => {
+  const app = await loadRoutes()
+  mkdirSync(importArtifactTestRoot, {recursive: true})
+  writeFileSync(
+    join(importArtifactTestRoot, 'progress.json'),
+    JSON.stringify({
+      message: 'Finalizing import analysis artifacts',
+      phase: 'analyze',
+      rowCountProcessed: 142_616,
+      rowCountTotal: 142_616,
+      status: 'running',
+      updatedAt: '2020-01-01T00:00:00.000Z',
+    }),
+  )
+  const timeoutMock = installFastAbortSignalTimeoutMock()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
+    await waitForForwardedRequestAbort(request as Request)
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/api-proxy-status-artifact-test', {method: 'GET'}),
+  )
+  const body = (await response.json()) as {data: {progress: {message: string}; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {progress: {message: 'Finalizing import analysis artifacts'}, state: 'analyzing'},
+    error: null,
+  })
+  expect(timeoutMock).toHaveBeenCalledWith(15000)
   expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
     'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
   )

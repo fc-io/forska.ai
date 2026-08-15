@@ -451,7 +451,30 @@ const getProjectTransferImportArtifactProxyResponse = async (requestTemplate: Du
     await import('./projectTransferRoutes.ts')
   const artifactResponse = await getImportSessionArtifactResponse(sessionId)
 
-  return artifactResponse === null || !shouldUseImportSessionArtifactResponse(artifactResponse)
+  return artifactResponse === null
+    || artifactResponse.data === null
+    || artifactResponse.data.state === 'failed'
+    || !shouldUseImportSessionArtifactResponse(artifactResponse)
+    ? null
+    : Response.json(artifactResponse)
+}
+
+const getProjectTransferImportArtifactFallbackProxyResponse = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+) => {
+  const sessionId = getImportSessionIdFromProxyPathname(requestTemplate)
+
+  if (sessionId === null) {
+    return null
+  }
+
+  const {getImportSessionArtifactResponse, shouldUseImportSessionArtifactResponse} =
+    await import('./projectTransferRoutes.ts')
+  const artifactResponse = await getImportSessionArtifactResponse(sessionId)
+
+  return artifactResponse === null
+    || artifactResponse.data === null
+    || (artifactResponse.data.state !== 'failed' && shouldUseImportSessionArtifactResponse(artifactResponse))
     ? null
     : Response.json(artifactResponse)
 }
@@ -477,6 +500,16 @@ const getProjectTransferArtifactProxyResponse = async (requestTemplate: DuckdbOw
     (await getProjectTransferImportArtifactProxyResponse(requestTemplate))
     ?? (await getProjectTransferExportArtifactProxyResponse(requestTemplate))
   )
+}
+
+const getImportArtifactFallbackForOwnerFailure = (
+  ownerResponse: Response | null,
+  artifactResponse: Response | null,
+) => {
+  return artifactResponse !== null
+    && (ownerResponse === null || ownerResponse.status === 502 || ownerResponse.status === 504)
+    ? artifactResponse
+    : ownerResponse
 }
 
 const getDuckdbOwnerProxyResponseHeaders = (response: Response) => {
@@ -558,10 +591,12 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
     return artifactResponse
   }
 
+  const importArtifactFallbackResponse = await getProjectTransferImportArtifactFallbackProxyResponse(requestTemplate)
+
   const target = await getDuckdbOwnerProxyTargetFailureResponse(requestTemplate)
 
   if ('response' in target) {
-    return target.response
+    return getImportArtifactFallbackForOwnerFailure(target.response, importArtifactFallbackResponse)
   }
 
   const shouldRetryProxyRequest = duckdbOwnerProxyRetryableMethods.has(requestTemplate.method)
@@ -571,17 +606,25 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
       ? await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
       : await fetchNonRetryableDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
 
-    return getDuckdbOwnerProxyResponse(response)
+    const ownerResponse = getDuckdbOwnerProxyResponse(response)
+
+    return getImportArtifactFallbackForOwnerFailure(ownerResponse, importArtifactFallbackResponse)
   } catch {
     if (!shouldRetryProxyRequest) {
-      return getDuckdbOwnerProxyFailureResponse(requestTemplate)
+      return getImportArtifactFallbackForOwnerFailure(
+        getDuckdbOwnerProxyFailureResponse(requestTemplate),
+        importArtifactFallbackResponse,
+      )
     }
 
     const retriedResponse = await getRetriedProxyResponse(requestTemplate, target.duckdbOwnerUrl)
 
-    return retriedResponse === null
-      ? getDuckdbOwnerProxyFailureResponse(requestTemplate)
-      : getDuckdbOwnerProxyResponse(retriedResponse)
+    const ownerResponse =
+      retriedResponse === null
+        ? getDuckdbOwnerProxyFailureResponse(requestTemplate)
+        : getDuckdbOwnerProxyResponse(retriedResponse)
+
+    return getImportArtifactFallbackForOwnerFailure(ownerResponse, importArtifactFallbackResponse)
   }
 }
 

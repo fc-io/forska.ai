@@ -175,6 +175,7 @@ test('serverMain lazy-loads cron routes so disabled low-memory crons cannot star
 test('serverMain low-memory cron deferral follows maintenance-capable roles and normalized env', () => {
   const serverMainText = readFileSync(serverMainPath, 'utf8')
 
+  expect(serverMainText).toContain('const lowMemoryMaintenanceDuckdbLimitMiB = 8192')
   expect(serverMainText).toContain('parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)')
   expect(serverMainText).toContain('shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())')
   expect(serverMainText).toContain('shouldMountJudgingCrons && !shouldMountMaintenanceCrons')

@@ -57,15 +57,21 @@ test('LLM judgment deltas preserve persisted benchmark-critical model and conten
     },
   ])
 
-  const inserts = getReviewChangeInsertStatements(statements).join('\n')
+  const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+    })
+    .join('\n')
 
-  expect(inserts).toContain('judgment.llm.updated')
-  expect(inserts).toContain('model-persisted')
-  expect(inserts).toContain('prompt-1')
-  expect(inserts).toContain('judgment-1')
-  expect(inserts).toContain('FALSE')
-  expect(inserts).toContain('TRUE')
-  expect(inserts).toContain('llmJudgment:article-1')
-  expect(inserts).not.toContain('retry')
-  expect(inserts).not.toContain('fallback')
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows).toContain('judgment.llm.updated')
+  expect(bulkRows).toContain('model-persisted')
+  expect(bulkRows).toContain('prompt-1')
+  expect(bulkRows).toContain('judgment-1')
+  expect(bulkRows).toContain('FALSE')
+  expect(bulkRows).toContain('TRUE')
+  expect(bulkRows).toContain('llmJudgment:article-1')
+  expect(bulkRows).not.toContain('retry')
+  expect(bulkRows).not.toContain('fallback')
 })
