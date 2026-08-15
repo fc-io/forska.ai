@@ -298,6 +298,29 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under low-memor
   ])
 })
 
+test('startBackgroundWork bounds the projector at the eight GiB owner boundary', () => {
+  const result = runStartBackgroundWork({duckdbMemoryLimit: '8192MiB', role: 'maintenance-worker'})
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
+  ])
+})
+
+test('startBackgroundWork keeps full maintenance enabled above the eight GiB owner boundary', () => {
+  const result = runStartBackgroundWork({duckdbMemoryLimit: '8193MiB', role: 'maintenance-worker'})
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'requestAttemptCloseoutBackfillScheduler',
+    'reviewBulkOperationWorkerHeartbeat',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:false',
+  ])
+})
+
 test('startBackgroundWork defers nonessential DuckDB maintenance under normalized default owner limit', () => {
   const result = runStartBackgroundWork({
     defaultMaintenanceDuckdbMemoryLimit: '6400MiB',

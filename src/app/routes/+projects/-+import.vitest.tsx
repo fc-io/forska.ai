@@ -665,6 +665,43 @@ describe('project import route', () => {
     }
   })
 
+  test('retries a failed commit when the server confirms the validated plan is still commit-ready', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        canCommit: true,
+        error: {message: 'Previous commit ran out of memory', name: 'Error'},
+        progress: {phase: 'commit', status: 'failed'},
+        state: 'failed',
+      }),
+    }
+    mockState.commitResult = getSession({
+      canCommit: false,
+      progress: {phase: 'revalidation', status: 'running'},
+      state: 'committing',
+      updatedAt: '2030-01-01T00:00:01.000Z',
+    })
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const retryButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.includes('Retry project import')
+      })
+
+      expect(retryButton?.disabled).toBe(false)
+      expect(container.textContent).toContain('The previous commit failed. The validated plan is ready to retry.')
+
+      retryButton?.click()
+      await flushMutationUpdates()
+
+      expect(mockState.commitInputs).toEqual([{planRevision: 2, sessionId: 'session-1'}])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('updates the session query cache when a background commit starts', async () => {
     const committingSession = getSession({
       canCommit: false,
@@ -739,12 +776,7 @@ describe('project import route', () => {
       updatedAt: '2030-01-01T00:17:00.000Z',
     }) as ReplacementInput['next']
 
-    expect(
-      shouldReplaceSessionOverride({
-        current: committingSession,
-        next: completedSession,
-      }),
-    ).toBe(true)
+    expect(shouldReplaceSessionOverride({current: committingSession, next: completedSession})).toBe(true)
   })
 
   test('shows the stored session error when background commit fails after polling', async () => {

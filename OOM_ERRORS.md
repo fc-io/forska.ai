@@ -12,6 +12,38 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-08-15 - Review-Serving Projector Maintenance Restarts
+
+- Error: The DuckDB maintenance child repeatedly exited natively with code 9 every 8–50 seconds while bootstrapping review-serving state for a newly imported project.
+- Context: Split local server with an 8,139 MiB maintenance-owner limit after importing 142,616 project-transfer rows; the project had tens of thousands of article-scoped source partitions and no active review-serving snapshot.
+- Cause: Source-watermark normalization copied an ever-growing object once per partition, making bootstrap O(n²). The resulting snapshot also retained every raw article partition instead of only canonical source families. After bounding those paths, DuckDB still terminated on writes to the indexed `review_projection_identity_manifest` and `review_serving_snapshot_manifest` tables, which had been missed by the earlier no-index repairs for write-hot review-serving tables.
+- Fix: Normalize watermarks through a private mutable accumulator, retain only canonical source-family maxima in bootstrap manifests, split large stats/watermark reads, seed bootstrap manifests before publishing request chunks, and rebuild the two remaining write-hot manifest tables without indexes. Constrained 8 GiB owners also use bounded maintenance/projector budgets, and admitted oversized `selectedImport` chunks split to the existing 5,000-row target.
+- Verification: A 20,000-partition boundary regression, rebuild-request/migration/projector tests, focused lint, and live monitoring: the repaired owner stayed ready through multiple cycles, seeded the missing snapshot, and split the 222,301-row rebuild while remaining near 1 GiB private memory.
+
+## 2026-08-15 - Project Transfer Analyze Finalization
+
+- Error: Windows resource-exhaustion event 2004 reported `bun.exe (8128) consumed 15,911,014,400 bytes`; the maintenance owner then exited unexpectedly with code 3 before writing import analysis artifacts. The recovered session later reached commit, where DuckDB failed at `7.9 GiB/7.9 GiB` while inserting `app.review_change_delta`.
+- Context: Project-transfer import session `0697c50e-9ab1-47b7-84c1-ef39c2a7c490`, a 703,600,320-byte package with 142,616 rows, including 572,521,301 bytes across 67,463 judgment rows.
+- Cause: Analyze retained the archive, extracted entry bytes, and full parsed payload objects, including 572,521,301 bytes of judgment NDJSON whose repeated signatures dominated the live object graph, then regenerated each schema-vNext logical payload digest by recursively copying the full payload and materializing, sorting, and joining package-sized canonical NDJSON strings. Canonical plan persistence also built a single 71.7 MB JSON string. Commit then emitted 56,352 created-article deltas and 18,784 project-scope deltas through a scalar ledger path that performed five DuckDB statements per row inside one transaction, exhausting transaction-local memory. During both phases status artifacts could stop serving while the DuckDB owner event loop was busy.
+- Fix: Schema-vNext staging now hashes each full row before retaining only compact judgment planning keys and canonical fidelity digests, while preserving complete staged NDJSON for commit. Payload metadata and package fingerprints consume those compact row/singleton digests without materializing canonical NDJSON, digest grouping no longer copies an ever-growing array per row, canonical JSON artifacts stream bounded chunks through a temporary file and atomic rename, review-serving ledger and import hot-field rows use bounded bulk writes with range-based watermarks, and finalization/status fallback remains pollable while the owner is busy.
+- Verification: Focused project-transfer analyzer, fidelity, fingerprint, canonical-artifact, commit-writer, review-serving ledger, route, and API-proxy tests; lint/build and successful supplied-session browser commit.
+
+## 2026-08-15 - Project Transfer Commit Judgment Materialization
+
+- Error: The maintenance owner reached roughly 11 GB of private memory during the supplied package commit and restarted before recording durable completion.
+- Context: Production project-transfer app-table commit for the 703,600,320-byte package containing 67,463 judgment rows and 572,521,301 bytes of judgment NDJSON.
+- Cause: Commit staging read the entire judgment file into one string and retained every full parsed object while DuckDB operation tables held the same full JSON; the set-based writer then created another full-field judgment row array even though its SQL already validated and inserted from the operation table.
+- Fix: Production commit now streams and validates each staged judgment while retaining only its source ID, and the set-based writer validates/inserts full fields exclusively from the operation table while deriving final source-to-target IDs from the frozen plan and commit maps. The full loader remains available for revalidation and non-set-based paths.
+- Verification: Focused project-transfer commit, set-based writer, workload guard, lint, and diff checks.
+
+## 2026-08-15 - Project Transfer Commit Operation-Table Transaction
+
+- Error: A supplied-package commit again stopped after `Waiting for DuckDB maintenance work to pause`; the prior attempt had exhausted DuckDB at `7.9 GiB/7.9 GiB` during the same set-based commit path.
+- Context: Project-transfer import session `91384a16-b5c6-43c2-b615-d1e4ac2647de`, whose staged judgment operation table is derived from 572,521,301 bytes of NDJSON.
+- Cause: All operation-table `CREATE TEMP TABLE AS` loads ran inside the atomic app-write transaction, so the parsed staging data remained transaction-local while target validation, inserts, and rollback bookkeeping added their own memory pressure. A failed statement also attempted temp-table cleanup inside the already-aborted transaction.
+- Fix: Operation tables now load through autocommit on the singleton DuckDB control connection before the app-write transaction, retaining the exclusive project-transfer workload context. Target validation and app mutations remain in one transaction, while temp tables clean up after commit, rollback, or a partial load failure.
+- Verification: Real DuckDB operation-table visibility/rollback cleanup test, partial-load cleanup/context test, commit transaction-boundary guard, focused project-transfer tests, lint, and diff checks.
+
 ## 2026-08-07 - Project Transfer Exclusive DuckDB Phases
 
 - Error: Large project-transfer analyze/commit work can hit `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` when competing DuckDB maintenance already occupies the constrained owner runtime.

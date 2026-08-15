@@ -4,11 +4,13 @@ import {
   getProjectTransferPayloadFormatForSchemaVersion,
   getProjectTransferPayloadKeysForSchemaVersion,
   type ProjectTransferManifest,
+  type ProjectTransferManifestPayload,
   type ProjectTransferPackagePayloadKey,
   type ProjectTransferPayloadFormat,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
   projectTransferSchemaVNextManifestSchemaVersion,
+  type ProjectTransferSchemaVNextPayloadKey,
 } from './projectTransferSchemas.ts'
 
 type ProjectTransferFingerprintValue =
@@ -309,7 +311,13 @@ const getSchemaVNextFingerprintPayloadFromDigests = ({
     assertSchemaVNextDigest(rowDigest.digestSha256, `${rowDigest.payloadKey}.digestSha256`)
     assertSchemaVNextDigest(rowDigest.sortKey, `${rowDigest.payloadKey}.sortKey`)
 
-    digestsByKey.set(rowDigest.payloadKey, [...(digestsByKey.get(rowDigest.payloadKey) ?? []), rowDigest])
+    const existingDigests = digestsByKey.get(rowDigest.payloadKey)
+
+    if (existingDigests === undefined) {
+      digestsByKey.set(rowDigest.payloadKey, [rowDigest])
+    } else {
+      existingDigests.push(rowDigest)
+    }
 
     return digestsByKey
   }, new Map())
@@ -433,6 +441,80 @@ export const getProjectTransferSchemaVNextSingletonPayloadDigest = ({
   value: unknown
 }): ProjectTransferSchemaVNextSingletonPayloadDigest => {
   return getSchemaVNextSingletonDigest({excludedKeys: getExcludedKeySet(excludedKeys), payloadKey, value})
+}
+
+export const getProjectTransferSchemaVNextLogicalPayloadDigest = ({
+  payloadKey,
+  value,
+}: {
+  payloadKey: ProjectTransferSchemaVNextPayloadKey
+  value: unknown
+}) => {
+  const format = getProjectTransferPayloadFormatForSchemaVersion({
+    key: payloadKey,
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  })
+
+  if (format === undefined) {
+    throw new Error(`Project transfer schema-vNext payload format is unavailable: ${payloadKey}`)
+  }
+
+  const rowDigestSha256 =
+    format === 'ndjson'
+      ? getSchemaVNextPayloadRecords(value).map((row) => {
+          return getProjectTransferSchemaVNextStagedRowDigest({payloadKey, row}).digestSha256
+        })
+      : []
+  const singletonDigestSha256 =
+    format === 'json' ? getProjectTransferSchemaVNextSingletonPayloadDigest({payloadKey, value}).digestSha256 : null
+
+  return getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests({
+    payloadKey,
+    rowDigestSha256,
+    singletonDigestSha256,
+  })
+}
+
+export const getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests = ({
+  payloadKey,
+  rowDigestSha256,
+  singletonDigestSha256,
+}: {
+  payloadKey: ProjectTransferSchemaVNextPayloadKey
+  rowDigestSha256: readonly string[]
+  singletonDigestSha256: string | null
+}) => {
+  const format = getProjectTransferPayloadFormatForSchemaVersion({
+    key: payloadKey,
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  })
+
+  if (format === undefined) {
+    throw new Error(`Project transfer schema-vNext payload format is unavailable: ${payloadKey}`)
+  }
+
+  const rowDigests = rowDigestSha256.map((digestSha256) => {
+    return {digestSha256, payloadKey, sortKey: digestSha256}
+  })
+  const singletonPayloadDigests =
+    singletonDigestSha256 === null ? [] : [{digestSha256: singletonDigestSha256, payloadKey}]
+  const manifestPayload = {
+    byteLength: 0,
+    checksumSha256: '',
+    format,
+    path: payloadKey,
+    recordCount: format === 'ndjson' ? rowDigestSha256.length : 1,
+  } satisfies ProjectTransferManifestPayload
+  const fingerprintPayload = getSchemaVNextFingerprintPayloadFromDigests({
+    manifest: {
+      payloads: {[payloadKey]: manifestPayload},
+      schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+    },
+    rowDigests,
+    singletonPayloadDigests,
+  })
+
+  return getProjectTransferCanonicalJsonChecksum(fingerprintPayload)
 }
 
 export const getProjectTransferSchemaVNextLogicalPackageFingerprintPayloadFromDigests = (

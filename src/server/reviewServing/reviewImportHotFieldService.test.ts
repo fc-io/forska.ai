@@ -5,6 +5,7 @@ import {
   getReviewImportHotFieldRow,
   reviewImportHotFieldProjectorColumns,
   upsertReviewImportArticleHotField,
+  upsertReviewImportArticleHotFields,
 } from './reviewImportHotFieldService.ts'
 import {type ReviewServingDeltaLedgerTransaction} from './reviewServingDeltaLedger.ts'
 
@@ -152,6 +153,42 @@ test('hot-field replacement writes scoped delete then compact insert without ind
   expect(statement).not.toContain('source_updated_at')
   expect(statement).not.toContain('created_at')
   expect(statement).not.toContain('updated_at')
+})
+
+test('bulk hot-field replacement uses bounded statements and preserves the last duplicate row', async () => {
+  const {statements, tx} = createFakeHotFieldTransaction()
+  const inputs = Array.from({length: 10_001}, (_entry, index) => {
+    return {
+      articleId: `article-${index}`,
+      articleTitle: `Title ${index}`,
+      importRouteId: 'route-1',
+      sourceRecordKey: `record-${index}`,
+    }
+  })
+  const firstInput = inputs[0]
+
+  if (firstInput === undefined) {
+    throw new Error('expected a bulk hot-field fixture row')
+  }
+
+  inputs.push({...firstInput, articleTitle: 'Replacement title'})
+
+  await upsertReviewImportArticleHotFields(tx, inputs)
+
+  expect(statements).toHaveLength(82)
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('DELETE FROM')
+    }),
+  ).toHaveLength(41)
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('INSERT INTO')
+    }),
+  ).toHaveLength(41)
+  expect(statements.join('\n')).not.toContain('ON CONFLICT')
+  expect(statements.join('\n')).toContain('Replacement title')
+  expect(statements.join('\n')).not.toContain("Title 0'")
 })
 
 test('projector column contract covers ranking, display, filters, postings, and contribution keys without raw JSON', () => {

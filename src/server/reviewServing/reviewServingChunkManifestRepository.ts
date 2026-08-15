@@ -1611,12 +1611,19 @@ export const getReviewServingRebuildChunkManifestForIdentity = async (
 }
 
 export const getNextClaimableReviewServingRebuildChunk = async (
-  input: {now: Date | string; projectId?: string | null; timings?: ReviewServingRebuildChunkTimingSink},
+  input: {
+    now: Date | string
+    projectId?: string | null
+    releaseInactiveRequests?: boolean
+    timings?: ReviewServingRebuildChunkTimingSink
+  },
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
-  await measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.releaseInactiveMs', async () => {
-    await releaseInactiveRequestRebuildChunkManifests(database)
-  })
+  if (input.releaseInactiveRequests !== false) {
+    await measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.releaseInactiveMs', async () => {
+      await releaseInactiveRequestRebuildChunkManifests(database)
+    })
+  }
 
   const rows = await measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.queryMs', async () => {
     return database.queryJson<

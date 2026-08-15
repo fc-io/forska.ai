@@ -7895,8 +7895,8 @@ test('request-associated summary chunks stage partials without refreshing filter
   expect(statements.join('\n')).not.toContain('INSERT INTO mart.review_filter_option_serving_v4')
 })
 
-test('worker splits already-admitted oversized payload search summary and posting chunks before execution', async () => {
-  for (const component of ['payload', 'search', 'summary', 'posting'] as const) {
+test('worker splits already-admitted oversized high-fanout chunks before execution', async () => {
+  for (const component of ['payload', 'search', 'selectedImport', 'summary', 'posting'] as const) {
     const harness = createWorkerHarness({wakeStatus: 'completed'})
     const statements: string[] = []
     const oversizedChunkInput = {
@@ -7961,7 +7961,10 @@ test('worker splits already-admitted oversized payload search summary and postin
       statements.push(statement)
     }
 
-    const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+    const result = await runReviewServingProjectorWorkerOnce(
+      {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+      harness.dependencies,
+    )
     const joined = statements.join('\n')
     const childInserts = statements.filter((statement) => {
       return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
@@ -7972,7 +7975,7 @@ test('worker splits already-admitted oversized payload search summary and postin
     expect(harness.runChunkInputs).toHaveLength(0)
     expect(joined).toContain('FROM mart.project_scope_article scope')
     expect(joined).toContain(
-      `NTILE(${component === 'payload' ? 25 : component === 'summary' ? 485 : 64}) OVER (ORDER BY scope.article_id)`,
+      `NTILE(${component === 'payload' ? 25 : component === 'selectedImport' ? 50 : component === 'summary' ? 485 : 64}) OVER (ORDER BY scope.article_id)`,
     )
     expect(joined).toContain("status = 'completed'")
     expect(joined).toContain('lease_expires_at > current_timestamp')

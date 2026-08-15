@@ -447,6 +447,21 @@ test('DuckDB migration creates dirty-work claim state without startup backfill',
   expect(migrationSql).not.toContain("json_extract_string(projection_key, '$.projectionComponent')")
 })
 
+test('DuckDB migration rebuilds write-hot review-serving manifests without indexes', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0225_rebuildReviewServingManifestsWithoutIndexes.sql'),
+    'utf8',
+  )
+
+  expect(migrationSql).toContain('CREATE TABLE app.review_projection_identity_manifest_noindex_repair_0225')
+  expect(migrationSql).toContain('INSERT INTO app.review_projection_identity_manifest_noindex_repair_0225 BY NAME')
+  expect(migrationSql).toContain('CREATE TABLE app.review_serving_snapshot_manifest_noindex_repair_0225')
+  expect(migrationSql).toContain('INSERT INTO app.review_serving_snapshot_manifest_noindex_repair_0225 BY NAME')
+  expect(migrationSql).not.toContain('PRIMARY KEY')
+  expect(migrationSql).not.toContain('UNIQUE')
+  expect(migrationSql).not.toContain('CREATE INDEX')
+})
+
 test('DuckDB migration retires review article serving compatibility view without touching base/state tables', () => {
   const migrationSql = readFileSync(
     resolve(migrationsFolder, '0196_dropReviewArticleServingCompatibilityView.sql'),

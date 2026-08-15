@@ -178,7 +178,7 @@ const startProjectTransferTtlRecoveryScheduler = () => {
 }
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
-const lowMemoryMaintenanceDuckdbLimitMiB = 6400
+const lowMemoryMaintenanceDuckdbLimitMiB = 8192
 const shouldDeferMaintenanceCronsForLowMemoryOwner = () => {
   const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
 

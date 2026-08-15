@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto'
 
 import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
+import {writeRuntimeOperatorLogEvent} from '../../utils/runtimeLogger.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getSqlLiteral} from '../appQueryHelpers.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
@@ -164,12 +165,14 @@ export const loadProjectTransferOperationTables = async ({
   operationId,
   payloadKeys = projectTransferPayloadKeys,
   runner,
+  workloadContext,
   ...runtimeOptions
 }: RuntimePathOptions & {
   layout: ProjectTransferImportTempLayout
   operationId?: string
   payloadKeys?: readonly ProjectTransferPayloadKey[]
   runner: ProjectTransferOperationTableRunner
+  workloadContext?: DuckdbWorkloadContext
 }): Promise<ProjectTransferOperationTableSet> => {
   const tables = getProjectTransferOperationTableNames(operationId)
 
@@ -177,10 +180,13 @@ export const loadProjectTransferOperationTables = async ({
     await previous
     const tableName = tables.tableNames[key]
 
-    return runner.run(`
-      DROP TABLE IF EXISTS ${tableName};
-      ${getCreateOperationTableSql({key, layout, runtimeOptions, tableName})}
-    `)
+    return runner.run(
+      `
+        DROP TABLE IF EXISTS ${tableName};
+        ${getCreateOperationTableSql({key, layout, runtimeOptions, tableName})}
+      `,
+      workloadContext,
+    )
   }, Promise.resolve())
 
   return tables
@@ -189,15 +195,66 @@ export const loadProjectTransferOperationTables = async ({
 export const dropProjectTransferOperationTables = async ({
   runner,
   tables,
+  workloadContext,
 }: {
   runner: ProjectTransferOperationTableRunner
   tables: ProjectTransferOperationTableSet
+  workloadContext?: DuckdbWorkloadContext
 }) => {
   await projectTransferPayloadKeys.reduce<Promise<void>>(async (previous, key) => {
     await previous
 
-    return runner.run(`DROP TABLE IF EXISTS ${tables.tableNames[key]}`)
+    return runner.run(`DROP TABLE IF EXISTS ${tables.tableNames[key]}`, workloadContext)
   }, Promise.resolve())
+}
+
+const dropProjectTransferOperationTablesBestEffort = async ({
+  cleanupPhase,
+  runner,
+  tables,
+  workloadContext,
+}: {
+  cleanupPhase: 'after-failure' | 'after-success'
+  runner: ProjectTransferOperationTableRunner
+  tables: ProjectTransferOperationTableSet
+  workloadContext?: DuckdbWorkloadContext
+}) => {
+  const firstError = await dropProjectTransferOperationTables({runner, tables, workloadContext}).then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error
+    },
+  )
+
+  if (firstError === null) {
+    return
+  }
+
+  const retryError = await dropProjectTransferOperationTables({runner, tables, workloadContext}).then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error
+    },
+  )
+
+  if (retryError === null) {
+    return
+  }
+
+  try {
+    writeRuntimeOperatorLogEvent({
+      attrs: {cleanupPhase, firstError, operationId: tables.operationId, retryError},
+      event: 'project-transfer.operation-tables.cleanup-failed',
+      message: '[project-transfer] operation-table cleanup failed after retry',
+      severity: 'WARN',
+    })
+  } catch (logError) {
+    console.warn('[project-transfer] failed to record operation-table cleanup failure', logError)
+  }
 }
 
 export const withProjectTransferOperationTables = async <T>({
@@ -216,16 +273,25 @@ export const withProjectTransferOperationTables = async <T>({
     }, runtimeOptions.workloadContext)
   }
 
-  const tables = await loadProjectTransferOperationTables({...runtimeOptions, layout, operationId, runner})
+  const tables = getProjectTransferOperationTableNames(operationId)
 
   try {
+    await loadProjectTransferOperationTables({...runtimeOptions, layout, operationId: tables.operationId, runner})
     const result = await work({runner, tables})
-    await dropProjectTransferOperationTables({runner, tables})
+    await dropProjectTransferOperationTablesBestEffort({
+      cleanupPhase: 'after-success',
+      runner,
+      tables,
+      workloadContext: runtimeOptions.workloadContext,
+    })
 
     return result
   } catch (error) {
-    await dropProjectTransferOperationTables({runner, tables}).catch(() => {
-      return undefined
+    await dropProjectTransferOperationTablesBestEffort({
+      cleanupPhase: 'after-failure',
+      runner,
+      tables,
+      workloadContext: runtimeOptions.workloadContext,
     })
     throw error
   }

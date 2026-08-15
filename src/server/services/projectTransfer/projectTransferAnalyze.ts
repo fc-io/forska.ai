@@ -11,6 +11,7 @@ import {
   type ProjectTransferAnalyzeTargetRunner,
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
+import {writeProjectTransferCanonicalJsonArtifact} from './projectTransferCanonicalJsonArtifact.ts'
 import type {ProjectTransferCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {
   type ProjectTransferDependencyStatus,
@@ -30,9 +31,16 @@ import {
   revalidateProjectTransferResolvedDependencies,
 } from './projectTransferDependencyResolution.ts'
 import {
+  type ProjectTransferDuckdbExclusiveWorkLease,
   runWithDuckdbExclusiveWork,
   updateActiveDuckdbExclusiveWorkProgress,
 } from './projectTransferDuckdbExclusiveWork.ts'
+import {
+  getProjectTransferJudgmentAnalysisFieldSignatureDigest,
+  getProjectTransferJudgmentAnalysisInputSignatureDigest,
+  projectTransferJudgmentAnalysisFieldSignatureDigestField,
+  projectTransferJudgmentAnalysisInputSignatureDigestField,
+} from './projectTransferFidelityValidation.ts'
 import {
   getProjectTransferCanonicalJson,
   getProjectTransferCanonicalNdjson,
@@ -40,6 +48,12 @@ import {
   getProjectTransferLogicalFingerprintValue,
   getProjectTransferLogicalPackageFingerprintPayload,
   getProjectTransferPackageFingerprint,
+  getProjectTransferSchemaVNextLogicalPackageFingerprintFromDigests,
+  getProjectTransferSchemaVNextLogicalPackageFingerprintPayloadFromDigests,
+  getProjectTransferSchemaVNextLogicalPayloadDigest,
+  getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests,
+  getProjectTransferSchemaVNextSingletonPayloadDigest,
+  getProjectTransferSchemaVNextStagedRowDigest,
   getProjectTransferSha256Checksum,
 } from './projectTransferFingerprint.ts'
 import {parseProjectTransferManifestJson} from './projectTransferManifest.ts'
@@ -77,6 +91,7 @@ import {
   getProjectTransferPayloadFormatForSchemaVersion,
   getProjectTransferPayloadKeysForSchemaVersion,
   getProjectTransferPayloadPathForSchemaVersion,
+  isProjectTransferSchemaVNextPayloadKey,
   projectTransferCurrentManifestSchemaVersion,
   type ProjectTransferManifest,
   type ProjectTransferManifestPayload,
@@ -100,6 +115,7 @@ import {
   type ProjectTransferTargetStateDirtyTokenSnapshot,
 } from './projectTransferTargetStateDirtyTokenService.ts'
 import {
+  type ProjectTransferZipEntryDigest,
   type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipReadEntry,
@@ -181,18 +197,24 @@ type JsonMetrics = {depth: number; memberCount: number}
 type ProjectTransferStagedPayloadParse = {
   artifactMetadata?: ProjectTransferStagedPayloadMetadata
   blockers: ProjectTransferPlanBlocker[]
+  jsonMetrics: JsonMetrics
+  logicalDigests: ProjectTransferSchemaVNextPayloadDigests | null
   metadata: ProjectTransferStagedPayloadMetadata
   payload: unknown
   warnings: ProjectTransferPackageWarning[]
 }
+
+type ProjectTransferSchemaVNextPayloadDigests = {rowDigestSha256: string[]; singletonDigestSha256: string | null}
 
 type ProjectTransferNdjsonStreamState = {
   blockers: ProjectTransferPlanBlocker[]
   canonicalByteLength: number
   carry: string
   invalidRecordCount: number
+  jsonMetrics: JsonMetrics
   lineNumber: number
   records: unknown[]
+  rowDigestSha256: string[]
   validRecordCount: number
   warnings: ProjectTransferPackageWarning[]
 }
@@ -200,6 +222,9 @@ type ProjectTransferNdjsonStreamState = {
 const textEncoder = new TextEncoder()
 const newlineByte = '\n'.charCodeAt(0)
 const ndjsonDecodeChunkBytes = 64 * 1024
+const targetAnalysisProgressHeartbeatIntervalMs = 15_000
+
+type ProjectTransferAsyncOutcome<T> = {ok: true; value: T} | {error: unknown; ok: false}
 
 const failProjectTransferAnalyze = (code: string, message: string): never => {
   throw new Error(`Project transfer analyze ${code}: ${message}`)
@@ -432,6 +457,39 @@ const getJsonMetrics = (value: unknown, depth = 0): JsonMetrics => {
   return {depth, memberCount: 0}
 }
 
+const getAnalyzePayloadJsonMetrics = ({
+  manifest,
+  payloadJsonMetrics,
+  payloads,
+}: {
+  manifest: ProjectTransferManifest
+  payloadJsonMetrics: Partial<Record<ProjectTransferPayloadKey, JsonMetrics>>
+  payloads: Partial<ProjectTransferPayloadByKey>
+}) => {
+  const manifestMetrics = getJsonMetrics(manifest)
+  const payloadMetrics = projectTransferPayloadKeys.flatMap((key) => {
+    return payloads[key] === undefined || payloadJsonMetrics[key] === undefined ? [] : [payloadJsonMetrics[key]]
+  })
+
+  return {
+    depth: getMaximumNumber([
+      manifestMetrics.depth + 1,
+      ...payloadMetrics.map((metrics) => {
+        return metrics.depth + 1
+      }),
+    ]),
+    memberCount:
+      1
+      + payloadMetrics.length
+      + manifestMetrics.memberCount
+      + sumNumbers(
+        payloadMetrics.map((metrics) => {
+          return metrics.memberCount
+        }),
+      ),
+  }
+}
+
 const getAssetManifestRecordCount = (payload: ProjectTransferPayload) => {
   return (payload as ProjectTransferPayloadByKey['assetManifest']).entries.length
 }
@@ -627,7 +685,67 @@ const getNormalizedStreamedNdjsonRecord = ({
   key: ProjectTransferPackagePayloadKey
   record: Record<string, unknown>
 }) => {
-  return key === 'articles' ? sanitizeLegacyArticlePayload(record) : record
+  return key === 'articles' ? sanitizeLegacyArticlePayload(record as ProjectTransferPayloadRecord) : record
+}
+
+const getOptionalAnalysisField = (record: Record<string, unknown>, field: string) => {
+  return hasOwn(record, field) ? {[field]: record[field]} : {}
+}
+
+const getJudgmentAnalysisModelRequestSignature = (record: Record<string, unknown>) => {
+  const inputSignature = isRecord(record.judgmentInputSignature) ? record.judgmentInputSignature : {}
+  const model = isRecord(inputSignature.model) ? inputSignature.model : {}
+
+  return {contextLimit: model.contextLimit, modelOptions: model.modelOptions, promptTokenLimit: model.promptTokenLimit}
+}
+
+const getJudgmentAnalysisProvenance = (record: Record<string, unknown>) => {
+  const provenance = isRecord(record.judgmentInputSignatureProvenance) ? record.judgmentInputSignatureProvenance : {}
+
+  return {kind: typeof provenance.kind === 'string' ? provenance.kind : null}
+}
+
+const getCompactJudgmentAnalysisRecord = (record: Record<string, unknown>): ProjectTransferPayloadRecord => {
+  return {
+    ...getOptionalAnalysisField(record, 'chunkingStrategy'),
+    contentSettings: record.contentSettings,
+    ...getOptionalAnalysisField(record, 'deleteGeneration'),
+    [projectTransferJudgmentAnalysisFieldSignatureDigestField]: getProjectTransferJudgmentAnalysisFieldSignatureDigest(
+      record as ProjectTransferPayloadRecord,
+    ),
+    [projectTransferJudgmentAnalysisInputSignatureDigestField]: getProjectTransferJudgmentAnalysisInputSignatureDigest(
+      record.judgmentInputSignature,
+    ),
+    judgmentInputSignature: {model: getJudgmentAnalysisModelRequestSignature(record)},
+    judgmentInputSignatureProvenance: getJudgmentAnalysisProvenance(record),
+    sourceArticleId: record.sourceArticleId,
+    sourceJudgmentId: record.sourceJudgmentId,
+    sourceModelId: record.sourceModelId,
+    sourcePromptId: record.sourcePromptId,
+  } as unknown as ProjectTransferPayloadRecord
+}
+
+const getAnalysisRecordForStreamedPayload = ({
+  key,
+  record,
+  schemaVersion,
+}: {
+  key: ProjectTransferPackagePayloadKey
+  record: Record<string, unknown>
+  schemaVersion: ProjectTransferManifest['schemaVersion']
+}) => {
+  return schemaVersion === projectTransferSchemaVNextManifestSchemaVersion && key === 'judgments'
+    ? getCompactJudgmentAnalysisRecord(record)
+    : record
+}
+
+const appendJsonMetricsForArrayRecord = (metrics: JsonMetrics, record: Record<string, unknown>) => {
+  const recordMetrics = getJsonMetrics(record, 1)
+
+  return {
+    depth: Math.max(metrics.depth, recordMetrics.depth),
+    memberCount: metrics.memberCount + 1 + recordMetrics.memberCount,
+  }
 }
 
 const getStreamedNdjsonLineValue = ({
@@ -706,9 +824,11 @@ const appendStagedNdjsonLine = async ({
   }
 
   hash.update(lineBytes)
-  state.records.push(value)
+  state.records.push(getAnalysisRecordForStreamedPayload({key, record: value, schemaVersion}))
+  state.rowDigestSha256.push(getProjectTransferSchemaVNextStagedRowDigest({payloadKey: key, row: value}).digestSha256)
   state.warnings.push(...getPackageWarningsFromRecord(value))
   state.blockers.push(...getInternalAnnotationBlockersForRecord({label: `${key}[${lineNumber}]`, record: value}))
+  state.jsonMetrics = appendJsonMetricsForArrayRecord(state.jsonMetrics, value)
   state.validRecordCount += 1
   state.canonicalByteLength += lineBytes.byteLength
 
@@ -828,8 +948,10 @@ const parseAndStageNdjsonPayloadEntry = async ({
     canonicalByteLength: 0,
     carry: '',
     invalidRecordCount: 0,
+    jsonMetrics: {depth: 0, memberCount: 0},
     lineNumber: 0,
     records: [],
+    rowDigestSha256: [],
     validRecordCount: 0,
     warnings: [],
   }
@@ -875,7 +997,10 @@ const parseAndStageNdjsonPayloadEntry = async ({
     await closeWriteStream(stream)
   }
 
-  const payload = assertProjectTransferPayload(artifactKey, completedState.records)
+  const payload =
+    schemaVersion === projectTransferSchemaVNextManifestSchemaVersion && key === 'judgments'
+      ? (completedState.records as ProjectTransferPayload)
+      : assertProjectTransferPayload(artifactKey, completedState.records)
   const artifactSerializedPayload =
     artifactFormat === 'json' ? serializeProjectTransferPayload(artifactKey, payload) : null
   const artifactSerializedBytes =
@@ -884,6 +1009,15 @@ const parseAndStageNdjsonPayloadEntry = async ({
   if (artifactSerializedPayload !== null) {
     await globalThis.Bun.write(resolvedPath, artifactSerializedPayload)
   }
+
+  const logicalDigests =
+    schemaVersion === projectTransferSchemaVNextManifestSchemaVersion
+      ? {rowDigestSha256: completedState.rowDigestSha256, singletonDigestSha256: null}
+      : null
+  const logicalDigestSha256 =
+    logicalDigests === null || !isProjectTransferSchemaVNextPayloadKey(key)
+      ? null
+      : getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests({payloadKey: key, ...logicalDigests})
 
   return {
     ...(artifactSerializedBytes === null
@@ -895,18 +1029,20 @@ const parseAndStageNdjsonPayloadEntry = async ({
             canonicalByteLength: artifactSerializedBytes.byteLength,
             canonicalChecksumSha256: getProjectTransferSha256Checksum(artifactSerializedBytes),
             invalidRecordCount: completedState.invalidRecordCount,
-            logicalDigestSha256: null,
+            logicalDigestSha256,
             recordCount: completedState.validRecordCount,
           },
         }),
     blockers: completedState.blockers,
+    jsonMetrics: completedState.jsonMetrics,
+    logicalDigests,
     metadata: {
       archiveByteLength: entry.uncompressedSize,
       archiveChecksumSha256: entry.checksumSha256,
       canonicalByteLength: completedState.canonicalByteLength,
       canonicalChecksumSha256: hash.digest('hex'),
       invalidRecordCount: completedState.invalidRecordCount,
-      logicalDigestSha256: null,
+      logicalDigestSha256,
       recordCount: completedState.validRecordCount,
     },
     payload,
@@ -938,15 +1074,30 @@ const parseAndStageJsonPayloadEntry = async ({
   await mkdir(dirname(resolvedPath), {recursive: true})
   await globalThis.Bun.write(resolvedPath, serializedPayload)
 
+  const logicalDigests =
+    schemaVersion === projectTransferSchemaVNextManifestSchemaVersion && isProjectTransferSchemaVNextPayloadKey(key)
+      ? {
+          rowDigestSha256: [],
+          singletonDigestSha256: getProjectTransferSchemaVNextSingletonPayloadDigest({payloadKey: key, value: payload})
+            .digestSha256,
+        }
+      : null
+  const logicalDigestSha256 =
+    logicalDigests === null || !isProjectTransferSchemaVNextPayloadKey(key)
+      ? null
+      : getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests({payloadKey: key, ...logicalDigests})
+
   return {
     blockers: getInternalAnnotationBlockers(artifactKey, payload),
+    jsonMetrics: getJsonMetrics(payload),
+    logicalDigests,
     metadata: {
       archiveByteLength: entry.uncompressedSize,
       archiveChecksumSha256: entry.checksumSha256,
       canonicalByteLength: serializedBytes.byteLength,
       canonicalChecksumSha256: getProjectTransferSha256Checksum(serializedBytes),
       invalidRecordCount: 0,
-      logicalDigestSha256: null,
+      logicalDigestSha256,
       recordCount: getPayloadRecordCount(artifactKey, payload),
     },
     payload,
@@ -979,16 +1130,36 @@ const parsePackageOnlyPayloadEntry = ({
   const payload = parseProjectTransferPayloadForSchemaVersion(schemaVersion, key, entry.bytes)
   const serializedPayload = serializeProjectTransferPayloadForSchemaVersion(schemaVersion, key, payload)
   const serializedBytes = textEncoder.encode(serializedPayload)
+  const rowDigestSha256 =
+    schemaVersion === projectTransferSchemaVNextManifestSchemaVersion && Array.isArray(payload)
+      ? payload.map((row) => {
+          return getProjectTransferSchemaVNextStagedRowDigest({payloadKey: key, row}).digestSha256
+        })
+      : []
+  const singletonDigestSha256 =
+    schemaVersion === projectTransferSchemaVNextManifestSchemaVersion
+    && isProjectTransferSchemaVNextPayloadKey(key)
+    && !Array.isArray(payload)
+      ? getProjectTransferSchemaVNextSingletonPayloadDigest({payloadKey: key, value: payload}).digestSha256
+      : null
+  const logicalDigests =
+    schemaVersion === projectTransferSchemaVNextManifestSchemaVersion ? {rowDigestSha256, singletonDigestSha256} : null
+  const logicalDigestSha256 =
+    logicalDigests === null || !isProjectTransferSchemaVNextPayloadKey(key)
+      ? null
+      : getProjectTransferSchemaVNextLogicalPayloadDigestFromDigests({payloadKey: key, ...logicalDigests})
 
   return {
     blockers: [],
+    jsonMetrics: getJsonMetrics(payload),
+    logicalDigests,
     metadata: {
       archiveByteLength: entry.uncompressedSize,
       archiveChecksumSha256: entry.checksumSha256,
       canonicalByteLength: serializedBytes.byteLength,
       canonicalChecksumSha256: getProjectTransferSha256Checksum(serializedBytes),
       invalidRecordCount: 0,
-      logicalDigestSha256: null,
+      logicalDigestSha256,
       recordCount: getPackagePayloadRecordCount(key, payload),
     },
     payload,
@@ -1123,7 +1294,11 @@ const parsePayloads = ({
         packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
         packageStagedPayloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>
         payloadAnalysis: Partial<Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>>
+        payloadJsonMetrics: Partial<Record<ProjectTransferPayloadKey, JsonMetrics>>
         payloads: Partial<ProjectTransferPayloadByKey>
+        schemaVNextPayloadDigests: Partial<
+          Record<ProjectTransferPackagePayloadKey, ProjectTransferSchemaVNextPayloadDigests>
+        >
         stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>
         warnings: ProjectTransferPackageWarning[]
       }>
@@ -1241,9 +1416,17 @@ const parsePayloads = ({
                   },
                 }),
           },
+          payloadJsonMetrics: {
+            ...state.payloadJsonMetrics,
+            ...(artifactKey === null ? {} : {[artifactKey]: stagedPayload.jsonMetrics}),
+          },
           payloads: {
             ...state.payloads,
             ...(artifactKey === null ? {} : {[artifactKey]: payload as ProjectTransferPayload}),
+          },
+          schemaVNextPayloadDigests: {
+            ...state.schemaVNextPayloadDigests,
+            ...(stagedPayload.logicalDigests === null ? {} : {[key]: stagedPayload.logicalDigests}),
           },
           stagedPayloads: {
             ...state.stagedPayloads,
@@ -1257,7 +1440,9 @@ const parsePayloads = ({
         packagePayloads: {},
         packageStagedPayloads: {},
         payloadAnalysis: {},
+        payloadJsonMetrics: {},
         payloads: {},
+        schemaVNextPayloadDigests: {},
         stagedPayloads: {},
         warnings: manifest.warnings ?? [],
       }),
@@ -1293,6 +1478,7 @@ const parsePayloads = ({
             key: 'assetManifest',
           },
         },
+        payloadJsonMetrics: {...state.payloadJsonMetrics, assetManifest: getJsonMetrics(assetManifest)},
         payloads: {...state.payloads, assetManifest},
         stagedPayloads: {...state.stagedPayloads, assetManifest: assetManifestMetadata},
       }
@@ -1445,7 +1631,7 @@ const getAssetEntryMap = (assetEntries: readonly ProjectTransferAssetManifestEnt
   }, new Map())
 }
 
-const getArchiveAssetEntries = (entries: readonly ProjectTransferZipReadEntry[]) => {
+const getArchiveAssetEntries = (entries: readonly ProjectTransferZipEntryDigest[]) => {
   const payloadPaths = getPayloadPathSet()
 
   return entries.filter((entry) => {
@@ -1474,7 +1660,7 @@ const assertAssetChecksum = ({
   zipEntry,
 }: {
   assetEntry: ProjectTransferAssetManifestEntry
-  zipEntry: ProjectTransferZipReadEntry
+  zipEntry: ProjectTransferZipEntryDigest
 }) => {
   return zipEntry.checksumSha256 === assetEntry.checksumSha256
     ? undefined
@@ -1489,7 +1675,7 @@ const getAssetBlockers = ({
   manifest,
   payloads,
 }: {
-  archiveEntries: readonly ProjectTransferZipReadEntry[]
+  archiveEntries: readonly ProjectTransferZipEntryDigest[]
   manifest: ProjectTransferManifest
   payloads: Partial<ProjectTransferPayloadByKey>
 }) => {
@@ -1633,18 +1819,61 @@ const getPackageFingerprintBlockers = ({
       ]
 }
 
+const getSchemaVNextFingerprintDigestInput = ({
+  manifest,
+  schemaVNextPayloadDigests,
+}: {
+  manifest: ProjectTransferManifest
+  schemaVNextPayloadDigests: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferSchemaVNextPayloadDigests>>
+}) => {
+  const payloadKeys = getProjectTransferPayloadKeysForSchemaVersion(projectTransferSchemaVNextManifestSchemaVersion)
+
+  return {
+    manifest,
+    rowDigests: payloadKeys.flatMap((payloadKey) => {
+      return (schemaVNextPayloadDigests[payloadKey]?.rowDigestSha256 ?? []).map((digestSha256) => {
+        return {digestSha256, payloadKey, sortKey: digestSha256}
+      })
+    }),
+    singletonPayloadDigests: payloadKeys.flatMap((payloadKey) => {
+      const digestSha256 = schemaVNextPayloadDigests[payloadKey]?.singletonDigestSha256 ?? null
+
+      return digestSha256 === null ? [] : [{digestSha256, payloadKey}]
+    }),
+  }
+}
+
 const getComputedPackageFingerprint = ({
   manifest,
   packagePayloads,
+  schemaVNextPayloadDigests,
 }: {
   manifest: ProjectTransferManifest
   packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
+  schemaVNextPayloadDigests: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferSchemaVNextPayloadDigests>>
 }) => {
-  const hasEveryPayload = getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion).every((key) => {
+  const payloadKeys = getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion)
+  const hasEveryPayload = payloadKeys.every((key) => {
     return packagePayloads[key] !== undefined
   })
 
-  return hasEveryPayload ? getProjectTransferPackageFingerprint({manifest, payloads: packagePayloads}) : null
+  if (!hasEveryPayload) {
+    return null
+  }
+
+  if (manifest.schemaVersion !== projectTransferSchemaVNextManifestSchemaVersion) {
+    return getProjectTransferPackageFingerprint({manifest, payloads: packagePayloads})
+  }
+
+  const hasEveryDigest = payloadKeys.every((key) => {
+    return schemaVNextPayloadDigests[key] !== undefined
+  })
+
+  return hasEveryDigest
+    ? getProjectTransferSchemaVNextLogicalPackageFingerprintFromDigests({
+        ...getSchemaVNextFingerprintDigestInput({manifest, schemaVNextPayloadDigests}),
+      })
+    : null
 }
 
 const getSemanticBlockers = ({
@@ -1860,8 +2089,7 @@ const writeJsonArtifact = async ({
   value: unknown
 }) => {
   const resolvedPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue})
-  await mkdir(dirname(resolvedPath), {recursive: true})
-  await globalThis.Bun.write(resolvedPath, getProjectTransferCanonicalJson(value))
+  await writeProjectTransferCanonicalJsonArtifact({filePath: resolvedPath, value})
 }
 
 const writeExtractedEntry = async ({
@@ -2020,13 +2248,13 @@ const assertActiveImportSchema = (manifest: ProjectTransferManifest) => {
       )
 }
 
-const getArchiveEntryByteCounts = (entries: readonly ProjectTransferZipReadEntry[]) => {
+const getArchiveEntryByteCounts = (entries: readonly ProjectTransferZipEntryDigest[]) => {
   return entries.reduce<Record<string, number>>((counts, entry) => {
     return {...counts, [entry.path]: entry.uncompressedSize}
   }, {})
 }
 
-const getArchiveEntryChecksums = (entries: readonly ProjectTransferZipReadEntry[]) => {
+const getArchiveEntryChecksums = (entries: readonly ProjectTransferZipEntryDigest[]) => {
   return entries.reduce<Record<string, string>>((checksums, entry) => {
     return {...checksums, [entry.path]: entry.checksumSha256}
   }, {})
@@ -2068,6 +2296,14 @@ const getLogicalPayloadDigest = ({
   manifest: ProjectTransferManifest
   payload: unknown
 }) => {
+  if (manifest.schemaVersion === projectTransferSchemaVNextManifestSchemaVersion) {
+    if (!isProjectTransferSchemaVNextPayloadKey(key)) {
+      throw new Error(`Project transfer schema-vNext payload key is invalid: ${key}`)
+    }
+
+    return getProjectTransferSchemaVNextLogicalPayloadDigest({payloadKey: key, value: payload})
+  }
+
   const logicalPayload = getProjectTransferLogicalFingerprintValue(payload)
 
   return manifest.payloads[key]?.format === 'ndjson' && Array.isArray(logicalPayload)
@@ -2097,7 +2333,13 @@ const getStagedPayloadsWithLogicalDigests = ({
 
     return stagedPayload === undefined || payload === undefined
       ? metadata
-      : {...metadata, [key]: {...stagedPayload, logicalDigestSha256: getLogicalPayloadDigest({key, manifest, payload})}}
+      : {
+          ...metadata,
+          [key]: {
+            ...stagedPayload,
+            logicalDigestSha256: stagedPayload.logicalDigestSha256 ?? getLogicalPayloadDigest({key, manifest, payload}),
+          },
+        }
   }, {})
 }
 
@@ -2105,12 +2347,19 @@ const getPackageFingerprintInputMetadata = ({
   manifest,
   payloadDigests,
   packagePayloads,
+  schemaVNextPayloadDigests,
 }: {
   manifest: ProjectTransferManifest
   payloadDigests: Record<string, string>
   packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
+  schemaVNextPayloadDigests: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferSchemaVNextPayloadDigests>>
 }): ProjectTransferStagedPackageMetadata['packageFingerprintInputs'] => {
-  const fingerprintInputs = getProjectTransferLogicalPackageFingerprintPayload({manifest, payloads: packagePayloads})
+  const fingerprintInputs =
+    manifest.schemaVersion === projectTransferSchemaVNextManifestSchemaVersion
+      ? getProjectTransferSchemaVNextLogicalPackageFingerprintPayloadFromDigests(
+          getSchemaVNextFingerprintDigestInput({manifest, schemaVNextPayloadDigests}),
+        )
+      : getProjectTransferLogicalPackageFingerprintPayload({manifest, payloads: packagePayloads})
 
   return {
     checksumSha256: getProjectTransferSha256Checksum(getProjectTransferCanonicalJson(fingerprintInputs)),
@@ -2130,14 +2379,16 @@ const getStagedPackageMetadata = ({
   packagePayloads,
   packageStagedPayloads,
   payloads,
+  schemaVNextPayloadDigests,
   stagedPayloads,
 }: {
-  archiveEntries: readonly ProjectTransferZipReadEntry[]
+  archiveEntries: readonly ProjectTransferZipEntryDigest[]
   assetManifest: ProjectTransferPayloadByKey['assetManifest']
   manifest: ProjectTransferManifest
   packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
   packageStagedPayloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>
   payloads: Partial<ProjectTransferPayloadByKey>
+  schemaVNextPayloadDigests: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferSchemaVNextPayloadDigests>>
   stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>
 }): ProjectTransferStagedPackageMetadata => {
   const stagedPayloadsWithDigests = getStagedPayloadsWithLogicalDigests({
@@ -2178,7 +2429,12 @@ const getStagedPackageMetadata = ({
       }),
     ),
     logicalPayloadDigests: payloadDigests,
-    packageFingerprintInputs: getPackageFingerprintInputMetadata({manifest, packagePayloads, payloadDigests}),
+    packageFingerprintInputs: getPackageFingerprintInputMetadata({
+      manifest,
+      packagePayloads,
+      payloadDigests,
+      schemaVNextPayloadDigests,
+    }),
     payloads: stagedPayloadsWithDigests as Record<string, ProjectTransferStagedPayloadMetadata>,
     rowCounts: getMetadataNumberRecord(manifest.schemaVersion, stagedPayloadsWithDigests, 'recordCount'),
     sourceProject: {
@@ -2307,14 +2563,87 @@ const publishImportAnalyzeProgress = async ({
   await input.onProgress?.(progress)
 }
 
+const getProjectTransferAsyncOutcome = <T>(operation: () => Promise<T>) => {
+  return Promise.resolve()
+    .then(operation)
+    .then<ProjectTransferAsyncOutcome<T>>(
+      (value) => {
+        return {ok: true, value}
+      },
+      (error: unknown) => {
+        return {error, ok: false}
+      },
+    )
+}
+
+const runTargetAnalysisWithProgressHeartbeat = async <T>({
+  input,
+  operation,
+  rowCountTotal,
+  warningCount,
+}: {
+  input: ProjectTransferImportAnalyzeInput
+  operation: () => Promise<T>
+  rowCountTotal: number
+  warningCount: number
+}) => {
+  const heartbeatOutcomes: Promise<ProjectTransferAsyncOutcome<void>>[] = []
+  const interval = setInterval(() => {
+    heartbeatOutcomes.push(
+      getProjectTransferAsyncOutcome(() => {
+        return publishImportAnalyzeProgress({
+          input,
+          message: 'Analyzing target project state',
+          phase: 'analyze',
+          rowCountProcessed: 0,
+          rowCountTotal,
+          status: 'running',
+          warningCount,
+        })
+      }),
+    )
+  }, targetAnalysisProgressHeartbeatIntervalMs)
+  const operationOutcome = await getProjectTransferAsyncOutcome(operation)
+
+  clearInterval(interval)
+  const settledHeartbeats = await Promise.all(heartbeatOutcomes)
+  const heartbeatFailure = settledHeartbeats.find((outcome) => {
+    return !outcome.ok
+  })
+
+  if (!operationOutcome.ok) {
+    throw operationOutcome.error
+  }
+
+  if (heartbeatFailure?.ok === false) {
+    throw heartbeatFailure.error
+  }
+
+  return operationOutcome.value
+}
+
 const getPackageRowCount = (packageCounts: Record<ProjectTransferPayloadKey, number>) => {
   return Object.values(packageCounts).reduce((total, count) => {
     return total + count
   }, 0)
 }
 
-export const analyzeProjectTransferImportPackage = async (
+const releaseProjectTransferAnalyzeArchiveBuffers = (
+  entries: ProjectTransferZipReadEntry[],
+): ProjectTransferZipEntryDigest[] => {
+  const releasedBytes = new Uint8Array()
+
+  return entries.map((entry) => {
+    const {bytes: _bytes, ...metadata} = entry
+    entry.bytes = releasedBytes
+
+    return metadata
+  })
+}
+
+const analyzeProjectTransferImportPackageCore = async (
   input: ProjectTransferImportAnalyzeInput,
+  exclusiveWorkLease: ProjectTransferDuckdbExclusiveWorkLease | null,
 ): Promise<ProjectTransferImportAnalyzeResult> => {
   const runtimeOptions = {cwd: input.cwd, envValues: input.envValues}
   const rootPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: input.layout.rootPath})
@@ -2323,7 +2652,8 @@ export const analyzeProjectTransferImportPackage = async (
   const stagingLayout = getProjectTransferImportStagingLayout({layout: input.layout, stagingRevision})
   const availableDiskBytes = input.availableDiskBytes ?? (await getAvailableDiskBytes(rootPath))
   const uploadPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: input.layout.uploadPath})
-  const packageBytes = await readFile(uploadPath)
+  let packageBytes: Uint8Array = await readFile(uploadPath)
+  const packageSizeBytes = packageBytes.byteLength
   const packageChecksumSha256 = getProjectTransferSha256Checksum(packageBytes)
 
   assertUploadChecksum({bytes: packageBytes, uploadMetadata: input.uploadMetadata})
@@ -2413,7 +2743,7 @@ export const analyzeProjectTransferImportPackage = async (
     maxNdjsonLineBytes,
     resourcePaths,
     tempRootPath: input.layout.rootPath,
-    zipBytes: packageBytes.byteLength,
+    zipBytes: packageSizeBytes,
   })
 
   await publishImportAnalyzeProgress({
@@ -2436,6 +2766,9 @@ export const analyzeProjectTransferImportPackage = async (
     return parsePayloads({entriesByPath, extractionRootPath: stagingLayout.extractedPath, manifest, runtimeOptions})
   })
   const parsed = parsedMeasurement.value
+  const archiveEntries = releaseProjectTransferAnalyzeArchiveBuffers(zipPackage.entries)
+  packageBytes = new Uint8Array()
+  globalThis.Bun.gc(true)
   await publishImportAnalyzeProgress({
     bytesProcessed: expandedBytes,
     bytesTotal: expandedBytes,
@@ -2450,7 +2783,11 @@ export const analyzeProjectTransferImportPackage = async (
     phase: 'fingerprint_validation',
     status: 'running',
   })
-  const computedPackageFingerprint = getComputedPackageFingerprint({manifest, packagePayloads: parsed.packagePayloads})
+  const computedPackageFingerprint = getComputedPackageFingerprint({
+    manifest,
+    packagePayloads: parsed.packagePayloads,
+    schemaVNextPayloadDigests: parsed.schemaVNextPayloadDigests,
+  })
   const legacyPackageFingerprint =
     manifest.schemaVersion === projectTransferCurrentManifestSchemaVersion
       ? getProjectTransferLegacyPackageFingerprint(manifest)
@@ -2458,7 +2795,7 @@ export const analyzeProjectTransferImportPackage = async (
   const packageFingerprint = computedPackageFingerprint ?? manifest.packageFingerprint ?? null
   const packageCounts = getCompletePayloadCounts(parsed.payloads, manifest)
   const semanticBlockers = getSemanticBlockers({
-    archiveEntries: zipPackage.entries,
+    archiveEntries,
     computedPackageFingerprint,
     legacyPackageFingerprint,
     manifest,
@@ -2483,36 +2820,30 @@ export const analyzeProjectTransferImportPackage = async (
     status: 'running',
     warningCount: parsed.warnings.length,
   })
-  const targetAnalysisMeasurement =
-    input.runner === undefined
-      ? await runWithDuckdbExclusiveWork(
-          {
-            estimatedRows: packageRowCount,
-            kind: 'project_transfer_import',
-            message: 'Analyzing target project state',
-            ownerToken: input.ownerToken,
-            phase: 'analyze',
-            sessionId: input.sessionId,
-          },
-          () => {
-            return measureProjectTransferPhase('targetAnalysis', () => {
-              return getProjectTransferAnalyzeTargetPlanWithOperationTables({
-                cwd: input.cwd,
-                envValues: input.envValues,
-                layout: stagingLayout,
-                packageFingerprint,
-                payloads: parsed.payloads,
-              })
+  const targetAnalysisMeasurement = await runTargetAnalysisWithProgressHeartbeat({
+    input,
+    operation: () => {
+      return input.runner === undefined
+        ? measureProjectTransferPhase('targetAnalysis', () => {
+            return getProjectTransferAnalyzeTargetPlanWithOperationTables({
+              cwd: input.cwd,
+              envValues: input.envValues,
+              layout: stagingLayout,
+              packageFingerprint,
+              payloads: parsed.payloads,
             })
-          },
-        )
-      : await measureProjectTransferPhase('targetAnalysis', () => {
-          return getProjectTransferAnalyzeTargetPlan({
-            packageFingerprint,
-            payloads: parsed.payloads,
-            runner: input.runner,
           })
-        })
+        : measureProjectTransferPhase('targetAnalysis', () => {
+            return getProjectTransferAnalyzeTargetPlan({
+              packageFingerprint,
+              payloads: parsed.payloads,
+              runner: input.runner,
+            })
+          })
+    },
+    rowCountTotal: packageRowCount,
+    warningCount: parsed.warnings.length,
+  })
   const targetAnalysis = targetAnalysisMeasurement.value
   await publishImportAnalyzeProgress({
     input,
@@ -2523,14 +2854,26 @@ export const analyzeProjectTransferImportPackage = async (
     status: 'completed',
     warningCount: parsed.warnings.length + targetAnalysis.packageWarnings.length,
   })
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Planning import changes',
+    phase: 'analyze',
+    rowCountProcessed: packageRowCount,
+    rowCountTotal: packageRowCount,
+    status: 'running',
+    warningCount: parsed.warnings.length + targetAnalysis.packageWarnings.length,
+  })
   const targetState = await getTargetStateDirtyTokenSnapshotForPlan(input.runner)
   const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]
   const packageWarnings = [...parsed.warnings, ...targetAnalysis.packageWarnings]
-  const payloadValues = Object.values(parsed.payloads)
-  const jsonMetrics = getJsonMetrics([manifest, ...payloadValues])
+  const jsonMetrics = getAnalyzePayloadJsonMetrics({
+    manifest,
+    payloadJsonMetrics: parsed.payloadJsonMetrics,
+    payloads: parsed.payloads,
+  })
 
   assertJsonMetricsResourceGate({
-    archiveMemberCount: zipPackage.entries.length,
+    archiveMemberCount: archiveEntries.length,
     availableDiskBytes,
     expandedBytes,
     jsonMetrics,
@@ -2538,7 +2881,7 @@ export const analyzeProjectTransferImportPackage = async (
     maxNdjsonLineBytes,
     resourcePaths,
     tempRootPath: input.layout.rootPath,
-    zipBytes: packageBytes.byteLength,
+    zipBytes: packageSizeBytes,
   })
 
   const initialPlanSummary = getPlanSummary({
@@ -2565,6 +2908,7 @@ export const analyzeProjectTransferImportPackage = async (
     targetPlan: targetAnalysis.targetPlan,
     targetState,
   })
+  await exclusiveWorkLease?.release()
   const resolvedAnalyzePlan = await getAnalyzePlanWithAutoResolvedDependencies({
     input,
     payloads: parsed.payloads,
@@ -2578,14 +2922,24 @@ export const analyzeProjectTransferImportPackage = async (
       return entry.byteLength
     }),
   )
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Finalizing import analysis artifacts',
+    phase: 'analyze',
+    rowCountProcessed: packageRowCount,
+    rowCountTotal: packageRowCount,
+    status: 'running',
+    warningCount: packageWarnings.length,
+  })
   const payloadAnalysis = getPayloadAnalysisRecord(parsed.payloadAnalysis, manifest)
   const stagedPackage = getStagedPackageMetadata({
-    archiveEntries: zipPackage.entries,
+    archiveEntries,
     assetManifest,
     manifest,
     packagePayloads: parsed.packagePayloads,
     packageStagedPayloads: parsed.packageStagedPayloads,
     payloads: parsed.payloads,
+    schemaVNextPayloadDigests: parsed.schemaVNextPayloadDigests,
     stagedPayloads: parsed.stagedPayloads,
   })
   const performanceMetrics = getImportAnalysisPerformanceMetrics({
@@ -2593,7 +2947,7 @@ export const analyzeProjectTransferImportPackage = async (
     assetSummaryBytes,
     conflictShape: planSummary.conflictCounts,
     expandedBytes,
-    packageBytes: packageBytes.byteLength,
+    packageBytes: packageSizeBytes,
     packageCounts,
     packageFingerprint,
     payloadAnalysis,
@@ -2611,12 +2965,7 @@ export const analyzeProjectTransferImportPackage = async (
   })
   const analysis = {
     analyzedAt: new Date().toISOString(),
-    archive: {
-      expandedBytes,
-      memberCount: zipPackage.entries.length,
-      packageChecksumSha256,
-      packageSizeBytes: packageBytes.byteLength,
-    },
+    archive: {expandedBytes, memberCount: archiveEntries.length, packageChecksumSha256, packageSizeBytes},
     assetSummary: {
       actualByteLength: assetSummaryBytes,
       actualEntryCount: assetManifest.entries.length,
@@ -2640,7 +2989,7 @@ export const analyzeProjectTransferImportPackage = async (
     assetSummaryBytes,
     conflictShape: planSummary.conflictCounts,
     expandedBytes,
-    packageBytes: packageBytes.byteLength,
+    packageBytes: packageSizeBytes,
     packageCounts,
     packageFingerprint,
     payloadAnalysis,
@@ -2673,4 +3022,28 @@ export const analyzeProjectTransferImportPackage = async (
   await mirrorProjectTransferStagingRevisionToLegacyLayout({layout: input.layout, runtimeOptions, stagingLayout})
 
   return {analysis: completedAnalysis, packageFingerprint, plan, planSummary, staging, stagingRevision}
+}
+
+export const analyzeProjectTransferImportPackage = async (
+  input: ProjectTransferImportAnalyzeInput,
+): Promise<ProjectTransferImportAnalyzeResult> => {
+  const analyze = (exclusiveWorkLease: ProjectTransferDuckdbExclusiveWorkLease | null) => {
+    return analyzeProjectTransferImportPackageCore(input, exclusiveWorkLease)
+  }
+
+  return input.runner === undefined
+    ? runWithDuckdbExclusiveWork(
+        {
+          estimatedRows: null,
+          kind: 'project_transfer_import',
+          message: 'Scanning and staging import package',
+          ownerToken: input.ownerToken,
+          phase: 'analyze',
+          sessionId: input.sessionId,
+        },
+        (lease) => {
+          return analyze(lease)
+        },
+      )
+    : analyze(null)
 }

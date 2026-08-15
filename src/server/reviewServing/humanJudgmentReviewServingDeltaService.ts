@@ -1,5 +1,7 @@
 import {
   appendReviewServingChangeDelta,
+  appendReviewServingChangeDeltas,
+  type ReviewServingDeltaAppendInput,
   type ReviewServingDeltaAppendResult,
   type ReviewServingDeltaLedgerTransaction,
   type ReviewServingSourceOperation,
@@ -31,10 +33,15 @@ export type AppendHumanJudgmentReviewServingDeltaInput = HumanJudgmentReviewServ
   sourceTable?: string
 }
 
-export const appendHumanJudgmentReviewServingDelta = async (
-  tx: ReviewServingDeltaLedgerTransaction,
+type PreparedHumanJudgmentReviewServingDelta = {
+  deltaInput: ReviewServingDeltaAppendInput
+  input: AppendHumanJudgmentReviewServingDeltaInput
+  sourcePartition: string
+}
+
+const getHumanJudgmentReviewServingDeltaInput = (
   input: AppendHumanJudgmentReviewServingDeltaInput,
-): Promise<ReviewServingDeltaAppendResult> => {
+): PreparedHumanJudgmentReviewServingDelta => {
   const sourcePartition = input.sourcePartition ?? `humanJudgment:${input.projectId}:${input.articleId}`
   const typedKey = {
     articleId: input.articleId,
@@ -43,44 +50,68 @@ export const appendHumanJudgmentReviewServingDelta = async (
     promptId: input.promptId ?? null,
   }
 
-  const result = await appendReviewServingChangeDelta(tx, {
-    articleId: input.articleId,
-    changeKind: 'judgment.human.updated',
-    humanJudgmentKey: input.humanJudgmentKey,
-    payloadJson: {...typedKey, answer: input.answer ?? null},
-    payloadVersion: 1,
-    projectId: input.projectId,
-    promptId: input.promptId ?? null,
-    sourceMutationKey: input.sourceMutationKey,
-    sourceOperation: input.sourceOperation,
-    sourcePartition,
-    sourceRowId: input.sourceRowId ?? input.humanJudgmentKey,
-    sourceTable: input.sourceTable ?? (input.promptId ? 'app.judgment_human' : 'app.judgment_human_summary'),
-    sourceUpdatedAt: input.sourceUpdatedAt,
-    typedKey,
-  })
-
-  if (input.reviewerOverlay) {
-    await appendReviewWriteOverlay(tx, {
+  return {
+    deltaInput: {
       articleId: input.articleId,
-      createdAt: input.sourceUpdatedAt ?? undefined,
+      changeKind: 'judgment.human.updated',
       humanJudgmentKey: input.humanJudgmentKey,
-      overlayKind: 'humanJudgment.answer',
-      overlayValueJson: {
-        answer: input.answer ?? null,
-        comment: input.comment ?? null,
-        humanJudgmentKey: input.humanJudgmentKey,
-        promptId: input.promptId ?? null,
-      },
+      payloadJson: {...typedKey, answer: input.answer ?? null},
+      payloadVersion: 1,
       projectId: input.projectId,
       promptId: input.promptId ?? null,
-      readSurface: input.reviewerOverlay.readSurface,
-      reviewConfigHash: input.reviewerOverlay.reviewConfigHash ?? null,
-      sourceHighWaterMark: result.sourceHighWaterMark,
+      sourceMutationKey: input.sourceMutationKey,
+      sourceOperation: input.sourceOperation,
       sourcePartition,
-      ttlMs: input.reviewerOverlay.ttlMs,
-    })
+      sourceRowId: input.sourceRowId ?? input.humanJudgmentKey,
+      sourceTable: input.sourceTable ?? (input.promptId ? 'app.judgment_human' : 'app.judgment_human_summary'),
+      sourceUpdatedAt: input.sourceUpdatedAt,
+      typedKey,
+    },
+    input,
+    sourcePartition,
   }
+}
+
+const appendHumanJudgmentReviewServingOverlay = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  prepared: PreparedHumanJudgmentReviewServingDelta,
+  result: ReviewServingDeltaAppendResult,
+) => {
+  const {input, sourcePartition} = prepared
+
+  if (!input.reviewerOverlay) {
+    return
+  }
+
+  await appendReviewWriteOverlay(tx, {
+    articleId: input.articleId,
+    createdAt: input.sourceUpdatedAt ?? undefined,
+    humanJudgmentKey: input.humanJudgmentKey,
+    overlayKind: 'humanJudgment.answer',
+    overlayValueJson: {
+      answer: input.answer ?? null,
+      comment: input.comment ?? null,
+      humanJudgmentKey: input.humanJudgmentKey,
+      promptId: input.promptId ?? null,
+    },
+    projectId: input.projectId,
+    promptId: input.promptId ?? null,
+    readSurface: input.reviewerOverlay.readSurface,
+    reviewConfigHash: input.reviewerOverlay.reviewConfigHash ?? null,
+    sourceHighWaterMark: result.sourceHighWaterMark,
+    sourcePartition,
+    ttlMs: input.reviewerOverlay.ttlMs,
+  })
+}
+
+export const appendHumanJudgmentReviewServingDelta = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: AppendHumanJudgmentReviewServingDeltaInput,
+): Promise<ReviewServingDeltaAppendResult> => {
+  const prepared = getHumanJudgmentReviewServingDeltaInput(input)
+  const result = await appendReviewServingChangeDelta(tx, prepared.deltaInput)
+
+  await appendHumanJudgmentReviewServingOverlay(tx, prepared, result)
 
   return result
 }
@@ -89,10 +120,23 @@ export const appendHumanJudgmentReviewServingDeltas = async (
   tx: ReviewServingDeltaLedgerTransaction,
   inputs: readonly AppendHumanJudgmentReviewServingDeltaInput[],
 ): Promise<ReviewServingDeltaAppendResult[]> => {
-  return inputs.reduce<Promise<ReviewServingDeltaAppendResult[]>>(async (previousRun, input) => {
-    const results = await previousRun
-    const result = await appendHumanJudgmentReviewServingDelta(tx, input)
+  const preparedInputs = inputs.map(getHumanJudgmentReviewServingDeltaInput)
+  const results = await appendReviewServingChangeDeltas(
+    tx,
+    preparedInputs.map((prepared) => {
+      return prepared.deltaInput
+    }),
+  )
 
-    return [...results, result]
-  }, Promise.resolve([]))
+  for (const [index, prepared] of preparedInputs.entries()) {
+    const result = results[index]
+
+    if (!result) {
+      throw new Error(`missing bulk human judgment delta result at index ${index}`)
+    }
+
+    await appendHumanJudgmentReviewServingOverlay(tx, prepared, result)
+  }
+
+  return results
 }

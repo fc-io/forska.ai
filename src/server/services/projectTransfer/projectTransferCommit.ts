@@ -1,6 +1,8 @@
 import {randomUUID} from 'node:crypto'
+import {createReadStream} from 'node:fs'
 import {mkdir, rm} from 'node:fs/promises'
 import {dirname} from 'node:path'
+import {createInterface} from 'node:readline'
 
 import type {ProjectTransferHistoryRecord, ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
 import {
@@ -20,6 +22,7 @@ import {
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
 import {runWithProjectTransferBackgroundActivity} from './projectTransferBackgroundActivity.ts'
+import {writeProjectTransferCanonicalJsonArtifact} from './projectTransferCanonicalJsonArtifact.ts'
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {
   promoteProjectTransferCommitAssets,
@@ -41,6 +44,7 @@ import {
   type ProjectTransferPlanSummary,
   type ProjectTransferProgressPayload,
   type ProjectTransferRuntimeEvent,
+  type ProjectTransferSessionResponse,
   toProjectTransferSessionResponse,
   validateProjectTransferPlanReadyToCommit,
 } from './projectTransferContracts.ts'
@@ -67,9 +71,11 @@ import {
 } from './projectTransferOperationTables.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import {
+  assertProjectTransferPayloadRow,
   parseProjectTransferPayload,
   type ProjectTransferPayload,
   type ProjectTransferPayloadByKey,
+  type ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
 import {
   getProjectTransferPerformanceMetrics,
@@ -202,6 +208,7 @@ const revalidatedTargetPlanKeys = [
   'promptPlan',
 ] as const satisfies readonly (keyof ProjectTransferTargetPlan)[]
 const commitWorkerHeartbeatIntervalMs = 15_000
+const retryableCommitFailureMessage = 'Commit failed; rollback cleanup completed or was not required'
 
 const writeCommitProgressArtifact = async ({
   progress,
@@ -215,8 +222,7 @@ const writeCommitProgressArtifact = async ({
   const layout = getProjectTransferImportTempLayout(sessionId)
   const progressPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: layout.progressPath})
 
-  await mkdir(dirname(progressPath), {recursive: true})
-  await globalThis.Bun.write(progressPath, getProjectTransferCanonicalJson(progress))
+  await writeProjectTransferCanonicalJsonArtifact({filePath: progressPath, value: progress})
 }
 
 const getCommitError = (message: string): never => {
@@ -414,6 +420,30 @@ const readExtractedPayload = async <TKey extends keyof ProjectTransferPayloadByK
   return parseProjectTransferPayload(input.key, text)
 }
 
+const readCompactExtractedJudgments = async (
+  input: RuntimePathOptions & {layout: ProjectTransferImportTempLayout},
+): Promise<ProjectTransferPayloadRecord[]> => {
+  const pathValue = getPayloadPath(input.layout, 'judgments')
+  const resolvedPath = resolveProjectTransferTempWritablePath({...input, pathValue})
+  const file = globalThis.Bun.file(resolvedPath)
+
+  if (!(await file.exists())) {
+    return getCommitError(`missing ${pathValue}`)
+  }
+
+  const records: ProjectTransferPayloadRecord[] = []
+  const lines = createInterface({crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(resolvedPath)})
+
+  for await (const line of lines) {
+    if (line.trim() !== '') {
+      const row = assertProjectTransferPayloadRow('judgments', JSON.parse(line) as unknown, records.length)
+      records.push({sourceJudgmentId: row.sourceJudgmentId})
+    }
+  }
+
+  return records
+}
+
 const getPackageCount = (plan: ProjectTransferImportPlanArtifact, key: string) => {
   const value = plan.packageCounts[key as keyof typeof plan.packageCounts]
 
@@ -449,6 +479,7 @@ const readExtractedPayloads = async (
     layout: ProjectTransferImportTempLayout
     onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void>
     phaseStartedAt?: Date
+    retainCompactJudgments?: boolean
   },
 ) => {
   const payloads: Partial<ProjectTransferPayloadByKey> = {}
@@ -478,7 +509,9 @@ const readExtractedPayloads = async (
       )
     }
 
-    payloads[key] = (await readExtractedPayload({...input, key})) as ProjectTransferPayload
+    payloads[key] = (await (input.retainCompactJudgments && key === 'judgments'
+      ? readCompactExtractedJudgments(input)
+      : readExtractedPayload({...input, key}))) as ProjectTransferPayload
 
     if (input.artifacts && input.onProgress) {
       await input.onProgress(
@@ -649,6 +682,21 @@ const getExistingCompletionResult = async ({
   return getHistoryCompletionResult({history, session})
 }
 
+export const isProjectTransferFailedCommitRetryCandidate = (response: ProjectTransferSessionResponse) => {
+  return (
+    response.direction === 'import'
+    && response.state === 'failed'
+    && response.ownerToken === null
+    && response.commitId !== null
+    && response.progress?.phase === 'commit'
+    && response.progress.status === 'failed'
+    && response.progress.message === retryableCommitFailureMessage
+    && response.progress.planRevision === response.planRevision
+    && response.planSummary?.packageCounts?.assetManifest === 0
+    && validateProjectTransferPlanReadyToCommit(response.planSummary).ok
+  )
+}
+
 const getInvalidSessionResult = ({
   now,
   session,
@@ -658,16 +706,17 @@ const getInvalidSessionResult = ({
 }): ProjectTransferCommitResult | null => {
   const response = toProjectTransferSessionResponse(session)
   const readyValidation = validateProjectTransferPlanReadyToCommit(response.planSummary)
+  const isFailedCommitRetry = isProjectTransferFailedCommitRetryCandidate(response)
 
   return response.direction !== 'import'
     ? {error: 'Project transfer session is not an import session', status: 'error', statusCode: 409}
     : response.state === 'expired' || response.expiresAt.getTime() <= now.getTime()
       ? {error: 'Project transfer import session expired', status: 'error', statusCode: 410}
-      : response.state === 'failed'
+      : response.state === 'failed' && !isFailedCommitRetry
         ? {error: 'Project transfer import session failed', status: 'error', statusCode: 409}
         : response.state === 'cancelled'
           ? {error: 'Project transfer import session was cancelled', status: 'error', statusCode: 409}
-          : response.state !== 'ready_to_commit'
+          : response.state !== 'ready_to_commit' && !isFailedCommitRetry
             ? {error: 'Project transfer import session is not ready to commit', status: 'error', statusCode: 409}
             : !readyValidation.ok
               ? {error: readyValidation.error, status: 'error', statusCode: 409}
@@ -1327,6 +1376,7 @@ const runProjectTransferCommitAppTableWrites = async ({
       layout: artifacts.layout,
       onProgress,
       phaseStartedAt: stagingLoadStartedAt,
+      retainCompactJudgments: true,
     })
   })
   const payloads = stagingLoad.value
@@ -1426,16 +1476,17 @@ const runProjectTransferCommitAppTableWrites = async ({
     const appTableWrites = await measureProjectTransferPhase(
       'appTableWrites',
       (): Promise<ProjectTransferCommitAppWriteResult> => {
-        return database.transaction((tx): Promise<ProjectTransferCommitAppWriteResult> => {
-          return withProjectTransferOperationTables({
-            ...runtimeOptions,
-            layout: artifacts.layout,
-            operationId: `commit_${commitId}`,
-            runner: tx,
-            work: ({runner, tables}) => {
+        return withProjectTransferOperationTables({
+          ...runtimeOptions,
+          layout: artifacts.layout,
+          operationId: `commit_${commitId}`,
+          runner: database,
+          workloadContext: projectTransferCommitTransactionWorkloadContext,
+          work: ({tables}) => {
+            return database.transaction((tx): Promise<ProjectTransferCommitAppWriteResult> => {
               return writeProjectTransferCommitAppTables({
                 commitId,
-                database: getProjectTransferCommitOperationDatabase(runner),
+                database: getProjectTransferCommitOperationDatabase(tx),
                 now,
                 operationTables: tables,
                 payloads,
@@ -1444,9 +1495,9 @@ const runProjectTransferCommitAppTableWrites = async ({
                 schemaVersion,
                 sessionId,
               })
-            },
-          })
-        }, projectTransferCommitTransactionWorkloadContext)
+            }, projectTransferCommitTransactionWorkloadContext)
+          },
+        })
       },
     )
     const phaseMetrics = getProjectTransferPerformanceMetrics({
@@ -1565,20 +1616,25 @@ const refreshClaimedCommitHeartbeat = async ({
   ownerToken,
   progress,
   repositories,
+  runtimeOptions,
   sessionId,
 }: {
   ownerToken: string
   progress: ProjectTransferProgressPayload
   repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
+  const heartbeatProgress = {...progress, updatedAt: new Date().toISOString()}
+
+  await writeCommitProgressArtifact({progress: heartbeatProgress, runtimeOptions, sessionId})
   const heartbeat = await repositories.sessionRepository.transitionProjectTransferSessionState({
     expectedOwnerToken: ownerToken,
     expectedState: 'committing',
     nextOwnerLeaseMs: 60_000,
     nextOwnerToken: ownerToken,
     nextState: 'committing',
-    progress,
+    progress: heartbeatProgress,
     sessionId,
   })
 
@@ -1594,25 +1650,37 @@ const runClaimedCommitHeartbeatOperation = async <TValue>({
   operation,
   ownerToken,
   repositories,
+  runtimeOptions,
   sessionId,
 }: {
   getProgress: () => ProjectTransferProgressPayload
   operation: () => Promise<TValue>
   ownerToken: string
   repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
+  const pendingHeartbeats: Promise<void>[] = []
   const interval = setInterval(() => {
-    void refreshClaimedCommitHeartbeat({ownerToken, progress: getProgress(), repositories, sessionId}).catch(
-      (error) => {
+    pendingHeartbeats.push(
+      refreshClaimedCommitHeartbeat({
+        ownerToken,
+        progress: getProgress(),
+        repositories,
+        runtimeOptions,
+        sessionId,
+      }).catch((error) => {
         logProjectTransferCommitHeartbeatError(sessionId, error)
-      },
+      }),
     )
   }, commitWorkerHeartbeatIntervalMs)
 
-  return operation().finally(() => {
+  try {
+    return await operation()
+  } finally {
     clearInterval(interval)
-  })
+    await Promise.all(pendingHeartbeats)
+  }
 }
 
 const failClaimedCommit = async ({
@@ -1634,7 +1702,7 @@ const failClaimedCommit = async ({
   const progress = getCommitProgress({
     artifacts,
     completedBytes: getExtractedAssetBytes(artifacts.analysis),
-    message: 'Commit failed; rollback cleanup completed or was not required',
+    message: retryableCommitFailureMessage,
     now,
     percent: 100,
     planRevision: artifacts.plan.planRevision,
@@ -1787,6 +1855,7 @@ const runClaimedProjectTransferImportCommit = async ({
       },
       ownerToken,
       repositories,
+      runtimeOptions,
       sessionId,
     })
     const completionNow = new Date()
@@ -1885,7 +1954,17 @@ export const commitProjectTransferImportSession = async ({
     return invalidSession
   }
 
-  const artifacts = await loadProjectTransferCommitArtifacts({...runtimeOptions, session: current, sessionId})
+  const isFailedCommitRetry = isProjectTransferFailedCommitRetryCandidate(toProjectTransferSessionResponse(current))
+  let artifacts: ProjectTransferCommitArtifacts
+
+  try {
+    artifacts = await loadProjectTransferCommitArtifacts({...runtimeOptions, session: current, sessionId})
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+
+    return {error: `Project transfer import artifacts are unavailable: ${detail}`, status: 'error', statusCode: 409}
+  }
+
   const executionMode = getCommitExecutionMode(artifacts)
   const expectedStagingRevision = getProjectTransferProgressStagingRevision(
     parseProjectTransferProgressPayload(current.progressJson),
@@ -1900,7 +1979,7 @@ export const commitProjectTransferImportSession = async ({
     return {error: artifactConsistency.error, status: 'error', statusCode: 409}
   }
 
-  if (executionMode !== 'background') {
+  if (executionMode !== 'background' && !isFailedCommitRetry) {
     const preClaimRevalidationMeasurement = await measureProjectTransferPhase('revalidation', () => {
       return repositories.revalidate({
         ...runtimeOptions,
@@ -1943,10 +2022,11 @@ export const commitProjectTransferImportSession = async ({
   })
   const claimed = await repositories.sessionRepository.transitionProjectTransferSessionState({
     commitId,
+    ...(isFailedCommitRetry ? {completionPayload: null, error: null} : {}),
     expectedOwnerToken: null,
     expectedPlanRevision: revision.planRevision,
     expectedStagingRevision,
-    expectedState: 'ready_to_commit',
+    expectedState: isFailedCommitRetry ? 'failed' : 'ready_to_commit',
     nextOwnerLeaseMs: 60_000,
     nextOwnerToken: ownerToken,
     nextState: 'committing',

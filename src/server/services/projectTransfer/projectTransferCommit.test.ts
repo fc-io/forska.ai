@@ -20,8 +20,15 @@ import {
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {getActiveDuckdbExclusiveWorkSnapshot} from './projectTransferDuckdbExclusiveWork.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
-import type {ProjectTransferPlanSummary} from './projectTransferSession.ts'
-import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
+import {
+  getProjectTransferImportTempLayout,
+  parseProjectTransferProgressPayload,
+  type ProjectTransferPlanSummary,
+} from './projectTransferSession.ts'
+import {
+  getProjectTransferImportStagingLayout,
+  getProjectTransferProgressStagingRevision,
+} from './projectTransferStaging.ts'
 import {
   projectTransferDependencyFingerprintAlgorithm,
   projectTransferDependencyFingerprintCodeVersion,
@@ -308,6 +315,27 @@ const getFinalOverlapCounts = () => {
   }
 }
 
+const getEmptyPackageCounts = () => {
+  return {
+    articleImportRoutes: 0,
+    assetManifest: 0,
+    articles: 0,
+    humanJudgmentSummaries: 0,
+    humanJudgments: 0,
+    importRoutes: 0,
+    judgmentAssessments: 0,
+    judgments: 0,
+    models: 0,
+    project: 1,
+    projectArticles: 0,
+    projectImportRoutes: 0,
+    projectPrompts: 0,
+    prompts: 0,
+    providerConnections: 0,
+    reviews: 0,
+  }
+}
+
 const getReadySummary = (overrides?: Partial<ProjectTransferPlanSummary>): ProjectTransferPlanSummary => {
   return {
     blockerCount: 0,
@@ -316,6 +344,7 @@ const getReadySummary = (overrides?: Partial<ProjectTransferPlanSummary>): Proje
     dependencyStatuses: {},
     judgmentConflictStatus: 'clear',
     overlapCounts: getFinalOverlapCounts(),
+    packageCounts: getEmptyPackageCounts(),
     warningCount: 0,
     ...overrides,
   }
@@ -331,24 +360,7 @@ const getPlan = ({
   return {
     blockers: summary.blockers ?? [],
     canCommit: summary.blockerCount === 0,
-    packageCounts: {
-      articleImportRoutes: 0,
-      assetManifest: 0,
-      articles: 0,
-      humanJudgmentSummaries: 0,
-      humanJudgments: 0,
-      importRoutes: 0,
-      judgmentAssessments: 0,
-      judgments: 0,
-      models: 0,
-      project: 1,
-      projectArticles: 0,
-      projectImportRoutes: 0,
-      projectPrompts: 0,
-      prompts: 0,
-      providerConnections: 0,
-      reviews: 0,
-    },
+    packageCounts: getEmptyPackageCounts(),
     packageFingerprint: 'fingerprint-commit',
     packageWarnings: [],
     planRevision,
@@ -409,7 +421,11 @@ const writeArtifacts = async ({
   plan: ProjectTransferImportPlanArtifact
   sessionId: string
 }) => {
-  const layout = getProjectTransferImportTempLayout(sessionId)
+  const baseLayout = getProjectTransferImportTempLayout(sessionId)
+  const layout =
+    typeof plan.stagingRevision === 'number'
+      ? getProjectTransferImportStagingLayout({layout: baseLayout, stagingRevision: plan.stagingRevision})
+      : baseLayout
   await writeJson({cwd, pathValue: layout.analysisPath, value: analysis})
   await writeJson({cwd, pathValue: layout.planPath, value: plan})
 
@@ -507,11 +523,18 @@ const getFakeSessionRepository = (initialSession: ProjectTransferSessionRecord) 
         params.expectedOwnerToken === undefined ? true : session.ownerToken === params.expectedOwnerToken
       const planRevisionMatches =
         params.expectedPlanRevision === undefined ? true : session.planRevision === params.expectedPlanRevision
+      const stagingRevisionMatches =
+        params.expectedStagingRevision === undefined
+        || getProjectTransferProgressStagingRevision(parseProjectTransferProgressPayload(session.progressJson))
+          === params.expectedStagingRevision
       session =
-        stateMatches && ownerMatches && planRevisionMatches
+        stateMatches && ownerMatches && planRevisionMatches && stagingRevisionMatches
           ? {
               ...session,
               commitId: Object.hasOwn(params, 'commitId') ? (params.commitId ?? null) : session.commitId,
+              completionPayloadJson: Object.hasOwn(params, 'completionPayload')
+                ? (params.completionPayload ?? null)
+                : session.completionPayloadJson,
               errorJson: Object.hasOwn(params, 'error') ? (params.error ?? null) : session.errorJson,
               heartbeatAt: params.now ?? null,
               ownerToken: Object.hasOwn(params, 'nextOwnerToken')
@@ -706,6 +729,168 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(planArtifactExists).toBe(false)
     expect(completionArtifactExists).toBe(true)
     expect(progressArtifactExists).toBe(true)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit retries a rolled-back failed commit with fresh fencing ids', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = {...getPlan({planRevision: 1, summary}), stagingRevision: 1}
+    await writeArtifacts({analysis: getAnalysis(1, {stagingRevision: 1}), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(
+      getSession({
+        commitId: 'commit-previous',
+        completionPayloadJson: {status: 'completed'},
+        errorJson: {message: 'Out of Memory Error'},
+        planSummaryJson: summary,
+        progressJson: {
+          message: 'Commit failed; rollback cleanup completed or was not required',
+          phase: 'commit',
+          planRevision: 1,
+          stagingRevision: 1,
+          status: 'failed',
+          updatedAt: '2026-05-28T10:20:00.000Z',
+        },
+        state: 'failed',
+      }),
+    )
+    const revalidationInputs: RevalidateInput[] = []
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      revalidate: async (input) => {
+        revalidationInputs.push(input)
+        return {changed: false, plan, ready: true}
+      },
+    })
+
+    expect(result).toMatchObject({status: 'completed', statusCode: 200})
+    expect(fake.calls.transition[0]).toMatchObject({
+      commitId: 'commit-generated',
+      completionPayload: null,
+      error: null,
+      expectedOwnerToken: null,
+      expectedPlanRevision: 1,
+      expectedStagingRevision: 1,
+      expectedState: 'failed',
+      nextOwnerToken: 'owner-generated',
+      nextState: 'committing',
+    })
+    expect(fake.getSession()).toMatchObject({
+      commitId: 'commit-generated',
+      errorJson: null,
+      ownerToken: null,
+      state: 'completed',
+    })
+    expect(revalidationInputs).toHaveLength(1)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit rejects a failed retry when reviewed staging artifacts are unavailable', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const fake = getFakeSessionRepository(
+      getSession({
+        commitId: 'commit-previous',
+        errorJson: {message: 'Out of Memory Error'},
+        planSummaryJson: getReadySummary(),
+        progressJson: {
+          message: 'Commit failed; rollback cleanup completed or was not required',
+          phase: 'commit',
+          planRevision: 1,
+          stagingRevision: 1,
+          status: 'failed',
+          updatedAt: '2026-05-28T10:20:00.000Z',
+        },
+        state: 'failed',
+      }),
+    )
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      revalidate: async () => {
+        throw new Error('unexpected revalidation')
+      },
+    })
+
+    expect(result).toMatchObject({status: 'error', statusCode: 409})
+    expect(result.status === 'error' ? result.error : '').toContain('Project transfer import artifacts are unavailable')
+    expect(fake.calls.transition).toHaveLength(0)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit does not retry failed sessions that may have promoted assets', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const fake = getFakeSessionRepository(
+      getSession({
+        commitId: 'commit-previous',
+        errorJson: {message: 'Asset promotion failed'},
+        planSummaryJson: getReadySummary({packageCounts: {...getEmptyPackageCounts(), assetManifest: 1}}),
+        progressJson: {
+          message: 'Commit failed; rollback cleanup completed or was not required',
+          phase: 'commit',
+          planRevision: 1,
+          stagingRevision: 1,
+          status: 'failed',
+          updatedAt: '2026-05-28T10:20:00.000Z',
+        },
+        state: 'failed',
+      }),
+    )
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      revalidate: async () => {
+        throw new Error('unexpected revalidation')
+      },
+    })
+
+    expect(result).toMatchObject({error: 'Project transfer import session failed', status: 'error', statusCode: 409})
+    expect(fake.calls.transition).toHaveLength(0)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit rejects analysis-failed sessions before loading artifacts', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const fake = getFakeSessionRepository(
+      getSession({
+        commitId: 'analyze-attempt',
+        errorJson: {message: 'Analysis failed'},
+        progressJson: {
+          phase: 'analyze',
+          planRevision: 1,
+          stagingRevision: 1,
+          status: 'failed',
+          updatedAt: '2026-05-28T10:20:00.000Z',
+        },
+        state: 'failed',
+      }),
+    )
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      revalidate: async () => {
+        throw new Error('unexpected revalidation')
+      },
+    })
+
+    expect(result).toMatchObject({error: 'Project transfer import session failed', status: 'error', statusCode: 409})
+    expect(fake.calls.transition).toHaveLength(0)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -1389,6 +1574,70 @@ test('project transfer commit returns completed session history without replayin
 
   expect(result).toMatchObject({
     completion: {projectId: 'target-project-1', status: 'completed'},
+    status: 'completed',
+    statusCode: 200,
+  })
+  expect(fake.calls.transition).toHaveLength(0)
+})
+
+test('project transfer commit returns history before retrying a failed commit', async () => {
+  const cwd = getRuntimeRoot()
+  const fake = getFakeSessionRepository(
+    getSession({
+      commitId: 'commit-previous',
+      errorJson: {message: 'Commit failed'},
+      progressJson: {
+        phase: 'commit',
+        planRevision: 1,
+        stagingRevision: 1,
+        status: 'failed',
+        updatedAt: '2026-05-28T10:20:00.000Z',
+      },
+      state: 'failed',
+    }),
+  )
+  const result = await commitProjectTransferImportSession({
+    cwd,
+    repositories: {
+      historyRepository: {
+        getCompletedImportHistoryBySessionId: async () => {
+          return {
+            commitId: 'commit-previous',
+            completionPayloadJson: {
+              packageFingerprint: 'fingerprint-commit',
+              projectId: 'target-project-history',
+              projectName: 'Target Project History',
+              status: 'completed',
+              transferHistoryId: 'history-failed-retry',
+            },
+            createdAt: new Date('2026-05-28T10:20:00.000Z'),
+            direction: 'import',
+            id: 'history-failed-retry',
+            packageFingerprint: 'fingerprint-commit',
+            payloadCountsJson: {project: 1},
+            schemaVersion: 1,
+            sessionId: 'commit-session',
+            sourceProjectId: 'source-project-1',
+            sourceProjectName: 'Source Project',
+            targetProjectId: 'target-project-history',
+            targetProjectName: 'Target Project History',
+          }
+        },
+      },
+      revalidate: async () => {
+        throw new Error('unexpected revalidation')
+      },
+      runAppTableWrites: async () => {
+        throw new Error('unexpected writes')
+      },
+      sessionRepository: fake.repository,
+    },
+    request: {planRevision: 1},
+    sessionId: 'commit-session',
+  })
+
+  expect(result).toMatchObject({
+    completion: {projectId: 'target-project-history', transferHistoryId: 'history-failed-retry'},
     status: 'completed',
     statusCode: 200,
   })
@@ -2246,6 +2495,7 @@ test('project transfer commit writer consumes same-connection operation tables f
     const writeResult = await database.transaction(async (tx) => {
       await createOperationPayloadTable(tx, operationTables.tableNames.articles, [newArticle, reusedArticle])
       await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [stagedArticleRoute])
+      await createOperationPayloadTable(tx, operationTables.tableNames.judgments, [])
       await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [projectArticle])
 
       return writeProjectTransferCommitAppTables({
@@ -3063,10 +3313,12 @@ test('project transfer commit writer blocks duplicate project prompt remaps befo
   expect(result.promptCount).toBe(0)
 })
 
-test('project transfer commit writer writes judgment assessment and human review decision rows', () => {
+test('project transfer set-based commit preserves judgment ids and counts from compact app payloads', () => {
   const result = runCommitWriterScript<{
+    completionJudgmentCount: number
     humanJudgmentRow: {answer: string | null; articleId: string; projectId: string; promptId: string}
     humanSummaryRow: {answer: string | null; articleId: string; origin: string; projectId: string}
+    judgmentIdBySourceId: Record<string, string>
     newAssessmentRow: {assessmentIsCorrect: boolean; judgmentId: string}
     newJudgmentRow: {
       articleId: string
@@ -3394,7 +3646,10 @@ test('project transfer commit writer writes judgment assessment and human review
       humanJudgmentSummaries: [humanSummaryPayload],
       humanJudgments: [humanJudgmentPayload],
       judgmentAssessments: [newAssessmentPayload, reusedAssessmentPayload],
-      judgments: [newJudgmentPayload, reusedJudgmentPayload],
+      judgments: [
+        {sourceJudgmentId: newJudgmentPayload.sourceJudgmentId},
+        {sourceJudgmentId: reusedJudgmentPayload.sourceJudgmentId},
+      ],
       models: [getModelPayload()],
       project: getProjectPayload(settings),
       projectArticles: [
@@ -3449,8 +3704,10 @@ test('project transfer commit writer writes judgment assessment and human review
     const [reviewRow] = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, opened, reviewed_title AS reviewedTitle, reviewed_title_comment AS reviewedTitleComment FROM app.review WHERE project_id = '" + writeResult.projectId + "'")
 
     console.log(JSON.stringify({
+      completionJudgmentCount: writeResult.completion.finalCounts.judgments,
       humanJudgmentRow,
       humanSummaryRow,
+      judgmentIdBySourceId: writeResult.commitIdMaps.judgmentIdBySourceId,
       newAssessmentRow,
       newJudgmentRow,
       reusedAssessmentCount: reusedAssessmentCount.count,
@@ -3471,6 +3728,11 @@ test('project transfer commit writer writes judgment assessment and human review
     projectId: result.targetProjectId,
     snapshotProjectId: result.targetProjectId,
     snapshotProjectModelName: 'exported-new-label',
+  })
+  expect(result.completionJudgmentCount).toBe(2)
+  expect(result.judgmentIdBySourceId).toEqual({
+    'source-judgment-new': result.newJudgmentRow.id,
+    'source-judgment-reuse': 'target-judgment-reuse',
   })
   expect(result.reusedJudgmentRow.snapshotProjectModelName).toBe('target-existing-label')
   expect(result.newAssessmentRow).toMatchObject({assessmentIsCorrect: true, judgmentId: result.newJudgmentRow.id})

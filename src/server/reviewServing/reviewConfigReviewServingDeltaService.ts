@@ -1,6 +1,8 @@
 import {getQuotedStringList} from '../services/appQueryHelpers.ts'
 import {
   appendReviewServingChangeDelta,
+  appendReviewServingChangeDeltas,
+  type ReviewServingDeltaAppendInput,
   type ReviewServingDeltaLedgerTransaction,
   type ReviewServingSourceOperation,
 } from './reviewServingDeltaLedger.ts'
@@ -62,14 +64,13 @@ const getSortedUniqueFields = <T extends string>(fields: readonly T[]) => {
   })
 }
 
-export const appendPromptConfigReviewServingDelta = async (
-  tx: ReviewServingDeltaLedgerTransaction,
+const getPromptConfigReviewServingDeltaInput = (
   input: AppendPromptConfigReviewServingDeltaInput,
-) => {
+): ReviewServingDeltaAppendInput => {
   const changedPromptConfigFields = getSortedUniqueFields(input.changedPromptConfigFields)
   const typedKey = {changedPromptConfigFields, projectId: input.projectId, promptId: input.promptId}
 
-  await appendReviewServingChangeDelta(tx, {
+  return {
     changeKind: 'prompt.config.updated',
     configFieldSet: changedPromptConfigFields.join(','),
     payloadJson: typedKey,
@@ -83,27 +84,16 @@ export const appendPromptConfigReviewServingDelta = async (
     sourceTable: input.sourceTable ?? 'app.project_prompt',
     sourceUpdatedAt: input.sourceUpdatedAt,
     typedKey,
-  })
+  }
 }
 
-export const appendPromptConfigReviewServingDeltas = async (
-  tx: ReviewServingDeltaLedgerTransaction,
-  inputs: readonly AppendPromptConfigReviewServingDeltaInput[],
-) => {
-  await inputs.reduce<Promise<void>>(async (previousRun, input) => {
-    await previousRun
-    await appendPromptConfigReviewServingDelta(tx, input)
-  }, Promise.resolve())
-}
-
-export const appendProjectReviewConfigReviewServingDelta = async (
-  tx: ReviewServingDeltaLedgerTransaction,
+const getProjectReviewConfigReviewServingDeltaInput = (
   input: AppendProjectReviewConfigReviewServingDeltaInput,
-) => {
+): ReviewServingDeltaAppendInput => {
   const changedReviewConfigFields = getSortedUniqueFields(input.changedReviewConfigFields)
   const typedKey = {changedReviewConfigFields, projectId: input.projectId, promptId: input.promptId ?? null}
 
-  await appendReviewServingChangeDelta(tx, {
+  return {
     changeKind: 'project.reviewConfig.updated',
     configFieldSet: changedReviewConfigFields.join(','),
     payloadJson: typedKey,
@@ -117,17 +107,35 @@ export const appendProjectReviewConfigReviewServingDelta = async (
     sourceTable: input.sourceTable ?? 'app.project',
     sourceUpdatedAt: input.sourceUpdatedAt,
     typedKey,
-  })
+  }
+}
+
+export const appendPromptConfigReviewServingDelta = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: AppendPromptConfigReviewServingDeltaInput,
+) => {
+  await appendReviewServingChangeDelta(tx, getPromptConfigReviewServingDeltaInput(input))
+}
+
+export const appendPromptConfigReviewServingDeltas = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  inputs: readonly AppendPromptConfigReviewServingDeltaInput[],
+) => {
+  await appendReviewServingChangeDeltas(tx, inputs.map(getPromptConfigReviewServingDeltaInput))
+}
+
+export const appendProjectReviewConfigReviewServingDelta = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: AppendProjectReviewConfigReviewServingDeltaInput,
+) => {
+  await appendReviewServingChangeDelta(tx, getProjectReviewConfigReviewServingDeltaInput(input))
 }
 
 export const appendProjectReviewConfigReviewServingDeltas = async (
   tx: ReviewServingDeltaLedgerTransaction,
   inputs: readonly AppendProjectReviewConfigReviewServingDeltaInput[],
 ) => {
-  await inputs.reduce<Promise<void>>(async (previousRun, input) => {
-    await previousRun
-    await appendProjectReviewConfigReviewServingDelta(tx, input)
-  }, Promise.resolve())
+  await appendReviewServingChangeDeltas(tx, inputs.map(getProjectReviewConfigReviewServingDeltaInput))
 }
 
 export const appendProviderModelExecutionIdentityReviewServingDeltas = async (

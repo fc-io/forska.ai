@@ -205,6 +205,8 @@ test('dev server watcher explains busy stack restart timeouts without raw source
   expect(source).toContain('if (currentLock?.pid === process.pid)')
   expect(source).toContain('readProcessLockForAcquisition({')
   expect(source).toContain('processLockMalformedStaleAfterMs')
+  expect(source).toContain('nextFingerprint === watchedPathFingerprint')
+  expect(source).toContain('filesystem notification left no source change; keeping server stack running')
   expect(source).not.toContain('Timed out waiting for server stack pid=${currentLock.pid} to release lock')
 })
 

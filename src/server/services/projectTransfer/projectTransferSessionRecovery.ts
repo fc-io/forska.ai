@@ -141,7 +141,7 @@ const defaultImportCommitHeartbeatStaleMs = 90 * 1000
 const defaultTerminalSessionPruneAgeMs = 24 * 60 * 60 * 1000
 const maxRecoveryBatchSize = 500
 const lowMemoryAutomaticRecoveryBatchSize = 1
-const lowMemoryMaintenanceDuckdbLimitMiB = 6400
+const lowMemoryMaintenanceDuckdbLimitMiB = 8192
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
 
 const emptyRecoveryResult = (skippedActiveWriterCheck: boolean): ProjectTransferSessionRecoveryResult => {

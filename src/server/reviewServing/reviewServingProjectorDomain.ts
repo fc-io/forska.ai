@@ -176,11 +176,12 @@ export const getReviewServingSourcePartitionWatermarks = (
   return claims.reduce<ReviewServingSourcePartitionWatermarks>((watermarks, claim) => {
     const sourceKeys = [claim.sourcePartition, ...getReviewServingSourceWatermarkKeys(claim.sourcePartition)]
 
-    return sourceKeys.reduce<ReviewServingSourcePartitionWatermarks>((nextWatermarks, sourceKey) => {
-      const previous = nextWatermarks[sourceKey] ?? 0
+    sourceKeys.forEach((sourceKey) => {
+      const previous = watermarks[sourceKey] ?? 0
+      watermarks[sourceKey] = Math.max(previous, claim.latestSourceHighWaterMark)
+    })
 
-      return {...nextWatermarks, [sourceKey]: Math.max(previous, claim.latestSourceHighWaterMark)}
-    }, watermarks)
+    return watermarks
   }, {})
 }
 

@@ -529,11 +529,13 @@ const getCommitUnavailableReason = (session: ProjectImportSession | null) => {
     ? 'Import completed.'
     : session?.state === 'committing'
       ? 'Commit is writing the imported project.'
-      : session?.stalePlan
-        ? 'Review the refreshed plan before committing.'
-        : session?.canCommit
-          ? 'Plan is ready to commit.'
-          : 'Resolve blockers and dependencies before committing this plan.'
+      : session?.state === 'failed' && session.canCommit
+        ? 'The previous commit failed. The validated plan is ready to retry.'
+        : session?.stalePlan
+          ? 'Review the refreshed plan before committing.'
+          : session?.canCommit
+            ? 'Plan is ready to commit.'
+            : 'Resolve blockers and dependencies before committing this plan.'
 }
 
 const SummaryTable = (props: {
@@ -1155,7 +1157,7 @@ export const ImportProjectWizard = () => {
 
     return (
       session?.canCommit === true
-      && session.state === 'ready_to_commit'
+      && (session.state === 'ready_to_commit' || session.state === 'failed')
       && session.stalePlan !== true
       && !commitMutation.isPending
     )
@@ -1334,6 +1336,7 @@ export const ImportProjectWizard = () => {
                     <Match when={commitMutation.isPending}>Creating...</Match>
                     <Match when={currentSession()?.state === 'committing'}>Create running</Match>
                     <Match when={currentSession()?.state === 'completed'}>Created</Match>
+                    <Match when={currentSession()?.state === 'failed'}>Retry project import</Match>
                     <Match when={true}>Create project from import</Match>
                   </Switch>
                 </Button>

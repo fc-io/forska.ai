@@ -1,5 +1,6 @@
 import {
   type DuckdbExclusiveWorkInput,
+  type DuckdbExclusiveWorkLease,
   type DuckdbExclusiveWorkSnapshot,
   getActiveDuckdbExclusiveWorkSnapshot,
   hasActiveDuckdbExclusiveWork,
@@ -51,12 +52,12 @@ export const runWithDuckdbExclusiveWork = async <T>(
     ownerToken?: string | null
     sessionId?: string | null
   },
-  operation: () => Promise<T>,
+  operation: (lease: DuckdbExclusiveWorkLease) => Promise<T>,
 ) => {
   return runWithSharedDuckdbExclusiveWork(
     {...input, ownerToken: input.ownerToken ?? null, sessionId: input.sessionId ?? 'unknown-project-transfer-session'},
-    () => {
-      return operation()
+    (lease) => {
+      return operation(lease)
     },
     {
       dependencies: {
@@ -85,6 +86,7 @@ export const updateActiveDuckdbExclusiveWorkProgress = (progress: ProjectTransfe
 export {
   getActiveDuckdbExclusiveWorkSnapshot,
   hasActiveDuckdbExclusiveWork,
+  type DuckdbExclusiveWorkLease as ProjectTransferDuckdbExclusiveWorkLease,
   type DuckdbExclusiveWorkSnapshot as ProjectTransferDuckdbExclusiveWorkSnapshot,
   resetDuckdbExclusiveWorkForTests,
 }

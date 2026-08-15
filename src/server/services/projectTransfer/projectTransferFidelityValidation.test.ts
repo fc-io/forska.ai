@@ -1,8 +1,17 @@
 import {expect, test} from 'bun:test'
 
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
-import {getProjectTransferFidelityValidation} from './projectTransferFidelityValidation.ts'
-import {getProjectTransferPayloadFixtureMap} from './projectTransferPayloadSchemas.ts'
+import {
+  getProjectTransferFidelityValidation,
+  getProjectTransferJudgmentAnalysisFieldSignatureDigest,
+  getProjectTransferJudgmentAnalysisInputSignatureDigest,
+  projectTransferJudgmentAnalysisFieldSignatureDigestField,
+  projectTransferJudgmentAnalysisInputSignatureDigestField,
+} from './projectTransferFidelityValidation.ts'
+import {
+  getProjectTransferPayloadFixtureMap,
+  type ProjectTransferPayloadRecord,
+} from './projectTransferPayloadSchemas.ts'
 
 const getBaseTargetPlan = (): ProjectTransferTargetPlan => {
   return {
@@ -33,6 +42,24 @@ const getBaseTargetPlan = (): ProjectTransferTargetPlan => {
       },
     ],
   }
+}
+
+const getCompactAnalysisJudgment = (judgment: ProjectTransferPayloadRecord): ProjectTransferPayloadRecord => {
+  return {
+    chunkingStrategy: judgment.chunkingStrategy,
+    contentSettings: judgment.contentSettings,
+    deleteGeneration: judgment.deleteGeneration,
+    judgmentInputSignatureProvenance: judgment.judgmentInputSignatureProvenance,
+    [projectTransferJudgmentAnalysisFieldSignatureDigestField]:
+      getProjectTransferJudgmentAnalysisFieldSignatureDigest(judgment),
+    [projectTransferJudgmentAnalysisInputSignatureDigestField]: getProjectTransferJudgmentAnalysisInputSignatureDigest(
+      judgment.judgmentInputSignature,
+    ),
+    sourceArticleId: judgment.sourceArticleId,
+    sourceJudgmentId: judgment.sourceJudgmentId,
+    sourceModelId: judgment.sourceModelId,
+    sourcePromptId: judgment.sourcePromptId,
+  } as unknown as ProjectTransferPayloadRecord
 }
 
 test('judgment review-visible keys preserve distinct content settings', async () => {
@@ -140,6 +167,64 @@ test('reused judgments treat TO_JSON database fields as equivalent arrays', asyn
   expect(judgmentPlan?.action).toBe('reuse')
   expect(judgmentPlan?.conflictCodes).toEqual([])
   expect(result.conflictCounts.judgmentConflictCount).toBe(0)
+})
+
+test('compact analysis judgment digests preserve input and saved-field fidelity checks', async () => {
+  const fixturePayloads = getProjectTransferPayloadFixtureMap()
+  const [importedJudgment] = fixturePayloads.judgments
+
+  if (!importedJudgment) {
+    throw new Error('Expected judgment fixture')
+  }
+
+  const payloads = {
+    ...fixturePayloads,
+    humanJudgmentSummaries: [],
+    humanJudgments: [],
+    judgmentAssessments: [],
+    judgments: [getCompactAnalysisJudgment(importedJudgment)],
+    reviews: [],
+  }
+  const result = await getProjectTransferFidelityValidation({
+    dependencyResolution: {
+      modelTargetBySourceId: {'model-1': 'target-model-1'},
+      providerTargetBySourceId: {'provider-connection-1': 'target-provider-1'},
+    },
+    payloads,
+    runner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        const rows = statement.includes('FROM app.judgment')
+          ? [
+              {
+                answeredOriginal: importedJudgment.answeredOriginal,
+                answeredOriginalAsArray: JSON.stringify(importedJudgment.answeredOriginalAsArray ?? []),
+                confidenceOriginal: importedJudgment.confidenceOriginal,
+                deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
+                explanation: importedJudgment.explanation,
+                isAnswered: importedJudgment.isAnswered,
+                quotes: JSON.stringify(importedJudgment.quotes ?? []),
+                targetArticleId: 'target-article-1',
+                targetJudgmentId: 'target-judgment-1',
+                targetModelId: 'target-model-1',
+                targetPromptId: 'target-prompt-1',
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useTitle: true,
+              },
+            ]
+          : []
+
+        return rows as T[]
+      },
+    },
+    targetPlan: getBaseTargetPlan(),
+  })
+  const [judgmentPlan] = result.targetPlan.judgmentPlan
+
+  expect(judgmentPlan?.action).toBe('reuse')
+  expect(judgmentPlan?.inputSignatureMatches).toBe(true)
+  expect(judgmentPlan?.conflictCodes).toEqual([])
 })
 
 test('imported model placeholders detect judgments that already exist under the materialized source model id', async () => {

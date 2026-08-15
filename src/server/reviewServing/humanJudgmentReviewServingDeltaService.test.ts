@@ -55,12 +55,57 @@ test('prompt human judgment updates emit human dirty deltas', async () => {
     },
   ])
 
-  const inserts = getReviewChangeInsertStatements(statements).join('\n')
+  const inserts = getReviewChangeInsertStatements(statements)
+  const bulkRows = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+    })
+    .join('\n')
 
-  expect(inserts).toContain('judgment.human.updated')
-  expect(inserts).toContain('judgment-human-1')
-  expect(inserts).toContain('prompt-1')
-  expect(inserts).toContain('app.judgment_human')
+  expect(inserts).toHaveLength(1)
+  expect(bulkRows).toContain('judgment.human.updated')
+  expect(bulkRows).toContain('judgment-human-1')
+  expect(bulkRows).toContain('prompt-1')
+  expect(bulkRows).toContain('app.judgment_human')
+})
+
+test('bulk human judgment deltas preserve reviewer overlays in input order', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendHumanJudgmentReviewServingDeltas(tx, [
+    {
+      answer: 'include',
+      articleId: 'article-1',
+      humanJudgmentKey: 'judgment-human-1',
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      reviewerOverlay: {readSurface: 'row'},
+      sourceMutationKey: 'human-submit-1',
+      sourceOperation: 'update',
+    },
+    {
+      answer: 'exclude',
+      articleId: 'article-2',
+      humanJudgmentKey: 'judgment-human-2',
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      reviewerOverlay: {readSurface: 'row'},
+      sourceMutationKey: 'human-submit-2',
+      sourceOperation: 'update',
+    },
+  ])
+
+  const deltaInserts = getReviewChangeInsertStatements(statements)
+  const overlayInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_write_overlay')
+  })
+
+  expect(deltaInserts).toHaveLength(1)
+  expect(overlayInserts).toHaveLength(2)
+  expect(overlayInserts[0]).toContain('judgment-human-1')
+  expect(overlayInserts[0]).toContain('include')
+  expect(overlayInserts[1]).toContain('judgment-human-2')
+  expect(overlayInserts[1]).toContain('exclude')
 })
 
 test('prompt human reviewer actions can create row-scoped overlays tied to delta high-water marks', async () => {

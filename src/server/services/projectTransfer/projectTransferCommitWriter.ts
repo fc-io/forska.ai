@@ -1,6 +1,7 @@
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
 import {
   appendArticleReviewServingDeltas,
+  appendArticleReviewServingDeltasForIds,
   type ArticleReviewServingFieldName,
 } from '../../reviewServing/articleReviewServingDeltaService.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
@@ -16,9 +17,9 @@ import {
 import {
   getReviewImportHotFieldRow,
   type ReviewImportHotFieldInput,
-  upsertReviewImportArticleHotField,
+  upsertReviewImportArticleHotFields,
 } from '../../reviewServing/reviewImportHotFieldService.ts'
-import {appendReviewServingImportRunArticleDelta} from '../../reviewServing/reviewServingDeltaLedger.ts'
+import {appendReviewServingImportRunArticleDeltas} from '../../reviewServing/reviewServingDeltaLedger.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
@@ -1941,11 +1942,10 @@ const appendProjectTransferArticleImportRouteReviewServingDeltas = async ({
   records: readonly ProjectTransferArticleImportRouteReviewServingRecord[]
   tx: ProjectTransferCommitWriterTx
 }) => {
-  await runChunks(records, (recordChunk) => {
-    return recordChunk.reduce<Promise<void>>(async (previousRun, record) => {
-      await previousRun
-      const hotFieldInput = getProjectTransferArticleImportRouteHotFieldInput(record)
-      const hotFieldRow = getReviewImportHotFieldRow(hotFieldInput)
+  await runChunks(records, async (recordChunk) => {
+    const hotFieldInputs = recordChunk.map(getProjectTransferArticleImportRouteHotFieldInput)
+    const deltaInputs = recordChunk.map((record) => {
+      const hotFieldRow = getReviewImportHotFieldRow(getProjectTransferArticleImportRouteHotFieldInput(record))
       const sourceMutationKey = [
         'projectTransferCommit.articleImportRoute',
         record.articleId,
@@ -1955,8 +1955,7 @@ const appendProjectTransferArticleImportRouteReviewServingDeltas = async ({
         now.toISOString(),
       ].join('|')
 
-      await upsertReviewImportArticleHotField(tx, hotFieldInput)
-      await appendReviewServingImportRunArticleDelta(tx, {
+      return {
         articleId: record.articleId,
         changeKind: 'importRoute.article.added',
         importRouteId: record.importRouteId,
@@ -1984,8 +1983,11 @@ const appendProjectTransferArticleImportRouteReviewServingDeltas = async ({
           importRouteId: record.importRouteId,
           importSourceRecordKey: record.sourceRecordKey,
         },
-      })
-    }, Promise.resolve())
+      } as const
+    })
+
+    await upsertReviewImportArticleHotFields(tx, hotFieldInputs)
+    await appendReviewServingImportRunArticleDeltas(tx, deltaInputs)
   })
 }
 
@@ -2076,16 +2078,14 @@ const appendProjectTransferCreatedArticleDeltas = async ({
   now: Date
   tx: ProjectTransferCommitWriterTx
 }) => {
-  await articleIds.reduce<Promise<void>>(async (previousRun, articleId) => {
-    await previousRun
-    await appendArticleReviewServingDeltas(tx, {
-      articleId,
-      changedFields: projectTransferCreatedArticleReviewServingFields,
-      sourceMutationKey: `projectTransferCommit.article|${articleId}|${now.toISOString()}`,
-      sourceOperation: 'insert',
-      sourceUpdatedAt: now,
-    })
-  }, Promise.resolve())
+  await appendArticleReviewServingDeltasForIds(tx, {
+    articleIds,
+    changedFields: projectTransferCreatedArticleReviewServingFields,
+    sourceMutationKey: 'projectTransferCommit.article',
+    sourceMutationKeySuffix: now.toISOString(),
+    sourceOperation: 'insert',
+    sourceUpdatedAt: now,
+  })
 }
 
 const getTransferArticleReviewServingFields = (fields: readonly ArticleField[]) => {
@@ -5089,6 +5089,90 @@ const getJudgmentIdBySourceId = (rows: readonly JudgmentCommitRow[]) => {
   }, {})
 }
 
+const getSetBasedJudgmentIdBySourceId = ({
+  commitIdMaps,
+  judgmentPlan,
+}: {
+  commitIdMaps: ProjectTransferCommitIdMaps
+  judgmentPlan: readonly JudgmentPlanEntry[]
+}) => {
+  return judgmentPlan.reduce<Record<string, string>>((mapped, entry) => {
+    if (entry.action === 'insert') {
+      mapped[entry.sourceJudgmentId] = getMappedTargetId({
+        label: 'judgment',
+        mapped: commitIdMaps.judgmentIdBySourceId,
+        sourceId: entry.sourceJudgmentId,
+      })
+
+      return mapped
+    }
+
+    if (entry.action === 'reuse') {
+      mapped[entry.sourceJudgmentId] =
+        entry.targetJudgmentId ?? failCommitWriter(`reused judgment ${entry.sourceJudgmentId} has no target id`)
+
+      return mapped
+    }
+
+    return failCommitWriter(`judgment ${entry.sourceJudgmentId} is not commit-safe`)
+  }, {})
+}
+
+const writeSetBasedJudgments = async ({
+  commitIdMaps,
+  context,
+  judgmentPlan,
+  now,
+  projectId,
+  tx,
+}: {
+  commitIdMaps: ProjectTransferCommitIdMaps
+  context: ProjectTransferCommitWriterSetBasedContext
+  judgmentPlan: readonly JudgmentPlanEntry[]
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await insertJudgmentRowsSetBased({context, now, projectId, tx})
+
+  return getSetBasedJudgmentIdBySourceId({commitIdMaps, judgmentPlan})
+}
+
+const writeMaterializedJudgments = async ({
+  articleIdBySourceId,
+  commitIdMaps,
+  judgmentPlan,
+  judgments,
+  now,
+  plan,
+  projectId,
+  promptIdBySourceId,
+  tx,
+}: {
+  articleIdBySourceId: Record<string, string>
+  commitIdMaps: ProjectTransferCommitIdMaps
+  judgmentPlan: readonly JudgmentPlanEntry[]
+  judgments: readonly ProjectTransferPayloadRecord[]
+  now: Date
+  plan: ProjectTransferImportPlanArtifact
+  projectId: string
+  promptIdBySourceId: Record<string, string>
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rows = getJudgmentRows({
+    articleIdBySourceId,
+    commitIdMaps,
+    judgmentPlan,
+    judgments,
+    now,
+    plan,
+    promptIdBySourceId,
+  })
+  await insertJudgmentRows({context: null, now, projectId, rows, tx})
+
+  return getJudgmentIdBySourceId(rows)
+}
+
 const getAssessmentSignature = (
   row: Pick<JudgmentAssessmentCommitRow, 'assessmentComment' | 'assessmentIsCorrect'>,
 ) => {
@@ -6846,23 +6930,27 @@ const writeProjectTransferCommitAppTablesTx = async ({
       projectId: createdProject.id,
       tx,
     })
-    const judgmentRows = getJudgmentRows({
-      articleIdBySourceId,
-      commitIdMaps: materializedPlan.commitIdMaps,
-      judgmentPlan,
-      judgments,
-      now: importedAt,
-      plan: materializedPlan,
-      promptIdBySourceId,
-    })
-    await insertJudgmentRows({
-      context: setBasedContext,
-      now: importedAt,
-      projectId: createdProject.id,
-      rows: judgmentRows,
-      tx,
-    })
-    const judgmentIdBySourceId = getJudgmentIdBySourceId(judgmentRows)
+    const judgmentIdBySourceId =
+      setBasedContext === null
+        ? await writeMaterializedJudgments({
+            articleIdBySourceId,
+            commitIdMaps: materializedPlan.commitIdMaps,
+            judgmentPlan,
+            judgments,
+            now: importedAt,
+            plan: materializedPlan,
+            projectId: createdProject.id,
+            promptIdBySourceId,
+            tx,
+          })
+        : await writeSetBasedJudgments({
+            commitIdMaps: materializedPlan.commitIdMaps,
+            context: setBasedContext,
+            judgmentPlan,
+            now: importedAt,
+            projectId: createdProject.id,
+            tx,
+          })
     const judgmentAssessmentRows = getJudgmentAssessmentRows({
       assessmentPlan: judgmentAssessmentPlan,
       assessments: judgmentAssessments,
