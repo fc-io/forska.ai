@@ -48,3 +48,24 @@ test('dev server watch fingerprint detects lasting source changes and deletions'
     await rm(directory, {force: true, recursive: true})
   }
 })
+
+test('dev server watch fingerprint detects same-size source changes with preserved mtime', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'forska-dev-watch-fingerprint-'))
+  const sourceDirectory = join(directory, 'src')
+  const sourcePath = join(sourceDirectory, 'server.ts')
+  const preservedTime = new Date('2026-01-01T00:00:00.000Z')
+
+  try {
+    await mkdir(sourceDirectory)
+    await writeFile(sourcePath, 'export const value = 1\n')
+    await utimes(sourcePath, preservedTime, preservedTime)
+    const before = await getDevServerWatchFingerprint([sourceDirectory])
+
+    await writeFile(sourcePath, 'export const value = 2\n')
+    await utimes(sourcePath, preservedTime, preservedTime)
+
+    expect(await getDevServerWatchFingerprint([sourceDirectory])).not.toBe(before)
+  } finally {
+    await rm(directory, {force: true, recursive: true})
+  }
+})
