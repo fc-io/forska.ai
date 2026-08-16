@@ -197,27 +197,6 @@ const getEffectiveProjectionManifestInput = (
   }
 }
 
-const isProjectionIdentityManifestUnchanged = (
-  current: ReviewServingProjectionIdentityManifest,
-  input: ReviewServingProjectionIdentityManifestInput,
-) => {
-  return (
-    current.baseGeneration === input.baseGeneration
-    && current.patchWatermark === input.patchWatermark
-    && current.patchRangeStart === (input.patchRangeStart ?? null)
-    && current.patchRangeEnd === (input.patchRangeEnd ?? null)
-    && current.inputWatermark === input.inputWatermark
-    && getStableReviewServingJson(current.inputWatermarks)
-      === getStableReviewServingJson(getProjectionManifestInputWatermarks(input))
-    && current.inputDigest === (input.inputDigest ?? null)
-    && current.definitionVersion === input.definitionVersion
-    && current.reviewConfigHash === (input.reviewConfigHash ?? null)
-    && current.promptConfigHash === (input.promptConfigHash ?? null)
-    && current.status === input.status
-    && current.invalidationReason === (input.invalidationReason ?? null)
-  )
-}
-
 const getSnapshotManifestFromRow = (row: SnapshotManifestRow): ReviewServingSnapshotManifest => {
   return {
     componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStates,
@@ -268,33 +247,10 @@ export const upsertReviewServingProjectionIdentityManifest = async (
   const current = await getReviewServingProjectionIdentityManifest(input, database)
   const effectiveInput = getEffectiveProjectionManifestInput(current, input)
 
-  if (current !== null && isProjectionIdentityManifestUnchanged(current, effectiveInput)) {
-    return {manifestId}
-  }
-
-  if (current !== null) {
-    await database.run(`
-      UPDATE app.review_projection_identity_manifest
-      SET
-        base_generation = ${getSqlLiteral(effectiveInput.baseGeneration)},
-        patch_watermark = ${getSqlLiteral(effectiveInput.patchWatermark)},
-        patch_range_start = ${getSqlLiteral(effectiveInput.patchRangeStart ?? null)},
-        patch_range_end = ${getSqlLiteral(effectiveInput.patchRangeEnd ?? null)},
-        input_watermark = ${getSqlLiteral(effectiveInput.inputWatermark)},
-        input_watermarks_json = ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(effectiveInput))},
-        input_digest = ${getSqlLiteral(effectiveInput.inputDigest ?? null)},
-        definition_version = ${getSqlLiteral(effectiveInput.definitionVersion)},
-        review_config_hash = ${getSqlLiteral(effectiveInput.reviewConfigHash ?? null)},
-        prompt_config_hash = ${getSqlLiteral(effectiveInput.promptConfigHash ?? null)},
-        status = ${getSqlLiteral(effectiveInput.status)},
-        invalidation_reason = ${getSqlLiteral(effectiveInput.invalidationReason ?? null)},
-        updated_at = current_timestamp
-      WHERE manifest_id = ${getSqlLiteral(manifestId)}
-    `)
-
-    return {manifestId}
-  }
-
+  await database.run(`
+    DELETE FROM app.review_projection_identity_manifest
+    WHERE manifest_id = ${getSqlLiteral(manifestId)}
+  `)
   await database.run(`
     INSERT INTO app.review_projection_identity_manifest (
       manifest_id,
@@ -362,6 +318,7 @@ export const getReviewServingProjectionIdentityManifest = async (
       invalidation_reason AS invalidationReason
     FROM app.review_projection_identity_manifest
     WHERE manifest_id = ${getSqlLiteral(getProjectionManifestId(identity))}
+    ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
     LIMIT 1
   `)
 
@@ -373,21 +330,7 @@ export const createCandidateReviewServingSnapshotManifest = async (
   database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
 ) => {
   await database.run(`
-    UPDATE app.review_serving_snapshot_manifest
-    SET
-      snapshot_status = 'candidate',
-      review_config_hash = ${getSqlLiteral(input.reviewConfigHash ?? null)},
-      composed_identity_json = ${getReviewServingJsonLiteral(input.composedIdentity)},
-      component_state_json = ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
-      required_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
-      optional_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
-      source_watermarks_json = ${getReviewServingJsonLiteral(input.sourceWatermarks)},
-      validation_result_json = ${getReviewServingNullableJsonLiteral(input.validationResult)},
-      selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId ?? null)},
-      last_known_good_snapshot_id = ${getSqlLiteral(input.lastKnownGoodSnapshotId ?? null)},
-      failed_at = NULL,
-      last_error = NULL,
-      updated_at = current_timestamp
+    DELETE FROM app.review_serving_snapshot_manifest
     WHERE (project_id || '') = (${getSqlLiteral(input.projectId)} || '')
       AND (snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
   `)
@@ -408,7 +351,7 @@ export const createCandidateReviewServingSnapshotManifest = async (
       last_known_good_snapshot_id,
       updated_at
     )
-    SELECT
+    VALUES (
       ${getSqlLiteral(input.projectId)},
       ${getSqlLiteral(input.snapshotId)},
       'candidate',
@@ -422,11 +365,6 @@ export const createCandidateReviewServingSnapshotManifest = async (
       ${getSqlLiteral(input.selectedImportSnapshotId ?? null)},
       ${getSqlLiteral(input.lastKnownGoodSnapshotId ?? null)},
       current_timestamp
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_snapshot_manifest existing
-      WHERE (existing.project_id || '') = (${getSqlLiteral(input.projectId)} || '')
-        AND (existing.snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
     )
   `)
 

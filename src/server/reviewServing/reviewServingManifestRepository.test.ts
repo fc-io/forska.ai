@@ -43,6 +43,7 @@ const baseSnapshotInput = {
   projectId: 'project-1',
   reviewConfigHash: 'review-config-1',
   selectedImportSnapshotId: 'selected-import-1',
+  snapshotId: 'snapshot-1',
   sourceWatermarks: {reviewChange: 10},
 } as const
 
@@ -134,6 +135,19 @@ const getWhereLiteral = (statement: string, columnName: string) => {
   )
 }
 
+const getConcatWhereLiteral = (statement: string, columnName: string) => {
+  return (
+    statement
+      .match(
+        new RegExp(
+          `\\(${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*\\('((?:''|[^'])*)'\\s*\\|\\|\\s*''\\)`,
+          'u',
+        ),
+      )?.[1]
+      ?.replaceAll("''", "'") ?? null
+  )
+}
+
 const getNotEqualLiteral = (statement: string, columnName: string) => {
   return (
     statement
@@ -147,7 +161,9 @@ const createFakeManifestDatabase = (
   options: {selectedImportSnapshotStatus?: string} = {},
 ) => {
   const projections = new Map<string, FakeProjectionRow>()
+  const projectionPhysicalRows = new Map<string, number>()
   const snapshots = new Map<string, FakeSnapshotRow>()
+  const snapshotPhysicalRows = new Map<string, number>()
   const statements: string[] = []
   const getSnapshotKey = (projectId: string, snapshotId: string) => {
     return `${projectId}:${snapshotId}`
@@ -182,6 +198,12 @@ const createFakeManifestDatabase = (
     }
 
     projections.set(manifestId, {...existing, ...row})
+    projectionPhysicalRows.set(manifestId, (projectionPhysicalRows.get(manifestId) ?? 0) + 1)
+  }
+  const deleteProjection = (statement: string) => {
+    const manifestId = getWhereLiteral(statement, 'manifest_id') ?? ''
+    projections.delete(manifestId)
+    projectionPhysicalRows.delete(manifestId)
   }
   const updateProjection = (statement: string) => {
     const manifestId = getWhereLiteral(statement, 'manifest_id') ?? ''
@@ -231,6 +253,16 @@ const createFakeManifestDatabase = (
       updatedAt: getClock(),
       validationResult: null,
     })
+    const snapshotKey = getSnapshotKey(projectId, snapshotId)
+    snapshotPhysicalRows.set(snapshotKey, (snapshotPhysicalRows.get(snapshotKey) ?? 0) + 1)
+  }
+  const deleteCandidate = (statement: string) => {
+    const snapshotKey = getSnapshotKey(
+      getConcatWhereLiteral(statement, 'project_id') ?? '',
+      getConcatWhereLiteral(statement, 'snapshot_id') ?? '',
+    )
+    snapshots.delete(snapshotKey)
+    snapshotPhysicalRows.delete(snapshotKey)
   }
   const markFailed = (statement: string) => {
     const projectId = getWhereLiteral(statement, 'project_id') ?? ''
@@ -366,12 +398,20 @@ const createFakeManifestDatabase = (
       upsertProjection(statement)
     }
 
+    if (statement.includes('DELETE FROM app.review_projection_identity_manifest')) {
+      deleteProjection(statement)
+    }
+
     if (statement.includes('UPDATE app.review_projection_identity_manifest')) {
       updateProjection(statement)
     }
 
     if (statement.includes('INSERT INTO app.review_serving_snapshot_manifest')) {
       upsertCandidate(statement)
+    }
+
+    if (statement.includes('DELETE FROM app.review_serving_snapshot_manifest')) {
+      deleteCandidate(statement)
     }
 
     if (statement.includes("snapshot_status = 'failed'")) {
@@ -399,10 +439,12 @@ const createFakeManifestDatabase = (
   }
 
   initialSnapshots.forEach((snapshot) => {
-    snapshots.set(getSnapshotKey(snapshot.projectId, snapshot.snapshotId), snapshot)
+    const snapshotKey = getSnapshotKey(snapshot.projectId, snapshot.snapshotId)
+    snapshots.set(snapshotKey, snapshot)
+    snapshotPhysicalRows.set(snapshotKey, (snapshotPhysicalRows.get(snapshotKey) ?? 0) + 1)
   })
 
-  return {database, projections, snapshots, statements}
+  return {database, projectionPhysicalRows, projections, snapshotPhysicalRows, snapshots, statements}
 }
 
 const getSnapshotQueryRow = (snapshot: FakeSnapshotRow) => {
@@ -423,7 +465,7 @@ const getSnapshotQueryRow = (snapshot: FakeSnapshotRow) => {
   }
 }
 
-test('projection identity manifest upsert is idempotent for project component identity', async () => {
+test('projection identity manifest upsert replaces one no-index logical row for project component identity', async () => {
   const {database, projections, statements} = createFakeManifestDatabase()
   const input = {
     baseGeneration: 2,
@@ -453,12 +495,15 @@ test('projection identity manifest upsert is idempotent for project component id
   const manifestWrites = statements.filter((statement) => {
     return (
       statement.includes('INSERT INTO app.review_projection_identity_manifest')
-      || statement.includes('UPDATE app.review_projection_identity_manifest')
+      || statement.includes('DELETE FROM app.review_projection_identity_manifest')
     )
   })
-  expect(manifestWrites).toHaveLength(2)
-  expect(manifestWrites[0]).toContain('INSERT INTO app.review_projection_identity_manifest')
-  expect(manifestWrites[1]).toContain('UPDATE app.review_projection_identity_manifest')
+  expect(manifestWrites).toHaveLength(4)
+  expect(manifestWrites[0]).toContain('DELETE FROM app.review_projection_identity_manifest')
+  expect(manifestWrites[1]).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(manifestWrites[2]).toContain('DELETE FROM app.review_projection_identity_manifest')
+  expect(manifestWrites[3]).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(manifestWrites.join('\n')).not.toContain('UPDATE app.review_projection_identity_manifest')
   expect(manifestWrites.join('\n')).not.toContain('ON CONFLICT(manifest_id)')
 })
 
@@ -504,8 +549,8 @@ test('projection identity manifest preserves prior source watermark coverage on 
   })
 })
 
-test('projection identity manifest skips unchanged writes', async () => {
-  const {database, statements} = createFakeManifestDatabase()
+test('projection identity manifest rewrites unchanged input to collapse no-index duplicates', async () => {
+  const {database, projectionPhysicalRows, statements} = createFakeManifestDatabase()
   const input = {
     baseGeneration: 2,
     definitionVersion: 'display-v1',
@@ -523,23 +568,32 @@ test('projection identity manifest skips unchanged writes', async () => {
     status: 'candidate',
   } as const
 
-  await upsertReviewServingProjectionIdentityManifest(input, database)
+  const first = await upsertReviewServingProjectionIdentityManifest(input, database)
+  projectionPhysicalRows.set(first.manifestId, 2)
   await upsertReviewServingProjectionIdentityManifest(input, database)
 
   const manifestWrites = statements.filter((statement) => {
     return (
       statement.includes('INSERT INTO app.review_projection_identity_manifest')
-      || statement.includes('UPDATE app.review_projection_identity_manifest')
+      || statement.includes('DELETE FROM app.review_projection_identity_manifest')
     )
   })
 
-  expect(manifestWrites).toHaveLength(1)
-  expect(manifestWrites[0]).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(manifestWrites).toHaveLength(4)
+  expect(manifestWrites[0]).toContain('DELETE FROM app.review_projection_identity_manifest')
+  expect(manifestWrites[1]).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(manifestWrites[2]).toContain('DELETE FROM app.review_projection_identity_manifest')
+  expect(manifestWrites[3]).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(projectionPhysicalRows.get(first.manifestId)).toBe(1)
+  expect(manifestWrites.join('\n')).not.toContain('UPDATE app.review_projection_identity_manifest')
+  expect(manifestWrites.join('\n')).not.toContain('WHERE NOT EXISTS')
 })
 
-test('candidate snapshot manifest avoids DuckDB primary-key ON CONFLICT writes', async () => {
-  const {database, statements} = createFakeManifestDatabase()
+test('candidate snapshot manifest replaces one no-index logical row without DuckDB ON CONFLICT writes', async () => {
+  const {database, snapshotPhysicalRows, statements} = createFakeManifestDatabase()
 
+  await createCandidateReviewServingSnapshotManifest(baseSnapshotInput, database)
+  snapshotPhysicalRows.set('project-1:snapshot-1', 2)
   await createCandidateReviewServingSnapshotManifest(baseSnapshotInput, database)
 
   const manifestWrites = statements.filter((statement) => {
@@ -547,9 +601,11 @@ test('candidate snapshot manifest avoids DuckDB primary-key ON CONFLICT writes',
   })
   const joined = manifestWrites.join('\n')
 
-  expect(joined).toContain('UPDATE app.review_serving_snapshot_manifest')
+  expect(joined).toContain('DELETE FROM app.review_serving_snapshot_manifest')
   expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
-  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(snapshotPhysicalRows.get('project-1:snapshot-1')).toBe(1)
+  expect(joined).not.toContain('UPDATE app.review_serving_snapshot_manifest')
+  expect(joined).not.toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain('ON CONFLICT(project_id, snapshot_id)')
 })
 

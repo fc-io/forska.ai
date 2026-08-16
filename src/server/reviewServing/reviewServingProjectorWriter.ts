@@ -19,6 +19,7 @@ import {
   upsertReviewServingDirtyWork,
 } from './reviewServingDirtyWorkService.ts'
 import {
+  createCandidateReviewServingSnapshotManifest,
   getActiveReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
@@ -626,69 +627,6 @@ const getReviewServingProjectorDeleteFreeSummaryScanGuardedInsertMissingTables =
   return tables
 }
 
-const createCandidateReviewServingSnapshotManifestFromWriter = async (
-  input: ReviewServingSnapshotManifestInput,
-  tx: ReviewServingProjectorWriterTransaction,
-) => {
-  await tx.run(`
-    UPDATE app.review_serving_snapshot_manifest
-    SET
-      snapshot_status = 'candidate',
-      review_config_hash = ${getSqlLiteral(input.reviewConfigHash ?? null)},
-      composed_identity_json = ${getReviewServingJsonLiteral(input.composedIdentity)},
-      component_state_json = ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
-      required_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
-      optional_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
-      source_watermarks_json = ${getReviewServingJsonLiteral(input.sourceWatermarks)},
-      validation_result_json = ${getReviewServingNullableJsonLiteral(input.validationResult)},
-      selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId ?? null)},
-      last_known_good_snapshot_id = ${getSqlLiteral(input.lastKnownGoodSnapshotId ?? null)},
-      failed_at = NULL,
-      last_error = NULL,
-      updated_at = current_timestamp
-    WHERE (project_id || '') = (${getSqlLiteral(input.projectId)} || '')
-      AND (snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
-  `)
-
-  await tx.run(`
-    INSERT INTO app.review_serving_snapshot_manifest (
-      project_id,
-      snapshot_id,
-      snapshot_status,
-      review_config_hash,
-      composed_identity_json,
-      component_state_json,
-      required_components_json,
-      optional_components_json,
-      source_watermarks_json,
-      validation_result_json,
-      selected_import_snapshot_id,
-      last_known_good_snapshot_id,
-      updated_at
-    )
-    SELECT
-      ${getSqlLiteral(input.projectId)},
-      ${getSqlLiteral(input.snapshotId)},
-      'candidate',
-      ${getSqlLiteral(input.reviewConfigHash ?? null)},
-      ${getReviewServingJsonLiteral(input.composedIdentity)},
-      ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
-      ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
-      ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
-      ${getReviewServingJsonLiteral(input.sourceWatermarks)},
-      ${getReviewServingNullableJsonLiteral(input.validationResult)},
-      ${getSqlLiteral(input.selectedImportSnapshotId ?? null)},
-      ${getSqlLiteral(input.lastKnownGoodSnapshotId ?? null)},
-      current_timestamp
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_snapshot_manifest existing
-      WHERE (existing.project_id || '') = (${getSqlLiteral(input.projectId)} || '')
-        AND (existing.snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
-    )
-  `)
-}
-
 const writeReviewServingSelectedImportSnapshotCursor = async (
   input: ReviewServingSelectedImportSnapshotCursorInput,
   tx: ReviewServingProjectorWriterTransaction,
@@ -1115,7 +1053,7 @@ export const writeReviewServingProjectorComponent = async (
 
     if (input.candidateSnapshot !== undefined) {
       await measure('candidateSnapshotMs', async () => {
-        await createCandidateReviewServingSnapshotManifestFromWriter(
+        await createCandidateReviewServingSnapshotManifest(
           input.candidateSnapshot as ReviewServingSnapshotManifestInput,
           tx,
         )
