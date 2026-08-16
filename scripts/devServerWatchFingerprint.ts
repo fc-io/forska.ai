@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto'
-import {lstat, readdir} from 'node:fs/promises'
+import {lstat, readdir, readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 
 const isMissingFileError = (error: unknown) => {
@@ -11,7 +11,11 @@ const getPathFingerprintEntries = async (rootPath: string, currentPath = rootPat
     const pathStat = await lstat(currentPath)
 
     if (!pathStat.isDirectory()) {
-      return [`file:${currentPath}:${pathStat.size}:${pathStat.mtimeMs}`]
+      const contentHash = createHash('sha256')
+        .update(await readFile(currentPath))
+        .digest('hex')
+
+      return [`file:${currentPath}:${pathStat.size}:${pathStat.mtimeMs}:${contentHash}`]
     }
 
     const childNames = (await readdir(currentPath)).sort((left, right) => {
