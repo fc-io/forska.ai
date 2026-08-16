@@ -462,6 +462,19 @@ test('DuckDB migration rebuilds write-hot review-serving manifests without index
   expect(migrationSql).not.toContain('CREATE INDEX')
 })
 
+test('review-serving manifest writers replace no-index logical identities', () => {
+  const manifestRepositorySql = readFileSync(
+    resolve(import.meta.dir, '../server/reviewServing/reviewServingManifestRepository.ts'),
+    'utf8',
+  )
+
+  expect(manifestRepositorySql).toContain('DELETE FROM app.review_projection_identity_manifest')
+  expect(manifestRepositorySql).toContain('DELETE FROM app.review_serving_snapshot_manifest')
+  expect(manifestRepositorySql).not.toContain(
+    'WHERE NOT EXISTS (\n      SELECT 1\n      FROM app.review_serving_snapshot_manifest',
+  )
+})
+
 test('DuckDB migration retires review article serving compatibility view without touching base/state tables', () => {
   const migrationSql = readFileSync(
     resolve(migrationsFolder, '0196_dropReviewArticleServingCompatibilityView.sql'),

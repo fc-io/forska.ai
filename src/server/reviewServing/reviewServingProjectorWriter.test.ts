@@ -505,7 +505,7 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
     statements.some((statement) => {
       return (
         statement.includes('INSERT INTO app.review_projection_identity_manifest')
-        || statement.includes('UPDATE app.review_projection_identity_manifest')
+        || statement.includes('DELETE FROM app.review_projection_identity_manifest')
       )
     }),
   ).toBe(true)
@@ -516,10 +516,14 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
   ).toBe(true)
   expect(statements.join('\n')).not.toContain('mart.review_article_serving_v4')
   const snapshotManifestStatements = statements.filter((statement) => {
-    return statement.includes('app.review_serving_snapshot_manifest')
+    return (
+      statement.includes('DELETE FROM app.review_serving_snapshot_manifest')
+      || statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    )
   })
+  expect(snapshotManifestStatements.join('\n')).toContain('DELETE FROM app.review_serving_snapshot_manifest')
   expect(snapshotManifestStatements.join('\n')).toContain('INSERT INTO app.review_serving_snapshot_manifest')
-  expect(snapshotManifestStatements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(snapshotManifestStatements.join('\n')).not.toContain('WHERE NOT EXISTS')
   expect(snapshotManifestStatements.join('\n')).not.toContain('ON CONFLICT(project_id, snapshot_id)')
   expect(
     statements.some((statement) => {

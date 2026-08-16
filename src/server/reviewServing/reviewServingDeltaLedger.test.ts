@@ -9,6 +9,7 @@ import {
   appendReviewServingSourceChangeOutbox,
   getReviewServingDeltaIdempotencyKey,
   type ReviewServingDeltaAppendInput,
+  type ReviewServingDeltaAppendResult,
   type ReviewServingDeltaLedgerTransaction,
   type ReviewServingImportRunArticleDeltaAppendInput,
 } from './reviewServingDeltaLedger.ts'
@@ -89,6 +90,16 @@ type FakeBulkLedgerTransactionOptions = {
 
 const createFakeBulkLedgerTransaction = (options: FakeBulkLedgerTransactionOptions = {}) => {
   const statements: string[] = []
+  const sourceHighWaterByPartition = new Map(Object.entries(options.sourceHighWaterByPartition ?? {}))
+  const applyBulkCursorAllocation = (statement: string) => {
+    for (const match of statement.matchAll(/\('([^']+)'\s*,\s*(\d+)\)/g)) {
+      const sourcePartition = match[1] ?? ''
+      const incrementCount = Number(match[2] ?? 0)
+      const current = Number(sourceHighWaterByPartition.get(sourcePartition) ?? 0)
+
+      sourceHighWaterByPartition.set(sourcePartition, current + incrementCount)
+    }
+  }
   const tx: ReviewServingDeltaLedgerTransaction = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
@@ -109,8 +120,8 @@ const createFakeBulkLedgerTransaction = (options: FakeBulkLedgerTransactionOptio
           }) as T[]
       }
 
-      if (statement.includes('AS candidates(source_partition)')) {
-        return Object.entries(options.sourceHighWaterByPartition ?? {})
+      if (statement.includes('AS candidates(source_partition, increment_count)')) {
+        return [...sourceHighWaterByPartition.entries()]
           .filter(([sourcePartition]) => {
             return statement.includes(`'${sourcePartition}'`)
           })
@@ -123,10 +134,91 @@ const createFakeBulkLedgerTransaction = (options: FakeBulkLedgerTransactionOptio
     },
     run: async (statement: string) => {
       statements.push(statement)
+
+      if (statement.includes('UPDATE app.review_delta_reconciliation_cursor')) {
+        applyBulkCursorAllocation(statement)
+      }
     },
   }
 
   return {statements, tx}
+}
+
+const createDeferred = () => {
+  let resolve!: () => void
+  const promise = new Promise<void>((next) => {
+    resolve = next
+  })
+
+  return {promise, resolve}
+}
+
+const createInterleavedBulkLedgerTransaction = () => {
+  const statements: string[] = []
+  const sourceHighWaterByPartition = new Map<string, number>([['article:shared', 0]])
+  const firstCursorUpdateStarted = createDeferred()
+  const releaseFirstCursorUpdate = createDeferred()
+  let cursorUpdateCount = 0
+
+  const applyBulkCursorAllocation = (statement: string) => {
+    for (const match of statement.matchAll(/\('([^']+)'\s*,\s*(\d+)\)/g)) {
+      const sourcePartition = match[1] ?? ''
+      const incrementCount = Number(match[2] ?? 0)
+
+      sourceHighWaterByPartition.set(
+        sourcePartition,
+        (sourceHighWaterByPartition.get(sourcePartition) ?? 0) + incrementCount,
+      )
+    }
+  }
+
+  const tx: ReviewServingDeltaLedgerTransaction = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('AS candidates(input_index, idempotency_key)')) {
+        return [] as T[]
+      }
+
+      if (statement.includes('AS candidates(source_partition, increment_count)')) {
+        return [...sourceHighWaterByPartition.entries()]
+          .filter(([sourcePartition]) => {
+            return statement.includes(`'${sourcePartition}'`)
+          })
+          .map(([sourcePartition, sourceHighWaterMark]) => {
+            return {sourceHighWaterMark, sourcePartition}
+          }) as T[]
+      }
+
+      if (statement.includes('AS candidates(source_partition)')) {
+        return [...sourceHighWaterByPartition.entries()]
+          .filter(([sourcePartition]) => {
+            return statement.includes(`'${sourcePartition}'`)
+          })
+          .map(([sourcePartition, sourceHighWaterMark]) => {
+            return {sourceHighWaterMark, sourcePartition}
+          }) as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('UPDATE app.review_delta_reconciliation_cursor')) {
+        cursorUpdateCount += 1
+
+        if (cursorUpdateCount === 1) {
+          firstCursorUpdateStarted.resolve()
+          await releaseFirstCursorUpdate.promise
+        }
+
+        applyBulkCursorAllocation(statement)
+      }
+    },
+  }
+
+  return {firstCursorUpdateStarted, releaseFirstCursorUpdate, statements, tx}
 }
 
 const getInsertStatement = (statements: string[], tableName: string) => {
@@ -287,13 +379,13 @@ test('bulk review-serving delta append preserves duplicate results and advances 
   expect(results[0]?.deltaId).toBe(results[1]?.deltaId)
   expect(results[2]?.deltaId).toBe('delta-existing')
 
-  const sourceHighWaterQuery =
+  const sourceHighWaterAllocationUpdate =
     statements.find((statement) => {
-      return statement.includes('AS candidates(source_partition)')
+      return statement.includes('UPDATE app.review_delta_reconciliation_cursor')
     }) ?? ''
-  expect(sourceHighWaterQuery).toContain("'article:shared'")
-  expect(sourceHighWaterQuery).toContain("'article:other'")
-  expect(sourceHighWaterQuery).not.toContain("'article:existing-only'")
+  expect(sourceHighWaterAllocationUpdate).toContain("('article:shared', 2)")
+  expect(sourceHighWaterAllocationUpdate).toContain("('article:other', 1)")
+  expect(sourceHighWaterAllocationUpdate).not.toContain("'article:existing-only'")
 
   const tempRowInsert =
     statements.find((statement) => {
@@ -318,6 +410,63 @@ test('bulk review-serving delta append preserves duplicate results and advances 
       return statement.includes('UPDATE app.review_delta_reconciliation_cursor')
     }),
   ).toHaveLength(1)
+})
+
+test('interleaved same-partition bulk review-serving delta appenders allocate unique monotonic cursor ranges', async () => {
+  const getInput = (sourceMutationKey: string): ReviewServingDeltaAppendInput => {
+    return {
+      articleId: `article-${sourceMutationKey}`,
+      changeKind: 'article.display.updated',
+      payloadVersion: 1,
+      sourceMutationKey,
+      sourceOperation: 'upsert',
+      sourcePartition: 'article:shared',
+      sourceRowId: `article-${sourceMutationKey}`,
+      sourceTable: 'app.article',
+      typedKey: {articleId: `article-${sourceMutationKey}`},
+    }
+  }
+  const {firstCursorUpdateStarted, releaseFirstCursorUpdate, tx} = createInterleavedBulkLedgerTransaction()
+  const firstAppender = appendReviewServingChangeDeltas(tx, [getInput('first-a'), getInput('first-b')])
+
+  await firstCursorUpdateStarted.promise
+  const secondAppender = appendReviewServingChangeDeltas(tx, [getInput('second-a'), getInput('second-b')])
+  const secondResult = await secondAppender.then(
+    (results) => {
+      return {results, status: 'fulfilled' as const}
+    },
+    (error: unknown) => {
+      return {error, status: 'rejected' as const}
+    },
+  )
+  releaseFirstCursorUpdate.resolve()
+  const firstResult = await firstAppender.then(
+    (results) => {
+      return {results, status: 'fulfilled' as const}
+    },
+    (error: unknown) => {
+      return {error, status: 'rejected' as const}
+    },
+  )
+  const fulfilled = [firstResult, secondResult].filter(
+    (result): result is {results: ReviewServingDeltaAppendResult[]; status: 'fulfilled'} => {
+      return result.status === 'fulfilled'
+    },
+  )
+
+  expect(fulfilled).toHaveLength(2)
+  const sourceHighWaterMarks = fulfilled
+    .flatMap((result) => {
+      return result.results.map((row) => {
+        return row.sourceHighWaterMark
+      })
+    })
+    .sort((left, right) => {
+      return left - right
+    })
+
+  expect(new Set(sourceHighWaterMarks).size).toBe(sourceHighWaterMarks.length)
+  expect(sourceHighWaterMarks).toEqual([1, 2, 3, 4])
 })
 
 test('bulk import article delta append bounds VALUES chunks and statement count for 10,000 candidates', async () => {

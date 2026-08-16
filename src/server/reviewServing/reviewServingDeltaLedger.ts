@@ -90,6 +90,7 @@ type SourceHighWaterRow = {sourceHighWaterMark: number}
 
 type BulkExistingDeltaRow = ExistingDeltaRow & {idempotencyKey: string}
 type BulkSourceHighWaterRow = SourceHighWaterRow & {sourcePartition: string}
+type BulkSourceHighWaterAllocation = {incrementCount: number; sourcePartition: string}
 type BulkDeltaAppendInput = ReviewServingDeltaAppendInput | ReviewServingImportRunArticleDeltaAppendInput
 type PreparedBulkDelta<TInput extends BulkDeltaAppendInput> = {
   changeKind: ReviewServingChangeKind
@@ -318,27 +319,76 @@ const getExistingBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
   return existingByIdempotencyKey
 }
 
-const getBulkSourceHighWaterMarks = async ({
-  sourcePartitions,
+const getBulkSourceHighWaterAllocations = (prepared: readonly PreparedBulkDelta<BulkDeltaAppendInput>[]) => {
+  return prepared.reduce((allocations, row) => {
+    if (row.input.allocatedSourceHighWaterMark !== null && row.input.allocatedSourceHighWaterMark !== undefined) {
+      return allocations
+    }
+
+    allocations.set(row.input.sourcePartition, (allocations.get(row.input.sourcePartition) ?? 0) + 1)
+
+    return allocations
+  }, new Map<string, number>())
+}
+
+const getBulkSourceHighWaterAllocationValuesSql = (
+  allocations: readonly BulkSourceHighWaterAllocation[],
+  includeIncrementCount: boolean,
+) => {
+  return allocations
+    .map((allocation) => {
+      return includeIncrementCount
+        ? `(${getSqlLiteral(allocation.sourcePartition)}, ${allocation.incrementCount})`
+        : `(${getSqlLiteral(allocation.sourcePartition)})`
+    })
+    .join(', ')
+}
+
+const allocateBulkSourceHighWaterMarkRanges = async ({
+  allocationCountsByPartition,
   tx,
 }: {
-  sourcePartitions: readonly string[]
+  allocationCountsByPartition: ReadonlyMap<string, number>
   tx: ReviewServingDeltaLedgerTransaction
 }) => {
   const sourceHighWaterByPartition = new Map<string, number>()
+  const allocations = [...allocationCountsByPartition.entries()].map(([sourcePartition, incrementCount]) => {
+    return {incrementCount, sourcePartition}
+  })
 
-  await getReviewServingBulkValueChunks(sourcePartitions).reduce<Promise<void>>(async (previous, chunk) => {
+  if (allocations.length === 0) {
+    return sourceHighWaterByPartition
+  }
+
+  await getReviewServingBulkValueChunks(allocations).reduce<Promise<void>>(async (previous, chunk) => {
     await previous
+    const partitionValuesSql = getBulkSourceHighWaterAllocationValuesSql(chunk, false)
+    const allocationValuesSql = getBulkSourceHighWaterAllocationValuesSql(chunk, true)
+
+    await tx.run(`
+      INSERT INTO app.review_delta_reconciliation_cursor (source_partition, source_high_water_mark)
+      SELECT candidates.source_partition, 0
+      FROM (VALUES ${partitionValuesSql}) AS candidates(source_partition)
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM app.review_delta_reconciliation_cursor cursor
+        WHERE cursor.source_partition = candidates.source_partition
+      )
+    `)
+    await tx.run(`
+      UPDATE app.review_delta_reconciliation_cursor AS cursor
+      SET
+        source_high_water_mark = cursor.source_high_water_mark + allocations.increment_count,
+        updated_at = current_timestamp
+      FROM (VALUES ${allocationValuesSql}) AS allocations(source_partition, increment_count)
+      WHERE cursor.source_partition = allocations.source_partition
+    `)
     const rows = await tx.queryJson<BulkSourceHighWaterRow>(`
       SELECT
         candidates.source_partition AS sourcePartition,
-        COALESCE(cursor.source_high_water_mark, 0) AS sourceHighWaterMark
-      FROM (VALUES ${chunk
-        .map((sourcePartition) => {
-          return `(${getSqlLiteral(sourcePartition)})`
-        })
-        .join(', ')}) AS candidates(source_partition)
-      LEFT JOIN app.review_delta_reconciliation_cursor cursor
+        cursor.source_high_water_mark AS sourceHighWaterMark
+      FROM (VALUES ${allocationValuesSql}) AS candidates(source_partition, increment_count)
+      INNER JOIN app.review_delta_reconciliation_cursor cursor
         ON cursor.source_partition = candidates.source_partition
     `)
 
@@ -359,18 +409,19 @@ const getResolvedBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
   prepared: readonly PreparedBulkDelta<TInput>[]
   tx: ReviewServingDeltaLedgerTransaction
 }) => {
-  const autoAllocatedPartitions = [
-    ...new Set(
-      prepared
-        .filter((row) => {
-          return row.input.allocatedSourceHighWaterMark === null || row.input.allocatedSourceHighWaterMark === undefined
-        })
-        .map((row) => {
-          return row.input.sourcePartition
-        }),
-    ),
-  ]
-  const sourceHighWaterByPartition = await getBulkSourceHighWaterMarks({sourcePartitions: autoAllocatedPartitions, tx})
+  const allocationCountsByPartition = getBulkSourceHighWaterAllocations(prepared)
+  const rangeEndByPartition = await allocateBulkSourceHighWaterMarkRanges({allocationCountsByPartition, tx})
+  const nextSourceHighWaterByPartition = new Map(
+    [...allocationCountsByPartition.entries()].map(([sourcePartition, incrementCount]) => {
+      const rangeEnd = rangeEndByPartition.get(sourcePartition)
+
+      if (rangeEnd === undefined) {
+        throw new Error(`failed to allocate bulk review-serving source high-water range for ${sourcePartition}`)
+      }
+
+      return [sourcePartition, rangeEnd - incrementCount + 1] as const
+    }),
+  )
 
   return prepared.map((row): ResolvedBulkDelta<TInput> => {
     const allocatedSourceHighWaterMark = row.input.allocatedSourceHighWaterMark
@@ -379,10 +430,15 @@ const getResolvedBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
       return {...row, advanceCursor: false, sourceHighWaterMark: allocatedSourceHighWaterMark}
     }
 
-    const sourceHighWaterMark = (sourceHighWaterByPartition.get(row.input.sourcePartition) ?? 0) + 1
-    sourceHighWaterByPartition.set(row.input.sourcePartition, sourceHighWaterMark)
+    const sourceHighWaterMark = nextSourceHighWaterByPartition.get(row.input.sourcePartition)
 
-    return {...row, advanceCursor: true, sourceHighWaterMark}
+    if (sourceHighWaterMark === undefined) {
+      throw new Error(`failed to resolve bulk review-serving source high-water mark for ${row.input.sourcePartition}`)
+    }
+
+    nextSourceHighWaterByPartition.set(row.input.sourcePartition, sourceHighWaterMark + 1)
+
+    return {...row, advanceCursor: false, sourceHighWaterMark}
   })
 }
 
@@ -625,42 +681,6 @@ const loadBulkDeltaTempRows = async <TInput extends BulkDeltaAppendInput>({
   }, Promise.resolve())
 }
 
-const advanceBulkDeltaSourceHighWaterMarks = async ({
-  tableName,
-  tx,
-}: {
-  tableName: string
-  tx: ReviewServingDeltaLedgerTransaction
-}) => {
-  await tx.run(`
-    INSERT INTO app.review_delta_reconciliation_cursor (source_partition, source_high_water_mark)
-    SELECT allocations.source_partition, 0
-    FROM (
-      SELECT DISTINCT source_partition
-      FROM ${tableName}
-      WHERE advance_cursor = TRUE
-    ) allocations
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM app.review_delta_reconciliation_cursor cursor
-      WHERE cursor.source_partition = allocations.source_partition
-    )
-  `)
-  await tx.run(`
-    UPDATE app.review_delta_reconciliation_cursor AS cursor
-    SET
-      source_high_water_mark = cursor.source_high_water_mark + allocations.increment_count,
-      updated_at = current_timestamp
-    FROM (
-      SELECT source_partition, COUNT(*)::BIGINT AS increment_count
-      FROM ${tableName}
-      WHERE advance_cursor = TRUE
-      GROUP BY source_partition
-    ) allocations
-    WHERE cursor.source_partition = allocations.source_partition
-  `)
-}
-
 const writeBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
   rows,
   target,
@@ -675,14 +695,6 @@ const writeBulkDeltas = async <TInput extends BulkDeltaAppendInput>({
 
   try {
     await loadBulkDeltaTempRows({getRowValuesSql: target.getRowValuesSql, rows, tableName, tx})
-
-    if (
-      rows.some((row) => {
-        return row.advanceCursor
-      })
-    ) {
-      await advanceBulkDeltaSourceHighWaterMarks({tableName, tx})
-    }
 
     await tx.run(target.getTargetInsertSql(tableName))
   } catch (error) {
