@@ -939,6 +939,14 @@ const getComparisonProjectJudgmentRowTitles = async (response: Response) => {
   })
 }
 
+const readCsvResponseWithBom = async (response: Response) => {
+  const bytes = new Uint8Array(await response.arrayBuffer())
+
+  expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+
+  return new TextDecoder().decode(bytes)
+}
+
 const getComparisonProjectCsvDataTitles = (csv: string) => {
   return csv
     .trim()
@@ -6256,7 +6264,7 @@ test('comparison project export streams ordered csv rows with article context an
     extraLlmRows: [
       {
         ...getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-1', modelId: 'model-1', promptId: 'prompt-1'}),
-        answeredOriginal: 'yes\nmaybe',
+        answeredOriginal: '是\n也许',
         answeredOriginalAsArray: null,
         createdAt: new Date('2026-04-02T00:00:00.000Z'),
       },
@@ -6271,7 +6279,7 @@ test('comparison project export streams ordered csv rows with article context an
   const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
   const app = new Elysia().use(comparisonProjectsRoutes)
   const response = await postComparisonProjectExport(app, {differenceFilter: 'all', rowFilter: 'fully-answered'})
-  const csv = await response.text()
+  const csv = await readCsvResponseWithBom(response)
   const state = getMockDatabaseState()
 
   expect(response.status).toBe(200)
@@ -6295,7 +6303,7 @@ test('comparison project export streams ordered csv rows with article context an
       'Article 1 summary',
       '2026-03-30T00:00:00.000Z',
       'Prompt 2',
-      'yes; maybe',
+      '是; 也许',
       'yes',
       'yes',
       'yes',

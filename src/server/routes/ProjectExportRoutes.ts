@@ -20,6 +20,7 @@ import {
   type ReviewServingExportSnapshotScope,
 } from '../services/projectExportReviewServingExportArticleRepository.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
+import {csvUtf8Bom, getCsvDownloadHeaders} from '../utils/csvResponse.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {parseArktypeOptions} from './projectsRoutes/articlesReviewsFiltersUtils.ts'
@@ -581,7 +582,7 @@ const buildExportCsvStream = (input: {
           .map(escapeCSV)
           .join(',')
 
-        controller.enqueue(encoder.encode(headerRow + '\n'))
+        controller.enqueue(encoder.encode(csvUtf8Bom + headerRow + '\n'))
 
         await input.articleIdBatches.reduce<Promise<void>>(async (previousBatch, articleIds) => {
           await previousBatch
@@ -957,16 +958,12 @@ export const projectExportRoutes = new Elysia()
         snapshotScopes,
       })
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export_${new Date().toISOString().slice(0, 10)}.csv`
+      const headers = getCsvDownloadHeaders(filename)
 
-      set.headers['Content-Type'] = 'text/csv; charset=utf-8'
-      set.headers['Content-Disposition'] = `attachment; filename="${filename}"`
+      set.headers['Content-Type'] = headers['Content-Type']
+      set.headers['Content-Disposition'] = headers['Content-Disposition']
 
-      return new Response(csv, {
-        headers: {
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Content-Type': 'text/csv; charset=utf-8',
-        },
-      })
+      return new Response(csv, {headers})
     },
     {params: t.Object({id: t.String(), jobId: t.String()})},
   )
@@ -1002,18 +999,14 @@ export const projectExportRoutes = new Elysia()
           projectId: params.id,
         }),
       )
-      const csv = buildPromptInfoCsv(body.promptIds, promptDetails)
+      const csv = csvUtf8Bom + buildPromptInfoCsv(body.promptIds, promptDetails)
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_prompts_${new Date().toISOString().slice(0, 10)}.csv`
+      const headers = getCsvDownloadHeaders(filename)
 
-      set.headers['Content-Type'] = 'text/csv; charset=utf-8'
-      set.headers['Content-Disposition'] = `attachment; filename="${filename}"`
+      set.headers['Content-Type'] = headers['Content-Type']
+      set.headers['Content-Disposition'] = headers['Content-Disposition']
 
-      return new Response(csv, {
-        headers: {
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Content-Type': 'text/csv; charset=utf-8',
-        },
-      })
+      return new Response(csv, {headers})
     },
     {body: t.Object({promptIds: t.Array(t.String())})},
   )

@@ -30,6 +30,7 @@ import {
   type ComparisonProjectServingStatusRow,
   getComparisonProjectServingRebuildService,
 } from '../services/comparisonProjectServingRebuildService.ts'
+import {csvUtf8Bom, getCsvDownloadHeaders} from '../utils/csvResponse.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {
   deriveStrictSummaryAnswer,
@@ -3559,14 +3560,11 @@ const getComparisonProjectExportResponse = (
   const includeConflictResolution = scope.allowConflictResolution
   const headers = getComparisonProjectExportHeaders(orderedColumns, includeConflictResolution)
   const filename = getComparisonProjectExportFilename(scope)
-  const responseHeaders = {
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'Content-Type': 'text/csv; charset=utf-8',
-  }
+  const responseHeaders = getCsvDownloadHeaders(filename)
   const stream = new ReadableStream<string>({
     async start(controller) {
       try {
-        controller.enqueue(getComparisonProjectCsvLine(headers))
+        controller.enqueue(csvUtf8Bom + getComparisonProjectCsvLine(headers))
 
         if (!scope.archived && scope.prompts.length > 0 && orderedColumns.length > 0) {
           await forEachComparisonProjectServingJudgmentRowBatch({

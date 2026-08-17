@@ -35,6 +35,14 @@ const payloadPendingSnapshotProjectIds = new Set<string>()
 const pinnedSnapshotStatuses = new Map<string, string>()
 const createReviewBulkOperationJobCalls: unknown[] = []
 
+const readCsvResponseWithBom = async (response: Response) => {
+  const bytes = new Uint8Array(await response.arrayBuffer())
+
+  expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+
+  return new TextDecoder().decode(bytes)
+}
+
 const projectReviewConfigRow = {
   modelId: null,
   useAbstract: true,
@@ -590,7 +598,7 @@ test('project export download hydrates completed durable job selection as CSV', 
           articleExternalId: 'article-1',
           articleId: 'article-1',
           articleOriginalData: null,
-          articleAuthors: ['Alice Example', 'Bob Example'],
+          articleAuthors: ['Alice Example', '张伟'],
           articleSourceMetadata: null,
           articleSummary: 'Summary 1',
           articleTitle: 'Article 1',
@@ -636,14 +644,14 @@ test('project export download hydrates completed durable job selection as CSV', 
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
   const response = await app.handle(new Request('http://localhost/api/projects/project-1/export/export-job-1/download'))
-  const text = await response.text()
+  const text = await readCsvResponseWithBom(response)
 
   expect(response.status).toBe(200)
   expect(response.headers.get('content-type')).toContain('text/csv')
   expect(text).toContain(
     'Title,Article ID,Article Link,Article Authors,Abstract/Summary,Journal,"V4 Prompt Heading\nType: V4 prompt type\nContent: V4 prompt content",V4 Prompt Heading - Explanation,V4 Prompt Heading - Quotes',
   )
-  expect(text).toContain('Article 1,article-1,,Alice Example; Bob Example,Summary 1,,yes,Because,Quote 1')
+  expect(text).toContain('Article 1,article-1,,Alice Example; 张伟,Summary 1,,yes,Because,Quote 1')
   expect(queryStatements.join('\n')).toContain(`JOIN ${articleServingBaseFixtureTable}`)
   expect(queryStatements.join('\n')).toContain(`JOIN ${articleServingListModeStateFixtureTable}`)
   expect(queryStatements.join('\n')).toContain(
@@ -694,6 +702,36 @@ test('project export download hydrates completed durable job selection as CSV', 
   )
   expect(queryStatements.join('\n')).toContain("AND detail.payload_kind = 'llm'")
   expect(queryStatements.join('\n')).not.toContain("AND detail.list_mode_key = 'llm'")
+})
+
+test('project prompt csv export includes a UTF-8 BOM for Chinese spreadsheet text', async () => {
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.project') && statement.includes('LIMIT 1')) {
+      return [{id: 'project-1', name: 'Project 1'}]
+    }
+
+    if (statement.includes('FROM app.prompt')) {
+      return [
+        {id: 'prompt-1', originalText: '请判断研究是否符合标准', promptHeading: '中文提示', type: 'single-choice'},
+      ]
+    }
+
+    return []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export-prompts', {
+      body: JSON.stringify({promptIds: ['prompt-1']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const text = await readCsvResponseWithBom(response)
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('content-type')).toContain('text/csv')
+  expect(text).toContain('中文提示,single-choice,请判断研究是否符合标准')
 })
 
 test('project export serving queries read prompt and judgment scalars', () => {
