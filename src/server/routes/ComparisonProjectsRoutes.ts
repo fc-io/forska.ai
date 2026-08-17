@@ -3487,7 +3487,9 @@ const getComparisonProjectExportCellValue = (value: string | null | undefined) =
 }
 
 const getComparisonProjectExportColumnHeader = (column: ComparisonProjectJudgmentsColumn) => {
-  return [column.sourceProjectName, column.promptLabel, column.modelLabel, column.contentLabel]
+  const answerSourceLabel = column.kind === 'human' ? 'Human answer' : `LLM - ${column.modelLabel}`
+
+  return [column.sourceProjectName, column.promptLabel, answerSourceLabel, column.contentLabel]
     .map((part) => {
       return part?.trim() ?? ''
     })
