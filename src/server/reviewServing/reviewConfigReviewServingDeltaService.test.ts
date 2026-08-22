@@ -11,14 +11,33 @@ import {getReviewServingInvalidationRuleOrNull} from './reviewServingInvalidatio
 
 const createFakeLedgerTransaction = (queryRows: Record<string, unknown[]> = {}) => {
   const statements: string[] = []
-  const highWaterByPartition: Record<string, number> = {}
+  const highWaterByPartition = new Map<string, number>()
+  const applyBulkCursorAllocation = (statement: string) => {
+    for (const match of statement.matchAll(/\('([^']+)'\s*,\s*(\d+)\)/g)) {
+      const sourcePartition = match[1] ?? ''
+      const incrementCount = Number(match[2] ?? 0)
+
+      highWaterByPartition.set(sourcePartition, (highWaterByPartition.get(sourcePartition) ?? 0) + incrementCount)
+    }
+  }
   const tx: ReviewServingDeltaLedgerTransaction = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
+      if (statement.includes('AS candidates(source_partition, increment_count)')) {
+        return [...highWaterByPartition.entries()]
+          .filter(([sourcePartition]) => {
+            return statement.includes(`'${sourcePartition}'`)
+          })
+          .map(([sourcePartition, sourceHighWaterMark]) => {
+            return {sourceHighWaterMark, sourcePartition}
+          }) as T[]
+      }
+
       if (statement.includes('FROM app.review_delta_reconciliation_cursor')) {
         const sourcePartition = statement.match(/source_partition = '([^']+)'/)?.[1] ?? ''
-        return [{sourceHighWaterMark: highWaterByPartition[sourcePartition] ?? 0}] as T[]
+
+        return [{sourceHighWaterMark: highWaterByPartition.get(sourcePartition) ?? 0}] as T[]
       }
 
       const matchingRows = Object.entries(queryRows).find(([marker]) => {
@@ -35,8 +54,12 @@ const createFakeLedgerTransaction = (queryRows: Record<string, unknown[]> = {}) 
       statements.push(statement)
 
       if (statement.includes('UPDATE app.review_delta_reconciliation_cursor')) {
-        const sourcePartition = statement.match(/source_partition = '([^']+)'/)?.[1] ?? ''
-        highWaterByPartition[sourcePartition] = (highWaterByPartition[sourcePartition] ?? 0) + 1
+        applyBulkCursorAllocation(statement)
+        const sourcePartition = statement.match(/source_partition = '([^']+)'/)?.[1]
+
+        if (sourcePartition !== undefined) {
+          highWaterByPartition.set(sourcePartition, (highWaterByPartition.get(sourcePartition) ?? 0) + 1)
+        }
       }
     },
   }

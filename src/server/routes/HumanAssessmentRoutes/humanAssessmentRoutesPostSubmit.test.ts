@@ -14,6 +14,12 @@ const queryJsonRef = {
 
 const runRef = {current: async (_statement: string): Promise<void> => {}}
 
+const getBulkSourceHighWaterRows = (statement: string) => {
+  return [...statement.matchAll(/\('([^']+)'\s*,\s*(\d+)\)/g)].map((match) => {
+    return {sourceHighWaterMark: Number(match[2] ?? 0), sourcePartition: match[1] ?? ''}
+  })
+}
+
 const transactionRef = {
   current: async <T>(
     operation: (tx: {queryJson: typeof queryJsonRef.current; run: typeof runRef.current}) => Promise<T>,
@@ -83,15 +89,17 @@ test('human assessment submit appends V4 deltas without legacy dirty ledger writ
       ? [{articleId: 'article-1'}]
       : statement.includes('FROM app.project_prompt pp')
         ? [{id: 'prompt-1'}]
-        : statement.includes('FROM app.review_delta_reconciliation_cursor')
-          ? [{sourceHighWaterMark: 1}]
-          : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
-            ? [{id: 'judgment-human-1', promptId: 'prompt-1', isAnswered: false}]
-            : statement.includes('FROM app.judgment_human jh')
-              ? [{id: 'judgment-human-1', promptId: 'prompt-1', articleId: 'article-1', type: 'string'}]
-              : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
-                ? [{id: 'judgment-human-1'}]
-                : []
+        : statement.includes('AS candidates(source_partition, increment_count)')
+          ? getBulkSourceHighWaterRows(statement)
+          : statement.includes('FROM app.review_delta_reconciliation_cursor')
+            ? [{sourceHighWaterMark: 1}]
+            : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
+              ? [{id: 'judgment-human-1', promptId: 'prompt-1', isAnswered: false}]
+              : statement.includes('FROM app.judgment_human jh')
+                ? [{id: 'judgment-human-1', promptId: 'prompt-1', articleId: 'article-1', type: 'string'}]
+                : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
+                  ? [{id: 'judgment-human-1'}]
+                  : []
   }
   runRef.current = async (statement) => {
     statements.push(statement)
@@ -121,7 +129,15 @@ test('human assessment submit appends V4 deltas without legacy dirty ledger writ
   ).toBe(true)
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_change_delta') && statement.includes('judgment.human.updated')
+      return statement.includes('INSERT INTO app.review_change_delta')
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return (
+        statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+        && statement.includes('judgment.human.updated')
+      )
     }),
   ).toBe(true)
   expect(
@@ -190,22 +206,24 @@ test('human assessment submit skips deltas for blank optional answers', async ()
       ? [{articleId: 'article-optional'}]
       : statement.includes('FROM app.project_prompt pp')
         ? [{id: 'prompt-optional'}]
-        : statement.includes('FROM app.review_delta_reconciliation_cursor')
-          ? [{sourceHighWaterMark: 1}]
-          : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
-            ? [{id: 'judgment-human-optional', promptId: 'prompt-optional', isAnswered: false}]
-            : statement.includes('FROM app.judgment_human jh')
-              ? [
-                  {
-                    articleId: 'article-optional',
-                    id: 'judgment-human-optional',
-                    promptId: 'prompt-optional',
-                    type: 'string | null',
-                  },
-                ]
-              : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
-                ? [{id: 'judgment-human-optional'}]
-                : []
+        : statement.includes('AS candidates(source_partition, increment_count)')
+          ? getBulkSourceHighWaterRows(statement)
+          : statement.includes('FROM app.review_delta_reconciliation_cursor')
+            ? [{sourceHighWaterMark: 1}]
+            : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
+              ? [{id: 'judgment-human-optional', promptId: 'prompt-optional', isAnswered: false}]
+              : statement.includes('FROM app.judgment_human jh')
+                ? [
+                    {
+                      articleId: 'article-optional',
+                      id: 'judgment-human-optional',
+                      promptId: 'prompt-optional',
+                      type: 'string | null',
+                    },
+                  ]
+                : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
+                  ? [{id: 'judgment-human-optional'}]
+                  : []
   }
   runRef.current = async (statement) => {
     statements.push(statement)
