@@ -45,6 +45,12 @@ const getCreatedProjectRow = () => {
   }
 }
 
+const getBulkSourceHighWaterRows = (statement: string) => {
+  return [...statement.matchAll(/\('([^']+)'\s*,\s*(\d+)\)/g)].map((match) => {
+    return {sourceHighWaterMark: Number(match[2] ?? 0), sourcePartition: match[1] ?? ''}
+  })
+}
+
 const queryJson = async (statement: string) => {
   if (statement.includes('FROM app.prompt')) {
     return [
@@ -82,8 +88,15 @@ const queryJson = async (statement: string) => {
     return [{id: 'article-1'}]
   }
 
-  if (statement.includes('FROM app.review_change_delta')) {
+  if (
+    statement.includes('FROM app.review_change_delta')
+    || statement.includes('AS candidates(input_index, idempotency_key)')
+  ) {
     return []
+  }
+
+  if (statement.includes('AS candidates(source_partition, increment_count)')) {
+    return getBulkSourceHighWaterRows(statement)
   }
 
   if (statement.includes('FROM app.review_delta_reconciliation_cursor')) {

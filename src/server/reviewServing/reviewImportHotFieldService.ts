@@ -233,8 +233,8 @@ export const upsertReviewImportArticleHotFields = async (
   }, new Map<string, ReviewImportHotFieldRow>())
   const rows = [...rowByKey.values()]
 
-  for (let offset = 0; offset < rows.length; offset += reviewImportHotFieldWriteChunkSize) {
-    const chunk = rows.slice(offset, offset + reviewImportHotFieldWriteChunkSize)
+  for (let chunkStart = 0; chunkStart < rows.length; chunkStart += reviewImportHotFieldWriteChunkSize) {
+    const chunk = rows.slice(chunkStart, chunkStart + reviewImportHotFieldWriteChunkSize)
     const keyRowsSql = chunk
       .map((row) => {
         return `(${getSqlLiteral(row.importRouteId)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.sourceRecordKey)})`

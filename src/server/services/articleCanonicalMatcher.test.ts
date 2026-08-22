@@ -399,11 +399,24 @@ test('matchCanonicalArticlesWithTx reuses existing source-record matches for uni
 test('matchCanonicalArticlesWithTx re-reads winning identifiers after insert conflicts', async () => {
   const runStatements: string[] = []
   const lookupStatements: string[] = []
+  let identifierLookupCount = 0
   const tx = {
     queryJson: async <T>(statement: string): Promise<T[]> => {
       lookupStatements.push(statement)
 
-      return lookupStatements.length === 1
+      if (statement.includes('AS candidates(input_index, idempotency_key)')) {
+        return []
+      }
+
+      if (statement.includes('AS candidates(source_partition, increment_count)')) {
+        return [...statement.matchAll(/\('([^']+)'\s*,\s*(\d+)\)/g)].map((match) => {
+          return {sourceHighWaterMark: Number(match[2] ?? 0), sourcePartition: match[1] ?? ''}
+        }) as T[]
+      }
+
+      identifierLookupCount += 1
+
+      return identifierLookupCount === 1
         ? []
         : ([{articleId: 'winning-article', kind: 'doi', normalizedValue: '10.1000/race'}] as T[])
     },
