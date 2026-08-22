@@ -16,7 +16,6 @@ const networkSmokeLogDirectory =
 const networkSmokeDbMode = process.env.FORSKA_NETWORK_SMOKE_DB_MODE === 'current' ? 'current' : 'synthetic'
 const currentDuckdbPath =
   process.env.FORSKA_NETWORK_SMOKE_DUCKDB_PATH
-  ?? process.env.DUCKDB_PATH
   ?? getRuntimeProfileDuckdbPath({profileName: 'primary'})
 const duckdbPath = networkSmokeDbMode === 'current' ? currentDuckdbPath : syntheticDuckdbPath
 const duckdbTempDirectory = networkSmokeDbMode === 'current' ? currentDuckdbTempDirectory : syntheticDuckdbTempDirectory

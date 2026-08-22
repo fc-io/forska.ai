@@ -173,6 +173,11 @@ test('current-db network smoke includes read-only browser and mutation-enabled s
   const source = readFileSync(new URL('./runWithRuntimeProfile.test.ts', import.meta.url), 'utf8')
   expect(source).toContain('const isReviewServingProgressProjectIdExplicit =')
   expect(source).toContain('if (isReviewServingProgressProjectIdExplicit) {')
+
+  const playwrightConfigSource = readFileSync(new URL('../playwright.config.ts', import.meta.url), 'utf8')
+  expect(playwrightConfigSource).toContain('process.env.FORSKA_NETWORK_SMOKE_DUCKDB_PATH')
+  expect(playwrightConfigSource).toContain("getRuntimeProfileDuckdbPath({profileName: 'primary'})")
+  expect(playwrightConfigSource).not.toContain('?? process.env.DUCKDB_PATH')
 })
 
 test('stacked server allows DuckDB startup recovery to finish before maintenance restart', () => {

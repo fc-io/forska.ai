@@ -457,7 +457,12 @@ test('project transfer set-based commit advances dirty tokens for touched write 
     await database.transaction(async (tx) => {
       await createOperationPayloadTable(tx, operationTables.tableNames.articles, [article])
       await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [])
+      await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgments, [])
+      await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgmentSummaries, [])
+      await createOperationPayloadTable(tx, operationTables.tableNames.judgmentAssessments, [])
+      await createOperationPayloadTable(tx, operationTables.tableNames.judgments, [])
       await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [projectArticle])
+      await createOperationPayloadTable(tx, operationTables.tableNames.reviews, [])
 
       await writeProjectTransferCommitAppTables({
         commitId: 'commit-dirty-token-writer',

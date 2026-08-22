@@ -635,17 +635,14 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
   const reseededRequest = await Effect.runPromise(
     requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
   )
-  const snapshotWrites = statements.filter((statement) => {
-    return statement.includes('app.review_serving_snapshot_manifest')
+  const snapshotInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+      && statement.includes('optional_components_json')
+    )
   })
-  const snapshotUpdate =
-    snapshotWrites.find((statement) => {
-      return (
-        statement.includes('UPDATE app.review_serving_snapshot_manifest')
-        && statement.includes('optional_components_json')
-      )
-    }) ?? ''
-  const jsonArrays = getJsonArraysFromSql(snapshotUpdate)
+  const reseededSnapshotInsert = snapshotInserts.at(-1) ?? ''
+  const jsonArrays = getJsonArraysFromSql(reseededSnapshotInsert)
   const requiredComponents = jsonArrays.find((entry) => {
     return entry.includes('projectScope') && entry.includes('selectedImport')
   })
@@ -654,6 +651,7 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
   })
 
   expect(reseededRequest.requestId).toBe(firstRequest.requestId)
+  expect(snapshotInserts).toHaveLength(2)
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
   expect(optionalComponents).toEqual(['judgmentInputContent', 'payload', 'search'])
