@@ -10,6 +10,7 @@ import {duckdbStudioRoutes} from './DuckdbStudioRoutes.ts'
 import {humanAssessmentRoutes} from './HumanAssessmentRoutes.ts'
 import {importRoutes} from './ImportRoutes.ts'
 import {judgmentsJobsRoutes} from './JudgmentsJobsRoutes.ts'
+import {judgmentWorkflowTopologyTestRoutes} from './judgmentWorkflowTopologyTestRoutes.ts'
 import {llmStatusRoutes} from './LlmStatusRoutes.ts'
 import {modelsRoutes} from './ModelsRoutes.ts'
 import {nvidiaSmiRoutes} from './NvidiaSmiRoutes.ts'
@@ -30,6 +31,7 @@ export const getProductApiRoutes = () => {
     .use(adminInvestigateRoutes)
     .use(comparisonProjectsRoutes)
     .use(judgmentsJobsRoutes)
+    .use(judgmentWorkflowTopologyTestRoutes)
     .use(articlesRoutes)
     .use(articleAdminRoutes)
     .use(humanAssessmentRoutes)

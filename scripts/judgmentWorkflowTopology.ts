@@ -3,8 +3,9 @@ import {existsSync, mkdirSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join, resolve} from 'node:path'
 
-import {listen, sleep, spawn, type Subprocess} from 'bun'
+import {listen, serve, sleep, spawn, type Subprocess} from 'bun'
 
+import {duckdbOwnerPrivateApiPrefix} from '../src/server/routes/apiRouteClassification.ts'
 import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
 
 export type JudgmentWorkflowTopology = {
@@ -16,6 +17,12 @@ export type JudgmentWorkflowTopology = {
   maintenancePort: number
   root: string
   serverStackLockPath: string
+}
+
+export type JudgmentWorkflowTopologyProvider = {
+  baseUrl: string
+  close: () => void
+  getEvidence: () => {maxConcurrentRequests: number; requestCount: number; renderedInputs: string[]}
 }
 
 type RuntimeRole = 'api' | 'judge-worker' | 'maintenance-worker'
@@ -72,14 +79,17 @@ export const createJudgmentWorkflowTopology = ({
     env: {
       ...getAllowedHostEnvironment(envValues),
       API_SERVER_PORT: String(apiPort),
+      BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT: '10GB',
       BACKGROUND_JUDGE_PORT: String(judgePort),
       BACKGROUND_MAINTENANCE_PORT: String(maintenancePort),
       DUCKDB_PATH: duckdbPath,
       DUCKDB_TEMP_DIRECTORY: join(root, 'duckdb-spill'),
       FORSKA_RUNTIME_PROFILE: 'local',
+      FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN: randomUUID(),
       JUDGE_WORKER_ID: workerId,
       LOG_DIR: join(root, 'logs'),
       NODE_ENV: 'test',
+      RUN_SERVER_JUDGING: 'true',
     },
     judgePort,
     journalPath,
@@ -87,6 +97,173 @@ export const createJudgmentWorkflowTopology = ({
     root,
     serverStackLockPath,
   }
+}
+
+export const startJudgmentWorkflowTopologyProvider = (): JudgmentWorkflowTopologyProvider => {
+  let activeRequests = 0
+  let maxConcurrentRequests = 0
+  let requestCount = 0
+  const renderedInputs: string[] = []
+  const server = serve({
+    fetch: async (request) => {
+      const url = new URL(request.url)
+
+      if (url.pathname === '/v1/models') {
+        return Response.json({data: [{id: 'topology-deterministic', object: 'model'}], object: 'list'})
+      }
+
+      if (url.pathname !== '/v1/chat/completions') {
+        return new Response('not found', {status: 404})
+      }
+
+      activeRequests += 1
+      requestCount += 1
+      maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests)
+      const body = (await request.json()) as {messages?: Array<{content?: string; role?: string}>}
+      renderedInputs.push(
+        (body.messages ?? [])
+          .map((message) => {
+            return String(message.content ?? '')
+          })
+          .join('\n'),
+      )
+      await sleep(30)
+      activeRequests -= 1
+
+      return Response.json({
+        choices: [
+          {
+            finish_reason: 'stop',
+            index: 0,
+            message: {
+              content: JSON.stringify({answer: 'yes', explanation: 'deterministic topology response', quotes: []}),
+              role: 'assistant',
+            },
+          },
+        ],
+        created: Math.floor(Date.now() / 1_000),
+        id: `topology-${requestCount}`,
+        model: 'topology-deterministic',
+        object: 'chat.completion',
+        usage: {completion_tokens: 8, prompt_tokens: 16, total_tokens: 24},
+      })
+    },
+    hostname: '127.0.0.1',
+    port: 0,
+  })
+
+  return {
+    baseUrl: `http://127.0.0.1:${server.port}/v1`,
+    close: () => {
+      void server.stop(true)
+    },
+    getEvidence: () => {
+      return {maxConcurrentRequests, renderedInputs: [...renderedInputs], requestCount}
+    },
+  }
+}
+
+const postJson = async <T>(url: string, body: unknown): Promise<T> => {
+  const response = await fetch(url, {
+    body: JSON.stringify(body),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
+  const text = await response.text()
+
+  if (!response.ok) {
+    throw new Error(`Topology request failed (${response.status}) ${url}: ${text}`)
+  }
+
+  return JSON.parse(text) as T
+}
+
+export const runJudgmentWorkflowTopologyLifecycle = async ({
+  provider,
+  topology,
+}: {
+  provider: JudgmentWorkflowTopologyProvider
+  topology: JudgmentWorkflowTopology
+}) => {
+  const fixtureId = `topology-${randomUUID()}`
+  const token = topology.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN
+  const ownerBaseUrl = `http://127.0.0.1:${topology.maintenancePort}${duckdbOwnerPrivateApiPrefix}`
+  const apiBaseUrl = `http://127.0.0.1:${topology.apiPort}`
+  const seeded = await postJson<{data: {fixture: {modelId: string; projectIds: string[]}}}>(
+    `${ownerBaseUrl}/api/test/judgment-workflow-topology/seed`,
+    {fixtureId, providerBaseUrl: provider.baseUrl, token},
+  )
+  const servingDeadline = Date.now() + 60_000
+  const waitForServingQueue = async (): Promise<void> => {
+    const evidence = await postJson<{data: {readyPairCount: number}}>(
+      `${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`,
+      {fixtureId, token},
+    )
+
+    if (evidence.data.readyPairCount === 4) {
+      return
+    }
+
+    if (Date.now() >= servingDeadline) {
+      throw new Error(`Timed out waiting for topology serving queue: ${JSON.stringify(evidence.data)}`)
+    }
+
+    await sleep(100)
+    return waitForServingQueue()
+  }
+  await waitForServingQueue()
+  const jobs = await Promise.all(
+    seeded.data.fixture.projectIds.map((projectId) => {
+      return postJson<{data: {jobId: string; status: string; storageState: string}}>(
+        `${apiBaseUrl}/api/judgmentsjobs`,
+        {projectId},
+      )
+    }),
+  )
+  const deadline = Date.now() + 120_000
+
+  const waitForJudgments = async (): Promise<{
+    judgments: Array<{
+      count: number
+      modelId: string
+      projectId: string
+      useAbstract: boolean
+      useFulltext: boolean
+      useFulltextNoImages: boolean
+      useTitle: boolean
+    }>
+  }> => {
+    const evidence = await postJson<{
+      data: {
+        judgments: Array<{
+          count: number
+          modelId: string
+          projectId: string
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          useTitle: boolean
+        }>
+      }
+    }>(`${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`, {fixtureId, token})
+
+    if (
+      evidence.data.judgments.reduce((count, row) => {
+        return count + Number(row.count)
+      }, 0) === 4
+    ) {
+      return evidence.data
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for topology judgments: ${JSON.stringify(evidence.data)}`)
+    }
+
+    await sleep(100)
+    return waitForJudgments()
+  }
+
+  return {fixture: seeded.data.fixture, jobs, providerEvidence: provider.getEvidence, result: await waitForJudgments()}
 }
 
 const waitForRuntimeRole = async ({

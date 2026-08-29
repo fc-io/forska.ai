@@ -351,10 +351,7 @@ const runJudgmentJobSqliteBackgroundImportAttempt = async ({
     const hasImportWork = job.storageState === 'draining' || (await hasActiveJobImportWork(jobId))
 
     if (!hasImportWork) {
-      return {
-        continueToNextJob: false,
-        summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0},
-      }
+      return {continueToNextJob: true, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}}
     }
 
     await recordImportStart(jobId)
@@ -363,7 +360,7 @@ const runJudgmentJobSqliteBackgroundImportAttempt = async ({
     await recordImportSuccess({exitCode: result.exitCode, jobId})
     await sqliteService.getHealthSnapshot(jobId)
     return !result.changed
-      ? {continueToNextJob: false, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}}
+      ? {continueToNextJob: true, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}}
       : {continueToNextJob: false, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}}
   } catch (error) {
     const errorMessage = getJudgmentJobSqliteErrorMessage(error)
