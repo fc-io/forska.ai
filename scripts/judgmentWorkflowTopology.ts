@@ -385,6 +385,30 @@ export const startJudgmentWorkflowTopology = async ({
   return {process: serverStackProcess, topology}
 }
 
+export const prepareJudgmentWorkflowMigrationBoundary = async (topology: JudgmentWorkflowTopology) => {
+  const preparation = spawn(
+    [process.execPath, 'scripts/prepareJudgmentWorkflowMigrationBoundary.ts', topology.duckdbPath],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...topology.env,
+        API_SERVER_PORT: String(topology.maintenancePort),
+        FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server',
+        SERVER_DUCKDB_OWNER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+      },
+      stderr: 'pipe',
+      stdin: 'ignore',
+      stdout: 'pipe',
+    },
+  )
+  const [exitCode, stderr] = await Promise.all([preparation.exited, new Response(preparation.stderr).text()])
+
+  if (exitCode !== 0) {
+    throw new Error(`Failed to prepare migration-boundary topology database: ${stderr}`)
+  }
+}
+
 const waitForExit = async (serverStackProcess: Subprocess<'ignore', 'pipe', 'pipe'>): Promise<number> => {
   return Promise.race([
     serverStackProcess.exited,
