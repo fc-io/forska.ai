@@ -1712,6 +1712,32 @@ test('creating a judgments job fails when the runtime model check fails', async 
 
   expect(response.status).toBe(400)
   expect(body).toContain('does not match the active SGLang runtime')
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const [stateAfterMismatch] = await getAppDatabaseService().queryJson<{
+    jobCount: number
+    modelId: string
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useTitle: boolean
+  }>(`
+    SELECT
+      (SELECT COUNT(*) FROM app.judgment_job WHERE project_id = '${projectId}') AS jobCount,
+      model_id AS modelId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project WHERE id = '${projectId}'
+  `)
+  expect(stateAfterMismatch).toMatchObject({
+    jobCount: '0',
+    modelId,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
 })
 
 test('starting an existing judgments job fails when the runtime model check fails', async () => {
@@ -1744,6 +1770,37 @@ test('starting an existing judgments job fails when the runtime model check fail
 
   expect(response.status).toBe(400)
   expect(body).toContain('does not match the active SGLang runtime')
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const [stateAfterMismatch] = await getAppDatabaseService().queryJson<{
+    modelId: string
+    status: string
+    storageState: string
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useTitle: boolean
+  }>(`
+    SELECT
+      job.status AS status,
+      job.storage_state AS storageState,
+      project.model_id AS modelId,
+      project.use_title AS useTitle,
+      project.use_abstract AS useAbstract,
+      project.use_fulltext AS useFulltext,
+      project.use_fulltext_no_images AS useFulltextNoImages
+    FROM app.judgment_job job
+    INNER JOIN app.project project ON project.id = job.project_id
+    WHERE job.id = '${jobId}'
+  `)
+  expect(stateAfterMismatch).toEqual({
+    modelId,
+    status: 'paused',
+    storageState: 'active',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
 })
 
 test('starting a quarantined judgments job returns an actionable error', async () => {

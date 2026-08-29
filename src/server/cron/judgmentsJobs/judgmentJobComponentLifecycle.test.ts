@@ -197,6 +197,43 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   await judgmentsJobsAddToQueue(serverJobId)
   expect((await sqliteService.getHealthSnapshot(jobId)).promptCounts.ready).toBe(1)
 
+  const queuedDetail = await requestJson<{
+    promptStats: {claimed: number; ready: number; running: number}
+    status: string
+    storageHealth: {outboxRowCount: number; promptCounts: {ready: number}}
+    storageState: string
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useTitle: boolean
+  }>(`/api/judgmentsjobs/${jobId}`)
+  expect(queuedDetail.body).toMatchObject({
+    promptStats: {claimed: 0, ready: 1, running: 0},
+    status: 'running',
+    storageHealth: {outboxRowCount: 0, promptCounts: {ready: 1}},
+    storageState: 'active',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  const queuedHealth = await requestJson<{
+    importMetadata: {importFailureCount: number; lastImportError: string | null}
+    importWork: {outboxRowCount: number; pendingCompletionAckCount: number}
+    liveSqlite: {lastAckSeq: number | null; promptCounts: {ready: number}}
+    quarantine: {quarantineReason: string | null; quarantinedAt: string | null}
+    runningWork: {claimedPromptCount: number; readyPromptCount: number; runningPromptCount: number}
+    storageState: string
+  }>(`/api/judgmentsjobs/${jobId}/health`)
+  expect(queuedHealth.body).toMatchObject({
+    importMetadata: {importFailureCount: 0, lastImportError: null},
+    importWork: {outboxRowCount: 0, pendingCompletionAckCount: 0},
+    liveSqlite: {lastAckSeq: null, promptCounts: {ready: 1}},
+    quarantine: {quarantineReason: null, quarantinedAt: null},
+    runningWork: {claimedPromptCount: 0, readyPromptCount: 1, runningPromptCount: 0},
+    storageState: 'active',
+  })
+
   const prompts = await getAndUpdateReadyPrompts(serverJobId, jobId, 1, {
     providerConnectionId: connectionId,
     providerMaxInflightRequests: 1,
@@ -293,6 +330,16 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     markerRows: Number(importCommit.markerRows),
     outboxSeq: Number(importCommit.outboxSeq),
   }).toEqual({deltaRows: 1, dirtyWorkRows: 5, markerRows: 1, outboxSeq: 1})
+  const importedHealth = await requestJson<{
+    importWork: {claimedOutboxCount: number; outboxRowCount: number}
+    liveSqlite: {lastAckSeq: number | null; outboxRowCount: number}
+    runningWork: {judgedPromptCount: number}
+  }>(`/api/judgmentsjobs/${jobId}/health`)
+  expect(importedHealth.body).toMatchObject({
+    importWork: {claimedOutboxCount: 0, outboxRowCount: 1},
+    liveSqlite: {lastAckSeq: null, outboxRowCount: 1},
+    runningWork: {judgedPromptCount: 1},
+  })
 
   const incompatibleFlags = Array.from({length: 16}, (_, value) => {
     return {
@@ -370,6 +417,28 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   expect(servingAfterProjection?.llmHasJudgment).toBe(true)
   await sqliteService.reconcileProjectRefreshAcks({projectId})
   expect((await sqliteService.getHealthSnapshot(jobId)).lastAckSeq).toBe(Number(importCommit.outboxSeq))
+  const visibleHealth = await requestJson<{liveSqlite: {lastAckSeq: number | null}}>(
+    `/api/judgmentsjobs/${jobId}/health`,
+  )
+  expect(visibleHealth.body.liveSqlite.lastAckSeq).toBe(Number(importCommit.outboxSeq))
+  const visibleFreshness = await requestJson<{
+    freshness: {
+      failedMaterializationCount: number
+      isFresh: boolean
+      unresolvedQuarantineBarrierCount: number
+      unreconciledMaterializationCount: number
+    }
+    freshnessStatus: string
+  }>(`/api/judgmentsjobs-unassessed-count?jobId=${jobId}`)
+  expect(visibleFreshness.body).toMatchObject({
+    freshness: {
+      failedMaterializationCount: 0,
+      isFresh: true,
+      unresolvedQuarantineBarrierCount: 0,
+      unreconciledMaterializationCount: 0,
+    },
+    freshnessStatus: 'fresh',
+  })
 
   const paused = await requestJson<{data: {status: string; storageState: string}}>(`/api/judgmentsjobs/${jobId}`, {
     body: JSON.stringify({status: 'paused'}),
@@ -410,6 +479,17 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     throw new Error(JSON.stringify({acks, dirty, health: await sqliteService.getHealthSnapshot(jobId), refresh}))
   }
   expect(drainStates.at(-1)).toBe('drained')
+
+  const drainedApiHealth = await requestJson<{
+    importWork: {outboxRowCount: number; pendingCompletionAckCount: number}
+    liveSqlite: {outboxRowCount: number; retainedRowCount: number}
+    storageState: string
+  }>(`/api/judgmentsjobs/${jobId}/health`)
+  expect(drainedApiHealth.body).toMatchObject({
+    importWork: {outboxRowCount: 0, pendingCompletionAckCount: 0},
+    liveSqlite: {outboxRowCount: 0, retainedRowCount: 0},
+    storageState: 'drained',
+  })
 
   const drainedHealth = await sqliteService.getHealthSnapshot(jobId)
   expect(drainedHealth.outboxRowCount).toBe(0)

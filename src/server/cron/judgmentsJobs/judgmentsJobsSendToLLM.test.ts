@@ -686,7 +686,7 @@ test('dispatch availability skips 404 misroutes during cooldown, probes once aft
   })
 })
 
-test('requeues not-yet-started prompts for a connection after a connection error', async () => {
+test('preserves the configured provider failure without alternate prompt execution', async () => {
   const firstPrompt = createPrompt()
   const secondPrompt = createPrompt({articleId: 'article-b', recordId: 'record-b'})
   const processed: string[] = []
@@ -707,19 +707,23 @@ test('requeues not-yet-started prompts for a connection after a connection error
     }),
   )
 
+  const processPrompt = mock(async (prompt: PromptToProcess) => {
+    processed.push(prompt.recordId)
+    if (prompt.recordId === firstPrompt.recordId) {
+      throw error
+    }
+  })
+
   await processClaimedPromptsByConnection({
     label: 'test',
-    processPrompt: async (prompt) => {
-      processed.push(prompt.recordId)
-      if (prompt.recordId === firstPrompt.recordId) {
-        throw error
-      }
-    },
+    processPrompt,
     prompts: [firstPrompt, secondPrompt],
     requeuePrompts,
   })
 
   expect(processed).toEqual(['record-a'])
+  expect(processPrompt).toHaveBeenCalledTimes(1)
+  expect(processPrompt).toHaveBeenCalledWith(firstPrompt)
   expect(requeuePrompts).toHaveBeenCalledWith([secondPrompt])
 })
 
