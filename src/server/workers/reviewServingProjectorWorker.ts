@@ -2,6 +2,8 @@ import {createHash} from 'node:crypto'
 import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
+import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {publishProjectedJudgmentJobVisibility} from '../reviewServing/judgmentJobReviewServingVisibilityService.ts'
 import {intakeReviewChangeDeltasToDirtyWork} from '../reviewServing/reviewChangeDeltaDirtyIntakeService.ts'
 import {intakeReviewImportDeltasToDirtyWork} from '../reviewServing/reviewImportDeltaDirtyIntakeService.ts'
 import {
@@ -9154,6 +9156,13 @@ export const runReviewServingProjectorWorkerCycle = async (
           },
         })
       })
+  if (!shouldRunOnlyRebuildChunk) {
+    await runReviewServingProjectorWorkerCyclePhase('completeJudgmentJobVisibility', () => {
+      return publishProjectedJudgmentJobVisibility(database, ({ackToken, jobId}) => {
+        return getJudgmentJobSqliteService().setLastProjectRefreshAckSeq(jobId, ackToken)
+      })
+    })
+  }
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
 

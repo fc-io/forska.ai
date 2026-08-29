@@ -12,6 +12,7 @@ export const judgmentWorkflowFocusedTestFiles = [
 ] as const
 
 export const judgmentWorkflowComponentLifecycleTestFiles = [
+  'src/server/cron/judgmentsJobs/judgmentJobComponentLifecycle.test.ts',
   'src/server/routes/JudgmentsJobsRoutes.test.ts',
   'src/server/routes/judgmentsJobsRoutesDirtyMaterializationFreshness.test.ts',
   'src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts',
