@@ -1,11 +1,32 @@
-import {startJudgmentWorkflowTopology, stopJudgmentWorkflowTopology} from './judgmentWorkflowTopology.ts'
+import {
+  runJudgmentWorkflowTopologyLifecycle,
+  startJudgmentWorkflowTopology,
+  startJudgmentWorkflowTopologyProvider,
+  stopJudgmentWorkflowTopology,
+} from './judgmentWorkflowTopology.ts'
 
+const provider = startJudgmentWorkflowTopologyProvider()
 const runningTopology = await startJudgmentWorkflowTopology()
 
 try {
+  const lifecycle = await runJudgmentWorkflowTopologyLifecycle({provider, topology: runningTopology.topology})
+  const providerEvidence = lifecycle.providerEvidence()
+
+  if (
+    lifecycle.result.judgments.length !== 2
+    || lifecycle.result.judgments.some((row) => {
+      return Number(row.count) !== 2
+    })
+  ) {
+    throw new Error(`Topology lifecycle produced unexpected canonical judgments: ${JSON.stringify(lifecycle.result)}`)
+  }
+  if (providerEvidence.maxConcurrentRequests !== 1 || providerEvidence.requestCount !== 4) {
+    throw new Error(`Topology provider admission evidence was unexpected: ${JSON.stringify(providerEvidence)}`)
+  }
   console.log(
-    `[judgment-workflow:topology] ready api=${runningTopology.topology.apiPort} maintenance=${runningTopology.topology.maintenancePort} judge=${runningTopology.topology.judgePort}`,
+    `[judgment-workflow:topology] complete api=${runningTopology.topology.apiPort} maintenance=${runningTopology.topology.maintenancePort} judge=${runningTopology.topology.judgePort} judgments=4 provider_max_concurrency=1`,
   )
 } finally {
   await stopJudgmentWorkflowTopology(runningTopology)
+  provider.close()
 }
