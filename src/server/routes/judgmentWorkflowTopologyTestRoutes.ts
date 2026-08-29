@@ -204,3 +204,53 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
     },
     {body: t.Object({fixtureId: t.String({pattern: '^[A-Za-z0-9_-]+$'}), token: t.String()})},
   )
+  .post(
+    '/api/test/judgment-workflow-real-codex/evidence',
+    async ({body}) => {
+      requireTopologySeedBoundary(body.token)
+      const judgments = await getAppDatabaseService().queryJson<{
+        answeredOriginal: string | null
+        articleId: string
+        confidenceOriginal: string | null
+        explanation: string | null
+        isAnswered: boolean | null
+        modelId: string
+        projectId: string
+        promptId: string
+        quotes: unknown
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        useTitle: boolean
+      }>(`
+        SELECT article_id AS articleId,
+               model_id AS modelId,
+               prompt_id AS promptId,
+               project_id AS projectId,
+               is_answered AS isAnswered,
+               answered_original AS answeredOriginal,
+               confidence_original AS confidenceOriginal,
+               explanation,
+               quotes,
+               use_title AS useTitle,
+               use_abstract AS useAbstract,
+               use_fulltext AS useFulltext,
+               use_fulltext_no_images AS useFulltextNoImages
+        FROM app.judgment
+        WHERE project_id = ${getSqlLiteral(body.projectId)}
+          AND model_id = ${getSqlLiteral(body.modelId)}
+          AND prompt_id = ${getSqlLiteral(body.promptId)}
+        ORDER BY article_id
+      `)
+      const [projection] = await getAppDatabaseService().queryJson<{count: number}>(`
+        SELECT COUNT(*) AS count
+        FROM mart.review_article_judgment_detail_serving_v4
+        WHERE project_id = ${getSqlLiteral(body.projectId)}
+          AND prompt_id = ${getSqlLiteral(body.promptId)}
+          AND payload_kind = 'llm'
+      `)
+
+      return {data: {judgments, visibleProjectionCount: Number(projection?.count ?? 0)}, error: null}
+    },
+    {body: t.Object({modelId: t.String(), projectId: t.String(), promptId: t.String(), token: t.String()})},
+  )

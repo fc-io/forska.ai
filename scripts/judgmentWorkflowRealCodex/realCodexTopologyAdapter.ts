@@ -3,6 +3,7 @@ import {join} from 'node:path'
 import {sleep} from 'bun'
 import {Database} from 'bun:sqlite'
 
+import {duckdbOwnerPrivateApiPrefix} from '../../src/server/routes/apiRouteClassification.ts'
 import {
   createJudgmentWorkflowTopology,
   startJudgmentWorkflowTopology,
@@ -177,14 +178,24 @@ const getSnapshotEvidence = async (baseUrl: string, identities: SnapshotIdentity
 export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
   let running: RunningTopology | null = null
   let articleCount = 0
-  let expectedContentFlags: RealCodexContentFlags | null = null
-  let expectedModel: {remoteModelId: string; thinking: string; variant: string} | null = null
+  let provisionedFixture: RealCodexProvisionedFixture | null = null
   const getRunning = () => {
     if (!running) throw new Error('Real Codex topology is not running')
     return running
   }
   const getBaseUrl = () => {
     return `http://127.0.0.1:${getRunning().topology.apiPort}`
+  }
+  const getOwnerBaseUrl = () => {
+    return `http://127.0.0.1:${getRunning().topology.maintenancePort}${duckdbOwnerPrivateApiPrefix}`
+  }
+  const getCanonicalEvidence = async (fixture: RealCodexProvisionedFixture) => {
+    const token = getRunning().topology.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN
+    const body = await requestJson(getOwnerBaseUrl(), 'POST', '/api/test/judgment-workflow-real-codex/evidence', {
+      ...fixture,
+      token,
+    })
+    return getDataRecord(body, 'real Codex canonical evidence')
   }
 
   return {
@@ -196,8 +207,6 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
     provisionThroughHttp: async ({articles, contentFlags, model, prompt}) => {
       const baseUrl = getBaseUrl()
       articleCount = articles.length
-      expectedContentFlags = contentFlags
-      expectedModel = model
       const ensured = getDataRecord(
         await requestJson(baseUrl, 'POST', '/api/models/ensure', {
           modelName: model.remoteModelId,
@@ -235,44 +244,49 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
           return value.providerKind === 'codex'
         })
       if (!connection) throw new Error('Codex provider connection was not created')
-      return {
+      provisionedFixture = {
         jobId,
         modelId,
         projectId,
         promptId,
         providerConnectionId: getString(connection.id, 'Codex provider connection id'),
       }
+      return provisionedFixture
     },
     startJobThroughHttp: async (fixture) => {
       await requestJson(getBaseUrl(), 'PATCH', `/api/judgmentsjobs/${fixture.jobId}`, {status: 'running'})
     },
-    waitForTerminal: async ({jobId, timeoutMs}): Promise<RealCodexTerminalObservation> => {
+    waitForTerminal: async ({jobId, stopAdmissionAfterFailure, timeoutMs}): Promise<RealCodexTerminalObservation> => {
       const startedAt = Date.now()
       const poll = async (): Promise<RealCodexTerminalObservation> => {
         const body = await requestJson(getBaseUrl(), 'GET', `/api/judgmentsjobs/${jobId}`)
         const job = getRecord(isRecord(body) && isRecord(body.data) ? body.data : body, 'job detail')
-        const prompts = getRecord(job.promptStats, 'job prompt stats')
         const requests = getRecord(job.requestStats, 'job request stats')
         const tokens = getRecord(job.totalTokenUsage, 'job token usage')
         const failures = isRecord(requests.failures) ? requests.failures : null
         const failure = failures && typeof failures.lastError === 'string' ? failures.lastError : null
         const attempts = Number(requests.attempts ?? 0)
+        const fixture = provisionedFixture
+        if (!fixture) throw new Error('Real Codex fixture was not provisioned')
+        const canonicalEvidence = await getCanonicalEvidence(fixture)
+        const judgments = Array.isArray(canonicalEvidence.judgments) ? canonicalEvidence.judgments : []
         const common = {
           articleCount,
           elapsedMs: Date.now() - startedAt,
           inputTokens: Number(tokens.totalPromptTokens ?? 0),
-          logicalDispatchCount: attempts,
+          logicalDispatchCount: judgments.length,
           outputTokens: Number(tokens.totalCompletionTokens ?? 0),
           requestAttemptCount: attempts,
         }
         if (failure) {
-          await requestJson(getBaseUrl(), 'PATCH', `/api/judgmentsjobs/${jobId}`, {status: 'paused'})
+          if (stopAdmissionAfterFailure) {
+            await requestJson(getBaseUrl(), 'PATCH', `/api/judgmentsjobs/${jobId}`, {status: 'paused'})
+          }
           return {...common, error: failure, status: 'failed'}
         }
         if (
-          Number(prompts.judged ?? 0) === articleCount
-          && Number(prompts.ready ?? 0) === 0
-          && Number(prompts.running ?? 0) === 0
+          judgments.length === articleCount
+          && Number(canonicalEvidence.visibleProjectionCount ?? 0) === articleCount
         ) {
           return {...common, error: null, status: 'completed'}
         }
@@ -286,11 +300,18 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
     },
     inspectEvidence: async (fixture: RealCodexProvisionedFixture): Promise<RealCodexEvidence> => {
       const active = getRunning()
-      const flags = expectedContentFlags
-      const model = expectedModel
-      if (!flags || !model) throw new Error('Real Codex fixture expectations were not provisioned')
       const sqlitePath = join(active.topology.root, 'data', 'judgment-jobs', `${fixture.jobId}.sqlite`)
       const executionInputs = await getSnapshotEvidence(getBaseUrl(), getSnapshotIdentities(sqlitePath))
+      const canonicalEvidence = await getCanonicalEvidence(fixture)
+      const canonicalJudgments = Array.isArray(canonicalEvidence.judgments)
+        ? canonicalEvidence.judgments.map((value) => {
+            return getRecord(value, 'canonical judgment')
+          })
+        : []
+      const project = getDataRecord(
+        await requestJson(getBaseUrl(), 'GET', `/api/projects/${fixture.projectId}`),
+        'real Codex project detail',
+      )
       const connectionsBody = getRecord(
         await requestJson(getBaseUrl(), 'GET', '/api/provider-connections'),
         'connections',
@@ -319,28 +340,46 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
 
       const metadata = isRecord(storedModel.metadataJson) ? storedModel.metadataJson : {}
       const options = isRecord(metadata.options) ? metadata.options : {}
+      const storedFlags = {
+        useAbstract: project.useAbstract === true,
+        useFulltext: project.useFulltext === true,
+        useFulltextNoImages: project.useFulltextNoImages === true,
+        useTitle: project.useTitle === true,
+      } as RealCodexContentFlags
+      const providerKind = getString(connection.providerKind, 'stored provider kind')
+      const thinking = getString(options.thinking, 'stored model thinking')
       return {
-        contentFlags: flags,
+        contentFlags: storedFlags,
         executionInputs,
-        judgments: executionInputs.map(({articleFixtureId}) => {
+        judgments: canonicalJudgments.map((judgment) => {
+          const contentFlags = {
+            useAbstract: judgment.useAbstract === true,
+            useFulltext: judgment.useFulltext === true,
+            useFulltextNoImages: judgment.useFulltextNoImages === true,
+            useTitle: judgment.useTitle === true,
+          } as RealCodexContentFlags
           return {
-            articleFixtureId,
-            contentFlags: flags,
-            modelId: fixture.modelId,
-            providerKind: 'codex',
-            schemaValid: true,
-            thinking: model.thinking,
+            articleFixtureId: getString(judgment.articleId, 'canonical judgment article id'),
+            contentFlags,
+            modelId: getString(judgment.modelId, 'canonical judgment model id'),
+            providerKind,
+            schemaValid:
+              typeof judgment.isAnswered === 'boolean'
+              && typeof judgment.answeredOriginal === 'string'
+              && typeof judgment.explanation === 'string',
+            thinking,
           }
         }),
         model: {
           authMode: typeof connection.authMode === 'string' ? connection.authMode : null,
           baseUrl: typeof connection.baseURL === 'string' ? connection.baseURL : null,
           metadataThinking: typeof options.thinking === 'string' ? options.thinking : null,
-          providerKind: getString(connection.providerKind, 'stored provider kind'),
+          providerKind,
           remoteModelId: typeof storedModel.remoteModelId === 'string' ? storedModel.remoteModelId : null,
           secretRef: typeof connection.secretRef === 'string' ? connection.secretRef : null,
           variant: typeof storedModel.variant === 'string' ? storedModel.variant : null,
         },
+        visibleProjectionCount: Number(canonicalEvidence.visibleProjectionCount ?? 0),
       }
     },
     stop: async () => {

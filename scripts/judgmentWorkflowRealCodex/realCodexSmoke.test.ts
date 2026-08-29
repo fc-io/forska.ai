@@ -78,6 +78,7 @@ const getEvidence = async (): Promise<RealCodexEvidence> => {
       secretRef: null,
       variant: realCodexPinnedThinking,
     },
+    visibleProjectionCount: fixtures.length,
   }
 }
 
