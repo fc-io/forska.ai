@@ -1,0 +1,5 @@
+{
+  "boundaryMigration": "0224_reviewServingDirtyWorkLifecycleReason.sql",
+  "description": "Supported deployed schema boundary immediately before the current migration",
+  "seedStatements": []
+}

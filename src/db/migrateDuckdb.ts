@@ -189,8 +189,16 @@ const shouldCheckpointAfterDuckdbMigration = (duckdbMemoryLimit: string) => {
   return memoryLimitMiB === null || memoryLimitMiB > 6400
 }
 
-export const migrateDuckdb = async (): Promise<void> => {
-  const migrationFiles = getDuckdbMigrationFiles(migrationsFolder)
+export const migrateDuckdb = async ({throughFileName}: {throughFileName?: string} = {}): Promise<void> => {
+  const allMigrationFiles = getDuckdbMigrationFiles(migrationsFolder)
+  const throughIndex =
+    throughFileName === undefined ? allMigrationFiles.length - 1 : allMigrationFiles.indexOf(throughFileName)
+
+  if (throughFileName !== undefined && throughIndex < 0) {
+    throw new Error(`Unknown DuckDB migration boundary: ${throughFileName}`)
+  }
+
+  const migrationFiles = allMigrationFiles.slice(0, throughIndex + 1)
   const env = getEnv()
 
   console.log(`[db:duck:mig] duckdb path: ${env.DUCKDB_PATH}`)
