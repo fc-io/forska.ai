@@ -1,11 +1,16 @@
 import {randomUUID} from 'node:crypto'
-import {existsSync, mkdirSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join, resolve} from 'node:path'
 
 import {listen, serve, sleep, spawn, type Subprocess} from 'bun'
 
 import {duckdbOwnerPrivateApiPrefix} from '../src/server/routes/apiRouteClassification.ts'
+import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
+import {
+  readJudgeWorkerJournalLock,
+  resolveJudgeWorkerJournalIdentity,
+} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
 
 export type JudgmentWorkflowTopology = {
@@ -27,6 +32,12 @@ export type JudgmentWorkflowTopologyProvider = {
 
 type RuntimeRole = 'api' | 'judge-worker' | 'maintenance-worker'
 type RunningTopology = {process: Subprocess<'ignore', 'pipe', 'pipe'>; topology: JudgmentWorkflowTopology}
+export type RunningTopologyExtraJudge = {
+  env: Record<string, string>
+  journalPath: string
+  port: number
+  process: Subprocess<'ignore', 'pipe', 'pipe'>
+}
 
 const startupTimeoutMs = 180_000
 const shutdownTimeoutMs = 20_000
@@ -85,6 +96,7 @@ export const createJudgmentWorkflowTopology = ({
       DUCKDB_PATH: duckdbPath,
       DUCKDB_TEMP_DIRECTORY: join(root, 'duckdb-spill'),
       FORSKA_RUNTIME_PROFILE: 'local',
+      FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT: join(root, 'completion-replay-barriers'),
       FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN: randomUUID(),
       JUDGE_WORKER_ID: workerId,
       LOG_DIR: join(root, 'logs'),
@@ -96,6 +108,55 @@ export const createJudgmentWorkflowTopology = ({
     maintenancePort,
     root,
     serverStackLockPath,
+  }
+}
+
+export const startJudgmentWorkflowTopologyExtraJudge = async (
+  topology: JudgmentWorkflowTopology,
+): Promise<RunningTopologyExtraJudge> => {
+  const port = getAvailablePort()
+  const workerId = `topology-extra-${randomUUID()}`
+  const env = getBackgroundServerEnv({
+    baseEnv: {...topology.env, BACKGROUND_JUDGE_PORT: String(port)},
+    role: 'judge-worker',
+  }) as Record<string, string>
+  env.JUDGE_WORKER_ID = workerId
+  const identity = resolveJudgeWorkerJournalIdentity({envValues: env})
+
+  if (
+    env.SERVER_DUCKDB_OWNER_URL !== `http://127.0.0.1:${topology.maintenancePort}`
+    || env.API_SERVER_PORT !== String(port)
+    || identity.journalPath === topology.journalPath
+  ) {
+    throw new Error('Extra judge-worker environment does not preserve isolated production owner routing')
+  }
+
+  const childProcess = spawn([process.execPath, 'src/server/index.ts'], {
+    cwd: process.cwd(),
+    env,
+    stderr: 'pipe',
+    stdin: 'ignore',
+    stdout: 'pipe',
+  })
+  const deadline = Date.now() + startupTimeoutMs
+
+  await Promise.race([
+    waitForRuntimeRole({deadline, port, role: 'judge-worker'}),
+    childProcess.exited.then((exitCode) => {
+      throw new Error(`Extra judge worker exited before readiness with code ${exitCode}`)
+    }),
+  ])
+
+  return {env, journalPath: identity.journalPath, port, process: childProcess}
+}
+
+export const stopJudgmentWorkflowTopologyExtraJudge = async (extraJudge: RunningTopologyExtraJudge) => {
+  extraJudge.process.kill('SIGTERM')
+  const exitCode = await waitForExit(extraJudge.process)
+  const journalLock = readJudgeWorkerJournalLock({envValues: extraJudge.env})
+
+  if ((exitCode !== 0 && exitCode !== 143) || journalLock?.processAlive === true) {
+    throw new Error(`Extra judge worker did not shut down cleanly (exit=${exitCode})`)
   }
 }
 
@@ -348,11 +409,33 @@ export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess,
     if (existsSync(topology.serverStackLockPath)) {
       throw new Error(`Production server stack lock was not released: ${topology.serverStackLockPath}`)
     }
+    const unexpectedSupervisorEvents = readdirSync(join(topology.root, 'logs'))
+      .filter((path) => {
+        return path.endsWith('.jsonl')
+      })
+      .flatMap((path) => {
+        return readFileSync(join(topology.root, 'logs', path), 'utf8').split('\n')
+      })
+      .filter((line) => {
+        return (
+          line.includes('server.stack.managed-process-unexpected-exit')
+          || line.includes('server.stack.managed-process-watchdog-restart')
+          || line.includes('duckdb.owner.takeover')
+        )
+      })
+
+    if (unexpectedSupervisorEvents.length > 0) {
+      throw new Error(`Production topology observed unexpected supervisor events: ${unexpectedSupervisorEvents[0]}`)
+    }
   } finally {
     if (serverStackProcess.exitCode === null) {
       serverStackProcess.kill('SIGKILL')
       await serverStackProcess.exited
     }
     rmSync(topology.root, {force: true, recursive: true})
+  }
+
+  if (existsSync(topology.root)) {
+    throw new Error(`Production topology root was not removed: ${topology.root}`)
   }
 }

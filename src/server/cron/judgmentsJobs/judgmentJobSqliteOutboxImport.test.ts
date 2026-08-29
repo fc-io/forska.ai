@@ -141,7 +141,7 @@ afterEach(async () => {
   removeClosedTestDirectory(tempJobDir)
 })
 
-test('background import selects the next active or draining job for a single import cycle', () => {
+test('background import scans every idle active or draining job in a single import cycle', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -260,7 +260,7 @@ test('background import selects the next active or draining job for a single imp
     }),
   ).toBe(true)
   expect(result.syncedLeaseJobIds).toEqual([])
-  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0})
+  expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 2, succeededCount: 0})
 })
 
 test('background import filters tracked sqlite jobs before applying the importable work cap', () => {
@@ -1203,7 +1203,7 @@ test('background import records transient SQLite locks and lease conflicts witho
   ).toBe(true)
 })
 
-test('background import releases an owned sqlite lease before importing the next job', () => {
+test('background import releases an owned sqlite lease and continues scanning idle jobs', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -1297,8 +1297,8 @@ test('background import releases an owned sqlite lease before importing the next
   }
 
   expect(result.releasedOwnedLeaseJobIds).toEqual(['owned-job'])
-  expect(result.attemptedJobIds).toEqual(['owned-job'])
-  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0})
+  expect(result.attemptedJobIds).toEqual(['owned-job', 'unowned-job'])
+  expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 2, succeededCount: 0})
 })
 
 test('imports SQLite-backed judgments into DuckDB in batches', async () => {
