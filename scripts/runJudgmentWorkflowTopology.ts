@@ -1,12 +1,15 @@
 import {
   runJudgmentWorkflowTopologyLifecycle,
   startJudgmentWorkflowTopology,
+  startJudgmentWorkflowTopologyExtraJudge,
   startJudgmentWorkflowTopologyProvider,
   stopJudgmentWorkflowTopology,
+  stopJudgmentWorkflowTopologyExtraJudge,
 } from './judgmentWorkflowTopology.ts'
 
 const provider = startJudgmentWorkflowTopologyProvider()
 const runningTopology = await startJudgmentWorkflowTopology()
+const extraJudge = await startJudgmentWorkflowTopologyExtraJudge(runningTopology.topology)
 
 try {
   const lifecycle = await runJudgmentWorkflowTopologyLifecycle({provider, topology: runningTopology.topology})
@@ -27,6 +30,10 @@ try {
     `[judgment-workflow:topology] complete api=${runningTopology.topology.apiPort} maintenance=${runningTopology.topology.maintenancePort} judge=${runningTopology.topology.judgePort} judgments=4 provider_max_concurrency=1`,
   )
 } finally {
-  await stopJudgmentWorkflowTopology(runningTopology)
-  provider.close()
+  try {
+    await stopJudgmentWorkflowTopologyExtraJudge(extraJudge)
+  } finally {
+    await stopJudgmentWorkflowTopology(runningTopology)
+    provider.close()
+  }
 }
