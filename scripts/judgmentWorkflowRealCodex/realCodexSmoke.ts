@@ -71,6 +71,7 @@ export type RealCodexEvidence = {
     secretRef: string | null
     variant: string | null
   }
+  visibleProjectionCount: number
 }
 
 export type RealCodexTopologyAdapter = {
@@ -245,6 +246,12 @@ const assertEvidence = ({
     throw new Error(`Expected ${articles.length} canonical judgments, got ${evidence.judgments.length}`)
   }
 
+  if (evidence.visibleProjectionCount !== articles.length) {
+    throw new Error(
+      `Expected ${articles.length} projected real-Codex judgments, got ${evidence.visibleProjectionCount}`,
+    )
+  }
+
   evidence.judgments.map((judgment) => {
     if (
       judgment.modelId !== fixture.modelId
@@ -335,9 +342,10 @@ export const runRealCodexSmoke = async ({
 
     return result
   } finally {
-    await adapter.stop().catch((error) => {
-      console.error(`[judgment-real-codex] teardown failed: ${error instanceof Error ? error.message : String(error)}`)
-    })
-    await rm(durableRoot, {force: true, recursive: true})
+    try {
+      await adapter.stop()
+    } finally {
+      await rm(durableRoot, {force: true, recursive: true})
+    }
   }
 }
