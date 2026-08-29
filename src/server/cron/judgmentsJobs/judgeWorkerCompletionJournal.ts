@@ -9,6 +9,7 @@ import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecu
 import {getEnv} from '../../utils/env.ts'
 import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJournalIdentity.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {waitAtJudgeWorkerCompletionReplayBarrier} from './judgeWorkerCompletionReplayBarrier.ts'
 import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {isTransientJudgmentJobSqliteLockMessage} from './judgmentJobSqliteTransientLock.ts'
@@ -2359,7 +2360,9 @@ const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<Comple
         }
 
         await withOwnerBackedCompletionReplaySlot(() => {
-          return sendCompletionToOwner(getCompletionPayloadFromRow(row))
+          return waitAtJudgeWorkerCompletionReplayBarrier(row.claimId).then(() => {
+            return sendCompletionToOwner(getCompletionPayloadFromRow(row))
+          })
         })
         markCompletionAcked(database, row.claimId)
         return {...summary, ackedCount: summary.ackedCount + 1}
