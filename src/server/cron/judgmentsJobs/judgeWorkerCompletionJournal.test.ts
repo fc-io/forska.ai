@@ -1,4 +1,4 @@
-import {mkdirSync, mkdtempSync, rmSync} from 'node:fs'
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -17,12 +17,14 @@ import {
   replayJudgeWorkerCompletionOutbox,
   resetJudgeWorkerCompletionJournalForTests,
 } from './judgeWorkerCompletionJournal.ts'
+import {getJudgeWorkerCompletionReplayBarrierPaths} from './judgeWorkerCompletionReplayBarrier.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 
 const originalEnv = {
   API_SERVER_PORT: process.env.API_SERVER_PORT,
   DUCKDB_PATH: process.env.DUCKDB_PATH,
+  FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT: process.env.FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT,
   JUDGE_WORKER_JOURNAL_PATH: process.env.JUDGE_WORKER_JOURNAL_PATH,
   SERVER_DUCKDB_OWNER_URL: process.env.SERVER_DUCKDB_OWNER_URL,
   SERVER_ROLE: process.env.SERVER_ROLE,
@@ -317,6 +319,7 @@ afterEach(async () => {
   })
   process.env.API_SERVER_PORT = originalEnv.API_SERVER_PORT
   process.env.DUCKDB_PATH = originalEnv.DUCKDB_PATH
+  process.env.FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT = originalEnv.FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT
   process.env.JUDGE_WORKER_JOURNAL_PATH = originalEnv.JUDGE_WORKER_JOURNAL_PATH
   process.env.SERVER_DUCKDB_OWNER_URL = originalEnv.SERVER_DUCKDB_OWNER_URL
   process.env.SERVER_ROLE = originalEnv.SERVER_ROLE
@@ -417,6 +420,39 @@ test('completion flushes are globally bounded so owner ack cannot stampede', asy
     }, 0),
   ).toBe(16)
   expect(getCompletionOutboxRow(journalPath, 'claim-0')?.ackedAt).not.toBeNull()
+})
+
+test('completion replay barrier signals after durable journal insert and before owner request', async () => {
+  let ownerCalls = 0
+  const {journalPath, testDirectory} = setupJournalTest(async (request) => {
+    ownerCalls += 1
+    const body = (await request.json()) as JudgeWorkerCompletionPayload
+
+    return Response.json({
+      data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: body.status ?? 'retry'},
+      error: null,
+    })
+  })
+  const barrierRoot = join(testDirectory, 'completion-barrier')
+  const payload = createCompletionPayload({status: 'retry'})
+  const barrierPaths = getJudgeWorkerCompletionReplayBarrierPaths({claimId: payload.claimId, root: barrierRoot})
+  mkdirSync(barrierRoot, {recursive: true})
+  writeFileSync(barrierPaths.controlPath, '')
+  process.env.FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT = barrierRoot
+
+  await enqueueJudgeWorkerCompletion(payload)
+  const replay = flushJudgeWorkerCompletionOutboxForClaim(payload.claimId)
+
+  await new Promise((resolveWait) => {
+    setTimeout(resolveWait, 50)
+  })
+  expect(getCompletionOutboxRow(journalPath, payload.claimId)?.ackedAt).toBeNull()
+  expect(ownerCalls).toBe(0)
+  expect(JSON.parse(readFileSync(barrierPaths.signalPath, 'utf8'))).toMatchObject({claimId: payload.claimId})
+
+  writeFileSync(barrierPaths.releasePath, '')
+  expect(await replay).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
+  expect(ownerCalls).toBe(1)
 })
 
 test('completion replay preserves legacy external and canonical article ids in payloads', async () => {
