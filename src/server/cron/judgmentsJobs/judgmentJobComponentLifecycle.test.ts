@@ -3,7 +3,6 @@ import {existsSync} from 'node:fs'
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 
 setDefaultTimeout(120_000)
@@ -20,6 +19,7 @@ let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
+let providerServer: ReturnType<typeof globalThis.Bun.serve> | null = null
 
 const requestJson = async <T>(path: string, init?: RequestInit): Promise<{body: T; status: number}> => {
   if (!app) {
@@ -72,6 +72,7 @@ afterAll(async () => {
   const {getJudgmentJobSqliteService} = await import('./judgmentJobSqliteService.ts')
 
   await getJudgmentJobSqliteService().closeAll()
+  await providerServer?.stop(true)
   await closeDatabase?.()
   tempRuntimeRoot.cleanup()
 })
@@ -88,10 +89,49 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   const articleId = `component-article-${suffix}`
   const promptId = `component-prompt-${suffix}`
   const serverJobId = `component-server-${suffix}`
+  const providerRequests: Array<{messages?: Array<{content?: string; role?: string}>}> = []
+  providerServer = globalThis.Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      const url = new URL(request.url)
+
+      if (url.pathname === '/v1/models') {
+        return Response.json({data: [{id: 'component-stub'}], object: 'list'})
+      }
+
+      if (url.pathname === '/v1/chat/completions') {
+        providerRequests.push((await request.json()) as (typeof providerRequests)[number])
+        return Response.json({
+          choices: [
+            {
+              finish_reason: 'stop',
+              index: 0,
+              message: {
+                content: JSON.stringify({
+                  answer: 'yes',
+                  explanation: 'deterministic component response',
+                  quotes: ['Deterministic abstract'],
+                }),
+                role: 'assistant',
+              },
+            },
+          ],
+          created: Math.floor(Date.now() / 1000),
+          id: `component-response-${suffix}`,
+          model: 'component-stub',
+          object: 'chat.completion',
+          usage: {completion_tokens: 10, prompt_tokens: 20, total_tokens: 30},
+        })
+      }
+
+      return new Response('Not found', {status: 404})
+    },
+  })
+  const providerBaseUrl = `http://127.0.0.1:${providerServer.port}/v1`
 
   await runDatabase(`
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-    VALUES ('${connectionId}', 'codex', 'Component Codex stub', TRUE, 'codex-cli', 'codex://app-server')
+    VALUES ('${connectionId}', 'sglang', 'Component SGLang stub', TRUE, 'none', '${providerBaseUrl}')
   `)
   await runDatabase(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
@@ -151,7 +191,6 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   const {getJudgmentJobSqlitePath} = await import('./judgmentJobPaths.ts')
   const {getJudgmentJobSqliteService} = await import('./judgmentJobSqliteService.ts')
   const {importJudgmentJobSqliteOutboxBatch} = await import('./judgmentJobSqliteOutboxImport.ts')
-  const {storeSinglePromptJudgment} = await import('../../../agent/judge/storeSinglePromptJudgment.ts')
   const sqliteService = getJudgmentJobSqliteService()
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
 
@@ -177,20 +216,7 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     useTitle: true,
   })
 
-  const dispatch = createJudgmentDispatchRuntime({
-    processPrompt: async ({prompt}) => {
-      await storeSinglePromptJudgment({
-        article: {id: prompt.articleId} as ArticleRecord,
-        chunkingStrategy: null,
-        judgment: {answer: 'yes', explanation: 'deterministic component response', quotes: ['fixture quote']},
-        judgmentsJobId: prompt.jobId,
-        modelId: prompt.modelId,
-        projectId: prompt.projectId,
-        promptId: prompt.promptId,
-        queueRecordId: prompt.recordId,
-      })
-    },
-  })
+  const dispatch = createJudgmentDispatchRuntime()
 
   await dispatch.enqueueClaimedPrompts({label: 'component lifecycle', prompts})
 
@@ -202,12 +228,25 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   }
   await dispatch.shutdown('component lifecycle complete')
 
+  expect(providerRequests).toHaveLength(1)
+  const renderedProviderRequest = JSON.stringify(providerRequests[0])
+  expect(renderedProviderRequest).toContain('Deterministic title')
+  expect(renderedProviderRequest).toContain('Deterministic abstract')
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(1)
-  const [canonicalBeforeImport] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count FROM app.judgment
-    WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = '${modelId}'
+  const [beforeImport] = await queryDatabase<{
+    canonicalRows: number
+    deltaRows: number
+    dirtyWorkRows: number
+    markerRows: number
+  }>(`
+    SELECT
+      (SELECT COUNT(*) FROM app.judgment
+       WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = '${modelId}') AS canonicalRows,
+      (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows,
+      (SELECT COUNT(*) FROM app.review_change_delta WHERE project_id = '${projectId}') AS deltaRows,
+      (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${projectId}') AS dirtyWorkRows
   `)
-  expect(Number(canonicalBeforeImport?.count ?? 0)).toBe(0)
+  expect(Object.values(beforeImport).map(Number)).toEqual([0, 0, 0, 0])
 
   expect(await importJudgmentJobSqliteOutboxBatch()).toBe(1)
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(0)
@@ -235,6 +274,51 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     useTitle: true,
   })
   expect(Number(canonicalRows[0]?.count ?? 0)).toBe(1)
+
+  const [importCommit] = await queryDatabase<{
+    deltaRows: number
+    dirtyWorkRows: number
+    markerRows: number
+    outboxSeq: number
+  }>(`
+    SELECT
+      (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows,
+      (SELECT MAX(outbox_seq) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS outboxSeq,
+      (SELECT COUNT(*) FROM app.review_change_delta WHERE project_id = '${projectId}') AS deltaRows,
+      (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${projectId}') AS dirtyWorkRows
+  `)
+  expect({
+    deltaRows: Number(importCommit.deltaRows),
+    dirtyWorkRows: Number(importCommit.dirtyWorkRows),
+    markerRows: Number(importCommit.markerRows),
+    outboxSeq: Number(importCommit.outboxSeq),
+  }).toEqual({deltaRows: 1, dirtyWorkRows: 5, markerRows: 1, outboxSeq: 1})
+
+  const incompatibleFlags = Array.from({length: 16}, (_, value) => {
+    return {
+      useAbstract: Boolean(value & 2),
+      useFulltext: Boolean(value & 4),
+      useFulltextNoImages: Boolean(value & 8),
+      useTitle: Boolean(value & 1),
+    }
+  }).filter((flags) => {
+    return !(flags.useTitle && flags.useAbstract && !flags.useFulltext && !flags.useFulltextNoImages)
+  })
+  for (const flags of incompatibleFlags) {
+    const [miss] = await queryDatabase<{count: number}>(`
+      SELECT COUNT(*) AS count FROM app.judgment
+      WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = '${modelId}'
+        AND use_title = ${flags.useTitle} AND use_abstract = ${flags.useAbstract}
+        AND use_fulltext = ${flags.useFulltext}
+        AND use_fulltext_no_images = ${flags.useFulltextNoImages}
+    `)
+    expect(Number(miss?.count ?? 0)).toBe(0)
+  }
+  const [wrongModelMiss] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count FROM app.judgment
+    WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = 'wrong-model'
+  `)
+  expect(Number(wrongModelMiss?.count ?? 0)).toBe(0)
 
   const dirtyBeforeProjection = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count FROM app.review_serving_dirty_work
@@ -285,6 +369,7 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   `)
   expect(servingAfterProjection?.llmHasJudgment).toBe(true)
   await sqliteService.reconcileProjectRefreshAcks({projectId})
+  expect((await sqliteService.getHealthSnapshot(jobId)).lastAckSeq).toBe(Number(importCommit.outboxSeq))
 
   const paused = await requestJson<{data: {status: string; storageState: string}}>(`/api/judgmentsjobs/${jobId}`, {
     body: JSON.stringify({status: 'paused'}),
@@ -326,6 +411,16 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   }
   expect(drainStates.at(-1)).toBe('drained')
 
+  const drainedHealth = await sqliteService.getHealthSnapshot(jobId)
+  expect(drainedHealth.outboxRowCount).toBe(0)
+  expect(drainedHealth.pendingCompletionAckCount).toBe(0)
+  expect(drainedHealth.retainedRowCount).toBe(0)
+  expect(sqliteService.hasOwnedLease(jobId)).toBe(false)
+
   await sqliteService.deleteDrainedJobs({jobId, serverJobId})
   expect(existsSync(sqlitePath)).toBe(false)
+  expect(existsSync(`${sqlitePath}-wal`)).toBe(false)
+  expect(existsSync(`${sqlitePath}-shm`)).toBe(false)
+  const {getJudgmentJobLeasePath} = await import('./judgmentJobPaths.ts')
+  expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(false)
 })

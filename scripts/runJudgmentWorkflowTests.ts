@@ -17,16 +17,28 @@ const main = async () => {
     process.exit(1)
   }
 
-  const testProcess = globalThis.Bun.spawn(getJudgmentWorkflowTestCommand(gate), {
-    cwd: process.cwd(),
-    env: process.env,
-    stderr: 'inherit',
-    stdout: 'inherit',
-  })
-  const exitCode = await testProcess.exited
+  // The component lifecycle owns process-wide runtime environment and module singletons.
+  // Run each component file in a fresh process so its production composition cannot
+  // leak DuckDB or SQLite ownership into the boundary suites.
+  const commands =
+    gate === 'component'
+      ? judgmentWorkflowTestFilesByGate.component.map((filePath) => {
+          return getBunTestCommand([filePath])
+        })
+      : [getJudgmentWorkflowTestCommand(gate)]
 
-  if (exitCode !== 0) {
-    process.exit(exitCode ?? 1)
+  for (const command of commands) {
+    const testProcess = globalThis.Bun.spawn(command, {
+      cwd: process.cwd(),
+      env: process.env,
+      stderr: 'inherit',
+      stdout: 'inherit',
+    })
+    const exitCode = await testProcess.exited
+
+    if (exitCode !== 0) {
+      process.exit(exitCode ?? 1)
+    }
   }
 }
 
