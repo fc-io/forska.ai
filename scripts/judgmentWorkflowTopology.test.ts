@@ -15,6 +15,7 @@ import {resolveJudgeWorkerJournalIdentity} from '../src/server/utils/judgeWorker
 import {
   createJudgmentWorkflowTopology,
   isExpectedTopologyShutdownExitCode,
+  isExpectedTopologySupervisorLockMetadata,
   startJudgmentWorkflowTopology,
 } from './judgmentWorkflowTopology.ts'
 
@@ -119,6 +120,31 @@ test('topology accepts Bun Windows SIGTERM exit status only for intentional shut
   expect(isExpectedTopologyShutdownExitCode({exitCode: 143, platform: 'win32'})).toBe(true)
   expect(isExpectedTopologyShutdownExitCode({exitCode: 143, platform: 'linux'})).toBe(false)
   expect(isExpectedTopologyShutdownExitCode({exitCode: 1, platform: 'win32'})).toBe(false)
+})
+
+test('topology only removes the exact stopped Windows supervisor lock', () => {
+  const topology = createJudgmentWorkflowTopology()
+  topologyRoots.push(topology.root)
+  const metadata = {
+    apiPort: topology.apiPort,
+    judgePort: topology.judgePort,
+    maintenancePort: topology.maintenancePort,
+    pid: 1234,
+    startedAt: '2026-08-30T00:00:00.000Z',
+  }
+
+  expect(isExpectedTopologySupervisorLockMetadata({metadata, supervisorPid: 1234, topology})).toBe(true)
+  expect(
+    isExpectedTopologySupervisorLockMetadata({metadata: {...metadata, pid: 5678}, supervisorPid: 1234, topology}),
+  ).toBe(false)
+  expect(
+    isExpectedTopologySupervisorLockMetadata({
+      metadata: {...metadata, maintenancePort: topology.maintenancePort + 1},
+      supervisorPid: 1234,
+      topology,
+    }),
+  ).toBe(false)
+  expect(isExpectedTopologySupervisorLockMetadata({metadata: null, supervisorPid: 1234, topology})).toBe(false)
 })
 
 test('topology removes its disposable root when the production stack cannot be spawned', async () => {
