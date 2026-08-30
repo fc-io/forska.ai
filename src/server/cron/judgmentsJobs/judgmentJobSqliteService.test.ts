@@ -3313,6 +3313,15 @@ test('transitions draining SQLite jobs to drained only after retention cleanup a
   expect(await service.deleteDrainedJobs({jobId})).toEqual([jobId])
   expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(false)
   expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(false)
+  expect(
+    await queryDatabase<{sqliteFileBytes: number | null; walBytes: number}>(`
+      SELECT
+        sqlite_file_bytes AS sqliteFileBytes,
+        CAST(wal_bytes AS INTEGER) AS walBytes
+      FROM app.judgment_job_sqlite_health_projection
+      WHERE job_id = '${jobId}'
+    `),
+  ).toEqual([{sqliteFileBytes: null, walBytes: 0}])
 })
 
 test('transitions paused draining SQLite jobs to drained only after retention cleanup and checkpointing finish', async () => {

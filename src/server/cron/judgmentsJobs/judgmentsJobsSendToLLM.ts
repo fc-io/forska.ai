@@ -13,6 +13,7 @@ import {
   replayJudgeWorkerCompletionOutbox,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
+import {isJudgeWorkerLeaseLossTestBarrierActive} from './judgeWorkerLeaseLossTestBarrier.ts'
 import {
   enqueueClaimedJudgmentPrompts,
   getJudgmentDispatchJobPromptIds,
@@ -1193,7 +1194,7 @@ const startOwnerBackedCompletionReplay = (): void => {
 }
 
 const startOwnerBackedWorkerHeartbeat = (serverJobId: string, jobs: RunningJudgmentJob[]): void => {
-  if (ownerBackedHeartbeatPromise || jobs.length === 0) {
+  if (ownerBackedHeartbeatPromise || jobs.length === 0 || isJudgeWorkerLeaseLossTestBarrierActive()) {
     return
   }
 

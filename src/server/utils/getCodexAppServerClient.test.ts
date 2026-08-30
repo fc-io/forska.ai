@@ -374,6 +374,41 @@ test('runJsonTurn sends Codex-safe sandbox policy without deprecated readOnlyAcc
   expect(JSON.stringify(turnStartParams[0])).not.toContain('readOnlyAccess')
 })
 
+test('runJsonTurn rejects an aborted turn before a racing completion can be accepted', async () => {
+  const controller = new AbortController()
+  const leaseLoss = new Error('provider admission lease lost')
+  const {client, getKillCount} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [{inputText: 'fenced request', kind: 'complete', status: 'completed'}],
+    onTurnStart: () => {
+      setTimeout(() => {
+        controller.abort(leaseLoss)
+      }, 0)
+    },
+    threadReadTextByInputText: {'fenced request': 'late fenced response'},
+  })
+
+  const result = await client
+    .runJsonTurn({
+      inputText: 'fenced request',
+      model: 'gpt-5.4',
+      outputSchema: {type: 'object'},
+      signal: controller.signal,
+    })
+    .then(
+      () => {
+        return null
+      },
+      (error: unknown) => {
+        return error
+      },
+    )
+
+  expect(result).toBe(leaseLoss)
+  await waitForCodexRecycleTimer()
+  expect(getKillCount()).toBe(1)
+})
+
 test('modelList stops the app-server process when initialize times out', async () => {
   const stdout = new EventEmitter()
   const stderr = new EventEmitter()

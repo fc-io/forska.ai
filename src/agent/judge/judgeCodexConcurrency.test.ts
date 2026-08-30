@@ -270,6 +270,9 @@ const loadJudgeModule = ({
 
   void mock.module(judgmentsRequestRuntimeModulePath, () => {
     return {
+      isProviderAdmissionLeaseLostError: () => {
+        return false
+      },
       updateJudgmentPromptRequestWork: () => {
         return undefined
       },

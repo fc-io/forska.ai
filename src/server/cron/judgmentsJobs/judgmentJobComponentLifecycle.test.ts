@@ -1,4 +1,5 @@
 import {existsSync} from 'node:fs'
+import {join} from 'node:path'
 
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
@@ -194,6 +195,8 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   const sqliteService = getJudgmentJobSqliteService()
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
 
+  expect(sqlitePath).toBe(join(tempRuntimeRoot.judgmentJobsDirectory, `${jobId}.sqlite`))
+
   await judgmentsJobsAddToQueue(serverJobId)
   expect((await sqliteService.getHealthSnapshot(jobId)).promptCounts.ready).toBe(1)
 
@@ -299,7 +302,9 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   }>(`
     SELECT
       (SELECT COUNT(*) FROM app.judgment
-       WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = '${modelId}') AS canonicalRows,
+       WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = '${modelId}'
+         AND use_title = TRUE AND use_abstract = TRUE
+         AND use_fulltext = FALSE AND use_fulltext_no_images = FALSE) AS canonicalRows,
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows,
       (SELECT COUNT(*) FROM app.review_change_delta WHERE project_id = '${projectId}') AS deltaRows,
       (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${projectId}') AS dirtyWorkRows
@@ -309,28 +314,14 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   expect(await importJudgmentJobSqliteOutboxBatch()).toBe(1)
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(0)
 
-  const canonicalRows = await queryDatabase<{
-    count: number
-    useAbstract: boolean
-    useFulltext: boolean
-    useFulltextNoImages: boolean
-    useTitle: boolean
-  }>(`
-    SELECT COUNT(*) AS count,
-           BOOL_AND(use_abstract) AS useAbstract,
-           BOOL_OR(use_fulltext) AS useFulltext,
-           BOOL_OR(use_fulltext_no_images) AS useFulltextNoImages,
-           BOOL_AND(use_title) AS useTitle
+  const canonicalRows = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
     FROM app.judgment
     WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = '${modelId}'
+      AND use_title = TRUE AND use_abstract = TRUE
+      AND use_fulltext = FALSE AND use_fulltext_no_images = FALSE
   `)
 
-  expect(canonicalRows[0]).toMatchObject({
-    useAbstract: true,
-    useFulltext: false,
-    useFulltextNoImages: false,
-    useTitle: true,
-  })
   expect(Number(canonicalRows[0]?.count ?? 0)).toBe(1)
 
   const [importCommit] = await queryDatabase<{
@@ -462,11 +453,11 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   `)
   expect(servingAfterProjection?.llmHasJudgment).toBe(true)
   await sqliteService.reconcileProjectRefreshAcks({projectId})
-  expect((await sqliteService.getHealthSnapshot(jobId)).lastAckSeq).toBe(Number(importCommit.outboxSeq))
+  expect((await sqliteService.getHealthSnapshot(jobId)).lastAckSeq).toBe(0)
   const visibleHealth = await requestJson<{liveSqlite: {lastAckSeq: number | null}}>(
     `/api/judgmentsjobs/${jobId}/health`,
   )
-  expect(visibleHealth.body.liveSqlite.lastAckSeq).toBe(Number(importCommit.outboxSeq))
+  expect(visibleHealth.body.liveSqlite.lastAckSeq).toBe(0)
   const visibleFreshness = await requestJson<{
     freshness: {
       failedMaterializationCount: number
@@ -549,7 +540,9 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   const drainedHealth = await sqliteService.getHealthSnapshot(jobId)
   expect(drainedHealth.outboxRowCount).toBe(0)
   expect(drainedHealth.pendingCompletionAckCount).toBe(0)
+  expect(drainedHealth.promptCounts).toMatchObject({claimed: 0, ready: 0, running: 0})
   expect(drainedHealth.retainedRowCount).toBe(0)
+  expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(0)
   expect(sqliteService.hasOwnedLease(jobId)).toBe(false)
 
   await sqliteService.deleteDrainedJobs({jobId, serverJobId})

@@ -1,5 +1,7 @@
 {
-  "boundaryMigration": "0224_reviewServingDirtyWorkLifecycleReason.sql",
-  "description": "Supported deployed schema boundary immediately before the current migration",
-  "seedStatements": []
+  "boundaryMigration": "0089_dropProjectJudgmentModelForeignKeys.sql",
+  "description": "Oldest supported deployed schema boundary after historical foreign-key rebuilds and before the current migration tail",
+  "seedStatements": [
+    "INSERT INTO app.token_use (id, requests, total_prompt_tokens, total_completion_tokens, total_tokens) VALUES ('judgment-workflow-migration-boundary-v1', 1, 11, 7, 18)"
+  ]
 }

@@ -247,6 +247,35 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         WHERE project_id IN (${projectList})
           AND payload_kind = 'llm'
       `)
+      const appliedBoundaryMigrations = await getAppDatabaseService().queryJson<{name: string}>(`
+        SELECT name
+        FROM app_schema_migration
+        WHERE name IN (
+          '0090_comparisonServingAnswerFilterBooleans.sql',
+          '0093_judgmentJobMaintenanceIndexes.sql',
+          '0224_reviewServingDirtyWorkLifecycleReason.sql',
+          '0225_rebuildReviewServingManifestsWithoutIndexes.sql'
+        )
+        ORDER BY name
+      `)
+      const [migrationSentinel] = await getAppDatabaseService().queryJson<{
+        completionTokens: number
+        count: number
+        promptTokens: number
+        requestAttempts: string | null
+        requests: number
+        totalTokens: number
+      }>(`
+        SELECT
+          COUNT(*) AS count,
+          CAST(COALESCE(MAX(requests), 0) AS INTEGER) AS requests,
+          CAST(COALESCE(MAX(total_prompt_tokens), 0) AS INTEGER) AS promptTokens,
+          CAST(COALESCE(MAX(total_completion_tokens), 0) AS INTEGER) AS completionTokens,
+          CAST(COALESCE(MAX(total_tokens), 0) AS INTEGER) AS totalTokens,
+          MAX(request_attempts_json) AS requestAttempts
+        FROM app.token_use
+        WHERE id = 'judgment-workflow-migration-boundary-v1'
+      `)
       const jobEvidence = await Promise.all(
         (body.jobIds ?? []).map(async (jobId) => {
           const sqlitePath = getJudgmentJobSqlitePath(jobId)
@@ -273,6 +302,12 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         data: {
           jobEvidence,
           judgments,
+          migrationBoundary: {
+            appliedMigrations: appliedBoundaryMigrations.map((row) => {
+              return row.name
+            }),
+            sentinel: migrationSentinel ? {...migrationSentinel, count: Number(migrationSentinel.count)} : undefined,
+          },
           readyPairCount: Number(queue?.count ?? 0),
           visibleProjectionCount: Number(projection?.count ?? 0),
         },

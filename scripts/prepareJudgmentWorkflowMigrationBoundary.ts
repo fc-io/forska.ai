@@ -22,6 +22,46 @@ try {
   for (const statement of manifest.seedStatements) {
     await getAppDatabaseService().run(statement)
   }
+  const appliedMigrations = await getAppDatabaseService().queryJson<{name: string}>(`
+    SELECT name
+    FROM app_schema_migration
+    WHERE name IN (
+      '0089_dropProjectJudgmentModelForeignKeys.sql',
+      '0090_comparisonServingAnswerFilterBooleans.sql'
+    )
+    ORDER BY name
+  `)
+  const [sentinel] = await getAppDatabaseService().queryJson<{
+    completionTokens: number
+    promptTokens: number
+    requests: number
+    totalTokens: number
+  }>(`
+    SELECT
+      requests,
+      CAST(total_prompt_tokens AS INTEGER) AS promptTokens,
+      CAST(total_completion_tokens AS INTEGER) AS completionTokens,
+      CAST(total_tokens AS INTEGER) AS totalTokens
+    FROM app.token_use
+    WHERE id = 'judgment-workflow-migration-boundary-v1'
+  `)
+  const [requestAttemptState] = await getAppDatabaseService().queryJson<{requestAttempts: string | null}>(`
+    SELECT request_attempts_json AS requestAttempts
+    FROM app.token_use
+    WHERE id = 'judgment-workflow-migration-boundary-v1'
+  `)
+
+  if (
+    appliedMigrations.length !== 1
+    || appliedMigrations[0]?.name !== manifest.boundaryMigration
+    || requestAttemptState?.requestAttempts !== null
+    || sentinel?.requests !== 1
+    || sentinel.promptTokens !== 11
+    || sentinel.completionTokens !== 7
+    || sentinel.totalTokens !== 18
+  ) {
+    throw new Error('Migration-boundary fixture did not stop at the declared deployed schema with its sentinel intact')
+  }
 } finally {
   await getAppDatabaseService().close({checkpointBeforeClose: true})
 }

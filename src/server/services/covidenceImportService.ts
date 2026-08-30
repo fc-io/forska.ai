@@ -2062,22 +2062,24 @@ const getCovidenceMappedHumanJudgmentSeeds = (params: {
 }) => {
   return Array.from(
     params.judgmentSeeds
-      .reduce<Map<string, Array<CovidenceHumanJudgmentSeed & {mappingSource: CovidenceArticleExternalIdMapping['mappingSource']}>>>(
-        (seedMap, judgmentSeed) => {
-          const articleMapping = params.articleIdByExternalId.get(judgmentSeed.articleExternalId)
-          const existingSeeds = articleMapping ? (seedMap.get(articleMapping.articleId) ?? []) : []
+      .reduce<
+        Map<
+          string,
+          Array<CovidenceHumanJudgmentSeed & {mappingSource: CovidenceArticleExternalIdMapping['mappingSource']}>
+        >
+      >((seedMap, judgmentSeed) => {
+        const articleMapping = params.articleIdByExternalId.get(judgmentSeed.articleExternalId)
+        const existingSeeds = articleMapping ? (seedMap.get(articleMapping.articleId) ?? []) : []
 
-          if (articleMapping) {
-            seedMap.set(articleMapping.articleId, [
-              ...existingSeeds,
-              {...judgmentSeed, mappingSource: articleMapping.mappingSource},
-            ])
-          }
+        if (articleMapping) {
+          seedMap.set(articleMapping.articleId, [
+            ...existingSeeds,
+            {...judgmentSeed, mappingSource: articleMapping.mappingSource},
+          ])
+        }
 
-          return seedMap
-        },
-        new Map(),
-      )
+        return seedMap
+      }, new Map())
       .entries(),
   ).map(([articleId, seeds]) => {
     const currentLinkSeeds = seeds.filter((seed) => {

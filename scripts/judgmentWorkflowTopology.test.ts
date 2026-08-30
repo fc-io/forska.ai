@@ -1,10 +1,16 @@
-import {existsSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, isAbsolute, join} from 'node:path'
 
 import {afterEach, expect, test} from 'bun:test'
 
+import {
+  getJudgeWorkerLeaseLossTestBarrierPaths,
+  getJudgeWorkerLeaseLossTestClaimLimit,
+  isJudgeWorkerLeaseLossTestBarrierActive,
+  waitAtJudgeWorkerLeaseLossTestBarrier,
+} from '../src/server/cron/judgmentsJobs/judgeWorkerLeaseLossTestBarrier.ts'
 import {resolveJudgeWorkerJournalIdentity} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
-import {createJudgmentWorkflowTopology} from './judgmentWorkflowTopology.ts'
+import {createJudgmentWorkflowTopology, startJudgmentWorkflowTopology} from './judgmentWorkflowTopology.ts'
 
 const topologyRoots: string[] = []
 
@@ -29,6 +35,9 @@ test('topology environment isolates production state and provider credentials', 
     PATH: '/bin',
   })
   expect(typeof topology.env.JUDGE_WORKER_ID).toBe('string')
+  expect(topology.env.FORSKA_TEST_JUDGE_LEASE_LOSS_BARRIER_ROOT).toBe(join(topology.root, 'lease-loss-barriers'))
+  expect(getJudgeWorkerLeaseLossTestClaimLimit(16, topology.env)).toBe(1)
+  expect(getJudgeWorkerLeaseLossTestClaimLimit(16, {...topology.env, NODE_ENV: 'production'})).toBe(16)
   expect(topology.env.HOME).toBeUndefined()
   expect(topology.env.CODEX_API_KEY).toBeUndefined()
   expect(topology.env.OPENAI_API_KEY).toBeUndefined()
@@ -46,12 +55,29 @@ test('topology derives a production-valid durable journal from DuckDB and worker
     journalPath: topology.journalPath,
     lockPath: `${topology.journalPath}.lock`,
     source: 'worker-id',
-    workerId: topology.env.JUDGE_WORKER_ID,
+    workerId: identity.workerId,
   })
   expect(identity.journalPath).toBe(
     join(dirname(topology.duckdbPath), 'judge-worker-journals', `${identity.workerId}.sqlite`),
   )
   expect(existsSync(topology.root)).toBe(true)
+})
+
+test('topology lease-loss barrier is opt-in, worker-specific, and test-only', async () => {
+  const topology = createJudgmentWorkflowTopology()
+  topologyRoots.push(topology.root)
+  const paths = getJudgeWorkerLeaseLossTestBarrierPaths(topology.env)
+
+  expect(isJudgeWorkerLeaseLossTestBarrierActive(topology.env)).toBe(false)
+  mkdirSync(dirname(paths.pausePath), {recursive: true})
+  writeFileSync(paths.pausePath, 'pause\n')
+  expect(isJudgeWorkerLeaseLossTestBarrierActive(topology.env)).toBe(true)
+  expect(isJudgeWorkerLeaseLossTestBarrierActive({...topology.env, JUDGE_WORKER_ID: 'different-worker'})).toBe(false)
+  expect(isJudgeWorkerLeaseLossTestBarrierActive({...topology.env, NODE_ENV: 'production'})).toBe(false)
+  const waitForRelease = waitAtJudgeWorkerLeaseLossTestBarrier(topology.env)
+  expect(existsSync(paths.reachedPath)).toBe(true)
+  writeFileSync(paths.releasePath, 'release\n')
+  expect(await waitForRelease).toBe(true)
 })
 
 test('topology resolves the production supervisor lock outside the disposable app-data root', () => {
@@ -62,4 +88,12 @@ test('topology resolves the production supervisor lock outside the disposable ap
   expect(topology.serverStackLockPath).toEndWith(
     `${topology.apiPort}-${topology.maintenancePort}-${topology.judgePort}.lock.json`,
   )
+})
+
+test('topology removes its disposable root when the production stack cannot be spawned', async () => {
+  const topology = createJudgmentWorkflowTopology()
+
+  expect(startJudgmentWorkflowTopology({cwd: join(topology.root, 'missing-cwd'), topology})).rejects.toThrow()
+  expect(existsSync(topology.root)).toBe(false)
+  expect(existsSync(topology.serverStackLockPath)).toBe(false)
 })

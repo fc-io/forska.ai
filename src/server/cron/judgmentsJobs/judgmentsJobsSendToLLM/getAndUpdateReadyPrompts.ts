@@ -11,6 +11,10 @@ import {
   recordAcceptedJudgeWorkerClaims,
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../judgeWorkerCompletionJournal.ts'
+import {
+  getJudgeWorkerLeaseLossTestClaimLimit,
+  isJudgeWorkerLeaseLossTestBarrierActive,
+} from '../judgeWorkerLeaseLossTestBarrier.ts'
 import {getJudgmentJobSqlitePath} from '../judgmentJobPaths.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../judgmentJobSqliteService.ts'
 
@@ -465,18 +469,23 @@ export const getAndUpdateReadyPrompts = async (
   },
   options: {ownerBackedJobInfo?: OwnerBackedJudgmentJobInfo | null; protectedRecordIds?: string[]} = {},
 ): Promise<PromptToProcess[]> => {
+  if (isJudgeWorkerLeaseLossTestBarrierActive()) {
+    return []
+  }
+  const effectiveLimit = getJudgeWorkerLeaseLossTestClaimLimit(limit)
+
   if (shouldUseJudgeWorkerOwnerHandoff()) {
     return getOwnerBackedReadyRows(
       serverJobId,
       jobId,
-      limit,
+      effectiveLimit,
       requestRuntime,
       options.protectedRecordIds ?? [],
       options.ownerBackedJobInfo,
     )
   }
 
-  const prompts = await getSqliteReadyRows(serverJobId, jobId, limit)
+  const prompts = await getSqliteReadyRows(serverJobId, jobId, effectiveLimit)
 
   return prompts.map((prompt) => {
     return {...prompt, ...requestRuntime}

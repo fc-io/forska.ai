@@ -2116,6 +2116,7 @@ const deleteDrainedSqliteJobs = async ({
     await ensureOwnedJobLease(currentJobId, serverJobId)
     await releaseOwnedJobLease(currentJobId)
     deleteJobFiles(currentJobId)
+    await publishHealthProjection({health: getEmptyHealthSnapshot(), jobId: currentJobId})
 
     return [currentJobId, ...(await deleteDrainedSqliteJobs({jobIds: jobIds.slice(1), serverJobId}))]
   } catch (error) {

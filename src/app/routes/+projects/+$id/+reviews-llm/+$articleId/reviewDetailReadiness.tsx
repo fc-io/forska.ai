@@ -1,5 +1,7 @@
-type ReviewDetailUnavailableData = {article?: null; reason?: string | null; status?: string}
-type ReviewDetailArchivedData = {article?: null; code?: string | null; message?: string | null; status?: string}
+type ReviewDetailUnavailableData = {article: null; reason?: string | null; status: 'unavailable'}
+type ReviewDetailArchivedData = {article: null; code: 'PROJECT_ARCHIVED'; message?: string | null; status: 'archived'}
+
+type ReviewDetailNotReadyData = ReviewDetailArchivedData | ReviewDetailUnavailableData
 
 const isObjectRecord = (data: unknown): data is Record<string, unknown> => {
   return typeof data === 'object' && data !== null
@@ -24,8 +26,12 @@ export const getArchivedReviewDetailFromResponseError = (error: unknown): Review
   return isArchivedReviewDetail(value) ? value : null
 }
 
-export const getAvailableReviewDetail = <T,>(data: T | null | undefined): T | null => {
-  return data && !isUnavailableReviewDetail(data) && !isArchivedReviewDetail(data) ? data : null
+export const getAvailableReviewDetail = <T,>(
+  data: T | null | undefined,
+): Exclude<T, ReviewDetailNotReadyData> | null => {
+  return data && !isUnavailableReviewDetail(data) && !isArchivedReviewDetail(data)
+    ? (data as Exclude<T, ReviewDetailNotReadyData>)
+    : null
 }
 
 export const getReviewDetailUnavailableMessage = (data: ReviewDetailUnavailableData) => {
