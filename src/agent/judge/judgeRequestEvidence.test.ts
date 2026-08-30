@@ -1,4 +1,4 @@
-import {access, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
+import {access, mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -122,4 +122,67 @@ test('rejects an evidence output path outside the declared test root', async () 
   }
   expect(error).toBeInstanceOf(Error)
   expect((error as Error).message).toContain('must be confined under the declared test root')
+})
+
+test('rejects an in-root output symlink that points outside the declared test root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'forska-request-evidence-'))
+  const outsideRoot = await mkdtemp(join(tmpdir(), 'forska-request-evidence-outside-'))
+  roots.push(root, outsideRoot)
+  const outputPath = join(root, 'evidence.jsonl')
+  const outsideOutputPath = join(outsideRoot, 'escaped.jsonl')
+  const manifestPath = join(root, 'manifest.json')
+  const fixture = {
+    abstract: 'ABSTRACT',
+    fixtureId: 'article-a',
+    fulltextSentinel: 'FULLTEXT',
+    imageSentinelUrl: 'IMAGE',
+    title: 'TITLE',
+  }
+  await symlink(outsideOutputPath, outputPath)
+  await writeFile(manifestPath, JSON.stringify({fixtures: [fixture], outputPath}), 'utf8')
+  process.env.NODE_ENV = 'test'
+  process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ENABLED = 'true'
+  process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_MANIFEST = manifestPath
+  process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ROOT = root
+
+  let error: unknown
+  try {
+    await captureJudgmentRequestEvidence({
+      articleId: fixture.fixtureId,
+      jobId: 'job-a',
+      prompt: `${fixture.title}\n${fixture.abstract}`,
+      systemPrompt: 'system',
+    })
+  } catch (caught) {
+    error = caught
+  }
+  expect(error).toBeInstanceOf(Error)
+  let outsideOutputExists = true
+  try {
+    await access(outsideOutputPath)
+  } catch {
+    outsideOutputExists = false
+  }
+  expect(outsideOutputExists).toBeFalse()
+})
+
+test('rejects a manifest outside the declared test root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'forska-request-evidence-'))
+  const outsideRoot = await mkdtemp(join(tmpdir(), 'forska-request-evidence-outside-'))
+  roots.push(root, outsideRoot)
+  const manifestPath = join(outsideRoot, 'manifest.json')
+  await writeFile(manifestPath, JSON.stringify({fixtures: [], outputPath: join(root, 'evidence.jsonl')}), 'utf8')
+  process.env.NODE_ENV = 'test'
+  process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ENABLED = 'true'
+  process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_MANIFEST = manifestPath
+  process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ROOT = root
+
+  let error: unknown
+  try {
+    await captureJudgmentRequestEvidence({articleId: 'a', jobId: 'j', prompt: 'p', systemPrompt: 's'})
+  } catch (caught) {
+    error = caught
+  }
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toContain('manifest path must be confined')
 })
