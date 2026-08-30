@@ -2,6 +2,27 @@
 
 Date: 2026-08-28
 
+## Implementation Status
+
+Implemented on 2026-08-30. The repository now exposes focused, component,
+recovery, split-process topology, browser, and opt-in real-Codex commands in
+`package.json` and documents their operator contracts in `TESTS.md`.
+
+The automated implementation has passed the focused, component, recovery,
+topology, browser, production build, desktop build, and full Bun backend gates.
+The topology gate covers fresh and supported migration-boundary databases,
+two fenced judge workers sharing one persisted provider-admission limit, durable
+journal replay across a real worker restart, canonical import, V4 projection,
+visibility acknowledgement, pause/drain, and production artifact cleanup.
+
+The paid real-Codex smoke is implemented but was not executed during this work
+because the standalone Codex CLI was not authenticated. It remains an explicit
+operator-only gate. Repository-wide lint still reports unrelated pre-existing
+errors outside the files touched by this implementation; scoped lint and
+whitespace checks pass. Desktop packaging passes, while the packaged-app
+lifecycle remains the documented manual gate until a desktop automation driver
+exists.
+
 ## Goal
 
 Add a documented, deterministic test gate that proves the complete judgment-job
@@ -20,7 +41,7 @@ content configuration. Failures under that configuration must remain visible;
 the test infrastructure must not silently retry with different settings,
 downgrade, or fall back to another provider or model.
 
-## Current Coverage And Gap
+## Baseline Coverage And Gap At Planning Time
 
 - `bun run test:bun` discovers the judgment-job unit and integration suites, but
   `TESTS.md` does not define a focused judgment-job regression gate.
