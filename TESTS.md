@@ -31,6 +31,67 @@ performance-measurement commands live in [PERF.md](PERF.md).
 
 Target a single Bun test file with `bun test path/to/file.test.ts`.
 
+## Judgment Workflow Gates
+
+Use these commands for judgment-job changes:
+
+```bash
+bun run test:judgment-workflow
+bun run test:judgment-workflow:e2e
+bun run test:judgment-workflow:recovery
+bun run test:judgment-workflow:topology
+bun run test:judgment-workflow:browser
+```
+
+- `test:judgment-workflow` is the fast focused route, queue, dispatch, SQLite,
+  import, repair, health, and read-model regression gate.
+- `test:judgment-workflow:e2e` is the deterministic component lifecycle. It
+  proves route creation, queue/claim/dispatch, durable SQLite completion,
+  canonical DuckDB import, V4 serving visibility, visibility acknowledgement,
+  pause/drain, and separate drained-artifact deletion.
+- `test:judgment-workflow:recovery` covers replay, crash boundaries, retry
+  exhaustion, stale claims, corruption/quarantine, and benchmark-critical
+  provider/model/thinking configuration integrity.
+- `test:judgment-workflow:topology` launches the isolated non-watch production
+  API, maintenance-owner, and judge-worker composition. It is the process-wiring
+  gate; in-process lifecycle and Playwright `dev-single` tests do not replace it.
+- `test:judgment-workflow:browser` runs the real admin job discovery,
+  start/pause/drain, and project review-serving UI against the deterministic
+  isolated production topology fixture.
+
+The topology and browser gates use test-owned durable app-data roots for DuckDB
+and judge journals, separate spill/temp directories, unique ports and worker
+identities, and credential-free child environments. They must never discover or
+mutate the primary runtime profile. A topology pass proves only the host OS on
+which it ran; path, signal, lock, and process-tree contract tests cover other
+supported operating systems without claiming full cross-platform execution.
+
+The real-provider smoke is operator-only and is never a normal PR/default gate:
+
+```bash
+FORSKA_RUN_REAL_CODEX_SMOKE=1 \
+FORSKA_REAL_CODEX_DURABLE_TEST_ROOT="$PWD/.tmp/judgment-real-codex" \
+bun run test:judgment-workflow:real-codex
+```
+
+Run it only from an already authenticated Codex CLI installation. It pins
+`gpt-5.6-luna` with low thinking, sends three reviewed PLOS article titles and
+abstracts, and sends no article full text or images. It performs no separate
+model-list, provider-test, or paid inference probe. The first article judgment
+is the entitlement/capability check, failures are preserved without model or
+provider fallback, and the declared maximum is six logical provider attempts
+for the three-article corpus under the production retry policy. Record the
+fixture hashes, model, thinking level, logical dispatches, observable attempts,
+token usage, elapsed time, terminal state, and result without credentials or
+article text.
+
+When desktop or shared runtime code changes, also run `bun run desktop:build`
+and perform the packaged-app lifecycle check against an explicitly isolated
+temporary profile/server stack: navigate to the seeded job, verify progress,
+pause, drain, and confirm the project review result. Never attach this manual
+check to the primary profile. This remains a documented manual gate until an
+automated packaged-app driver exists.
+
 ## Current DB Smoke Phases
 
 `bun run test:network-smoke:current-db` is the required end-to-end current-DB gate. It runs both phases in order:
