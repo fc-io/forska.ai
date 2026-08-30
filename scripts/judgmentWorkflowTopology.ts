@@ -46,7 +46,7 @@ export type RunningTopologyExtraJudge = {
 export type JudgmentWorkflowReadinessMonitor = {assertHealthy: () => void; stop: () => Promise<void>}
 
 export const topologyLongRunningProcessStdio = {stderr: 'inherit', stdout: 'inherit'} as const
-export const topologyEvidencePollIntervalMs = 2_500
+export const topologyProjectorQuietWindowMs = 10_000
 
 const startupTimeoutMs = 600_000
 const shutdownTimeoutMs = 30_000
@@ -471,7 +471,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       throw new Error(`Timed out waiting for topology serving queue: ${JSON.stringify(evidence.data)}`)
     }
 
-    await sleep(100)
+    await sleep(topologyProjectorQuietWindowMs)
     return waitForServingQueue()
   }
   await waitForServingQueue()
@@ -631,7 +631,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       throw new Error(`Timed out waiting for topology judgments: ${JSON.stringify(evidence.data)}`)
     }
 
-    await sleep(topologyEvidencePollIntervalMs)
+    await sleep(topologyProjectorQuietWindowMs)
     return waitForJudgments()
   }
 
