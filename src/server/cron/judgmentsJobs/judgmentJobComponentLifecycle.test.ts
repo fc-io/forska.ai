@@ -233,6 +233,27 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     runningWork: {claimedPromptCount: 0, readyPromptCount: 1, runningPromptCount: 0},
     storageState: 'active',
   })
+  const queuedList = await requestJson<{
+    data: Array<{health: {badges: string[]; isHealthy: boolean}; id: string; status: string; storageState: string}>
+  }>('/api/judgmentsjobs')
+  expect(
+    queuedList.body.data.find((job) => {
+      return job.id === jobId
+    }),
+  ).toMatchObject({health: {badges: ['Healthy'], isHealthy: true}, status: 'running', storageState: 'active'})
+  const queuedGlobalHealth = await requestJson<{
+    data: {
+      healthy: number
+      jobs: Array<{action: string; jobId: string; progressState: string; runningWork: {readyPromptCount: number}}>
+      progressStates: {queued: number}
+    }
+  }>('/api/judgmentsjobs-health')
+  expect(
+    queuedGlobalHealth.body.data.jobs.find((job) => {
+      return job.jobId === jobId
+    }),
+  ).toMatchObject({action: 'none', progressState: 'queued', runningWork: {readyPromptCount: 1}})
+  expect(queuedGlobalHealth.body.data).toMatchObject({healthy: 1, progressStates: {queued: 1}})
 
   const prompts = await getAndUpdateReadyPrompts(serverJobId, jobId, 1, {
     providerConnectionId: connectionId,
@@ -340,6 +361,31 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     liveSqlite: {lastAckSeq: null, outboxRowCount: 1},
     runningWork: {judgedPromptCount: 1},
   })
+  const importedList = await requestJson<{data: Array<{health: {badges: string[]; isHealthy: boolean}; id: string}>}>(
+    '/api/judgmentsjobs',
+  )
+  expect(
+    importedList.body.data.find((job) => {
+      return job.id === jobId
+    })?.health,
+  ).toEqual({badges: ['Retained Outbox'], isHealthy: false})
+  const importedGlobalHealth = await requestJson<{
+    data: {
+      completionAckBacklog: number
+      jobs: Array<{action: string; blockedReason: string | null; jobId: string; progressState: string}>
+      retainedOutbox: number
+    }
+  }>('/api/judgmentsjobs-health')
+  expect(
+    importedGlobalHealth.body.data.jobs.find((job) => {
+      return job.jobId === jobId
+    }),
+  ).toMatchObject({
+    action: 'resume_outbox_import',
+    blockedReason: 'waiting_for_owner_ack',
+    progressState: 'waiting_for_owner_ack',
+  })
+  expect(importedGlobalHealth.body.data).toMatchObject({completionAckBacklog: 1, retainedOutbox: 1})
 
   const incompatibleFlags = Array.from({length: 16}, (_, value) => {
     return {
@@ -490,6 +536,15 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     liveSqlite: {outboxRowCount: 0, retainedRowCount: 0},
     storageState: 'drained',
   })
+  const drainedGlobalHealth = await requestJson<{
+    data: {healthy: number; jobs: Array<{action: string; jobId: string; progressState: string}>}
+  }>('/api/judgmentsjobs-health')
+  expect(
+    drainedGlobalHealth.body.data.jobs.find((job) => {
+      return job.jobId === jobId
+    }),
+  ).toMatchObject({action: 'none', progressState: 'idle'})
+  expect(drainedGlobalHealth.body.data.healthy).toBe(0)
 
   const drainedHealth = await sqliteService.getHealthSnapshot(jobId)
   expect(drainedHealth.outboxRowCount).toBe(0)
