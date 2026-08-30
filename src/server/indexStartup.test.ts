@@ -556,6 +556,12 @@ test('judge-worker startup replays unacked completions for the same durable iden
       },
       timeoutMs: 5_000,
     })
+    await waitForCondition({
+      condition: () => {
+        return getCompletionAckedAt(journalPath, 'claim-replay-startup') !== null
+      },
+      timeoutMs: 5_000,
+    })
 
     expect(completionRequests).toHaveLength(1)
     expect(getCompletionAckedAt(journalPath, 'claim-replay-startup')).not.toBe(null)
@@ -657,6 +663,12 @@ test('judge-worker startup replays unacked completions from worker-id durable jo
     await waitForCondition({
       condition: () => {
         return completionRequests.length === 1
+      },
+      timeoutMs: 5_000,
+    })
+    await waitForCondition({
+      condition: () => {
+        return getCompletionAckedAt(journalPath, 'claim-replay-startup') !== null
       },
       timeoutMs: 5_000,
     })

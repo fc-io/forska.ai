@@ -496,7 +496,8 @@ type LegacyCompletionAckRepairRow = {
 
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
-const ownedJobLeaseOperationCounts = new Map<string, number>()
+const judgmentJobDatabaseOperationCounts = new Map<string, number>()
+let activeJudgmentJobDatabaseIds = new Set<string>()
 const judgmentJobLeaseHeartbeatIntervalMs = 5_000
 const judgmentJobLeaseOperationDrainPollMs = 25
 const judgmentJobLeaseOperationDrainTimeoutMs = 10_000
@@ -655,44 +656,66 @@ const releaseOwnedJobLeaseState = (jobId: string) => {
   closeOpenDatabase(jobId)
 }
 
-const getOwnedJobLeaseOperationCount = (jobId: string) => {
-  return ownedJobLeaseOperationCounts.get(jobId) ?? 0
+const getJudgmentJobDatabaseOperationCount = (jobId: string) => {
+  return judgmentJobDatabaseOperationCounts.get(jobId) ?? 0
 }
 
-const startOwnedJobLeaseOperation = (jobId: string) => {
-  ownedJobLeaseOperationCounts.set(jobId, getOwnedJobLeaseOperationCount(jobId) + 1)
+const startJudgmentJobDatabaseOperation = (jobId: string) => {
+  judgmentJobDatabaseOperationCounts.set(jobId, getJudgmentJobDatabaseOperationCount(jobId) + 1)
 }
 
-const finishOwnedJobLeaseOperation = (jobId: string) => {
-  const nextCount = Math.max(0, getOwnedJobLeaseOperationCount(jobId) - 1)
+const finishJudgmentJobDatabaseOperation = (jobId: string) => {
+  const nextCount = Math.max(0, getJudgmentJobDatabaseOperationCount(jobId) - 1)
 
-  return nextCount === 0
-    ? ownedJobLeaseOperationCounts.delete(jobId)
-    : ownedJobLeaseOperationCounts.set(jobId, nextCount)
-}
-
-const hasOwnedJobLeaseOperation = (jobId: string) => {
-  return getOwnedJobLeaseOperationCount(jobId) > 0
-}
-
-const waitForOwnedJobLeaseOperationsToDrain = async (jobId: string, startedAtMs = Date.now()): Promise<void> => {
-  if (!hasOwnedJobLeaseOperation(jobId)) {
+  if (nextCount > 0) {
+    judgmentJobDatabaseOperationCounts.set(jobId, nextCount)
     return
+  }
+
+  judgmentJobDatabaseOperationCounts.delete(jobId)
+
+  if (!ownedJobLeases.has(jobId) && !activeJudgmentJobDatabaseIds.has(jobId)) {
+    closeOpenDatabase(jobId)
+  }
+}
+
+const hasJudgmentJobDatabaseOperation = (jobId: string) => {
+  return getJudgmentJobDatabaseOperationCount(jobId) > 0
+}
+
+const closeInactiveOpenDatabases = () => {
+  openDatabases.forEach((_database, jobId) => {
+    if (
+      !ownedJobLeases.has(jobId)
+      && !activeJudgmentJobDatabaseIds.has(jobId)
+      && !hasJudgmentJobDatabaseOperation(jobId)
+    ) {
+      closeOpenDatabase(jobId)
+    }
+  })
+}
+
+const waitForJudgmentJobDatabaseOperationsToDrain = async (
+  jobId: string,
+  startedAtMs = Date.now(),
+): Promise<boolean> => {
+  if (!hasJudgmentJobDatabaseOperation(jobId)) {
+    return true
   }
 
   if (Date.now() - startedAtMs >= judgmentJobLeaseOperationDrainTimeoutMs) {
     judgmentJobLeaseLogger.warn(
       `judgment-job-lease:operation-drain-timeout:${jobId}`,
       '[judgments] timed out waiting for SQLite job operations before releasing lease',
-      {activeOperations: getOwnedJobLeaseOperationCount(jobId), jobId},
+      {activeOperations: getJudgmentJobDatabaseOperationCount(jobId), jobId},
     )
-    return
+    return false
   }
 
   await new Promise((resolve) => {
     setTimeout(resolve, judgmentJobLeaseOperationDrainPollMs)
   })
-  return waitForOwnedJobLeaseOperationsToDrain(jobId, startedAtMs)
+  return waitForJudgmentJobDatabaseOperationsToDrain(jobId, startedAtMs)
 }
 
 const heartbeatOwnedJobLease = async (jobId: string) => {
@@ -897,8 +920,14 @@ const withJobDatabase = <T>(
   createIfMissing: boolean,
   operation: (database: Database) => T,
 ): T | null => {
-  const database = getOpenDatabase(jobId, createIfMissing)
-  return database ? operation(database) : null
+  startJudgmentJobDatabaseOperation(jobId)
+
+  try {
+    const database = getOpenDatabase(jobId, createIfMissing)
+    return database ? operation(database) : null
+  } finally {
+    finishJudgmentJobDatabaseOperation(jobId)
+  }
 }
 
 const toBoolean = (value: number | boolean | null | undefined) => {
@@ -2820,18 +2849,22 @@ const withOwnedJobDatabase = async <T>(
   operation: (database: Database) => T,
   serverJobId?: string,
 ): Promise<T | null> => {
-  startOwnedJobLeaseOperation(jobId)
+  startJudgmentJobDatabaseOperation(jobId)
 
   try {
     await ensureOwnedJobLease(jobId, serverJobId)
     return withJobDatabase(jobId, createIfMissing, operation)
   } finally {
-    finishOwnedJobLeaseOperation(jobId)
+    finishJudgmentJobDatabaseOperation(jobId)
   }
 }
 
 const releaseOwnedJobLease = async (jobId: string) => {
-  await waitForOwnedJobLeaseOperationsToDrain(jobId)
+  const operationsDrained = await waitForJudgmentJobDatabaseOperationsToDrain(jobId)
+
+  if (!operationsDrained || hasJudgmentJobDatabaseOperation(jobId)) {
+    throw new JudgmentJobLeaseError(`Cannot release SQLite job lease with active operations for ${jobId}`)
+  }
 
   const currentLease = ownedJobLeases.get(jobId)
 
@@ -4256,7 +4289,7 @@ const sqliteService = {
     return insertedCount ?? 0
   },
   claimReadyPrompts: async (jobId: string, serverJobId: string, limit: number): Promise<QueuePromptClaim[]> => {
-    startOwnedJobLeaseOperation(jobId)
+    startJudgmentJobDatabaseOperation(jobId)
 
     try {
       await ensureOwnedJobLease(jobId, serverJobId)
@@ -4273,7 +4306,7 @@ const sqliteService = {
         serverJobId,
       })
     } finally {
-      finishOwnedJobLeaseOperation(jobId)
+      finishJudgmentJobDatabaseOperation(jobId)
     }
   },
   claimReadyPromptsWithoutLease: async (
@@ -4281,17 +4314,23 @@ const sqliteService = {
     serverJobId: string,
     limit: number,
   ): Promise<QueuePromptClaim[]> => {
-    const database = getOpenDatabase(jobId, false)
+    startJudgmentJobDatabaseOperation(jobId)
 
-    return database
-      ? claimReadyQueuePromptRows({
-          database,
-          ensureLease: false,
-          jobId,
-          rows: getReadyQueuePromptRows(database, limit),
-          serverJobId,
-        })
-      : []
+    try {
+      const database = getOpenDatabase(jobId, false)
+
+      return database
+        ? await claimReadyQueuePromptRows({
+            database,
+            ensureLease: false,
+            jobId,
+            rows: getReadyQueuePromptRows(database, limit),
+            serverJobId,
+          })
+        : []
+    } finally {
+      finishJudgmentJobDatabaseOperation(jobId)
+    }
   },
   clearActiveQueue: async (jobId: string) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
@@ -4359,6 +4398,7 @@ const sqliteService = {
     )
   },
   closeAll: async () => {
+    activeJudgmentJobDatabaseIds = new Set()
     await Promise.all(
       Array.from(ownedJobLeases.keys()).map((jobId) => {
         return releaseOwnedJobLease(jobId)
@@ -4989,6 +5029,9 @@ const sqliteService = {
   hasOwnedLease: (jobId: string) => {
     return ownedJobLeases.has(jobId)
   },
+  hasOpenDatabase: (jobId: string) => {
+    return openDatabases.has(jobId)
+  },
   getJudgmentJobLeaseMetadata: async (jobId: string) => {
     return getJudgmentJobLeaseMetadataForJob(jobId)
   },
@@ -5003,15 +5046,17 @@ const sqliteService = {
   },
   syncOwnedLeases: async (jobIds: string[]) => {
     const activeJobIds = new Set(jobIds)
+    activeJudgmentJobDatabaseIds = activeJobIds
     await Promise.all(
       Array.from(ownedJobLeases.keys())
         .filter((jobId) => {
-          return !activeJobIds.has(jobId) && !hasOwnedJobLeaseOperation(jobId)
+          return !activeJobIds.has(jobId) && !hasJudgmentJobDatabaseOperation(jobId)
         })
         .map((jobId) => {
           return releaseOwnedJobLease(jobId)
         }),
     )
+    closeInactiveOpenDatabases()
   },
   publishHealthProjections: async (jobIds?: string[]) => {
     const candidateJobIds = jobIds ?? getExistingOutboxJobIds()
@@ -5381,32 +5426,35 @@ const sqliteService = {
     retryAfterMs: number | null = null,
     completionAck?: PromptCompletionAck,
   ) => {
-    const database = getOpenDatabase(jobId, false)
+    startJudgmentJobDatabaseOperation(jobId)
 
-    if (!database) {
-      return undefined
-    }
+    try {
+      const database = getOpenDatabase(jobId, false)
 
-    const now = new Date().toISOString()
-    const retryAfterAt = retryAfterMs && retryAfterMs > 0 ? new Date(Date.now() + retryAfterMs).toISOString() : null
+      if (!database) {
+        return undefined
+      }
 
-    database.transaction(() => {
-      const nextReadyInsertSeq = Number(
-        (
-          database
-            .query(
-              `
+      const now = new Date().toISOString()
+      const retryAfterAt = retryAfterMs && retryAfterMs > 0 ? new Date(Date.now() + retryAfterMs).toISOString() : null
+
+      database.transaction(() => {
+        const nextReadyInsertSeq = Number(
+          (
+            database
+              .query(
+                `
                 SELECT COALESCE(MAX(ready_insert_seq), 0) + 1 AS nextReadyInsertSeq
                 FROM queue_prompt
               `,
-            )
-            .get() as {nextReadyInsertSeq: number | null} | null
-        )?.nextReadyInsertSeq ?? 1,
-      )
+              )
+              .get() as {nextReadyInsertSeq: number | null} | null
+          )?.nextReadyInsertSeq ?? 1,
+        )
 
-      database
-        .query(
-          `
+        database
+          .query(
+            `
           UPDATE queue_prompt
           SET status = 'ready',
               sent_at = NULL,
@@ -5418,22 +5466,25 @@ const sqliteService = {
               ready_insert_seq = ?
           WHERE id = ?
         `,
-        )
-        .run(retryAfterAt, now, nextReadyInsertSeq, recordId)
+          )
+          .run(retryAfterAt, now, nextReadyInsertSeq, recordId)
 
-      if (completionAck) {
-        recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
-      }
-    })()
+        if (completionAck) {
+          recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
+        }
+      })()
 
-    return completionAck
-      ? compactQueuePromptManifestCloseoutFromDatabase({
-          database,
-          jobId,
-          queueRecordId: completionAck.queuePromptId,
-          requestAttemptsJson: completionAck.requestAttemptsJson,
-        })
-      : undefined
+      return completionAck
+        ? compactQueuePromptManifestCloseoutFromDatabase({
+            database,
+            jobId,
+            queueRecordId: completionAck.queuePromptId,
+            requestAttemptsJson: completionAck.requestAttemptsJson,
+          })
+        : undefined
+    } finally {
+      finishJudgmentJobDatabaseOperation(jobId)
+    }
   },
   consumePromptExtraRetry: async ({
     errorCode,

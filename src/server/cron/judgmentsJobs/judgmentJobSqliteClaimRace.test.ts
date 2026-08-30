@@ -94,7 +94,7 @@ afterAll(async () => {
   mock.restore()
 })
 
-test('claimReadyPrompts survives lease release while snapshot creation is in flight', async () => {
+test('claim operations keep active handles open and close inactive unleased handles', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
@@ -161,6 +161,57 @@ test('claimReadyPrompts survives lease release while snapshot creation is in fli
   ).toEqual(['article-race:prompt-race'])
   expect(await service.getClaimedCount(jobId)).toBe(1)
   expect(service.hasOwnedLease(jobId)).toBe(false)
+  expect(service.hasOpenDatabase(jobId)).toBe(false)
+
+  await service.markPromptAsRetryWithoutLease(jobId, claimed[0]?.recordId ?? '')
+
+  expect(service.hasOwnedLease(jobId)).toBe(false)
+  expect(service.hasOpenDatabase(jobId)).toBe(false)
+
+  let continueTransientSnapshot: () => void = () => {
+    return undefined
+  }
+  const transientSnapshotStarted = new Promise<void>((resolveStarted) => {
+    snapshotGate = {
+      continuePromise: new Promise<void>((resolveContinue) => {
+        continueTransientSnapshot = () => {
+          resolveContinue()
+        }
+      }),
+      started: resolveStarted,
+    }
+  })
+  const unleasedClaimPromise = service.claimReadyPromptsWithoutLease(jobId, 'server-b', 1)
+
+  await transientSnapshotStarted
+
+  expect(service.hasOwnedLease(jobId)).toBe(false)
+  expect(service.hasOpenDatabase(jobId)).toBe(true)
+
+  await service.syncOwnedLeases([])
+
+  expect(service.hasOpenDatabase(jobId)).toBe(true)
+
+  continueTransientSnapshot()
+
+  const unleasedClaimed = await unleasedClaimPromise
+
+  expect(unleasedClaimed).toHaveLength(1)
+  expect(service.hasOwnedLease(jobId)).toBe(false)
+  expect(service.hasOpenDatabase(jobId)).toBe(false)
+
+  expect((await service.getHealthSnapshot(jobId)).promptCounts.claimed).toBe(1)
+  expect(service.hasOpenDatabase(jobId)).toBe(false)
+
+  await service.syncOwnedLeases([jobId])
+  await service.getHealthSnapshot(jobId)
+
+  expect(service.hasOwnedLease(jobId)).toBe(false)
+  expect(service.hasOpenDatabase(jobId)).toBe(true)
+
+  await service.syncOwnedLeases([])
+
+  expect(service.hasOpenDatabase(jobId)).toBe(false)
   snapshotGate = null
 
   await service.closeAll()
