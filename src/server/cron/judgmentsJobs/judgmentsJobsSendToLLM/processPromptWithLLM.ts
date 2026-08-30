@@ -92,7 +92,7 @@ const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
 const DEFAULT_MODEL_CONTEXT = 32768
 const DEFAULT_PROMPT_TOKEN_LIMIT = Math.max(0, DEFAULT_MODEL_CONTEXT - MAX_COMPLETION_TOKENS)
-const maxRecoverablePromptExtraRetries = 1
+export const maxRecoverablePromptExtraRetries = 1
 export const promptPreparationConcurrencyBounds = {maximum: 512, minimum: 2} as const
 
 const promptPreparationWaiters: PromptPreparationWaiter[] = []

@@ -205,9 +205,15 @@ const main = async () => {
       throw new Error(`Judgment workflow browser smoke failed with code ${playwrightExitCode}`)
     }
   } finally {
-    await stopApp(app)
-    if (running) await stopJudgmentWorkflowTopology(running)
-    provider.close()
+    try {
+      await stopApp(app)
+    } finally {
+      try {
+        if (running) await stopJudgmentWorkflowTopology(running)
+      } finally {
+        provider.close()
+      }
+    }
   }
 }
 

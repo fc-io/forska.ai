@@ -1193,6 +1193,33 @@ test.each(['missing', 'notHolder'] as const)(
   },
 )
 
+test('rejects a completed provider response when final admission fencing finds the lease missing', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  heartbeatProviderAdmissionLeaseThroughOwner.mockImplementationOnce(async () => {
+    return {heartbeat: false as const, reason: 'missing' as const}
+  })
+
+  const result = await withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-provider-final-fence',
+      provider: 'openai',
+      fallbackBaseURL: 'http://provider-final-fence.test/v1',
+      providerConnectionId: 'connection-provider-final-fence',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      return 'late provider response'
+    },
+  ).catch((error: unknown) => {
+    return error
+  })
+
+  expect(result).toBeInstanceOf(Error)
+  expect((result as Error).message).toContain('Provider admission lease lost during active request: missing')
+})
+
 test('aborts and rejects active provider work when the admission heartbeat owner request fails', async () => {
   const {withJudgmentRequest} = await loadRuntime()
   heartbeatProviderAdmissionLeaseThroughOwner.mockImplementationOnce(async () => {

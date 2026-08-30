@@ -17,6 +17,7 @@ import type {
 } from '../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
 import {getRequestAttemptManifestOwner} from '../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
 import {
+  isProviderAdmissionLeaseLostError,
   updateJudgmentPromptRequestWork,
   withJudgmentRequest,
 } from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
@@ -291,6 +292,7 @@ const getSinglePromptEvidenceOutputSchema = (): unknown => {
 
 // How many times we should ask the model to retry if the response is invalid
 const MAX_RETRIES = 2
+export const maximumProviderAttemptsPerJudgeDispatch = MAX_RETRIES + 1
 
 export const MAX_COMPLETION_TOKENS = 4000
 
@@ -1333,6 +1335,7 @@ export const judgeSinglePrompt = async ({
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
   let shouldRequeueError: JudgmentPersistenceError | null = null
+  let fatalRequestError: Error | null = null
 
   const {
     recordText: recordTextForQuoteValidation,
@@ -1643,6 +1646,12 @@ export const judgeSinglePrompt = async ({
 
         lastResponse = responseText
 
+        if (isProviderAdmissionLeaseLostError(error)) {
+          abortCount += 1
+          fatalRequestError = error
+          break
+        }
+
         if (attempts < MAX_RETRIES) {
           userPrompt = getRetryPromptForFailure({
             basePrompt,
@@ -1912,6 +1921,10 @@ export const judgeSinglePrompt = async ({
               errorCount += 1
 
               lastResponse = responseText
+
+              if (isProviderAdmissionLeaseLostError(error)) {
+                throw error
+              }
 
               if (attempts < MAX_RETRIES) {
                 userPrompt = getRetryPromptForFailure({
@@ -2284,6 +2297,12 @@ export const judgeSinglePrompt = async ({
           lastError = adjustedErrorMessage
           lastResponse = responseText
 
+          if (isProviderAdmissionLeaseLostError(error)) {
+            fatalRequestError = error
+            abortCount += 1
+            break
+          }
+
           if (attempts < MAX_RETRIES) {
             finalUserPrompt = getRetryPromptForFailure({
               basePrompt: fittedFinal.userPrompt,
@@ -2304,7 +2323,9 @@ export const judgeSinglePrompt = async ({
         }
       }
     } catch (error) {
-      if (error instanceof ConnectionError) {
+      if (isProviderAdmissionLeaseLostError(error)) {
+        fatalRequestError = error
+      } else if (error instanceof ConnectionError) {
         throw error
       }
       if (error instanceof RecoverableJudgeError) {
@@ -2329,6 +2350,9 @@ export const judgeSinglePrompt = async ({
     console.error('judgeStoreTokenUse failed; continuing', err instanceof Error ? err.message : err)
   })
 
+  if (fatalRequestError) {
+    throw fatalRequestError
+  }
   if (shouldRequeueError) {
     throw shouldRequeueError
   }

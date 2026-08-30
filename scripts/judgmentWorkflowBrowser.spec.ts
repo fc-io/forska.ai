@@ -78,6 +78,9 @@ test('discovers and drives a real judgment job through start, result, pause, dra
       {timeout: 60_000},
     )
     .toContain('0')
+  const promptQueue = page.getByRole('heading', {name: 'Prompt Queue'}).locator('..').locator('..')
+  await expect(promptQueue.getByText('Ready', {exact: true}).locator('..')).toContainText('0')
+  await expect(promptQueue.getByText('Judged', {exact: true}).locator('..')).toContainText('2')
 
   await page.getByRole('button', {name: 'Pause Job'}).click()
   await expect(page.getByRole('button', {name: 'Start Job', exact: true})).toBeVisible({timeout: 30_000})
@@ -127,18 +130,26 @@ test('discovers and drives a real judgment job through start, result, pause, dra
   await expect
     .poll(
       async () => {
-        const response = await page.request.get(`/api/judgmentsjobs/${jobId}`)
+        const response = await page.request.post(`${ownerOrigin}/api/test/judgment-workflow-topology/evidence`, {
+          data: {fixtureId, jobIds: [jobId], token: seedToken},
+        })
         const body = (await response.json()) as {
-          data?: {storageHealth?: {sqliteFileBytes?: number | null}}
-          storageHealth?: {sqliteFileBytes?: number | null}
+          data: {
+            jobEvidence: Array<{
+              artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
+              jobId: string
+            }>
+          }
         }
-        const job = body.data ?? body
+        const jobEvidence = body.data.jobEvidence.find((job) => {
+          return job.jobId === jobId
+        })
 
-        return job.storageHealth?.sqliteFileBytes
+        return jobEvidence?.artifacts
       },
       {timeout: 30_000},
     )
-    .toBeNull()
+    .toEqual({lease: false, shm: false, sqlite: false, wal: false})
   await page.reload()
   await expect(page.getByText('Storage: Drained', {exact: true})).toBeVisible()
 

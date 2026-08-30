@@ -138,12 +138,7 @@ const getWhereLiteral = (statement: string, columnName: string) => {
 const getConcatWhereLiteral = (statement: string, columnName: string) => {
   return (
     statement
-      .match(
-        new RegExp(
-          `\\(${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*\\('((?:''|[^'])*)'\\s*\\|\\|\\s*''\\)`,
-          'u',
-        ),
-      )?.[1]
+      .match(new RegExp(`\\(${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*\\('((?:''|[^'])*)'\\s*\\|\\|\\s*''\\)`, 'u'))?.[1]
       ?.replaceAll("''", "'") ?? null
   )
 }

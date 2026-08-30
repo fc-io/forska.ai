@@ -14,28 +14,29 @@ import {
 const runScenario = async ({upgrade}: {upgrade: boolean}) => {
   const provider = startJudgmentWorkflowTopologyProvider({holdFirstRequest: true})
   const preparedTopology = upgrade ? createJudgmentWorkflowTopology() : undefined
-
-  if (preparedTopology) {
-    await prepareJudgmentWorkflowMigrationBoundary(preparedTopology)
-  }
-
-  const runningTopology = await startJudgmentWorkflowTopology(
-    preparedTopology ? {topology: preparedTopology} : undefined,
-  )
+  let runningTopology: Awaited<ReturnType<typeof startJudgmentWorkflowTopology>> | undefined
   let extraJudge: Awaited<ReturnType<typeof startJudgmentWorkflowTopologyExtraJudge>> | undefined
   let readinessMonitor: ReturnType<typeof startJudgmentWorkflowReadinessMonitor> | undefined
 
   try {
+    if (preparedTopology) {
+      await prepareJudgmentWorkflowMigrationBoundary(preparedTopology)
+    }
+
+    const startedTopology = await startJudgmentWorkflowTopology(
+      preparedTopology ? {topology: preparedTopology} : undefined,
+    )
+    runningTopology = startedTopology
     const lifecycle = await runJudgmentWorkflowTopologyLifecycle({
       onDistinctJudgeOwners: () => {
         if (!extraJudge) throw new Error('Extra judge was not ready when distinct ownership was observed')
-        readinessMonitor ??= startJudgmentWorkflowReadinessMonitor({extraJudge, topology: runningTopology.topology})
+        readinessMonitor ??= startJudgmentWorkflowReadinessMonitor({extraJudge, topology: startedTopology.topology})
       },
       onFirstJobClaimed: async () => {
-        extraJudge = await startJudgmentWorkflowTopologyExtraJudge(runningTopology.topology)
+        extraJudge = await startJudgmentWorkflowTopologyExtraJudge(startedTopology.topology)
       },
       provider,
-      topology: runningTopology.topology,
+      topology: startedTopology.topology,
     })
     const providerEvidence = lifecycle.providerEvidence()
     readinessMonitor?.assertHealthy()
@@ -48,11 +49,40 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
     ) {
       throw new Error(`Topology lifecycle produced unexpected canonical judgments: ${JSON.stringify(lifecycle.result)}`)
     }
+    if (
+      upgrade
+      && (lifecycle.result.migrationBoundary.appliedMigrations.join(',')
+        !== [
+          '0090_comparisonServingAnswerFilterBooleans.sql',
+          '0093_judgmentJobMaintenanceIndexes.sql',
+          '0224_reviewServingDirtyWorkLifecycleReason.sql',
+          '0225_rebuildReviewServingManifestsWithoutIndexes.sql',
+        ].join(',')
+        || lifecycle.result.migrationBoundary.sentinel.count !== 1
+        || lifecycle.result.migrationBoundary.sentinel.requests !== 1
+        || lifecycle.result.migrationBoundary.sentinel.promptTokens !== 11
+        || lifecycle.result.migrationBoundary.sentinel.completionTokens !== 7
+        || lifecycle.result.migrationBoundary.sentinel.totalTokens !== 18
+        || lifecycle.result.migrationBoundary.sentinel.requestAttempts !== null)
+    ) {
+      throw new Error(
+        `Migration-boundary topology did not preserve its deployed-schema sentinel: ${JSON.stringify(lifecycle.result.migrationBoundary)}`,
+      )
+    }
     // The fenced worker's accepted request is retried exactly once after its
     // heartbeat and admission lease expire. Owner-backed admission must keep
     // both the live-worker phase and that failover at the configured cap.
     if (providerEvidence.maxConcurrentRequests !== 1 || providerEvidence.requestCount !== 5) {
-      throw new Error(`Topology provider admission evidence was unexpected: ${JSON.stringify(providerEvidence)}`)
+      const requestSummary = providerEvidence.renderedInputs.map((input) => {
+        return {
+          article: input.includes('Topology article A') ? 'A' : input.includes('Topology article B') ? 'B' : 'unknown',
+          criterion: input.includes('criterion A') ? 'A' : input.includes('criterion B') ? 'B' : 'unknown',
+          retry: input.includes('Your previous answer'),
+        }
+      })
+      throw new Error(
+        `Topology provider admission evidence was unexpected: ${JSON.stringify({maxConcurrentRequests: providerEvidence.maxConcurrentRequests, requestCount: providerEvidence.requestCount, requestSummary})}`,
+      )
     }
     if (
       lifecycle.result.judgments.some((row) => {
@@ -88,25 +118,42 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
       try {
         if (extraJudge) await stopJudgmentWorkflowTopologyExtraJudge(extraJudge)
       } finally {
-        await stopJudgmentWorkflowTopology(runningTopology)
-        provider.close()
+        try {
+          if (runningTopology) await stopJudgmentWorkflowTopology(runningTopology)
+        } finally {
+          provider.close()
+        }
       }
     }
   }
 }
 
-await runScenario({upgrade: false})
-await runScenario({upgrade: true})
+const requestedScenario = process.argv[2] ?? 'all'
+if (!['all', 'fresh', 'migration-boundary', 'journal-replay'].includes(requestedScenario)) {
+  throw new Error(`Unknown topology scenario: ${requestedScenario}`)
+}
 
-const replayProvider = startJudgmentWorkflowTopologyProvider({holdFirstRequest: true})
-const replayTopology = await startJudgmentWorkflowTopology()
+if (requestedScenario === 'all' || requestedScenario === 'fresh') await runScenario({upgrade: false})
+if (requestedScenario === 'all' || requestedScenario === 'migration-boundary') await runScenario({upgrade: true})
 
-try {
-  const replay = await runJudgmentWorkflowTopologyReplay({provider: replayProvider, topology: replayTopology.topology})
-  console.log(
-    `[judgment-workflow:topology] complete scenario=journal-replay job=${replay.jobId} claim=${replay.claimId} restarted_pid=${replay.restartedPid}`,
-  )
-} finally {
-  await stopJudgmentWorkflowTopology(replayTopology)
-  replayProvider.close()
+if (requestedScenario === 'all' || requestedScenario === 'journal-replay') {
+  const replayProvider = startJudgmentWorkflowTopologyProvider({holdFirstRequest: true})
+  let replayTopology: Awaited<ReturnType<typeof startJudgmentWorkflowTopology>> | undefined
+
+  try {
+    replayTopology = await startJudgmentWorkflowTopology()
+    const replay = await runJudgmentWorkflowTopologyReplay({
+      provider: replayProvider,
+      topology: replayTopology.topology,
+    })
+    console.log(
+      `[judgment-workflow:topology] complete scenario=journal-replay job=${replay.jobId} claim=${replay.claimId} restarted_pid=${replay.restartedPid}`,
+    )
+  } finally {
+    try {
+      if (replayTopology) await stopJudgmentWorkflowTopology(replayTopology)
+    } finally {
+      replayProvider.close()
+    }
+  }
 }

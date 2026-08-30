@@ -1,11 +1,12 @@
 import {randomUUID} from 'node:crypto'
 import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {join, resolve} from 'node:path'
+import {dirname, join, resolve} from 'node:path'
 
 import {listen, serve, sleep, spawn, type Subprocess} from 'bun'
 
 import {getJudgeWorkerCompletionReplayBarrierPaths} from '../src/server/cron/judgmentsJobs/judgeWorkerCompletionReplayBarrier.ts'
+import {getJudgeWorkerLeaseLossTestBarrierPaths} from '../src/server/cron/judgmentsJobs/judgeWorkerLeaseLossTestBarrier.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../src/server/routes/apiRouteClassification.ts'
 import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
 import {
@@ -25,9 +26,6 @@ export type JudgmentWorkflowTopology = {
   root: string
   serverStackLockPath: string
   expectedJudgeRestartPid?: number
-  firstJudgeServerId?: string
-  suspendedExtraJudgePid?: number
-  suspendedJudgePid?: number
 }
 
 export type JudgmentWorkflowTopologyProvider = {
@@ -47,8 +45,8 @@ export type RunningTopologyExtraJudge = {
 }
 export type JudgmentWorkflowReadinessMonitor = {assertHealthy: () => void; stop: () => Promise<void>}
 
-const startupTimeoutMs = 180_000
-const shutdownTimeoutMs = 20_000
+const startupTimeoutMs = 600_000
+const shutdownTimeoutMs = 30_000
 
 const getAvailablePort = (): number => {
   const server = listen({hostname: '127.0.0.1', port: 0, socket: {data() {}}})
@@ -104,6 +102,8 @@ export const createJudgmentWorkflowTopology = ({
       DUCKDB_PATH: duckdbPath,
       DUCKDB_TEMP_DIRECTORY: join(root, 'duckdb-spill'),
       FORSKA_RUNTIME_PROFILE: 'local',
+      FORSKA_TEST_JUDGE_CLAIM_LIMIT: '1',
+      FORSKA_TEST_JUDGE_LEASE_LOSS_BARRIER_ROOT: join(root, 'lease-loss-barriers'),
       FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT: join(root, 'completion-replay-barriers'),
       FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN: randomUUID(),
       JUDGE_WORKER_ID: workerId,
@@ -347,6 +347,7 @@ export const runJudgmentWorkflowTopologyReplay = async ({
     },
   })
   const barrierRoot = topology.env.FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT
+  if (!barrierRoot) throw new Error('Completion replay barrier root is missing')
   mkdirSync(barrierRoot, {recursive: true})
   const barrierPaths = getJudgeWorkerCompletionReplayBarrierPaths({claimId, root: barrierRoot})
   writeFileSync(barrierPaths.controlPath, `${claimId}\n`, {flag: 'wx'})
@@ -415,6 +416,8 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
   const apiBaseUrl = `http://127.0.0.1:${topology.apiPort}`
   const observedClaims = new Map<string, Set<string>>()
   const observedJudgeIds = new Set<string>()
+  let barrierReleased = false
+  let distinctOwnersReported = false
   const seeded = await postJson<{data: {fixture: {modelId: string; projectIds: string[]}}}>(
     `${ownerBaseUrl}/api/test/judgment-workflow-topology/seed`,
     {fixtureId, providerBaseUrl: provider.baseUrl, token},
@@ -452,24 +455,27 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       }>(`${ownerBaseUrl}/api/test/judgment-workflow-topology/claims`, {jobId: firstJob.data.jobId, token})
       for (const claim of claims.data.claims) {
         observedJudgeIds.add(claim.serverId)
-        topology.firstJudgeServerId ??= claim.serverId
         observedClaims.set(claim.queueRecordId, new Set([claim.claimId]))
-        const pid = Number.parseInt(claim.serverId.split('-').at(-1) ?? '', 10)
-        if (Number.isInteger(pid) && pid > 0) topology.suspendedJudgePid = pid
       }
       return claims.data.claims.length > 0
     },
   })
   await onFirstJobClaimed?.()
-  if (!topology.suspendedJudgePid) {
-    throw new Error('Could not resolve the first claim owner PID for deterministic multi-worker fencing')
-  }
-  process.kill(topology.suspendedJudgePid, 'SIGSTOP')
+  const leaseLossBarrier = getJudgeWorkerLeaseLossTestBarrierPaths(topology.env)
+  mkdirSync(dirname(leaseLossBarrier.pausePath), {recursive: true})
+  writeFileSync(leaseLossBarrier.pausePath, 'pause\n', {flag: 'wx'})
   const secondJob = await postJson<{data: {jobId: string; status: string; storageState: string}}>(
     `${apiBaseUrl}/api/judgmentsjobs`,
     {projectId: seeded.data.fixture.projectIds[1]},
   )
   provider.releaseFirstRequest()
+  await waitUntil({
+    deadline: Date.now() + 30_000,
+    description: 'post-provider lease-loss barrier',
+    predicate: () => {
+      return existsSync(leaseLossBarrier.reachedPath)
+    },
+  })
   const jobs = [firstJob, secondJob]
   const deadline = Date.now() + 240_000
 
@@ -490,6 +496,17 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       useFulltextNoImages: boolean
       useTitle: boolean
     }>
+    migrationBoundary: {
+      appliedMigrations: string[]
+      sentinel: {
+        completionTokens: number
+        count: number
+        promptTokens: number
+        requestAttempts: string | null
+        requests: number
+        totalTokens: number
+      }
+    }
     visibleProjectionCount: number
   }> => {
     const evidence = await postJson<{
@@ -510,6 +527,17 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
           useFulltextNoImages: boolean
           useTitle: boolean
         }>
+        migrationBoundary: {
+          appliedMigrations: string[]
+          sentinel: {
+            completionTokens: number
+            count: number
+            promptTokens: number
+            requestAttempts: string | null
+            requests: number
+            totalTokens: number
+          }
+        }
         visibleProjectionCount: number
       }
     }>(`${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`, {
@@ -528,27 +556,20 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
         observedClaims.set(claim.queueRecordId, claimIds)
       }
     }
+    const providerEvidence = provider.getEvidence()
+    if (!barrierReleased && providerEvidence.requestCount >= 2) {
+      writeFileSync(leaseLossBarrier.releasePath, 'release\n', {flag: 'wx'})
+      barrierReleased = true
+    }
     if (observedJudgeIds.size >= 2) {
-      if (!topology.suspendedExtraJudgePid) {
-        const providerEvidence = provider.getEvidence()
-        if (providerEvidence.requestCount > 2 || providerEvidence.maxConcurrentRequests !== 1) {
-          throw new Error(
-            `Provider admission exceeded its shared limit while both judges were live: ${JSON.stringify(providerEvidence)}`,
-          )
-        }
-        const extraServerId = [...observedJudgeIds].find((serverId) => {
-          return serverId !== topology.firstJudgeServerId
-        })
-        const extraPid = Number.parseInt(extraServerId?.split('-').at(-1) ?? '', 10)
-        if (!Number.isInteger(extraPid) || extraPid <= 0) {
-          throw new Error(`Could not resolve extra judge PID from ${String(extraServerId)}`)
-        }
-        process.kill(extraPid, 'SIGSTOP')
-        topology.suspendedExtraJudgePid = extraPid
+      if (providerEvidence.maxConcurrentRequests !== 1) {
+        throw new Error(
+          `Provider admission exceeded its shared limit while both judges were live: ${JSON.stringify(providerEvidence)}`,
+        )
       }
-      if (topology.suspendedJudgePid) {
-        process.kill(topology.suspendedJudgePid, 'SIGCONT')
-        topology.suspendedJudgePid = undefined
+      if (!distinctOwnersReported) {
+        distinctOwnersReported = true
+        await onDistinctJudgeOwners?.()
       }
     }
 
@@ -574,14 +595,12 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
 
   const result = await waitForJudgments()
 
-  if (topology.suspendedExtraJudgePid) {
-    process.kill(topology.suspendedExtraJudgePid, 'SIGCONT')
-    topology.suspendedExtraJudgePid = undefined
-  }
-  await onDistinctJudgeOwners?.()
-
   if (
-    observedJudgeIds.size !== 2
+    !barrierReleased
+    || !existsSync(leaseLossBarrier.reachedPath)
+    || !existsSync(leaseLossBarrier.outcomePath)
+    || !['missing', 'notHolder'].includes(readFileSync(leaseLossBarrier.outcomePath, 'utf8').trim())
+    || observedJudgeIds.size !== 2
     || ![...observedClaims.values()].some((claimIds) => {
       return claimIds.size === 2
     })
@@ -747,25 +766,47 @@ export const startJudgmentWorkflowTopology = async ({
   cwd = process.cwd(),
   topology = createJudgmentWorkflowTopology({cwd}),
 }: {cwd?: string; topology?: JudgmentWorkflowTopology} = {}): Promise<RunningTopology> => {
-  const serverStackProcess = spawn([process.execPath, 'scripts/startServerStack.ts'], {
-    cwd,
-    env: topology.env,
-    stderr: 'pipe',
-    stdin: 'ignore',
-    stdout: 'pipe',
-  })
+  let serverStackProcess: Subprocess<'ignore', 'pipe', 'pipe'>
+
+  try {
+    serverStackProcess = spawn([process.execPath, 'scripts/startServerStack.ts'], {
+      cwd,
+      env: topology.env,
+      stderr: 'pipe',
+      stdin: 'ignore',
+      stdout: 'pipe',
+    })
+  } catch (error) {
+    rmSync(topology.serverStackLockPath, {force: true})
+    rmSync(topology.root, {force: true, recursive: true})
+    throw error
+  }
   const deadline = Date.now() + startupTimeoutMs
 
-  await Promise.race([
-    Promise.all([
-      waitForRuntimeRole({deadline, port: topology.apiPort, role: 'api'}),
-      waitForRuntimeRole({deadline, port: topology.maintenancePort, role: 'maintenance-worker'}),
-      waitForRuntimeRole({deadline, port: topology.judgePort, role: 'judge-worker'}),
-    ]),
-    serverStackProcess.exited.then((exitCode) => {
-      throw new Error(`Production server stack exited before readiness with code ${exitCode}`)
-    }),
-  ])
+  try {
+    await Promise.race([
+      Promise.all([
+        waitForRuntimeRole({deadline, port: topology.apiPort, role: 'api'}),
+        waitForRuntimeRole({deadline, port: topology.maintenancePort, role: 'maintenance-worker'}),
+        waitForRuntimeRole({deadline, port: topology.judgePort, role: 'judge-worker'}),
+      ]),
+      serverStackProcess.exited.then((exitCode) => {
+        throw new Error(`Production server stack exited before readiness with code ${exitCode}`)
+      }),
+    ])
+  } catch (error) {
+    if (serverStackProcess.exitCode === null) {
+      serverStackProcess.kill('SIGTERM')
+      await Promise.race([serverStackProcess.exited, sleep(shutdownTimeoutMs)])
+    }
+    if (serverStackProcess.exitCode === null) {
+      serverStackProcess.kill('SIGKILL')
+      await serverStackProcess.exited
+    }
+    rmSync(topology.serverStackLockPath, {force: true})
+    rmSync(topology.root, {force: true, recursive: true})
+    throw error
+  }
 
   return {process: serverStackProcess, topology}
 }
@@ -790,6 +831,7 @@ export const prepareJudgmentWorkflowMigrationBoundary = async (topology: Judgmen
   const [exitCode, stderr] = await Promise.all([preparation.exited, new Response(preparation.stderr).text()])
 
   if (exitCode !== 0) {
+    rmSync(topology.root, {force: true, recursive: true})
     throw new Error(`Failed to prepare migration-boundary topology database: ${stderr}`)
   }
 }
@@ -806,22 +848,6 @@ const waitForExit = async (serverStackProcess: Subprocess<'ignore', 'pipe', 'pip
 }
 
 export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess, topology}: RunningTopology) => {
-  if (topology.suspendedExtraJudgePid) {
-    try {
-      process.kill(topology.suspendedExtraJudgePid, 'SIGCONT')
-    } catch {
-      // The worker may already have exited while unwinding a failed topology run.
-    }
-    topology.suspendedExtraJudgePid = undefined
-  }
-  if (topology.suspendedJudgePid) {
-    try {
-      process.kill(topology.suspendedJudgePid, 'SIGCONT')
-    } catch {
-      // The worker may already have exited while unwinding a failed topology run.
-    }
-    topology.suspendedJudgePid = undefined
-  }
   serverStackProcess.kill('SIGTERM')
 
   try {

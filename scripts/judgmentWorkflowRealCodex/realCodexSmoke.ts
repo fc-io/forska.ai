@@ -5,13 +5,17 @@ import {join} from 'node:path'
 
 import {spawnSync, which} from 'bun'
 
+import {maximumProviderAttemptsPerJudgeDispatch} from '../../src/agent/judge.ts'
+import {maxRecoverablePromptExtraRetries} from '../../src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+
 type Environment = Record<string, string | undefined>
 
 export const realCodexOptInEnvironmentVariable = 'FORSKA_RUN_REAL_CODEX_SMOKE'
 export const realCodexPinnedModel = 'gpt-5.6-luna'
 export const realCodexPinnedThinking = 'low'
 export const realCodexOverallTimeoutMs = 20 * 60 * 1_000
-export const realCodexMaximumRecoverableAttemptsPerArticle = 2
+export const realCodexMaximumRecoverableAttemptsPerArticle =
+  maximumProviderAttemptsPerJudgeDispatch * (1 + maxRecoverablePromptExtraRetries)
 export const realCodexPrompt =
   'Does the title and abstract describe original empirical research involving human participants?'
 

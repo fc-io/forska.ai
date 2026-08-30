@@ -19,6 +19,11 @@ import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
 import {
+  isJudgeWorkerLeaseLossTestBarrierActive,
+  recordJudgeWorkerLeaseLossTestBarrierOutcome,
+  waitAtJudgeWorkerLeaseLossTestBarrier,
+} from './judgeWorkerLeaseLossTestBarrier.ts'
+import {
   adjustJudgmentEndpointLocalProbeLiveCount,
   adjustJudgmentEndpointObservedAggregateProbeLiveCount,
   claimJudgmentEndpointAvailability,
@@ -602,11 +607,15 @@ const releaseProviderRequestAdmissionLease = async (lease: ProviderRequestAdmiss
   notifyProbeAdmissionWaiters()
 }
 
-class ProviderAdmissionLeaseLostError extends Error {
+export class ProviderAdmissionLeaseLostError extends Error {
   constructor(reason: unknown) {
     super(`Provider admission lease lost during active request: ${getErrorMessage(reason)}`)
     this.name = 'ProviderAdmissionLeaseLostError'
   }
+}
+
+export const isProviderAdmissionLeaseLostError = (error: unknown): error is ProviderAdmissionLeaseLostError => {
+  return error instanceof ProviderAdmissionLeaseLostError
 }
 
 const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmissionLease) => {
@@ -1903,7 +1912,24 @@ export const withJudgmentRequest = async <T>(
     const providerRequest = run(slot.baseURL, requestAttempt)
 
     try {
-      return await Promise.race([providerRequest, providerAdmissionHeartbeat.leaseLoss])
+      const result = await Promise.race([providerRequest, providerAdmissionHeartbeat.leaseLoss])
+      if (isJudgeWorkerLeaseLossTestBarrierActive()) {
+        providerAdmissionHeartbeat.stop()
+        await waitAtJudgeWorkerLeaseLossTestBarrier()
+      }
+      const finalHeartbeat = await heartbeatProviderAdmissionLeaseThroughOwner(providerAdmissionLease)
+
+      if (isJudgeWorkerLeaseLossTestBarrierActive()) {
+        recordJudgeWorkerLeaseLossTestBarrierOutcome(
+          finalHeartbeat.heartbeat ? 'heartbeat' : String(finalHeartbeat.reason),
+        )
+      }
+
+      if (!finalHeartbeat.heartbeat) {
+        throw new ProviderAdmissionLeaseLostError(finalHeartbeat.reason)
+      }
+
+      return result
     } catch (error) {
       if (providerAdmissionHeartbeat.signal.aborted) {
         await providerRequest.catch(() => {

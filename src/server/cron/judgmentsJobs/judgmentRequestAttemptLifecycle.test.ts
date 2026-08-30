@@ -15,6 +15,9 @@ type JudgmentsRequestRuntimeModule = typeof import('./judgmentsRequestRuntime.ts
 type ProviderAdmissionLeaseAcquireInput = Parameters<
   typeof realProviderAdmissionLeaseModule.acquireProviderAdmissionLeasePersisted
 >[0]
+type ProviderAdmissionLeaseHeartbeatInput = Parameters<
+  typeof realProviderAdmissionLeaseModule.heartbeatProviderAdmissionLeaseThroughOwner
+>[0]
 type ProviderAdmissionLeaseReleaseInput = Parameters<
   typeof realProviderAdmissionLeaseModule.releaseProviderAdmissionLeaseWithResultThroughOwner
 >[0]
@@ -23,6 +26,10 @@ const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', 
 
 const acquireProviderAdmissionLeasePersisted = async (input: ProviderAdmissionLeaseAcquireInput) => {
   return realProviderAdmissionLeaseModule.acquireProviderAdmissionLease(input)
+}
+
+const heartbeatProviderAdmissionLeaseThroughOwner = async (_input: ProviderAdmissionLeaseHeartbeatInput) => {
+  return {heartbeat: true as const}
 }
 
 const releaseProviderAdmissionLeaseWithResultThroughOwner = async (input: ProviderAdmissionLeaseReleaseInput) => {
@@ -35,6 +42,7 @@ const loadRuntime = (): Promise<JudgmentsRequestRuntimeModule> => {
     return {
       ...realProviderAdmissionLeaseModule,
       acquireProviderAdmissionLeasePersisted,
+      heartbeatProviderAdmissionLeaseThroughOwner,
       releaseProviderAdmissionLeaseWithResultThroughOwner,
     }
   })

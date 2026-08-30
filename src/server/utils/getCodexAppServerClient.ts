@@ -723,6 +723,7 @@ export const createCodexAppServerClient = ({
     try {
       const safe = buildSafeTurnConfig()
       const started = await request('thread/start', {model: params.model, cwd: safe.cwd})
+      params.signal?.throwIfAborted()
       const threadId = (started as {thread?: {id?: unknown}}).thread?.id
       if (typeof threadId !== 'string') {
         throw new Error('codex app-server: thread/start missing threadId')
@@ -743,6 +744,7 @@ export const createCodexAppServerClient = ({
         },
         params.timeoutMs,
       )
+      params.signal?.throwIfAborted()
       const turnId = (turnStart as {turn?: {id?: unknown}}).turn?.id
       if (typeof turnId !== 'string') {
         throw new Error('codex app-server: turn/start missing turnId')
@@ -771,13 +773,10 @@ export const createCodexAppServerClient = ({
         }
         const onAbort = () => {
           const reason: unknown = params.signal?.reason
-          void request('turn/interrupt', {threadId, turnId}, params.timeoutMs)
-            .catch(() => {
-              return undefined
-            })
-            .finally(() => {
-              fail(reason instanceof Error ? reason : new Error('codex app-server: turn aborted'))
-            })
+          fail(reason instanceof Error ? reason : new Error('codex app-server: turn aborted'))
+          void request('turn/interrupt', {threadId, turnId}, 5_000).catch(() => {
+            return undefined
+          })
         }
         const timeout = setTimeout(() => {
           fail(new Error('codex app-server: turn timeout'))

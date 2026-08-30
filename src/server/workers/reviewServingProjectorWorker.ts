@@ -9140,7 +9140,7 @@ export const runReviewServingProjectorWorkerCycle = async (
       })
   const projectorServiceDependencies = {
     getQueueState: async () => {
-      return {foregroundDuckdbQueueDepth: dependencies.getForegroundQueueDepth()}
+      return {foregroundDuckdbQueueDepth: dependencies.getForegroundQueueDepth?.() ?? 0}
     },
     runners: getLoggedReviewServingProjectorRunners(database),
     ...(dependencies.projectorServiceDependencies ?? {}),
@@ -9158,8 +9158,8 @@ export const runReviewServingProjectorWorkerCycle = async (
       })
   if (!shouldRunOnlyRebuildChunk) {
     await runReviewServingProjectorWorkerCyclePhase('completeJudgmentJobVisibility', () => {
-      return publishProjectedJudgmentJobVisibility(database, ({ackToken, jobId}) => {
-        return getJudgmentJobSqliteService().setLastProjectRefreshAckSeq(jobId, ackToken)
+      return publishProjectedJudgmentJobVisibility(database, async ({ackToken, jobId}) => {
+        await getJudgmentJobSqliteService().setLastProjectRefreshAckSeq(jobId, ackToken)
       })
     })
   }

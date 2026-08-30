@@ -6,6 +6,9 @@ type JudgmentsRequestRuntimeModule = typeof import('./judgmentsRequestRuntime.ts
 type ProviderAdmissionLeaseAcquireInput = Parameters<
   typeof realProviderAdmissionLeaseModule.acquireProviderAdmissionLeasePersisted
 >[0]
+type ProviderAdmissionLeaseHeartbeatInput = Parameters<
+  typeof realProviderAdmissionLeaseModule.heartbeatProviderAdmissionLeaseThroughOwner
+>[0]
 type ProviderAdmissionLeaseReleaseInput = Parameters<
   typeof realProviderAdmissionLeaseModule.releaseProviderAdmissionLeaseWithResultThroughOwner
 >[0]
@@ -34,6 +37,9 @@ const getJudgmentsCapacityMock = mock((_runningJobCount: number) => {
 })
 const acquireProviderAdmissionLeasePersisted = mock(async (input: ProviderAdmissionLeaseAcquireInput) => {
   return realProviderAdmissionLeaseModule.acquireProviderAdmissionLease(input)
+})
+const heartbeatProviderAdmissionLeaseThroughOwner = mock(async (_input: ProviderAdmissionLeaseHeartbeatInput) => {
+  return {heartbeat: true as const}
 })
 const releaseProviderAdmissionLeaseWithResultThroughOwner = mock(async (input: ProviderAdmissionLeaseReleaseInput) => {
   const released = realProviderAdmissionLeaseModule.releaseProviderAdmissionLease(input)
@@ -83,6 +89,7 @@ const registerMocks = (): void => {
     return {
       ...realProviderAdmissionLeaseModule,
       acquireProviderAdmissionLeasePersisted,
+      heartbeatProviderAdmissionLeaseThroughOwner,
       releaseProviderAdmissionLeaseWithResultThroughOwner,
     }
   })
@@ -148,6 +155,7 @@ afterEach(async () => {
   getCodexMaxInflightMock.mockClear()
   getJudgmentsCapacityMock.mockClear()
   acquireProviderAdmissionLeasePersisted.mockClear()
+  heartbeatProviderAdmissionLeaseThroughOwner.mockClear()
   releaseProviderAdmissionLeaseWithResultThroughOwner.mockClear()
   recordRequestAttemptManifestStage.mockClear()
   mock.restore()
