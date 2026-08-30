@@ -265,7 +265,10 @@ const getNormalizedTimestampMs = (value: number): number => {
 }
 
 const shouldUseLocalProviderAdmissionLeaseStore = (): boolean => {
-  return String(process.env.SERVER_ROLE ?? '').trim() === 'judge-worker'
+  return (
+    String(process.env.NODE_ENV ?? '').trim() === 'test'
+    && String(process.env.FORSKA_TEST_LOCAL_PROVIDER_ADMISSION_LEASE_STORE ?? '').trim() === 'true'
+  )
 }
 
 const getRequiredLeaseIdentityPart = ({label, value}: {label: string; value: string}): string => {

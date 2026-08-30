@@ -20,10 +20,14 @@ export type JudgmentWorkflowTopology = {
   env: Record<string, string>
   judgePort: number
   journalPath: string
+  journalPaths: string[]
   maintenancePort: number
   root: string
   serverStackLockPath: string
   expectedJudgeRestartPid?: number
+  firstJudgeServerId?: string
+  suspendedExtraJudgePid?: number
+  suspendedJudgePid?: number
 }
 
 export type JudgmentWorkflowTopologyProvider = {
@@ -41,6 +45,7 @@ export type RunningTopologyExtraJudge = {
   port: number
   process: Subprocess<'ignore', 'pipe', 'pipe'>
 }
+export type JudgmentWorkflowReadinessMonitor = {assertHealthy: () => void; stop: () => Promise<void>}
 
 const startupTimeoutMs = 180_000
 const shutdownTimeoutMs = 20_000
@@ -108,6 +113,7 @@ export const createJudgmentWorkflowTopology = ({
     },
     judgePort,
     journalPath,
+    journalPaths: [journalPath],
     maintenancePort,
     root,
     serverStackLockPath,
@@ -149,6 +155,7 @@ export const startJudgmentWorkflowTopologyExtraJudge = async (
       throw new Error(`Extra judge worker exited before readiness with code ${exitCode}`)
     }),
   ])
+  topology.journalPaths.push(identity.journalPath)
 
   return {env, journalPath: identity.journalPath, port, process: childProcess}
 }
@@ -188,6 +195,7 @@ export const startJudgmentWorkflowTopologyProvider = ({
 
       activeRequests += 1
       requestCount += 1
+      const requestNumber = requestCount
       maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests)
       const body = (await request.json()) as {messages?: Array<{content?: string; role?: string}>}
       renderedInputs.push(
@@ -197,8 +205,12 @@ export const startJudgmentWorkflowTopologyProvider = ({
           })
           .join('\n'),
       )
-      await sleep(30)
-      if (holdFirstRequest && requestCount === 1) {
+      // Leave enough time for the topology harness to observe and fence a claim
+      // before this deterministic provider completes it. This is deliberately
+      // longer than the evidence polling interval, while remaining negligible
+      // compared with the production stale-claim recovery window.
+      await sleep(1_000)
+      if (holdFirstRequest && requestNumber === 1) {
         await firstRequestRelease
       }
       activeRequests -= 1
@@ -237,11 +249,35 @@ export const startJudgmentWorkflowTopologyProvider = ({
   }
 }
 
-const postJson = async <T>(url: string, body: unknown): Promise<T> => {
+const postJson = async <T>(url: string, body: unknown, transientAttempt = 0): Promise<T> => {
   const response = await fetch(url, {
     body: JSON.stringify(body),
     headers: {'content-type': 'application/json'},
     method: 'POST',
+  })
+  const text = await response.text()
+
+  if (!response.ok) {
+    if (
+      response.status === 500
+      && text.includes('database is locked')
+      && url.includes('/api/test/judgment-workflow-topology/')
+      && transientAttempt < 100
+    ) {
+      await sleep(25)
+      return postJson<T>(url, body, transientAttempt + 1)
+    }
+    throw new Error(`Topology request failed (${response.status}) ${url}: ${text}`)
+  }
+
+  return JSON.parse(text) as T
+}
+
+const patchJson = async <T>(url: string, body: unknown): Promise<T> => {
+  const response = await fetch(url, {
+    body: JSON.stringify(body),
+    headers: {'content-type': 'application/json'},
+    method: 'PATCH',
   })
   const text = await response.text()
 
@@ -279,18 +315,18 @@ export const runJudgmentWorkflowTopologyReplay = async ({
   const ownerBaseUrl = `http://127.0.0.1:${topology.maintenancePort}${duckdbOwnerPrivateApiPrefix}`
   const seeded = await postJson<{data: {fixture: {projectIds: string[]}}}>(
     `${ownerBaseUrl}/api/test/judgment-workflow-topology/seed`,
-    {fixtureId, providerBaseUrl: provider.baseUrl, token},
+    {fixtureId, providerBaseUrl: provider.baseUrl, singlePromptProjectA: true, token},
   )
 
   await waitUntil({
-    deadline: Date.now() + 60_000,
+    deadline: Date.now() + 120_000,
     description: 'replay fixture serving queue',
     predicate: async () => {
       const evidence = await postJson<{data: {readyPairCount: number}}>(
         `${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`,
         {fixtureId, token},
       )
-      return evidence.data.readyPairCount === 4
+      return evidence.data.readyPairCount >= 3
     },
   })
   const job = await postJson<{data: {jobId: string}}>(`http://127.0.0.1:${topology.apiPort}/api/judgmentsjobs`, {
@@ -350,12 +386,12 @@ export const runJudgmentWorkflowTopologyReplay = async ({
       return (
         evidence.data.judgments.length === 1
         && evidence.data.judgments[0]?.projectId === seeded.data.fixture.projectIds[0]
-        && Number(evidence.data.judgments[0]?.count) === 2
+        && Number(evidence.data.judgments[0]?.count) === 1
       )
     },
   })
 
-  if (provider.getEvidence().requestCount !== 2) {
+  if (provider.getEvidence().requestCount !== 1) {
     throw new Error(`Replay must not repeat provider inference: ${JSON.stringify(provider.getEvidence())}`)
   }
 
@@ -363,9 +399,13 @@ export const runJudgmentWorkflowTopologyReplay = async ({
 }
 
 export const runJudgmentWorkflowTopologyLifecycle = async ({
+  onDistinctJudgeOwners,
+  onFirstJobClaimed,
   provider,
   topology,
 }: {
+  onDistinctJudgeOwners?: () => Promise<void> | void
+  onFirstJobClaimed?: () => Promise<void>
   provider: JudgmentWorkflowTopologyProvider
   topology: JudgmentWorkflowTopology
 }) => {
@@ -373,6 +413,8 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
   const token = topology.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN
   const ownerBaseUrl = `http://127.0.0.1:${topology.maintenancePort}${duckdbOwnerPrivateApiPrefix}`
   const apiBaseUrl = `http://127.0.0.1:${topology.apiPort}`
+  const observedClaims = new Map<string, Set<string>>()
+  const observedJudgeIds = new Set<string>()
   const seeded = await postJson<{data: {fixture: {modelId: string; projectIds: string[]}}}>(
     `${ownerBaseUrl}/api/test/judgment-workflow-topology/seed`,
     {fixtureId, providerBaseUrl: provider.baseUrl, token},
@@ -396,17 +438,49 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     return waitForServingQueue()
   }
   await waitForServingQueue()
-  const jobs = await Promise.all(
-    seeded.data.fixture.projectIds.map((projectId) => {
-      return postJson<{data: {jobId: string; status: string; storageState: string}}>(
-        `${apiBaseUrl}/api/judgmentsjobs`,
-        {projectId},
-      )
-    }),
+  const firstJob = await postJson<{data: {jobId: string; status: string; storageState: string}}>(
+    `${apiBaseUrl}/api/judgmentsjobs`,
+    {projectId: seeded.data.fixture.projectIds[0]},
   )
-  const deadline = Date.now() + 120_000
+  await waitUntil({
+    deadline: Date.now() + 60_000,
+    description: 'first job provider request and claim',
+    predicate: async () => {
+      if (provider.getEvidence().requestCount < 1) return false
+      const claims = await postJson<{
+        data: {claims: Array<{claimId: string; queueRecordId: string; serverId: string}>}
+      }>(`${ownerBaseUrl}/api/test/judgment-workflow-topology/claims`, {jobId: firstJob.data.jobId, token})
+      for (const claim of claims.data.claims) {
+        observedJudgeIds.add(claim.serverId)
+        topology.firstJudgeServerId ??= claim.serverId
+        observedClaims.set(claim.queueRecordId, new Set([claim.claimId]))
+        const pid = Number.parseInt(claim.serverId.split('-').at(-1) ?? '', 10)
+        if (Number.isInteger(pid) && pid > 0) topology.suspendedJudgePid = pid
+      }
+      return claims.data.claims.length > 0
+    },
+  })
+  await onFirstJobClaimed?.()
+  if (!topology.suspendedJudgePid) {
+    throw new Error('Could not resolve the first claim owner PID for deterministic multi-worker fencing')
+  }
+  process.kill(topology.suspendedJudgePid, 'SIGSTOP')
+  const secondJob = await postJson<{data: {jobId: string; status: string; storageState: string}}>(
+    `${apiBaseUrl}/api/judgmentsjobs`,
+    {projectId: seeded.data.fixture.projectIds[1]},
+  )
+  provider.releaseFirstRequest()
+  const jobs = [firstJob, secondJob]
+  const deadline = Date.now() + 240_000
 
   const waitForJudgments = async (): Promise<{
+    jobEvidence: Array<{
+      artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
+      claims: Array<{claimId: string; queueRecordId: string; serverId: string; status: string}>
+      health: {lastAckSeq: number | null; retainedRowCount: number}
+      jobId: string
+      scanState: {lastProjectRefreshAckSeq: number | null}
+    }>
     judgments: Array<{
       count: number
       modelId: string
@@ -416,9 +490,17 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       useFulltextNoImages: boolean
       useTitle: boolean
     }>
+    visibleProjectionCount: number
   }> => {
     const evidence = await postJson<{
       data: {
+        jobEvidence: Array<{
+          artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
+          claims: Array<{claimId: string; queueRecordId: string; serverId: string; status: string}>
+          health: {lastAckSeq: number | null; retainedRowCount: number}
+          jobId: string
+          scanState: {lastProjectRefreshAckSeq: number | null}
+        }>
         judgments: Array<{
           count: number
           modelId: string
@@ -428,13 +510,56 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
           useFulltextNoImages: boolean
           useTitle: boolean
         }>
+        visibleProjectionCount: number
       }
-    }>(`${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`, {fixtureId, token})
+    }>(`${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`, {
+      fixtureId,
+      jobIds: jobs.map((job) => {
+        return job.data.jobId
+      }),
+      token,
+    })
+
+    for (const job of evidence.data.jobEvidence) {
+      for (const claim of job.claims) {
+        observedJudgeIds.add(claim.serverId)
+        const claimIds = observedClaims.get(claim.queueRecordId) ?? new Set<string>()
+        claimIds.add(claim.claimId)
+        observedClaims.set(claim.queueRecordId, claimIds)
+      }
+    }
+    if (observedJudgeIds.size >= 2) {
+      if (!topology.suspendedExtraJudgePid) {
+        const providerEvidence = provider.getEvidence()
+        if (providerEvidence.requestCount > 2 || providerEvidence.maxConcurrentRequests !== 1) {
+          throw new Error(
+            `Provider admission exceeded its shared limit while both judges were live: ${JSON.stringify(providerEvidence)}`,
+          )
+        }
+        const extraServerId = [...observedJudgeIds].find((serverId) => {
+          return serverId !== topology.firstJudgeServerId
+        })
+        const extraPid = Number.parseInt(extraServerId?.split('-').at(-1) ?? '', 10)
+        if (!Number.isInteger(extraPid) || extraPid <= 0) {
+          throw new Error(`Could not resolve extra judge PID from ${String(extraServerId)}`)
+        }
+        process.kill(extraPid, 'SIGSTOP')
+        topology.suspendedExtraJudgePid = extraPid
+      }
+      if (topology.suspendedJudgePid) {
+        process.kill(topology.suspendedJudgePid, 'SIGCONT')
+        topology.suspendedJudgePid = undefined
+      }
+    }
 
     if (
       evidence.data.judgments.reduce((count, row) => {
         return count + Number(row.count)
       }, 0) === 4
+      && evidence.data.visibleProjectionCount === 4
+      && evidence.data.jobEvidence.every((job) => {
+        return job.health.lastAckSeq !== null && job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
+      })
     ) {
       return evidence.data
     }
@@ -447,7 +572,95 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     return waitForJudgments()
   }
 
-  return {fixture: seeded.data.fixture, jobs, providerEvidence: provider.getEvidence, result: await waitForJudgments()}
+  const result = await waitForJudgments()
+
+  if (topology.suspendedExtraJudgePid) {
+    process.kill(topology.suspendedExtraJudgePid, 'SIGCONT')
+    topology.suspendedExtraJudgePid = undefined
+  }
+  await onDistinctJudgeOwners?.()
+
+  if (
+    observedJudgeIds.size !== 2
+    || ![...observedClaims.values()].some((claimIds) => {
+      return claimIds.size === 2
+    })
+    || [...observedClaims.values()].some((claimIds) => {
+      return claimIds.size > 2
+    })
+  ) {
+    throw new Error(
+      `Topology did not prove distinct fenced judge ownership: ${JSON.stringify({
+        observedClaims: [...observedClaims].map(([queueRecordId, claimIds]) => {
+          return [queueRecordId, [...claimIds]]
+        }),
+        observedJudgeIds: [...observedJudgeIds],
+      })}`,
+    )
+  }
+
+  const pausedJobs = await Promise.all(
+    jobs.map((job) => {
+      return patchJson<{data: {status: string; storageState: string}}>(
+        `${apiBaseUrl}/api/judgmentsjobs/${job.data.jobId}`,
+        {status: 'paused'},
+      )
+    }),
+  )
+
+  if (
+    pausedJobs.some((job) => {
+      return job.data.status !== 'paused' || job.data.storageState !== 'draining'
+    })
+  ) {
+    throw new Error(`Topology pause did not enter draining storage: ${JSON.stringify(pausedJobs)}`)
+  }
+
+  let drainedEvidence = result
+  await waitUntil({
+    deadline: Date.now() + 120_000,
+    description: 'drained jobs and production SQLite cleanup',
+    predicate: async () => {
+      await postJson(`${ownerBaseUrl}/api/test/judgment-workflow-topology/cleanup-stale`, {token})
+      drainedEvidence = await postJson<{data: typeof result}>(
+        `${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`,
+        {
+          fixtureId,
+          jobIds: jobs.map((job) => {
+            return job.data.jobId
+          }),
+          token,
+        },
+      ).then((response) => {
+        return response.data
+      })
+      const states = await Promise.all(
+        jobs.map((job) => {
+          return fetch(`${apiBaseUrl}/api/judgmentsjobs/${job.data.jobId}`).then(async (response) => {
+            return (await response.json()) as {storageState?: string}
+          })
+        }),
+      )
+
+      return (
+        states.every((state) => {
+          return state.storageState === 'drained'
+        })
+        && drainedEvidence.jobEvidence.every((job) => {
+          return !job.artifacts.sqlite && !job.artifacts.wal && !job.artifacts.shm && !job.artifacts.lease
+        })
+      )
+    },
+  })
+
+  return {
+    drainedEvidence,
+    fixture: seeded.data.fixture,
+    jobs,
+    observedJudgeIds: [...observedJudgeIds],
+    providerEvidence: provider.getEvidence,
+    result,
+  }
 }
 
 const waitForRuntimeRole = async ({
@@ -479,6 +692,55 @@ const waitForRuntimeRole = async ({
 
   await sleep(100)
   return waitForRuntimeRole({deadline, port, role})
+}
+
+export const startJudgmentWorkflowReadinessMonitor = ({
+  extraJudge,
+  topology,
+}: {
+  extraJudge?: RunningTopologyExtraJudge
+  topology: JudgmentWorkflowTopology
+}): JudgmentWorkflowReadinessMonitor => {
+  const targets = [
+    {port: topology.apiPort, role: 'api' as const},
+    {port: topology.maintenancePort, role: 'maintenance-worker' as const},
+    {port: topology.judgePort, role: 'judge-worker' as const},
+    ...(extraJudge ? [{port: extraJudge.port, role: 'judge-worker' as const}] : []),
+  ]
+  let stopped = false
+  let failure: Error | null = null
+  const monitor = async (): Promise<void> => {
+    while (!stopped && failure === null) {
+      for (const target of targets) {
+        const healthy = await fetch(`http://127.0.0.1:${target.port}${runtimeReadyPath}`)
+          .then(async (response) => {
+            const body = (await response.json()) as {data?: {ready?: boolean; role?: string}}
+            return response.ok && body.data?.ready === true && body.data.role === target.role
+          })
+          .catch(() => {
+            return false
+          })
+
+        if (!healthy) {
+          failure = new Error(`Runtime readiness regressed for ${target.role} on port ${target.port}`)
+          return
+        }
+      }
+      await sleep(100)
+    }
+  }
+  const monitorPromise = monitor()
+
+  return {
+    assertHealthy: () => {
+      if (failure) throw failure
+    },
+    stop: async () => {
+      stopped = true
+      await monitorPromise
+      if (failure) throw failure
+    },
+  }
 }
 
 export const startJudgmentWorkflowTopology = async ({
@@ -544,6 +806,22 @@ const waitForExit = async (serverStackProcess: Subprocess<'ignore', 'pipe', 'pip
 }
 
 export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess, topology}: RunningTopology) => {
+  if (topology.suspendedExtraJudgePid) {
+    try {
+      process.kill(topology.suspendedExtraJudgePid, 'SIGCONT')
+    } catch {
+      // The worker may already have exited while unwinding a failed topology run.
+    }
+    topology.suspendedExtraJudgePid = undefined
+  }
+  if (topology.suspendedJudgePid) {
+    try {
+      process.kill(topology.suspendedJudgePid, 'SIGCONT')
+    } catch {
+      // The worker may already have exited while unwinding a failed topology run.
+    }
+    topology.suspendedJudgePid = undefined
+  }
   serverStackProcess.kill('SIGTERM')
 
   try {
@@ -589,6 +867,40 @@ export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess,
     }
     if (topology.expectedJudgeRestartPid !== undefined && expectedRestartEvents.length !== 1) {
       throw new Error(`Production topology did not record exactly one synchronized judge restart`)
+    }
+    const runtimePids = readdirSync(join(topology.root, 'logs'))
+      .filter((path) => {
+        return path.endsWith('.jsonl')
+      })
+      .flatMap((path) => {
+        return readFileSync(join(topology.root, 'logs', path), 'utf8').split('\n')
+      })
+      .flatMap((line) => {
+        try {
+          const pid = (JSON.parse(line) as {runtime?: {pid?: number}}).runtime?.pid
+          return typeof pid === 'number' ? [pid] : []
+        } catch {
+          return []
+        }
+      })
+    const liveChildPids = [...new Set(runtimePids)].filter((pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    })
+
+    if (liveChildPids.length > 0) {
+      throw new Error(`Production topology left child processes alive after shutdown: ${liveChildPids.join(', ')}`)
+    }
+    const missingJournals = topology.journalPaths.filter((path) => {
+      return !existsSync(path)
+    })
+
+    if (missingJournals.length > 0) {
+      throw new Error(`Production topology did not persist expected judge journals: ${missingJournals.join(', ')}`)
     }
   } finally {
     if (serverStackProcess.exitCode === null) {

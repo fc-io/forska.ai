@@ -1,5 +1,8 @@
+import {existsSync} from 'node:fs'
+
 import {Elysia, t} from 'elysia'
 
+import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from '../cron/judgmentsJobs/judgmentJobPaths.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {judgmentsJobsCleanupStale} from '../cron/judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
@@ -37,10 +40,12 @@ const seedTopologyFixture = async ({
   createPausedJob,
   fixtureId,
   providerBaseUrl,
+  singlePromptProjectA,
 }: {
   createPausedJob?: boolean
   fixtureId: string
   providerBaseUrl: string
+  singlePromptProjectA?: boolean
 }) => {
   const ids = getFixtureIds(fixtureId)
   const [articleA, articleB] = ids.articleIds
@@ -53,8 +58,13 @@ const seedTopologyFixture = async ({
 
   await getAppDatabaseService().transaction(async (tx) => {
     await tx.run(`
-      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url, config_json)
-      VALUES (${sql(ids.connectionId)}, 'llamacpp', 'Topology deterministic provider', TRUE, 'none', ${sql(providerBaseUrl)}, json_object('workerUrlMode', 'manual'));
+      INSERT INTO app.provider_connection (
+        id, provider_kind, label, enabled, auth_mode, base_url, config_json, max_inflight_requests
+      )
+      VALUES (
+        ${sql(ids.connectionId)}, 'llamacpp', 'Topology deterministic provider', TRUE, 'none',
+        ${sql(providerBaseUrl)}, json_object('workerUrlMode', 'manual'), 1
+      );
       INSERT INTO app.model (
         id, provider_connection_id, name, remote_model_id, display_name, source, enabled
       ) VALUES (
@@ -69,6 +79,10 @@ const seedTopologyFixture = async ({
       VALUES
         (${sql(articleA)}, ${sql(`external-${articleA}`)}, 'Topology article A', 'Deterministic abstract A', current_timestamp, current_timestamp),
         (${sql(articleB)}, ${sql(`external-${articleB}`)}, 'Topology article B', 'Deterministic abstract B', current_timestamp, current_timestamp);
+      UPDATE app.article
+      SET full_text = ${sql(`FULLTEXT_SENTINEL_${fixtureId}`)},
+          full_text_assets = ${sql(JSON.stringify([{src: `IMAGE_SENTINEL_${fixtureId}`}]))}
+      WHERE id IN (${sql(articleA)}, ${sql(articleB)});
       INSERT INTO app.prompt (id, original_text, content_hash)
       VALUES
         (${sql(promptA)}, 'Does this article satisfy criterion A?', ${sql(`${promptA}-hash`)}),
@@ -84,6 +98,12 @@ const seedTopologyFixture = async ({
         (${sql(`${projectB}-prompt-a`)}, ${sql(projectB)}, ${sql(promptA)}, 1, TRUE),
         (${sql(`${projectB}-prompt-b`)}, ${sql(projectB)}, ${sql(promptB)}, 2, TRUE);
     `)
+    if (singlePromptProjectA) {
+      await tx.run(`
+        DELETE FROM app.project_prompt
+        WHERE project_id = ${sql(projectA)} AND prompt_id = ${sql(promptB)}
+      `)
+    }
     await appendProjectScopeArticleReviewServingDeltas(tx, [
       {
         articleId: articleA,
@@ -184,6 +204,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         createPausedJob: t.Optional(t.Boolean()),
         fixtureId: t.String({pattern: '^[A-Za-z0-9_-]+$'}),
         providerBaseUrl: t.String(),
+        singlePromptProjectA: t.Optional(t.Boolean()),
         token: t.String(),
       }),
     },
@@ -220,10 +241,51 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         FROM mart.review_unassessed_queue_article_rank_serving_v4
         WHERE project_id IN (${projectList})
       `)
+      const [projection] = await getAppDatabaseService().queryJson<{count: number}>(`
+        SELECT COUNT(*) AS count
+        FROM mart.review_article_judgment_detail_serving_v4
+        WHERE project_id IN (${projectList})
+          AND payload_kind = 'llm'
+      `)
+      const jobEvidence = await Promise.all(
+        (body.jobIds ?? []).map(async (jobId) => {
+          const sqlitePath = getJudgmentJobSqlitePath(jobId)
+          const scanState = await getJudgmentJobSqliteService().getScanState(jobId)
+          const health = await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+          const claims = await getJudgmentJobSqliteService().getTopologyClaimRows(jobId)
 
-      return {data: {judgments, readyPairCount: Number(queue?.count ?? 0)}, error: null}
+          return {
+            artifacts: {
+              lease: existsSync(getJudgmentJobLeasePath(jobId)),
+              shm: existsSync(`${sqlitePath}-shm`),
+              sqlite: existsSync(sqlitePath),
+              wal: existsSync(`${sqlitePath}-wal`),
+            },
+            claims,
+            health,
+            jobId,
+            scanState,
+          }
+        }),
+      )
+
+      return {
+        data: {
+          jobEvidence,
+          judgments,
+          readyPairCount: Number(queue?.count ?? 0),
+          visibleProjectionCount: Number(projection?.count ?? 0),
+        },
+        error: null,
+      }
     },
-    {body: t.Object({fixtureId: t.String({pattern: '^[A-Za-z0-9_-]+$'}), token: t.String()})},
+    {
+      body: t.Object({
+        fixtureId: t.String({pattern: '^[A-Za-z0-9_-]+$'}),
+        jobIds: t.Optional(t.Array(t.String())),
+        token: t.String(),
+      }),
+    },
   )
   .post(
     '/api/test/judgment-workflow-real-codex/evidence',

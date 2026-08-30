@@ -324,7 +324,7 @@ export type JudgmentJobQueuePromptLifecycleRow = {
   updatedAt: string
 }
 
-export type JudgmentJobTopologyClaimRow = {claimId: string; queueRecordId: string; status: string}
+export type JudgmentJobTopologyClaimRow = {claimId: string; queueRecordId: string; serverId: string; status: string}
 
 export type JudgmentJobSqlitePreflightSnapshot = {
   outboxSampleCount: number
@@ -4473,7 +4473,7 @@ const sqliteService = {
         return database
           .query(
             `
-              SELECT claim_id AS claimId, id AS queueRecordId, status
+              SELECT claim_id AS claimId, id AS queueRecordId, server_id AS serverId, status
               FROM queue_prompt
               WHERE job_id = ?
                 AND claim_id IS NOT NULL
