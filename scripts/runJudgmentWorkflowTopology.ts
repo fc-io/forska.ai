@@ -2,6 +2,7 @@ import {
   createJudgmentWorkflowTopology,
   prepareJudgmentWorkflowMigrationBoundary,
   runJudgmentWorkflowTopologyLifecycle,
+  runJudgmentWorkflowTopologyReplay,
   startJudgmentWorkflowTopology,
   startJudgmentWorkflowTopologyExtraJudge,
   startJudgmentWorkflowTopologyProvider,
@@ -52,3 +53,16 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
 
 await runScenario({upgrade: false})
 await runScenario({upgrade: true})
+
+const replayProvider = startJudgmentWorkflowTopologyProvider({holdFirstRequest: true})
+const replayTopology = await startJudgmentWorkflowTopology()
+
+try {
+  const replay = await runJudgmentWorkflowTopologyReplay({provider: replayProvider, topology: replayTopology.topology})
+  console.log(
+    `[judgment-workflow:topology] complete scenario=journal-replay job=${replay.jobId} claim=${replay.claimId} restarted_pid=${replay.restartedPid}`,
+  )
+} finally {
+  await stopJudgmentWorkflowTopology(replayTopology)
+  replayProvider.close()
+}

@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
   appendProjectReviewConfigReviewServingDeltas,
@@ -150,6 +151,15 @@ const seedTopologyFixture = async ({
 
 export const judgmentWorkflowTopologyTestRoutes = new Elysia()
   .use(withErrorHandler())
+  .post(
+    '/api/test/judgment-workflow-topology/claims',
+    async ({body}) => {
+      requireTopologySeedBoundary(body.token)
+
+      return {data: {claims: await getJudgmentJobSqliteService().getTopologyClaimRows(body.jobId)}, error: null}
+    },
+    {body: t.Object({jobId: t.String(), token: t.String()})},
+  )
   .post(
     '/api/test/judgment-workflow-topology/seed',
     async ({body}) => {

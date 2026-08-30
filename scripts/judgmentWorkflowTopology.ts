@@ -1,10 +1,11 @@
 import {randomUUID} from 'node:crypto'
-import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join, resolve} from 'node:path'
 
 import {listen, serve, sleep, spawn, type Subprocess} from 'bun'
 
+import {getJudgeWorkerCompletionReplayBarrierPaths} from '../src/server/cron/judgmentsJobs/judgeWorkerCompletionReplayBarrier.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../src/server/routes/apiRouteClassification.ts'
 import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
 import {
@@ -22,12 +23,14 @@ export type JudgmentWorkflowTopology = {
   maintenancePort: number
   root: string
   serverStackLockPath: string
+  expectedJudgeRestartPid?: number
 }
 
 export type JudgmentWorkflowTopologyProvider = {
   baseUrl: string
   close: () => void
   getEvidence: () => {maxConcurrentRequests: number; requestCount: number; renderedInputs: string[]}
+  releaseFirstRequest: () => void
 }
 
 type RuntimeRole = 'api' | 'judge-worker' | 'maintenance-worker'
@@ -160,11 +163,17 @@ export const stopJudgmentWorkflowTopologyExtraJudge = async (extraJudge: Running
   }
 }
 
-export const startJudgmentWorkflowTopologyProvider = (): JudgmentWorkflowTopologyProvider => {
+export const startJudgmentWorkflowTopologyProvider = ({
+  holdFirstRequest = false,
+}: {holdFirstRequest?: boolean} = {}): JudgmentWorkflowTopologyProvider => {
   let activeRequests = 0
   let maxConcurrentRequests = 0
   let requestCount = 0
   const renderedInputs: string[] = []
+  let releaseFirstRequest = () => {}
+  const firstRequestRelease = new Promise<void>((resolveRelease) => {
+    releaseFirstRequest = resolveRelease
+  })
   const server = serve({
     fetch: async (request) => {
       const url = new URL(request.url)
@@ -189,6 +198,9 @@ export const startJudgmentWorkflowTopologyProvider = (): JudgmentWorkflowTopolog
           .join('\n'),
       )
       await sleep(30)
+      if (holdFirstRequest && requestCount === 1) {
+        await firstRequestRelease
+      }
       activeRequests -= 1
 
       return Response.json({
@@ -221,6 +233,7 @@ export const startJudgmentWorkflowTopologyProvider = (): JudgmentWorkflowTopolog
     getEvidence: () => {
       return {maxConcurrentRequests, renderedInputs: [...renderedInputs], requestCount}
     },
+    releaseFirstRequest,
   }
 }
 
@@ -237,6 +250,116 @@ const postJson = async <T>(url: string, body: unknown): Promise<T> => {
   }
 
   return JSON.parse(text) as T
+}
+
+const waitUntil = async ({
+  deadline,
+  description,
+  predicate,
+}: {
+  deadline: number
+  description: string
+  predicate: () => Promise<boolean> | boolean
+}): Promise<void> => {
+  if (await predicate()) return
+  if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`)
+  await sleep(50)
+  return waitUntil({deadline, description, predicate})
+}
+
+export const runJudgmentWorkflowTopologyReplay = async ({
+  provider,
+  topology,
+}: {
+  provider: JudgmentWorkflowTopologyProvider
+  topology: JudgmentWorkflowTopology
+}) => {
+  const fixtureId = `topology-replay-${randomUUID()}`
+  const token = topology.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN
+  const ownerBaseUrl = `http://127.0.0.1:${topology.maintenancePort}${duckdbOwnerPrivateApiPrefix}`
+  const seeded = await postJson<{data: {fixture: {projectIds: string[]}}}>(
+    `${ownerBaseUrl}/api/test/judgment-workflow-topology/seed`,
+    {fixtureId, providerBaseUrl: provider.baseUrl, token},
+  )
+
+  await waitUntil({
+    deadline: Date.now() + 60_000,
+    description: 'replay fixture serving queue',
+    predicate: async () => {
+      const evidence = await postJson<{data: {readyPairCount: number}}>(
+        `${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`,
+        {fixtureId, token},
+      )
+      return evidence.data.readyPairCount === 4
+    },
+  })
+  const job = await postJson<{data: {jobId: string}}>(`http://127.0.0.1:${topology.apiPort}/api/judgmentsjobs`, {
+    projectId: seeded.data.fixture.projectIds[0],
+  })
+  let claimId = ''
+  await waitUntil({
+    deadline: Date.now() + 60_000,
+    description: 'first provider request and owner claim',
+    predicate: async () => {
+      if (provider.getEvidence().requestCount < 1) return false
+      const claims = await postJson<{data: {claims: Array<{claimId: string}>}}>(
+        `${ownerBaseUrl}/api/test/judgment-workflow-topology/claims`,
+        {jobId: job.data.jobId, token},
+      )
+      claimId = claims.data.claims[0]?.claimId ?? ''
+      return claimId.length > 0
+    },
+  })
+  const barrierRoot = topology.env.FORSKA_TEST_JUDGE_COMPLETION_BARRIER_ROOT
+  mkdirSync(barrierRoot, {recursive: true})
+  const barrierPaths = getJudgeWorkerCompletionReplayBarrierPaths({claimId, root: barrierRoot})
+  writeFileSync(barrierPaths.controlPath, `${claimId}\n`, {flag: 'wx'})
+  provider.releaseFirstRequest()
+  await waitUntil({
+    deadline: Date.now() + 30_000,
+    description: 'durable completion replay barrier',
+    predicate: () => {
+      return existsSync(barrierPaths.signalPath)
+    },
+  })
+  const signal = JSON.parse(readFileSync(barrierPaths.signalPath, 'utf8')) as {pid: number}
+  topology.expectedJudgeRestartPid = signal.pid
+  process.kill(signal.pid, 'SIGKILL')
+  await waitUntil({
+    deadline: Date.now() + 10_000,
+    description: 'terminated judge worker',
+    predicate: () => {
+      try {
+        process.kill(signal.pid, 0)
+        return false
+      } catch {
+        return true
+      }
+    },
+  })
+  await waitForRuntimeRole({deadline: Date.now() + startupTimeoutMs, port: topology.judgePort, role: 'judge-worker'})
+
+  await waitUntil({
+    deadline: Date.now() + 120_000,
+    description: 'exact canonical replay judgments',
+    predicate: async () => {
+      const evidence = await postJson<{data: {judgments: Array<{count: number; projectId: string}>}}>(
+        `${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`,
+        {fixtureId, token},
+      )
+      return (
+        evidence.data.judgments.length === 1
+        && evidence.data.judgments[0]?.projectId === seeded.data.fixture.projectIds[0]
+        && Number(evidence.data.judgments[0]?.count) === 2
+      )
+    },
+  })
+
+  if (provider.getEvidence().requestCount !== 2) {
+    throw new Error(`Replay must not repeat provider inference: ${JSON.stringify(provider.getEvidence())}`)
+  }
+
+  return {claimId, jobId: job.data.jobId, restartedPid: signal.pid}
 }
 
 export const runJudgmentWorkflowTopologyLifecycle = async ({
@@ -433,23 +556,39 @@ export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess,
     if (existsSync(topology.serverStackLockPath)) {
       throw new Error(`Production server stack lock was not released: ${topology.serverStackLockPath}`)
     }
-    const unexpectedSupervisorEvents = readdirSync(join(topology.root, 'logs'))
+    const supervisorEvents = readdirSync(join(topology.root, 'logs'))
       .filter((path) => {
         return path.endsWith('.jsonl')
       })
       .flatMap((path) => {
         return readFileSync(join(topology.root, 'logs', path), 'utf8').split('\n')
       })
-      .filter((line) => {
-        return (
-          line.includes('server.stack.managed-process-unexpected-exit')
-          || line.includes('server.stack.managed-process-watchdog-restart')
-          || line.includes('duckdb.owner.takeover')
-        )
+      .flatMap((line) => {
+        try {
+          const event = JSON.parse(line) as {attrs?: {pid?: number; role?: string}; event?: string}
+          return event.event?.startsWith('server.stack.') || event.event === 'duckdb.owner.takeover' ? [event] : []
+        } catch {
+          return []
+        }
       })
+    const expectedRestartEvents = supervisorEvents.filter((event) => {
+      return (
+        event.event === 'server.stack.managed-process-unexpected-exit'
+        && event.attrs?.role === 'judge'
+        && event.attrs.pid === topology.expectedJudgeRestartPid
+      )
+    })
+    const unexpectedSupervisorEvents = supervisorEvents.filter((event) => {
+      return !expectedRestartEvents.includes(event)
+    })
 
     if (unexpectedSupervisorEvents.length > 0) {
-      throw new Error(`Production topology observed unexpected supervisor events: ${unexpectedSupervisorEvents[0]}`)
+      throw new Error(
+        `Production topology observed unexpected supervisor events: ${JSON.stringify(unexpectedSupervisorEvents[0])}`,
+      )
+    }
+    if (topology.expectedJudgeRestartPid !== undefined && expectedRestartEvents.length !== 1) {
+      throw new Error(`Production topology did not record exactly one synchronized judge restart`)
     }
   } finally {
     if (serverStackProcess.exitCode === null) {
