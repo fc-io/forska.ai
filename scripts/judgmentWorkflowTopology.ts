@@ -58,6 +58,28 @@ export const isExpectedTopologyShutdownExitCode = ({
   return exitCode === 0 || (platform === 'win32' && exitCode === 143)
 }
 
+export const isExpectedTopologySupervisorLockMetadata = ({
+  metadata,
+  supervisorPid,
+  topology,
+}: {
+  metadata: unknown
+  supervisorPid: number
+  topology: JudgmentWorkflowTopology
+}): boolean => {
+  if (typeof metadata !== 'object' || metadata === null) return false
+  const lock = metadata as Record<string, unknown>
+
+  return (
+    lock.pid === supervisorPid
+    && lock.apiPort === topology.apiPort
+    && lock.maintenancePort === topology.maintenancePort
+    && lock.judgePort === topology.judgePort
+    && typeof lock.startedAt === 'string'
+    && lock.startedAt.length > 0
+  )
+}
+
 const getAvailablePort = (): number => {
   const server = listen({hostname: '127.0.0.1', port: 0, socket: {data() {}}})
   const port = server.port
@@ -866,6 +888,9 @@ const waitForExit = async (serverStackProcess: Subprocess<'ignore', 'pipe', 'pip
 }
 
 export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess, topology}: RunningTopology) => {
+  const lockBeforeShutdown = existsSync(topology.serverStackLockPath)
+    ? readFileSync(topology.serverStackLockPath, 'utf8')
+    : null
   serverStackProcess.kill('SIGTERM')
 
   try {
@@ -873,6 +898,25 @@ export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess,
 
     if (!isExpectedTopologyShutdownExitCode({exitCode})) {
       throw new Error(`Production server stack exited with code ${exitCode}`)
+    }
+
+    if (process.platform === 'win32' && exitCode === 143 && existsSync(topology.serverStackLockPath)) {
+      const lockAfterShutdown = readFileSync(topology.serverStackLockPath, 'utf8')
+      let metadata: unknown
+      try {
+        metadata = JSON.parse(lockAfterShutdown)
+      } catch {
+        metadata = null
+      }
+
+      if (
+        lockBeforeShutdown === null
+        || lockAfterShutdown !== lockBeforeShutdown
+        || !isExpectedTopologySupervisorLockMetadata({metadata, supervisorPid: serverStackProcess.pid, topology})
+      ) {
+        throw new Error(`Windows topology left an unverified supervisor lock: ${topology.serverStackLockPath}`)
+      }
+      rmSync(topology.serverStackLockPath)
     }
 
     if (existsSync(topology.serverStackLockPath)) {
