@@ -20,7 +20,7 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-test('judging cron prevents overlapping owner-backed running job reads', () => {
+test('judging cron prevents overlapping owner reads and syncs judge-worker SQLite leases', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -45,6 +45,7 @@ test('judging cron prevents overlapping owner-backed running job reads', () => {
         let getRunningJobsCallCount = 0
         let resolveRunningJobs = () => {}
         let sendToLlmCallCount = 0
+        const syncOwnedLeaseInputs = []
 
         void mock.module('elysia', () => {
           return {
@@ -69,7 +70,12 @@ test('judging cron prevents overlapping owner-backed running job reads', () => {
         void mock.module(sqliteServiceModulePath, () => {
           return {
             getJudgmentJobSqliteService: () => {
-              return {publishHealthProjections: async () => {}, syncOwnedLeases: async () => {}}
+              return {
+                publishHealthProjections: async () => {},
+                syncOwnedLeases: async (jobIds) => {
+                  syncOwnedLeaseInputs.push(jobIds)
+                },
+              }
             },
           }
         })
@@ -129,6 +135,7 @@ test('judging cron prevents overlapping owner-backed running job reads', () => {
           countsAfterResume: {getRunningJobsCallCount, sendToLlmCallCount},
           countsAfterRejectedRun,
           countsDuringFirstRun,
+          syncOwnedLeaseInputs,
         }))
       `,
     ],
@@ -145,9 +152,11 @@ test('judging cron prevents overlapping owner-backed running job reads', () => {
     countsAfterResume: {getRunningJobsCallCount: number; sendToLlmCallCount: number}
     countsAfterRejectedRun: {getRunningJobsCallCount: number; sendToLlmCallCount: number}
     countsDuringFirstRun: {getRunningJobsCallCount: number; sendToLlmCallCount: number}
+    syncOwnedLeaseInputs: string[][]
   }
 
   expect(result.countsDuringFirstRun).toEqual({getRunningJobsCallCount: 1, sendToLlmCallCount: 0})
   expect(result.countsAfterRejectedRun).toEqual({getRunningJobsCallCount: 2, sendToLlmCallCount: 1})
   expect(result.countsAfterResume).toEqual({getRunningJobsCallCount: 3, sendToLlmCallCount: 2})
+  expect(result.syncOwnedLeaseInputs).toEqual([[], []])
 })
