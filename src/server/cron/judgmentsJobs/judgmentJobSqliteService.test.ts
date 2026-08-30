@@ -25,6 +25,9 @@ let runDatabase: ((statement: string) => Promise<void>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
 let JudgmentJobLeaseError: Awaited<typeof import('./judgmentJobSqliteService.ts')>['JudgmentJobLeaseError'] | null =
   null
+let isRetryableJudgmentJobFileDeleteError:
+  | Awaited<typeof import('./judgmentJobSqliteService.ts')>['isRetryableJudgmentJobFileDeleteError']
+  | null = null
 
 type QueueCountRow = {count: number; status: string}
 
@@ -95,12 +98,26 @@ beforeAll(async () => {
   }
   sqliteService = sqliteModule.getJudgmentJobSqliteService
   JudgmentJobLeaseError = sqliteModule.JudgmentJobLeaseError
+  isRetryableJudgmentJobFileDeleteError = sqliteModule.isRetryableJudgmentJobFileDeleteError
 })
 
 afterAll(async () => {
   await sqliteService?.().closeAll()
   await closeDatabase?.()
   tempRuntimeRoot.cleanup()
+})
+
+test('classifies only native busy file deletion as retryable', () => {
+  if (!isRetryableJudgmentJobFileDeleteError) {
+    throw new Error('SQLite file deletion classifier not initialized')
+  }
+
+  expect(isRetryableJudgmentJobFileDeleteError(Object.assign(new Error('busy'), {code: 'EBUSY'}))).toBe(true)
+  expect(isRetryableJudgmentJobFileDeleteError(Object.assign(new Error('permission denied'), {code: 'EPERM'}))).toBe(
+    false,
+  )
+  expect(isRetryableJudgmentJobFileDeleteError(new Error('busy'))).toBe(false)
+  expect(isRetryableJudgmentJobFileDeleteError(null)).toBe(false)
 })
 
 test('claims and requeues prompts from the per-job SQLite queue', async () => {
