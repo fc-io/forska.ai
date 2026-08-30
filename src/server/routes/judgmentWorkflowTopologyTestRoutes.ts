@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {judgmentsJobsCleanupStale} from '../cron/judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
   appendProjectReviewConfigReviewServingDeltas,
@@ -151,6 +152,16 @@ const seedTopologyFixture = async ({
 
 export const judgmentWorkflowTopologyTestRoutes = new Elysia()
   .use(withErrorHandler())
+  .post(
+    '/api/test/judgment-workflow-topology/cleanup-stale',
+    async ({body}) => {
+      requireTopologySeedBoundary(body.token)
+      await judgmentsJobsCleanupStale()
+
+      return {data: {ok: true}, error: null}
+    },
+    {body: t.Object({token: t.String()})},
+  )
   .post(
     '/api/test/judgment-workflow-topology/claims',
     async ({body}) => {
