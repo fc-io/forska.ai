@@ -63,8 +63,10 @@ The topology and browser gates use test-owned durable app-data roots for DuckDB
 and judge journals, separate spill/temp directories, unique ports and worker
 identities, and credential-free child environments. They must never discover or
 mutate the primary runtime profile. A topology pass proves only the host OS on
-which it ran; path, signal, lock, and process-tree contract tests cover other
-supported operating systems without claiming full cross-platform execution.
+which it ran. The current topology helpers use host-native path, process-tree,
+and signal abstractions and are tested only on that host; they do not provide
+simulated cross-platform evidence. Run this gate on every supported server OS
+before claiming cross-platform production parity.
 
 The real-provider smoke is operator-only and is never a normal PR/default gate:
 
