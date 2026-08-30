@@ -27,11 +27,15 @@ import {tokensRoutes} from './TokensRoutes'
 import {usersRoutes} from './UsersRoutes'
 
 export const getProductApiRoutes = () => {
+  const topologyTestRoutes = process.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN
+    ? judgmentWorkflowTopologyTestRoutes
+    : new Elysia()
+
   return new Elysia()
     .use(adminInvestigateRoutes)
     .use(comparisonProjectsRoutes)
     .use(judgmentsJobsRoutes)
-    .use(judgmentWorkflowTopologyTestRoutes)
+    .use(topologyTestRoutes)
     .use(articlesRoutes)
     .use(articleAdminRoutes)
     .use(humanAssessmentRoutes)
