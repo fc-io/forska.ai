@@ -212,6 +212,8 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
         'utf8',
       )
       topology.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_MANIFEST = requestEvidenceManifestPath
+      topology.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ENABLED = 'true'
+      topology.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ROOT = topology.root
       topology.env.JUDGE_FIRST_REQUEST_LOG_FULL = 'false'
       topology.env.JUDGE_FIRST_REQUEST_PREVIEW_CHARS = '1'
       if (inheritedCodexHome) topology.env.CODEX_HOME = inheritedCodexHome

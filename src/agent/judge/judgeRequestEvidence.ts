@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto'
-import {appendFile, readFile} from 'node:fs/promises'
+import {appendFile, readFile, realpath} from 'node:fs/promises'
+import {basename, dirname, isAbsolute, relative, resolve, sep} from 'node:path'
 
 type RequestEvidenceFixture = {
   abstract: string
@@ -12,19 +13,39 @@ type RequestEvidenceFixture = {
 type RequestEvidenceManifest = {fixtures: RequestEvidenceFixture[]; outputPath: string}
 
 let cachedManifestPath: string | null = null
+let cachedTestRoot: string | null = null
 let cachedManifest: RequestEvidenceManifest | null = null
 
 const getManifest = async (): Promise<RequestEvidenceManifest | null> => {
-  const manifestPath = process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_MANIFEST?.trim()
+  if (process.env.NODE_ENV !== 'test' || process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ENABLED !== 'true') {
+    return null
+  }
 
-  if (!manifestPath) return null
-  if (cachedManifestPath === manifestPath && cachedManifest) return cachedManifest
+  const manifestPath = process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_MANIFEST?.trim()
+  const testRoot = process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ROOT?.trim()
+
+  if (!manifestPath || !testRoot) return null
+  if (cachedManifestPath === manifestPath && cachedTestRoot === testRoot && cachedManifest) return cachedManifest
 
   const parsed = JSON.parse(await readFile(manifestPath, 'utf8')) as RequestEvidenceManifest
   if (!parsed.outputPath || !Array.isArray(parsed.fixtures)) {
     throw new Error('Judgment request evidence manifest is invalid')
   }
+
+  const canonicalRoot = await realpath(resolve(testRoot))
+  const canonicalOutputParent = await realpath(dirname(resolve(parsed.outputPath)))
+  const canonicalOutput = resolve(canonicalOutputParent, basename(parsed.outputPath))
+  const relativeOutput = relative(canonicalRoot, canonicalOutput)
+  if (
+    !relativeOutput
+    || relativeOutput === '..'
+    || relativeOutput.startsWith(`..${sep}`)
+    || isAbsolute(relativeOutput)
+  ) {
+    throw new Error('Judgment request evidence output path must be confined under the declared test root')
+  }
   cachedManifestPath = manifestPath
+  cachedTestRoot = testRoot
   cachedManifest = parsed
   return parsed
 }
