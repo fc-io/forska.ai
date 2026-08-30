@@ -54,13 +54,11 @@ const sendToLLM = async (): Promise<void> => {
   isSendingToLLM = true
   try {
     const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
-    if (shouldRunJudgmentMaintenanceCron()) {
-      await getJudgmentJobSqliteService().syncOwnedLeases(
-        runningJobs.map((job) => {
-          return job.id
-        }),
-      )
-    }
+    await getJudgmentJobSqliteService().syncOwnedLeases(
+      runningJobs.map((job) => {
+        return job.id
+      }),
+    )
     if (!shouldRunJudgingCron()) return
     await judgmentsJobsSendToLLM(runningJobs, serverJobId, {
       filterJobs: shouldUseLowMemoryJudgmentsCronMode()
