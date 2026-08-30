@@ -1,0 +1,131 @@
+import {expect, test} from '@playwright/test'
+
+const getRequiredEnvironmentValue = (key: string) => {
+  const value = process.env[key]?.trim()
+
+  if (!value) {
+    throw new Error(`${key} is required for the judgment workflow browser smoke`)
+  }
+
+  return value
+}
+
+const projectId = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_PROJECT_ID')
+const projectName = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_PROJECT_NAME')
+const jobId = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_JOB_ID')
+const articleId = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_ARTICLE_ID')
+const fixtureId = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_FIXTURE_ID')
+const ownerOrigin = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_OWNER_ORIGIN')
+const seedToken = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_SEED_TOKEN')
+const modelId = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_MODEL_ID')
+const promptId = getRequiredEnvironmentValue('FORSKA_JUDGMENT_BROWSER_PROMPT_ID')
+
+test('discovers and drives a real judgment job through start, result, pause, drain, and review UI', async ({page}) => {
+  await page.goto('/admin/jobs')
+  await expect(page.getByRole('heading', {name: 'Judgment Jobs'})).toBeVisible()
+  const projectLink = page.getByRole('link', {name: projectName}).first()
+  await expect(projectLink).toBeVisible()
+  await projectLink.click()
+
+  await expect(page).toHaveURL(new RegExp(`/admin/jobs/${jobId}`))
+  await expect(page.getByRole('button', {name: 'Start Job', exact: true})).toBeVisible()
+  await page.getByRole('button', {name: 'Start Job', exact: true}).click()
+  await expect(page.getByRole('button', {name: 'Pause Job'})).toBeVisible({timeout: 30_000})
+  await expect(page.getByRole('heading', {name: 'Pipeline Summary'})).toBeVisible()
+  await expect(page.getByRole('heading', {name: 'Prompt Queue'})).toBeVisible()
+  await expect(page.getByText('Judged', {exact: true})).toBeVisible()
+
+  await expect
+    .poll(
+      async () => {
+        try {
+          const response = await page.request.post(`${ownerOrigin}/api/test/judgment-workflow-real-codex/evidence`, {
+            data: {modelId, projectId, promptId, token: seedToken},
+          })
+          const topologyResponse = await page.request.post(
+            `${ownerOrigin}/api/test/judgment-workflow-topology/evidence`,
+            {data: {fixtureId, token: seedToken}},
+          )
+          const body = (await response.json()) as {
+            data: {judgments: Array<{articleId: string}>; visibleProjectionCount: number}
+          }
+          const topologyBody = (await topologyResponse.json()) as {
+            data: {judgments: Array<{count: number; projectId: string}>}
+          }
+          const projectJudgments = topologyBody.data.judgments.find((row) => {
+            return row.projectId === projectId
+          })
+
+          return {
+            canonicalCount: Number(projectJudgments?.count ?? 0),
+            visibleProjectionCount: body.data.visibleProjectionCount,
+          }
+        } catch {
+          return 0
+        }
+      },
+      {timeout: 120_000},
+    )
+    .toEqual({canonicalCount: 2, visibleProjectionCount: 1})
+
+  await page.reload()
+  await expect(page.getByText('Unassessed Articles', {exact: true}).locator('..')).toContainText('1')
+
+  await page.getByRole('button', {name: 'Pause Job'}).click()
+  await expect(page.getByRole('button', {name: 'Start Job', exact: true})).toBeVisible({timeout: 30_000})
+  await page.getByRole('button', {name: 'Drain Storage'}).click()
+
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(`/api/judgmentsjobs/${jobId}`)
+        const body = (await response.json()) as {
+          data?: {
+            status?: string
+            storageHealth?: {
+              hasOutboxRows?: boolean
+              hasQueueRows?: boolean
+              sqliteFileBytes?: number | null
+              walBytes?: number
+            }
+            storageState?: string
+          }
+          status?: string
+          storageHealth?: {
+            hasOutboxRows?: boolean
+            hasQueueRows?: boolean
+            sqliteFileBytes?: number | null
+            walBytes?: number
+          }
+          storageState?: string
+        }
+        const job = body.data ?? body
+
+        return {
+          hasOutboxRows: job.storageHealth?.hasOutboxRows,
+          hasQueueRows: job.storageHealth?.hasQueueRows,
+          sqliteFileBytes: job.storageHealth?.sqliteFileBytes,
+          status: job.status,
+          storageState: job.storageState,
+          walBytes: job.storageHealth?.walBytes,
+        }
+      },
+      {timeout: 60_000},
+    )
+    .toEqual({
+      hasOutboxRows: false,
+      hasQueueRows: false,
+      sqliteFileBytes: null,
+      status: 'paused',
+      storageState: 'drained',
+      walBytes: 0,
+    })
+  await page.reload()
+  await expect(page.getByText('Storage: Drained', {exact: true})).toBeVisible()
+
+  await page.goto(`/projects/${projectId}/reviews-llm/${encodeURIComponent(articleId)}`)
+  await expect(page.getByText('Topology article A', {exact: true})).toBeVisible({timeout: 60_000})
+  const judgmentExplanations = page.getByText(/deterministic topology response/i)
+  await expect(judgmentExplanations).toHaveCount(2)
+  await expect(judgmentExplanations.first()).toBeVisible()
+})
