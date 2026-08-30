@@ -33,7 +33,6 @@ export type JudgmentWorkflowTopologyProvider = {
   close: () => void
   getEvidence: () => {maxConcurrentRequests: number; requestCount: number; renderedInputs: string[]}
   releaseFirstRequest: () => void
-  setFirstRequestHook: (hook: () => void) => void
 }
 
 type RuntimeRole = 'api' | 'judge-worker' | 'maintenance-worker'
@@ -188,7 +187,6 @@ export const startJudgmentWorkflowTopologyProvider = ({
   let maxConcurrentRequests = 0
   let requestCount = 0
   const renderedInputs: string[] = []
-  let firstRequestHook = () => {}
   let releaseFirstRequest = () => {}
   const firstRequestRelease = new Promise<void>((resolveRelease) => {
     releaseFirstRequest = resolveRelease
@@ -208,7 +206,6 @@ export const startJudgmentWorkflowTopologyProvider = ({
       activeRequests += 1
       requestCount += 1
       const requestNumber = requestCount
-      if (requestNumber === 1) firstRequestHook()
       maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests)
       const body = (await request.json()) as {messages?: Array<{content?: string; role?: string}>}
       renderedInputs.push(
@@ -259,9 +256,6 @@ export const startJudgmentWorkflowTopologyProvider = ({
       return {maxConcurrentRequests, renderedInputs: [...renderedInputs], requestCount}
     },
     releaseFirstRequest,
-    setFirstRequestHook: (hook) => {
-      firstRequestHook = hook
-    },
   }
 }
 
@@ -459,9 +453,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
   await waitForServingQueue()
   const leaseLossBarrier = getJudgeWorkerLeaseLossTestBarrierPaths(topology.env)
   mkdirSync(dirname(leaseLossBarrier.pausePath), {recursive: true})
-  provider.setFirstRequestHook(() => {
-    writeFileSync(leaseLossBarrier.pausePath, 'pause\n', {flag: 'wx'})
-  })
+  writeFileSync(leaseLossBarrier.armAfterClaimPath, 'armed\n', {flag: 'wx'})
   const firstJob = await postJson<{data: {jobId: string; status: string; storageState: string}}>(
     `${apiBaseUrl}/api/judgmentsjobs`,
     {projectId: seeded.data.fixture.projectIds[0]},
@@ -487,7 +479,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     },
   })
   if (!existsSync(leaseLossBarrier.pausePath)) {
-    throw new Error('Topology provider did not synchronously pause the primary judge after its first request')
+    throw new Error('Topology owner did not synchronously pause the primary judge after its first claim')
   }
   await onFirstJobClaimed?.()
   const secondJob = await postJson<{data: {jobId: string; status: string; storageState: string}}>(

@@ -2,6 +2,10 @@ import {Elysia, t} from 'elysia'
 
 import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {
+  isJudgeWorkerPausedAfterArmedTestClaim,
+  pauseJudgeWorkerAfterArmedTestClaim,
+} from '../cron/judgmentsJobs/judgeWorkerLeaseLossTestBarrier.ts'
+import {
   getJudgmentEndpointAvailability,
   getJudgmentEndpointAvailabilityDiagnostics,
 } from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
@@ -783,6 +787,9 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
 
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
   const claimedBy = body?.claimedBy ?? judgmentJobServerId
+  if (isJudgeWorkerPausedAfterArmedTestClaim({claimedBy})) {
+    return {data: {claims: []}, error: null}
+  }
   await runOwnerBackedClaimRecovery({claimedBy, jobId, protectedRecordIds: body?.protectedRecordIds})
 
   try {
@@ -791,6 +798,7 @@ const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequest
       claimedBy,
       getNormalizedClaimLimit(body?.limit ?? 1),
     )
+    pauseJudgeWorkerAfterArmedTestClaim({claimedBy, claimedCount: claims.length})
 
     return {data: {claims: getOwnerBackedClaimResponse(claims)}, error: null}
   } catch (error) {

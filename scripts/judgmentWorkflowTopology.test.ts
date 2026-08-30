@@ -7,6 +7,8 @@ import {
   getJudgeWorkerLeaseLossTestBarrierPaths,
   getJudgeWorkerLeaseLossTestClaimLimit,
   isJudgeWorkerLeaseLossTestBarrierActive,
+  isJudgeWorkerPausedAfterArmedTestClaim,
+  pauseJudgeWorkerAfterArmedTestClaim,
   waitAtJudgeWorkerLeaseLossTestBarrier,
 } from '../src/server/cron/judgmentsJobs/judgeWorkerLeaseLossTestBarrier.ts'
 import {resolveJudgeWorkerJournalIdentity} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
@@ -74,8 +76,26 @@ test('topology lease-loss barrier is opt-in, worker-specific, and test-only', as
 
   expect(isJudgeWorkerLeaseLossTestBarrierActive(topology.env)).toBe(false)
   mkdirSync(dirname(paths.pausePath), {recursive: true})
-  writeFileSync(paths.pausePath, 'pause\n')
+  expect(
+    pauseJudgeWorkerAfterArmedTestClaim({claimedBy: 'primary-claimant', claimedCount: 1, envValues: topology.env}),
+  ).toBe(false)
+  writeFileSync(paths.armAfterClaimPath, 'armed\n')
+  expect(
+    pauseJudgeWorkerAfterArmedTestClaim({claimedBy: 'primary-claimant', claimedCount: 0, envValues: topology.env}),
+  ).toBe(false)
+  expect(
+    pauseJudgeWorkerAfterArmedTestClaim({
+      claimedBy: 'primary-claimant',
+      claimedCount: 1,
+      envValues: {...topology.env, NODE_ENV: 'production'},
+    }),
+  ).toBe(false)
+  expect(
+    pauseJudgeWorkerAfterArmedTestClaim({claimedBy: 'primary-claimant', claimedCount: 1, envValues: topology.env}),
+  ).toBe(true)
   expect(isJudgeWorkerLeaseLossTestBarrierActive(topology.env)).toBe(true)
+  expect(isJudgeWorkerPausedAfterArmedTestClaim({claimedBy: 'primary-claimant', envValues: topology.env})).toBe(true)
+  expect(isJudgeWorkerPausedAfterArmedTestClaim({claimedBy: 'extra-claimant', envValues: topology.env})).toBe(false)
   expect(isJudgeWorkerLeaseLossTestBarrierActive({...topology.env, JUDGE_WORKER_ID: 'different-worker'})).toBe(false)
   expect(isJudgeWorkerLeaseLossTestBarrierActive({...topology.env, NODE_ENV: 'production'})).toBe(false)
   const waitForRelease = waitAtJudgeWorkerLeaseLossTestBarrier(topology.env)

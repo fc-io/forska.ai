@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
 import {sleep} from 'bun'
@@ -6,6 +6,8 @@ import {sleep} from 'bun'
 type BarrierEnvironment = Record<string, string | undefined>
 
 export type JudgeWorkerLeaseLossTestBarrierPaths = {
+  armAfterClaimPath: string
+  claimedByPath: string
   outcomePath: string
   pausePath: string
   reachedPath: string
@@ -27,11 +29,60 @@ const getBarrierPaths = (envValues: BarrierEnvironment = process.env): JudgeWork
   }
 
   return {
+    armAfterClaimPath: join(root, `${workerId}.arm-after-claim`),
+    claimedByPath: join(root, `${workerId}.claimed-by`),
     outcomePath: join(root, `${workerId}.outcome`),
     pausePath: join(root, `${workerId}.pause`),
     reachedPath: join(root, `${workerId}.reached`),
     releasePath: join(root, `${workerId}.release`),
   }
+}
+
+export const pauseJudgeWorkerAfterArmedTestClaim = ({
+  claimedBy,
+  claimedCount,
+  envValues = process.env,
+}: {
+  claimedBy: string
+  claimedCount: number
+  envValues?: BarrierEnvironment
+}): boolean => {
+  if (claimedCount <= 0) return false
+
+  const paths = getBarrierPaths(envValues)
+  if (!paths || !existsSync(paths.armAfterClaimPath)) return false
+
+  mkdirSync(dirname(paths.pausePath), {recursive: true})
+  try {
+    writeFileSync(paths.claimedByPath, `${claimedBy}\n`, {flag: 'wx'})
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+    if (readFileSync(paths.claimedByPath, 'utf8').trim() !== claimedBy) return false
+  }
+  try {
+    writeFileSync(paths.pausePath, 'pause\n', {flag: 'wx'})
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+  }
+
+  return true
+}
+
+export const isJudgeWorkerPausedAfterArmedTestClaim = ({
+  claimedBy,
+  envValues = process.env,
+}: {
+  claimedBy: string
+  envValues?: BarrierEnvironment
+}): boolean => {
+  const paths = getBarrierPaths(envValues)
+
+  return (
+    paths !== null
+    && existsSync(paths.pausePath)
+    && existsSync(paths.claimedByPath)
+    && readFileSync(paths.claimedByPath, 'utf8').trim() === claimedBy
+  )
 }
 
 export const isJudgeWorkerLeaseLossTestBarrierActive = (envValues: BarrierEnvironment = process.env): boolean => {
