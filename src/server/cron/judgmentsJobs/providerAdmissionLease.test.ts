@@ -50,9 +50,13 @@ test('provider bucket snapshot resolves null maxInflightRequests to the family d
   expect(snapshot.providerLimitVersion).toHaveLength(64)
 })
 
-test('judge workers use local provider admission leases instead of owner RPCs', async () => {
+test('the explicit test-only override uses local provider admission leases instead of owner RPCs', async () => {
   const originalServerRole = process.env.SERVER_ROLE
+  const originalNodeEnv = process.env.NODE_ENV
+  const originalLocalStore = process.env.FORSKA_TEST_LOCAL_PROVIDER_ADMISSION_LEASE_STORE
   process.env.SERVER_ROLE = 'judge-worker'
+  process.env.NODE_ENV = 'test'
+  process.env.FORSKA_TEST_LOCAL_PROVIDER_ADMISSION_LEASE_STORE = 'true'
 
   try {
     const snapshot = getProviderBucketSnapshot({
@@ -96,6 +100,16 @@ test('judge workers use local provider admission leases instead of owner RPCs', 
       delete process.env.SERVER_ROLE
     } else {
       process.env.SERVER_ROLE = originalServerRole
+    }
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV
+    } else {
+      process.env.NODE_ENV = originalNodeEnv
+    }
+    if (originalLocalStore === undefined) {
+      delete process.env.FORSKA_TEST_LOCAL_PROVIDER_ADMISSION_LEASE_STORE
+    } else {
+      process.env.FORSKA_TEST_LOCAL_PROVIDER_ADMISSION_LEASE_STORE = originalLocalStore
     }
   }
 })
