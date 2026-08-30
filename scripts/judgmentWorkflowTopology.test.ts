@@ -16,6 +16,7 @@ import {
   createJudgmentWorkflowTopology,
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
+  isTopologyJobCleanupComplete,
   startJudgmentWorkflowTopology,
   topologyLongRunningProcessStdio,
   topologyProjectorQuietWindowMs,
@@ -123,6 +124,19 @@ test('topology drains long-running child output instead of leaving bounded pipes
 
 test('topology projector evidence polls leave serialized main-queue work a quiet window', () => {
   expect(topologyProjectorQuietWindowMs).toBe(10_000)
+})
+
+test('topology cleanup completion requires central drain state and absent local artifacts', () => {
+  const drained = {
+    artifacts: {lease: false, shm: false, sqlite: false, wal: false},
+    jobId: 'job-a',
+    storageState: 'drained',
+  }
+
+  expect(isTopologyJobCleanupComplete([drained])).toBe(true)
+  expect(isTopologyJobCleanupComplete([{...drained, storageState: 'draining'}])).toBe(false)
+  expect(isTopologyJobCleanupComplete([{...drained, artifacts: {...drained.artifacts, sqlite: true}}])).toBe(false)
+  expect(isTopologyJobCleanupComplete([])).toBe(false)
 })
 
 test('topology accepts Bun Windows SIGTERM exit status only for intentional shutdown', () => {
