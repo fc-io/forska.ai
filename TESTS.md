@@ -60,11 +60,14 @@ bun run test:judgment-workflow:browser
   boundary after historical foreign-key table rebuilds, seeds a versioned
   `token_use` sentinel, and proves both the migration tail and sentinel survive
   ordinary production startup. Its multi-worker phase caps the test claim batch
-  at one, then uses an opt-in file barrier after the first provider response to
-  stop that worker's claim, worker-heartbeat, and provider-admission heartbeat
-  progress. The replacement worker must requeue through ordinary stale-worker
-  recovery, acquire the expired admission slot, and make the original final
-  heartbeat report `missing` or `notHolder` before the barrier releases.
+  at one and arms an opt-in owner-side hook that pauses the primary immediately
+  after its first claim commits and before the claim response returns. The
+  primary then waits at the post-provider barrier with claim, worker-heartbeat,
+  and provider-admission heartbeat progress stopped. Same-claimant request
+  replays return no work, while the replacement worker must requeue through
+  ordinary stale-worker recovery, acquire the expired admission slot, and make
+  the original final heartbeat report `missing` or `notHolder` before the
+  barrier releases.
 - `test:judgment-workflow:browser` runs the real admin job discovery,
   start/pause/drain, and project review-serving UI against the deterministic
   isolated production topology fixture.
