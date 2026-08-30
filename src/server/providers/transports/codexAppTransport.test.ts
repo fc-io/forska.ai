@@ -54,6 +54,23 @@ test('invokeCodexAppModel maps Codex token usage into provider usage', async () 
   expect(result).toEqual({text: 'codex-response', usage: {completionTokens: 35, promptTokens: 120, totalTokens: 155}})
 })
 
+test('invokeCodexAppModel forwards admission fencing abort signals to the app-server turn', async () => {
+  runJsonTurn.mockResolvedValue({text: 'codex-response', usage: null})
+  const controller = new AbortController()
+  const {invokeCodexAppModel} = await loadTransport()
+
+  await invokeCodexAppModel({
+    modelName: 'codex-mini',
+    outputSchema: {type: 'object'},
+    prompt: 'hello',
+    signal: controller.signal,
+    systemPrompt: 'system',
+    version: 'medium',
+  })
+
+  expect(runJsonTurn.mock.calls[0]?.[0]).toMatchObject({signal: controller.signal})
+})
+
 test('invokeCodexAppModel wraps transient turn timeouts as provider invocation failures', async () => {
   runJsonTurn.mockRejectedValue(new Error('The operation timed out.'))
 

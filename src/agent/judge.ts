@@ -781,6 +781,7 @@ const generateSinglePromptResponse = async ({
           modelId,
           outputSchema,
           prompt,
+          signal: requestAttempt.signal,
           systemPrompt,
           temperature: 0.2,
         })

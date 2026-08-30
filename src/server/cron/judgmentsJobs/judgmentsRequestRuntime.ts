@@ -602,8 +602,30 @@ const releaseProviderRequestAdmissionLease = async (lease: ProviderRequestAdmiss
   notifyProbeAdmissionWaiters()
 }
 
-const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmissionLease): (() => void) => {
+class ProviderAdmissionLeaseLostError extends Error {
+  constructor(reason: unknown) {
+    super(`Provider admission lease lost during active request: ${getErrorMessage(reason)}`)
+    this.name = 'ProviderAdmissionLeaseLostError'
+  }
+}
+
+const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmissionLease) => {
   let heartbeatInFlight = false
+  let rejectLeaseLoss = (_error: unknown): void => {
+    return undefined
+  }
+  const controller = new AbortController()
+  const leaseLoss = new Promise<never>((_resolve, reject) => {
+    rejectLeaseLoss = reject
+  })
+
+  const loseLease = (reason: unknown) => {
+    if (controller.signal.aborted) return
+    const error =
+      reason instanceof ProviderAdmissionLeaseLostError ? reason : new ProviderAdmissionLeaseLostError(reason)
+    controller.abort(error)
+    rejectLeaseLoss(error)
+  }
 
   const heartbeat = (): void => {
     if (heartbeatInFlight) {
@@ -612,8 +634,11 @@ const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmis
 
     heartbeatInFlight = true
     void heartbeatProviderAdmissionLeaseThroughOwner(lease)
-      .catch(() => {
-        return undefined
+      .then((result) => {
+        if (!result.heartbeat) loseLease(result.reason)
+      })
+      .catch((error) => {
+        loseLease(error)
       })
       .finally(() => {
         heartbeatInFlight = false
@@ -623,8 +648,12 @@ const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmis
 
   interval.unref?.()
 
-  return () => {
-    clearInterval(interval)
+  return {
+    leaseLoss,
+    signal: controller.signal,
+    stop: () => {
+      clearInterval(interval)
+    },
   }
 }
 
@@ -1853,9 +1882,14 @@ export const withJudgmentRequest = async <T>(
       getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt: requestAttemptContext}),
     )
   })
-  const requestAttempt = {...requestAttemptContext, baseURL: slot.baseURL, startedAt: new Date().toISOString()}
+  const providerAdmissionHeartbeat = startProviderRequestAdmissionLeaseHeartbeat(providerAdmissionLease)
+  const requestAttempt = {
+    ...requestAttemptContext,
+    baseURL: slot.baseURL,
+    signal: providerAdmissionHeartbeat.signal,
+    startedAt: new Date().toISOString(),
+  }
   markRequestStarted(judgmentsJobId, requestAttempt)
-  const stopProviderAdmissionHeartbeat = startProviderRequestAdmissionLeaseHeartbeat(providerAdmissionLease)
 
   try {
     await recordRequestAttemptManifestStage({
@@ -1866,9 +1900,21 @@ export const withJudgmentRequest = async <T>(
       startedAt: requestAttempt.startedAt,
     })
 
-    return await run(slot.baseURL, requestAttempt)
+    const providerRequest = run(slot.baseURL, requestAttempt)
+
+    try {
+      return await Promise.race([providerRequest, providerAdmissionHeartbeat.leaseLoss])
+    } catch (error) {
+      if (providerAdmissionHeartbeat.signal.aborted) {
+        await providerRequest.catch(() => {
+          return undefined
+        })
+        throw providerAdmissionHeartbeat.signal.reason
+      }
+      throw error
+    }
   } finally {
-    stopProviderAdmissionHeartbeat()
+    providerAdmissionHeartbeat.stop()
     markRequestFinished(judgmentsJobId, requestAttempt)
     slot.release()
     await releaseProviderRequestAdmissionLease(providerAdmissionLease)

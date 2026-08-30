@@ -114,6 +114,7 @@ const invokeAnthropicMessagesRun = async ({
   modelName,
   outputSchema,
   prompt,
+  signal,
   systemPrompt,
   temperature,
   thinkingVersion,
@@ -124,6 +125,7 @@ const invokeAnthropicMessagesRun = async ({
   modelName: string
   outputSchema: unknown
   prompt: string
+  signal?: AbortSignal
   systemPrompt: string
   temperature: number
   thinkingVersion: string | null
@@ -149,6 +151,7 @@ const invokeAnthropicMessagesRun = async ({
       ),
       headers: getAnthropicHeaders(apiKey),
       method: 'POST',
+      signal,
     })
 
     if (!response.ok) {
@@ -301,6 +304,7 @@ export const invokeAnthropicMessagesModel = async ({
   modelName,
   outputSchema,
   prompt,
+  signal,
   systemPrompt,
   temperature,
   version,
@@ -311,6 +315,7 @@ export const invokeAnthropicMessagesModel = async ({
   modelName: string
   outputSchema: unknown
   prompt: string
+  signal?: AbortSignal
   systemPrompt: string
   temperature: number
   version: string | null
@@ -324,6 +329,7 @@ export const invokeAnthropicMessagesModel = async ({
     modelName,
     outputSchema,
     prompt,
+    signal,
     systemPrompt,
     temperature,
     thinkingVersion: version,

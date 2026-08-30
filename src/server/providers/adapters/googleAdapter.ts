@@ -58,6 +58,7 @@ export const createGoogleAdapter = (catalog: ProviderCatalogEntry): ProviderDefi
         baseURL: runtimeCredentials.baseURL,
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         prompt: request.prompt,
+        signal: request.signal,
         systemPrompt: request.systemPrompt,
         temperature: request.temperature,
       })

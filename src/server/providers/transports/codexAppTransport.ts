@@ -133,12 +133,14 @@ export const invokeCodexAppModel = async ({
   modelName,
   outputSchema,
   prompt,
+  signal,
   systemPrompt,
   version,
 }: {
   modelName: string
   outputSchema: unknown
   prompt: string
+  signal?: AbortSignal
   systemPrompt: string
   version: string | null
 }): Promise<ProviderInvocationResult> => {
@@ -149,6 +151,7 @@ export const invokeCodexAppModel = async ({
       inputText: `${systemPrompt}\n\n${prompt}`,
       model: modelName,
       outputSchema,
+      signal,
       timeoutMs: 900_000,
     })
     .catch((error) => {
