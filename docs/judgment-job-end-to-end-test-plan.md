@@ -386,7 +386,9 @@ Acceptance criteria:
 - [x] Exercise `/admin/jobs/:id`: verify lifecycle state, queue/judged progress,
       storage health, and actions. This page is operational telemetry, not a
       judgment-result viewer; verify the resulting judgment through the relevant
-      project review-serving UI if a user-visible result assertion is in scope.
+      project review-serving UI. In the LLM-assessed review, assert the exact
+      assessed count and that the judged article appears in the list before
+      opening its detail view and asserting the deterministic judgment result.
 - [x] Pause and drain the job through the UI and verify the terminal state.
 - [x] Keep the existing mocked telemetry tests for loading, error, and
       presentation edge cases.

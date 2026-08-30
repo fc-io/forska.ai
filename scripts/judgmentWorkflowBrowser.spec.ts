@@ -153,7 +153,15 @@ test('discovers and drives a real judgment job through start, result, pause, dra
   await page.reload()
   await expect(page.getByText('Storage: Drained', {exact: true})).toBeVisible()
 
-  await page.goto(`/projects/${projectId}/reviews-llm/${encodeURIComponent(articleId)}`)
+  await page.goto(`/projects/${projectId}/reviews-llm`)
+  await expect(page.getByRole('link', {name: 'Assessed by LLM'})).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('heading', {name: 'Articles with Judgments (Showing 1-1 of 1)'})).toBeVisible({
+    timeout: 60_000,
+  })
+  const judgedArticleLink = page.getByRole('link', {name: 'Topology article A', exact: true})
+  await expect(judgedArticleLink).toBeVisible()
+  await judgedArticleLink.click()
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reviews-llm/${encodeURIComponent(articleId)}`))
   await expect(page.getByText('Topology article A', {exact: true})).toBeVisible({timeout: 60_000})
   const judgmentExplanations = page.getByText(/deterministic topology response/i)
   await expect(judgmentExplanations).toHaveCount(2)
