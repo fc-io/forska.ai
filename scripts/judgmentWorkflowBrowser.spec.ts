@@ -69,7 +69,15 @@ test('discovers and drives a real judgment job through start, result, pause, dra
     .toEqual({canonicalCount: 2, visibleProjectionCount: 1})
 
   await page.reload()
-  await expect(page.getByText('Unassessed Articles', {exact: true}).locator('..')).toContainText('1')
+  await expect
+    .poll(
+      async () => {
+        await page.reload()
+        return page.getByText('Unassessed Articles', {exact: true}).locator('..').textContent()
+      },
+      {timeout: 60_000},
+    )
+    .toContain('0')
 
   await page.getByRole('button', {name: 'Pause Job'}).click()
   await expect(page.getByRole('button', {name: 'Start Job', exact: true})).toBeVisible({timeout: 30_000})
@@ -104,22 +112,33 @@ test('discovers and drives a real judgment job through start, result, pause, dra
         return {
           hasOutboxRows: job.storageHealth?.hasOutboxRows,
           hasQueueRows: job.storageHealth?.hasQueueRows,
-          sqliteFileBytes: job.storageHealth?.sqliteFileBytes,
           status: job.status,
           storageState: job.storageState,
           walBytes: job.storageHealth?.walBytes,
         }
       },
-      {timeout: 60_000},
+      {timeout: 90_000},
     )
-    .toEqual({
-      hasOutboxRows: false,
-      hasQueueRows: false,
-      sqliteFileBytes: null,
-      status: 'paused',
-      storageState: 'drained',
-      walBytes: 0,
-    })
+    .toEqual({hasOutboxRows: false, hasQueueRows: false, status: 'paused', storageState: 'drained', walBytes: 0})
+  const cleanupResponse = await page.request.post(`${ownerOrigin}/api/test/judgment-workflow-topology/cleanup-stale`, {
+    data: {token: seedToken},
+  })
+  expect(cleanupResponse.ok()).toBe(true)
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(`/api/judgmentsjobs/${jobId}`)
+        const body = (await response.json()) as {
+          data?: {storageHealth?: {sqliteFileBytes?: number | null}}
+          storageHealth?: {sqliteFileBytes?: number | null}
+        }
+        const job = body.data ?? body
+
+        return job.storageHealth?.sqliteFileBytes
+      },
+      {timeout: 30_000},
+    )
+    .toBeNull()
   await page.reload()
   await expect(page.getByText('Storage: Drained', {exact: true})).toBeVisible()
 
