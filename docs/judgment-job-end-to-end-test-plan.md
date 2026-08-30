@@ -5,30 +5,33 @@ Date: 2026-08-28
 ## Implementation Status
 
 Rechecked on 2026-08-30. The named focused, component, recovery, topology,
-browser, and opt-in real-Codex commands exist, but the plan is not ready for
-final PR completion.
+browser, and opt-in real-Codex commands exist. Every automated PR gate is green,
+but the plan is not ready for final PR completion until the manual packaged
+desktop lifecycle is executed and recorded.
 
-Current macOS execution is green for focused (225 tests), component (124
-tests), recovery, fresh/migration-boundary/restart topology, the browser
-lifecycle with exact displayed queue counts, the desktop build, repository-wide
-lint, and the full Bun suite (3,287 passed, 3 skipped, 0 failed). The recheck also corrected
+Current execution is green for focused (227 tests), component (125 tests),
+recovery (202 tests), fresh/migration-boundary/restart topology, the browser
+lifecycle (1 Playwright test) with exact displayed queue counts, the desktop
+build, repository-wide lint, and the full Bun suite (all 385 discovered test
+files completed successfully). The macOS/Linux/Windows production-topology
+matrix is green in GitHub Actions run
+[`33300054921`](https://github.com/fc-io/forska.ai/actions/runs/33300054921).
+The recheck also corrected
 full-key component assertions, prompt abort and final-admission fencing,
 real-Codex maximum-attempt accounting, topology startup teardown, drained
 health projection publication, and the bounded judgment visibility
 token-domain bridge. The topology recheck also replaced POSIX process suspension
-with an opt-in cooperative lease-loss barrier at the post-provider,
-pre-final-heartbeat boundary and now upgrades from the versioned
+with an opt-in cooperative lease-loss barrier at the owner-claim commit boundary
+and now upgrades from the versioned
 `0089_dropProjectJudgmentModelForeignKeys.sql` boundary while preserving a
 non-empty sentinel row.
 
-Remaining release gates are explicit: the macOS/Linux/Windows topology matrix
-is implemented in `.github/workflows/judgment-workflow-topology.yml` but has not
-yet executed on remote CI, and the packaged desktop lifecycle has not been
-executed or recorded. The lint recheck repaired a stale review-detail type
-discriminator and two formatter-only baseline findings; both repository-wide
-and touched-file lint now pass. The operator-only paid real-Codex smoke was not
-run. Do not finalize the PR until the required cross-platform and manual desktop
-gates have their required evidence.
+The only remaining required release gate is the packaged desktop lifecycle,
+which has not been executed or recorded. The lint recheck repaired a stale
+review-detail type discriminator and two formatter-only baseline findings; both
+repository-wide and touched-file lint pass. The operator-only paid real-Codex
+smoke was not run and is not a PR requirement. Do not finalize the PR until the
+manual desktop gate has its required evidence.
 
 ## Goal
 
@@ -199,7 +202,7 @@ Acceptance criteria:
       auth-home location), while keeping Forska runtime/profile/database paths
       redirected to the test root; document that narrow exception and never copy
       credential material into the test root.
-- [ ] Run the topology command on every operating system supported by the
+- [x] Run the topology command on every operating system supported by the
       server release in CI. At minimum, add focused contract tests for macOS,
       Linux, and Windows runtime-root/journal/job-path resolution, supervisor-lock
       location, process-tree discovery, signal/exit handling, and path separators.
