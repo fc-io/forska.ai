@@ -37,6 +37,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingDynamicCountSql.ts'),
   join(reviewServingSourceRoot, 'reviewServingFilteredCountService.ts'),
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
+  join(reviewServingSourceRoot, 'judgmentJobReviewServingVisibilityService.ts'),
   join(reviewServingSourceRoot, 'reviewServingLazyPromptAnswerPostingSql.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorDomain.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
@@ -46,6 +47,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingV4RebuildRequestService.ts'),
 ])
 const reviewServingMaintenanceAdmissionFiles = [
+  'judgmentJobReviewServingVisibilityService.ts',
   'reviewServingChunkManifestRepository.ts',
   'reviewServingDirtyWorkService.ts',
   'reviewServingJudgmentJobQueueService.ts',
