@@ -8,6 +8,7 @@ const workspaceRoot = process.cwd()
 const srcRoot = join(workspaceRoot, 'src')
 const routesRoot = join(workspaceRoot, 'src/server/routes')
 const serverMainPath = join(workspaceRoot, 'src/server/serverMain.ts')
+const testOnlyRouteFiles = new Set(['src/server/routes/judgmentWorkflowTopologyTestRoutes.ts'])
 
 const getSourceFiles = (directory: string): string[] => {
   return readdirSync(directory, {withFileTypes: true}).flatMap((entry) => {
@@ -238,7 +239,11 @@ test('route handlers cannot add new unallowlisted generic DuckDB imports', () =>
 
     return forbiddenDuckdbImportPatterns
       .filter((entry) => {
-        return entry.pattern.test(fileText) && !routeDuckdbImportAllowlist.has(routeFile)
+        return (
+          entry.pattern.test(fileText)
+          && !routeDuckdbImportAllowlist.has(routeFile)
+          && !testOnlyRouteFiles.has(routeFile)
+        )
       })
       .map((entry) => {
         return `${routeFile}: ${entry.label}`
@@ -345,7 +350,11 @@ test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes'
 
     return forbiddenNormalForegroundSqlPatterns
       .filter((entry) => {
-        return entry.pattern.test(fileText) && !normalForegroundSqlAllowlist.has(routeFile)
+        return (
+          entry.pattern.test(fileText)
+          && !normalForegroundSqlAllowlist.has(routeFile)
+          && !testOnlyRouteFiles.has(routeFile)
+        )
       })
       .map((entry) => {
         return `${routeFile}: ${entry.label}`
@@ -353,6 +362,16 @@ test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes'
   })
 
   expect(violations).toEqual([])
+})
+
+test('test-only topology routes are token gated and absent from normal product API composition', () => {
+  const productRoutesText = readFileSync(join(routesRoot, 'productApiRoutes.ts'), 'utf8')
+  const topologyRoutesText = readFileSync(join(routesRoot, 'judgmentWorkflowTopologyTestRoutes.ts'), 'utf8')
+
+  expect(productRoutesText).toContain('process.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN')
+  expect(productRoutesText).toContain('? judgmentWorkflowTopologyTestRoutes')
+  expect(topologyRoutesText).toContain('requireTopologySeedBoundary(body.token)')
+  expect(topologyRoutesText).toContain("getCurrentServerRole() !== 'maintenance-worker'")
 })
 
 test('prompt preview route cannot reintroduce legacy sample article fallback reads', () => {
