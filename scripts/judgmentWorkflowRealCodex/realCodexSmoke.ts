@@ -42,18 +42,32 @@ export type RealCodexProvisionedFixture = {
 
 export type RealCodexTerminalObservation = {
   articleCount: number
+  canonicalCompletionCount: number
   elapsedMs: number
   error: string | null
   inputTokens: number | null
-  logicalDispatchCount: number
   outputTokens: number | null
+  providerDispatchCount: number
   requestAttemptCount: number
   status: 'completed' | 'failed' | 'timed_out'
 }
 
 export type RealCodexEvidence = {
   contentFlags: RealCodexContentFlags
-  executionInputs: Array<{articleFixtureId: string; renderedInput: string}>
+  requestInputs: Array<{
+    articleFixtureId: string
+    hasAbstract: boolean
+    hasExcludedFulltext: boolean
+    hasExcludedImage: boolean
+    hasTitle: boolean
+    requestPayloadSha256: string
+  }>
+  snapshotInputs: Array<{
+    articleFixtureId: string
+    hasAbstract: boolean
+    hasExcludedContent: boolean
+    hasTitle: boolean
+  }>
   judgments: Array<{
     articleFixtureId: string
     contentFlags: RealCodexContentFlags
@@ -222,21 +236,31 @@ const assertEvidence = ({
     throw new Error(`Real Codex project content flags mismatch: ${JSON.stringify(evidence.contentFlags)}`)
   }
 
-  const evidenceByFixtureId = new Map(
-    evidence.executionInputs.map((entry) => {
+  const requestEvidenceByFixtureId = new Map(
+    evidence.requestInputs.map((entry) => {
+      return [entry.articleFixtureId, entry]
+    }),
+  )
+  const snapshotEvidenceByFixtureId = new Map(
+    evidence.snapshotInputs.map((entry) => {
       return [entry.articleFixtureId, entry]
     }),
   )
 
   articles.map((article) => {
-    const input = evidenceByFixtureId.get(article.fixtureId)?.renderedInput
+    const requestInput = requestEvidenceByFixtureId.get(article.fixtureId)
+    const snapshotInput = snapshotEvidenceByFixtureId.get(article.fixtureId)
 
-    if (!input?.includes(article.title) || !input.includes(article.abstract)) {
-      throw new Error(`Execution input for ${article.fixtureId} omitted its title or abstract`)
+    if (!requestInput?.hasTitle || !requestInput.hasAbstract) {
+      throw new Error(`Provider request for ${article.fixtureId} omitted its title or abstract`)
     }
 
-    if (input.includes(article.fulltextSentinel) || input.includes(article.imageSentinelUrl)) {
-      throw new Error(`Execution input for ${article.fixtureId} leaked excluded full text or image content`)
+    if (requestInput.hasExcludedFulltext || requestInput.hasExcludedImage) {
+      throw new Error(`Provider request for ${article.fixtureId} leaked excluded full text or image content`)
+    }
+
+    if (!snapshotInput?.hasTitle || !snapshotInput.hasAbstract || snapshotInput.hasExcludedContent) {
+      throw new Error(`Execution snapshot for ${article.fixtureId} violated the title-and-abstract contract`)
     }
 
     return article
@@ -313,14 +337,17 @@ export const runRealCodexSmoke = async ({
 
     if (
       terminal.articleCount !== articles.length
-      || terminal.logicalDispatchCount > maximumLogicalProviderAttempts
+      || terminal.canonicalCompletionCount !== articles.length
+      || terminal.providerDispatchCount < articles.length
+      || terminal.providerDispatchCount > maximumLogicalProviderAttempts
       || terminal.requestAttemptCount > maximumLogicalProviderAttempts
     ) {
       throw new Error(
         `Real Codex cost evidence exceeded the declared bound: ${JSON.stringify({
           articleCount: terminal.articleCount,
-          logicalDispatchCount: terminal.logicalDispatchCount,
+          canonicalCompletionCount: terminal.canonicalCompletionCount,
           maximumLogicalProviderAttempts,
+          providerDispatchCount: terminal.providerDispatchCount,
           requestAttemptCount: terminal.requestAttemptCount,
         })}`,
       )

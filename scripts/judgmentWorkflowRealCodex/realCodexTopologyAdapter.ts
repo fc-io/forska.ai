@@ -1,3 +1,4 @@
+import {readFile, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 
 import {sleep} from 'bun'
@@ -165,11 +166,11 @@ const getSnapshotEvidence = async (baseUrl: string, identities: SnapshotIdentity
       if (article.fullText !== null || article.fullTextHtml !== null || article.originalData !== null) {
         throw new Error(`Execution snapshot ${identity.executionSnapshotId} retained excluded article content`)
       }
-      const title = typeof article.articleTitle === 'string' ? article.articleTitle : ''
-      const abstract = typeof article.articleSummary === 'string' ? article.articleSummary : ''
       return {
         articleFixtureId: identity.articleId.split(':').at(-1) ?? identity.articleId,
-        renderedInput: `${title}\n${abstract}`,
+        hasAbstract: typeof article.articleSummary === 'string' && article.articleSummary.length > 0,
+        hasExcludedContent: false,
+        hasTitle: typeof article.articleTitle === 'string' && article.articleTitle.length > 0,
       }
     }),
   )
@@ -179,6 +180,8 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
   let running: RunningTopology | null = null
   let articleCount = 0
   let provisionedFixture: RealCodexProvisionedFixture | null = null
+  let requestEvidenceManifestPath: string | null = null
+  let requestEvidenceOutputPath: string | null = null
   const getRunning = () => {
     if (!running) throw new Error('Real Codex topology is not running')
     return running
@@ -201,12 +204,35 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
   return {
     start: async ({durableRoot, inheritedCodexHome}) => {
       const topology = createJudgmentWorkflowTopology({cwd: durableRoot})
+      requestEvidenceManifestPath = join(topology.root, 'request-evidence-manifest.json')
+      requestEvidenceOutputPath = join(topology.root, 'request-evidence.jsonl')
+      await writeFile(
+        requestEvidenceManifestPath,
+        JSON.stringify({fixtures: [], outputPath: requestEvidenceOutputPath}),
+        'utf8',
+      )
+      topology.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_MANIFEST = requestEvidenceManifestPath
+      topology.env.JUDGE_FIRST_REQUEST_LOG_FULL = 'false'
+      topology.env.JUDGE_FIRST_REQUEST_PREVIEW_CHARS = '1'
       if (inheritedCodexHome) topology.env.CODEX_HOME = inheritedCodexHome
       running = await startJudgmentWorkflowTopology({cwd: process.cwd(), topology})
     },
     provisionThroughHttp: async ({articles, contentFlags, model, prompt}) => {
       const baseUrl = getBaseUrl()
       articleCount = articles.length
+      if (!requestEvidenceManifestPath || !requestEvidenceOutputPath) {
+        throw new Error('Real Codex request evidence paths were not initialized')
+      }
+      await writeFile(
+        requestEvidenceManifestPath,
+        JSON.stringify({
+          fixtures: articles.map(({abstract, fixtureId, fulltextSentinel, imageSentinelUrl, title}) => {
+            return {abstract, fixtureId, fulltextSentinel, imageSentinelUrl, title}
+          }),
+          outputPath: requestEvidenceOutputPath,
+        }),
+        'utf8',
+      )
       const ensured = getDataRecord(
         await requestJson(baseUrl, 'POST', '/api/models/ensure', {
           modelName: model.remoteModelId,
@@ -274,8 +300,18 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
           articleCount,
           elapsedMs: Date.now() - startedAt,
           inputTokens: Number(tokens.totalPromptTokens ?? 0),
-          logicalDispatchCount: judgments.length,
+          canonicalCompletionCount: judgments.length,
           outputTokens: Number(tokens.totalCompletionTokens ?? 0),
+          providerDispatchCount: requestEvidenceOutputPath
+            ? (
+                await readFile(requestEvidenceOutputPath, 'utf8').catch(() => {
+                  return ''
+                })
+              )
+                .trim()
+                .split('\n')
+                .filter(Boolean).length
+            : 0,
           requestAttemptCount: attempts,
         }
         if (failure) {
@@ -302,6 +338,14 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
       const active = getRunning()
       const sqlitePath = join(active.topology.root, 'data', 'judgment-jobs', `${fixture.jobId}.sqlite`)
       const executionInputs = await getSnapshotEvidence(getBaseUrl(), getSnapshotIdentities(sqlitePath))
+      if (!requestEvidenceOutputPath) throw new Error('Real Codex request evidence path is unavailable')
+      const requestInputs = (await readFile(requestEvidenceOutputPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          return getRecord(JSON.parse(line) as unknown, 'provider request evidence')
+        })
       const canonicalEvidence = await getCanonicalEvidence(fixture)
       const canonicalJudgments = Array.isArray(canonicalEvidence.judgments)
         ? canonicalEvidence.judgments.map((value) => {
@@ -350,7 +394,17 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
       const thinking = getString(options.thinking, 'stored model thinking')
       return {
         contentFlags: storedFlags,
-        executionInputs,
+        requestInputs: requestInputs.map((entry) => {
+          return {
+            articleFixtureId: getString(entry.articleFixtureId, 'request evidence article fixture id'),
+            hasAbstract: entry.hasAbstract === true,
+            hasExcludedFulltext: entry.hasExcludedFulltext === true,
+            hasExcludedImage: entry.hasExcludedImage === true,
+            hasTitle: entry.hasTitle === true,
+            requestPayloadSha256: getString(entry.requestPayloadSha256, 'request payload hash'),
+          }
+        }),
+        snapshotInputs: executionInputs,
         judgments: canonicalJudgments.map((judgment) => {
           const contentFlags = {
             useAbstract: judgment.useAbstract === true,
