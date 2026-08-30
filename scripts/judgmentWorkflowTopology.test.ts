@@ -10,7 +10,11 @@ import {
   waitAtJudgeWorkerLeaseLossTestBarrier,
 } from '../src/server/cron/judgmentsJobs/judgeWorkerLeaseLossTestBarrier.ts'
 import {resolveJudgeWorkerJournalIdentity} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
-import {createJudgmentWorkflowTopology, startJudgmentWorkflowTopology} from './judgmentWorkflowTopology.ts'
+import {
+  createJudgmentWorkflowTopology,
+  isExpectedTopologyShutdownExitCode,
+  startJudgmentWorkflowTopology,
+} from './judgmentWorkflowTopology.ts'
 
 const topologyRoots: string[] = []
 
@@ -88,6 +92,13 @@ test('topology resolves the production supervisor lock outside the disposable ap
   expect(topology.serverStackLockPath).toEndWith(
     `${topology.apiPort}-${topology.maintenancePort}-${topology.judgePort}.lock.json`,
   )
+})
+
+test('topology accepts Bun Windows SIGTERM exit status only for intentional shutdown', () => {
+  expect(isExpectedTopologyShutdownExitCode({exitCode: 0, platform: 'win32'})).toBe(true)
+  expect(isExpectedTopologyShutdownExitCode({exitCode: 143, platform: 'win32'})).toBe(true)
+  expect(isExpectedTopologyShutdownExitCode({exitCode: 143, platform: 'linux'})).toBe(false)
+  expect(isExpectedTopologyShutdownExitCode({exitCode: 1, platform: 'win32'})).toBe(false)
 })
 
 test('topology removes its disposable root when the production stack cannot be spawned', async () => {

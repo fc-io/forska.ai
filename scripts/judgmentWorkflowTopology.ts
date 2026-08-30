@@ -33,6 +33,7 @@ export type JudgmentWorkflowTopologyProvider = {
   close: () => void
   getEvidence: () => {maxConcurrentRequests: number; requestCount: number; renderedInputs: string[]}
   releaseFirstRequest: () => void
+  setFirstRequestHook: (hook: () => void) => void
 }
 
 type RuntimeRole = 'api' | 'judge-worker' | 'maintenance-worker'
@@ -47,6 +48,16 @@ export type JudgmentWorkflowReadinessMonitor = {assertHealthy: () => void; stop:
 
 const startupTimeoutMs = 600_000
 const shutdownTimeoutMs = 30_000
+
+export const isExpectedTopologyShutdownExitCode = ({
+  exitCode,
+  platform = process.platform,
+}: {
+  exitCode: number
+  platform?: NodeJS.Platform
+}) => {
+  return exitCode === 0 || (platform === 'win32' && exitCode === 143)
+}
 
 const getAvailablePort = (): number => {
   const server = listen({hostname: '127.0.0.1', port: 0, socket: {data() {}}})
@@ -177,6 +188,7 @@ export const startJudgmentWorkflowTopologyProvider = ({
   let maxConcurrentRequests = 0
   let requestCount = 0
   const renderedInputs: string[] = []
+  let firstRequestHook = () => {}
   let releaseFirstRequest = () => {}
   const firstRequestRelease = new Promise<void>((resolveRelease) => {
     releaseFirstRequest = resolveRelease
@@ -196,6 +208,7 @@ export const startJudgmentWorkflowTopologyProvider = ({
       activeRequests += 1
       requestCount += 1
       const requestNumber = requestCount
+      if (requestNumber === 1) firstRequestHook()
       maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests)
       const body = (await request.json()) as {messages?: Array<{content?: string; role?: string}>}
       renderedInputs.push(
@@ -246,6 +259,9 @@ export const startJudgmentWorkflowTopologyProvider = ({
       return {maxConcurrentRequests, renderedInputs: [...renderedInputs], requestCount}
     },
     releaseFirstRequest,
+    setFirstRequestHook: (hook) => {
+      firstRequestHook = hook
+    },
   }
 }
 
@@ -441,6 +457,11 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     return waitForServingQueue()
   }
   await waitForServingQueue()
+  const leaseLossBarrier = getJudgeWorkerLeaseLossTestBarrierPaths(topology.env)
+  mkdirSync(dirname(leaseLossBarrier.pausePath), {recursive: true})
+  provider.setFirstRequestHook(() => {
+    writeFileSync(leaseLossBarrier.pausePath, 'pause\n', {flag: 'wx'})
+  })
   const firstJob = await postJson<{data: {jobId: string; status: string; storageState: string}}>(
     `${apiBaseUrl}/api/judgmentsjobs`,
     {projectId: seeded.data.fixture.projectIds[0]},
@@ -453,17 +474,22 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       const claims = await postJson<{
         data: {claims: Array<{claimId: string; queueRecordId: string; serverId: string}>}
       }>(`${ownerBaseUrl}/api/test/judgment-workflow-topology/claims`, {jobId: firstJob.data.jobId, token})
+      if (claims.data.claims.length > 1) {
+        throw new Error(
+          `Primary judge claimed more than the fenced first prompt: ${JSON.stringify(claims.data.claims)}`,
+        )
+      }
       for (const claim of claims.data.claims) {
         observedJudgeIds.add(claim.serverId)
         observedClaims.set(claim.queueRecordId, new Set([claim.claimId]))
       }
-      return claims.data.claims.length > 0
+      return claims.data.claims.length === 1
     },
   })
+  if (!existsSync(leaseLossBarrier.pausePath)) {
+    throw new Error('Topology provider did not synchronously pause the primary judge after its first request')
+  }
   await onFirstJobClaimed?.()
-  const leaseLossBarrier = getJudgeWorkerLeaseLossTestBarrierPaths(topology.env)
-  mkdirSync(dirname(leaseLossBarrier.pausePath), {recursive: true})
-  writeFileSync(leaseLossBarrier.pausePath, 'pause\n', {flag: 'wx'})
   const secondJob = await postJson<{data: {jobId: string; status: string; storageState: string}}>(
     `${apiBaseUrl}/api/judgmentsjobs`,
     {projectId: seeded.data.fixture.projectIds[1]},
@@ -853,7 +879,7 @@ export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess,
   try {
     const exitCode = await waitForExit(serverStackProcess)
 
-    if (exitCode !== 0) {
+    if (!isExpectedTopologyShutdownExitCode({exitCode})) {
       throw new Error(`Production server stack exited with code ${exitCode}`)
     }
 
