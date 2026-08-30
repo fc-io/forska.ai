@@ -324,6 +324,8 @@ export type JudgmentJobQueuePromptLifecycleRow = {
   updatedAt: string
 }
 
+export type JudgmentJobTopologyClaimRow = {claimId: string; queueRecordId: string; status: string}
+
 export type JudgmentJobSqlitePreflightSnapshot = {
   outboxSampleCount: number
   queueSampleCount: number
@@ -4458,6 +4460,27 @@ const sqliteService = {
             `,
           )
           .all(jobId) as JudgmentJobQueuePromptLifecycleRow[]
+      }) ?? []
+    )
+  },
+  getTopologyClaimRows: async (jobId: string): Promise<JudgmentJobTopologyClaimRow[]> => {
+    if (!process.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN) {
+      return []
+    }
+
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return database
+          .query(
+            `
+              SELECT claim_id AS claimId, id AS queueRecordId, status
+              FROM queue_prompt
+              WHERE job_id = ?
+                AND claim_id IS NOT NULL
+              ORDER BY ready_insert_seq ASC
+            `,
+          )
+          .all(jobId) as JudgmentJobTopologyClaimRow[]
       }) ?? []
     )
   },
