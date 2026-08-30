@@ -119,6 +119,7 @@ export const invokeOpenAIChatModel = async ({
   modelName,
   outputSchema,
   prompt,
+  signal,
   systemPrompt,
   temperature,
 }: {
@@ -129,6 +130,7 @@ export const invokeOpenAIChatModel = async ({
   modelName: string
   outputSchema: unknown
   prompt: string
+  signal?: AbortSignal
   systemPrompt: string
   temperature: number
 }): Promise<ProviderInvocationResult> => {
@@ -144,6 +146,7 @@ export const invokeOpenAIChatModel = async ({
       systemPrompt,
       temperature,
     }) as never,
+    {signal},
   )
   const message = response.choices[0]?.message
 

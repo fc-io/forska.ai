@@ -243,6 +243,7 @@ export type ProviderInvokeRequest = {
   maxCompletionTokens: number
   outputSchema: unknown
   prompt: string
+  signal?: AbortSignal
   systemPrompt: string
   temperature: number
 }

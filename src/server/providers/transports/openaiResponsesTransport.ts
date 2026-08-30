@@ -41,6 +41,7 @@ export const invokeOpenAIResponsesModel = async ({
   modelName,
   outputSchema,
   prompt,
+  signal,
   systemPrompt,
   temperature,
 }: {
@@ -50,22 +51,26 @@ export const invokeOpenAIResponsesModel = async ({
   modelName: string
   outputSchema: unknown
   prompt: string
+  signal?: AbortSignal
   systemPrompt: string
   temperature: number
 }): Promise<ProviderInvocationResult> => {
   const resolvedBaseURL = getRequiredBaseURL({baseURL, providerLabel: 'OpenAI API'})
   const requiredApiKey = getRequiredApiKey({apiKey, providerLabel: 'OpenAI API'})
   const client = getOpenAIClient({apiKey: requiredApiKey, baseURL: resolvedBaseURL})
-  const response = await client.responses.create({
-    input: [
-      {content: systemPrompt, role: 'system'},
-      {content: prompt, role: 'user'},
-    ],
-    model: modelName,
-    temperature,
-    text: getJsonSchemaTextFormat(outputSchema),
-    ...(typeof maxCompletionTokens === 'number' ? {max_output_tokens: maxCompletionTokens} : {}),
-  } as never)
+  const response = await client.responses.create(
+    {
+      input: [
+        {content: systemPrompt, role: 'system'},
+        {content: prompt, role: 'user'},
+      ],
+      model: modelName,
+      temperature,
+      text: getJsonSchemaTextFormat(outputSchema),
+      ...(typeof maxCompletionTokens === 'number' ? {max_output_tokens: maxCompletionTokens} : {}),
+    } as never,
+    {signal},
+  )
   const usage = response.usage
 
   return {

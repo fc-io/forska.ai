@@ -109,7 +109,7 @@ const releaseProviderAdmissionLeaseWithResultThroughOwner = mock(async (input: P
   return released ? ({released: true} as const) : ({reason: 'missing', released: false} as const)
 })
 const heartbeatProviderAdmissionLeaseThroughOwner = mock(async (_input: ProviderAdmissionLeaseHeartbeatInput) => {
-  return {heartbeat: false, reason: 'missing' as const}
+  return {heartbeat: true as const, lease: {} as never}
 })
 class RecoverableJudgeError extends Error {
   failureCode: string
@@ -425,7 +425,7 @@ afterEach(async () => {
   )
   heartbeatProviderAdmissionLeaseThroughOwner.mockImplementation(
     async (_input: ProviderAdmissionLeaseHeartbeatInput) => {
-      return {heartbeat: false, reason: 'missing' as const}
+      return {heartbeat: true as const, lease: {} as never}
     },
   )
   judgeSinglePrompt.mockImplementation(async (_input: unknown) => {
@@ -1149,6 +1149,138 @@ test('heartbeats provider admission lease while remote request is running', asyn
 
   release.resolve()
   await request
+})
+
+test.each(['missing', 'notHolder'] as const)(
+  'aborts and rejects active provider work when admission heartbeat loses the %s lease',
+  async (reason) => {
+    const {withJudgmentRequest} = await loadRuntime()
+    heartbeatProviderAdmissionLeaseThroughOwner.mockImplementationOnce(async () => {
+      return {heartbeat: false as const, reason}
+    })
+    let observedAbortReason: unknown
+
+    const request = withJudgmentRequest(
+      {
+        judgmentsJobId: `job-provider-heartbeat-${reason}`,
+        provider: 'openai',
+        fallbackBaseURL: `http://provider-heartbeat-${reason}.test/v1`,
+        providerConnectionId: `connection-provider-heartbeat-${reason}`,
+        providerMaxInflightRequests: 1,
+        providerUsesFamilyDefault: false,
+        workerUrls: [],
+      },
+      async (_baseURL, requestAttempt) => {
+        await new Promise<void>((resolve) => {
+          requestAttempt.signal.addEventListener(
+            'abort',
+            () => {
+              observedAbortReason = requestAttempt.signal.reason
+              resolve()
+            },
+            {once: true},
+          )
+        })
+      },
+    )
+
+    const error = await request.catch((requestError: unknown) => {
+      return requestError
+    })
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain(`Provider admission lease lost during active request: ${reason}`)
+    expect(observedAbortReason).toBeInstanceOf(Error)
+  },
+)
+
+test('aborts and rejects active provider work when the admission heartbeat owner request fails', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  heartbeatProviderAdmissionLeaseThroughOwner.mockImplementationOnce(async () => {
+    throw new Error('owner unavailable')
+  })
+  let aborted = false
+
+  const request = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-provider-heartbeat-owner-failure',
+      provider: 'openai',
+      fallbackBaseURL: 'http://provider-heartbeat-owner-failure.test/v1',
+      providerConnectionId: 'connection-provider-heartbeat-owner-failure',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async (_baseURL, requestAttempt) => {
+      await new Promise<void>((resolve) => {
+        requestAttempt.signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true
+            resolve()
+          },
+          {once: true},
+        )
+      })
+    },
+  )
+  const error = await request.catch((requestError: unknown) => {
+    return requestError
+  })
+
+  expect(aborted).toBe(true)
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toContain('Provider admission lease lost during active request: owner unavailable')
+})
+
+test('does not release capacity for replacement until aborted provider work has settled', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  const providerCleanup = createSignal()
+  let firstAborted = false
+  let secondStarted = false
+  heartbeatProviderAdmissionLeaseThroughOwner.mockImplementationOnce(async () => {
+    return {heartbeat: false as const, reason: 'missing' as const}
+  })
+
+  const input = {
+    judgmentsJobId: 'job-provider-heartbeat-fencing',
+    provider: 'openai',
+    fallbackBaseURL: 'http://provider-heartbeat-fencing.test/v1',
+    providerConnectionId: 'connection-provider-heartbeat-fencing',
+    providerMaxInflightRequests: 1,
+    providerUsesFamilyDefault: false,
+    workerUrls: [],
+  }
+  const firstRequest = withJudgmentRequest(input, async (_baseURL, requestAttempt) => {
+    await new Promise<void>((resolve) => {
+      requestAttempt.signal.addEventListener(
+        'abort',
+        () => {
+          firstAborted = true
+          resolve()
+        },
+        {once: true},
+      )
+    })
+    await providerCleanup.promise
+  })
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20)
+  })
+  expect(firstAborted).toBe(true)
+
+  const secondRequest = withJudgmentRequest(input, async () => {
+    secondStarted = true
+  })
+  await flush()
+  expect(secondStarted).toBe(false)
+
+  providerCleanup.resolve()
+  await firstRequest.catch(() => {
+    return undefined
+  })
+  await secondRequest
+  expect(secondStarted).toBe(true)
 })
 
 test('provider admission release fencing failure still clears the local request slot', async () => {

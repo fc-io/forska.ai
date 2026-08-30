@@ -52,6 +52,7 @@ export const invokeGeminiGenerateContentModel = async ({
   maxCompletionTokens,
   modelName,
   prompt,
+  signal,
   systemPrompt,
   temperature,
 }: {
@@ -60,6 +61,7 @@ export const invokeGeminiGenerateContentModel = async ({
   maxCompletionTokens?: number | null
   modelName: string
   prompt: string
+  signal?: AbortSignal
   systemPrompt: string
   temperature: number
 }): Promise<ProviderInvocationResult> => {
@@ -78,6 +80,7 @@ export const invokeGeminiGenerateContentModel = async ({
       }),
       headers: {'content-type': 'application/json'},
       method: 'POST',
+      signal,
     },
   )
 

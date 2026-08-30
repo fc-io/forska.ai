@@ -59,6 +59,7 @@ export const createOpenAIAdapter = (catalog: ProviderCatalogEntry): ProviderDefi
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
         prompt: request.prompt,
+        signal: request.signal,
         systemPrompt: request.systemPrompt,
         temperature: request.temperature,
       })

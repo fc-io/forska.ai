@@ -86,6 +86,7 @@ export type JudgmentRequestAttemptRuntimeContext = {requestAttemptId: string; pr
 
 export type JudgmentRequestAttemptLiveContext = JudgmentRequestAttemptRuntimeContext & {
   baseURL: string
+  signal: AbortSignal
   startedAt: string
 }
 

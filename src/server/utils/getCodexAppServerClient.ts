@@ -157,6 +157,7 @@ export type CodexAppServerClient = {
     effort?: string | null
     inputText: string
     outputSchema: unknown
+    signal?: AbortSignal
     timeoutMs?: number
   }) => Promise<{text: string; usage: CodexThreadTokenUsage | null}>
 }
@@ -709,9 +710,11 @@ export const createCodexAppServerClient = ({
     effort?: string | null
     inputText: string
     outputSchema: unknown
+    signal?: AbortSignal
     timeoutMs?: number
   }): Promise<{text: string; usage: CodexThreadTokenUsage | null}> => {
     await initPromise
+    params.signal?.throwIfAborted()
 
     startTrackedTurn()
     let completedTurn = false
@@ -746,6 +749,7 @@ export const createCodexAppServerClient = ({
       }
 
       return await new Promise<{text: string; usage: CodexThreadTokenUsage | null}>((resolve, reject) => {
+        let settled = false
         let handler: Listener = () => {
           return undefined
         }
@@ -756,11 +760,24 @@ export const createCodexAppServerClient = ({
           clearTimeout(timeout)
           listeners.delete(handler)
           lifecycleListeners.delete(onClosed)
+          params.signal?.removeEventListener('abort', onAbort)
         }
         const fail = (error: Error): void => {
+          if (settled) return
+          settled = true
           cleanup()
           recycleAfterTurn = true
           reject(error)
+        }
+        const onAbort = () => {
+          const reason: unknown = params.signal?.reason
+          void request('turn/interrupt', {threadId, turnId}, params.timeoutMs)
+            .catch(() => {
+              return undefined
+            })
+            .finally(() => {
+              fail(reason instanceof Error ? reason : new Error('codex app-server: turn aborted'))
+            })
         }
         const timeout = setTimeout(() => {
           fail(new Error('codex app-server: turn timeout'))
@@ -782,6 +799,8 @@ export const createCodexAppServerClient = ({
             const completedTurnId = completionParams?.turn?.id
             const status = completionParams?.turn?.status
             if (completedTurnId !== turnId) return
+            if (settled) return
+            settled = true
             cleanup()
 
             if (status === 'failed') {
@@ -804,9 +823,12 @@ export const createCodexAppServerClient = ({
 
         listeners.add(handler)
         lifecycleListeners.add(onClosed)
+        params.signal?.addEventListener('abort', onAbort, {once: true})
 
         if (closedError) {
           fail(closedError)
+        } else if (params.signal?.aborted) {
+          onAbort()
         }
       })
     } catch (error) {

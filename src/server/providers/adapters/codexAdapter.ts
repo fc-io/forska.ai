@@ -145,6 +145,7 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
         prompt: request.prompt,
+        signal: request.signal,
         systemPrompt: request.systemPrompt,
         version: model.variant ?? model.version,
       })

@@ -37,6 +37,7 @@ export const invokeStoredProviderModel = async ({
   modelId,
   outputSchema,
   prompt,
+  signal,
   systemPrompt,
   temperature,
 }: StoredProviderInvocationInput): Promise<ProviderInvocationResult> => {
@@ -52,7 +53,7 @@ export const invokeStoredProviderModel = async ({
   return definition.invoke({
     connection,
     model,
-    request: {maxCompletionTokens, outputSchema, prompt, systemPrompt, temperature},
+    request: {maxCompletionTokens, outputSchema, prompt, signal, systemPrompt, temperature},
     runtimeCredentials: nextRuntimeCredentials,
   })
 }

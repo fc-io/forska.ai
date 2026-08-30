@@ -215,6 +215,7 @@ export const createOpenAICompatibleAdapter = (
         modelName: getProviderModelName(model),
         outputSchema: request.outputSchema,
         prompt: request.prompt,
+        signal: request.signal,
         systemPrompt: request.systemPrompt,
         temperature: request.temperature,
       })
