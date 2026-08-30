@@ -44,9 +44,29 @@ export type RunningTopologyExtraJudge = {
   process: Subprocess<'ignore', 'inherit', 'inherit'>
 }
 export type JudgmentWorkflowReadinessMonitor = {assertHealthy: () => void; stop: () => Promise<void>}
+export type TopologyJobCleanupState = {
+  artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
+  jobId: string
+  storageState: string | null
+}
 
 export const topologyLongRunningProcessStdio = {stderr: 'inherit', stdout: 'inherit'} as const
 export const topologyProjectorQuietWindowMs = 10_000
+
+export const isTopologyJobCleanupComplete = (jobs: TopologyJobCleanupState[]) => {
+  return (
+    jobs.length > 0
+    && jobs.every((job) => {
+      return (
+        job.storageState === 'drained'
+        && !job.artifacts.sqlite
+        && !job.artifacts.wal
+        && !job.artifacts.shm
+        && !job.artifacts.lease
+      )
+    })
+  )
+}
 
 const startupTimeoutMs = 600_000
 const shutdownTimeoutMs = 30_000
@@ -682,35 +702,30 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     deadline: Date.now() + 120_000,
     description: 'drained jobs and production SQLite cleanup',
     predicate: async () => {
-      await postJson(`${ownerBaseUrl}/api/test/judgment-workflow-topology/cleanup-stale`, {token})
-      drainedEvidence = await postJson<{data: typeof result}>(
-        `${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`,
+      const cleanup = await postJson<{data: {jobs: TopologyJobCleanupState[]; ok: boolean}}>(
+        `${ownerBaseUrl}/api/test/judgment-workflow-topology/cleanup-stale`,
         {
-          fixtureId,
           jobIds: jobs.map((job) => {
             return job.data.jobId
           }),
           token,
         },
-      ).then((response) => {
-        return response.data
-      })
-      const states = await Promise.all(
-        jobs.map((job) => {
-          return fetch(`${apiBaseUrl}/api/judgmentsjobs/${job.data.jobId}`).then(async (response) => {
-            return (await response.json()) as {storageState?: string}
-          })
+      )
+      const cleanupByJobId = new Map(
+        cleanup.data.jobs.map((job) => {
+          return [job.jobId, job]
         }),
       )
+      drainedEvidence = {
+        ...result,
+        jobEvidence: result.jobEvidence.map((job) => {
+          const cleanupState = cleanupByJobId.get(job.jobId)
 
-      return (
-        states.every((state) => {
-          return state.storageState === 'drained'
-        })
-        && drainedEvidence.jobEvidence.every((job) => {
-          return !job.artifacts.sqlite && !job.artifacts.wal && !job.artifacts.shm && !job.artifacts.lease
-        })
-      )
+          return cleanupState ? {...job, artifacts: cleanupState.artifacts} : job
+        }),
+      }
+
+      return isTopologyJobCleanupComplete(cleanup.data.jobs)
     },
   })
 
