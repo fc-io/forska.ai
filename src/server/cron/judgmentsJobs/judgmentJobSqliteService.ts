@@ -1515,6 +1515,10 @@ const reconcileProjectRefreshAcks = async ({projectId}: {projectId?: string} = {
 
 const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
 
+export const isRetryableJudgmentJobFileDeleteError = (error: unknown) => {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EBUSY'
+}
+
 const deleteJobFiles = (jobId: string) => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
 
@@ -2120,7 +2124,7 @@ const deleteDrainedSqliteJobs = async ({
 
     return [currentJobId, ...(await deleteDrainedSqliteJobs({jobIds: jobIds.slice(1), serverJobId}))]
   } catch (error) {
-    return error instanceof JudgmentJobLeaseError
+    return error instanceof JudgmentJobLeaseError || isRetryableJudgmentJobFileDeleteError(error)
       ? deleteDrainedSqliteJobs({jobIds: jobIds.slice(1), serverJobId})
       : Promise.reject(error)
   }
