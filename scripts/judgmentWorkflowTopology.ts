@@ -36,14 +36,16 @@ export type JudgmentWorkflowTopologyProvider = {
 }
 
 type RuntimeRole = 'api' | 'judge-worker' | 'maintenance-worker'
-type RunningTopology = {process: Subprocess<'ignore', 'pipe', 'pipe'>; topology: JudgmentWorkflowTopology}
+type RunningTopology = {process: Subprocess<'ignore', 'inherit', 'inherit'>; topology: JudgmentWorkflowTopology}
 export type RunningTopologyExtraJudge = {
   env: Record<string, string>
   journalPath: string
   port: number
-  process: Subprocess<'ignore', 'pipe', 'pipe'>
+  process: Subprocess<'ignore', 'inherit', 'inherit'>
 }
 export type JudgmentWorkflowReadinessMonitor = {assertHealthy: () => void; stop: () => Promise<void>}
+
+export const topologyLongRunningProcessStdio = {stderr: 'inherit', stdout: 'inherit'} as const
 
 const startupTimeoutMs = 600_000
 const shutdownTimeoutMs = 30_000
@@ -175,9 +177,8 @@ export const startJudgmentWorkflowTopologyExtraJudge = async (
   const childProcess = spawn([process.execPath, 'src/server/index.ts'], {
     cwd: process.cwd(),
     env,
-    stderr: 'pipe',
     stdin: 'ignore',
-    stdout: 'pipe',
+    ...topologyLongRunningProcessStdio,
   })
   const deadline = Date.now() + startupTimeoutMs
 
@@ -806,15 +807,14 @@ export const startJudgmentWorkflowTopology = async ({
   cwd = process.cwd(),
   topology = createJudgmentWorkflowTopology({cwd}),
 }: {cwd?: string; topology?: JudgmentWorkflowTopology} = {}): Promise<RunningTopology> => {
-  let serverStackProcess: Subprocess<'ignore', 'pipe', 'pipe'>
+  let serverStackProcess: Subprocess<'ignore', 'inherit', 'inherit'>
 
   try {
     serverStackProcess = spawn([process.execPath, 'scripts/startServerStack.ts'], {
       cwd,
       env: topology.env,
-      stderr: 'pipe',
       stdin: 'ignore',
-      stdout: 'pipe',
+      ...topologyLongRunningProcessStdio,
     })
   } catch (error) {
     rmSync(topology.serverStackLockPath, {force: true})
@@ -876,7 +876,7 @@ export const prepareJudgmentWorkflowMigrationBoundary = async (topology: Judgmen
   }
 }
 
-const waitForExit = async (serverStackProcess: Subprocess<'ignore', 'pipe', 'pipe'>): Promise<number> => {
+const waitForExit = async (serverStackProcess: Subprocess<'ignore', 'inherit', 'inherit'>): Promise<number> => {
   return Promise.race([
     serverStackProcess.exited,
     new Promise<never>((_resolve, reject) => {

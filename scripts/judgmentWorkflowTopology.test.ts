@@ -17,6 +17,7 @@ import {
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
   startJudgmentWorkflowTopology,
+  topologyLongRunningProcessStdio,
 } from './judgmentWorkflowTopology.ts'
 
 const topologyRoots: string[] = []
@@ -113,6 +114,10 @@ test('topology resolves the production supervisor lock outside the disposable ap
   expect(topology.serverStackLockPath).toEndWith(
     `${topology.apiPort}-${topology.maintenancePort}-${topology.judgePort}.lock.json`,
   )
+})
+
+test('topology drains long-running child output instead of leaving bounded pipes unread', () => {
+  expect(topologyLongRunningProcessStdio).toEqual({stderr: 'inherit', stdout: 'inherit'})
 })
 
 test('topology accepts Bun Windows SIGTERM exit status only for intentional shutdown', () => {
