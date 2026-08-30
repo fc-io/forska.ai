@@ -56,8 +56,18 @@ const getEvidence = async (): Promise<RealCodexEvidence> => {
 
   return {
     contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
-    executionInputs: fixtures.map((fixture) => {
-      return {articleFixtureId: fixture.fixtureId, renderedInput: `${fixture.title}\n${fixture.abstract}`}
+    requestInputs: fixtures.map((fixture) => {
+      return {
+        articleFixtureId: fixture.fixtureId,
+        hasAbstract: true,
+        hasExcludedFulltext: false,
+        hasExcludedImage: false,
+        hasTitle: true,
+        requestPayloadSha256: 'a'.repeat(64),
+      }
+    }),
+    snapshotInputs: fixtures.map((fixture) => {
+      return {articleFixtureId: fixture.fixtureId, hasAbstract: true, hasExcludedContent: false, hasTitle: true}
     }),
     judgments: fixtures.map((fixture) => {
       return {
@@ -100,11 +110,12 @@ const getAdapter = (updates?: Partial<RealCodexTopologyAdapter>) => {
     waitForTerminal: async () => {
       return {
         articleCount: 3,
+        canonicalCompletionCount: 3,
         elapsedMs: 10,
         error: null,
         inputTokens: 1_000,
-        logicalDispatchCount: 3,
         outputTokens: 100,
+        providerDispatchCount: 3,
         requestAttemptCount: 3,
         status: 'completed',
       }
@@ -212,11 +223,12 @@ test('runner preserves the terminal provider diagnostic and always stops the ada
           waitForTerminal: async () => {
             return {
               articleCount: 1,
+              canonicalCompletionCount: 0,
               elapsedMs: 20,
               error: 'model gpt-5.6-luna is unavailable for this Codex account',
               inputTokens: null,
-              logicalDispatchCount: 1,
               outputTokens: null,
+              providerDispatchCount: 1,
               requestAttemptCount: 1,
               status: 'failed',
             }
@@ -252,13 +264,13 @@ test('runner rejects evidence containing the full-text sentinel and tears down',
     const fixtures = await loadAndValidateRealArticleFixtures()
     const evidence = await getEvidence()
     const [fixture] = fixtures
-    const [executionInput] = evidence.executionInputs
+    const [requestInput] = evidence.requestInputs
 
-    if (!fixture || !executionInput) {
+    if (!fixture || !requestInput) {
       throw new Error('Expected committed real-Codex fixture evidence')
     }
 
-    executionInput.renderedInput += `\nFORSKA_REAL_CODEX_FULLTEXT_SENTINEL_${fixture.fixtureId}`
+    requestInput.hasExcludedFulltext = true
 
     const error = await getError(
       runRealCodexSmoke({

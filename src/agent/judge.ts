@@ -36,6 +36,7 @@ import {
 } from './judge/judgeChunking.ts'
 import type {ContentSettings} from './judge/judgeGetPrompt.ts'
 import {getSinglePromptEvidenceSystemPromptForArticle, isFhirEhrPatientArticle} from './judge/judgePromptSelection.ts'
+import {captureJudgmentRequestEvidence} from './judge/judgeRequestEvidence.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
 import {mapAsyncWithConcurrency} from './judge/mapAsyncWithConcurrency.ts'
 import {parseSinglePromptEvidence} from './judge/parseSinglePromptEvidence.ts'
@@ -772,6 +773,7 @@ const generateSinglePromptResponse = async ({
     },
     async (requestBaseURL, requestAttempt) => {
       try {
+        await captureJudgmentRequestEvidence({articleId, jobId: judgmentsJobId, prompt, systemPrompt})
         const result = await invokeStoredProviderModel({
           baseURLOverride: requestBaseURL,
           invocationContext: providerInvocationContext,
