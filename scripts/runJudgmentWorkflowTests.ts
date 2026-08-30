@@ -9,6 +9,12 @@ export const getJudgmentWorkflowTestCommand = (gate: JudgmentWorkflowTestGate) =
   return getBunTestCommand([...judgmentWorkflowTestFilesByGate[gate]])
 }
 
+export const getJudgmentWorkflowTestCommands = (gate: JudgmentWorkflowTestGate) => {
+  return judgmentWorkflowTestFilesByGate[gate].map((filePath) => {
+    return getBunTestCommand([filePath])
+  })
+}
+
 const main = async () => {
   const [gate = 'focused'] = process.argv.slice(2)
 
@@ -17,17 +23,10 @@ const main = async () => {
     process.exit(1)
   }
 
-  // The component lifecycle owns process-wide runtime environment and module singletons.
-  // Run each component file in a fresh process so its production composition cannot
-  // leak DuckDB or SQLite ownership into the boundary suites.
-  const commands =
-    gate === 'component'
-      ? judgmentWorkflowTestFilesByGate.component.map((filePath) => {
-          return getBunTestCommand([filePath])
-        })
-      : [getJudgmentWorkflowTestCommand(gate)]
-
-  for (const command of commands) {
+  // Bun module mocks and runtime modules are process-wide. Each suite configures
+  // different owners, databases, and provider boundaries, so sharing a process can
+  // make a later file observe an earlier file's mock.module implementation.
+  for (const command of getJudgmentWorkflowTestCommands(gate)) {
     const testProcess = globalThis.Bun.spawn(command, {
       cwd: process.cwd(),
       env: process.env,

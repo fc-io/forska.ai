@@ -7,7 +7,7 @@ import {
   judgmentWorkflowFocusedTestFiles,
   judgmentWorkflowRecoveryTestFiles,
 } from './judgmentWorkflowTestFiles.ts'
-import {getJudgmentWorkflowTestCommand} from './runJudgmentWorkflowTests.ts'
+import {getJudgmentWorkflowTestCommand, getJudgmentWorkflowTestCommands} from './runJudgmentWorkflowTests.ts'
 
 const allGateFiles = [
   ...judgmentWorkflowFocusedTestFiles,
@@ -61,4 +61,18 @@ test('runner produces an explicit Bun command without provider fallback flags', 
     }),
   )
   expect(command.join(' ')).not.toContain('fallback')
+})
+
+test('runner isolates every gate file in its own Bun process command', () => {
+  for (const [gate, files] of [
+    ['component', judgmentWorkflowComponentLifecycleTestFiles],
+    ['focused', judgmentWorkflowFocusedTestFiles],
+    ['recovery', judgmentWorkflowRecoveryTestFiles],
+  ] as const) {
+    expect(getJudgmentWorkflowTestCommands(gate)).toEqual(
+      files.map((filePath) => {
+        return ['bun', 'test', `./${filePath}`]
+      }),
+    )
+  }
 })
