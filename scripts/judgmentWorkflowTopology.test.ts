@@ -17,6 +17,7 @@ import {
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
   startJudgmentWorkflowTopology,
+  topologyEvidencePollIntervalMs,
   topologyLongRunningProcessStdio,
 } from './judgmentWorkflowTopology.ts'
 
@@ -118,6 +119,10 @@ test('topology resolves the production supervisor lock outside the disposable ap
 
 test('topology drains long-running child output instead of leaving bounded pipes unread', () => {
   expect(topologyLongRunningProcessStdio).toEqual({stderr: 'inherit', stdout: 'inherit'})
+})
+
+test('topology evidence polling leaves a full idle projector wake interval free of foreground reads', () => {
+  expect(topologyEvidencePollIntervalMs).toBeGreaterThan(2_000)
 })
 
 test('topology accepts Bun Windows SIGTERM exit status only for intentional shutdown', () => {
