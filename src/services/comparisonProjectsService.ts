@@ -300,7 +300,13 @@ export type ComparisonProjectJudgmentsRow = {
   canonicalArticleId: string
   cells: Record<string, string | null>
   hasConflict: boolean
-  conflictResolution: {articleId: string; label: string; value: string} | null
+  conflictResolution: {
+    articleId: string
+    label: string
+    reviewerDisplayName: string | null
+    reviewerUserId: string | null
+    value: string
+  } | null
 }
 
 export type ComparisonProjectJudgmentsPage = {
@@ -423,7 +429,7 @@ export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequest
   page?: string
 }
 export type ComparisonProjectJudgmentsCountRequest = ComparisonProjectRowsRequestFilters & {limit: string}
-export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
+export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters & {format?: 'csv' | 'pdf'}
 export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
 export type ComparisonProjectConflictResolutionTransferMatchKind =
   | ComparisonProjectConflictResolutionTransferIdentifierKind
@@ -881,10 +887,13 @@ export const setComparisonProjectConflictResolution = async (
     input,
   )
 
-  return getResponseData<{articleId: string; label: string; value: string}>(
-    response,
-    'Failed to save conflict resolution',
-  )
+  return getResponseData<{
+    articleId: string
+    label: string
+    reviewerDisplayName: string | null
+    reviewerUserId: string | null
+    value: string
+  }>(response, 'Failed to save conflict resolution')
 }
 
 export const resetComparisonProjectConflictResolution = async (

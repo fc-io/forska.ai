@@ -16,7 +16,7 @@ import {
   getSelectableComparisonProjectDifferenceFilters,
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 import type {ComparisonProjectRowFilter} from '../../../../utils/comparisonProjectRowFilter.ts'
-import {downloadCsvFromPost} from '../../../utils/downloadCsv.ts'
+import {downloadFileFromPost} from '../../../utils/downloadCsv.ts'
 import {CompareProjectExportFilters} from './+export/compareProjectExportFilters.tsx'
 import {CompareProjectExportMetadata} from './+export/compareProjectExportMetadata.tsx'
 import {
@@ -31,6 +31,10 @@ const getComparisonProjectId = (params: Record<string, string>) => {
 
 const getExportFallbackFilename = (comparisonProjectId: string) => {
   return `comparison-export-${comparisonProjectId}.csv`
+}
+
+const getPdfExportFallbackFilename = (comparisonProjectId: string) => {
+  return `comparison-export-${comparisonProjectId}.pdf`
 }
 
 const getExportPath = (comparisonProjectId: string) => {
@@ -114,13 +118,31 @@ const CompareProjectExportPage = () => {
     }),
   )
 
-  const exportMutation = useMutation(() => {
+  const csvExportMutation = useMutation(() => {
     return {
       mutationFn: async () => {
-        await downloadCsvFromPost({
-          body: getCompareProjectExportRequestBody(urlState()),
+        await downloadFileFromPost({
+          body: {...getCompareProjectExportRequestBody(urlState()), format: 'csv'},
           errorMessage: 'Comparison export failed',
           fallbackFilename: getExportFallbackFilename(comparisonProjectId()),
+          path: getExportPath(comparisonProjectId()),
+        })
+
+        return {success: true}
+      },
+      onError: (err) => {
+        const message = err instanceof Error ? err.message : 'An unexpected error occurred'
+        setError(message)
+      },
+    }
+  })
+  const pdfExportMutation = useMutation(() => {
+    return {
+      mutationFn: async () => {
+        await downloadFileFromPost({
+          body: {...getCompareProjectExportRequestBody(urlState()), format: 'pdf'},
+          errorMessage: 'Comparison PDF export failed',
+          fallbackFilename: getPdfExportFallbackFilename(comparisonProjectId()),
           path: getExportPath(comparisonProjectId()),
         })
 
@@ -143,7 +165,11 @@ const CompareProjectExportPage = () => {
   }
   const handleExport = () => {
     setError(null)
-    exportMutation.mutate()
+    csvExportMutation.mutate()
+  }
+  const handlePdfExport = () => {
+    setError(null)
+    pdfExportMutation.mutate()
   }
 
   return (
@@ -192,11 +218,13 @@ const CompareProjectExportPage = () => {
                 differenceFilter={differenceFilter()}
                 differenceFilterDisabled={availableDifferenceFilters().length <= 1 && differenceFilter() === 'all'}
                 differenceFilterOptions={differenceFilterOptions()}
-                isExporting={exportMutation.isPending}
+                isExportingCsv={csvExportMutation.isPending}
+                isExportingPdf={pdfExportMutation.isPending}
                 isSummaryMode={isSummaryMode()}
                 onArticleCategoryFilterChange={updateArticleCategoryFilter}
                 onDifferenceFilterChange={updateDifferenceFilter}
-                onExport={handleExport}
+                onExportCsv={handleExport}
+                onExportPdf={handlePdfExport}
                 onRowFilterChange={updateRowFilter}
                 rowFilter={rowFilter()}
               />

@@ -8,18 +8,22 @@ import type {
 } from '../../db/schemaTypes.ts'
 import {
   type ComparisonProjectArticleCategoryFilter,
+  getComparisonProjectArticleCategoryFilterLabel,
   getNormalizedComparisonProjectArticleCategoryFilter,
 } from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectDifferenceColumn,
   type ComparisonProjectDifferenceFilter,
+  getComparisonProjectDifferenceFilterLabel,
   getNormalizedComparisonProjectDifferenceFilter,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
+  getComparisonProjectRowFilterLabel,
   getNormalizedComparisonProjectRowFilter,
 } from '../../utils/comparisonProjectRowFilter.ts'
+import {legacyLocalUserId, localUserDefaults} from '../../utils/localUser.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
@@ -34,6 +38,7 @@ import {
   type ComparisonProjectServingStatusRow,
   getComparisonProjectServingRebuildService,
 } from '../services/comparisonProjectServingRebuildService.ts'
+import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {csvUtf8Bom, getCsvDownloadHeaders} from '../utils/csvResponse.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {
@@ -43,6 +48,7 @@ import {
   normalizeSummaryAnswerValue,
 } from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {SimplePdfDocument} from '../utils/simplePdf.ts'
 import {
   type ComparisonProjectConflictResolutionTransferSourceRow,
   createComparisonProjectConflictResolutionTransferArtifact,
@@ -188,7 +194,13 @@ type ComparisonProjectStatsResponse = {
 }
 type ComparisonProjectLlmRow = ComparisonProjectJudgmentLlmRow
 type ComparisonProjectHumanRow = ComparisonProjectJudgmentHumanRow
-type ComparisonProjectConflictResolution = {articleId: string; label: string; value: string}
+type ComparisonProjectConflictResolution = {
+  articleId: string
+  label: string
+  reviewerDisplayName: string | null
+  reviewerUserId: string | null
+  value: string
+}
 type ComparisonProjectConflictResolutionExportQueryRow = Omit<
   ComparisonProjectConflictResolutionTransferSourceRow,
   'resolutionLabel' | 'resolutionMode' | 'resolutionValue'
@@ -196,6 +208,7 @@ type ComparisonProjectConflictResolutionExportQueryRow = Omit<
 type ComparisonProjectExportRow = ComparisonProjectJudgmentRow & {
   conflictResolution?: ComparisonProjectConflictResolution | null
 }
+type ComparisonProjectExportFormat = 'csv' | 'pdf'
 type ComparisonProjectConflictResolutionOption = {label: string; value: string}
 type ComparisonProjectSourcePrompt = {
   id: string
@@ -1811,6 +1824,61 @@ const getEmptyConflictResolutionImportSummary = (): ComparisonProjectConflictRes
   }
 }
 
+const getOrCreateComparisonProjectConflictResolutionReviewer = async (tx: AppTx) => {
+  const [existing] = await tx.queryJson<{id: string; name: string}>(`
+    SELECT id, name
+    FROM app.user_config
+    LIMIT 1
+  `)
+
+  if (existing) {
+    const shouldRepair = existing.id === legacyLocalUserId || !existing.name.trim()
+    if (!shouldRepair) {
+      return existing
+    }
+
+    const [repaired] = await tx.queryJson<{id: string; name: string}>(`
+      UPDATE app.user_config
+      SET id = CASE
+            WHEN id = ${getSqlLiteral(legacyLocalUserId)} THEN ${getSqlLiteral(localUserDefaults.id)}
+            ELSE id
+          END,
+          name = CASE
+            WHEN NULLIF(TRIM(name), '') IS NULL THEN ${getSqlLiteral(localUserDefaults.name)}
+            ELSE name
+          END,
+          email = CASE
+            WHEN id = ${getSqlLiteral(legacyLocalUserId)} THEN ${getSqlLiteral(localUserDefaults.email)}
+            ELSE email
+          END,
+          updated_at = current_timestamp
+      WHERE id = ${getSqlLiteral(existing.id)}
+      RETURNING id, name
+    `)
+
+    return repaired ?? existing
+  }
+
+  const [created] = await tx.queryJson<{id: string; name: string}>(`
+    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
+    VALUES (
+      ${getSqlLiteral(localUserDefaults.id)},
+      ${getSqlLiteral(localUserDefaults.name)},
+      ${getSqlLiteral(localUserDefaults.email)},
+      ${getSqlLiteral(localUserDefaults.role)},
+      ${getSqlLiteral(localUserDefaults.fullTextConversionModelId)},
+      ${getSqlLiteral(localUserDefaults.unpaywallEmail)}
+    )
+    RETURNING id, name
+  `)
+
+  if (!created) {
+    throw new Error('Failed to create local reviewer')
+  }
+
+  return created
+}
+
 const insertComparisonProjectConflictResolutionImportCandidates = async (params: {
   candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
   comparisonProjectId: string
@@ -1820,13 +1888,16 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
     return 0
   }
 
+  const reviewer = await getOrCreateComparisonProjectConflictResolutionReviewer(params.tx)
+
   await params.tx.run(`
     INSERT INTO ${comparisonProjectConflictResolutionTable} (
       id,
       comparison_project_id,
       article_id,
       prompt_id,
-      answer_value
+      answer_value,
+      reviewer_user_id
     )
     VALUES ${params.candidates
       .map((candidate) => {
@@ -1835,7 +1906,8 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
           ${getSqlLiteral(params.comparisonProjectId)},
           ${getSqlLiteral(candidate.targetArticleId)},
           NULL,
-          ${getSqlLiteral(candidate.resolutionValue)}
+          ${getSqlLiteral(candidate.resolutionValue)},
+          ${getSqlLiteral(reviewer.id)}
         )`
       })
       .join(',\n')}
@@ -3256,12 +3328,17 @@ const getComparisonProjectConflictResolutions = async (
     answerValue: string | null
     articleId: string
     promptId: string | null
+    reviewerDisplayName: string | null
+    reviewerUserId: string | null
   }>(`
     SELECT
       article_id AS articleId,
       prompt_id AS promptId,
-      answer_value AS answerValue
+      answer_value AS answerValue,
+      reviewer_user_id AS reviewerUserId,
+      NULLIF(TRIM(reviewer.name), '') AS reviewerDisplayName
     FROM ${comparisonProjectConflictResolutionTable}
+    LEFT JOIN app.user_config reviewer ON reviewer.id = reviewer_user_id
     WHERE comparison_project_id = ${getSqlLiteral(scope.id)}
       AND article_id IN (${getInClause(articleIds)})
   `)
@@ -3274,7 +3351,13 @@ const getComparisonProjectConflictResolutions = async (
       return resolutionMap
     }
 
-    resolutionMap.set(row.articleId, {articleId: row.articleId, label: option.label, value: option.value})
+    resolutionMap.set(row.articleId, {
+      articleId: row.articleId,
+      label: option.label,
+      reviewerDisplayName: row.reviewerDisplayName,
+      reviewerUserId: row.reviewerUserId,
+      value: option.value,
+    })
     return resolutionMap
   }, new Map<string, ComparisonProjectConflictResolution>())
 }
@@ -3330,26 +3413,37 @@ const setComparisonProjectConflictResolution = async (params: {
   await getComparisonProjectConflictResolutionTargetRow(params.scope, params.articleId)
   const option = getValidatedComparisonProjectConflictResolutionOption(params.scope, params.value)
   const isSummaryMode = getIsSummaryMode(params.scope)
-  const [resolutionRow] = await appDatabaseService.queryJson<{articleId: string}>(`
+  const reviewer = await getUserConfigQueryService().getOrCreateUserConfig()
+  const [resolutionRow] = await appDatabaseService.queryJson<{
+    articleId: string
+    reviewerDisplayName: string | null
+    reviewerUserId: string | null
+  }>(`
     INSERT INTO ${comparisonProjectConflictResolutionTable} (
       id,
       comparison_project_id,
       article_id,
       prompt_id,
-      answer_value
+      answer_value,
+      reviewer_user_id
     )
     VALUES (
       ${getSqlLiteral(crypto.randomUUID())},
       ${getSqlLiteral(params.scope.id)},
       ${getSqlLiteral(params.articleId)},
       ${getSqlLiteral(isSummaryMode ? null : option.value)},
-      ${getSqlLiteral(isSummaryMode ? option.value : null)}
+      ${getSqlLiteral(isSummaryMode ? option.value : null)},
+      ${getSqlLiteral(reviewer.id)}
     )
     ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET
       prompt_id = excluded.prompt_id,
       answer_value = excluded.answer_value,
+      reviewer_user_id = excluded.reviewer_user_id,
       updated_at = now()
-    RETURNING article_id AS articleId
+    RETURNING
+      article_id AS articleId,
+      reviewer_user_id AS reviewerUserId,
+      ${getSqlLiteral(reviewer.name)} AS reviewerDisplayName
   `)
 
   if (!resolutionRow) {
@@ -3556,6 +3650,10 @@ const getComparisonProjectExportFilename = (scope: ComparisonProjectScope) => {
   return `${scope.name.replace(/[^a-zA-Z0-9]/g, '_')}_comparison_export_${new Date().toISOString().slice(0, 10)}.csv`
 }
 
+const getComparisonProjectPdfExportFilename = (scope: ComparisonProjectScope) => {
+  return `${scope.name.replace(/[^a-zA-Z0-9]/g, '_')}_comparison_export_${new Date().toISOString().slice(0, 10)}.pdf`
+}
+
 const getComparisonProjectExportResponse = (
   scope: ComparisonProjectScope,
   rowFilter: ComparisonProjectRowFilter,
@@ -3598,6 +3696,194 @@ const getComparisonProjectExportResponse = (
   })
 
   return new Response(stream, {headers: responseHeaders})
+}
+
+const getComparisonProjectPdfHeaderFilters = (params: {
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter
+  differenceFilter: ComparisonProjectDifferenceFilter
+  rowFilter: ComparisonProjectRowFilter
+  scope: ComparisonProjectScope
+}) => {
+  const rowFilterLabel = getComparisonProjectRowFilterLabel(params.rowFilter, getIsSummaryMode(params.scope))
+  const differenceFilterLabel = getComparisonProjectDifferenceFilterLabel(params.differenceFilter)
+  const articleCategoryLabel = getComparisonProjectArticleCategoryFilterLabel(params.articleCategoryFilter)
+
+  return [rowFilterLabel, differenceFilterLabel, articleCategoryLabel].join(' | ')
+}
+
+const getComparisonProjectPdfResolutionOptions = (scope: ComparisonProjectScope) => {
+  const options = getComparisonProjectConflictResolutionOptions(scope)
+
+  return options.length > 0
+    ? options
+    : [
+        {label: 'Include / Yes', value: 'yes'},
+        {label: 'Exclude / No', value: 'no'},
+        {label: 'Maybe / Unsure', value: 'maybe'},
+      ]
+}
+
+const addComparisonProjectPdfConflictResolution = (
+  pdf: SimplePdfDocument,
+  scope: ComparisonProjectScope,
+  row: ComparisonProjectExportRow,
+) => {
+  if (!scope.allowConflictResolution || !row.hasConflict) {
+    return
+  }
+
+  pdf.addText('Conflict resolution', {font: 'bold', fontSize: 12, gapAfter: 4})
+  pdf.addText(`Current resolution: ${row.conflictResolution?.label ?? 'Not set'}`, {fontSize: 10})
+  pdf.addText(`Reviewer: ${row.conflictResolution?.reviewerDisplayName ?? 'Not set'}`, {fontSize: 10, gapAfter: 4})
+  pdf.addText('Choose resolution', {font: 'bold', fontSize: 10})
+
+  getComparisonProjectPdfResolutionOptions(scope).forEach((option) => {
+    const selected = row.conflictResolution?.value === option.value ? 'x' : ' '
+    pdf.addText(`(${selected}) ${option.label}`, {fontSize: 10, indent: 12})
+  })
+  pdf.addGap(10)
+}
+
+const addComparisonProjectPdfJudgmentSection = (
+  pdf: SimplePdfDocument,
+  row: ComparisonProjectExportRow,
+  columns: readonly ComparisonProjectJudgmentsColumn[],
+) => {
+  pdf.addText('LLM assessment', {font: 'bold', fontSize: 12, gapAfter: 4})
+
+  const columnsByPrompt = columns.reduce<Map<string, ComparisonProjectJudgmentsColumn[]>>((columnMap, column) => {
+    const promptColumns = columnMap.get(column.promptId) ?? []
+    promptColumns.push(column)
+    columnMap.set(column.promptId, promptColumns)
+    return columnMap
+  }, new Map<string, ComparisonProjectJudgmentsColumn[]>())
+
+  Array.from(columnsByPrompt.entries()).forEach(([, promptColumns]) => {
+    const [firstColumn] = promptColumns
+    pdf.addText('Prompt', {font: 'bold', fontSize: 10})
+    pdf.addText(firstColumn?.promptLabel ?? 'Prompt', {fontSize: 10, gapAfter: 4})
+
+    promptColumns.forEach((column) => {
+      const answer = getComparisonProjectExportCellValue(row.cells[column.id]) || 'Not answered'
+      const sourceLabel = column.kind === 'human' ? 'Human judgment' : `LLM judgment: ${column.modelLabel}`
+
+      pdf.addText(sourceLabel, {font: 'bold', fontSize: 10})
+      pdf.addText(`Answer: ${answer}`, {fontSize: 10, indent: 12})
+
+      if (column.kind === 'llm' && column.contentLabel) {
+        pdf.addText(`Content used: ${column.contentLabel}`, {fontSize: 10, indent: 12})
+      }
+
+      pdf.addGap(4)
+    })
+    pdf.addGap(8)
+  })
+}
+
+const addComparisonProjectPdfExportRow = (params: {
+  columns: readonly ComparisonProjectJudgmentsColumn[]
+  exportFilters: string
+  index: number
+  pdf: SimplePdfDocument
+  row: ComparisonProjectExportRow
+  scope: ComparisonProjectScope
+  totalCount: number
+}) => {
+  const {columns, exportFilters, index, pdf, row, scope, totalCount} = params
+
+  if (index > 0) {
+    pdf.addPage()
+  }
+
+  pdf.addText(`Project: ${scope.name}`, {fontSize: 8})
+  pdf.addText(`Filters: ${exportFilters}`, {fontSize: 8})
+  pdf.addText(`Exported: ${new Date().toISOString()}`, {fontSize: 8, gapAfter: 12})
+  pdf.addText(
+    `Article ${index + 1} of ${totalCount} | Article ID: ${row.articleExternalId ?? row.canonicalArticleId}`,
+    {fontSize: 8, gapAfter: 10},
+  )
+  pdf.addText(row.articleTitle?.trim() || 'Untitled', {font: 'bold', fontSize: 15, gapAfter: 10})
+  pdf.addText('Abstract / Summary', {font: 'bold', fontSize: 11, gapAfter: 4})
+  pdf.addText(row.articleSummary?.trim() || 'No abstract or summary available.', {fontSize: 10, gapAfter: 12})
+  addComparisonProjectPdfConflictResolution(pdf, scope, row)
+  addComparisonProjectPdfJudgmentSection(pdf, row, columns)
+}
+
+const getComparisonProjectPdfExportResponse = async (
+  scope: ComparisonProjectScope,
+  rowFilter: ComparisonProjectRowFilter,
+  differenceFilter: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+) => {
+  const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
+  const filename = getComparisonProjectPdfExportFilename(scope)
+  const pdf = new SimplePdfDocument()
+  const totalCountResult = await getComparisonProjectJudgmentsCount(
+    scope,
+    comparisonProjectJudgmentArticleBatchSize,
+    rowFilter,
+    normalizedDifferenceFilter,
+    articleCategoryFilter,
+  )
+  const exportFilters = getComparisonProjectPdfHeaderFilters({
+    articleCategoryFilter,
+    differenceFilter: normalizedDifferenceFilter,
+    rowFilter,
+    scope,
+  })
+  let rowIndex = 0
+
+  if (!scope.archived && scope.prompts.length > 0 && orderedColumns.length > 0) {
+    await forEachComparisonProjectServingJudgmentRowBatch({
+      comparisonProjectId: scope.id,
+      articleCategoryFilter,
+      differenceFilter: normalizedDifferenceFilter,
+      limit: comparisonProjectJudgmentArticleBatchSize,
+      onRows: async (rows) => {
+        const exportRows = scope.allowConflictResolution
+          ? await getComparisonProjectRowsWithConflictResolutions(scope, rows)
+          : rows
+
+        exportRows.forEach((row) => {
+          addComparisonProjectPdfExportRow({
+            columns: orderedColumns,
+            exportFilters,
+            index: rowIndex,
+            pdf,
+            row,
+            scope,
+            totalCount: totalCountResult.totalCount,
+          })
+          rowIndex += 1
+        })
+      },
+      queryRunner: appDatabaseService,
+      rowFilter,
+    })
+  }
+
+  if (rowIndex === 0) {
+    pdf.addText(`Project: ${scope.name}`, {fontSize: 8})
+    pdf.addText(`Filters: ${exportFilters}`, {fontSize: 8, gapAfter: 12})
+    pdf.addText('No rows matched the selected export filters.', {font: 'bold', fontSize: 12})
+  }
+
+  return new Response(pdf.toBuffer(), {
+    headers: {'Content-Disposition': `attachment; filename="${filename}"`, 'Content-Type': 'application/pdf'},
+  })
+}
+
+const getComparisonProjectFormattedExportResponse = async (
+  scope: ComparisonProjectScope,
+  rowFilter: ComparisonProjectRowFilter,
+  differenceFilter: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  format: ComparisonProjectExportFormat,
+) => {
+  return format === 'pdf'
+    ? getComparisonProjectPdfExportResponse(scope, rowFilter, differenceFilter, articleCategoryFilter)
+    : getComparisonProjectExportResponse(scope, rowFilter, differenceFilter, articleCategoryFilter)
 }
 
 const getComparisonProjectJudgmentsPage = async (
@@ -4606,13 +4892,21 @@ export const comparisonProjectsRoutes = new Elysia()
       const differenceFilter = getRequestedComparisonProjectDifferenceFilter({differenceFilter: body.differenceFilter})
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
       const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
+      const format: ComparisonProjectExportFormat = body.format === 'pdf' ? 'pdf' : 'csv'
 
-      return getComparisonProjectExportResponse(data, rowFilter, differenceFilter, articleCategoryFilter)
+      return getComparisonProjectFormattedExportResponse(
+        data,
+        rowFilter,
+        differenceFilter,
+        articleCategoryFilter,
+        format,
+      )
     },
     {
       body: t.Object({
         rowFilter: t.Optional(t.String()),
         articleCategoryFilter: t.Optional(t.String()),
+        format: t.Optional(t.Union([t.Literal('csv'), t.Literal('pdf')])),
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),

@@ -1,6 +1,6 @@
 import {getApiRequestUrl} from './getApiRequestUrl.ts'
 
-type CsvDownloadPostRequest = {body: unknown; errorMessage: string; fallbackFilename: string; path: string}
+type FileDownloadPostRequest = {body: unknown; errorMessage: string; fallbackFilename: string; path: string}
 
 export const getCsvFilenameFromResponse = (response: Response, fallbackFilename: string): string => {
   const contentDisposition = response.headers.get('Content-Disposition')
@@ -24,6 +24,10 @@ export const downloadResponseAsCsv = async (response: Response, fallbackFilename
 }
 
 export const downloadCsvFromPost = async (request: CsvDownloadPostRequest): Promise<void> => {
+  return downloadFileFromPost(request)
+}
+
+export const downloadFileFromPost = async (request: FileDownloadPostRequest): Promise<void> => {
   const response = await fetch(getApiRequestUrl(request.path), {
     body: JSON.stringify(request.body),
     credentials: 'include',
@@ -37,3 +41,5 @@ export const downloadCsvFromPost = async (request: CsvDownloadPostRequest): Prom
 
   await downloadResponseAsCsv(response, request.fallbackFilename)
 }
+
+type CsvDownloadPostRequest = FileDownloadPostRequest

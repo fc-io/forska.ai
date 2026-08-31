@@ -455,7 +455,7 @@ const CompareProjectJudgmentsPage = () => {
   })
   const updateCurrentJudgmentsPageConflictResolution = (
     articleId: string,
-    conflictResolution: {articleId: string; label: string; value: string} | null,
+    conflictResolution: ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'],
   ) => {
     queryClient.setQueryData<InfiniteData<ComparisonProjectJudgmentsPage, string | null>>(
       getCurrentJudgmentsPageQueryKey(),

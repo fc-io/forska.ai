@@ -22,11 +22,13 @@ type CompareProjectExportFiltersProps = {
   differenceFilter: ComparisonProjectDifferenceFilter
   differenceFilterDisabled: boolean
   differenceFilterOptions: CompareProjectExportDifferenceFilterOption[]
-  isExporting: boolean
+  isExportingCsv: boolean
+  isExportingPdf: boolean
   isSummaryMode: boolean
   onArticleCategoryFilterChange: (value: ComparisonProjectArticleCategoryFilter) => void
   onDifferenceFilterChange: (value: ComparisonProjectDifferenceFilter) => void
-  onExport: () => void
+  onExportCsv: () => void
+  onExportPdf: () => void
   onRowFilterChange: (value: ComparisonProjectRowFilter) => void
   rowFilter: ComparisonProjectRowFilter
 }
@@ -103,12 +105,22 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
         </label>
         <Button
           type="button"
-          disabled={props.isExporting}
+          disabled={props.isExportingCsv || props.isExportingPdf}
           onClick={() => {
-            props.onExport()
+            props.onExportCsv()
           }}
         >
-          {props.isExporting ? 'Exporting...' : 'Export to CSV'}
+          {props.isExportingCsv ? 'Exporting CSV...' : 'Export to CSV'}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={props.isExportingCsv || props.isExportingPdf}
+          onClick={() => {
+            props.onExportPdf()
+          }}
+        >
+          {props.isExportingPdf ? 'Exporting PDF...' : 'Export to PDF'}
         </Button>
       </div>
     </div>
