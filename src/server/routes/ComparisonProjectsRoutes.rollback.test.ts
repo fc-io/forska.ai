@@ -27,6 +27,7 @@ const comparisonProjectServingGenerationServiceModulePath = new URL(
   import.meta.url,
 ).href
 const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).href
+const userConfigQueryServiceModulePath = new URL('../services/userConfigQueryService.ts', import.meta.url).href
 
 type MockServingStatus = {
   activeGeneration: number | null
@@ -135,6 +136,8 @@ type MockDatabaseState = {
     medrxivId?: string | null
     promptId: string | null
     pubmedId?: string | null
+    reviewerDisplayName?: string | null
+    reviewerUserId?: string | null
     title?: string | null
     url?: string | null
   }>
@@ -604,14 +607,15 @@ const getSqlNullableStringLiteralValue = (value: string | undefined) => {
 const getMockConflictResolutionInsertRows = (statement: string) => {
   return Array.from(
     statement.matchAll(
-      /\(\s*'(?:''|[^'])*'\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*\)/g,
+      /\(\s*'(?:''|[^'])*'\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*(?:,\s*(NULL|'(?:''|[^'])*'))?\s*\)/g,
     ),
-  ).map(([, comparisonProjectId, articleId, promptId, answerValue]) => {
+  ).map(([, comparisonProjectId, articleId, promptId, answerValue, reviewerUserId]) => {
     return {
       answerValue: getSqlNullableStringLiteralValue(answerValue),
       articleId: getSqlNullableStringLiteralValue(articleId) ?? '',
       comparisonProjectId: getSqlNullableStringLiteralValue(comparisonProjectId) ?? '',
       promptId: getSqlNullableStringLiteralValue(promptId),
+      reviewerUserId: getSqlNullableStringLiteralValue(reviewerUserId),
     }
   })
 }
@@ -1487,9 +1491,25 @@ const queryJson = async (
     && !statement.includes('WITH source_resolution AS')
     && !statement.includes('FROM mart.comparison_cell_serving cell')
   ) {
-    return state.conflictResolutionRows.filter((row) => {
-      return statement.includes(`'${row.articleId}'`)
-    })
+    return state.conflictResolutionRows
+      .filter((row) => {
+        return statement.includes(`'${row.articleId}'`)
+      })
+      .map((row) => {
+        return {
+          ...row,
+          reviewerDisplayName: row.reviewerDisplayName ?? (row.reviewerUserId ? 'Test reviewer' : null),
+          reviewerUserId: row.reviewerUserId ?? null,
+        }
+      })
+  }
+
+  if (statement.includes('FROM app.user_config')) {
+    return [{email: 'test-reviewer@forska.local', id: 'test-reviewer', name: 'Test reviewer', role: null}]
+  }
+
+  if (statement.includes('INSERT INTO app.user_config')) {
+    return [{id: 'test-reviewer', name: 'Test reviewer'}]
   }
 
   if (statement.includes('FROM mart.comparison_filter_stats')) {
@@ -1984,6 +2004,28 @@ const registerModuleMocks = () => {
         }
 
         return params.modelIds
+      },
+    }
+  })
+
+  void mock.module(userConfigQueryServiceModulePath, () => {
+    return {
+      getUserConfigQueryService: () => {
+        return {
+          getOrCreateUserConfig: async () => {
+            return {
+              createdAt: new Date('2026-04-01T00:00:00.000Z'),
+              email: 'test-reviewer@forska.local',
+              fullTextConversionModelId: null,
+              id: 'test-reviewer',
+              maintenanceWorkerDuckdbMemoryLimit: null,
+              name: 'Test reviewer',
+              role: null,
+              unpaywallEmail: null,
+              updatedAt: new Date('2026-04-01T00:00:00.000Z'),
+            }
+          },
+        }
       },
     }
   })
@@ -3615,6 +3657,7 @@ test('comparison project conflict resolution import commit writes safe rows and 
     articleId: 'article-2',
     comparisonProjectId: 'comparison-project-1',
     promptId: null,
+    reviewerUserId: 'test-reviewer',
   })
   expect(
     state.conflictResolutionRows.filter((row) => {
@@ -3717,6 +3760,7 @@ test('comparison project conflict resolution import commit can include non-confl
     articleId: 'article-2',
     comparisonProjectId: 'comparison-project-1',
     promptId: null,
+    reviewerUserId: 'test-reviewer',
   })
 })
 
@@ -4043,7 +4087,13 @@ test('comparison project create-from-project can import non-conflicting matched 
     warnings: [],
   })
   expect(insertedResolutions).toEqual([
-    {answerValue: 'yes', articleId: 'article-2', comparisonProjectId: 'comparison-project-created', promptId: null},
+    {
+      answerValue: 'yes',
+      articleId: 'article-2',
+      comparisonProjectId: 'comparison-project-created',
+      promptId: null,
+      reviewerUserId: 'test-reviewer',
+    },
   ])
 })
 
@@ -4181,7 +4231,13 @@ test('comparison project create-from-project skips conflicting import warnings w
     },
   ])
   expect(insertedResolutions).toEqual([
-    {answerValue: 'yes', articleId: 'article-1', comparisonProjectId: 'comparison-project-created', promptId: null},
+    {
+      answerValue: 'yes',
+      articleId: 'article-1',
+      comparisonProjectId: 'comparison-project-created',
+      promptId: null,
+      reviewerUserId: 'test-reviewer',
+    },
   ])
   expect(state.transactionCalls).toBe(1)
   expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
@@ -4387,7 +4443,13 @@ test('comparison project create-from-project returns warning summary counts whil
     },
   ])
   expect(insertedResolutions).toEqual([
-    {answerValue: 'yes', articleId: 'article-1', comparisonProjectId: 'comparison-project-created', promptId: null},
+    {
+      answerValue: 'yes',
+      articleId: 'article-1',
+      comparisonProjectId: 'comparison-project-created',
+      promptId: null,
+      reviewerUserId: 'test-reviewer',
+    },
   ])
   expect(state.transactionCalls).toBe(1)
   expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
@@ -5957,7 +6019,18 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
     rowFilter: 'fully-answered',
   })
   const body = (await response.json()) as {
-    data: {data: Array<{conflictResolution: {articleId: string; label: string; value: string} | null; id: string}>}
+    data: {
+      data: Array<{
+        conflictResolution: {
+          articleId: string
+          label: string
+          reviewerDisplayName: string | null
+          reviewerUserId: string | null
+          value: string
+        } | null
+        id: string
+      }>
+    }
   }
   const state = getMockDatabaseState()
 
@@ -5966,7 +6039,18 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
     body.data.data.map((row) => {
       return {conflictResolution: row.conflictResolution, id: row.id}
     }),
-  ).toEqual([{conflictResolution: {articleId: 'article-1', label: 'Prompt 2', value: 'prompt-2'}, id: 'article-1'}])
+  ).toEqual([
+    {
+      conflictResolution: {
+        articleId: 'article-1',
+        label: 'Prompt 2',
+        reviewerDisplayName: null,
+        reviewerUserId: null,
+        value: 'prompt-2',
+      },
+      id: 'article-1',
+    },
+  ])
   expect(
     state.queryStatements.some((statement) => {
       return (
@@ -6328,6 +6412,66 @@ test('comparison project export streams ordered csv rows with article context an
       )
     }),
   ).toBe(false)
+})
+
+test('comparison project export can render a readable pdf with matching filters and reviewer metadata', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: null,
+        articleId: 'article-1',
+        promptId: 'prompt-2',
+        reviewerDisplayName: 'Dr Reviewer',
+        reviewerUserId: 'reviewer-1',
+      },
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {
+    articleCategoryFilter: 'non_chinese',
+    differenceFilter: 'all',
+    format: 'pdf',
+    rowFilter: 'fully-answered',
+  })
+  const pdf = Buffer.from(await response.arrayBuffer()).toString('latin1')
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('Content-Type') ?? '').toContain('application/pdf')
+  expect(response.headers.get('Content-Disposition') ?? '').toContain('Rollback_test_project_comparison_export_')
+  expect(response.headers.get('Content-Disposition') ?? '').toContain('.pdf')
+  expect(pdf.startsWith('%PDF-1.4')).toBe(true)
+  expect(pdf).toContain('Article 1 of 1 | Article ID: article-1')
+  expect(pdf).toContain('Article 1 summary')
+  expect(pdf).toContain('Conflict resolution')
+  expect(pdf).toContain('Current resolution: Prompt 2')
+  expect(pdf).toContain('Reviewer: Dr Reviewer')
+  expect(pdf).toContain('LLM assessment')
+  expect(pdf).not.toContain('Confidence')
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes("article.article_category = 'non_chinese'")
+      )
+    }),
+  ).toBe(true)
 })
 
 test('comparison project conflict resolution export returns saved resolutions as compact json', async () => {

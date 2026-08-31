@@ -1,7 +1,8 @@
-import {rmSync} from 'node:fs'
+import {readFileSync, rmSync} from 'node:fs'
 
 import {expect, setDefaultTimeout, test} from 'bun:test'
 
+import {comparisonProjectArticleCategoryFilters} from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {comparisonProjectDifferenceFilters} from '../../utils/comparisonProjectDifferenceFilter.ts'
 import {comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
 import {getComparisonProjectServingRebuildService} from './comparisonProjectServingRebuildService.ts'
@@ -103,19 +104,6 @@ const getComparisonProjectServingBoundaryQueryRows = <T>(statement: string) => {
   return [] as T[]
 }
 
-const getLastJsonLine = (stdout: string) => {
-  const lines = stdout
-    .split('\n')
-    .map((line) => {
-      return line.trim()
-    })
-    .filter((line) => {
-      return line !== ''
-    })
-
-  return lines.at(-1) ?? ''
-}
-
 const getScript = (body: string) => {
   return `
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
@@ -130,6 +118,16 @@ const getScript = (body: string) => {
     const database = getAppDatabaseService()
     const service = getComparisonProjectServingRebuildService()
     const comparisonProjectId = '9fd6f6e9-5191-4d3e-a688-d1f86088d93c'
+    let __testJsonResult = null
+    const __originalConsoleLog = console.log
+    console.log = (...args) => {
+      const message = args.map((arg) => String(arg)).join(' ')
+      if (message.startsWith('{') && message.endsWith('}')) {
+        __testJsonResult = message
+        return
+      }
+      __originalConsoleLog(...args)
+    }
 
     await database.run(\`
       INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -296,6 +294,11 @@ const getScript = (body: string) => {
     }
 
     ${body}
+
+    if (!__testJsonResult) {
+      throw new Error('Comparison serving rebuild test did not emit JSON result')
+    }
+    await Bun.write(process.env.TEST_JSON_RESULT_PATH, __testJsonResult)
   `
 }
 
@@ -303,6 +306,7 @@ const runScript = <T>(body: string) => {
   const duckdbPath = `/tmp/f1-comparison-project-serving-rebuild-${Date.now()}-${Math.random()
     .toString(16)
     .slice(2)}.duckdb`
+  const outputPath = `${duckdbPath}.result.json`
   const runResult = globalThis.Bun.spawnSync(['bun', '-e', getScript(body)], {
     cwd: process.cwd(),
     env: {
@@ -312,6 +316,7 @@ const runScript = <T>(body: string) => {
       DUCKDB_PATH: duckdbPath,
       DUCKDB_TEMP_DIRECTORY: '/tmp/duckdb-temp',
       SERVER_ROLE: 'dev-single',
+      TEST_JSON_RESULT_PATH: outputPath,
       VITE_PORT: '3000',
     },
   })
@@ -323,9 +328,10 @@ const runScript = <T>(body: string) => {
       )
     }
 
-    return JSON.parse(getLastJsonLine(runResult.stdout.toString())) as T
+    return JSON.parse(readFileSync(outputPath, 'utf8')) as T
   } finally {
     removeFileIfExists(duckdbPath)
+    removeFileIfExists(outputPath)
     removeFileIfExists(`${duckdbPath}.wal`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
@@ -720,7 +726,11 @@ test('comparison serving rebuild stages builds promotes and records ready status
   expect(rowsByTable.cell?.rowCount).toBe('4')
   expect(Number(rowsByTable.member?.rowCount ?? 0)).toBe(0)
   expect(rowsByTable.stats?.rowCount).toBe(
-    String(comparisonProjectRowFilters.length * comparisonProjectDifferenceFilters.length),
+    String(
+      comparisonProjectRowFilters.length
+        * comparisonProjectDifferenceFilters.length
+        * comparisonProjectArticleCategoryFilters.length,
+    ),
   )
 })
 

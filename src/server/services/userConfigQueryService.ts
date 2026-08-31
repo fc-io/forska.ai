@@ -1,5 +1,5 @@
 import type {UserRecord} from '../../db/schemaTypes.ts'
-import {localUserDefaults} from '../../utils/localUser.ts'
+import {legacyLocalUserId, localUserDefaults} from '../../utils/localUser.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
 import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
@@ -69,6 +69,10 @@ const getDefaultUserRecord = (): UserRecord => {
   }
 }
 
+const getNonEmptyUserName = (value: string | null | undefined) => {
+  return getValueOrFallback(value, localUserDefaults.name)
+}
+
 const getUserConfigValue = (row: UserConfigRow): UserRecord => {
   return {
     maintenanceWorkerDuckdbMemoryLimit: getNullableTrimmedValue(row.maintenanceWorkerDuckdbMemoryLimit),
@@ -91,6 +95,30 @@ const getUserConfig = async (): Promise<UserRecord | null> => {
   `)
 
   return row ? getUserConfigValue(row) : null
+}
+
+const repairLegacyUserConfig = async (current: UserRecord): Promise<UserRecord> => {
+  if (current.id !== legacyLocalUserId && getNullableTrimmedValue(current.name)) {
+    return current
+  }
+
+  const [row] = await getAppDatabaseService().queryJson<UserConfigRow>(`
+    UPDATE app.user_config
+    SET id = CASE
+          WHEN id = ${getSqlLiteral(legacyLocalUserId)} THEN ${getSqlLiteral(localUserDefaults.id)}
+          ELSE id
+        END,
+        name = ${getSqlLiteral(getNonEmptyUserName(current.name))},
+        email = CASE
+          WHEN id = ${getSqlLiteral(legacyLocalUserId)} THEN ${getSqlLiteral(localUserDefaults.email)}
+          ELSE email
+        END,
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(current.id)}
+    RETURNING ${userConfigSelectClause}
+  `)
+
+  return row ? getUserConfigValue(row) : current
 }
 
 const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
@@ -127,7 +155,7 @@ const getOrCreateUserConfig = async (): Promise<UserRecord> => {
   const inserted = existing ? null : await insertDefaultUserConfig()
   const loaded = existing ?? inserted ?? (await getUserConfig())
 
-  return loaded ?? getDefaultUserRecord()
+  return loaded ? repairLegacyUserConfig(loaded) : getDefaultUserRecord()
 }
 
 const getFullTextConversionModelAvailability = (row: FullTextConversionModelAvailabilityRow) => {
@@ -197,7 +225,7 @@ const updateUserConfigRow = async ({
         project_mart_large_rebuild_tuning_mode = 'automatic',
         unpaywall_email = ${getSqlLiteral(getNullableTrimmedValue(unpaywallEmail))},
         updated_at = current_timestamp
-    WHERE id = ${getSqlLiteral(localUserDefaults.id)}
+    WHERE id = ${getSqlLiteral(current.id)}
     RETURNING ${userConfigSelectClause}
   `)
 
