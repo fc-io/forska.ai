@@ -17,6 +17,12 @@ import {
   resetComparisonProjectConflictResolution,
   setComparisonProjectConflictResolution,
 } from '../../../../services/comparisonProjectsService'
+import {
+  type ComparisonProjectArticleCategoryFilter,
+  comparisonProjectArticleCategoryFilters,
+  getComparisonProjectArticleCategoryFilterLabel,
+  getNormalizedComparisonProjectArticleCategoryFilter,
+} from '../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectDifferenceFilter,
@@ -237,6 +243,9 @@ const CompareProjectJudgmentsPage = () => {
   }
   const [pageLimit, setPageLimit] = createSignal(initialUrlState.pageLimit)
   const [rowFilter, setRowFilter] = createSignal<ComparisonProjectRowFilter>(initialUrlState.rowFilter)
+  const [articleCategoryFilter, setArticleCategoryFilter] = createSignal<ComparisonProjectArticleCategoryFilter>(
+    initialUrlState.articleCategoryFilter,
+  )
   const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
     initialUrlState.differenceFilter,
   )
@@ -301,6 +310,7 @@ const CompareProjectJudgmentsPage = () => {
       pageLimit(),
       rowFilter(),
       differenceFilter(),
+      articleCategoryFilter(),
     ] as const
   }
   const getCurrentJudgmentsCountQueryKey = () => {
@@ -310,6 +320,7 @@ const CompareProjectJudgmentsPage = () => {
       pageLimit(),
       rowFilter(),
       differenceFilter(),
+      articleCategoryFilter(),
     ] as const
   }
   const canFetchJudgmentsPage = createMemo(() => {
@@ -329,6 +340,7 @@ const CompareProjectJudgmentsPage = () => {
           pageLimit(),
           rowFilter(),
           differenceFilter(),
+          articleCategoryFilter(),
           typeof pageParam === 'string' ? pageParam : null,
         )
       },
@@ -345,7 +357,13 @@ const CompareProjectJudgmentsPage = () => {
     return {
       queryKey: getCurrentJudgmentsCountQueryKey(),
       queryFn: () => {
-        return fetchComparisonProjectJudgmentsCount(comparisonProjectId(), pageLimit(), rowFilter(), differenceFilter())
+        return fetchComparisonProjectJudgmentsCount(
+          comparisonProjectId(),
+          pageLimit(),
+          rowFilter(),
+          differenceFilter(),
+          articleCategoryFilter(),
+        )
       },
       enabled: canFetchJudgmentsPage() && judgmentsPageQuery.isSuccess,
       refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
@@ -406,11 +424,12 @@ const CompareProjectJudgmentsPage = () => {
       pageLimit: pageLimit(),
       rowFilter: rowFilter(),
       differenceFilter: differenceFilter(),
+      articleCategoryFilter: articleCategoryFilter(),
     })
   })
 
   createEffect(
-    on([pageLimit, rowFilter, differenceFilter, searchInitialized], () => {
+    on([pageLimit, rowFilter, differenceFilter, articleCategoryFilter, searchInitialized], () => {
       if (!searchInitialized()) {
         return
       }
@@ -432,7 +451,7 @@ const CompareProjectJudgmentsPage = () => {
     )
   })
   const hasRowFilters = createMemo(() => {
-    return rowFilter() !== 'all' || differenceFilter() !== 'all'
+    return rowFilter() !== 'all' || differenceFilter() !== 'all' || articleCategoryFilter() !== 'all'
   })
   const updateCurrentJudgmentsPageConflictResolution = (
     articleId: string,
@@ -717,6 +736,28 @@ const CompareProjectJudgmentsPage = () => {
                         </select>
                       </label>
                     </Show>
+                    <label class="flex items-center gap-2 text-sm text-gray-600">
+                      <span>Article category</span>
+                      <select
+                        value={articleCategoryFilter()}
+                        class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
+                        onChange={(event) => {
+                          setArticleCategoryFilter(
+                            getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
+                          )
+                        }}
+                      >
+                        <For each={comparisonProjectArticleCategoryFilters}>
+                          {(option) => {
+                            return (
+                              <option selected={option === articleCategoryFilter()} value={option}>
+                                {getComparisonProjectArticleCategoryFilterLabel(option)}
+                              </option>
+                            )
+                          }}
+                        </For>
+                      </select>
+                    </label>
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <span>Rows</span>
                       <select

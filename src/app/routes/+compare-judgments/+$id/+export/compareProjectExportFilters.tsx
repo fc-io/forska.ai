@@ -1,6 +1,12 @@
 import {For} from 'solid-js'
 
 import {Button} from '../../../../../components/ui/button'
+import {
+  type ComparisonProjectArticleCategoryFilter,
+  comparisonProjectArticleCategoryFilters,
+  getComparisonProjectArticleCategoryFilterLabel,
+  getNormalizedComparisonProjectArticleCategoryFilter,
+} from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import type {ComparisonProjectDifferenceFilter} from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
@@ -12,11 +18,13 @@ import {
 type CompareProjectExportDifferenceFilterOption = {label: string; value: ComparisonProjectDifferenceFilter}
 
 type CompareProjectExportFiltersProps = {
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter
   differenceFilter: ComparisonProjectDifferenceFilter
   differenceFilterDisabled: boolean
   differenceFilterOptions: CompareProjectExportDifferenceFilterOption[]
   isExporting: boolean
   isSummaryMode: boolean
+  onArticleCategoryFilterChange: (value: ComparisonProjectArticleCategoryFilter) => void
   onDifferenceFilterChange: (value: ComparisonProjectDifferenceFilter) => void
   onExport: () => void
   onRowFilterChange: (value: ComparisonProjectRowFilter) => void
@@ -65,6 +73,28 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
                 return (
                   <option selected={option.value === props.differenceFilter} value={option.value}>
                     {option.label}
+                  </option>
+                )
+              }}
+            </For>
+          </select>
+        </label>
+        <label class="flex flex-col gap-2 text-sm text-gray-700">
+          <span class="font-medium">Article category</span>
+          <select
+            value={props.articleCategoryFilter}
+            class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+            onChange={(event) => {
+              props.onArticleCategoryFilterChange(
+                getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
+              )
+            }}
+          >
+            <For each={comparisonProjectArticleCategoryFilters}>
+              {(option) => {
+                return (
+                  <option selected={option === props.articleCategoryFilter} value={option}>
+                    {getComparisonProjectArticleCategoryFilterLabel(option)}
                   </option>
                 )
               }}

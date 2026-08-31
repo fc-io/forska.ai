@@ -7,6 +7,7 @@ import {
   type ComparisonProjectJudgmentsColumn,
   fetchComparisonProjectJudgmentsMetadata,
 } from '../../../../services/comparisonProjectsService'
+import type {ComparisonProjectArticleCategoryFilter} from '../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectDifferenceFilter,
@@ -46,6 +47,9 @@ const CompareProjectExportPage = () => {
   }
   const [pageLimit] = createSignal(initialUrlState.pageLimit)
   const [rowFilter, setRowFilter] = createSignal<ComparisonProjectRowFilter>(initialUrlState.rowFilter)
+  const [articleCategoryFilter, setArticleCategoryFilter] = createSignal<ComparisonProjectArticleCategoryFilter>(
+    initialUrlState.articleCategoryFilter,
+  )
   const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
     initialUrlState.differenceFilter,
   )
@@ -87,11 +91,16 @@ const CompareProjectExportPage = () => {
     )
   })
   const urlState = createMemo(() => {
-    return {differenceFilter: differenceFilter(), pageLimit: pageLimit(), rowFilter: rowFilter()}
+    return {
+      articleCategoryFilter: articleCategoryFilter(),
+      differenceFilter: differenceFilter(),
+      pageLimit: pageLimit(),
+      rowFilter: rowFilter(),
+    }
   })
 
   createEffect(
-    on([pageLimit, rowFilter, differenceFilter, searchInitialized], () => {
+    on([pageLimit, rowFilter, differenceFilter, articleCategoryFilter, searchInitialized], () => {
       if (!searchInitialized()) {
         return
       }
@@ -128,6 +137,9 @@ const CompareProjectExportPage = () => {
   }
   const updateDifferenceFilter = (value: ComparisonProjectDifferenceFilter) => {
     setDifferenceFilter(value)
+  }
+  const updateArticleCategoryFilter = (value: ComparisonProjectArticleCategoryFilter) => {
+    setArticleCategoryFilter(value)
   }
   const handleExport = () => {
     setError(null)
@@ -176,11 +188,13 @@ const CompareProjectExportPage = () => {
               </Show>
               <CompareProjectExportMetadata comparisonProject={comparisonProject()} />
               <CompareProjectExportFilters
+                articleCategoryFilter={articleCategoryFilter()}
                 differenceFilter={differenceFilter()}
                 differenceFilterDisabled={availableDifferenceFilters().length <= 1 && differenceFilter() === 'all'}
                 differenceFilterOptions={differenceFilterOptions()}
                 isExporting={exportMutation.isPending}
                 isSummaryMode={isSummaryMode()}
+                onArticleCategoryFilterChange={updateArticleCategoryFilter}
                 onDifferenceFilterChange={updateDifferenceFilter}
                 onExport={handleExport}
                 onRowFilterChange={updateRowFilter}

@@ -1,4 +1,9 @@
 import {
+  type ComparisonProjectArticleCategoryFilter,
+  defaultComparisonProjectArticleCategoryFilter,
+  getNormalizedComparisonProjectArticleCategoryFilter,
+} from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
+import {
   type ComparisonProjectDifferenceFilter,
   comparisonProjectDifferenceFilters,
 } from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
@@ -11,6 +16,7 @@ import {
 export const compareProjectJudgmentsPageLimitOptions = [25, 50, 100]
 
 export type CompareProjectJudgmentsUrlState = {
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter
   pageLimit: number
   rowFilter: ComparisonProjectRowFilter
   differenceFilter: ComparisonProjectDifferenceFilter
@@ -27,7 +33,12 @@ type CompareProjectJudgmentsPageQueryState = CompareProjectJudgmentsDifferenceFi
 }
 
 export const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
-  return {pageLimit: 50, rowFilter: defaultComparisonProjectRowFilter, differenceFilter: 'all'}
+  return {
+    articleCategoryFilter: defaultComparisonProjectArticleCategoryFilter,
+    pageLimit: 50,
+    rowFilter: defaultComparisonProjectRowFilter,
+    differenceFilter: 'all',
+  }
 }
 
 const getPositiveIntegerSearchParamValue = (value: unknown, fallback: number) => {
@@ -90,6 +101,7 @@ export const getInitialCompareProjectJudgmentsUrlState = (
       : defaultState.pageLimit,
     rowFilter: getRowFilterSearchParamValue(search),
     differenceFilter: getDifferenceFilterSearchParamValue(search),
+    articleCategoryFilter: getNormalizedComparisonProjectArticleCategoryFilter(search.articleCategoryFilter),
   }
 }
 
@@ -109,6 +121,10 @@ export const getCompareProjectJudgmentsSearchParams = (
 
   if (state.differenceFilter !== defaultState.differenceFilter) {
     searchParams.differenceFilter = state.differenceFilter
+  }
+
+  if (state.articleCategoryFilter !== defaultState.articleCategoryFilter) {
+    searchParams.articleCategoryFilter = state.articleCategoryFilter
   }
 
   return searchParams

@@ -5,6 +5,7 @@ import type {
   HumanJudgmentMode,
   ProjectPromptCriteriaDisposition,
 } from '../db/schemaTypes.ts'
+import type {ComparisonProjectArticleCategoryFilter} from '../utils/comparisonProjectArticleCategoryFilter.ts'
 import type {
   ComparisonProjectDifferenceColumn,
   ComparisonProjectDifferenceFilter,
@@ -412,6 +413,7 @@ export type ComparisonProjectStats = {
   servingUpdatedAt: Date | string | null
 }
 export type ComparisonProjectRowsRequestFilters = {
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   rowFilter?: ComparisonProjectRowFilter
   differenceFilter?: ComparisonProjectDifferenceFilter
 }
@@ -770,9 +772,16 @@ export const fetchComparisonProjectJudgmentsPage = async (
   limit: number,
   rowFilter?: ComparisonProjectRowFilter,
   differenceFilter?: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter,
   cursor?: string | null,
 ) => {
-  const body: ComparisonProjectJudgmentsPageRequest = {cursor, limit: String(limit), rowFilter, differenceFilter}
+  const body: ComparisonProjectJudgmentsPageRequest = {
+    articleCategoryFilter,
+    cursor,
+    limit: String(limit),
+    rowFilter,
+    differenceFilter,
+  }
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post(body)
 
   return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')
@@ -783,8 +792,14 @@ export const fetchComparisonProjectJudgmentsCount = async (
   limit: number,
   rowFilter?: ComparisonProjectRowFilter,
   differenceFilter?: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter,
 ) => {
-  const body: ComparisonProjectJudgmentsCountRequest = {limit: String(limit), rowFilter, differenceFilter}
+  const body: ComparisonProjectJudgmentsCountRequest = {
+    articleCategoryFilter,
+    limit: String(limit),
+    rowFilter,
+    differenceFilter,
+  }
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.count.post(body)
 
   return getResponseData<ComparisonProjectJudgmentsCount>(response, 'Failed to fetch comparison project judgment count')

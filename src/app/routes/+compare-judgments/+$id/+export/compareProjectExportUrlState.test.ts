@@ -8,14 +8,21 @@ import {
 
 test('compare export URL state starts from active compare page search params', () => {
   const state = getInitialCompareProjectExportUrlState({
+    articleCategoryFilter: 'non_chinese',
     differenceFilter: 'human-vs-llm',
     limit: '100',
     page: '4',
     rowFilter: 'fully-answered',
   })
 
-  expect(state).toEqual({differenceFilter: 'human-vs-llm', pageLimit: 100, rowFilter: 'fully-answered'})
+  expect(state).toEqual({
+    articleCategoryFilter: 'non_chinese',
+    differenceFilter: 'human-vs-llm',
+    pageLimit: 100,
+    rowFilter: 'fully-answered',
+  })
   expect(getCompareProjectExportSearchParams(state)).toEqual({
+    articleCategoryFilter: 'non_chinese',
     differenceFilter: 'human-vs-llm',
     limit: '100',
     rowFilter: 'fully-answered',
@@ -30,7 +37,11 @@ test('compare export request body sends only export filters', () => {
     rowFilter: 'all',
   })
 
-  expect(getCompareProjectExportRequestBody(state)).toEqual({differenceFilter: 'llm-vs-llm', rowFilter: 'all'})
+  expect(getCompareProjectExportRequestBody(state)).toEqual({
+    articleCategoryFilter: 'all',
+    differenceFilter: 'llm-vs-llm',
+    rowFilter: 'all',
+  })
 })
 
 test('compare export URL state normalizes legacy compare filters to canonical params', () => {
@@ -46,6 +57,7 @@ test('compare export URL state normalizes legacy compare filters to canonical pa
     rowFilter: 'fully-answered',
   })
   expect(getCompareProjectExportRequestBody(state)).toEqual({
+    articleCategoryFilter: 'all',
     differenceFilter: 'llm-vs-llm',
     rowFilter: 'fully-answered',
   })

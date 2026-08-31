@@ -192,6 +192,7 @@ test('serving member sql resolves active generation and pages by keyset cursor',
     title: 'Article 4',
   })
   const sql = getComparisonProjectServingMemberSql({
+    articleCategoryFilter: 'chinese',
     comparisonProjectId: 'comparison-project-1',
     cursor,
     differenceFilter: 'llm-vs-llm',
@@ -204,6 +205,7 @@ test('serving member sql resolves active generation and pages by keyset cursor',
   expect(sql).toContain("comparison_project_id = 'comparison-project-1'")
   expect(sql).toContain('article.passes_row_filter_fully_answered')
   expect(sql).toContain('article.passes_difference_filter_llm_vs_llm')
+  expect(sql).toContain("article.article_category = 'chinese'")
   expect(sql).toContain("article.row_sort_created_at < TIMESTAMPTZ '2026-04-04T00:00:00.000Z'")
   expect(sql).toContain("article.row_sort_title > 'Article 4'")
   expect(sql).toContain('ORDER BY article.row_sort_created_at DESC NULLS LAST, article.row_sort_title ASC')
@@ -232,6 +234,7 @@ test('serving hydration sql scopes articles and cells to returned article ids', 
 
 test('serving judgment count sql reads active generation filter stats only', () => {
   const sql = getComparisonProjectServingJudgmentCountSql({
+    articleCategoryFilter: 'non_chinese',
     comparisonProjectId: 'comparison-project-1',
     differenceFilter: 'human-vs-llm',
     rowFilter: 'multiple-answers',
@@ -242,6 +245,7 @@ test('serving judgment count sql reads active generation filter stats only', () 
   expect(sql).toContain('stats.total_count')
   expect(sql).toContain("stats.row_filter = 'multiple-answers'")
   expect(sql).toContain("stats.difference_filter = 'human-vs-llm'")
+  expect(sql).toContain("stats.article_category_filter = 'non_chinese'")
   expect(sql).not.toContain('comparison_filter_member')
   expect(sql).not.toContain('comparison_cell_serving')
   expect(sql).not.toContain('comparison_article_serving')
