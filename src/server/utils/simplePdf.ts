@@ -1,6 +1,9 @@
 type PdfFont = 'regular' | 'bold'
 
 type PdfTextOptions = {font?: PdfFont; fontSize?: number; gapAfter?: number; indent?: number}
+type PdfCheckboxOptions = {checked?: boolean; fieldName: string; fontSize?: number; gapAfter?: number; indent?: number}
+type PdfPanelOptions = {gapAfter?: number; title: string}
+type PdfCheckboxField = {checked: boolean; fieldName: string; pageIndex: number; size: number; x: number; y: number}
 
 const pageWidth = 595
 const pageHeight = 842
@@ -8,8 +11,10 @@ const marginX = 48
 const marginTop = 42
 const marginBottom = 42
 const lineHeightMultiplier = 1.25
+const sectionFillColor = '0.96 0.98 1.00'
+const sectionStrokeColor = '0.82 0.88 0.95'
 
-const getPdfSafeText = (value: string) => {
+const getPdfSafeAsciiText = (value: string) => {
   return value
     .normalize('NFKD')
     .replace(/[^\x20-\x7E]/g, '?')
@@ -18,11 +23,52 @@ const getPdfSafeText = (value: string) => {
     })
 }
 
+const hasNonAsciiText = (value: string) => {
+  return /[^\x20-\x7E]/.test(value)
+}
+
+const getUtf16BeHexText = (value: string) => {
+  const utf16le = Buffer.from(value, 'utf16le')
+
+  for (let index = 0; index < utf16le.length; index += 2) {
+    const lowByte = utf16le[index]
+    utf16le[index] = utf16le[index + 1] ?? 0
+    utf16le[index + 1] = lowByte ?? 0
+  }
+
+  return utf16le.toString('hex').toUpperCase()
+}
+
+const getPdfTextCommand = (line: string, font: string, fontSize: number, x: number, y: number) => {
+  if (hasNonAsciiText(line)) {
+    return `BT /F3 ${fontSize} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td <${getUtf16BeHexText(line)}> Tj ET`
+  }
+
+  return `BT /${font} ${fontSize} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td (${getPdfSafeAsciiText(line)}) Tj ET`
+}
+
+const splitLongWord = (word: string, maxCharacters: number) => {
+  const characters = Array.from(word)
+  const chunks: string[] = []
+
+  for (let index = 0; index < characters.length; index += maxCharacters) {
+    chunks.push(characters.slice(index, index + maxCharacters).join(''))
+  }
+
+  return chunks
+}
+
 const getWrappedLines = (value: string, maxCharacters: number) => {
   const paragraphs = value.split(/\r\n|\n|\r/g)
 
   return paragraphs.flatMap((paragraph) => {
-    const words = paragraph.trim().split(/\s+/).filter(Boolean)
+    const words = paragraph
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .flatMap((word) => {
+        return Array.from(word).length > maxCharacters ? splitLongWord(word, maxCharacters) : [word]
+      })
 
     if (words.length === 0) {
       return ['']
@@ -33,7 +79,7 @@ const getWrappedLines = (value: string, maxCharacters: number) => {
         const currentLine = lines[lines.length - 1] ?? ''
         const candidate = currentLine ? `${currentLine} ${word}` : word
 
-        if (candidate.length <= maxCharacters) {
+        if (Array.from(candidate).length <= maxCharacters) {
           lines[lines.length - 1] = candidate
           return lines
         }
@@ -52,6 +98,7 @@ const getObject = (body: string | Buffer) => {
 
 export class SimplePdfDocument {
   private readonly pages: string[][] = [[]]
+  private readonly checkboxFields: PdfCheckboxField[] = []
   private y = pageHeight - marginTop
 
   addPage() {
@@ -74,13 +121,36 @@ export class SimplePdfDocument {
       }
 
       const font = options.font === 'bold' ? 'F2' : 'F1'
-      this.pages[this.pages.length - 1]?.push(
-        `BT /${font} ${fontSize} Tf ${x.toFixed(2)} ${this.y.toFixed(2)} Td (${getPdfSafeText(line)}) Tj ET`,
-      )
+      this.pages[this.pages.length - 1]?.push(getPdfTextCommand(line, font, fontSize, x, this.y))
       this.y -= lineHeight
     })
 
     this.y -= options.gapAfter ?? 0
+  }
+
+  addCheckbox(label: string, options: PdfCheckboxOptions) {
+    const fontSize = options.fontSize ?? 10
+    const lineHeight = fontSize * lineHeightMultiplier
+    const size = Math.max(fontSize + 1, 11)
+    const x = marginX + (options.indent ?? 0)
+
+    if (this.y - lineHeight < marginBottom) {
+      this.addPage()
+    }
+
+    const pageIndex = this.pages.length - 1
+    const checkboxY = this.y - 1
+    this.checkboxFields.push({
+      checked: options.checked ?? false,
+      fieldName: options.fieldName,
+      pageIndex,
+      size,
+      x,
+      y: checkboxY,
+    })
+
+    this.pages[pageIndex]?.push(getPdfTextCommand(label, 'F1', fontSize, x + size + 7, this.y))
+    this.y -= lineHeight + (options.gapAfter ?? 0)
   }
 
   addGap(points: number) {
@@ -91,33 +161,119 @@ export class SimplePdfDocument {
     }
   }
 
+  addPanel(options: PdfPanelOptions, renderContent: () => void) {
+    if (this.y < marginBottom + 90) {
+      this.addPage()
+    }
+
+    const pageIndex = this.pages.length - 1
+    const startCommandIndex = this.pages[pageIndex]?.length ?? 0
+    const topY = this.y + 6
+
+    this.addText(options.title, {font: 'bold', fontSize: 12, gapAfter: 8, indent: 12})
+    renderContent()
+
+    const bottomY = this.pages.length - 1 === pageIndex ? Math.max(this.y - 4, marginBottom) : marginBottom
+    const rectHeight = topY - bottomY
+    const rectCommand = [
+      'q',
+      `${sectionFillColor} rg`,
+      `${sectionStrokeColor} RG`,
+      '1 w',
+      `${(marginX - 8).toFixed(2)} ${bottomY.toFixed(2)} ${(pageWidth - marginX * 2 + 16).toFixed(2)} ${rectHeight.toFixed(2)} re`,
+      'B',
+      'Q',
+    ].join(' ')
+    this.pages[pageIndex]?.splice(startCommandIndex, 0, rectCommand)
+    this.y -= options.gapAfter ?? 10
+  }
+
   toBuffer() {
     const objects: Buffer[] = []
     const addObject = (body: string | Buffer) => {
       objects.push(getObject(body))
       return objects.length
     }
+    const addStreamObject = (dictionary: string, stream: string | Buffer) => {
+      const content = getObject(stream)
+
+      return addObject(
+        Buffer.concat([
+          Buffer.from(`<< ${dictionary} /Length ${content.length} >>\nstream\n`),
+          content,
+          Buffer.from('\nendstream'),
+        ]),
+      )
+    }
 
     const catalogId = addObject('')
     const pagesId = addObject('')
     const regularFontId = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
     const boldFontId = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>')
+    const cjkDescendantFontId = addObject(
+      '<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /DW 1000 >>',
+    )
+    const cjkFontId = addObject(
+      `<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [${cjkDescendantFontId} 0 R] >>`,
+    )
+    const checkboxOnAppearanceId = addStreamObject(
+      '/Type /XObject /Subtype /Form /BBox [0 0 12 12] /Resources << >>',
+      'q 1 1 1 rg 0.45 0.52 0.60 RG 1 w 0.5 0.5 11 11 re B 0.12 0.33 0.60 RG 1.8 w 2.7 6 m 5.1 3.6 l 9.4 8.7 l S Q',
+    )
+    const checkboxOffAppearanceId = addStreamObject(
+      '/Type /XObject /Subtype /Form /BBox [0 0 12 12] /Resources << >>',
+      'q 1 1 1 rg 0.45 0.52 0.60 RG 1 w 0.5 0.5 11 11 re B Q',
+    )
+    const checkboxFieldIds = this.checkboxFields.map((field) => {
+      const state = field.checked ? '/Yes' : '/Off'
+
+      return addObject(
+        [
+          '<< /Type /Annot /Subtype /Widget /FT /Btn',
+          `/T (${getPdfSafeAsciiText(field.fieldName)})`,
+          `/Rect [${field.x.toFixed(2)} ${(field.y - field.size).toFixed(2)} ${(field.x + field.size).toFixed(2)} ${field.y.toFixed(2)}]`,
+          `/V ${state} /AS ${state} /F 4 /H /P`,
+          '/MK << /BC [0.45 0.52 0.60] /BG [1 1 1] /CA (4) >>',
+          '/BS << /W 1 /S /S >>',
+          `/AP << /N << /Yes ${checkboxOnAppearanceId} 0 R /Off ${checkboxOffAppearanceId} 0 R >> >>`,
+          '>>',
+        ].join(' '),
+      )
+    })
     const pageIds: number[] = []
 
     this.pages.forEach((pageCommands, index) => {
       pageCommands.push(`BT /F1 8 Tf ${(pageWidth - marginX - 28).toFixed(2)} 24.00 Td (Page ${index + 1}) Tj ET`)
-      const content = Buffer.from(pageCommands.join('\n'), 'utf8')
-      const contentId = addObject(
-        Buffer.concat([Buffer.from(`<< /Length ${content.length} >>\nstream\n`), content, Buffer.from('\nendstream')]),
-      )
+      const pageCheckboxIds = checkboxFieldIds.filter((_, fieldIndex) => {
+        return this.checkboxFields[fieldIndex]?.pageIndex === index
+      })
+      const contentId = addStreamObject('', pageCommands.join('\n'))
       const pageId = addObject(
-        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${regularFontId} 0 R /F2 ${boldFontId} 0 R >> >> /Contents ${contentId} 0 R >>`,
+        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${regularFontId} 0 R /F2 ${boldFontId} 0 R /F3 ${cjkFontId} 0 R >> >> /Contents ${contentId} 0 R${
+          pageCheckboxIds.length > 0
+            ? ` /Annots [${pageCheckboxIds
+                .map((fieldId) => {
+                  return `${fieldId} 0 R`
+                })
+                .join(' ')}]`
+            : ''
+        } >>`,
       )
 
       pageIds.push(pageId)
     })
 
-    objects[catalogId - 1] = getObject(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`)
+    objects[catalogId - 1] = getObject(
+      `<< /Type /Catalog /Pages ${pagesId} 0 R${
+        checkboxFieldIds.length > 0
+          ? ` /AcroForm << /Fields [${checkboxFieldIds
+              .map((fieldId) => {
+                return `${fieldId} 0 R`
+              })
+              .join(' ')}] /NeedAppearances true >>`
+          : ''
+      } >>`,
+    )
     objects[pagesId - 1] = getObject(
       `<< /Type /Pages /Kids [${pageIds
         .map((pageId) => {
