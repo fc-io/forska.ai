@@ -111,6 +111,7 @@ type MockConflictResolutionImportSourceRow = {
 }
 
 type MockDatabaseState = {
+  articleRows?: Array<{articleCreatedAt: Date; articleId: string; articleSummary: string | null; articleTitle: string}>
   comparisonProject: {
     archived?: boolean
     allowConflictResolution?: boolean
@@ -818,20 +819,22 @@ const getMockServingRows = (
   const isSummaryMode =
     state.comparisonProject.compareWithHumans && state.comparisonProject.humanJudgmentMode === 'summary'
   const cellsByArticle = getMockServingCellsByArticle(state)
-  const rows = [
-    {
-      articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'),
-      articleId: 'article-1',
-      articleSummary: 'Article 1 summary',
-      articleTitle: 'Article 1',
-    },
-    {
-      articleCreatedAt: new Date('2026-03-29T00:00:00.000Z'),
-      articleId: 'article-2',
-      articleSummary: 'Article 2 summary',
-      articleTitle: 'Article 2',
-    },
-  ]
+  const rows = (
+    state.articleRows ?? [
+      {
+        articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'),
+        articleId: 'article-1',
+        articleSummary: 'Article 1 summary',
+        articleTitle: 'Article 1',
+      },
+      {
+        articleCreatedAt: new Date('2026-03-29T00:00:00.000Z'),
+        articleId: 'article-2',
+        articleSummary: 'Article 2 summary',
+        articleTitle: 'Article 2',
+      },
+    ]
+  )
     .map<MockServingRow | null>((article) => {
       const cells = cellsByArticle[article.articleId] ?? {}
       const hasCells = Object.values(cells).some(hasServingCellValue)
@@ -2401,6 +2404,18 @@ const loadComparisonProjectsRoutes = async () => {
 
   const moduleUnknown: unknown = await import(`./ComparisonProjectsRoutes.ts?rollback=${Date.now()}-${Math.random()}`)
   return moduleUnknown as typeof import('./ComparisonProjectsRoutes.ts')
+}
+
+const getUtf16BeHexFixture = (value: string) => {
+  const utf16le = Buffer.from(value, 'utf16le')
+
+  for (let index = 0; index < utf16le.length; index += 2) {
+    const lowByte = utf16le[index]
+    utf16le[index] = utf16le[index + 1] ?? 0
+    utf16le[index + 1] = lowByte ?? 0
+  }
+
+  return utf16le.toString('hex').toUpperCase()
 }
 
 afterEach(() => {
@@ -6459,9 +6474,17 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf.startsWith('%PDF-1.4')).toBe(true)
   expect(pdf).toContain('Article 1 of 1 | Article ID: article-1')
   expect(pdf).toContain('Article 1 summary')
+  expect(pdf).toMatch(/Exported: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/)
+  expect(pdf).not.toMatch(/Exported: .*T.*Z/)
+  expect(pdf).toContain('0.96 0.98 1.00 rg')
   expect(pdf).toContain('Conflict resolution')
   expect(pdf).toContain('Current resolution: Prompt 2')
   expect(pdf).toContain('Reviewer: Dr Reviewer')
+  expect(pdf).toContain('/AcroForm')
+  expect(pdf).toContain('/FT /Btn')
+  expect(pdf).toContain('/T (comparison.comparison-project-1.article.article-1.resolution.prompt-2)')
+  expect(pdf).toContain('/V /Yes /AS /Yes')
+  expect(pdf).not.toContain('(x) Prompt 2')
   expect(pdf).toContain('LLM assessment')
   expect(pdf).not.toContain('Confidence')
   expect(
@@ -6469,6 +6492,103 @@ test('comparison project export can render a readable pdf with matching filters 
       return (
         statement.includes('FROM mart.comparison_article_serving article')
         && statement.includes("article.article_category = 'non_chinese'")
+      )
+    }),
+  ).toBe(true)
+})
+
+test('comparison project pdf export preserves Chinese title and abstract glyph text', async () => {
+  const chineseTitle = '针灸治疗慢性疼痛的疗效'
+  const chineseSummary = '摘要：本研究评估针灸对慢性疼痛患者的影响。'
+
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    articleRows: [
+      {
+        articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'),
+        articleId: 'article-1',
+        articleSummary: chineseSummary,
+        articleTitle: chineseTitle,
+      },
+    ],
+    comparisonProject: {
+      allowConflictResolution: false,
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {
+    articleCategoryFilter: 'all',
+    differenceFilter: 'all',
+    format: 'pdf',
+    rowFilter: 'fully-answered',
+  })
+  const pdf = Buffer.from(await response.arrayBuffer()).toString('latin1')
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('Content-Type') ?? '').toContain('application/pdf')
+  expect(pdf).toContain('/BaseFont /STSong-Light')
+  expect(pdf).toContain('/Encoding /UniGB-UCS2-H')
+  expect(pdf).toContain(`<${getUtf16BeHexFixture(chineseTitle)}>`)
+  expect(pdf).toContain(`<${getUtf16BeHexFixture(chineseSummary)}>`)
+  expect(pdf).not.toContain('????????')
+})
+
+test('comparison project pdf export shows individual assessments behind summary LLM decisions', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: false,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+      {id: 'comparison-project-source-2', sourceProjectId: 'source-project-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {
+    articleCategoryFilter: 'all',
+    differenceFilter: 'all',
+    format: 'pdf',
+    rowFilter: 'fully-answered',
+  })
+  const pdf = Buffer.from(await response.arrayBuffer()).toString('latin1')
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(pdf).toContain('LLM assessment')
+  expect(pdf).toContain('Individual assessments')
+  expect(pdf).toContain('Prompt 1: yes')
+  expect(pdf).toContain('Prompt 2: yes')
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.judgment j')
+        && statement.includes("'prompt-1'")
+        && statement.includes("'prompt-2'")
       )
     }),
   ).toBe(true)
