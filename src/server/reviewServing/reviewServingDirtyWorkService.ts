@@ -1169,6 +1169,14 @@ export const claimReviewServingDirtyWork = async (
         state.dirty_range_end AS dirtyRangeEnd,
         state.updated_at AS updatedAt
       FROM app.review_serving_dirty_work_claim_state state
+      WHERE state.projection_component = ${getSqlLiteral(params.projectionComponent)}
+        AND (
+          state.status = 'pending'
+          OR (
+            state.status IN ('running', 'failed')
+            AND state.updated_at <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
+          )
+        )
       LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
     `)
 

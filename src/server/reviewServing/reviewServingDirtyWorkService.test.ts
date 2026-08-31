@@ -594,7 +594,15 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     }
   }
   const getClaimStateRows = (statement: string) => {
+    const projectionComponent = getWhereLiteral(statement, 'state.projection_component')
+
     return [...dirtyWork.values()]
+      .filter((row) => {
+        return (
+          (projectionComponent === null || row.projectionComponent === projectionComponent)
+          && isClaimEligibleForStatement(row, statement)
+        )
+      })
       .slice(0, statement.includes('LIMIT 2048') ? 2048 : getLimit(statement))
       .map(getClaimStateRow)
   }
@@ -1371,11 +1379,12 @@ test('claim query keeps candidate discovery bounded to the claim-state window', 
   expect(claimSelect).toContain('SELECT')
   expect(claimSelect).not.toContain('state.rowid AS claimStateRowId')
   expect(claimSelect).toContain('LIMIT 2048')
-  expect(claimSelect).not.toContain('WHERE state.')
+  expect(claimSelect).toContain("WHERE state.projection_component = 'display'")
+  expect(claimSelect).toContain("state.status = 'pending'")
+  expect(claimSelect).toContain("state.status IN ('running', 'failed')")
   expect(claimSelect).not.toContain('ORDER BY')
   expect(claimSelect).not.toContain('ORDER BY state.rowid')
   expect(claimSelect).not.toContain('ORDER BY state.updated_at')
-  expect(claimSelect).not.toContain('state.projection_component =')
   expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
   expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work ')
 })
@@ -1396,13 +1405,60 @@ test('claim query samples claim-state without ordered cursor scans', async () =>
   const nextBucketSelect = claimSelects.at(-1)
 
   expect(nextBucketSelect).toContain('LIMIT 2048')
-  expect(nextBucketSelect).not.toContain('WHERE state.')
+  expect(nextBucketSelect).toContain("WHERE state.projection_component = 'display'")
+  expect(nextBucketSelect).toContain("state.status = 'pending'")
+  expect(nextBucketSelect).toContain("state.status IN ('running', 'failed')")
   expect(nextBucketSelect).not.toContain('ORDER BY')
   expect(nextBucketSelect).not.toContain('state.rowid')
   expect(nextBucketSelect).not.toContain('ORDER BY state.updated_at')
-  expect(nextBucketSelect).not.toContain('state.projection_component =')
   expect(nextBucketSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
   expect(nextBucketSelect).not.toContain('FROM app.review_serving_dirty_work ')
+})
+
+test('claim query ignores completed claim-state rows before pending work', async () => {
+  const {database} = createFakeDirtyWorkDatabase()
+
+  for (let index = 0; index < 2_048; index += 1) {
+    const {dirtyWorkId} = await upsertDisplayWork(
+      database,
+      {...getBaseScope(index + 1, String(index + 1), String(index + 1)), scopeId: `project-1:completed-${index}`},
+      `delta-completed-${index}`,
+    )
+    await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+    await completeReviewServingDirtyWorkClaims(
+      [
+        {
+          articleId: `completed-${index}`,
+          dirtyKind: 'article.display.updated',
+          dirtyRangeEnd: String(index + 1),
+          dirtyRangeStart: String(index + 1),
+          dirtyWorkId,
+          firstSourceHighWaterMark: index + 1,
+          latestDeltaId: `delta-completed-${index}`,
+          latestSourceHighWaterMark: index + 1,
+          projectId: 'project-1',
+          projectionComponent: 'display',
+          projectionIdentity: 'display:identity-1',
+          scopeId: `project-1:completed-${index}`,
+          scopeKind: 'article',
+          sourcePartition: 'article:display',
+          status: 'running',
+        },
+      ],
+      database,
+    )
+  }
+
+  await upsertDisplayWork(
+    database,
+    {...getBaseScope(2_049, '2049', '2049'), scopeId: 'project-1:article-pending'},
+    'delta-pending',
+  )
+
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  expect(claims).toHaveLength(1)
+  expect(claims[0]?.scopeId).toBe('project-1:article-pending')
 })
 
 test('claims dirty work from bounded per-row claim state with one exact update returning statement', async () => {
@@ -1430,7 +1486,9 @@ test('claims dirty work from bounded per-row claim state with one exact update r
   expect(claimStateSelect).toContain('FROM app.review_serving_dirty_work_claim_state state')
   expect(claimStateSelect).not.toContain('state.rowid AS claimStateRowId')
   expect(claimStateSelect).toContain('LIMIT 2048')
-  expect(claimStateSelect).not.toContain('WHERE state.')
+  expect(claimStateSelect).toContain("WHERE state.projection_component = 'display'")
+  expect(claimStateSelect).toContain("state.status = 'pending'")
+  expect(claimStateSelect).toContain("state.status IN ('running', 'failed')")
   expect(claimStateSelect).not.toContain('ORDER BY')
   expect(claimStateSelect).not.toContain('ORDER BY state.rowid')
   expect(claimStateSelect).not.toContain('ORDER BY state.updated_at')
