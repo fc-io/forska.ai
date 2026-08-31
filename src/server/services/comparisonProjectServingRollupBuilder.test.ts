@@ -1,4 +1,4 @@
-import {rmSync} from 'node:fs'
+import {readFileSync, rmSync, writeFileSync} from 'node:fs'
 
 import {expect, setDefaultTimeout, test} from 'bun:test'
 
@@ -83,6 +83,7 @@ type ActualFilterMember = {
 }
 
 type ActualFilterStats = {
+  articleCategoryFilter: 'all' | ArticleCategory
   comparisonProjectId: string
   differenceFilter: ComparisonProjectDifferenceFilter
   rowFilter: ComparisonProjectRowFilter
@@ -800,9 +801,10 @@ const getRollupScript = () => {
         comparison_project_id AS comparisonProjectId,
         row_filter AS rowFilter,
         difference_filter AS differenceFilter,
+        article_category_filter AS articleCategoryFilter,
         CAST(total_count AS INTEGER) AS totalCount
       FROM mart.comparison_filter_stats
-      ORDER BY comparison_project_id ASC, row_filter ASC, difference_filter ASC
+      ORDER BY comparison_project_id ASC, row_filter ASC, difference_filter ASC, article_category_filter ASC
     \`)
 
     console.log(JSON.stringify({articleRows, memberRows, statsRows}))
@@ -951,6 +953,7 @@ const getTrueConflictRollupScript = () => {
       WHERE comparison_project_id = '\${projectId}'
         AND row_filter = 'all'
         AND difference_filter = 'human-vs-llm-true-conflict'
+        AND article_category_filter = 'all'
     \`)
 
     console.log(JSON.stringify({articleRows, memberRows, statsRows}))
@@ -1471,13 +1474,35 @@ const runScript = <T>(body: string) => {
   const duckdbPath = `/tmp/f1-comparison-project-serving-rollups-${Date.now()}-${Math.random()
     .toString(16)
     .slice(2)}.duckdb`
-  const runResult = globalThis.Bun.spawnSync(['bun', '-e', body], {
+  const outputPath = `${duckdbPath}.output.jsonl`
+  const scriptPath = `comparison-project-serving-rollups-${Date.now()}-${Math.random().toString(16).slice(2)}.mjs`
+  writeFileSync(
+    scriptPath,
+    `
+      const {writeFileSync} = await import('node:fs')
+      const originalConsoleLog = console.log
+      console.log = (...args) => {
+        const message = args.map(String).join(' ')
+        if (!message.startsWith('[db:duck:mig]')) {
+          if (process.env.ROLLUP_TEST_OUTPUT_PATH) {
+            writeFileSync(process.env.ROLLUP_TEST_OUTPUT_PATH, message + '\\n', {flag: 'a'})
+          } else {
+            originalConsoleLog(...args)
+          }
+        }
+      }
+
+      ${body}
+    `,
+  )
+  const runResult = globalThis.Bun.spawnSync(['bun', `./${scriptPath}`], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       API_SERVER_PORT: '3001',
       DUCKDB_PATH: duckdbPath,
       SERVER_ROLE: 'dev-single',
+      ROLLUP_TEST_OUTPUT_PATH: outputPath,
       VITE_PORT: '3000',
     },
   })
@@ -1485,12 +1510,25 @@ const runScript = <T>(body: string) => {
   try {
     if (runResult.exitCode !== 0) {
       throw new Error(
-        runResult.stderr.toString() || runResult.stdout.toString() || 'Comparison serving rollup builder test failed',
+        runResult.stderr.toString()
+          || runResult.stdout.toString()
+          || `Comparison serving rollup builder test failed with exitCode=${runResult.exitCode} signalCode=${runResult.signalCode} scriptPath=${scriptPath}`,
       )
     }
 
-    return JSON.parse(getLastJsonLine(runResult.stdout.toString())) as T
+    const output = readFileSync(outputPath, 'utf8')
+    const lastJsonLine = getLastJsonLine(output)
+
+    if (lastJsonLine === '') {
+      throw new Error(
+        `Comparison serving rollup builder test produced no JSON output.\nstdout:\n${runResult.stdout.toString()}\nstderr:\n${runResult.stderr.toString()}`,
+      )
+    }
+
+    return JSON.parse(lastJsonLine) as T
   } finally {
+    removeFileIfExists(scriptPath)
+    removeFileIfExists(outputPath)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
   }
@@ -1607,6 +1645,11 @@ test('filter stats inserts are split by filter combination', async () => {
       return [`VALUES ('${pair.rowFilter}')`, `VALUES ('${pair.differenceFilter}')`]
     }),
   )
+  expect(
+    statements.every((statement) => {
+      return statement.includes("VALUES ('all'), ('chinese'), ('non_chinese')")
+    }),
+  ).toBe(true)
 })
 
 test('serving rollups, filter members, and stats match current page and export filters', () => {
@@ -1619,7 +1662,7 @@ test('serving rollups, filter members, and stats match current page and export f
     new Map<string, ActualArticleRollup>(),
   )
   const actualStatsByFilter = result.statsRows.reduce<Map<string, ActualFilterStats>>((rowMap, row) => {
-    rowMap.set(`${row.comparisonProjectId}:${row.rowFilter}:${row.differenceFilter}`, row)
+    rowMap.set(`${row.comparisonProjectId}:${row.rowFilter}:${row.differenceFilter}:${row.articleCategoryFilter}`, row)
     return rowMap
   }, new Map<string, ActualFilterStats>())
 
@@ -1642,10 +1685,15 @@ test('serving rollups, filter members, and stats match current page and export f
 
     comparisonProjectRowFilters.forEach((rowFilter) => {
       differenceFilters.forEach((differenceFilter) => {
-        const key = `${project.id}:${rowFilter}:${differenceFilter}`
         const expectedArticleIds = getExpectedArticleIds(project, rowFilter, differenceFilter)
 
-        expect(actualStatsByFilter.get(key)?.totalCount).toBe(expectedArticleIds.length)
+        expect(actualStatsByFilter.get(`${project.id}:${rowFilter}:${differenceFilter}:all`)?.totalCount).toBe(
+          expectedArticleIds.length,
+        )
+        expect(actualStatsByFilter.get(`${project.id}:${rowFilter}:${differenceFilter}:non_chinese`)?.totalCount).toBe(
+          expectedArticleIds.length,
+        )
+        expect(actualStatsByFilter.get(`${project.id}:${rowFilter}:${differenceFilter}:chinese`)?.totalCount).toBe(0)
       })
     })
   })

@@ -1,4 +1,8 @@
 import {
+  type ComparisonProjectArticleCategoryFilter,
+  comparisonProjectArticleCategoryFilters,
+} from '../../utils/comparisonProjectArticleCategoryFilter.ts'
+import {
   type ComparisonProjectDifferenceFilter,
   comparisonProjectDifferenceFilters,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
@@ -30,6 +34,7 @@ type ComparisonProjectServingRollupBuilderParams = {
 type ComparisonProjectArticleRollupBuilderParams = ComparisonProjectServingRollupBuilderParams & {articleIds?: string[]}
 
 type ComparisonProjectFilterStatsBuilderParams = ComparisonProjectServingRollupBuilderParams & {
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   differenceFilter?: ComparisonProjectDifferenceFilter
   rowFilter?: ComparisonProjectRowFilter
 }
@@ -822,11 +827,15 @@ const getComparisonProjectArticleIdentifierServingInsertSql = ({
 }
 
 const getComparisonProjectFilterValuesCteSql = (params: {
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   differenceFilter?: ComparisonProjectDifferenceFilter
   rowFilter?: ComparisonProjectRowFilter
 }) => {
   const rowFilters = params.rowFilter ? [params.rowFilter] : comparisonProjectRowFilters
   const differenceFilters = params.differenceFilter ? [params.differenceFilter] : comparisonProjectDifferenceFilters
+  const articleCategoryFilters = params.articleCategoryFilter
+    ? [params.articleCategoryFilter]
+    : comparisonProjectArticleCategoryFilters
   const rowFilterValues = rowFilters
     .map((rowFilter) => {
       return `(${getSqlLiteral(rowFilter)})`
@@ -835,6 +844,11 @@ const getComparisonProjectFilterValuesCteSql = (params: {
   const differenceFilterValues = differenceFilters
     .map((differenceFilter) => {
       return `(${getSqlLiteral(differenceFilter)})`
+    })
+    .join(', ')
+  const articleCategoryFilterValues = articleCategoryFilters
+    .map((articleCategoryFilter) => {
+      return `(${getSqlLiteral(articleCategoryFilter)})`
     })
     .join(', ')
 
@@ -851,10 +865,20 @@ const getComparisonProjectFilterValuesCteSql = (params: {
         VALUES ${differenceFilterValues}
       ) AS difference_filter_value(difference_filter)
     ),
+    article_category_filter AS (
+      SELECT article_category_filter
+      FROM (
+        VALUES ${articleCategoryFilterValues}
+      ) AS article_category_filter_value(article_category_filter)
+    ),
     filter_combination AS (
-      SELECT row_filter.row_filter, difference_filter.difference_filter
+      SELECT
+        row_filter.row_filter,
+        difference_filter.difference_filter,
+        article_category_filter.article_category_filter
       FROM row_filter
       CROSS JOIN difference_filter
+      CROSS JOIN article_category_filter
     )
   `
 }
@@ -888,7 +912,19 @@ const getComparisonProjectArticleDifferenceFilterPredicateSql = (
         END`
 }
 
+const getComparisonProjectArticleCategoryFilterPredicateSql = (
+  articleCategoryFilterExpression: string,
+  articleAlias: string,
+) => {
+  return `CASE ${articleCategoryFilterExpression}
+          WHEN 'chinese' THEN ${articleAlias}.article_category = 'chinese'
+          WHEN 'non_chinese' THEN ${articleAlias}.article_category = 'non_chinese'
+          ELSE TRUE
+        END`
+}
+
 const getComparisonProjectFilterStatsInsertSql = ({
+  articleCategoryFilter,
   comparisonProjectId,
   differenceFilter,
   generation,
@@ -904,6 +940,10 @@ const getComparisonProjectFilterStatsInsertSql = ({
     'filter_combination.difference_filter',
     'article',
   )
+  const articleCategoryFilterPredicate = getComparisonProjectArticleCategoryFilterPredicateSql(
+    'filter_combination.article_category_filter',
+    'article',
+  )
 
   return `
     INSERT INTO ${comparisonFilterStatsTable} (
@@ -911,14 +951,16 @@ const getComparisonProjectFilterStatsInsertSql = ({
       generation,
       row_filter,
       difference_filter,
+      article_category_filter,
       total_count,
       stats_updated_at
     )
-    WITH ${getComparisonProjectFilterValuesCteSql({differenceFilter, rowFilter})},
+    WITH ${getComparisonProjectFilterValuesCteSql({articleCategoryFilter, differenceFilter, rowFilter})},
     member_count AS (
       SELECT
         filter_combination.row_filter,
         filter_combination.difference_filter,
+        filter_combination.article_category_filter,
         COUNT(article.article_id) AS total_count
       FROM filter_combination
       LEFT JOIN ${comparisonArticleServingTable} article
@@ -926,19 +968,25 @@ const getComparisonProjectFilterStatsInsertSql = ({
        AND article.generation = ${generationLiteral}
        AND ${rowFilterPredicate}
        AND ${differenceFilterPredicate}
-      GROUP BY filter_combination.row_filter, filter_combination.difference_filter
+       AND ${articleCategoryFilterPredicate}
+      GROUP BY
+        filter_combination.row_filter,
+        filter_combination.difference_filter,
+        filter_combination.article_category_filter
     )
     SELECT
       ${comparisonProjectLiteral} AS comparison_project_id,
       ${generationLiteral} AS generation,
       filter_combination.row_filter,
       filter_combination.difference_filter,
+      filter_combination.article_category_filter,
       COALESCE(member_count.total_count, 0) AS total_count,
       current_timestamp AS stats_updated_at
     FROM filter_combination
     LEFT JOIN member_count
       ON member_count.row_filter = filter_combination.row_filter
      AND member_count.difference_filter = filter_combination.difference_filter
+     AND member_count.article_category_filter = filter_combination.article_category_filter
   `
 }
 

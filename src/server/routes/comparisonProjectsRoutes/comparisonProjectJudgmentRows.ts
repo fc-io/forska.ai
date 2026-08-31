@@ -1,4 +1,8 @@
 import {
+  type ComparisonProjectArticleCategoryFilter,
+  defaultComparisonProjectArticleCategoryFilter,
+} from '../../../utils/comparisonProjectArticleCategoryFilter.ts'
+import {
   type ComparisonProjectDifferenceColumn,
   type ComparisonProjectDifferenceFilter,
   getComparisonProjectHasAnyConflict,
@@ -112,6 +116,7 @@ type ForEachComparisonProjectJudgmentRowBatchParams = {
 }
 
 type ComparisonProjectServingJudgmentRowsParams = {
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   comparisonProjectId: string
   cursor?: string | null
   differenceFilter: ComparisonProjectDifferenceFilter
@@ -125,6 +130,7 @@ type ForEachComparisonProjectServingJudgmentRowBatchParams = ComparisonProjectSe
 }
 
 type ComparisonProjectServingJudgmentCountParams = {
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   comparisonProjectId: string
   differenceFilter: ComparisonProjectDifferenceFilter
   limit: number
@@ -297,6 +303,15 @@ const getComparisonProjectServingDifferenceFilterPredicateSql = (
   return comparisonProjectServingDifferenceFilterPredicates[differenceFilter]
 }
 
+const getComparisonProjectServingArticleCategoryFilterPredicateSql = (
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  articleAlias: string,
+) => {
+  return articleCategoryFilter === 'all'
+    ? 'TRUE'
+    : `${articleAlias}.article_category = ${getSqlLiteral(articleCategoryFilter)}`
+}
+
 const getRowsByArticleId = <T extends {articleId: string}>(rows: readonly T[]) => {
   return rows.reduce<Map<string, T[]>>((rowMap, row) => {
     const currentRows = rowMap.get(row.articleId) ?? []
@@ -404,6 +419,7 @@ export const getComparisonProjectScopedArticleBatch = async (params: {
 }
 
 export const getComparisonProjectServingMemberSql = (params: {
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   comparisonProjectId: string
   cursor?: string | null
   differenceFilter: ComparisonProjectDifferenceFilter
@@ -414,6 +430,10 @@ export const getComparisonProjectServingMemberSql = (params: {
   const limit = getPositiveInteger(params.limit)
   const rowFilterPredicate = getComparisonProjectServingRowFilterPredicateSql(params.rowFilter)
   const differenceFilterPredicate = getComparisonProjectServingDifferenceFilterPredicateSql(params.differenceFilter)
+  const articleCategoryFilterPredicate = getComparisonProjectServingArticleCategoryFilterPredicateSql(
+    params.articleCategoryFilter ?? defaultComparisonProjectArticleCategoryFilter,
+    'article',
+  )
 
   return `
     WITH active_generation AS (
@@ -433,6 +453,7 @@ export const getComparisonProjectServingMemberSql = (params: {
     WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
       AND ${rowFilterPredicate}
       AND ${differenceFilterPredicate}
+      AND ${articleCategoryFilterPredicate}
       ${getComparisonProjectServingCursorWhereSql(cursor)}
     ORDER BY article.row_sort_created_at DESC NULLS LAST, article.row_sort_title ASC, article.row_sort_article_id ASC
     LIMIT ${limit + 1}
@@ -479,6 +500,7 @@ export const getComparisonProjectServingCellsSql = (params: {
 }
 
 export const getComparisonProjectServingJudgmentCountSql = (params: {
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   comparisonProjectId: string
   differenceFilter: ComparisonProjectDifferenceFilter
   rowFilter: ComparisonProjectRowFilter
@@ -496,6 +518,9 @@ export const getComparisonProjectServingJudgmentCountSql = (params: {
     WHERE stats.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
       AND stats.row_filter = ${getSqlLiteral(params.rowFilter)}
       AND stats.difference_filter = ${getSqlLiteral(params.differenceFilter)}
+      AND stats.article_category_filter = ${getSqlLiteral(
+        params.articleCategoryFilter ?? defaultComparisonProjectArticleCategoryFilter,
+      )}
     LIMIT 1
   `
 }

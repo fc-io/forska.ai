@@ -6,6 +6,10 @@ import type {
   HumanJudgmentMode,
   ProjectPromptCriteriaDisposition,
 } from '../../db/schemaTypes.ts'
+import {
+  type ComparisonProjectArticleCategoryFilter,
+  getNormalizedComparisonProjectArticleCategoryFilter,
+} from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectDifferenceColumn,
@@ -3556,6 +3560,7 @@ const getComparisonProjectExportResponse = (
   scope: ComparisonProjectScope,
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
 ) => {
   const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
   const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
@@ -3571,6 +3576,7 @@ const getComparisonProjectExportResponse = (
         if (!scope.archived && scope.prompts.length > 0 && orderedColumns.length > 0) {
           await forEachComparisonProjectServingJudgmentRowBatch({
             comparisonProjectId: scope.id,
+            articleCategoryFilter,
             differenceFilter: normalizedDifferenceFilter,
             limit: comparisonProjectJudgmentArticleBatchSize,
             onRows: async (rows) => {
@@ -3601,6 +3607,7 @@ const getComparisonProjectJudgmentsPage = async (
   cursor: string | null,
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
 ) => {
   if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0) {
     return {
@@ -3635,6 +3642,7 @@ const getComparisonProjectJudgmentsPage = async (
   const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
   const pageResult = await getComparisonProjectServingJudgmentRowsPage({
     comparisonProjectId: scope.id,
+    articleCategoryFilter,
     cursor,
     differenceFilter: normalizedDifferenceFilter,
     limit,
@@ -3662,6 +3670,7 @@ const getComparisonProjectJudgmentsCount = async (
   limit: number,
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
 ) => {
   if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0 || scope.activeGeneration === null) {
     return {
@@ -3678,6 +3687,7 @@ const getComparisonProjectJudgmentsCount = async (
   const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
   const countResult = await getComparisonProjectServingJudgmentCount({
     comparisonProjectId: scope.id,
+    articleCategoryFilter,
     differenceFilter: normalizedDifferenceFilter,
     limit,
     queryRunner: appDatabaseService,
@@ -4418,6 +4428,7 @@ export const comparisonProjectsRoutes = new Elysia()
         showOnlyModelDifferences: body.showOnlyModelDifferences,
       })
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
+      const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
       const judgmentsPage = await getComparisonProjectJudgmentsPage(
         data,
         page,
@@ -4425,6 +4436,7 @@ export const comparisonProjectsRoutes = new Elysia()
         cursor,
         rowFilter,
         differenceFilter,
+        articleCategoryFilter,
       )
 
       return {data: judgmentsPage}
@@ -4435,6 +4447,7 @@ export const comparisonProjectsRoutes = new Elysia()
         limit: t.Union([t.String(), t.Number()]),
         cursor: t.Optional(t.Nullable(t.String())),
         rowFilter: t.Optional(t.String()),
+        articleCategoryFilter: t.Optional(t.String()),
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
@@ -4465,7 +4478,14 @@ export const comparisonProjectsRoutes = new Elysia()
       const limit = Math.min(Math.max(parsedLimit, 1), 100)
       const differenceFilter = getRequestedComparisonProjectDifferenceFilter({differenceFilter: body.differenceFilter})
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
-      const countResult = await getComparisonProjectJudgmentsCount(data, limit, rowFilter, differenceFilter)
+      const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
+      const countResult = await getComparisonProjectJudgmentsCount(
+        data,
+        limit,
+        rowFilter,
+        differenceFilter,
+        articleCategoryFilter,
+      )
 
       return {data: countResult}
     },
@@ -4473,6 +4493,7 @@ export const comparisonProjectsRoutes = new Elysia()
       body: t.Object({
         limit: t.Union([t.String(), t.Number()]),
         rowFilter: t.Optional(t.String()),
+        articleCategoryFilter: t.Optional(t.String()),
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
@@ -4584,12 +4605,14 @@ export const comparisonProjectsRoutes = new Elysia()
 
       const differenceFilter = getRequestedComparisonProjectDifferenceFilter({differenceFilter: body.differenceFilter})
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
+      const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
 
-      return getComparisonProjectExportResponse(data, rowFilter, differenceFilter)
+      return getComparisonProjectExportResponse(data, rowFilter, differenceFilter, articleCategoryFilter)
     },
     {
       body: t.Object({
         rowFilter: t.Optional(t.String()),
+        articleCategoryFilter: t.Optional(t.String()),
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
