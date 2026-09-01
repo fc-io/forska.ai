@@ -48,6 +48,10 @@ const hasCjkText = (value: string) => {
   return /[\u3400-\u9FFF\uF900-\uFAFF]/.test(value)
 }
 
+const isCjkCharacter = (value: string) => {
+  return /^[\u3400-\u9FFF\uF900-\uFAFF]$/.test(value)
+}
+
 const getUtf16BeHexText = (value: string) => {
   const utf16le = Buffer.from(value, 'utf16le')
 
@@ -69,6 +73,10 @@ const getPdfTextCommand = (line: string, font: string, fontSize: number, x: numb
 }
 
 const getCharacterWidthFactor = (character: string) => {
+  if (isCjkCharacter(character)) {
+    return 1.08
+  }
+
   if (/[^\x20-\x7E]/.test(character)) {
     return 1
   }
@@ -106,7 +114,8 @@ const splitLongWordToWidth = (word: string, maxWidth: number, fontSize: number) 
     const candidate = `${chunk}${character}`
 
     if (chunk && getTextWidth(candidate, fontSize) > maxWidth) {
-      chunks.push(chunk)
+      const hyphenatedChunk = `${chunk}-`
+      chunks.push(getTextWidth(hyphenatedChunk, fontSize) <= maxWidth ? hyphenatedChunk : chunk)
       chunk = character
       return
     }
@@ -121,10 +130,75 @@ const splitLongWordToWidth = (word: string, maxWidth: number, fontSize: number) 
   return chunks.length > 0 ? chunks : [word]
 }
 
+const getCjkWrappedLines = (paragraph: string, maxWidth: number, fontSize: number) => {
+  const lines: string[] = []
+  let line = ''
+  let nonCjkRun = ''
+
+  const appendToken = (token: string) => {
+    if (!token) {
+      return
+    }
+
+    if (token === ' ') {
+      if (line && !line.endsWith(' ')) {
+        line += token
+      }
+
+      return
+    }
+
+    const tokenParts =
+      getTextWidth(token, fontSize) > maxWidth ? splitLongWordToWidth(token, maxWidth, fontSize) : [token]
+
+    tokenParts.forEach((part) => {
+      const candidate = `${line}${part}`
+
+      if (line && getTextWidth(candidate, fontSize) > maxWidth) {
+        lines.push(line.trimEnd())
+        line = part.trimStart()
+        return
+      }
+
+      line = candidate.trimStart()
+    })
+  }
+
+  Array.from(paragraph.trim()).forEach((character) => {
+    if (/\s/.test(character)) {
+      appendToken(nonCjkRun)
+      nonCjkRun = ''
+      appendToken(' ')
+      return
+    }
+
+    if (isCjkCharacter(character)) {
+      appendToken(nonCjkRun)
+      nonCjkRun = ''
+      appendToken(character)
+      return
+    }
+
+    nonCjkRun += character
+  })
+
+  appendToken(nonCjkRun)
+
+  if (line) {
+    lines.push(line.trimEnd())
+  }
+
+  return lines.length > 0 ? lines : ['']
+}
+
 const getWrappedLines = (value: string, maxWidth: number, fontSize: number) => {
   const paragraphs = value.split(/\r\n|\n|\r/g)
 
   return paragraphs.flatMap((paragraph) => {
+    if (hasCjkText(paragraph)) {
+      return getCjkWrappedLines(paragraph, maxWidth, fontSize)
+    }
+
     const words = paragraph
       .trim()
       .split(/\s+/)
