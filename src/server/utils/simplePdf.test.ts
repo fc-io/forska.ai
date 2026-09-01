@@ -55,6 +55,25 @@ test('simple PDF keeps checkbox row widgets aligned with one text baseline', () 
   expect(output).toContain('/T (resolution.maybe)')
 })
 
+test('simple PDF creates grouped radio rows for single-choice fields', () => {
+  const pdf = new SimplePdfDocument()
+  pdf.addRadioRow('resolution', 'no', [
+    {label: 'yes', value: 'yes'},
+    {label: 'no', value: 'no'},
+    {label: 'maybe', value: 'maybe'},
+  ])
+
+  const output = pdf.toBuffer().toString('latin1')
+
+  expect(output).toContain('/T (resolution)')
+  expect(output).toContain('/Ff 49152')
+  expect(output).toContain('/V /no')
+  expect(output).toContain('/Kids [')
+  expect(output).toContain('/AS /no')
+  expect(output).toContain('/AS /Off')
+  expect(output).not.toContain('/T (resolution.yes)')
+})
+
 test('simple PDF continues panel layout across page breaks without resetting to the first page bottom', () => {
   const pdf = new SimplePdfDocument()
   pdf.addPanel({title: 'LLM assessment'}, () => {

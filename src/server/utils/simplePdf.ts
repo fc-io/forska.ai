@@ -3,8 +3,11 @@ type PdfFont = 'regular' | 'bold'
 type PdfTextOptions = {font?: PdfFont; fontSize?: number; gapAfter?: number; indent?: number}
 type PdfCheckboxOptions = {checked?: boolean; fieldName: string; fontSize?: number; gapAfter?: number; indent?: number}
 type PdfCheckboxRowOption = PdfCheckboxOptions & {label: string}
+type PdfRadioRowOption = {fontSize?: number; gapAfter?: number; indent?: number; label: string; value: string}
 type PdfPanelOptions = {gapAfter?: number; title: string}
 type PdfCheckboxField = {checked: boolean; fieldName: string; pageIndex: number; size: number; x: number; y: number}
+type PdfRadioField = {pageIndex: number; size: number; value: string; x: number; y: number}
+type PdfRadioGroup = {fieldName: string; fields: PdfRadioField[]; selectedValue?: string}
 
 const pageWidth = 595
 const pageHeight = 842
@@ -33,6 +36,12 @@ const getPdfSafeAsciiText = (value: string) => {
     .replace(/[\\()]/g, (match) => {
       return `\\${match}`
     })
+}
+
+const getPdfSafeName = (value: string) => {
+  const safe = value.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+  return safe || 'Option'
 }
 
 const hasCjkText = (value: string) => {
@@ -153,6 +162,7 @@ const getObject = (body: string | Buffer) => {
 export class SimplePdfDocument {
   private readonly pages: string[][] = [[]]
   private readonly checkboxFields: PdfCheckboxField[] = []
+  private readonly radioGroups: PdfRadioGroup[] = []
   private y = pageHeight - marginTop
 
   addPage() {
@@ -239,6 +249,37 @@ export class SimplePdfDocument {
       return x + size + 8 + getTextWidth(option.label, fontSize) + gap
     }, startX)
 
+    this.y -= lineHeight + (options[0]?.gapAfter ?? 0)
+  }
+
+  addRadioRow(fieldName: string, selectedValue: string | null | undefined, options: PdfRadioRowOption[]) {
+    if (options.length === 0) {
+      return
+    }
+
+    const fontSize = options[0]?.fontSize ?? 10
+    const lineHeight = fontSize * lineHeightMultiplier
+    const size = Math.max(fontSize + 2, 12)
+    const startX = marginX + (options[0]?.indent ?? 0)
+    const gap = 18
+
+    if (this.y - lineHeight < marginBottom) {
+      this.addPage()
+    }
+
+    const pageIndex = this.pages.length - 1
+    const rowY = this.y
+    const radioY = rowY + (lineHeight - size) / 2 + size - 2
+    const fields: PdfRadioField[] = []
+
+    options.reduce((x, option) => {
+      fields.push({pageIndex, size, value: option.value, x, y: radioY})
+      this.pages[pageIndex]?.push(getPdfTextCommand(option.label, 'F1', fontSize, x + size + 8, rowY))
+
+      return x + size + 8 + getTextWidth(option.label, fontSize) + gap
+    }, startX)
+
+    this.radioGroups.push({fieldName, fields, selectedValue: selectedValue ?? undefined})
     this.y -= lineHeight + (options[0]?.gapAfter ?? 0)
   }
 
@@ -332,6 +373,14 @@ export class SimplePdfDocument {
       '/Type /XObject /Subtype /Form /BBox [0 0 12 12] /Resources << >>',
       'q 1 1 1 rg 0.45 0.52 0.60 RG 1 w 0.5 0.5 11 11 re B Q',
     )
+    const radioOnAppearanceId = addStreamObject(
+      '/Type /XObject /Subtype /Form /BBox [0 0 12 12] /Resources << >>',
+      'q 1 1 1 rg 0.45 0.52 0.60 RG 1 w 6 11.4 m 8.98 11.4 11.4 8.98 11.4 6 c 11.4 3.02 8.98 0.6 6 0.6 c 3.02 0.6 0.6 3.02 0.6 6 c 0.6 8.98 3.02 11.4 6 11.4 c B 0.12 0.33 0.60 rg 6 8.9 m 7.6 8.9 8.9 7.6 8.9 6 c 8.9 4.4 7.6 3.1 6 3.1 c 4.4 3.1 3.1 4.4 3.1 6 c 3.1 7.6 4.4 8.9 6 8.9 c f Q',
+    )
+    const radioOffAppearanceId = addStreamObject(
+      '/Type /XObject /Subtype /Form /BBox [0 0 12 12] /Resources << >>',
+      'q 1 1 1 rg 0.45 0.52 0.60 RG 1 w 6 11.4 m 8.98 11.4 11.4 8.98 11.4 6 c 11.4 3.02 8.98 0.6 6 0.6 c 3.02 0.6 0.6 3.02 0.6 6 c 0.6 8.98 3.02 11.4 6 11.4 c B Q',
+    )
     const checkboxFieldIds = this.checkboxFields.map((field) => {
       const state = field.checked ? '/Yes' : '/Off'
 
@@ -348,6 +397,53 @@ export class SimplePdfDocument {
         ].join(' '),
       )
     })
+    const radioWidgetIdsByPage = new Map<number, number[]>()
+    const radioGroupIds = this.radioGroups.map((group) => {
+      const parentFieldId = addObject('')
+      const widgetIds = group.fields.map((field) => {
+        const valueName = getPdfSafeName(field.value)
+        const state = group.selectedValue === field.value ? `/${valueName}` : '/Off'
+        const widgetId = addObject(
+          [
+            '<< /Type /Annot /Subtype /Widget',
+            `/Parent ${parentFieldId} 0 R`,
+            `/Rect [${field.x.toFixed(2)} ${(field.y - field.size).toFixed(2)} ${(field.x + field.size).toFixed(2)} ${field.y.toFixed(2)}]`,
+            `/AS ${state} /F 4 /H /P`,
+            '/MK << /BC [0.45 0.52 0.60] /BG [1 1 1] >>',
+            '/BS << /W 1 /S /S >>',
+            `/AP << /N << /${valueName} ${radioOnAppearanceId} 0 R /Off ${radioOffAppearanceId} 0 R >> >>`,
+            '>>',
+          ].join(' '),
+        )
+
+        radioWidgetIdsByPage.set(field.pageIndex, [...(radioWidgetIdsByPage.get(field.pageIndex) ?? []), widgetId])
+
+        return widgetId
+      })
+      const selectedValue =
+        group.selectedValue
+        && group.fields.some((field) => {
+          return field.value === group.selectedValue
+        })
+          ? `/${getPdfSafeName(group.selectedValue)}`
+          : '/Off'
+
+      objects[parentFieldId - 1] = getObject(
+        [
+          '<< /FT /Btn /Ff 49152',
+          `/T (${getPdfSafeAsciiText(group.fieldName)})`,
+          `/V ${selectedValue}`,
+          `/Kids [${widgetIds
+            .map((widgetId) => {
+              return `${widgetId} 0 R`
+            })
+            .join(' ')}]`,
+          '>>',
+        ].join(' '),
+      )
+
+      return parentFieldId
+    })
     const pageIds: number[] = []
 
     this.pages.forEach((pageCommands, index) => {
@@ -355,13 +451,15 @@ export class SimplePdfDocument {
       const pageCheckboxIds = checkboxFieldIds.filter((_, fieldIndex) => {
         return this.checkboxFields[fieldIndex]?.pageIndex === index
       })
+      const pageRadioWidgetIds = radioWidgetIdsByPage.get(index) ?? []
+      const pageAnnotationIds = [...pageCheckboxIds, ...pageRadioWidgetIds]
       const contentId = addStreamObject('', pageCommands.join('\n'))
       const pageId = addObject(
         `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${regularFontId} 0 R /F2 ${boldFontId} 0 R /F3 ${cjkFontId} 0 R >> >> /Contents ${contentId} 0 R${
-          pageCheckboxIds.length > 0
-            ? ` /Annots [${pageCheckboxIds
-                .map((fieldId) => {
-                  return `${fieldId} 0 R`
+          pageAnnotationIds.length > 0
+            ? ` /Annots [${pageAnnotationIds
+                .map((annotationId) => {
+                  return `${annotationId} 0 R`
                 })
                 .join(' ')}]`
             : ''
@@ -373,8 +471,8 @@ export class SimplePdfDocument {
 
     objects[catalogId - 1] = getObject(
       `<< /Type /Catalog /Pages ${pagesId} 0 R${
-        checkboxFieldIds.length > 0
-          ? ` /AcroForm << /Fields [${checkboxFieldIds
+        checkboxFieldIds.length > 0 || radioGroupIds.length > 0
+          ? ` /AcroForm << /Fields [${[...checkboxFieldIds, ...radioGroupIds]
               .map((fieldId) => {
                 return `${fieldId} 0 R`
               })
