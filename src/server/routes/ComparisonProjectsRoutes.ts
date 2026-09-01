@@ -3771,22 +3771,17 @@ const addComparisonProjectPdfConflictResolution = (
     pdf.addText(`Reviewer: ${row.conflictResolution?.reviewerDisplayName ?? 'Not set'}`, {fontSize: 10, gapAfter: 6})
     pdf.addText('Choose resolution', {font: 'bold', fontSize: 10, gapAfter: 4})
 
-    pdf.addCheckboxRow(
+    pdf.addRadioRow(
+      [
+        'comparison',
+        getComparisonProjectPdfFieldNamePart(scope.id),
+        'article',
+        getComparisonProjectPdfFieldNamePart(row.canonicalArticleId),
+        'resolution',
+      ].join('.'),
+      row.conflictResolution?.value,
       getComparisonProjectPdfResolutionOptions(scope).map((option) => {
-        return {
-          label: option.label,
-          checked: row.conflictResolution?.value === option.value,
-          fieldName: [
-            'comparison',
-            getComparisonProjectPdfFieldNamePart(scope.id),
-            'article',
-            getComparisonProjectPdfFieldNamePart(row.canonicalArticleId),
-            'resolution',
-            getComparisonProjectPdfFieldNamePart(option.value),
-          ].join('.'),
-          fontSize: 10,
-          gapAfter: 3,
-        }
+        return {label: option.label, value: option.value, fontSize: 10, gapAfter: 3}
       }),
     )
   })
