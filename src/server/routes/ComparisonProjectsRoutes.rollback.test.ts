@@ -6493,7 +6493,8 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('/V /prompt-2')
   expect(pdf).toContain('/AS /prompt-2')
   expect(pdf).not.toContain('(x) Prompt 2')
-  expect(pdf).toContain('LLM assessment')
+  expect(pdf).toContain('Summary judgment')
+  expect(pdf).not.toContain('LLM assessment')
   expect(pdf).not.toContain('Confidence')
   expect(
     state.queryStatements.some((statement) => {
@@ -6587,9 +6588,9 @@ test('comparison project pdf export shows individual assessments behind summary 
   const state = getMockDatabaseState()
 
   expect(response.status).toBe(200)
-  expect(pdf).toContain('Summary judgments')
+  expect(pdf).toContain('Summary judgment')
   expect(pdf).toContain('LLM assessment')
-  expect(pdf.indexOf('Summary judgments')).toBeLessThan(pdf.indexOf('LLM assessment'))
+  expect(pdf.indexOf('Summary judgment')).toBeLessThan(pdf.indexOf('LLM assessment'))
   expect(pdf).not.toContain('Individual assessments')
   expect(pdf).toContain('Prompt 1')
   expect(pdf).toContain('Summary answer: yes')
@@ -6638,9 +6639,9 @@ test('comparison project pdf export shows individual assessments for import-scop
   const state = getMockDatabaseState()
 
   expect(response.status).toBe(200)
-  expect(pdf).toContain('Summary judgments')
+  expect(pdf).toContain('Summary judgment')
   expect(pdf).toContain('LLM assessment')
-  expect(pdf.indexOf('Summary judgments')).toBeLessThan(pdf.indexOf('LLM assessment'))
+  expect(pdf.indexOf('Summary judgment')).toBeLessThan(pdf.indexOf('LLM assessment'))
   expect(pdf).not.toContain('Individual assessments')
   expect(pdf).toContain('Prompt 1')
   expect(pdf).toContain('Summary answer: no')

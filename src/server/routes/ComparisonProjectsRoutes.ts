@@ -3881,7 +3881,7 @@ const getComparisonProjectPdfSummaryJudgments = (params: {
   })
 }
 
-const addComparisonProjectPdfSummaryJudgmentSection = (
+const addComparisonProjectPdfLlmAssessmentSection = (
   pdf: SimplePdfDocument,
   row: ComparisonProjectExportRow,
   columns: readonly ComparisonProjectJudgmentsColumn[],
@@ -3894,7 +3894,7 @@ const addComparisonProjectPdfSummaryJudgmentSection = (
     return
   }
 
-  pdf.addPanel({title: 'Summary judgments'}, () => {
+  pdf.addPanel({title: 'LLM assessment'}, () => {
     summaryJudgments.forEach((summaryJudgment) => {
       pdf.ensureSpace(30)
       pdf.addText(summaryJudgment.sourceLabel, {font: 'bold', fontSize: 10})
@@ -3912,12 +3912,12 @@ const addComparisonProjectPdfSummaryJudgmentSection = (
   })
 }
 
-const addComparisonProjectPdfJudgmentSection = (
+const addComparisonProjectPdfSummaryJudgmentSection = (
   pdf: SimplePdfDocument,
   row: ComparisonProjectExportRow,
   columns: readonly ComparisonProjectJudgmentsColumn[],
 ) => {
-  pdf.addPanel({title: 'LLM assessment'}, () => {
+  pdf.addPanel({title: 'Summary judgment'}, () => {
     const columnsByPrompt = columns.reduce<Map<string, ComparisonProjectJudgmentsColumn[]>>((columnMap, column) => {
       const promptColumns = columnMap.get(column.promptId) ?? []
       promptColumns.push(column)
@@ -3976,8 +3976,8 @@ const addComparisonProjectPdfExportRow = (params: {
   pdf.addText('Abstract / Summary', {font: 'bold', fontSize: 11, gapAfter: 4})
   pdf.addText(row.articleSummary?.trim() || 'No abstract or summary available.', {fontSize: 10, gapAfter: 12})
   addComparisonProjectPdfConflictResolution(pdf, scope, row)
-  addComparisonProjectPdfSummaryJudgmentSection(pdf, row, columns, scope, componentRows)
-  addComparisonProjectPdfJudgmentSection(pdf, row, columns)
+  addComparisonProjectPdfSummaryJudgmentSection(pdf, row, columns)
+  addComparisonProjectPdfLlmAssessmentSection(pdf, row, columns, scope, componentRows)
 }
 
 const getComparisonProjectPdfExportResponse = async (
