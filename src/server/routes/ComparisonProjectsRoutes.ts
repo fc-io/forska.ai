@@ -2689,7 +2689,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const useImportRoutesForScope = linkedSourceProjectIds.length === 0
   const contentVariants = getComparisonProjectContentVariants(normalizedComparisonProjectRow)
   const useSourceProjectLlmColumns = getIsSummaryMode(normalizedComparisonProjectRow) && !useImportRoutesForScope
-  const sourceProjectSummaryPrompts = useSourceProjectLlmColumns
+  const sourceProjectSummaryPrompts = getIsSummaryMode(normalizedComparisonProjectRow)
     ? await getComparisonProjectSourceSummaryPromptConfigs(sourceProjectIds)
     : []
   const modelPromptConfigs = sourceProjectSummaryPrompts.length > 0 ? sourceProjectSummaryPrompts : promptConfigs
@@ -2938,12 +2938,11 @@ const getComparisonProjectLlmRows = async (
   articleIds: string[],
   queryRunner: AppQueryRunner = appDatabaseService,
 ) => {
-  const summarySourcePromptIds =
-    getIsSummaryMode(scope) && !scope.useImportRoutesForScope
-      ? scope.sourceProjectSummaryPrompts.map((prompt) => {
-          return prompt.id
-        })
-      : []
+  const summarySourcePromptIds = getIsSummaryMode(scope)
+    ? scope.sourceProjectSummaryPrompts.map((prompt) => {
+        return prompt.id
+      })
+    : []
   const fallbackPromptIds = scope.prompts.map((prompt) => {
     return prompt.id
   })

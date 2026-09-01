@@ -13,6 +13,9 @@ const marginBottom = 42
 const lineHeightMultiplier = 1.25
 const sectionFillColor = '0.96 0.98 1.00'
 const sectionStrokeColor = '0.82 0.88 0.95'
+const panelPaddingX = 14
+const panelPaddingTop = 16
+const panelPaddingBottom = 12
 
 const getPdfSafeAsciiText = (value: string) => {
   return value
@@ -47,18 +50,60 @@ const getPdfTextCommand = (line: string, font: string, fontSize: number, x: numb
   return `BT /${font} ${fontSize} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td (${getPdfSafeAsciiText(line)}) Tj ET`
 }
 
-const splitLongWord = (word: string, maxCharacters: number) => {
-  const characters = Array.from(word)
-  const chunks: string[] = []
-
-  for (let index = 0; index < characters.length; index += maxCharacters) {
-    chunks.push(characters.slice(index, index + maxCharacters).join(''))
+const getCharacterWidthFactor = (character: string) => {
+  if (/[^\x20-\x7E]/.test(character)) {
+    return 1
   }
 
-  return chunks
+  if (/[ilI.,'`:;|!]/.test(character)) {
+    return 0.25
+  }
+
+  if (/[mwMW@#%&]/.test(character)) {
+    return 0.8
+  }
+
+  if (/[A-Z0-9]/.test(character)) {
+    return 0.62
+  }
+
+  if (character === ' ') {
+    return 0.28
+  }
+
+  return 0.5
 }
 
-const getWrappedLines = (value: string, maxCharacters: number) => {
+const getTextWidth = (value: string, fontSize: number) => {
+  return Array.from(value).reduce((width, character) => {
+    return width + getCharacterWidthFactor(character) * fontSize
+  }, 0)
+}
+
+const splitLongWordToWidth = (word: string, maxWidth: number, fontSize: number) => {
+  const chunks: string[] = []
+  let chunk = ''
+
+  Array.from(word).forEach((character) => {
+    const candidate = `${chunk}${character}`
+
+    if (chunk && getTextWidth(candidate, fontSize) > maxWidth) {
+      chunks.push(chunk)
+      chunk = character
+      return
+    }
+
+    chunk = candidate
+  })
+
+  if (chunk) {
+    chunks.push(chunk)
+  }
+
+  return chunks.length > 0 ? chunks : [word]
+}
+
+const getWrappedLines = (value: string, maxWidth: number, fontSize: number) => {
   const paragraphs = value.split(/\r\n|\n|\r/g)
 
   return paragraphs.flatMap((paragraph) => {
@@ -67,7 +112,7 @@ const getWrappedLines = (value: string, maxCharacters: number) => {
       .split(/\s+/)
       .filter(Boolean)
       .flatMap((word) => {
-        return Array.from(word).length > maxCharacters ? splitLongWord(word, maxCharacters) : [word]
+        return getTextWidth(word, fontSize) > maxWidth ? splitLongWordToWidth(word, maxWidth, fontSize) : [word]
       })
 
     if (words.length === 0) {
@@ -79,7 +124,7 @@ const getWrappedLines = (value: string, maxCharacters: number) => {
         const currentLine = lines[lines.length - 1] ?? ''
         const candidate = currentLine ? `${currentLine} ${word}` : word
 
-        if (Array.from(candidate).length <= maxCharacters) {
+        if (getTextWidth(candidate, fontSize) <= maxWidth) {
           lines[lines.length - 1] = candidate
           return lines
         }
@@ -112,8 +157,7 @@ export class SimplePdfDocument {
     const lineHeight = fontSize * lineHeightMultiplier
     const x = marginX + (options.indent ?? 0)
     const usableWidth = pageWidth - x - marginX
-    const maxCharacters = Math.max(Math.floor(usableWidth / (fontSize * 0.5)), 20)
-    const lines = getWrappedLines(text || ' ', maxCharacters)
+    const lines = getWrappedLines(text || ' ', usableWidth, fontSize)
 
     lines.forEach((line) => {
       if (this.y - lineHeight < marginBottom) {
@@ -131,7 +175,7 @@ export class SimplePdfDocument {
   addCheckbox(label: string, options: PdfCheckboxOptions) {
     const fontSize = options.fontSize ?? 10
     const lineHeight = fontSize * lineHeightMultiplier
-    const size = Math.max(fontSize + 1, 11)
+    const size = Math.max(fontSize + 2, 12)
     const x = marginX + (options.indent ?? 0)
 
     if (this.y - lineHeight < marginBottom) {
@@ -139,7 +183,7 @@ export class SimplePdfDocument {
     }
 
     const pageIndex = this.pages.length - 1
-    const checkboxY = this.y - 1
+    const checkboxY = this.y + 2
     this.checkboxFields.push({
       checked: options.checked ?? false,
       fieldName: options.fieldName,
@@ -149,7 +193,7 @@ export class SimplePdfDocument {
       y: checkboxY,
     })
 
-    this.pages[pageIndex]?.push(getPdfTextCommand(label, 'F1', fontSize, x + size + 7, this.y))
+    this.pages[pageIndex]?.push(getPdfTextCommand(label, 'F1', fontSize, x + size + 8, this.y))
     this.y -= lineHeight + (options.gapAfter ?? 0)
   }
 
@@ -168,12 +212,15 @@ export class SimplePdfDocument {
 
     const pageIndex = this.pages.length - 1
     const startCommandIndex = this.pages[pageIndex]?.length ?? 0
-    const topY = this.y + 6
+    const topY = this.y
 
-    this.addText(options.title, {font: 'bold', fontSize: 12, gapAfter: 8, indent: 12})
+    this.y -= panelPaddingTop
+
+    this.addText(options.title, {font: 'bold', fontSize: 12, gapAfter: 10, indent: panelPaddingX})
     renderContent()
 
-    const bottomY = this.pages.length - 1 === pageIndex ? Math.max(this.y - 4, marginBottom) : marginBottom
+    const bottomY =
+      this.pages.length - 1 === pageIndex ? Math.max(this.y - panelPaddingBottom, marginBottom) : marginBottom
     const rectHeight = topY - bottomY
     const rectCommand = [
       'q',
@@ -185,7 +232,7 @@ export class SimplePdfDocument {
       'Q',
     ].join(' ')
     this.pages[pageIndex]?.splice(startCommandIndex, 0, rectCommand)
-    this.y -= options.gapAfter ?? 10
+    this.y = bottomY - (options.gapAfter ?? 10)
   }
 
   toBuffer() {
