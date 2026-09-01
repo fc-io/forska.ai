@@ -181,8 +181,10 @@ type MockLlmJudgmentRow = {
   answeredOriginalAsArray: string[] | null
   articleId: string
   createdAt: Date
+  explanation?: string | null
   modelId: string
   promptId: string
+  quotes?: unknown
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -1892,8 +1894,10 @@ const queryJson = async (
         answeredOriginalAsArray: null,
         articleId: 'article-1',
         createdAt: new Date('2026-03-31T00:00:00.000Z'),
+        explanation: 'Model 1 prompt 1 explanation',
         modelId: 'model-1',
         promptId: 'prompt-1',
+        quotes: ['Model 1 prompt 1 quote'],
         useAbstract: true,
         useFulltext: false,
         useFulltextNoImages: false,
@@ -1904,8 +1908,10 @@ const queryJson = async (
         answeredOriginalAsArray: null,
         articleId: 'article-1',
         createdAt: new Date('2026-03-31T00:00:00.000Z'),
+        explanation: 'Model 1 prompt 2 explanation',
         modelId: 'model-1',
         promptId: 'prompt-2',
+        quotes: [{quote: 'Model 1 prompt 2 quote'}],
         useAbstract: true,
         useFulltext: false,
         useFulltextNoImages: false,
@@ -6581,8 +6587,13 @@ test('comparison project pdf export shows individual assessments behind summary 
   expect(response.status).toBe(200)
   expect(pdf).toContain('LLM assessment')
   expect(pdf).toContain('Individual assessments')
-  expect(pdf).toContain('Prompt 1: yes')
-  expect(pdf).toContain('Prompt 2: yes')
+  expect(pdf).toContain('Prompt 1')
+  expect(pdf).toContain('Answer: yes')
+  expect(pdf).toContain('Explanation: Model 1 prompt 1 explanation')
+  expect(pdf).toContain('Quotes: Model 1 prompt 1 quote')
+  expect(pdf).toContain('Prompt 2')
+  expect(pdf).toContain('Explanation: Model 1 prompt 2 explanation')
+  expect(pdf).toContain('Quotes: {"quote":"Model 1 prompt 2 quote"}')
   expect(
     state.queryStatements.some((statement) => {
       return (
@@ -6623,8 +6634,13 @@ test('comparison project pdf export shows individual assessments for import-scop
 
   expect(response.status).toBe(200)
   expect(pdf).toContain('Individual assessments')
-  expect(pdf).toContain('Prompt 1: yes')
-  expect(pdf).toContain('Prompt 2: yes')
+  expect(pdf).toContain('Prompt 1')
+  expect(pdf).toContain('Answer: yes')
+  expect(pdf).toContain('Explanation: Model 1 prompt 1 explanation')
+  expect(pdf).toContain('Quotes: Model 1 prompt 1 quote')
+  expect(pdf).toContain('Prompt 2')
+  expect(pdf).toContain('Explanation: Model 1 prompt 2 explanation')
+  expect(pdf).toContain('Quotes: {"quote":"Model 1 prompt 2 quote"}')
   expect(
     state.queryStatements.some((statement) => {
       return (

@@ -32,6 +32,8 @@ export type ComparisonProjectJudgmentLlmRow = {
   sourceProjectId: string | null
   answeredOriginal: string | null
   answeredOriginalAsArray: string[] | null
+  explanation?: string | null
+  quotes?: unknown
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
