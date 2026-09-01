@@ -211,6 +211,12 @@ type ComparisonProjectExportRow = ComparisonProjectJudgmentRow & {
 type ComparisonProjectExportFormat = 'csv' | 'pdf'
 type ComparisonProjectConflictResolutionOption = {label: string; value: string}
 type ComparisonProjectPdfAssessmentDetail = {answer: string; explanation: string; label: string; quotes: string}
+type ComparisonProjectPdfSummaryJudgment = {
+  answer: string
+  contentLabel: string | null
+  details: ComparisonProjectPdfAssessmentDetail[]
+  sourceLabel: string
+}
 type ComparisonProjectSourcePrompt = {
   id: string
   promptHeading: string | null
@@ -3847,12 +3853,69 @@ const getComparisonProjectPdfAssessmentDetails = (params: {
     })
 }
 
-const addComparisonProjectPdfJudgmentSection = (
+const getComparisonProjectPdfSummaryJudgments = (params: {
+  columns: readonly ComparisonProjectJudgmentsColumn[]
+  componentRows: readonly ComparisonProjectLlmRow[]
+  row: ComparisonProjectExportRow
+  scope: ComparisonProjectScope
+}) => {
+  return params.columns.flatMap<ComparisonProjectPdfSummaryJudgment>((column) => {
+    const details = getComparisonProjectPdfAssessmentDetails({
+      column,
+      componentRows: params.componentRows,
+      scope: params.scope,
+    })
+
+    if (details.length === 0) {
+      return []
+    }
+
+    return [
+      {
+        answer: getComparisonProjectExportCellValue(params.row.cells[column.id]) || 'Not answered',
+        contentLabel: column.kind === 'llm' ? column.contentLabel : null,
+        details,
+        sourceLabel: column.kind === 'human' ? 'Human judgment' : `LLM judgment: ${column.modelLabel}`,
+      },
+    ]
+  })
+}
+
+const addComparisonProjectPdfSummaryJudgmentSection = (
   pdf: SimplePdfDocument,
   row: ComparisonProjectExportRow,
   columns: readonly ComparisonProjectJudgmentsColumn[],
   scope: ComparisonProjectScope,
   componentRows: readonly ComparisonProjectLlmRow[],
+) => {
+  const summaryJudgments = getComparisonProjectPdfSummaryJudgments({columns, componentRows, row, scope})
+
+  if (summaryJudgments.length === 0) {
+    return
+  }
+
+  pdf.addPanel({title: 'Summary judgments'}, () => {
+    summaryJudgments.forEach((summaryJudgment) => {
+      pdf.ensureSpace(30)
+      pdf.addText(summaryJudgment.sourceLabel, {font: 'bold', fontSize: 10})
+      pdf.addText(`Summary answer: ${summaryJudgment.answer}`, {fontSize: 10, indent: 12})
+
+      if (summaryJudgment.contentLabel) {
+        pdf.addText(`Content used: ${summaryJudgment.contentLabel}`, {fontSize: 10, indent: 12})
+      }
+
+      summaryJudgment.details.forEach((detail) => {
+        addComparisonProjectPdfAssessmentDetail(pdf, detail)
+      })
+      pdf.addGap(5)
+    })
+  })
+}
+
+const addComparisonProjectPdfJudgmentSection = (
+  pdf: SimplePdfDocument,
+  row: ComparisonProjectExportRow,
+  columns: readonly ComparisonProjectJudgmentsColumn[],
 ) => {
   pdf.addPanel({title: 'LLM assessment'}, () => {
     const columnsByPrompt = columns.reduce<Map<string, ComparisonProjectJudgmentsColumn[]>>((columnMap, column) => {
@@ -3870,7 +3933,6 @@ const addComparisonProjectPdfJudgmentSection = (
       promptColumns.forEach((column) => {
         const answer = getComparisonProjectExportCellValue(row.cells[column.id]) || 'Not answered'
         const sourceLabel = column.kind === 'human' ? 'Human judgment' : `LLM judgment: ${column.modelLabel}`
-        const assessmentDetails = getComparisonProjectPdfAssessmentDetails({column, componentRows, scope})
 
         pdf.ensureSpace(30)
         pdf.addText(sourceLabel, {font: 'bold', fontSize: 10})
@@ -3878,13 +3940,6 @@ const addComparisonProjectPdfJudgmentSection = (
 
         if (column.kind === 'llm' && column.contentLabel) {
           pdf.addText(`Content used: ${column.contentLabel}`, {fontSize: 10, indent: 12})
-        }
-
-        if (assessmentDetails.length > 0) {
-          pdf.addText('Individual assessments', {font: 'bold', fontSize: 10, gapAfter: 2, indent: 12})
-          assessmentDetails.forEach((detail) => {
-            addComparisonProjectPdfAssessmentDetail(pdf, detail)
-          })
         }
 
         pdf.addGap(5)
@@ -3921,7 +3976,8 @@ const addComparisonProjectPdfExportRow = (params: {
   pdf.addText('Abstract / Summary', {font: 'bold', fontSize: 11, gapAfter: 4})
   pdf.addText(row.articleSummary?.trim() || 'No abstract or summary available.', {fontSize: 10, gapAfter: 12})
   addComparisonProjectPdfConflictResolution(pdf, scope, row)
-  addComparisonProjectPdfJudgmentSection(pdf, row, columns, scope, componentRows)
+  addComparisonProjectPdfSummaryJudgmentSection(pdf, row, columns, scope, componentRows)
+  addComparisonProjectPdfJudgmentSection(pdf, row, columns)
 }
 
 const getComparisonProjectPdfExportResponse = async (
