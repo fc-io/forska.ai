@@ -24,6 +24,19 @@ test('simple PDF normalizes escaped carriage-return entities before drawing text
   expect(output).toContain('(- District health facility located within Hanoi or Ca Mau Provinces)')
 })
 
+test('simple PDF panel padding grows outward so panel title aligns with page text', () => {
+  const pdf = new SimplePdfDocument()
+  pdf.addPanel({title: 'Conflict resolution'}, () => {
+    pdf.addText('Current resolution: Not set')
+  })
+
+  const output = pdf.toBuffer().toString('latin1')
+
+  expect(output).toContain('32.00')
+  expect(output).toContain('/F2 12 Tf 48.00')
+  expect(output).toContain('/F1 10 Tf 48.00')
+})
+
 test('simple PDF keeps checkbox row widgets aligned with one text baseline', () => {
   const pdf = new SimplePdfDocument()
   pdf.addCheckboxRow([

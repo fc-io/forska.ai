@@ -14,7 +14,7 @@ const marginBottom = 42
 const lineHeightMultiplier = 1.25
 const sectionFillColor = '0.96 0.98 1.00'
 const sectionStrokeColor = '0.82 0.88 0.95'
-const panelPaddingX = 22
+const panelPaddingX = 16
 const panelPaddingTop = 24
 const panelPaddingBottom = 16
 
@@ -267,7 +267,7 @@ export class SimplePdfDocument {
 
     this.y -= panelPaddingTop
 
-    this.addText(options.title, {font: 'bold', fontSize: 12, gapAfter: 10, indent: panelPaddingX})
+    this.addText(options.title, {font: 'bold', fontSize: 12, gapAfter: 10})
     renderContent()
 
     const endPageIndex = this.pages.length - 1
@@ -285,7 +285,7 @@ export class SimplePdfDocument {
         `${sectionFillColor} rg`,
         `${sectionStrokeColor} RG`,
         '1 w',
-        `${(marginX - 8).toFixed(2)} ${rectBottomY.toFixed(2)} ${(pageWidth - marginX * 2 + 16).toFixed(2)} ${rectHeight.toFixed(2)} re`,
+        `${(marginX - panelPaddingX).toFixed(2)} ${rectBottomY.toFixed(2)} ${(pageWidth - (marginX - panelPaddingX) * 2).toFixed(2)} ${rectHeight.toFixed(2)} re`,
         'B',
         'Q',
       ].join(' ')
