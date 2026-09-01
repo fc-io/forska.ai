@@ -3767,13 +3767,9 @@ const addComparisonProjectPdfConflictResolution = (
   }
 
   pdf.addPanel({title: 'Conflict resolution'}, () => {
-    pdf.addText(`Current resolution: ${row.conflictResolution?.label ?? 'Not set'}`, {fontSize: 10, indent: 12})
-    pdf.addText(`Reviewer: ${row.conflictResolution?.reviewerDisplayName ?? 'Not set'}`, {
-      fontSize: 10,
-      gapAfter: 6,
-      indent: 12,
-    })
-    pdf.addText('Choose resolution', {font: 'bold', fontSize: 10, gapAfter: 4, indent: 12})
+    pdf.addText(`Current resolution: ${row.conflictResolution?.label ?? 'Not set'}`, {fontSize: 10})
+    pdf.addText(`Reviewer: ${row.conflictResolution?.reviewerDisplayName ?? 'Not set'}`, {fontSize: 10, gapAfter: 6})
+    pdf.addText('Choose resolution', {font: 'bold', fontSize: 10, gapAfter: 4})
 
     pdf.addCheckboxRow(
       getComparisonProjectPdfResolutionOptions(scope).map((option) => {
@@ -3790,7 +3786,6 @@ const addComparisonProjectPdfConflictResolution = (
           ].join('.'),
           fontSize: 10,
           gapAfter: 3,
-          indent: 12,
         }
       }),
     )
@@ -3827,10 +3822,10 @@ const addComparisonProjectPdfAssessmentDetail = (
   detail: ComparisonProjectPdfAssessmentDetail,
 ) => {
   pdf.ensureSpace(38)
-  pdf.addText(detail.label, {font: 'bold', fontSize: 10, indent: 36})
-  pdf.addText(`Answer: ${detail.answer}`, {fontSize: 10, indent: 48})
-  addComparisonProjectPdfLabeledValue(pdf, 'Explanation', detail.explanation, 48)
-  addComparisonProjectPdfLabeledValue(pdf, 'Quotes', detail.quotes, 48)
+  pdf.addText(detail.label, {font: 'bold', fontSize: 10, indent: 24})
+  pdf.addText(`Answer: ${detail.answer}`, {fontSize: 10, indent: 36})
+  addComparisonProjectPdfLabeledValue(pdf, 'Explanation', detail.explanation, 36)
+  addComparisonProjectPdfLabeledValue(pdf, 'Quotes', detail.quotes, 36)
 }
 
 const getComparisonProjectPdfAssessmentDetails = (params: {
@@ -3874,8 +3869,8 @@ const addComparisonProjectPdfJudgmentSection = (
 
     Array.from(columnsByPrompt.entries()).forEach(([, promptColumns]) => {
       const [firstColumn] = promptColumns
-      pdf.addText('Prompt', {font: 'bold', fontSize: 10, indent: 12})
-      pdf.addText(firstColumn?.promptLabel ?? 'Prompt', {fontSize: 10, gapAfter: 4, indent: 12})
+      pdf.addText('Prompt', {font: 'bold', fontSize: 10})
+      pdf.addText(firstColumn?.promptLabel ?? 'Prompt', {fontSize: 10, gapAfter: 4})
 
       promptColumns.forEach((column) => {
         const answer = getComparisonProjectExportCellValue(row.cells[column.id]) || 'Not answered'
@@ -3883,15 +3878,15 @@ const addComparisonProjectPdfJudgmentSection = (
         const assessmentDetails = getComparisonProjectPdfAssessmentDetails({column, componentRows, scope})
 
         pdf.ensureSpace(30)
-        pdf.addText(sourceLabel, {font: 'bold', fontSize: 10, indent: 12})
-        pdf.addText(`Answer: ${answer}`, {fontSize: 10, indent: 24})
+        pdf.addText(sourceLabel, {font: 'bold', fontSize: 10})
+        pdf.addText(`Answer: ${answer}`, {fontSize: 10, indent: 12})
 
         if (column.kind === 'llm' && column.contentLabel) {
-          pdf.addText(`Content used: ${column.contentLabel}`, {fontSize: 10, indent: 24})
+          pdf.addText(`Content used: ${column.contentLabel}`, {fontSize: 10, indent: 12})
         }
 
         if (assessmentDetails.length > 0) {
-          pdf.addText('Individual assessments', {font: 'bold', fontSize: 10, gapAfter: 2, indent: 24})
+          pdf.addText('Individual assessments', {font: 'bold', fontSize: 10, gapAfter: 2, indent: 12})
           assessmentDetails.forEach((detail) => {
             addComparisonProjectPdfAssessmentDetail(pdf, detail)
           })
