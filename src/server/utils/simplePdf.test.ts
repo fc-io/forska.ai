@@ -24,6 +24,22 @@ test('simple PDF normalizes escaped carriage-return entities before drawing text
   expect(output).toContain('(- District health facility located within Hanoi or Ca Mau Provinces)')
 })
 
+test('simple PDF wraps mixed Chinese text inside indented containers', () => {
+  const pdf = new SimplePdfDocument()
+  const text = '抗菌药物使用率为73.6%,平均使用抗菌药物4.23 d; 依赖C-RP检测可有效减少抗菌药物使用率'
+
+  pdf.addPanel({title: 'LLM assessment'}, () => {
+    pdf.addText(`Quotes: ${text}${text}`, {indent: 80})
+  })
+
+  const output = pdf.toBuffer().toString('latin1')
+  const cjkLineCount = output.match(/\/F3 10 Tf/g)?.length ?? 0
+
+  expect(cjkLineCount).toBeGreaterThan(1)
+  expect(output).toContain('(LLM assessment)')
+  expect(output).toContain('0.96 0.98 1.00 rg')
+})
+
 test('simple PDF panel padding grows outward so panel title aligns with page text', () => {
   const pdf = new SimplePdfDocument()
   pdf.addPanel({title: 'Conflict resolution'}, () => {
