@@ -6,6 +6,7 @@ import type {
   ComparisonProjectStatsCategoryBreakdown,
   ComparisonProjectStatsComparison,
 } from '../../../../../../services/comparisonProjectsService.ts'
+import {getHasComparisonProjectChineseArticles} from '../../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 
 type ComparisonProjectChineseStatsSectionProps = {stats: ComparisonProjectStats}
 
@@ -39,10 +40,6 @@ const getComparisonProjectStatsCategoryBreakdown = (
   return stats.categoryBreakdowns.find((breakdown) => {
     return breakdown.category === category
   })
-}
-
-const getHasChineseArticles = (stats: ComparisonProjectStats) => {
-  return (getComparisonProjectStatsCategoryBreakdown(stats, 'chinese')?.articleCount ?? 0) > 0
 }
 
 const getOrderedCategoryBreakdowns = (stats: ComparisonProjectStats) => {
@@ -161,7 +158,7 @@ export const ComparisonProjectChineseStatsSection = (props: ComparisonProjectChi
   }
 
   return (
-    <Show when={getHasChineseArticles(props.stats)}>
+    <Show when={getHasComparisonProjectChineseArticles(props.stats.categoryBreakdowns)}>
       <section class="mt-6 border-t border-gray-200 pt-4">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>

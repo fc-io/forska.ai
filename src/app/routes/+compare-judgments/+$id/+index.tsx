@@ -21,6 +21,7 @@ import {
   type ComparisonProjectArticleCategoryFilter,
   comparisonProjectArticleCategoryFilters,
   getComparisonProjectArticleCategoryFilterLabel,
+  getHasComparisonProjectChineseArticles,
   getNormalizedComparisonProjectArticleCategoryFilter,
 } from '../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
@@ -372,6 +373,16 @@ const CompareProjectJudgmentsPage = () => {
   })
   const exactTotalCount = createMemo(() => {
     return judgmentsCountQuery.isSuccess ? (judgmentsCountQuery.data?.totalCount ?? 0) : null
+  })
+  const hasChineseArticles = createMemo(() => {
+    return getHasComparisonProjectChineseArticles(comparisonProjectStatsQuery.data?.categoryBreakdowns)
+  })
+  createEffect(() => {
+    if (!comparisonProjectStatsQuery.isSuccess || hasChineseArticles() || articleCategoryFilter() === 'all') {
+      return
+    }
+
+    setArticleCategoryFilter('all')
   })
   const servingUnavailableState = createMemo(() => {
     const comparisonProject = comparisonProjectQuery.data
@@ -736,28 +747,30 @@ const CompareProjectJudgmentsPage = () => {
                         </select>
                       </label>
                     </Show>
-                    <label class="flex items-center gap-2 text-sm text-gray-600">
-                      <span>Article category</span>
-                      <select
-                        value={articleCategoryFilter()}
-                        class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
-                        onChange={(event) => {
-                          setArticleCategoryFilter(
-                            getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
-                          )
-                        }}
-                      >
-                        <For each={comparisonProjectArticleCategoryFilters}>
-                          {(option) => {
-                            return (
-                              <option selected={option === articleCategoryFilter()} value={option}>
-                                {getComparisonProjectArticleCategoryFilterLabel(option)}
-                              </option>
+                    <Show when={hasChineseArticles()}>
+                      <label class="flex items-center gap-2 text-sm text-gray-600">
+                        <span>Article category</span>
+                        <select
+                          value={articleCategoryFilter()}
+                          class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
+                          onChange={(event) => {
+                            setArticleCategoryFilter(
+                              getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
                             )
                           }}
-                        </For>
-                      </select>
-                    </label>
+                        >
+                          <For each={comparisonProjectArticleCategoryFilters}>
+                            {(option) => {
+                              return (
+                                <option selected={option === articleCategoryFilter()} value={option}>
+                                  {getComparisonProjectArticleCategoryFilterLabel(option)}
+                                </option>
+                              )
+                            }}
+                          </For>
+                        </select>
+                      </label>
+                    </Show>
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <span>Rows</span>
                       <select

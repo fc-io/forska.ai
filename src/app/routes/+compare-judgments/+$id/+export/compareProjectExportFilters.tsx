@@ -1,4 +1,4 @@
-import {For} from 'solid-js'
+import {For, Show} from 'solid-js'
 
 import {Button} from '../../../../../components/ui/button'
 import {
@@ -25,6 +25,7 @@ type CompareProjectExportFiltersProps = {
   isExportingCsv: boolean
   isExportingPdf: boolean
   isSummaryMode: boolean
+  showArticleCategoryFilter: boolean
   onArticleCategoryFilterChange: (value: ComparisonProjectArticleCategoryFilter) => void
   onDifferenceFilterChange: (value: ComparisonProjectDifferenceFilter) => void
   onExportCsv: () => void
@@ -81,28 +82,30 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
             </For>
           </select>
         </label>
-        <label class="flex flex-col gap-2 text-sm text-gray-700">
-          <span class="font-medium">Article category</span>
-          <select
-            value={props.articleCategoryFilter}
-            class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-            onChange={(event) => {
-              props.onArticleCategoryFilterChange(
-                getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
-              )
-            }}
-          >
-            <For each={comparisonProjectArticleCategoryFilters}>
-              {(option) => {
-                return (
-                  <option selected={option === props.articleCategoryFilter} value={option}>
-                    {getComparisonProjectArticleCategoryFilterLabel(option)}
-                  </option>
+        <Show when={props.showArticleCategoryFilter}>
+          <label class="flex flex-col gap-2 text-sm text-gray-700">
+            <span class="font-medium">Article category</span>
+            <select
+              value={props.articleCategoryFilter}
+              class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+              onChange={(event) => {
+                props.onArticleCategoryFilterChange(
+                  getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
                 )
               }}
-            </For>
-          </select>
-        </label>
+            >
+              <For each={comparisonProjectArticleCategoryFilters}>
+                {(option) => {
+                  return (
+                    <option selected={option === props.articleCategoryFilter} value={option}>
+                      {getComparisonProjectArticleCategoryFilterLabel(option)}
+                    </option>
+                  )
+                }}
+              </For>
+            </select>
+          </label>
+        </Show>
         <Button
           type="button"
           disabled={props.isExportingCsv || props.isExportingPdf}

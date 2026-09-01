@@ -25,3 +25,15 @@ export const getComparisonProjectArticleCategoryFilterLabel = (
       ? 'Non-Chinese articles'
       : 'All article categories'
 }
+
+export type ComparisonProjectArticleCategoryBreakdown = {articleCount: number; category: 'chinese' | 'non_chinese'}
+
+export const getHasComparisonProjectChineseArticles = (
+  categoryBreakdowns: readonly ComparisonProjectArticleCategoryBreakdown[] | null | undefined,
+) => {
+  return (
+    categoryBreakdowns?.some((breakdown) => {
+      return breakdown.category === 'chinese' && breakdown.articleCount > 0
+    }) ?? false
+  )
+}

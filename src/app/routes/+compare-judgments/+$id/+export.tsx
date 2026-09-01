@@ -6,8 +6,12 @@ import {Button} from '../../../../components/ui/button'
 import {
   type ComparisonProjectJudgmentsColumn,
   fetchComparisonProjectJudgmentsMetadata,
+  fetchComparisonProjectStats,
 } from '../../../../services/comparisonProjectsService'
-import type {ComparisonProjectArticleCategoryFilter} from '../../../../utils/comparisonProjectArticleCategoryFilter.ts'
+import {
+  type ComparisonProjectArticleCategoryFilter,
+  getHasComparisonProjectChineseArticles,
+} from '../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectDifferenceFilter,
@@ -74,6 +78,22 @@ const CompareProjectExportPage = () => {
       staleTime: 5 * 60 * 1000,
     }
   })
+  const comparisonProjectStatsQuery = useQuery(() => {
+    return {
+      queryKey: [
+        'comparison-project-stats',
+        comparisonProjectId(),
+        comparisonProjectQuery.data?.activeGeneration ?? null,
+      ],
+      queryFn: () => {
+        return fetchComparisonProjectStats(comparisonProjectId())
+      },
+      enabled: comparisonProjectId().length > 0,
+      refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
+      refetchOnWindowFocus: false,
+      staleTime: 5000,
+    }
+  })
   const orderedColumns = createMemo<ComparisonProjectJudgmentsColumn[]>(() => {
     const comparisonProject = comparisonProjectQuery.data
 
@@ -94,6 +114,9 @@ const CompareProjectExportPage = () => {
       },
     )
   })
+  const hasChineseArticles = createMemo(() => {
+    return getHasComparisonProjectChineseArticles(comparisonProjectStatsQuery.data?.categoryBreakdowns)
+  })
   const urlState = createMemo(() => {
     return {
       articleCategoryFilter: articleCategoryFilter(),
@@ -101,6 +124,13 @@ const CompareProjectExportPage = () => {
       pageLimit: pageLimit(),
       rowFilter: rowFilter(),
     }
+  })
+  createEffect(() => {
+    if (!comparisonProjectStatsQuery.isSuccess || hasChineseArticles() || articleCategoryFilter() === 'all') {
+      return
+    }
+
+    setArticleCategoryFilter('all')
   })
 
   createEffect(
@@ -221,6 +251,7 @@ const CompareProjectExportPage = () => {
                 isExportingCsv={csvExportMutation.isPending}
                 isExportingPdf={pdfExportMutation.isPending}
                 isSummaryMode={isSummaryMode()}
+                showArticleCategoryFilter={hasChineseArticles()}
                 onArticleCategoryFilterChange={updateArticleCategoryFilter}
                 onDifferenceFilterChange={updateDifferenceFilter}
                 onExportCsv={handleExport}
