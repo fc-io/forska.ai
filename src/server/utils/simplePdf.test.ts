@@ -35,7 +35,7 @@ test('simple PDF wraps mixed Chinese text inside indented containers', () => {
   const output = pdf.toBuffer().toString('latin1')
   const cjkLineCount = output.match(/\/F3 10 Tf/g)?.length ?? 0
 
-  expect(cjkLineCount).toBeGreaterThan(1)
+  expect(cjkLineCount).toBeGreaterThanOrEqual(3)
   expect(output).toContain('(LLM assessment)')
   expect(output).toContain('0.96 0.98 1.00 rg')
 })
