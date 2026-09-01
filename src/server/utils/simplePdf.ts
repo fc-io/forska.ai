@@ -2,6 +2,7 @@ type PdfFont = 'regular' | 'bold'
 
 type PdfTextOptions = {font?: PdfFont; fontSize?: number; gapAfter?: number; indent?: number}
 type PdfCheckboxOptions = {checked?: boolean; fieldName: string; fontSize?: number; gapAfter?: number; indent?: number}
+type PdfCheckboxRowOption = PdfCheckboxOptions & {label: string}
 type PdfPanelOptions = {gapAfter?: number; title: string}
 type PdfCheckboxField = {checked: boolean; fieldName: string; pageIndex: number; size: number; x: number; y: number}
 
@@ -13,21 +14,29 @@ const marginBottom = 42
 const lineHeightMultiplier = 1.25
 const sectionFillColor = '0.96 0.98 1.00'
 const sectionStrokeColor = '0.82 0.88 0.95'
-const panelPaddingX = 14
-const panelPaddingTop = 16
-const panelPaddingBottom = 12
+const panelPaddingX = 22
+const panelPaddingTop = 24
+const panelPaddingBottom = 16
+
+const getNormalizedPdfText = (value: string) => {
+  return value.replace(/&#x0D;|&#13;/gi, '\n').replace(/&#x0A;|&#10;/gi, '\n')
+}
 
 const getPdfSafeAsciiText = (value: string) => {
   return value
     .normalize('NFKD')
+    .replace(/[\u2010-\u2015]/g, '-')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\u00A0/g, ' ')
     .replace(/[^\x20-\x7E]/g, '?')
     .replace(/[\\()]/g, (match) => {
       return `\\${match}`
     })
 }
 
-const hasNonAsciiText = (value: string) => {
-  return /[^\x20-\x7E]/.test(value)
+const hasCjkText = (value: string) => {
+  return /[\u3400-\u9FFF\uF900-\uFAFF]/.test(value)
 }
 
 const getUtf16BeHexText = (value: string) => {
@@ -43,7 +52,7 @@ const getUtf16BeHexText = (value: string) => {
 }
 
 const getPdfTextCommand = (line: string, font: string, fontSize: number, x: number, y: number) => {
-  if (hasNonAsciiText(line)) {
+  if (hasCjkText(line)) {
     return `BT /F3 ${fontSize} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td <${getUtf16BeHexText(line)}> Tj ET`
   }
 
@@ -152,7 +161,7 @@ export class SimplePdfDocument {
   }
 
   addText(value: string | null | undefined, options: PdfTextOptions = {}) {
-    const text = String(value ?? '').trim()
+    const text = getNormalizedPdfText(String(value ?? '')).trim()
     const fontSize = options.fontSize ?? 10
     const lineHeight = fontSize * lineHeightMultiplier
     const x = marginX + (options.indent ?? 0)
@@ -183,7 +192,7 @@ export class SimplePdfDocument {
     }
 
     const pageIndex = this.pages.length - 1
-    const checkboxY = this.y + 2
+    const checkboxY = this.y + (lineHeight - size) / 2 + size - 2
     this.checkboxFields.push({
       checked: options.checked ?? false,
       fieldName: options.fieldName,
@@ -197,10 +206,52 @@ export class SimplePdfDocument {
     this.y -= lineHeight + (options.gapAfter ?? 0)
   }
 
+  addCheckboxRow(options: PdfCheckboxRowOption[]) {
+    if (options.length === 0) {
+      return
+    }
+
+    const fontSize = options[0]?.fontSize ?? 10
+    const lineHeight = fontSize * lineHeightMultiplier
+    const size = Math.max(fontSize + 2, 12)
+    const startX = marginX + (options[0]?.indent ?? 0)
+    const gap = 18
+
+    if (this.y - lineHeight < marginBottom) {
+      this.addPage()
+    }
+
+    const pageIndex = this.pages.length - 1
+    const rowY = this.y
+    const checkboxY = rowY + (lineHeight - size) / 2 + size - 2
+
+    options.reduce((x, option) => {
+      this.checkboxFields.push({
+        checked: option.checked ?? false,
+        fieldName: option.fieldName,
+        pageIndex,
+        size,
+        x,
+        y: checkboxY,
+      })
+      this.pages[pageIndex]?.push(getPdfTextCommand(option.label, 'F1', fontSize, x + size + 8, rowY))
+
+      return x + size + 8 + getTextWidth(option.label, fontSize) + gap
+    }, startX)
+
+    this.y -= lineHeight + (options[0]?.gapAfter ?? 0)
+  }
+
   addGap(points: number) {
     this.y -= points
 
     if (this.y < marginBottom) {
+      this.addPage()
+    }
+  }
+
+  ensureSpace(points: number) {
+    if (this.y - points < marginBottom) {
       this.addPage()
     }
   }
@@ -219,20 +270,30 @@ export class SimplePdfDocument {
     this.addText(options.title, {font: 'bold', fontSize: 12, gapAfter: 10, indent: panelPaddingX})
     renderContent()
 
-    const bottomY =
-      this.pages.length - 1 === pageIndex ? Math.max(this.y - panelPaddingBottom, marginBottom) : marginBottom
-    const rectHeight = topY - bottomY
-    const rectCommand = [
-      'q',
-      `${sectionFillColor} rg`,
-      `${sectionStrokeColor} RG`,
-      '1 w',
-      `${(marginX - 8).toFixed(2)} ${bottomY.toFixed(2)} ${(pageWidth - marginX * 2 + 16).toFixed(2)} ${rectHeight.toFixed(2)} re`,
-      'B',
-      'Q',
-    ].join(' ')
-    this.pages[pageIndex]?.splice(startCommandIndex, 0, rectCommand)
-    this.y = bottomY - (options.gapAfter ?? 10)
+    const endPageIndex = this.pages.length - 1
+    const endY = this.y
+
+    Array.from({length: endPageIndex - pageIndex + 1}).forEach((_, offset) => {
+      const currentPageIndex = pageIndex + offset
+      const isStartPage = currentPageIndex === pageIndex
+      const isEndPage = currentPageIndex === endPageIndex
+      const rectTopY = isStartPage ? topY : pageHeight - marginTop + panelPaddingTop
+      const rectBottomY = isEndPage ? Math.max(endY - panelPaddingBottom, marginBottom) : marginBottom
+      const rectHeight = rectTopY - rectBottomY
+      const rectCommand = [
+        'q',
+        `${sectionFillColor} rg`,
+        `${sectionStrokeColor} RG`,
+        '1 w',
+        `${(marginX - 8).toFixed(2)} ${rectBottomY.toFixed(2)} ${(pageWidth - marginX * 2 + 16).toFixed(2)} ${rectHeight.toFixed(2)} re`,
+        'B',
+        'Q',
+      ].join(' ')
+
+      this.pages[currentPageIndex]?.splice(isStartPage ? startCommandIndex : 0, 0, rectCommand)
+    })
+
+    this.y = Math.max(endY - panelPaddingBottom, marginBottom) - (options.gapAfter ?? 10)
   }
 
   toBuffer() {

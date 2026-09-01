@@ -210,7 +210,7 @@ type ComparisonProjectExportRow = ComparisonProjectJudgmentRow & {
 }
 type ComparisonProjectExportFormat = 'csv' | 'pdf'
 type ComparisonProjectConflictResolutionOption = {label: string; value: string}
-type ComparisonProjectPdfAssessmentDetail = {answer: string; label: string}
+type ComparisonProjectPdfAssessmentDetail = {answer: string; explanation: string; label: string; quotes: string}
 type ComparisonProjectSourcePrompt = {
   id: string
   promptHeading: string | null
@@ -2970,6 +2970,8 @@ const getComparisonProjectLlmRows = async (
     modelId: string
     answeredOriginal: string | null
     answeredOriginalAsArray: unknown
+    explanation: string | null
+    quotes: unknown
     useTitle: boolean
     useAbstract: boolean
     useFulltext: boolean
@@ -2982,6 +2984,8 @@ const getComparisonProjectLlmRows = async (
       model_id AS modelId,
       answered_original AS answeredOriginal,
       answered_original_as_array AS answeredOriginalAsArray,
+      explanation,
+      TO_JSON(quotes) AS quotes,
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -3584,6 +3588,22 @@ const getComparisonProjectExportCellValue = (value: string | null | undefined) =
     .join('; ')
 }
 
+const getComparisonProjectPdfQuotesValue = (value: unknown) => {
+  const quotesValue = getJsonValue(value)
+
+  return Array.isArray(quotesValue)
+    ? quotesValue
+        .map((quote) => {
+          return typeof quote === 'string' ? quote : JSON.stringify(quote)
+        })
+        .join('; ')
+    : typeof quotesValue === 'string'
+      ? quotesValue
+      : quotesValue === null || quotesValue === undefined
+        ? ''
+        : JSON.stringify(quotesValue)
+}
+
 const getComparisonProjectExportColumnHeader = (column: ComparisonProjectJudgmentsColumn) => {
   const answerSourceLabel = column.kind === 'human' ? 'Human answer' : `LLM - ${column.modelLabel}`
 
@@ -3755,23 +3775,62 @@ const addComparisonProjectPdfConflictResolution = (
     })
     pdf.addText('Choose resolution', {font: 'bold', fontSize: 10, gapAfter: 4, indent: 12})
 
-    getComparisonProjectPdfResolutionOptions(scope).forEach((option) => {
-      pdf.addCheckbox(option.label, {
-        checked: row.conflictResolution?.value === option.value,
-        fieldName: [
-          'comparison',
-          getComparisonProjectPdfFieldNamePart(scope.id),
-          'article',
-          getComparisonProjectPdfFieldNamePart(row.canonicalArticleId),
-          'resolution',
-          getComparisonProjectPdfFieldNamePart(option.value),
-        ].join('.'),
-        fontSize: 10,
-        gapAfter: 3,
-        indent: 12,
-      })
-    })
+    pdf.addCheckboxRow(
+      getComparisonProjectPdfResolutionOptions(scope).map((option) => {
+        return {
+          label: option.label,
+          checked: row.conflictResolution?.value === option.value,
+          fieldName: [
+            'comparison',
+            getComparisonProjectPdfFieldNamePart(scope.id),
+            'article',
+            getComparisonProjectPdfFieldNamePart(row.canonicalArticleId),
+            'resolution',
+            getComparisonProjectPdfFieldNamePart(option.value),
+          ].join('.'),
+          fontSize: 10,
+          gapAfter: 3,
+          indent: 12,
+        }
+      }),
+    )
   })
+}
+
+const addComparisonProjectPdfLabeledValue = (
+  pdf: SimplePdfDocument,
+  label: string,
+  value: string | null | undefined,
+  indent: number,
+) => {
+  const normalizedValue = getComparisonProjectExportCellValue(value)
+
+  if (normalizedValue) {
+    pdf.addText(`${label}: ${normalizedValue}`, {fontSize: 10, indent})
+  }
+}
+
+const getComparisonProjectPdfAssessmentDetail = (
+  prompt: ComparisonProjectSourceSummaryPromptConfig,
+  row: ComparisonProjectLlmRow,
+): ComparisonProjectPdfAssessmentDetail => {
+  return {
+    answer: getComparisonProjectExportCellValue(row.answeredOriginal) || 'Not answered',
+    explanation: getComparisonProjectExportCellValue(row.explanation),
+    label: prompt.promptLabel,
+    quotes: getComparisonProjectPdfQuotesValue(row.quotes),
+  }
+}
+
+const addComparisonProjectPdfAssessmentDetail = (
+  pdf: SimplePdfDocument,
+  detail: ComparisonProjectPdfAssessmentDetail,
+) => {
+  pdf.ensureSpace(38)
+  pdf.addText(detail.label, {font: 'bold', fontSize: 10, indent: 36})
+  pdf.addText(`Answer: ${detail.answer}`, {fontSize: 10, indent: 48})
+  addComparisonProjectPdfLabeledValue(pdf, 'Explanation', detail.explanation, 48)
+  addComparisonProjectPdfLabeledValue(pdf, 'Quotes', detail.quotes, 48)
 }
 
 const getComparisonProjectPdfAssessmentDetails = (params: {
@@ -3793,10 +3852,7 @@ const getComparisonProjectPdfAssessmentDetails = (params: {
           return row.promptId === prompt.id && row.modelId === params.column.modelId
         })
         .map((row) => {
-          return {
-            answer: getComparisonProjectExportCellValue(row.answeredOriginal) || 'Not answered',
-            label: prompt.promptLabel,
-          }
+          return getComparisonProjectPdfAssessmentDetail(prompt, row)
         })
     })
 }
@@ -3826,6 +3882,7 @@ const addComparisonProjectPdfJudgmentSection = (
         const sourceLabel = column.kind === 'human' ? 'Human judgment' : `LLM judgment: ${column.modelLabel}`
         const assessmentDetails = getComparisonProjectPdfAssessmentDetails({column, componentRows, scope})
 
+        pdf.ensureSpace(30)
         pdf.addText(sourceLabel, {font: 'bold', fontSize: 10, indent: 12})
         pdf.addText(`Answer: ${answer}`, {fontSize: 10, indent: 24})
 
@@ -3836,7 +3893,7 @@ const addComparisonProjectPdfJudgmentSection = (
         if (assessmentDetails.length > 0) {
           pdf.addText('Individual assessments', {font: 'bold', fontSize: 10, gapAfter: 2, indent: 24})
           assessmentDetails.forEach((detail) => {
-            pdf.addText(`${detail.label}: ${detail.answer}`, {fontSize: 10, indent: 36})
+            addComparisonProjectPdfAssessmentDetail(pdf, detail)
           })
         }
 
