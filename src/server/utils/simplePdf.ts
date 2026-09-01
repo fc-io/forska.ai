@@ -72,7 +72,13 @@ const getPdfTextCommand = (line: string, font: string, fontSize: number, x: numb
   return `BT /${font} ${fontSize} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td (${getPdfSafeAsciiText(line)}) Tj ET`
 }
 
-const getCharacterWidthFactor = (character: string) => {
+type PdfTextMeasureMode = 'regular' | 'cjk'
+
+const getCharacterWidthFactor = (character: string, mode: PdfTextMeasureMode = 'regular') => {
+  if (mode === 'cjk') {
+    return character === ' ' ? 0.5 : 1.08
+  }
+
   if (isCjkCharacter(character)) {
     return 1.08
   }
@@ -100,22 +106,29 @@ const getCharacterWidthFactor = (character: string) => {
   return 0.5
 }
 
-const getTextWidth = (value: string, fontSize: number) => {
+const getTextWidth = (value: string, fontSize: number, mode: PdfTextMeasureMode = 'regular') => {
   return Array.from(value).reduce((width, character) => {
-    return width + getCharacterWidthFactor(character) * fontSize
+    return width + getCharacterWidthFactor(character, mode) * fontSize
   }, 0)
 }
 
-const splitLongWordToWidth = (word: string, maxWidth: number, fontSize: number) => {
+const splitLongWordToWidth = (
+  word: string,
+  maxWidth: number,
+  fontSize: number,
+  mode: PdfTextMeasureMode = 'regular',
+) => {
   const chunks: string[] = []
   let chunk = ''
 
   Array.from(word).forEach((character) => {
     const candidate = `${chunk}${character}`
 
-    if (chunk && getTextWidth(candidate, fontSize) > maxWidth) {
+    if (chunk && getTextWidth(candidate, fontSize, mode) > maxWidth) {
       const hyphenatedChunk = `${chunk}-`
-      chunks.push(getTextWidth(hyphenatedChunk, fontSize) <= maxWidth ? hyphenatedChunk : chunk)
+      chunks.push(
+        mode === 'regular' && getTextWidth(hyphenatedChunk, fontSize, mode) <= maxWidth ? hyphenatedChunk : chunk,
+      )
       chunk = character
       return
     }
@@ -149,12 +162,12 @@ const getCjkWrappedLines = (paragraph: string, maxWidth: number, fontSize: numbe
     }
 
     const tokenParts =
-      getTextWidth(token, fontSize) > maxWidth ? splitLongWordToWidth(token, maxWidth, fontSize) : [token]
+      getTextWidth(token, fontSize, 'cjk') > maxWidth ? splitLongWordToWidth(token, maxWidth, fontSize, 'cjk') : [token]
 
     tokenParts.forEach((part) => {
       const candidate = `${line}${part}`
 
-      if (line && getTextWidth(candidate, fontSize) > maxWidth) {
+      if (line && getTextWidth(candidate, fontSize, 'cjk') > maxWidth) {
         lines.push(line.trimEnd())
         line = part.trimStart()
         return
