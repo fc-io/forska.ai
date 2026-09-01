@@ -6594,6 +6594,57 @@ test('comparison project pdf export shows individual assessments behind summary 
   ).toBe(true)
 })
 
+test('comparison project pdf export shows individual assessments for import-scoped summary projects', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: false,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    failPromptInsert: false,
+    promptLinks: [{id: 'comparison-project-prompt-summary', order: 0, promptId: 'prompt-1'}],
+    sourceProjectLinks: [],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {
+    articleCategoryFilter: 'all',
+    differenceFilter: 'all',
+    format: 'pdf',
+    rowFilter: 'fully-answered',
+  })
+  const pdf = Buffer.from(await response.arrayBuffer()).toString('latin1')
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(pdf).toContain('Individual assessments')
+  expect(pdf).toContain('Prompt 1: yes')
+  expect(pdf).toContain('Prompt 2: yes')
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.project_prompt')
+        && statement.includes('AS sourceProjectId')
+        && statement.includes("'source-project-1'")
+      )
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.judgment j')
+        && statement.includes("'prompt-1'")
+        && statement.includes("'prompt-2'")
+      )
+    }),
+  ).toBe(true)
+})
+
 test('comparison project conflict resolution export returns saved resolutions as compact json', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
