@@ -190,7 +190,7 @@ const getWarningFailureDetails = (data: ReviewsWarningsData) => {
         'data.indexing.serving.diagnostics.dirtyWork.failedCount',
         'data.indexing.serving.diagnostics.rebuildChunks.failedCount',
       ].includes(variant.path)
-    )
+    ) && !isCurrentDbHistoricalMaintenanceFailure(data, variant.path)
   })
 
   return failureVariants.length === 0
@@ -241,6 +241,19 @@ const isMutationDisabledCurrentDbQueuedBacklog = (indexing: ReviewsWarningsData[
     && indexing.pendingRefreshCount > 0
     && indexing.inFlightRefreshCount === 0
     && indexing.activeWorkCount === 0
+  )
+}
+
+const isCurrentDbHistoricalMaintenanceFailure = (data: ReviewsWarningsData, path: string) => {
+  return (
+    networkSmokeDbMode === 'current'
+    && path === 'data.indexing.serving.diagnostics.rebuildChunks.failedCount'
+    && data.indexing.status === 'ready'
+    && data.indexing.progressState === 'completed'
+    && data.indexing.serving.readable
+    && data.indexing.serving.usable
+    && data.indexing.maintenance.hasHistoricalFailures
+    && !data.indexing.maintenance.hasActionableFailures
   )
 }
 
