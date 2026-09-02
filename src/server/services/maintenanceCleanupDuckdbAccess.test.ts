@@ -19,8 +19,8 @@ test('archived project cleanup uses explicit maintenance workload context for ow
   expect(source).toContain("getMaintenanceDuckdbWorkloadContext('archivedProjectCleanup')")
   expect(countMatches(source, /getAppDatabaseService\(\)\.queryJson</g)).toBe(3)
   expect(countMatches(source, /getAppDatabaseService\(\)\.transaction\(/g)).toBe(6)
-  expect(countMatches(source, /getAppDatabaseService\(\)\.run\(/g)).toBe(2)
-  expect(countMatches(source, /archivedProjectCleanupWorkloadContext/g)).toBe(12)
+  expect(countMatches(source, /getAppDatabaseService\(\)\.run\(/g)).toBe(1)
+  expect(countMatches(source, /archivedProjectCleanupWorkloadContext/g)).toBe(11)
 })
 
 test('maintenance work leases use explicit maintenance workload context for owner DB calls', () => {

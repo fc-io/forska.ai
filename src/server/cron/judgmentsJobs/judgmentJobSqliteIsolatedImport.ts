@@ -1,4 +1,6 @@
 import {spawn} from 'node:child_process'
+import {existsSync, readFileSync, rmSync} from 'node:fs'
+import {join} from 'node:path'
 import {fileURLToPath} from 'node:url'
 
 import {getRuntimeWritableRoot} from '../../utils/runtimeWritablePath.ts'
@@ -66,6 +68,25 @@ const parseIsolatedImportOutput = (stdout: string) => {
         }
       })()
     : null
+}
+
+const createIsolatedImportResultPath = (jobId: string) => {
+  const safeJobId = jobId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'unknown-job'
+
+  return join(
+    getRuntimeWritableRoot(),
+    `.judgment-sqlite-import-${safeJobId}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+  )
+}
+
+const readIsolatedImportOutput = ({resultPath, stdout}: {resultPath: string; stdout: string}) => {
+  const trimmedStdout = stdout.trim()
+
+  if (trimmedStdout !== '') {
+    return stdout
+  }
+
+  return existsSync(resultPath) ? readFileSync(resultPath, 'utf8') : stdout
 }
 
 const normalizeClaimedBatch = (value: unknown): JudgmentJobSqliteClaimedOutboxBatch | null => {
@@ -156,9 +177,10 @@ export const runJudgmentJobSqliteIsolatedImportCycle = async ({
   claimedBy: string
   jobId: string
 }): Promise<JudgmentJobSqliteIsolatedImportProcessResult> => {
+  const resultPath = createIsolatedImportResultPath(jobId)
   const childProcess = spawn(
     process.execPath,
-    [isolatedImportEntrypointPath, `--jobId=${jobId}`, `--claimedBy=${claimedBy}`],
+    [isolatedImportEntrypointPath, `--jobId=${jobId}`, `--claimedBy=${claimedBy}`, `--resultPath=${resultPath}`],
     {cwd: getRuntimeWritableRoot(), env: {...process.env}, stdio: ['ignore', 'pipe', 'pipe']},
   )
 
@@ -200,7 +222,9 @@ export const runJudgmentJobSqliteIsolatedImportCycle = async ({
   })
 
   const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, exitCodePromise])
-  const parsed = parseIsolatedImportOutput(stdout)
+  const output = readIsolatedImportOutput({resultPath, stdout})
+  rmSync(resultPath, {force: true})
+  const parsed = parseIsolatedImportOutput(output)
   const parsedStatus = parsed ? (parsed as {status?: unknown}).status : undefined
   const result = getCycleResult(parsed)
   const claimedBatch = normalizeClaimedBatch(parsed?.claimedBatch)
@@ -227,7 +251,7 @@ export const runJudgmentJobSqliteIsolatedImportCycle = async ({
     return {errorMessage: 'SQLite importer did not return a parseable cycle result', exitCode, result: null}
   }
 
-  return {errorMessage: getIsolatedImportErrorMessage({exitCode, stderr, stdout}), exitCode, result}
+  return {errorMessage: getIsolatedImportErrorMessage({exitCode, stderr, stdout: output}), exitCode, result}
 }
 
 export const runJudgmentJobSqliteIsolatedFlush = async ({

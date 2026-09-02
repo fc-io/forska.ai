@@ -1,4 +1,4 @@
-import {rmSync} from 'node:fs'
+import {readFileSync, rmSync} from 'node:fs'
 
 import {expect, setDefaultTimeout, test} from 'bun:test'
 
@@ -21,11 +21,21 @@ const getLastJsonLine = (stdout: string) => {
   return lines.at(-1) ?? ''
 }
 
-const getScript = (body: string) => {
+const getScript = (body: string, resultPath: string) => {
   return `
+    const {writeFileSync} = await import('node:fs')
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
     const {cleanupNextArchivedProjectBatch, runArchivedProjectBoundedCleanup} = await import('./src/server/services/archivedProjectCleanupService.ts')
+    const resultPath = ${JSON.stringify(resultPath)}
+    const originalConsoleLog = console.log.bind(console)
+    console.log = (...args) => {
+      const line = args.map((arg) => {
+        return typeof arg === 'string' ? arg : JSON.stringify(arg)
+      }).join(' ')
+      writeFileSync(resultPath, line)
+      originalConsoleLog(...args)
+    }
 
     await migrateDuckdb()
 
@@ -307,7 +317,8 @@ const getScript = (body: string) => {
 
 const runScript = <T>(body: string) => {
   const duckdbPath = `/tmp/f2-archived-project-cleanup-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
-  const result = globalThis.Bun.spawnSync(['bun', '-e', getScript(body)], {
+  const resultPath = `${duckdbPath}.result.json`
+  const result = globalThis.Bun.spawnSync(['bun', '-e', getScript(body, resultPath)], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -317,6 +328,8 @@ const runScript = <T>(body: string) => {
       SERVER_ROLE: 'maintenance-worker',
       VITE_PORT: '3000',
     },
+    stderr: 'pipe',
+    stdout: 'pipe',
   })
 
   try {
@@ -324,12 +337,16 @@ const runScript = <T>(body: string) => {
       throw new Error(result.stderr.toString() || result.stdout.toString() || 'Archived cleanup test failed')
     }
 
-    return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
+    const stdoutJson = getLastJsonLine(result.stdout.toString())
+    const outputJson = stdoutJson === '' ? readFileSync(resultPath, 'utf8') : stdoutJson
+
+    return JSON.parse(outputJson) as T
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(resultPath)
     removeFileIfExists('/tmp/duckdb-temp')
   }
 }

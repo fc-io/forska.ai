@@ -295,6 +295,12 @@ type DuckdbStartupPreflightRepairMarker = {
   schemaName?: unknown
   tableName?: unknown
 }
+const duckdbStartupCriticalProtectedTableSpecs = [
+  {schemaName: 'main', tableName: 'app_schema_migration'},
+  {schemaName: 'app', tableName: 'project'},
+  {schemaName: 'app', tableName: 'comparison_project'},
+  {schemaName: 'app', tableName: 'comparison_project_conflict_resolution'},
+]
 const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[] = [
   {
     duplicateKeySelectSql: `
@@ -3006,6 +3012,28 @@ const copyDuckdbDatabaseBeforeWalRecovery = async ({
   return databaseBackupPath
 }
 
+const copyDuckdbWalBeforeRecovery = async ({
+  databasePath,
+  walBackupPath,
+}: {
+  databasePath: string
+  walBackupPath: string
+}) => {
+  const walPath = `${databasePath}.wal`
+
+  if (!(await pathExists(walPath))) {
+    return null
+  }
+
+  try {
+    await copyFile(walPath, walBackupPath, fsConstants.COPYFILE_FICLONE)
+  } catch {
+    await copyFile(walPath, walBackupPath)
+  }
+
+  return walBackupPath
+}
+
 const duckdbStartupRecoveryArtifactPattern =
   /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z\.[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\.(?:duckdb|pre-repair\.duckdb|[^/]+\.wal|recovery\.json)$/iu
 
@@ -3140,6 +3168,19 @@ const hasNonEmptyDuckdbWal = (databasePath: string) => {
   const walStat = statSync(walPath, {throwIfNoEntry: false})
 
   return walStat?.isFile() === true && walStat.size > 0
+}
+
+const hasDuckdbWal = (databasePath: string) => {
+  const walPath = `${databasePath}.wal`
+  const walStat = statSync(walPath, {throwIfNoEntry: false})
+
+  return walStat?.isFile() === true
+}
+
+const isDuckdbWalReplayFailure = (error: unknown) => {
+  const message = getNormalizedDuckdbError(error).message.toLowerCase()
+
+  return message.includes('.duckdb.wal') || message.includes('replaying wal file')
 }
 
 const getDuckdbStartupPreflightScript = () => {
@@ -3613,6 +3654,8 @@ const getDuckdbIndexedTableRepairScript = () => {
     const options = JSON.parse(process.argv[2])
     const tableRepairSpecs = JSON.parse(process.argv[3])
     const repairId = JSON.parse(process.argv[4])
+    const criticalProtectedTableSpecs = JSON.parse(process.argv[5])
+    const preservedDatabasePath = JSON.parse(process.argv[6])
     const {DuckDBInstance} = await import('@duckdb/node-api')
 
     let connection = null
@@ -3620,6 +3663,11 @@ const getDuckdbIndexedTableRepairScript = () => {
 
     const getRows = async (statement) => {
       const reader = await connection.runAndReadAll(statement)
+      return reader.getRowObjectsJson()
+    }
+
+    const getRowsForConnection = async (targetConnection, statement) => {
+      const reader = await targetConnection.runAndReadAll(statement)
       return reader.getRowObjectsJson()
     }
 
@@ -3785,12 +3833,127 @@ const getDuckdbIndexedTableRepairScript = () => {
       return Number(rows[0]?.tableCount ?? 0) > 0
     }
 
+    const tableExistsForConnection = async (targetConnection, schemaName, tableName) => {
+      const rows = await getRowsForConnection(
+        targetConnection,
+        "SELECT COUNT(*) AS tableCount FROM information_schema.tables " +
+          "WHERE table_schema = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName),
+      )
+      return Number(rows[0]?.tableCount ?? 0) > 0
+    }
+
     const getTableRowCount = async (schemaName, tableName) => {
       const rows = await getRows(
         'SELECT COUNT(*) AS rowCount FROM ' + getQualifiedIdentifier(schemaName, tableName),
       )
 
       return String(rows[0]?.rowCount ?? '0')
+    }
+
+    const getTableRowCountForConnection = async (targetConnection, schemaName, tableName) => {
+      const rows = await getRowsForConnection(
+        targetConnection,
+        'SELECT COUNT(*) AS rowCount FROM ' + getQualifiedIdentifier(schemaName, tableName),
+      )
+
+      return String(rows[0]?.rowCount ?? '0')
+    }
+
+    const getCriticalProtectedTableRowCounts = async (targetConnection, tableSpecs, repairedTableKeys) => {
+      if (!Array.isArray(tableSpecs) || tableSpecs.length === 0) {
+        return []
+      }
+
+      const counts = []
+
+      for (const tableSpec of tableSpecs) {
+        const schemaName = typeof tableSpec?.schemaName === 'string' ? tableSpec.schemaName : null
+        const tableName = typeof tableSpec?.tableName === 'string' ? tableSpec.tableName : null
+
+        if (schemaName === null || tableName === null || repairedTableKeys.has(getRepairSpecKey(schemaName, tableName))) {
+          continue
+        }
+
+        if (await tableExistsForConnection(targetConnection, schemaName, tableName)) {
+          counts.push({
+            rowCount: await getTableRowCountForConnection(targetConnection, schemaName, tableName),
+            schemaName,
+            tableName,
+          })
+        }
+      }
+
+      return counts
+    }
+
+    const getPreservedCriticalProtectedTableRowCounts = async (repairedTableKeys) => {
+      if (typeof preservedDatabasePath !== 'string' || preservedDatabasePath.length === 0) {
+        return []
+      }
+
+      let preservedConnection = null
+      let preservedInstance = null
+
+      try {
+        preservedInstance = await DuckDBInstance.create(preservedDatabasePath, {
+          ...options,
+          access_mode: 'READ_ONLY',
+        })
+        preservedConnection = await preservedInstance.connect()
+
+        return await getCriticalProtectedTableRowCounts(
+          preservedConnection,
+          criticalProtectedTableSpecs,
+          repairedTableKeys,
+        )
+      } finally {
+        try {
+          preservedConnection?.closeSync()
+        } catch {}
+        try {
+          preservedInstance?.closeSync()
+        } catch {}
+      }
+    }
+
+    const assertCriticalProtectedTableRowCountsDidNotShrink = async (beforeCounts, repairedTableKeys) => {
+      if (beforeCounts.length === 0) {
+        return
+      }
+
+      const afterCounts = await getCriticalProtectedTableRowCounts(connection, criticalProtectedTableSpecs, repairedTableKeys)
+      const afterCountByTable = new Map(
+        afterCounts.map((count) => {
+          return [getRepairSpecKey(count.schemaName, count.tableName), count]
+        }),
+      )
+
+      for (const beforeCount of beforeCounts) {
+        const tableKey = getRepairSpecKey(beforeCount.schemaName, beforeCount.tableName)
+        const afterCount = afterCountByTable.get(tableKey)
+
+        if (afterCount === undefined) {
+          throw new Error(
+            'startup repair WAL replay changed critical non-repaired table '
+              + getQualifiedName(beforeCount.schemaName, beforeCount.tableName)
+              + ': table disappeared after preserved pre-repair count was '
+              + beforeCount.rowCount,
+          )
+        }
+
+        if (BigInt(afterCount.rowCount) < BigInt(beforeCount.rowCount)) {
+          throw new Error(
+            'startup repair WAL replay shrank critical non-repaired table '
+              + getQualifiedName(beforeCount.schemaName, beforeCount.tableName)
+              + ': row count was '
+              + beforeCount.rowCount
+              + ' in the preserved pre-repair database and is '
+              + afterCount.rowCount
+              + ' after WAL replay',
+          )
+        }
+      }
     }
 
     const getProtectedTableRowCounts = async (repairedTableKeys) => {
@@ -3953,8 +4116,15 @@ const getDuckdbIndexedTableRepairScript = () => {
           return getRepairSpecKey(spec.schemaName, spec.tableName)
         }),
       )
+      const preservedCriticalProtectedTableRowCounts =
+        await getPreservedCriticalProtectedTableRowCounts(repairedTableKeys)
       const protectedTableRowCounts = await getProtectedTableRowCounts(repairedTableKeys)
       let repairCommitted = false
+
+      await assertCriticalProtectedTableRowCountsDidNotShrink(
+        preservedCriticalProtectedTableRowCounts,
+        repairedTableKeys,
+      )
 
       await connection.run('BEGIN')
       try {
@@ -4358,19 +4528,152 @@ const repairDuckdbStartupIndexedTables = async (
   const repairId = recoveryPathPart.replace(/[^a-zA-Z0-9_]/g, '_')
   const recoveryDirectory = `${runtimeConfig.databasePath}.startup-recovery`
   const databaseBackupPath = join(recoveryDirectory, `${recoveryPathPart}.pre-repair.duckdb`)
+  const walBackupPath = join(recoveryDirectory, `${recoveryPathPart}.pre-repair.wal`)
   const manifestPath = join(recoveryDirectory, `${recoveryPathPart}.recovery.json`)
   const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
   const repairMarker = getDuckdbStartupPreflightRepairMarkerFromError(error)
+  const hadWalBeforeRepair = hasDuckdbWal(runtimeConfig.databasePath)
 
   await mkdir(recoveryDirectory, {recursive: true})
-  await waitForDuckdbStartupRepairFileLock(runtimeConfig)
-  let preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+  let preservedDatabasePath: string | null
+  let preservedWalPath: string | null
+
+  if (!hadWalBeforeRepair) {
+    try {
+      await waitForDuckdbStartupRepairFileLock(runtimeConfig)
+    } catch (lockProbeError) {
+      if (!hasDuckdbWal(runtimeConfig.databasePath) && !isDuckdbWalReplayFailure(lockProbeError)) {
+        throw lockProbeError
+      }
+
+      preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+        databaseBackupPath,
+        databasePath: runtimeConfig.databasePath,
+      })
+      preservedWalPath = await copyDuckdbWalBeforeRecovery({databasePath: runtimeConfig.databasePath, walBackupPath})
+
+      if (preservedDatabasePath !== null) {
+        await pruneDuckdbStartupRecoveryArtifactsSafely(runtimeConfig, recoveryDirectory, recoveryPathPart)
+      }
+
+      const repairError =
+        `startup indexed-table repair blocked because the lock probe hit pending WAL replay for ${runtimeConfig.databasePath}; `
+        + 'preserved database/WAL evidence for operator recovery'
+
+      await writeFile(
+        manifestPath,
+        JSON.stringify(
+          {
+            checkpointSourcePath: runtimeConfig.databasePath,
+            error: getCompactDuckdbErrorMessage(error),
+            lockProbeError: getCompactDuckdbErrorMessage(lockProbeError),
+            preservedDatabasePath,
+            preservedWalPath,
+            recoveredAt: new Date().toISOString(),
+            recovery: 'indexed-table-rebuild-blocked-lock-probe-wal-replay',
+            repairError,
+            repairMarker,
+            repairStrategies: Object.fromEntries(
+              repairSpecs.map((spec) => {
+                return [`${spec.schemaName}.${spec.tableName}`, spec.repairStrategy ?? 'copy']
+              }),
+            ),
+            repairedTables: repairSpecs.map((spec) => {
+              return `${spec.schemaName}.${spec.tableName}`
+            }),
+          },
+          null,
+          2,
+        ),
+      )
+
+      writeRuntimeOperatorLogEvent({
+        attrs: {
+          databasePath: runtimeConfig.databasePath,
+          lockProbeError: getCompactDuckdbErrorMessage(lockProbeError),
+          manifestPath,
+          preservedDatabasePath,
+          preservedWalPath,
+          repairError,
+          repairMarker,
+        },
+        event: 'duckdb.startup.indexed-table-repair-blocked-lock-probe-wal-replay',
+        message: '[duckdb] blocked startup indexed-table repair after lock probe hit WAL replay',
+        severity: 'ERROR',
+        terminalArgs: [
+          `database_backup=${preservedDatabasePath ?? 'none'}`,
+          `wal_backup=${preservedWalPath ?? 'none'}`,
+          `manifest=${manifestPath}`,
+        ],
+      })
+
+      throw new Error(`DuckDB startup indexed-table repair blocked for ${runtimeConfig.databasePath}: ${repairError}`, {
+        cause: lockProbeError,
+      })
+    }
+  }
+
+  preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
     databaseBackupPath,
     databasePath: runtimeConfig.databasePath,
   })
+  preservedWalPath = await copyDuckdbWalBeforeRecovery({databasePath: runtimeConfig.databasePath, walBackupPath})
 
   if (preservedDatabasePath !== null) {
     await pruneDuckdbStartupRecoveryArtifactsSafely(runtimeConfig, recoveryDirectory, recoveryPathPart)
+  }
+
+  if (hadWalBeforeRepair) {
+    const repairError =
+      `startup indexed-table repair blocked because ${runtimeConfig.databasePath}.wal is non-empty; `
+      + 'preserved database/WAL evidence for operator recovery'
+
+    await writeFile(
+      manifestPath,
+      JSON.stringify(
+        {
+          checkpointSourcePath: runtimeConfig.databasePath,
+          error: getCompactDuckdbErrorMessage(error),
+          preservedDatabasePath,
+          preservedWalPath,
+          recoveredAt: new Date().toISOString(),
+          recovery: 'indexed-table-rebuild-blocked-pending-wal',
+          repairError,
+          repairMarker,
+          repairStrategies: Object.fromEntries(
+            repairSpecs.map((spec) => {
+              return [`${spec.schemaName}.${spec.tableName}`, spec.repairStrategy ?? 'copy']
+            }),
+          ),
+          repairedTables: repairSpecs.map((spec) => {
+            return `${spec.schemaName}.${spec.tableName}`
+          }),
+        },
+        null,
+        2,
+      ),
+    )
+
+    writeRuntimeOperatorLogEvent({
+      attrs: {
+        databasePath: runtimeConfig.databasePath,
+        manifestPath,
+        preservedDatabasePath,
+        preservedWalPath,
+        repairError,
+        repairMarker,
+      },
+      event: 'duckdb.startup.indexed-table-repair-blocked-pending-wal',
+      message: '[duckdb] blocked startup indexed-table repair while WAL evidence is still pending',
+      severity: 'ERROR',
+      terminalArgs: [
+        `database_backup=${preservedDatabasePath ?? 'none'}`,
+        `wal_backup=${preservedWalPath ?? 'none'}`,
+        `manifest=${manifestPath}`,
+      ],
+    })
+
+    throw new Error(`DuckDB startup indexed-table repair blocked for ${runtimeConfig.databasePath}: ${repairError}`)
   }
 
   let result: ReturnType<typeof globalThis.Bun.spawnSync> | null = null
@@ -4384,6 +4687,8 @@ const repairDuckdbStartupIndexedTables = async (
       JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
       JSON.stringify(repairSpecs),
       JSON.stringify(repairId),
+      JSON.stringify(duckdbStartupCriticalProtectedTableSpecs),
+      JSON.stringify(preservedDatabasePath),
     ],
   })
 
@@ -4416,14 +4721,166 @@ const repairDuckdbStartupIndexedTables = async (
       terminalArgs: [`attempt=${attempt + 1}`, `retry_ms=${retryDelayMs}`],
     })
     await sleepMs(retryDelayMs)
-    await waitForDuckdbStartupRepairFileLock(runtimeConfig)
+    if (hasDuckdbWal(runtimeConfig.databasePath)) {
+      preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+        databaseBackupPath,
+        databasePath: runtimeConfig.databasePath,
+      })
+      preservedWalPath = await copyDuckdbWalBeforeRecovery({databasePath: runtimeConfig.databasePath, walBackupPath})
+
+      const repairError =
+        `startup indexed-table repair blocked because ${runtimeConfig.databasePath}.wal appeared before repair retry; `
+        + 'preserved database/WAL evidence for operator recovery'
+
+      await writeFile(
+        manifestPath,
+        JSON.stringify(
+          {
+            checkpointSourcePath: runtimeConfig.databasePath,
+            error: getCompactDuckdbErrorMessage(error),
+            preservedDatabasePath,
+            preservedWalPath,
+            recoveredAt: new Date().toISOString(),
+            recovery: 'indexed-table-rebuild-blocked-pending-wal',
+            repairError,
+            repairMarker,
+            repairStrategies: Object.fromEntries(
+              repairSpecs.map((spec) => {
+                return [`${spec.schemaName}.${spec.tableName}`, spec.repairStrategy ?? 'copy']
+              }),
+            ),
+            repairedTables: repairSpecs.map((spec) => {
+              return `${spec.schemaName}.${spec.tableName}`
+            }),
+          },
+          null,
+          2,
+        ),
+      )
+
+      writeRuntimeOperatorLogEvent({
+        attrs: {
+          databasePath: runtimeConfig.databasePath,
+          manifestPath,
+          preservedDatabasePath,
+          preservedWalPath,
+          repairError,
+          repairMarker,
+        },
+        event: 'duckdb.startup.indexed-table-repair-blocked-pending-wal',
+        message: '[duckdb] blocked startup indexed-table repair while WAL evidence is still pending',
+        severity: 'ERROR',
+        terminalArgs: [
+          `database_backup=${preservedDatabasePath ?? 'none'}`,
+          `wal_backup=${preservedWalPath ?? 'none'}`,
+          `manifest=${manifestPath}`,
+        ],
+      })
+
+      throw new Error(`DuckDB startup indexed-table repair blocked for ${runtimeConfig.databasePath}: ${repairError}`)
+    }
+
+    try {
+      await waitForDuckdbStartupRepairFileLock(runtimeConfig)
+    } catch (lockProbeError) {
+      if (!hasDuckdbWal(runtimeConfig.databasePath) && !isDuckdbWalReplayFailure(lockProbeError)) {
+        throw lockProbeError
+      }
+
+      preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+        databaseBackupPath,
+        databasePath: runtimeConfig.databasePath,
+      })
+      preservedWalPath = await copyDuckdbWalBeforeRecovery({databasePath: runtimeConfig.databasePath, walBackupPath})
+
+      const repairError =
+        `startup indexed-table repair blocked because the lock probe hit pending WAL replay for ${runtimeConfig.databasePath}; `
+        + 'preserved database/WAL evidence for operator recovery'
+
+      await writeFile(
+        manifestPath,
+        JSON.stringify(
+          {
+            checkpointSourcePath: runtimeConfig.databasePath,
+            error: getCompactDuckdbErrorMessage(error),
+            lockProbeError: getCompactDuckdbErrorMessage(lockProbeError),
+            preservedDatabasePath,
+            preservedWalPath,
+            recoveredAt: new Date().toISOString(),
+            recovery: 'indexed-table-rebuild-blocked-lock-probe-wal-replay',
+            repairError,
+            repairMarker,
+            repairStrategies: Object.fromEntries(
+              repairSpecs.map((spec) => {
+                return [`${spec.schemaName}.${spec.tableName}`, spec.repairStrategy ?? 'copy']
+              }),
+            ),
+            repairedTables: repairSpecs.map((spec) => {
+              return `${spec.schemaName}.${spec.tableName}`
+            }),
+          },
+          null,
+          2,
+        ),
+      )
+
+      writeRuntimeOperatorLogEvent({
+        attrs: {
+          databasePath: runtimeConfig.databasePath,
+          lockProbeError: getCompactDuckdbErrorMessage(lockProbeError),
+          manifestPath,
+          preservedDatabasePath,
+          preservedWalPath,
+          repairError,
+          repairMarker,
+        },
+        event: 'duckdb.startup.indexed-table-repair-blocked-lock-probe-wal-replay',
+        message: '[duckdb] blocked startup indexed-table repair after lock probe hit WAL replay',
+        severity: 'ERROR',
+        terminalArgs: [
+          `database_backup=${preservedDatabasePath ?? 'none'}`,
+          `wal_backup=${preservedWalPath ?? 'none'}`,
+          `manifest=${manifestPath}`,
+        ],
+      })
+
+      throw new Error(`DuckDB startup indexed-table repair blocked for ${runtimeConfig.databasePath}: ${repairError}`, {
+        cause: lockProbeError,
+      })
+    }
     preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
       databaseBackupPath,
       databasePath: runtimeConfig.databasePath,
     })
+    preservedWalPath = await copyDuckdbWalBeforeRecovery({databasePath: runtimeConfig.databasePath, walBackupPath})
   }
 
   if (result === null || result.exitCode !== 0) {
+    await writeFile(
+      manifestPath,
+      JSON.stringify(
+        {
+          checkpointSourcePath: runtimeConfig.databasePath,
+          error: getCompactDuckdbErrorMessage(error),
+          preservedDatabasePath,
+          preservedWalPath,
+          recoveredAt: new Date().toISOString(),
+          recovery: 'indexed-table-rebuild-failed',
+          repairError: outputText === '' ? `exitCode=${result?.exitCode ?? 'unknown'}` : outputText,
+          repairMarker,
+          repairStrategies: Object.fromEntries(
+            repairSpecs.map((spec) => {
+              return [`${spec.schemaName}.${spec.tableName}`, spec.repairStrategy ?? 'copy']
+            }),
+          ),
+          repairedTables: repairSpecs.map((spec) => {
+            return `${spec.schemaName}.${spec.tableName}`
+          }),
+        },
+        null,
+        2,
+      ),
+    )
     throw new Error(
       `DuckDB startup indexed-table repair failed for ${runtimeConfig.databasePath}: ${
         outputText === '' ? `exitCode=${result?.exitCode ?? 'unknown'}` : outputText
@@ -4439,6 +4896,7 @@ const repairDuckdbStartupIndexedTables = async (
         checkpointSourcePath: runtimeConfig.databasePath,
         error: getCompactDuckdbErrorMessage(error),
         preservedDatabasePath,
+        preservedWalPath,
         recoveredAt: new Date().toISOString(),
         recovery: 'indexed-table-rebuild',
         postRepairCheckpointSkipped: checkpointSkipped,
@@ -4463,6 +4921,7 @@ const repairDuckdbStartupIndexedTables = async (
       error,
       manifestPath,
       preservedDatabasePath,
+      preservedWalPath,
       repairMarker,
       repairedTables: repairSpecs.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
