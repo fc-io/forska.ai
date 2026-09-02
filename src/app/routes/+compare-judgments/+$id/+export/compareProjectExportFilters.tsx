@@ -84,7 +84,7 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
         </label>
         <Show when={props.showArticleCategoryFilter}>
           <label class="flex flex-col gap-2 text-sm text-gray-700">
-            <span class="font-medium">Article category</span>
+            <span class="font-medium">Language</span>
             <select
               value={props.articleCategoryFilter}
               class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
