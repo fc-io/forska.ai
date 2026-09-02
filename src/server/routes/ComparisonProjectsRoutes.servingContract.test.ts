@@ -22,11 +22,20 @@ const getRouteBody = (routeAnchor: string) => {
   const start = routeSource.indexOf(routeAnchor)
   const nextRoute = routeSource.indexOf('\n  .', start + 1)
 
-  if (start === -1 || nextRoute === -1) {
+  if (start === -1) {
     throw new Error(`Missing route ${routeAnchor}`)
   }
 
-  return routeSource.slice(start, nextRoute)
+  return routeSource.slice(start, nextRoute === -1 ? undefined : nextRoute)
+}
+
+const expectInOrder = (source: string, before: string, after: string) => {
+  const beforeIndex = source.indexOf(before)
+  const afterIndex = source.indexOf(after)
+
+  expect(beforeIndex).toBeGreaterThanOrEqual(0)
+  expect(afterIndex).toBeGreaterThanOrEqual(0)
+  expect(beforeIndex).toBeLessThan(afterIndex)
 }
 
 test('comparison product reads are admitted through bounded serving helpers', () => {
@@ -88,21 +97,36 @@ test('comparison source writes stay owner routed and queue serving rebuilds', ()
   const purgeHelperBody = getFunctionBody('purgeArchivedComparisonProjectTx')
   const purgeBody = getRouteBody(".delete('/api/comparison-projects/:id/purge'")
   const deleteBody = getRouteBody(".delete('/api/comparison-projects/:id'")
+  const unarchiveBody = getRouteBody(".post('/api/comparison-projects/:id/unarchive'")
 
   expect(createBody).toContain('appDatabaseService.transaction')
   expect(createBody).toContain('createComparisonProjectRecord')
-  expect(createBody).toContain('markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)')
+  expectInOrder(
+    createBody,
+    'checkpointComparisonProjectMutation()',
+    'markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)',
+  )
   expect(createFromProjectBody).toContain('appDatabaseService.transaction')
   expect(createFromProjectBody).toContain('createComparisonProjectRecord')
-  expect(createFromProjectBody).toContain(
+  expectInOrder(
+    createFromProjectBody,
+    'checkpointComparisonProjectMutation()',
     'markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)',
   )
   expect(patchBody).toContain('updateComparisonProjectWithRelinkedLinks')
-  expect(patchBody).toContain('markComparisonProjectServingStaleAndQueueRebuild(params.id)')
+  expectInOrder(
+    patchBody,
+    'checkpointComparisonProjectMutation()',
+    'markComparisonProjectServingStaleAndQueueRebuild(params.id)',
+  )
   expect(purgeBody).toContain('appDatabaseService.transaction')
   expect(purgeBody).toContain('purgeArchivedComparisonProjectTx')
+  expect(purgeBody).toContain('checkpointComparisonProjectMutation()')
   expect(purgeHelperBody).toContain('cleanupComparisonProjectServing')
   expect(purgeHelperBody).toContain('DELETE FROM ${comparisonProjectTable}')
   expect(deleteBody).toContain('appDatabaseService.transaction')
+  expect(deleteBody).toContain('checkpointComparisonProjectMutation()')
   expect(deleteBody).not.toContain('cleanupComparisonProjectServing')
+  expect(unarchiveBody).toContain('appDatabaseService.transaction')
+  expect(unarchiveBody).toContain('checkpointComparisonProjectMutation()')
 })

@@ -40,6 +40,7 @@ import {
 } from '../services/comparisonProjectServingRebuildService.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {csvUtf8Bom, getCsvDownloadHeaders} from '../utils/csvResponse.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {
   deriveStrictSummaryAnswer,
@@ -519,6 +520,10 @@ const queueUnavailableComparisonProjectServingRebuild = (
 const markComparisonProjectServingStaleAndQueueRebuild = async (comparisonProjectId: string) => {
   await comparisonProjectServingRebuildService.markComparisonProjectServingStale(comparisonProjectId)
   void queueComparisonProjectServingRebuild(comparisonProjectId)
+}
+
+const checkpointComparisonProjectMutation = async () => {
+  await appDatabaseService.maintenance('checkpoint', getMaintenanceDuckdbWorkloadContext('comparisonProjectMutation'))
 }
 
 const getComparisonProjectServingGenerationTxDependencies = (tx: AppTx) => {
@@ -4816,6 +4821,7 @@ export const comparisonProjectsRoutes = new Elysia()
         conflictResolutionImportSummary: ComparisonProjectConflictResolutionImportSummary | null
       }
       const createdComparisonProject = createResult.createdComparisonProject
+      await checkpointComparisonProjectMutation()
       await markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)
 
       return createResult.conflictResolutionImportSummary
@@ -4992,6 +4998,7 @@ export const comparisonProjectsRoutes = new Elysia()
       }
 
       const data = await setComparisonProjectConflictResolution({articleId: body.articleId, value: body.value, scope})
+      await checkpointComparisonProjectMutation()
 
       return {data}
     },
@@ -5009,6 +5016,7 @@ export const comparisonProjectsRoutes = new Elysia()
       }
 
       const data = await resetComparisonProjectConflictResolution({articleId: body.articleId, scope})
+      await checkpointComparisonProjectMutation()
 
       return {data}
     },
@@ -5059,6 +5067,7 @@ export const comparisonProjectsRoutes = new Elysia()
       }
 
       const data = await commitComparisonProjectConflictResolutionImport(scope, context.body)
+      await checkpointComparisonProjectMutation()
 
       return {data}
     },
@@ -5114,6 +5123,7 @@ export const comparisonProjectsRoutes = new Elysia()
       const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, body)
       })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
+      await checkpointComparisonProjectMutation()
       await markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)
 
       return {data: createdComparisonProject}
@@ -5215,6 +5225,7 @@ export const comparisonProjectsRoutes = new Elysia()
         throw new Error('Comparison project not found')
       }
 
+      await checkpointComparisonProjectMutation()
       await markComparisonProjectServingStaleAndQueueRebuild(params.id)
 
       return {data: getComparisonProjectRecordValue(updatedComparisonProjectRow)}
@@ -5249,6 +5260,8 @@ export const comparisonProjectsRoutes = new Elysia()
       return {success: false, error: 'Comparison project not found'}
     }
 
+    await checkpointComparisonProjectMutation()
+
     return {success: true}
   })
   .delete('/api/comparison-projects/:id', async (context) => {
@@ -5265,6 +5278,8 @@ export const comparisonProjectsRoutes = new Elysia()
       return {success: false, error: 'Comparison project not found'}
     }
 
+    await checkpointComparisonProjectMutation()
+
     return {success: true}
   })
   .post('/api/comparison-projects/:id/unarchive', async (context) => {
@@ -5280,6 +5295,8 @@ export const comparisonProjectsRoutes = new Elysia()
       set.status = 404
       return {success: false, error: 'Comparison project not found'}
     }
+
+    await checkpointComparisonProjectMutation()
 
     return {success: true}
   })
