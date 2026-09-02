@@ -41,7 +41,7 @@ describe('CompareProjectExportFilters', () => {
     const {container, dispose} = renderFilters(false)
 
     try {
-      expect(container.textContent).not.toContain('Article category')
+      expect(container.textContent).not.toContain('Language')
       expect(container.textContent).not.toContain('Chinese articles')
     } finally {
       dispose()
@@ -52,8 +52,13 @@ describe('CompareProjectExportFilters', () => {
     const {container, dispose} = renderFilters(true)
 
     try {
-      expect(container.textContent).toContain('Article category')
+      expect(container.textContent).toContain('Language')
       expect(container.textContent).toContain('Chinese articles')
+      expect(
+        Array.from(container.querySelectorAll('select')[2]?.options ?? []).map((option) => {
+          return option.textContent
+        }),
+      ).toEqual(['All', 'Chinese articles', 'Non-Chinese articles'])
     } finally {
       dispose()
     }

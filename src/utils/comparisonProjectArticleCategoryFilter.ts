@@ -23,7 +23,7 @@ export const getComparisonProjectArticleCategoryFilterLabel = (
     ? 'Chinese articles'
     : articleCategoryFilter === 'non_chinese'
       ? 'Non-Chinese articles'
-      : 'All article categories'
+      : 'All'
 }
 
 export type ComparisonProjectArticleCategoryBreakdown = {articleCount: number; category: 'chinese' | 'non_chinese'}

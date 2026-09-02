@@ -749,7 +749,7 @@ const CompareProjectJudgmentsPage = () => {
                     </Show>
                     <Show when={hasChineseArticles()}>
                       <label class="flex items-center gap-2 text-sm text-gray-600">
-                        <span>Article category</span>
+                        <span>Language</span>
                         <select
                           value={articleCategoryFilter()}
                           class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
