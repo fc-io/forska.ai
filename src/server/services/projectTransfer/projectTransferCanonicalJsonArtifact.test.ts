@@ -1,5 +1,5 @@
 import {mkdtempSync, rmSync} from 'node:fs'
-import {readdir, readFile} from 'node:fs/promises'
+import {open, readdir, readFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -64,6 +64,28 @@ test('publishes a complete canonical artifact with an atomic rename', async () =
 
   expect(await readFile(targetPath, 'utf8')).toBe(getProjectTransferCanonicalJson(value))
   expect(await readdir(join(runtimeRoot, 'success'))).toEqual(['artifact.json'])
+})
+
+test('publishes while a reader briefly holds the prior artifact open', async () => {
+  const targetDirectory = join(runtimeRoot, 'reader-lock')
+  const targetPath = join(targetDirectory, 'artifact.json')
+  const value = {status: 'updated'}
+  await writeProjectTransferCanonicalJsonArtifact({filePath: targetPath, value: {status: 'previous'}})
+  const priorArtifact = await open(targetPath, 'r')
+  const readerReleased = new Promise<void>((resolve, reject) => {
+    setTimeout(() => {
+      void priorArtifact.close().then(resolve, reject)
+    }, 50)
+  })
+
+  try {
+    await writeProjectTransferCanonicalJsonArtifact({filePath: targetPath, value})
+  } finally {
+    await readerReleased
+  }
+
+  expect(await readFile(targetPath, 'utf8')).toBe(getProjectTransferCanonicalJson(value))
+  expect(await readdir(targetDirectory)).toEqual(['artifact.json'])
 })
 
 test('preserves the prior artifact and removes the temporary file when serialization fails', async () => {

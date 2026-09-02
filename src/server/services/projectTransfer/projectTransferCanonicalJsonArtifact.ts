@@ -6,6 +6,8 @@ import {Readable} from 'node:stream'
 import {pipeline} from 'node:stream/promises'
 
 const canonicalJsonChunkCodeUnitLimit = 16 * 1024
+const canonicalJsonPublishRetryCount = 5
+const canonicalJsonPublishRetryDelayMs = 25
 const textEncoder = new TextEncoder()
 
 export const projectTransferCanonicalJsonChunkMaxBytes = canonicalJsonChunkCodeUnitLimit * 3
@@ -188,6 +190,40 @@ const removeTemporaryArtifact = async (temporaryPath: string, error: unknown): P
   throw error
 }
 
+const isTransientArtifactPublishError = (error: unknown) => {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && ['EACCES', 'EBUSY', 'EPERM'].includes(String(error.code))
+  )
+}
+
+const waitForArtifactPublishRetry = (attempt: number) => {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, canonicalJsonPublishRetryDelayMs * (attempt + 1))
+  })
+}
+
+const publishTemporaryArtifact = async ({
+  attempt,
+  filePath,
+  temporaryPath,
+}: {
+  attempt: number
+  filePath: string
+  temporaryPath: string
+}): Promise<void> => {
+  return rename(temporaryPath, filePath).catch(async (error: unknown) => {
+    if (!isTransientArtifactPublishError(error) || attempt >= canonicalJsonPublishRetryCount) {
+      throw error
+    }
+
+    await waitForArtifactPublishRetry(attempt)
+    return publishTemporaryArtifact({attempt: attempt + 1, filePath, temporaryPath})
+  })
+}
+
 export const writeProjectTransferCanonicalJsonArtifact = async ({
   filePath,
   value,
@@ -202,7 +238,7 @@ export const writeProjectTransferCanonicalJsonArtifact = async ({
 
   await pipeline(source, destination)
     .then(() => {
-      return rename(temporaryPath, filePath)
+      return publishTemporaryArtifact({attempt: 0, filePath, temporaryPath})
     })
     .catch((error: unknown) => {
       return removeTemporaryArtifact(temporaryPath, error)
