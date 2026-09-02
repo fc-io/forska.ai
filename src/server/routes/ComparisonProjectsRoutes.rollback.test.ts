@@ -143,6 +143,7 @@ type MockDatabaseState = {
     url?: string | null
   }>
   extraLlmRows: MockLlmJudgmentRow[]
+  failMaintenanceCheckpoint?: boolean
   failPromptInsert: boolean
   failServingCleanup: boolean
   failSelectableModelValidation?: boolean
@@ -151,6 +152,7 @@ type MockDatabaseState = {
   lastConflictResolutionInsertStatement: string | null
   lastPromptInsertStatement: string | null
   lastUpdateStatement: string | null
+  maintenanceCommands: string[]
   missingServingStats: boolean
   promptLinks: Array<{
     criteriaDisposition?: string | null
@@ -2127,6 +2129,14 @@ const registerModuleMocks = () => {
               state.sourceProjectLinks.splice(0, state.sourceProjectLinks.length)
             }
           },
+          maintenance: async (command: string) => {
+            const state = getMockDatabaseState()
+            state.maintenanceCommands.push(command)
+
+            if (state.failMaintenanceCheckpoint) {
+              throw new Error('comparison project checkpoint failed')
+            }
+          },
           transaction: async <T>(
             work: (runner: {
               queryJson: <R>(statement: string) => Promise<R[]>
@@ -2369,6 +2379,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     conflictResolutionRows: [],
     conflictResolutionImportSourceRows: [],
     extraLlmRows: [],
+    failMaintenanceCheckpoint: false,
     failPromptInsert: true,
     failServingCleanup: false,
     failSelectableModelValidation: false,
@@ -2377,6 +2388,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     lastConflictResolutionInsertStatement: null,
     lastPromptInsertStatement: null,
     lastUpdateStatement: null,
+    maintenanceCommands: [],
     missingServingStats: false,
     promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
     queryStatements: [],
@@ -2459,6 +2471,7 @@ test('comparison project model relink failure keeps original links intact', asyn
   expect(bodyText).toContain('comparison project prompt insert failed')
   expect(state.transactionCalls).toBe(1)
   expect(state.rootRunStatements).toEqual([])
+  expect(state.maintenanceCommands).toEqual([])
   expect(state.comparisonProject.modelIds).toEqual(['model-1'])
   expect(state.routeLinks).toEqual([{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}])
   expect(state.promptLinks).toEqual([{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}])
@@ -2494,6 +2507,7 @@ test('comparison project model relink avoids detached reference statements', asy
   expect(bodyText).toContain('"modelIds":["model-2"]')
   expect(state.transactionCalls).toBe(1)
   expect(state.rootRunStatements).toEqual([])
+  expect(state.maintenanceCommands).toEqual(['checkpoint'])
   expect(state.comparisonProject.modelIds).toEqual(['model-2'])
   expect(state.routeLinks).toEqual([{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}])
   expect(
@@ -5061,6 +5075,7 @@ test('comparison project create and update mark serving stale and queue rebuilds
   expect(createResponse.status).toBe(200)
   expect(createFromProjectResponse.status).toBe(200)
   expect(updateResponse.status).toBe(200)
+  expect(state.maintenanceCommands).toEqual(['checkpoint', 'checkpoint', 'checkpoint'])
   expect(state.staleServingIds).toEqual([
     'comparison-project-created',
     'comparison-project-created',
@@ -5071,6 +5086,44 @@ test('comparison project create and update mark serving stale and queue rebuilds
     'comparison-project-created',
     'comparison-project-1',
   ])
+})
+
+test('comparison project create reports checkpoint failures before queueing serving rebuilds', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    failMaintenanceCheckpoint: true,
+    failPromptInsert: false,
+    promptLinks: [],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects', {
+      body: JSON.stringify({
+        compareWithHumans: false,
+        description: 'Manual comparison',
+        modelIds: ['model-1'],
+        name: 'Manual comparison',
+        promptSelections: [{promptId: 'prompt-1', order: 0}],
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('comparison project checkpoint failed')
+  expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
+  expect(state.maintenanceCommands).toEqual(['checkpoint'])
+  expect(state.staleServingIds).toEqual([])
+  expect(state.queuedServingRebuildIds).toEqual([])
 })
 
 test('comparison project archive marks archived without cleaning serving materialization state', async () => {
@@ -5090,6 +5143,7 @@ test('comparison project archive marks archived without cleaning serving materia
 
   expect(response.status).toBe(200)
   expect(body.success).toBe(true)
+  expect(state.maintenanceCommands).toEqual(['checkpoint'])
   expect(state.cleanedServingProjectIds).toEqual([])
   expect(state.lastUpdateStatement).toContain('archived = TRUE')
   expect(state.comparisonProject.archived).toBe(true)
