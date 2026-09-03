@@ -10,6 +10,7 @@ import {
 test('compare judgments URL state preserves canonical filter params', () => {
   const state = getInitialCompareProjectJudgmentsUrlState({
     articleCategoryFilter: 'chinese',
+    conflictResolutionFilter: 'maybe',
     differenceFilter: 'human-vs-llm-true-conflict',
     limit: '100',
     page: '3',
@@ -18,12 +19,14 @@ test('compare judgments URL state preserves canonical filter params', () => {
 
   expect(state).toEqual({
     articleCategoryFilter: 'chinese',
+    conflictResolutionFilter: 'maybe',
     differenceFilter: 'human-vs-llm-true-conflict',
     pageLimit: 100,
     rowFilter: 'fully-answered',
   })
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({
     articleCategoryFilter: 'chinese',
+    conflictResolutionFilter: 'maybe',
     differenceFilter: 'human-vs-llm-true-conflict',
     limit: '100',
     rowFilter: 'fully-answered',
@@ -35,6 +38,13 @@ test('compare judgments URL state defaults invalid article category filters to a
 
   expect(state.articleCategoryFilter).toBe('all')
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({})
+})
+
+test('compare judgments URL state preserves conflict-resolution filters', () => {
+  const state = getInitialCompareProjectJudgmentsUrlState({conflictResolutionFilter: 'not-set'})
+
+  expect(state.conflictResolutionFilter).toBe('not-set')
+  expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({conflictResolutionFilter: 'not-set'})
 })
 
 test('compare judgments URL state normalizes legacy fully answered row filter', () => {

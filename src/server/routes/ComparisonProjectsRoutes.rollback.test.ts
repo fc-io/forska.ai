@@ -765,12 +765,17 @@ const getMockSummaryServingCells = (state: MockDatabaseState): Record<string, Re
       return {...cells, [column.id]: column.id.includes('model-2') ? 'yes' : 'no'}
     }, {})
   }
-  const article2Cells = state.extraLlmRows.length > 0 ? getLlmSummaryCells() : {}
+  const extraArticleCells = Array.from(
+    new Set(
+      state.extraLlmRows.map((row) => {
+        return row.articleId
+      }),
+    ),
+  ).reduce<Record<string, Record<string, string | null>>>((articleMap, articleId) => {
+    return articleId === 'article-1' ? articleMap : {...articleMap, [articleId]: getLlmSummaryCells()}
+  }, {})
 
-  return {
-    'article-1': {...getLlmSummaryCells(), 'human:summary': 'maybe'},
-    ...(Object.keys(article2Cells).length > 0 ? {'article-2': article2Cells} : {}),
-  }
+  return {'article-1': {...getLlmSummaryCells(), 'human:summary': 'maybe'}, ...extraArticleCells}
 }
 
 const getMockServingCellsByArticle = (state: MockDatabaseState): Record<string, Record<string, string | null>> => {
@@ -818,6 +823,7 @@ const getMockServingRows = (
   state: MockDatabaseState,
   rowFilter: ComparisonProjectRowFilter = 'all',
   differenceFilter: ComparisonProjectDifferenceFilter = 'all',
+  conflictResolutionFilter = 'all',
 ) => {
   const columns = getMockComparisonProjectColumns(state)
   const isSummaryMode =
@@ -850,9 +856,21 @@ const getMockServingRows = (
     })
 
   return rows.filter((row) => {
+    const resolutionRow = state.conflictResolutionRows.find((candidate) => {
+      return (
+        candidate.articleId === row.articleId
+        && (candidate.comparisonProjectId ?? 'comparison-project-1') === state.comparisonProject.id
+      )
+    })
+    const passesConflictResolutionFilter =
+      conflictResolutionFilter === 'all'
+      || (conflictResolutionFilter === 'not-set' && row.hasConflict && !resolutionRow)
+      || (row.hasConflict && resolutionRow?.answerValue === conflictResolutionFilter)
+
     return (
       getMockServingRowFilterMatch(rowFilter, row.cells, columns, isSummaryMode)
       && getComparisonProjectHasDifferenceFilterMatch(row.cells, columns, differenceFilter)
+      && passesConflictResolutionFilter
     )
   })
 }
@@ -1022,6 +1040,14 @@ const getSqlFilterValue = <T extends string>(params: {
   )
 }
 
+const getSqlConflictResolutionFilterValue = (statement: string) => {
+  if (statement.includes('conflict_resolution.article_id IS NULL')) {
+    return 'not-set'
+  }
+
+  return statement.match(/conflict_resolution\.answer_value = '([^']+)'/)?.[1] ?? 'all'
+}
+
 const getSqlLimitValue = (statement: string) => {
   const limitMatch = statement.match(/LIMIT\s+(\d+)/)
   const limit = Number.parseInt(limitMatch?.[1] ?? '', 10)
@@ -1053,8 +1079,9 @@ const getMockServingArticlePageRows = (statement: string, state: MockDatabaseSta
     statement,
     values: differenceFilters,
   })
+  const conflictResolutionFilter = getSqlConflictResolutionFilterValue(statement)
   const cursorArticleId = getSqlArticleCursorArticleId(statement)
-  const rows = getMockServingRows(state, rowFilter, differenceFilter)
+  const rows = getMockServingRows(state, rowFilter, differenceFilter, conflictResolutionFilter)
   const cursorIndex = rows.findIndex((row) => {
     return row.articleId === cursorArticleId
   })
@@ -1554,6 +1581,34 @@ const queryJson = async (
     })
 
     return [{totalCount: getMockServingRows(mockState, rowFilter, differenceFilter).length}]
+  }
+
+  if (
+    statement.includes('SELECT COUNT(*) AS totalCount')
+    && statement.includes('FROM mart.comparison_article_serving article')
+  ) {
+    const mockState = getMockDatabaseState()
+    const generation = mockState.servingStatus.activeGeneration
+
+    if (generation === null) {
+      return []
+    }
+
+    const rowFilter = getSqlFilterValue({
+      column: 'row_filter',
+      fallback: 'multiple-answers',
+      statement,
+      values: comparisonProjectRowFilters,
+    })
+    const differenceFilter = getSqlFilterValue({
+      column: 'difference_filter',
+      fallback: 'all',
+      statement,
+      values: differenceFilters,
+    })
+    const conflictResolutionFilter = getSqlConflictResolutionFilterValue(statement)
+
+    return [{totalCount: getMockServingRows(mockState, rowFilter, differenceFilter, conflictResolutionFilter).length}]
   }
 
   if (statement.includes('FROM mart.comparison_filter_member')) {
@@ -6311,6 +6366,176 @@ test('summary comparison conflict resolution API can change maybe to yes', async
   expect(insertStatement).toContain("'yes'")
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
+})
+
+test('summary comparison judgments count and export support conflict-resolution filters', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    articleRows: [
+      {
+        articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'),
+        articleId: 'article-1',
+        articleSummary: 'Article 1 summary',
+        articleTitle: 'Article 1',
+      },
+      {
+        articleCreatedAt: new Date('2026-03-29T00:00:00.000Z'),
+        articleId: 'article-2',
+        articleSummary: 'Article 2 summary',
+        articleTitle: 'Article 2',
+      },
+      {
+        articleCreatedAt: new Date('2026-03-28T00:00:00.000Z'),
+        articleId: 'article-3',
+        articleSummary: 'Article 3 summary',
+        articleTitle: 'Article 3',
+      },
+      {
+        articleCreatedAt: new Date('2026-03-27T00:00:00.000Z'),
+        articleId: 'article-4',
+        articleSummary: 'Article 4 summary',
+        articleTitle: 'Article 4',
+      },
+    ],
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {answerValue: 'yes', articleId: 'article-1', promptId: null},
+      {answerValue: 'no', articleId: 'article-2', promptId: null},
+      {answerValue: 'maybe', articleId: 'article-3', promptId: null},
+    ],
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-3', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-4', modelId: 'model-1', promptId: 'prompt-1'}),
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        id: 'comparison-project-prompt-2',
+        order: 1,
+        promptId: 'prompt-2',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const filterCases = [
+    {conflictResolutionFilter: 'all', expectedTitles: ['Article 1', 'Article 2', 'Article 3', 'Article 4']},
+    {conflictResolutionFilter: 'not-set', expectedTitles: ['Article 4']},
+    {conflictResolutionFilter: 'yes', expectedTitles: ['Article 1']},
+    {conflictResolutionFilter: 'no', expectedTitles: ['Article 2']},
+    {conflictResolutionFilter: 'maybe', expectedTitles: ['Article 3']},
+    {conflictResolutionFilter: 'unsupported', expectedTitles: ['Article 1', 'Article 2', 'Article 3', 'Article 4']},
+  ]
+  const results = await filterCases.reduce<
+    Promise<Array<{count: number; exportTitles: string[]; filter: string; judgmentTitles: string[]}>>
+  >(async (promise, filterCase) => {
+    const previousResults = await promise
+    const body = {
+      conflictResolutionFilter: filterCase.conflictResolutionFilter,
+      differenceFilter: 'all',
+      rowFilter: 'all',
+    }
+    const countResponse = await postComparisonProjectJudgmentsCount(app, {...body, limit: '2'})
+    const countBody = (await countResponse.json()) as {data: {totalCount: number; totalPages: number}}
+    const titles = await getComparisonProjectExportAndJudgmentTitles(app, body)
+
+    expect(countResponse.status).toBe(200)
+    expect(countBody.data.totalPages).toBe(Math.ceil(filterCase.expectedTitles.length / 2))
+
+    return [
+      ...previousResults,
+      {
+        count: countBody.data.totalCount,
+        exportTitles: titles.exportTitles,
+        filter: filterCase.conflictResolutionFilter,
+        judgmentTitles: titles.judgmentTitles,
+      },
+    ]
+  }, Promise.resolve([]))
+  const state = getMockDatabaseState()
+
+  expect(results).toEqual(
+    filterCases.map((filterCase) => {
+      return {
+        count: filterCase.expectedTitles.length,
+        exportTitles: filterCase.expectedTitles,
+        filter: filterCase.conflictResolutionFilter,
+        judgmentTitles: filterCase.expectedTitles,
+      }
+    }),
+  )
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+        && statement.includes('conflict_resolution.article_id IS NULL')
+      )
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+        && statement.includes("conflict_resolution.answer_value = 'maybe'")
+      )
+    }),
+  ).toBe(true)
+})
+
+test('conflict-resolution filter is ignored outside enabled summary comparison projects', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    conflictResolutionRows: [{answerValue: null, articleId: 'article-1', promptId: 'prompt-2'}],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const titles = await getComparisonProjectExportAndJudgmentTitles(app, {
+    conflictResolutionFilter: 'not-set',
+    differenceFilter: 'all',
+    rowFilter: 'all',
+  })
+  const state = getMockDatabaseState()
+
+  expect(titles).toEqual({exportTitles: ['Article 1'], judgmentTitles: ['Article 1']})
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+    }),
+  ).toBe(false)
 })
 
 test('comparison export filters match judgments endpoint for every row and difference filter', async () => {

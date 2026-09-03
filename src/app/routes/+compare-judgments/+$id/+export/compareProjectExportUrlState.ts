@@ -1,4 +1,5 @@
 import type {ComparisonProjectArticleCategoryFilter} from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
+import type {ComparisonProjectConflictResolutionFilter} from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import type {ComparisonProjectDifferenceFilter} from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
 import type {ComparisonProjectRowFilter} from '../../../../../utils/comparisonProjectRowFilter.ts'
 import {
@@ -9,6 +10,7 @@ import {
 
 export type CompareProjectExportRequestBody = {
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter
   differenceFilter: ComparisonProjectDifferenceFilter
   rowFilter: ComparisonProjectRowFilter
 }
@@ -28,6 +30,7 @@ export const getCompareProjectExportRequestBody = (
 ): CompareProjectExportRequestBody => {
   return {
     articleCategoryFilter: state.articleCategoryFilter,
+    conflictResolutionFilter: state.conflictResolutionFilter,
     differenceFilter: state.differenceFilter,
     rowFilter: state.rowFilter,
   }

@@ -12,6 +12,14 @@ const renderFilters = (showArticleCategoryFilter: boolean) => {
     return (
       <CompareProjectExportFilters
         articleCategoryFilter="all"
+        conflictResolutionFilter="all"
+        conflictResolutionFilterOptions={[
+          {label: 'All', value: 'all'},
+          {label: 'Not set', value: 'not-set'},
+          {label: 'yes', value: 'yes'},
+          {label: 'no', value: 'no'},
+          {label: 'maybe', value: 'maybe'},
+        ]}
         differenceFilter="all"
         differenceFilterDisabled={false}
         differenceFilterOptions={[{label: 'All rows', value: 'all'}]}
@@ -19,7 +27,9 @@ const renderFilters = (showArticleCategoryFilter: boolean) => {
         isExportingPdf={false}
         isSummaryMode={false}
         showArticleCategoryFilter={showArticleCategoryFilter}
+        showConflictResolutionFilter={true}
         onArticleCategoryFilterChange={vi.fn()}
+        onConflictResolutionFilterChange={vi.fn()}
         onDifferenceFilterChange={vi.fn()}
         onExportCsv={vi.fn()}
         onExportPdf={vi.fn()}
@@ -55,10 +65,29 @@ describe('CompareProjectExportFilters', () => {
       expect(container.textContent).toContain('Language')
       expect(container.textContent).toContain('Chinese articles')
       expect(
-        Array.from(container.querySelectorAll('select')[2]?.options ?? []).map((option) => {
+        Array.from(container.querySelectorAll('select')[3]?.options ?? []).map((option) => {
           return option.textContent
         }),
       ).toEqual(['All', 'Chinese articles', 'Non-Chinese articles'])
+    } finally {
+      dispose()
+    }
+  })
+
+  test('shows conflict-resolution selector between difference and language filters', () => {
+    const {container, dispose} = renderFilters(true)
+
+    try {
+      const labels = Array.from(container.querySelectorAll('label')).map((label) => {
+        return label.querySelector('span')?.textContent
+      })
+
+      expect(labels.slice(0, 4)).toEqual(['Row filter', 'Difference filter', 'Conflict resolutions', 'Language'])
+      expect(
+        Array.from(container.querySelectorAll('select')[2]?.options ?? []).map((option) => {
+          return option.textContent
+        }),
+      ).toEqual(['All', 'Not set', 'yes', 'no', 'maybe'])
     } finally {
       dispose()
     }

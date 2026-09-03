@@ -26,6 +26,12 @@ import {
 } from '../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
+  type ComparisonProjectConflictResolutionFilter,
+  getComparisonProjectConflictResolutionFilterOptions,
+  getComparisonProjectSummaryConflictResolutionOptions,
+  getNormalizedComparisonProjectConflictResolutionFilter,
+} from '../../../../utils/comparisonProjectConflictResolutionFilter.ts'
+import {
   type ComparisonProjectDifferenceFilter,
   getAvailableComparisonProjectDifferenceFilters,
   getComparisonProjectDifferenceFilterLabel,
@@ -90,28 +96,6 @@ const getConflictResolutionPromptLabel = (prompt: {
     .join(' · ')
 
   return criteriaLabel ? `${prompt.promptLabel} (${criteriaLabel})` : prompt.promptLabel
-}
-
-const getPromptTypeOptions = (type: string | null) => {
-  const matches = type?.match(/['"]([^'"]+)['"]/g) ?? []
-
-  return matches.map((match) => {
-    return match.slice(1, -1)
-  })
-}
-
-const getUniqueConflictResolutionOptions = (options: Array<{label: string; value: string}>) => {
-  return Array.from(
-    options
-      .reduce<Map<string, {label: string; value: string}>>((optionMap, option) => {
-        if (!optionMap.has(option.value)) {
-          optionMap.set(option.value, option)
-        }
-
-        return optionMap
-      }, new Map<string, {label: string; value: string}>())
-      .values(),
-  )
 }
 
 const comparisonProjectServingStatusBanners: Partial<
@@ -250,6 +234,8 @@ const CompareProjectJudgmentsPage = () => {
   const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
     initialUrlState.differenceFilter,
   )
+  const [conflictResolutionFilter, setConflictResolutionFilter] =
+    createSignal<ComparisonProjectConflictResolutionFilter>(initialUrlState.conflictResolutionFilter)
   const [shouldRefreshCommittedImport, setShouldRefreshCommittedImport] = createSignal(
     getHasConflictResolutionImportCommittedSearchParam(search() as Record<string, unknown>),
   )
@@ -312,6 +298,7 @@ const CompareProjectJudgmentsPage = () => {
       rowFilter(),
       differenceFilter(),
       articleCategoryFilter(),
+      conflictResolutionFilter(),
     ] as const
   }
   const getCurrentJudgmentsCountQueryKey = () => {
@@ -322,6 +309,7 @@ const CompareProjectJudgmentsPage = () => {
       rowFilter(),
       differenceFilter(),
       articleCategoryFilter(),
+      conflictResolutionFilter(),
     ] as const
   }
   const canFetchJudgmentsPage = createMemo(() => {
@@ -342,6 +330,7 @@ const CompareProjectJudgmentsPage = () => {
           rowFilter(),
           differenceFilter(),
           articleCategoryFilter(),
+          conflictResolutionFilter(),
           typeof pageParam === 'string' ? pageParam : null,
         )
       },
@@ -364,6 +353,7 @@ const CompareProjectJudgmentsPage = () => {
           rowFilter(),
           differenceFilter(),
           articleCategoryFilter(),
+          conflictResolutionFilter(),
         )
       },
       enabled: canFetchJudgmentsPage() && judgmentsPageQuery.isSuccess,
@@ -400,13 +390,7 @@ const CompareProjectJudgmentsPage = () => {
     const comparisonProject = comparisonProjectQuery.data
 
     return comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary'
-      ? getUniqueConflictResolutionOptions(
-          comparisonProject.prompts.flatMap((prompt) => {
-            return getPromptTypeOptions(prompt.type).map((option) => {
-              return {label: option, value: option}
-            })
-          }),
-        )
+      ? getComparisonProjectSummaryConflictResolutionOptions(comparisonProject.prompts)
       : (comparisonProject?.prompts ?? []).map((prompt) => {
           return {label: getConflictResolutionPromptLabel(prompt), value: prompt.id}
         })
@@ -415,6 +399,14 @@ const CompareProjectJudgmentsPage = () => {
     const comparisonProject = comparisonProjectQuery.data
 
     return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
+  })
+  const showConflictResolutionFilter = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return Boolean(comparisonProject?.allowConflictResolution && isSummaryMode())
+  })
+  const conflictResolutionFilterOptions = createMemo(() => {
+    return getComparisonProjectConflictResolutionFilterOptions(conflictResolutionOptions())
   })
   const differenceFilterOptions = createMemo(() => {
     return getSelectableComparisonProjectDifferenceFilters(availableDifferenceFilters(), differenceFilter()).map(
@@ -435,23 +427,27 @@ const CompareProjectJudgmentsPage = () => {
       pageLimit: pageLimit(),
       rowFilter: rowFilter(),
       differenceFilter: differenceFilter(),
+      conflictResolutionFilter: showConflictResolutionFilter() ? conflictResolutionFilter() : 'all',
       articleCategoryFilter: articleCategoryFilter(),
     })
   })
 
   createEffect(
-    on([pageLimit, rowFilter, differenceFilter, articleCategoryFilter, searchInitialized], () => {
-      if (!searchInitialized()) {
-        return
-      }
+    on(
+      [pageLimit, rowFilter, differenceFilter, articleCategoryFilter, conflictResolutionFilter, searchInitialized],
+      () => {
+        if (!searchInitialized()) {
+          return
+        }
 
-      void navigate({
-        to: '/compare-judgments/$id/' as '/',
-        params: {id: comparisonProjectId()} as never,
-        search: compareSearchParams() as never,
-        replace: true,
-      })
-    }),
+        void navigate({
+          to: '/compare-judgments/$id/' as '/',
+          params: {id: comparisonProjectId()} as never,
+          search: compareSearchParams() as never,
+          replace: true,
+        })
+      },
+    ),
   )
 
   const serverFilteredRows = createMemo(() => {
@@ -462,7 +458,12 @@ const CompareProjectJudgmentsPage = () => {
     )
   })
   const hasRowFilters = createMemo(() => {
-    return rowFilter() !== 'all' || differenceFilter() !== 'all' || articleCategoryFilter() !== 'all'
+    return (
+      rowFilter() !== 'all'
+      || differenceFilter() !== 'all'
+      || articleCategoryFilter() !== 'all'
+      || (showConflictResolutionFilter() && conflictResolutionFilter() !== 'all')
+    )
   })
   const updateCurrentJudgmentsPageConflictResolution = (
     articleId: string,
@@ -739,6 +740,30 @@ const CompareProjectJudgmentsPage = () => {
                             {(option) => {
                               return (
                                 <option selected={option.value === differenceFilter()} value={option.value}>
+                                  {option.label}
+                                </option>
+                              )
+                            }}
+                          </For>
+                        </select>
+                      </label>
+                    </Show>
+                    <Show when={showConflictResolutionFilter()}>
+                      <label class="flex items-center gap-2 text-sm text-gray-600">
+                        <span>Conflict resolutions</span>
+                        <select
+                          value={conflictResolutionFilter()}
+                          class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
+                          onChange={(event) => {
+                            setConflictResolutionFilter(
+                              getNormalizedComparisonProjectConflictResolutionFilter(event.currentTarget.value),
+                            )
+                          }}
+                        >
+                          <For each={conflictResolutionFilterOptions()}>
+                            {(option) => {
+                              return (
+                                <option selected={option.value === conflictResolutionFilter()} value={option.value}>
                                   {option.label}
                                 </option>
                               )

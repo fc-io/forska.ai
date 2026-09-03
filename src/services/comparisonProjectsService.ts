@@ -6,6 +6,7 @@ import type {
   ProjectPromptCriteriaDisposition,
 } from '../db/schemaTypes.ts'
 import type {ComparisonProjectArticleCategoryFilter} from '../utils/comparisonProjectArticleCategoryFilter.ts'
+import type {ComparisonProjectConflictResolutionFilter} from '../utils/comparisonProjectConflictResolutionFilter.ts'
 import type {
   ComparisonProjectDifferenceColumn,
   ComparisonProjectDifferenceFilter,
@@ -420,6 +421,7 @@ export type ComparisonProjectStats = {
 }
 export type ComparisonProjectRowsRequestFilters = {
   articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
+  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter
   rowFilter?: ComparisonProjectRowFilter
   differenceFilter?: ComparisonProjectDifferenceFilter
 }
@@ -779,10 +781,12 @@ export const fetchComparisonProjectJudgmentsPage = async (
   rowFilter?: ComparisonProjectRowFilter,
   differenceFilter?: ComparisonProjectDifferenceFilter,
   articleCategoryFilter?: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter,
   cursor?: string | null,
 ) => {
   const body: ComparisonProjectJudgmentsPageRequest = {
     articleCategoryFilter,
+    conflictResolutionFilter,
     cursor,
     limit: String(limit),
     rowFilter,
@@ -799,9 +803,11 @@ export const fetchComparisonProjectJudgmentsCount = async (
   rowFilter?: ComparisonProjectRowFilter,
   differenceFilter?: ComparisonProjectDifferenceFilter,
   articleCategoryFilter?: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter,
 ) => {
   const body: ComparisonProjectJudgmentsCountRequest = {
     articleCategoryFilter,
+    conflictResolutionFilter,
     limit: String(limit),
     rowFilter,
     differenceFilter,
