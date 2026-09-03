@@ -908,6 +908,19 @@ const postComparisonProjectConflictResolutionExport = (app: {handle: (request: R
   )
 }
 
+const postComparisonProjectConflictResolution = (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown>,
+) => {
+  return app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+}
+
 const postComparisonProjectConflictResolutionImportAnalyze = (
   app: {handle: (request: Request) => Promise<Response>},
   body: Record<string, unknown>,
@@ -6240,6 +6253,62 @@ test('comparison conflict resolution upsert uses DuckDB-safe timestamp function'
   expect(body.data).toEqual({articleId: 'article-1', label: 'Prompt 2', value: 'prompt-2'})
   expect(insertStatement).toContain('updated_at = now()')
   expect(insertStatement).not.toContain('updated_at = current_timestamp')
+  expect(state.staleServingIds).toEqual([])
+  expect(state.queuedServingRebuildIds).toEqual([])
+})
+
+test('summary comparison conflict resolution API can change maybe to yes', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'maybe',
+        articleId: 'article-1',
+        comparisonProjectId: 'comparison-project-1',
+        id: 'existing-resolution-1',
+        promptId: null,
+      },
+    ],
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        id: 'comparison-project-prompt-2',
+        order: 1,
+        promptId: 'prompt-2',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolution(app, {articleId: 'article-1', value: 'yes'})
+  const body = (await response.json()) as {data: {articleId: string; label: string; value: string}}
+  const state = getMockDatabaseState()
+  const insertStatement = state.lastConflictResolutionInsertStatement ?? ''
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({articleId: 'article-1', label: 'yes', value: 'yes'})
+  expect(insertStatement).toContain('ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET')
+  expect(insertStatement).toContain('answer_value = excluded.answer_value')
+  expect(insertStatement).toContain("'yes'")
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
 })
