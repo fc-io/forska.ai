@@ -7,6 +7,11 @@ import {
   getComparisonProjectArticleCategoryFilterLabel,
   getNormalizedComparisonProjectArticleCategoryFilter,
 } from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
+import {
+  type ComparisonProjectConflictResolutionFilter,
+  type ComparisonProjectConflictResolutionFilterOption,
+  getNormalizedComparisonProjectConflictResolutionFilter,
+} from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import type {ComparisonProjectDifferenceFilter} from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
@@ -19,6 +24,8 @@ type CompareProjectExportDifferenceFilterOption = {label: string; value: Compari
 
 type CompareProjectExportFiltersProps = {
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter
+  conflictResolutionFilterOptions: ComparisonProjectConflictResolutionFilterOption[]
   differenceFilter: ComparisonProjectDifferenceFilter
   differenceFilterDisabled: boolean
   differenceFilterOptions: CompareProjectExportDifferenceFilterOption[]
@@ -26,7 +33,9 @@ type CompareProjectExportFiltersProps = {
   isExportingPdf: boolean
   isSummaryMode: boolean
   showArticleCategoryFilter: boolean
+  showConflictResolutionFilter: boolean
   onArticleCategoryFilterChange: (value: ComparisonProjectArticleCategoryFilter) => void
+  onConflictResolutionFilterChange: (value: ComparisonProjectConflictResolutionFilter) => void
   onDifferenceFilterChange: (value: ComparisonProjectDifferenceFilter) => void
   onExportCsv: () => void
   onExportPdf: () => void
@@ -82,6 +91,30 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
             </For>
           </select>
         </label>
+        <Show when={props.showConflictResolutionFilter}>
+          <label class="flex flex-col gap-2 text-sm text-gray-700">
+            <span class="font-medium">Conflict resolutions</span>
+            <select
+              value={props.conflictResolutionFilter}
+              class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+              onChange={(event) => {
+                props.onConflictResolutionFilterChange(
+                  getNormalizedComparisonProjectConflictResolutionFilter(event.currentTarget.value),
+                )
+              }}
+            >
+              <For each={props.conflictResolutionFilterOptions}>
+                {(option) => {
+                  return (
+                    <option selected={option.value === props.conflictResolutionFilter} value={option.value}>
+                      {option.label}
+                    </option>
+                  )
+                }}
+              </For>
+            </select>
+          </label>
+        </Show>
         <Show when={props.showArticleCategoryFilter}>
           <label class="flex flex-col gap-2 text-sm text-gray-700">
             <span class="font-medium">Language</span>

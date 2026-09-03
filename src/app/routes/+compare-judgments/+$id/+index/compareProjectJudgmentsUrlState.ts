@@ -4,6 +4,11 @@ import {
   getNormalizedComparisonProjectArticleCategoryFilter,
 } from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {
+  type ComparisonProjectConflictResolutionFilter,
+  defaultComparisonProjectConflictResolutionFilter,
+  getNormalizedComparisonProjectConflictResolutionFilter,
+} from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
+import {
   type ComparisonProjectDifferenceFilter,
   comparisonProjectDifferenceFilters,
 } from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
@@ -17,6 +22,7 @@ export const compareProjectJudgmentsPageLimitOptions = [25, 50, 100]
 
 export type CompareProjectJudgmentsUrlState = {
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter
   pageLimit: number
   rowFilter: ComparisonProjectRowFilter
   differenceFilter: ComparisonProjectDifferenceFilter
@@ -35,6 +41,7 @@ type CompareProjectJudgmentsPageQueryState = CompareProjectJudgmentsDifferenceFi
 export const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
   return {
     articleCategoryFilter: defaultComparisonProjectArticleCategoryFilter,
+    conflictResolutionFilter: defaultComparisonProjectConflictResolutionFilter,
     pageLimit: 50,
     rowFilter: defaultComparisonProjectRowFilter,
     differenceFilter: 'all',
@@ -102,6 +109,7 @@ export const getInitialCompareProjectJudgmentsUrlState = (
     rowFilter: getRowFilterSearchParamValue(search),
     differenceFilter: getDifferenceFilterSearchParamValue(search),
     articleCategoryFilter: getNormalizedComparisonProjectArticleCategoryFilter(search.articleCategoryFilter),
+    conflictResolutionFilter: getNormalizedComparisonProjectConflictResolutionFilter(search.conflictResolutionFilter),
   }
 }
 
@@ -125,6 +133,10 @@ export const getCompareProjectJudgmentsSearchParams = (
 
   if (state.articleCategoryFilter !== defaultState.articleCategoryFilter) {
     searchParams.articleCategoryFilter = state.articleCategoryFilter
+  }
+
+  if (state.conflictResolutionFilter !== defaultState.conflictResolutionFilter) {
+    searchParams.conflictResolutionFilter = state.conflictResolutionFilter
   }
 
   return searchParams

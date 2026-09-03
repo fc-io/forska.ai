@@ -13,6 +13,7 @@ import {
   getComparisonProjectServingCellsSql,
   getComparisonProjectServingJudgmentCount,
   getComparisonProjectServingJudgmentCountSql,
+  getComparisonProjectServingJudgmentFilteredCountSql,
   getComparisonProjectServingJudgmentRowsPage,
   getComparisonProjectServingMemberSql,
 } from './comparisonProjectJudgmentRows.ts'
@@ -212,6 +213,29 @@ test('serving member sql resolves active generation and pages by keyset cursor',
   expect(sql).toContain('LIMIT 26')
 })
 
+test('serving member sql can filter summary conflict-resolution rows', () => {
+  const notSetSql = getComparisonProjectServingMemberSql({
+    comparisonProjectId: 'comparison-project-1',
+    conflictResolutionFilter: 'not-set',
+    cursor: null,
+    differenceFilter: 'all',
+    limit: 25,
+    rowFilter: 'all',
+  })
+  const yesSql = getComparisonProjectServingMemberSql({
+    comparisonProjectId: 'comparison-project-1',
+    conflictResolutionFilter: 'yes',
+    cursor: null,
+    differenceFilter: 'all',
+    limit: 25,
+    rowFilter: 'all',
+  })
+
+  expect(notSetSql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+  expect(notSetSql).toContain('article.has_conflict AND conflict_resolution.article_id IS NULL')
+  expect(yesSql).toContain("article.has_conflict AND conflict_resolution.answer_value = 'yes'")
+})
+
 test('serving hydration sql scopes articles and cells to returned article ids', () => {
   const articleSql = getComparisonProjectServingArticlesSql({
     articleIds: ['article-1', 'article-2'],
@@ -249,6 +273,24 @@ test('serving judgment count sql reads active generation filter stats only', () 
   expect(sql).not.toContain('comparison_filter_member')
   expect(sql).not.toContain('comparison_cell_serving')
   expect(sql).not.toContain('comparison_article_serving')
+})
+
+test('serving filtered judgment count sql scans serving rows with conflict-resolution predicate', () => {
+  const sql = getComparisonProjectServingJudgmentFilteredCountSql({
+    articleCategoryFilter: 'all',
+    comparisonProjectId: 'comparison-project-1',
+    conflictResolutionFilter: 'maybe',
+    differenceFilter: 'human-vs-llm',
+    rowFilter: 'multiple-answers',
+  })
+
+  expect(sql).toContain('SELECT COUNT(*) AS totalCount')
+  expect(sql).toContain('FROM mart.comparison_article_serving article')
+  expect(sql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+  expect(sql).toContain('article.passes_row_filter_multiple_answers')
+  expect(sql).toContain('article.passes_difference_filter_human_vs_llm')
+  expect(sql).toContain("conflict_resolution.answer_value = 'maybe'")
+  expect(sql).not.toContain('FROM mart.comparison_filter_stats stats')
 })
 
 test('serving judgment count returns pages from stats and zero for missing stats', async () => {

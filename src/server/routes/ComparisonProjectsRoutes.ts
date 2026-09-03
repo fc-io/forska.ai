@@ -85,6 +85,7 @@ import {
   mergeComparisonProjectConflictResolutionImportTargetArticleRows,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
 import {
+  type ComparisonProjectConflictResolutionFilter,
   type ComparisonProjectJudgmentHumanRow,
   type ComparisonProjectJudgmentLlmRow,
   type ComparisonProjectJudgmentRow,
@@ -626,6 +627,23 @@ const getRequestedComparisonProjectDifferenceFilter = (params: {
   showOnlyModelDifferences?: boolean
 }) => {
   return params.differenceFilter ?? (params.showOnlyModelDifferences ? 'llm-vs-llm' : 'all')
+}
+
+const getNormalizedComparisonProjectConflictResolutionFilter = (
+  scope: ComparisonProjectScope,
+  value: string | null | undefined,
+): ComparisonProjectConflictResolutionFilter => {
+  const requestedValue = value?.trim() ?? ''
+
+  if (!requestedValue || requestedValue === 'all' || !scope.allowConflictResolution || !getIsSummaryMode(scope)) {
+    return 'all'
+  }
+
+  if (requestedValue === 'not-set') {
+    return requestedValue
+  }
+
+  return getComparisonProjectConflictResolutionOptionByValue(scope).has(requestedValue) ? requestedValue : 'all'
 }
 
 const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
@@ -3277,6 +3295,22 @@ const getComparisonProjectConflictResolutionOptionByValue = (scope: ComparisonPr
   }, new Map<string, ComparisonProjectConflictResolutionOption>())
 }
 
+const getComparisonProjectConflictResolutionFilterLabel = (
+  scope: ComparisonProjectScope,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
+) => {
+  if (conflictResolutionFilter === 'all') {
+    return 'Conflict resolution: All'
+  }
+
+  if (conflictResolutionFilter === 'not-set') {
+    return 'Conflict resolution: Not set'
+  }
+
+  const option = getComparisonProjectConflictResolutionOptionByValue(scope).get(conflictResolutionFilter)
+  return `Conflict resolution: ${option?.label ?? conflictResolutionFilter}`
+}
+
 const getComparisonProjectRowsForArticles = async (
   scope: ComparisonProjectScope,
   articleIds: string[],
@@ -3690,6 +3724,7 @@ const getComparisonProjectExportResponse = (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
   const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
   const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
@@ -3706,6 +3741,7 @@ const getComparisonProjectExportResponse = (
           await forEachComparisonProjectServingJudgmentRowBatch({
             comparisonProjectId: scope.id,
             articleCategoryFilter,
+            conflictResolutionFilter,
             differenceFilter: normalizedDifferenceFilter,
             limit: comparisonProjectJudgmentArticleBatchSize,
             onRows: async (rows) => {
@@ -3731,15 +3767,20 @@ const getComparisonProjectExportResponse = (
 
 const getComparisonProjectPdfHeaderFilters = (params: {
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter
   differenceFilter: ComparisonProjectDifferenceFilter
   rowFilter: ComparisonProjectRowFilter
   scope: ComparisonProjectScope
 }) => {
   const rowFilterLabel = getComparisonProjectRowFilterLabel(params.rowFilter, getIsSummaryMode(params.scope))
   const differenceFilterLabel = getComparisonProjectDifferenceFilterLabel(params.differenceFilter)
+  const conflictResolutionLabel = getComparisonProjectConflictResolutionFilterLabel(
+    params.scope,
+    params.conflictResolutionFilter,
+  )
   const articleCategoryLabel = getComparisonProjectArticleCategoryFilterLabel(params.articleCategoryFilter)
 
-  return [rowFilterLabel, differenceFilterLabel, articleCategoryLabel].join(' | ')
+  return [rowFilterLabel, differenceFilterLabel, conflictResolutionLabel, articleCategoryLabel].join(' | ')
 }
 
 const getComparisonProjectPdfResolutionOptions = (scope: ComparisonProjectScope) => {
@@ -3990,6 +4031,7 @@ const getComparisonProjectPdfExportResponse = async (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
   const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
   const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
@@ -4001,9 +4043,11 @@ const getComparisonProjectPdfExportResponse = async (
     rowFilter,
     normalizedDifferenceFilter,
     articleCategoryFilter,
+    conflictResolutionFilter,
   )
   const exportFilters = getComparisonProjectPdfHeaderFilters({
     articleCategoryFilter,
+    conflictResolutionFilter,
     differenceFilter: normalizedDifferenceFilter,
     rowFilter,
     scope,
@@ -4014,6 +4058,7 @@ const getComparisonProjectPdfExportResponse = async (
     await forEachComparisonProjectServingJudgmentRowBatch({
       comparisonProjectId: scope.id,
       articleCategoryFilter,
+      conflictResolutionFilter,
       differenceFilter: normalizedDifferenceFilter,
       limit: comparisonProjectJudgmentArticleBatchSize,
       onRows: async (rows) => {
@@ -4071,10 +4116,23 @@ const getComparisonProjectFormattedExportResponse = async (
   differenceFilter: ComparisonProjectDifferenceFilter,
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
   format: ComparisonProjectExportFormat,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
   return format === 'pdf'
-    ? getComparisonProjectPdfExportResponse(scope, rowFilter, differenceFilter, articleCategoryFilter)
-    : getComparisonProjectExportResponse(scope, rowFilter, differenceFilter, articleCategoryFilter)
+    ? getComparisonProjectPdfExportResponse(
+        scope,
+        rowFilter,
+        differenceFilter,
+        articleCategoryFilter,
+        conflictResolutionFilter,
+      )
+    : getComparisonProjectExportResponse(
+        scope,
+        rowFilter,
+        differenceFilter,
+        articleCategoryFilter,
+        conflictResolutionFilter,
+      )
 }
 
 const getComparisonProjectJudgmentsPage = async (
@@ -4085,6 +4143,7 @@ const getComparisonProjectJudgmentsPage = async (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
   if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0) {
     return {
@@ -4120,6 +4179,7 @@ const getComparisonProjectJudgmentsPage = async (
   const pageResult = await getComparisonProjectServingJudgmentRowsPage({
     comparisonProjectId: scope.id,
     articleCategoryFilter,
+    conflictResolutionFilter,
     cursor,
     differenceFilter: normalizedDifferenceFilter,
     limit,
@@ -4148,6 +4208,7 @@ const getComparisonProjectJudgmentsCount = async (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
   if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0 || scope.activeGeneration === null) {
     return {
@@ -4165,6 +4226,7 @@ const getComparisonProjectJudgmentsCount = async (
   const countResult = await getComparisonProjectServingJudgmentCount({
     comparisonProjectId: scope.id,
     articleCategoryFilter,
+    conflictResolutionFilter,
     differenceFilter: normalizedDifferenceFilter,
     limit,
     queryRunner: appDatabaseService,
@@ -4907,6 +4969,10 @@ export const comparisonProjectsRoutes = new Elysia()
       })
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
       const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
+      const conflictResolutionFilter = getNormalizedComparisonProjectConflictResolutionFilter(
+        data,
+        body.conflictResolutionFilter,
+      )
       const judgmentsPage = await getComparisonProjectJudgmentsPage(
         data,
         page,
@@ -4915,6 +4981,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter,
         differenceFilter,
         articleCategoryFilter,
+        conflictResolutionFilter,
       )
 
       return {data: judgmentsPage}
@@ -4926,6 +4993,7 @@ export const comparisonProjectsRoutes = new Elysia()
         cursor: t.Optional(t.Nullable(t.String())),
         rowFilter: t.Optional(t.String()),
         articleCategoryFilter: t.Optional(t.String()),
+        conflictResolutionFilter: t.Optional(t.String()),
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
@@ -4957,12 +5025,17 @@ export const comparisonProjectsRoutes = new Elysia()
       const differenceFilter = getRequestedComparisonProjectDifferenceFilter({differenceFilter: body.differenceFilter})
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
       const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
+      const conflictResolutionFilter = getNormalizedComparisonProjectConflictResolutionFilter(
+        data,
+        body.conflictResolutionFilter,
+      )
       const countResult = await getComparisonProjectJudgmentsCount(
         data,
         limit,
         rowFilter,
         differenceFilter,
         articleCategoryFilter,
+        conflictResolutionFilter,
       )
 
       return {data: countResult}
@@ -4972,6 +5045,7 @@ export const comparisonProjectsRoutes = new Elysia()
         limit: t.Union([t.String(), t.Number()]),
         rowFilter: t.Optional(t.String()),
         articleCategoryFilter: t.Optional(t.String()),
+        conflictResolutionFilter: t.Optional(t.String()),
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
@@ -5088,6 +5162,10 @@ export const comparisonProjectsRoutes = new Elysia()
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
       const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
       const format: ComparisonProjectExportFormat = body.format === 'pdf' ? 'pdf' : 'csv'
+      const conflictResolutionFilter = getNormalizedComparisonProjectConflictResolutionFilter(
+        data,
+        body.conflictResolutionFilter,
+      )
 
       return getComparisonProjectFormattedExportResponse(
         data,
@@ -5095,12 +5173,14 @@ export const comparisonProjectsRoutes = new Elysia()
         differenceFilter,
         articleCategoryFilter,
         format,
+        conflictResolutionFilter,
       )
     },
     {
       body: t.Object({
         rowFilter: t.Optional(t.String()),
         articleCategoryFilter: t.Optional(t.String()),
+        conflictResolutionFilter: t.Optional(t.String()),
         format: t.Optional(t.Union([t.Literal('csv'), t.Literal('pdf')])),
         differenceFilter: t.Optional(
           t.Union([
