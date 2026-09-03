@@ -146,72 +146,112 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                     <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-2 py-2 text-xs ${rowHighlightClasses.cell}`}>
                       <Show when={row.hasConflict} fallback={<span class="text-gray-400">No conflict</span>}>
                         <Show
-                          when={row.conflictResolution}
+                          when={conflictResolutionOptions().length > 0}
                           fallback={
                             <Show
-                              when={conflictResolutionOptions().length > 0}
+                              when={row.conflictResolution}
                               fallback={<span class="text-gray-400">No options available</span>}
                             >
-                              <select
-                                value=""
-                                disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
-                                class="w-full max-w-[180px] rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs disabled:opacity-60"
-                                onChange={(event) => {
-                                  const value = event.currentTarget.value
-
-                                  if (value) {
-                                    void props.onConflictResolutionSelect?.(row.canonicalArticleId, value)
-                                  }
-                                }}
-                              >
-                                <option value="" disabled selected>
-                                  Conflict resolution:
-                                </option>
-                                <For each={conflictResolutionOptions()}>
-                                  {(option) => {
-                                    return <option value={option.value}>{option.label}</option>
-                                  }}
-                                </For>
-                              </select>
+                              {(resolution) => {
+                                return (
+                                  <div class="flex items-start justify-between gap-2">
+                                    <span
+                                      class="min-w-0 whitespace-pre-wrap break-words leading-5 text-gray-800"
+                                      title={resolution().label}
+                                    >
+                                      {resolution().label}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
+                                      title="Reset conflict resolution"
+                                      aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
+                                      disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
+                                      onClick={() => {
+                                        void props.onConflictResolutionReset?.(row.canonicalArticleId)
+                                      }}
+                                    >
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2.5"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        class="size-3.5"
+                                      >
+                                        <path d="M18 6L6 18" />
+                                        <path d="M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                )
+                              }}
                             </Show>
                           }
                         >
-                          {(resolution) => {
-                            return (
-                              <div class="flex items-start justify-between gap-2">
-                                <span
-                                  class="min-w-0 whitespace-pre-wrap break-words leading-5 text-gray-800"
-                                  title={resolution().label}
+                          <div class="flex items-start gap-2">
+                            <select
+                              ref={(element) => {
+                                queueMicrotask(() => {
+                                  element.value = row.conflictResolution?.value ?? ''
+                                })
+                              }}
+                              disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
+                              aria-label={`Conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
+                              class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs disabled:opacity-60"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value
+
+                                if (value && value !== row.conflictResolution?.value) {
+                                  void props.onConflictResolutionSelect?.(row.canonicalArticleId, value)
+                                }
+                              }}
+                            >
+                              <option value="" disabled selected={!row.conflictResolution}>
+                                Conflict resolution:
+                              </option>
+                              <For each={conflictResolutionOptions()}>
+                                {(option) => {
+                                  return (
+                                    <option
+                                      value={option.value}
+                                      selected={row.conflictResolution?.value === option.value}
+                                    >
+                                      {option.label}
+                                    </option>
+                                  )
+                                }}
+                              </For>
+                            </select>
+                            <Show when={row.conflictResolution}>
+                              <button
+                                type="button"
+                                class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
+                                title="Reset conflict resolution"
+                                aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
+                                disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
+                                onClick={() => {
+                                  void props.onConflictResolutionReset?.(row.canonicalArticleId)
+                                }}
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2.5"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="size-3.5"
                                 >
-                                  {resolution().label}
-                                </span>
-                                <button
-                                  type="button"
-                                  class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
-                                  title="Reset conflict resolution"
-                                  aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
-                                  disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
-                                  onClick={() => {
-                                    void props.onConflictResolutionReset?.(row.canonicalArticleId)
-                                  }}
-                                >
-                                  <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2.5"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    class="size-3.5"
-                                  >
-                                    <path d="M18 6L6 18" />
-                                    <path d="M6 6l12 12" />
-                                  </svg>
-                                </button>
-                              </div>
-                            )
-                          }}
+                                  <path d="M18 6L6 18" />
+                                  <path d="M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </Show>
+                          </div>
                         </Show>
                       </Show>
                     </td>
