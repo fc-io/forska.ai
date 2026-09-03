@@ -677,35 +677,53 @@ const CompareProjectJudgmentsPage = () => {
               </Show>
 
               <div class="space-y-4">
-                <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-4 shadow max-[1429px]:items-start">
-                  <div class="min-w-0 max-[1429px]:basis-full">
-                    <h2 class="text-lg font-semibold">Article Judgments</h2>
-                    <p class="text-sm text-gray-600">
-                      <Show
-                        when={servingUnavailableState()}
-                        fallback={
-                          <Show when={judgmentsPageQuery.data} fallback="Loading results...">
-                            <Show
-                              when={exactTotalCount() !== null}
-                              fallback={
-                                <span class="inline-flex items-center gap-2">
-                                  <span>{getPendingCountRangeLabel(serverFilteredRows().length)}</span>
-                                  <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
-                                </span>
-                              }
-                            >
-                              {getLoadedRangeLabel(serverFilteredRows().length, exactTotalCount() ?? 0)}
+                <div class="rounded-lg bg-white p-4 shadow">
+                  <div class="flex items-start justify-between gap-4">
+                    <div class="min-w-0">
+                      <h2 class="text-lg font-semibold">Article Judgments</h2>
+                      <p class="text-sm text-gray-600">
+                        <Show
+                          when={servingUnavailableState()}
+                          fallback={
+                            <Show when={judgmentsPageQuery.data} fallback="Loading results...">
+                              <Show
+                                when={exactTotalCount() !== null}
+                                fallback={
+                                  <span class="inline-flex items-center gap-2">
+                                    <span>{getPendingCountRangeLabel(serverFilteredRows().length)}</span>
+                                    <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                                  </span>
+                                }
+                              >
+                                {getLoadedRangeLabel(serverFilteredRows().length, exactTotalCount() ?? 0)}
+                              </Show>
                             </Show>
-                          </Show>
-                        }
-                      >
-                        {(state) => {
-                          return state().title
+                          }
+                        >
+                          {(state) => {
+                            return state().title
+                          }}
+                        </Show>
+                      </p>
+                    </div>
+                    <label class="flex shrink-0 items-center gap-2 text-sm text-gray-600">
+                      <span>Rows</span>
+                      <select
+                        value={pageLimit()}
+                        class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
+                        onChange={(event) => {
+                          setPageLimit(Number(event.currentTarget.value))
                         }}
-                      </Show>
-                    </p>
+                      >
+                        <For each={compareProjectJudgmentsPageLimitOptions}>
+                          {(option) => {
+                            return <option value={option}>{option}</option>
+                          }}
+                        </For>
+                      </select>
+                    </label>
                   </div>
-                  <div class="flex flex-wrap items-center gap-x-4 gap-y-2 max-[1429px]:basis-full">
+                  <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <span>Row filter</span>
                       <select
@@ -796,22 +814,6 @@ const CompareProjectJudgmentsPage = () => {
                         </select>
                       </label>
                     </Show>
-                    <label class="flex items-center gap-2 text-sm text-gray-600">
-                      <span>Rows</span>
-                      <select
-                        value={pageLimit()}
-                        class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
-                        onChange={(event) => {
-                          setPageLimit(Number(event.currentTarget.value))
-                        }}
-                      >
-                        <For each={compareProjectJudgmentsPageLimitOptions}>
-                          {(option) => {
-                            return <option value={option}>{option}</option>
-                          }}
-                        </For>
-                      </select>
-                    </label>
                   </div>
                 </div>
 
