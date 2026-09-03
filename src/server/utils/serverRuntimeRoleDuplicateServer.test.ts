@@ -1,10 +1,22 @@
+import {spawnSync} from 'node:child_process'
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
 import {hostname, tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {join, resolve} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
-import {getRuntimeCutoverVersion} from './runtimeCutover.ts'
+const getChildRuntimeEnv = (overrides: Record<string, string>) => {
+  return {
+    HOME: process.env.HOME ?? '',
+    NODE_ENV: 'test',
+    PATH: process.env.PATH ?? '',
+    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    USER: process.env.USER ?? '',
+    ...overrides,
+  }
+}
+
+const repoRoot = resolve(import.meta.dir, '../../..')
 
 const getLastJsonLine = (output: string) => {
   return (
@@ -36,7 +48,7 @@ test('auto follower exits when another local process already owns the same write
         hostname: hostname(),
         leaseId: 'lease-id',
         pid: process.pid,
-        runtimeVersion: getRuntimeCutoverVersion(),
+        runtimeVersion: 'split-runtime-v1',
         serverRole: 'maintenance-worker',
       },
       null,
@@ -45,9 +57,9 @@ test('auto follower exits when another local process already owns the same write
   )
 
   try {
-    const result = globalThis.Bun.spawnSync(
+    const result = spawnSync(
+      process.execPath,
       [
-        'bun',
         '-e',
         `
           const {initializeServerRuntimeRole} = await import('./src/server/utils/serverRuntimeRole.ts')
@@ -56,9 +68,8 @@ test('auto follower exits when another local process already owns the same write
         `,
       ],
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
+        cwd: repoRoot,
+        env: getChildRuntimeEnv({
           API_SERVER_PORT: '3999',
           DUCKDB_MEMORY_LIMIT: '1GB',
           DUCKDB_PATH: duckdbPath,
@@ -67,11 +78,11 @@ test('auto follower exits when another local process already owns the same write
           SERVER_ROLE: 'auto',
           SERVER_DUCKDB_OWNER_URL: '',
           VITE_PORT: '3000',
-        },
+        }),
       },
     )
 
-    expect(result.exitCode).toBe(0)
+    expect(result.status).toBe(0)
     expect(result.stdout.toString()).not.toContain('alive')
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
@@ -83,13 +94,14 @@ test('auto role resumes writer when the existing lease belongs to the current pr
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {
-    const result = globalThis.Bun.spawnSync(
+    const result = spawnSync(
+      process.execPath,
       [
-        'bun',
         '-e',
         `
           const {writeFileSync} = await import('node:fs')
           const {hostname} = await import('node:os')
+          const {getLocalMachineFingerprint} = await import('./src/server/utils/localMachineIdentity.ts')
           const {getRuntimeCutoverVersion} = await import('./src/server/utils/runtimeCutover.ts')
           const now = new Date().toISOString()
           const duckdbPath = process.env.DUCKDB_PATH
@@ -101,6 +113,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
             heartbeatAt: now,
             hostname: hostname(),
             leaseId: 'lease-id',
+            machineFingerprint: getLocalMachineFingerprint(),
             pid: process.pid,
             runtimeVersion: getRuntimeCutoverVersion(),
             serverRole: 'maintenance-worker',
@@ -114,9 +127,8 @@ test('auto role resumes writer when the existing lease belongs to the current pr
         `,
       ],
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
+        cwd: repoRoot,
+        env: getChildRuntimeEnv({
           API_SERVER_PORT: '3999',
           DUCKDB_MEMORY_LIMIT: '1GB',
           DUCKDB_PATH: duckdbPath,
@@ -125,11 +137,11 @@ test('auto role resumes writer when the existing lease belongs to the current pr
           SERVER_ROLE: 'auto',
           SERVER_DUCKDB_OWNER_URL: '',
           VITE_PORT: '3000',
-        },
+        }),
       },
     )
 
-    expect(result.exitCode).toBe(0)
+    expect(result.status).toBe(0)
     expect(result.stdout.toString()).toContain('role=maintenance-worker')
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
@@ -141,9 +153,9 @@ test('auto role keeps ownership when a promotion handler fails', () => {
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {
-    const result = globalThis.Bun.spawnSync(
+    const result = spawnSync(
+      process.execPath,
       [
-        'bun',
         '-e',
         `
           const {
@@ -164,9 +176,8 @@ test('auto role keeps ownership when a promotion handler fails', () => {
         `,
       ],
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
+        cwd: repoRoot,
+        env: getChildRuntimeEnv({
           API_SERVER_PORT: '3999',
           DUCKDB_MEMORY_LIMIT: '1GB',
           DUCKDB_PATH: duckdbPath,
@@ -175,11 +186,11 @@ test('auto role keeps ownership when a promotion handler fails', () => {
           SERVER_ROLE: 'auto',
           SERVER_DUCKDB_OWNER_URL: '',
           VITE_PORT: '3000',
-        },
+        }),
       },
     )
 
-    expect(result.exitCode).toBe(0)
+    expect(result.status).toBe(0)
     expect(JSON.parse(getLastJsonLine(result.stdout.toString()))).toEqual({role: 'maintenance-worker'})
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
@@ -191,9 +202,9 @@ test('explicit owner role refreshes its DuckDB owner lease heartbeat after acqui
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {
-    const result = globalThis.Bun.spawnSync(
+    const result = spawnSync(
+      process.execPath,
       [
-        'bun',
         '-e',
         `
           const {readFileSync} = await import('node:fs')
@@ -217,9 +228,8 @@ test('explicit owner role refreshes its DuckDB owner lease heartbeat after acqui
         `,
       ],
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
+        cwd: repoRoot,
+        env: getChildRuntimeEnv({
           API_SERVER_PORT: '3999',
           DUCKDB_MEMORY_LIMIT: '1GB',
           DUCKDB_PATH: duckdbPath,
@@ -228,11 +238,11 @@ test('explicit owner role refreshes its DuckDB owner lease heartbeat after acqui
           SERVER_ROLE: 'maintenance-worker',
           SERVER_DUCKDB_OWNER_URL: '',
           VITE_PORT: '3000',
-        },
+        }),
       },
     )
 
-    expect(result.exitCode).toBe(0)
+    expect(result.status).toBe(0)
 
     const output = result.stdout.toString().trim()
     const parsed = JSON.parse(output) as {initialHeartbeatAt: string; refreshedHeartbeatAt: string}
@@ -248,13 +258,14 @@ test('explicit owner role demotes after DuckDB owner lease loss', {timeout: 15_0
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
   try {
-    const result = globalThis.Bun.spawnSync(
+    const result = spawnSync(
+      process.execPath,
       [
-        'bun',
         '-e',
         `
           const {writeFileSync} = await import('node:fs')
           const {hostname} = await import('node:os')
+          const {getLocalMachineFingerprint} = await import('./src/server/utils/localMachineIdentity.ts')
           const {getRuntimeCutoverVersion} = await import('./src/server/utils/runtimeCutover.ts')
           const {
             ensureCurrentDuckdbOwnerLease,
@@ -275,6 +286,7 @@ test('explicit owner role demotes after DuckDB owner lease loss', {timeout: 15_0
                   heartbeatAt: now,
                   hostname: hostname(),
                   leaseId: 'replacement-lease-id',
+                  machineFingerprint: getLocalMachineFingerprint(),
                   pid: process.pid,
                   runtimeVersion: getRuntimeCutoverVersion(),
                   serverRole: 'maintenance-worker',
@@ -295,9 +307,8 @@ test('explicit owner role demotes after DuckDB owner lease loss', {timeout: 15_0
         `,
       ],
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
+        cwd: repoRoot,
+        env: getChildRuntimeEnv({
           API_SERVER_PORT: '3999',
           DUCKDB_MEMORY_LIMIT: '1GB',
           DUCKDB_PATH: duckdbPath,
@@ -306,11 +317,11 @@ test('explicit owner role demotes after DuckDB owner lease loss', {timeout: 15_0
           SERVER_ROLE: 'maintenance-worker',
           SERVER_DUCKDB_OWNER_URL: '',
           VITE_PORT: '3000',
-        },
+        }),
       },
     )
 
-    if (result.exitCode !== 0) {
+    if (result.status !== 0) {
       throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB explicit lease loss test failed')
     }
 

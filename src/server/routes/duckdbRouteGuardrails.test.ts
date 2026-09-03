@@ -367,11 +367,19 @@ test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes'
 test('test-only topology routes are token gated and absent from normal product API composition', () => {
   const productRoutesText = readFileSync(join(routesRoot, 'productApiRoutes.ts'), 'utf8')
   const topologyRoutesText = readFileSync(join(routesRoot, 'judgmentWorkflowTopologyTestRoutes.ts'), 'utf8')
+  const sqliteServiceText = readFileSync(
+    join(process.cwd(), 'src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'),
+    'utf8',
+  )
 
+  expect(productRoutesText).toContain("process.env.NODE_ENV === 'test'")
   expect(productRoutesText).toContain('process.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN')
   expect(productRoutesText).toContain('? judgmentWorkflowTopologyTestRoutes')
   expect(topologyRoutesText).toContain('requireTopologySeedBoundary(body.token)')
+  expect(topologyRoutesText).toContain("process.env.NODE_ENV !== 'test'")
   expect(topologyRoutesText).toContain("getCurrentServerRole() !== 'maintenance-worker'")
+  expect(sqliteServiceText).toContain("process.env.NODE_ENV !== 'test'")
+  expect(sqliteServiceText).toContain('process.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN')
 })
 
 test('prompt preview route cannot reintroduce legacy sample article fallback reads', () => {

@@ -1,4 +1,5 @@
 import {existsSync} from 'node:fs'
+import {resolve} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -57,7 +58,7 @@ test('runner produces an explicit Bun command without provider fallback flags', 
   expect(command.slice(0, 2)).toEqual(['bun', 'test'])
   expect(command.slice(2)).toEqual(
     judgmentWorkflowComponentLifecycleTestFiles.map((filePath) => {
-      return `./${filePath}`
+      return resolve(filePath)
     }),
   )
   expect(command.join(' ')).not.toContain('fallback')
@@ -71,7 +72,7 @@ test('runner isolates every gate file in its own Bun process command', () => {
   ] as const) {
     expect(getJudgmentWorkflowTestCommands(gate)).toEqual(
       files.map((filePath) => {
-        return ['bun', 'test', `./${filePath}`]
+        return ['bun', 'test', resolve(filePath)]
       }),
     )
   }

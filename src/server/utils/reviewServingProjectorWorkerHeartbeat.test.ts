@@ -1,7 +1,44 @@
+import {spawnSync} from 'node:child_process'
+import {tmpdir} from 'node:os'
+import {resolve} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {getReviewServingProjectorWorkerHardRestartRssBytes} from './reviewServingProjectorWorkerHeartbeat.ts'
+
+const repoRoot = resolve(import.meta.dir, '../../..')
+
+const getChildRuntimeEnv = (overrides: Record<string, string>) => {
+  return {
+    HOME: process.env.HOME ?? '',
+    NODE_ENV: 'test',
+    PATH: process.env.PATH ?? '',
+    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    USER: process.env.USER ?? '',
+    ...overrides,
+  }
+}
+
+const runBunEval = (script: string, env: Record<string, string>) => {
+  const result = spawnSync(process.execPath, ['-e', script], {
+    cwd: repoRoot,
+    env: getChildRuntimeEnv(env),
+    timeout: 10_000,
+  })
+
+  return {...result, exitCode: result.status ?? 1}
+}
+
+const readChildProcessOutput = (runScript: {
+  stderr: {toString: () => string}
+  stdout: {toString: () => string}
+}) => {
+  const stdout = runScript.stdout.toString()
+  const stderr = runScript.stderr.toString()
+
+  return {combined: `${stdout}\n${stderr}`, stderr, stdout}
+}
 
 const getLastJsonLine = (value: string) => {
   const lines = value
@@ -104,15 +141,14 @@ test('review serving projector worker heartbeat logs original loop failure and r
   )
 
   if (runScript.exitCode !== 0) {
+    const {stderr, stdout} = readChildProcessOutput(runScript)
     throw new Error(
-      runScript.stderr.toString()
-        || runScript.stdout.toString()
-        || 'Review serving projector worker heartbeat logging test failed',
+      stderr || stdout || 'Review serving projector worker heartbeat logging test failed',
     )
   }
 
-  const output = `${runScript.stdout.toString()}\n${runScript.stderr.toString()}`
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<number | string>>}
+  const {combined: output, stdout} = readChildProcessOutput(runScript)
+  const result = JSON.parse(getLastJsonLine(stdout)) as {events: Array<Array<number | string>>}
 
   expect(result.events).toEqual([['run', 0, 3, 100], ['unref', 1], ['run', 2, 3, 100], ['abort']])
   expect(output).toContain('projector loop failed')
@@ -450,11 +486,8 @@ test('review serving projector worker heartbeat recycles DuckDB before high-RSS 
 })
 
 test('review serving projector worker heartbeat skips high-RSS recycle while foreground DuckDB work is active', () => {
-  const runScript = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
+  const runScript = runBunEval(
+    `
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
@@ -531,11 +564,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle while for
 
         console.log(JSON.stringify({events}))
       `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
-    },
+    {DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
   )
 
   if (runScript.exitCode !== 0) {
