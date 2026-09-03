@@ -49,64 +49,42 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
       <div class="mb-4">
         <h2 class="text-lg font-semibold">Export Filters</h2>
       </div>
-      <div class="flex flex-wrap items-end gap-4">
-        <label class="flex flex-col gap-2 text-sm text-gray-700">
-          <span class="font-medium">Row filter</span>
-          <select
-            value={props.rowFilter}
-            class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-            onChange={(event) => {
-              props.onRowFilterChange(getNormalizedComparisonProjectRowFilter(event.currentTarget.value))
-            }}
-          >
-            <For each={comparisonProjectRowFilters}>
-              {(option) => {
-                return (
-                  <option selected={option === props.rowFilter} value={option}>
-                    {getComparisonProjectRowFilterLabel(option, props.isSummaryMode)}
-                  </option>
-                )
-              }}
-            </For>
-          </select>
-        </label>
-        <label class="flex flex-col gap-2 text-sm text-gray-700">
-          <span class="font-medium">Difference filter</span>
-          <select
-            value={props.differenceFilter}
-            class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-            disabled={props.differenceFilterDisabled}
-            onChange={(event) => {
-              props.onDifferenceFilterChange(event.currentTarget.value as ComparisonProjectDifferenceFilter)
-            }}
-          >
-            <For each={props.differenceFilterOptions}>
-              {(option) => {
-                return (
-                  <option selected={option.value === props.differenceFilter} value={option.value}>
-                    {option.label}
-                  </option>
-                )
-              }}
-            </For>
-          </select>
-        </label>
-        <Show when={props.showConflictResolutionFilter}>
+      <div class="flex flex-col gap-4 min-[1430px]:flex-row min-[1430px]:items-end min-[1430px]:justify-between">
+        <div class="flex flex-wrap items-end gap-4">
           <label class="flex flex-col gap-2 text-sm text-gray-700">
-            <span class="font-medium">Conflict resolutions</span>
+            <span class="font-medium">Row filter</span>
             <select
-              value={props.conflictResolutionFilter}
+              value={props.rowFilter}
               class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
               onChange={(event) => {
-                props.onConflictResolutionFilterChange(
-                  getNormalizedComparisonProjectConflictResolutionFilter(event.currentTarget.value),
-                )
+                props.onRowFilterChange(getNormalizedComparisonProjectRowFilter(event.currentTarget.value))
               }}
             >
-              <For each={props.conflictResolutionFilterOptions}>
+              <For each={comparisonProjectRowFilters}>
                 {(option) => {
                   return (
-                    <option selected={option.value === props.conflictResolutionFilter} value={option.value}>
+                    <option selected={option === props.rowFilter} value={option}>
+                      {getComparisonProjectRowFilterLabel(option, props.isSummaryMode)}
+                    </option>
+                  )
+                }}
+              </For>
+            </select>
+          </label>
+          <label class="flex flex-col gap-2 text-sm text-gray-700">
+            <span class="font-medium">Difference filter</span>
+            <select
+              value={props.differenceFilter}
+              class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+              disabled={props.differenceFilterDisabled}
+              onChange={(event) => {
+                props.onDifferenceFilterChange(event.currentTarget.value as ComparisonProjectDifferenceFilter)
+              }}
+            >
+              <For each={props.differenceFilterOptions}>
+                {(option) => {
+                  return (
+                    <option selected={option.value === props.differenceFilter} value={option.value}>
                       {option.label}
                     </option>
                   )
@@ -114,50 +92,76 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
               </For>
             </select>
           </label>
-        </Show>
-        <Show when={props.showArticleCategoryFilter}>
-          <label class="flex flex-col gap-2 text-sm text-gray-700">
-            <span class="font-medium">Language</span>
-            <select
-              value={props.articleCategoryFilter}
-              class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-              onChange={(event) => {
-                props.onArticleCategoryFilterChange(
-                  getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
-                )
-              }}
-            >
-              <For each={comparisonProjectArticleCategoryFilters}>
-                {(option) => {
-                  return (
-                    <option selected={option === props.articleCategoryFilter} value={option}>
-                      {getComparisonProjectArticleCategoryFilterLabel(option)}
-                    </option>
+          <Show when={props.showConflictResolutionFilter}>
+            <label class="flex flex-col gap-2 text-sm text-gray-700">
+              <span class="font-medium">Conflict resolutions</span>
+              <select
+                value={props.conflictResolutionFilter}
+                class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                onChange={(event) => {
+                  props.onConflictResolutionFilterChange(
+                    getNormalizedComparisonProjectConflictResolutionFilter(event.currentTarget.value),
                   )
                 }}
-              </For>
-            </select>
-          </label>
-        </Show>
-        <Button
-          type="button"
-          disabled={props.isExportingCsv || props.isExportingPdf}
-          onClick={() => {
-            props.onExportCsv()
-          }}
-        >
-          {props.isExportingCsv ? 'Exporting CSV...' : 'Export to CSV'}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={props.isExportingCsv || props.isExportingPdf}
-          onClick={() => {
-            props.onExportPdf()
-          }}
-        >
-          {props.isExportingPdf ? 'Exporting PDF...' : 'Export to PDF'}
-        </Button>
+              >
+                <For each={props.conflictResolutionFilterOptions}>
+                  {(option) => {
+                    return (
+                      <option selected={option.value === props.conflictResolutionFilter} value={option.value}>
+                        {option.label}
+                      </option>
+                    )
+                  }}
+                </For>
+              </select>
+            </label>
+          </Show>
+          <Show when={props.showArticleCategoryFilter}>
+            <label class="flex flex-col gap-2 text-sm text-gray-700">
+              <span class="font-medium">Language</span>
+              <select
+                value={props.articleCategoryFilter}
+                class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                onChange={(event) => {
+                  props.onArticleCategoryFilterChange(
+                    getNormalizedComparisonProjectArticleCategoryFilter(event.currentTarget.value),
+                  )
+                }}
+              >
+                <For each={comparisonProjectArticleCategoryFilters}>
+                  {(option) => {
+                    return (
+                      <option selected={option === props.articleCategoryFilter} value={option}>
+                        {getComparisonProjectArticleCategoryFilterLabel(option)}
+                      </option>
+                    )
+                  }}
+                </For>
+              </select>
+            </label>
+          </Show>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            disabled={props.isExportingCsv || props.isExportingPdf}
+            onClick={() => {
+              props.onExportCsv()
+            }}
+          >
+            {props.isExportingCsv ? 'Exporting CSV...' : 'Export to CSV'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={props.isExportingCsv || props.isExportingPdf}
+            onClick={() => {
+              props.onExportPdf()
+            }}
+          >
+            {props.isExportingPdf ? 'Exporting PDF...' : 'Export to PDF'}
+          </Button>
+        </div>
       </div>
     </div>
   )

@@ -677,8 +677,8 @@ const CompareProjectJudgmentsPage = () => {
               </Show>
 
               <div class="space-y-4">
-                <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-4 shadow">
-                  <div>
+                <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-4 shadow max-[1429px]:items-start">
+                  <div class="min-w-0 max-[1429px]:basis-full">
                     <h2 class="text-lg font-semibold">Article Judgments</h2>
                     <p class="text-sm text-gray-600">
                       <Show
@@ -705,7 +705,7 @@ const CompareProjectJudgmentsPage = () => {
                       </Show>
                     </p>
                   </div>
-                  <div class="flex items-center gap-3">
+                  <div class="flex flex-wrap items-center gap-x-4 gap-y-2 max-[1429px]:basis-full">
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <span>Row filter</span>
                       <select
