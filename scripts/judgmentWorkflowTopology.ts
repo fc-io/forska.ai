@@ -76,7 +76,7 @@ export const isExpectedTopologyShutdownExitCode = ({
   platform = process.platform,
 }: {
   exitCode: number
-  platform?: NodeJS.Platform
+  platform?: typeof process.platform
 }) => {
   return exitCode === 0 || (platform === 'win32' && exitCode === 143)
 }
@@ -203,12 +203,20 @@ export const startJudgmentWorkflowTopologyExtraJudge = async (
   })
   const deadline = Date.now() + startupTimeoutMs
 
-  await Promise.race([
-    waitForRuntimeRole({deadline, port, role: 'judge-worker'}),
-    childProcess.exited.then((exitCode) => {
-      throw new Error(`Extra judge worker exited before readiness with code ${exitCode}`)
-    }),
-  ])
+  try {
+    await Promise.race([
+      waitForRuntimeRole({deadline, port, role: 'judge-worker'}),
+      childProcess.exited.then((exitCode) => {
+        throw new Error(`Extra judge worker exited before readiness with code ${exitCode}`)
+      }),
+    ])
+  } catch (error) {
+    childProcess.kill('SIGTERM')
+    await waitForExit(childProcess).catch(() => {
+      return undefined
+    })
+    throw error
+  }
   topology.journalPaths.push(identity.journalPath)
 
   return {env, journalPath: identity.journalPath, port, process: childProcess}
@@ -893,14 +901,22 @@ export const prepareJudgmentWorkflowMigrationBoundary = async (topology: Judgmen
 }
 
 const waitForExit = async (serverStackProcess: Subprocess<'ignore', 'inherit', 'inherit'>): Promise<number> => {
-  return Promise.race([
-    serverStackProcess.exited,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(() => {
-        reject(new Error('Production server stack did not exit after SIGTERM'))
-      }, shutdownTimeoutMs)
-    }),
-  ])
+  let timeout: ReturnType<typeof setTimeout> | null = null
+
+  try {
+    return await Promise.race([
+      serverStackProcess.exited,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error('Production server stack did not exit after SIGTERM'))
+        }, shutdownTimeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
+  }
 }
 
 export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess, topology}: RunningTopology) => {

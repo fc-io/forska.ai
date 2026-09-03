@@ -182,6 +182,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
   let provisionedFixture: RealCodexProvisionedFixture | null = null
   let requestEvidenceManifestPath: string | null = null
   let requestEvidenceOutputPath: string | null = null
+  let retainedSnapshotIdentities: SnapshotIdentity[] = []
   const getRunning = () => {
     if (!running) throw new Error('Real Codex topology is not running')
     return running
@@ -279,6 +280,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
         promptId,
         providerConnectionId: getString(connection.id, 'Codex provider connection id'),
       }
+      retainedSnapshotIdentities = []
       return provisionedFixture
     },
     startJobThroughHttp: async (fixture) => {
@@ -292,7 +294,13 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
         const requests = getRecord(job.requestStats, 'job request stats')
         const tokens = getRecord(job.totalTokenUsage, 'job token usage')
         const failures = isRecord(requests.failures) ? requests.failures : null
-        const failure = failures && typeof failures.lastError === 'string' ? failures.lastError : null
+        const persistedFailedRequests = Number(failures?.persistedFailedRequests ?? 0)
+        const failure =
+          failures && typeof failures.lastError === 'string'
+            ? failures.lastError
+            : persistedFailedRequests > 0
+              ? `Persisted ${persistedFailedRequests} failed request${persistedFailedRequests === 1 ? '' : 's'}`
+              : null
         const attempts = Number(requests.attempts ?? 0)
         const fixture = provisionedFixture
         if (!fixture) throw new Error('Real Codex fixture was not provisioned')
@@ -326,6 +334,14 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
           judgments.length === articleCount
           && Number(canonicalEvidence.visibleProjectionCount ?? 0) === articleCount
         ) {
+          if (retainedSnapshotIdentities.length === 0) {
+            const sqlitePath = join(getRunning().topology.root, 'data', 'judgment-jobs', `${fixture.jobId}.sqlite`)
+            retainedSnapshotIdentities = getSnapshotIdentities(sqlitePath)
+          }
+          if (retainedSnapshotIdentities.length === 0) {
+            await sleep(500)
+            return poll()
+          }
           return {...common, error: null, status: 'completed'}
         }
         if (Date.now() - startedAt >= timeoutMs) {
@@ -339,7 +355,9 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
     inspectEvidence: async (fixture: RealCodexProvisionedFixture): Promise<RealCodexEvidence> => {
       const active = getRunning()
       const sqlitePath = join(active.topology.root, 'data', 'judgment-jobs', `${fixture.jobId}.sqlite`)
-      const executionInputs = await getSnapshotEvidence(getBaseUrl(), getSnapshotIdentities(sqlitePath))
+      const snapshotIdentities =
+        retainedSnapshotIdentities.length > 0 ? retainedSnapshotIdentities : getSnapshotIdentities(sqlitePath)
+      const executionInputs = await getSnapshotEvidence(getBaseUrl(), snapshotIdentities)
       if (!requestEvidenceOutputPath) throw new Error('Real Codex request evidence path is unavailable')
       const requestInputs = (await readFile(requestEvidenceOutputPath, 'utf8'))
         .trim()

@@ -30,10 +30,7 @@ const runBunEval = (script: string, env: Record<string, string>) => {
   return {...result, exitCode: result.status ?? 1}
 }
 
-const readChildProcessOutput = (runScript: {
-  stderr: {toString: () => string}
-  stdout: {toString: () => string}
-}) => {
+const readChildProcessOutput = (runScript: {stderr: {toString: () => string}; stdout: {toString: () => string}}) => {
   const stdout = runScript.stdout.toString()
   const stderr = runScript.stderr.toString()
 
@@ -142,9 +139,7 @@ test('review serving projector worker heartbeat logs original loop failure and r
 
   if (runScript.exitCode !== 0) {
     const {stderr, stdout} = readChildProcessOutput(runScript)
-    throw new Error(
-      stderr || stdout || 'Review serving projector worker heartbeat logging test failed',
-    )
+    throw new Error(stderr || stdout || 'Review serving projector worker heartbeat logging test failed')
   }
 
   const {combined: output, stdout} = readChildProcessOutput(runScript)

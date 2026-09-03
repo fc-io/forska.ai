@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto'
 import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
-import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {publishProjectedJudgmentJobVisibility} from '../reviewServing/judgmentJobReviewServingVisibilityService.ts'
 import {intakeReviewChangeDeltasToDirtyWork} from '../reviewServing/reviewChangeDeltaDirtyIntakeService.ts'
 import {intakeReviewImportDeltasToDirtyWork} from '../reviewServing/reviewImportDeltaDirtyIntakeService.ts'
@@ -9159,7 +9159,13 @@ export const runReviewServingProjectorWorkerCycle = async (
   if (!shouldRunOnlyRebuildChunk) {
     await runReviewServingProjectorWorkerCyclePhase('completeJudgmentJobVisibility', () => {
       return publishProjectedJudgmentJobVisibility(database, async ({ackToken, jobId}) => {
-        await getJudgmentJobSqliteService().setLastProjectRefreshAckSeq(jobId, ackToken)
+        await getJudgmentJobSqliteService()
+          .setLastProjectRefreshAckSeq(jobId, ackToken)
+          .catch((error) => {
+            if (!(error instanceof JudgmentJobLeaseError)) {
+              throw error
+            }
+          })
       })
     })
   }

@@ -15,20 +15,31 @@ export const mapAsyncWithConcurrency = async <T, U>({
     return item === undefined ? [] : [{index, value: await mapItem(item, index)}, ...(await runLane(index + safeLimit))]
   }
 
-  return items.length === 0
-    ? []
-    : Promise.all(
-        Array.from({length: safeLimit}, (_, index) => {
-          return runLane(index)
-        }),
-      ).then((lanes) => {
-        return lanes
-          .flat()
-          .sort((a, b) => {
-            return a.index - b.index
-          })
-          .map((entry) => {
-            return entry.value
-          })
-      })
+  if (items.length === 0) {
+    return []
+  }
+
+  const lanes = await Promise.allSettled(
+    Array.from({length: safeLimit}, (_, index) => {
+      return runLane(index)
+    }),
+  )
+  const firstRejectedLane = lanes.find((lane) => {
+    return lane.status === 'rejected'
+  })
+
+  if (firstRejectedLane?.status === 'rejected') {
+    throw firstRejectedLane.reason
+  }
+
+  return lanes
+    .flatMap((lane) => {
+      return lane.status === 'fulfilled' ? lane.value : []
+    })
+    .sort((a, b) => {
+      return a.index - b.index
+    })
+    .map((entry) => {
+      return entry.value
+    })
 }
