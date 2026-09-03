@@ -1,3 +1,5 @@
+import {resolve} from 'node:path'
+
 const ignoredPrefixes = ['node_modules/', 'dist/', '.git/', 'desktopBuild/', 'desktopArtifacts/']
 export const bunTestProcessTimeoutMs = 10 * 60_000
 
@@ -30,9 +32,9 @@ const getTestFiles = async () => {
     })
 }
 
-export const getBunTestCommand = (files: string[]) => {
+export const getBunTestCommand = (files: string[], cwd = process.cwd()) => {
   const fileArgs = files.map((filePath) => {
-    return filePath.startsWith('./') ? filePath : `./${filePath}`
+    return resolve(cwd, filePath)
   })
 
   return ['bun', 'test', ...fileArgs]

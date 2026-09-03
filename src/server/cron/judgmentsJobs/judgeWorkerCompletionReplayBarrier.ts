@@ -51,6 +51,10 @@ const consumeControlFile = (controlPath: string, consumedPath: string): boolean 
 }
 
 export const waitAtJudgeWorkerCompletionReplayBarrier = async (claimId: string): Promise<void> => {
+  if (process.env.NODE_ENV !== 'test') {
+    return
+  }
+
   const configuredRoot = String(process.env[barrierRootEnvKey] ?? '').trim()
 
   if (configuredRoot.length === 0) {

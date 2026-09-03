@@ -16,5 +16,9 @@ test('Bun test discovery normalizes Windows paths before excluding generated and
 
 test('Bun test discovery bounds each file process without relaxing Bun test timeouts', () => {
   expect(bunTestProcessTimeoutMs).toBe(10 * 60_000)
-  expect(getBunTestCommand(['scripts/example.test.ts'])).toEqual(['bun', 'test', './scripts/example.test.ts'])
+  expect(getBunTestCommand(['scripts/example.test.ts'], '/repo')).toEqual([
+    'bun',
+    'test',
+    '/repo/scripts/example.test.ts',
+  ])
 })

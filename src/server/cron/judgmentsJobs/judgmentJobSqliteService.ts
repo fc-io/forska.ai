@@ -4509,7 +4509,7 @@ const sqliteService = {
     )
   },
   getTopologyClaimRows: async (jobId: string): Promise<JudgmentJobTopologyClaimRow[]> => {
-    if (!process.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN) {
+    if (process.env.NODE_ENV !== 'test' || !process.env.FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN) {
       return []
     }
 
