@@ -624,16 +624,61 @@ export const createCodexAppServerClient = ({
     })
   }
 
-  const readThreadWithRetry = async (threadId: string, attempt = 1): Promise<unknown> => {
+  const requestWithAbort = async (
+    method: string,
+    params: unknown,
+    signal: AbortSignal | undefined,
+    timeoutMs?: number,
+  ): Promise<unknown> => {
+    if (!signal) {
+      return request(method, params, timeoutMs)
+    }
+    signal.throwIfAborted()
+
+    const requestPromise = request(method, params, timeoutMs)
+
+    return await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        signal.removeEventListener('abort', onAbort)
+      }
+      const onAbort = () => {
+        cleanup()
+        requestPromise.catch(() => {
+          return undefined
+        })
+        reject(signal.reason instanceof Error ? signal.reason : new Error(`codex app-server: ${method} aborted`))
+      }
+
+      signal.addEventListener('abort', onAbort, {once: true})
+      requestPromise.then(
+        (value) => {
+          cleanup()
+          resolve(value)
+        },
+        (error) => {
+          cleanup()
+          reject(error)
+        },
+      )
+    })
+  }
+
+  const readThreadWithRetry = async (
+    threadId: string,
+    signal: AbortSignal | undefined,
+    attempt = 1,
+  ): Promise<unknown> => {
     try {
-      return await request('thread/read', {threadId, includeTurns: true}, resolvedThreadReadTimeoutMs)
+      return await requestWithAbort('thread/read', {threadId, includeTurns: true}, signal, resolvedThreadReadTimeoutMs)
     } catch (error) {
       if (!isCodexThreadReadTimeoutError(error) || attempt >= resolvedThreadReadMaxAttempts) {
         throw error
       }
 
+      signal?.throwIfAborted()
       await waitForCodexThreadReadRetry(resolvedThreadReadRetryDelayMs)
-      return readThreadWithRetry(threadId, attempt + 1)
+      signal?.throwIfAborted()
+      return readThreadWithRetry(threadId, signal, attempt + 1)
     }
   }
 
@@ -729,7 +774,7 @@ export const createCodexAppServerClient = ({
         throw new Error('codex app-server: thread/start missing threadId')
       }
 
-      const turnStart = await request(
+      const turnStart = await requestWithAbort(
         'turn/start',
         {
           threadId,
@@ -742,8 +787,14 @@ export const createCodexAppServerClient = ({
           sandboxPolicy: safe.sandboxPolicy,
           outputSchema: params.outputSchema,
         },
+        params.signal,
         params.timeoutMs,
-      )
+      ).catch((error) => {
+        if (params.signal?.aborted) {
+          markRecycleWhenIdle('turnError')
+        }
+        throw error
+      })
       params.signal?.throwIfAborted()
       const turnId = (turnStart as {turn?: {id?: unknown}}).turn?.id
       if (typeof turnId !== 'string') {
@@ -758,11 +809,13 @@ export const createCodexAppServerClient = ({
         const onClosed: LifecycleListener = (error) => {
           fail(error)
         }
-        const cleanup = (): void => {
+        const cleanup = ({removeAbort = true}: {removeAbort?: boolean} = {}): void => {
           clearTimeout(timeout)
           listeners.delete(handler)
           lifecycleListeners.delete(onClosed)
-          params.signal?.removeEventListener('abort', onAbort)
+          if (removeAbort) {
+            params.signal?.removeEventListener('abort', onAbort)
+          }
         }
         const fail = (error: Error): void => {
           if (settled) return
@@ -800,7 +853,7 @@ export const createCodexAppServerClient = ({
             if (completedTurnId !== turnId) return
             if (settled) return
             settled = true
-            cleanup()
+            cleanup({removeAbort: false})
 
             if (status === 'failed') {
               recycleAfterTurn = true
@@ -808,12 +861,14 @@ export const createCodexAppServerClient = ({
               return undefined
             }
 
-            void readThreadWithRetry(threadId)
+            void readThreadWithRetry(threadId, params.signal)
               .then((threadRead) => {
+                cleanup()
                 completedTurn = true
                 resolve({text: getCodexTurnAgentMessageText(threadRead, turnId), usage: turnUsage})
               })
               .catch((error) => {
+                cleanup()
                 recycleAfterTurn = true
                 reject(error)
               })

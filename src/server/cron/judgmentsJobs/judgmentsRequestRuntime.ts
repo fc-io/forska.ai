@@ -1917,7 +1917,11 @@ export const withJudgmentRequest = async <T>(
         providerAdmissionHeartbeat.stop()
         await waitAtJudgeWorkerLeaseLossTestBarrier()
       }
-      const finalHeartbeat = await heartbeatProviderAdmissionLeaseThroughOwner(providerAdmissionLease)
+      const finalHeartbeat = await heartbeatProviderAdmissionLeaseThroughOwner(providerAdmissionLease).catch(
+        (error) => {
+          return {heartbeat: false as const, reason: getErrorMessage(error)}
+        },
+      )
 
       if (isJudgeWorkerLeaseLossTestBarrierActive()) {
         recordJudgeWorkerLeaseLossTestBarrierOutcome(
@@ -1925,8 +1929,16 @@ export const withJudgmentRequest = async <T>(
         )
       }
 
+      if (providerAdmissionHeartbeat.signal.aborted) {
+        throw providerAdmissionHeartbeat.signal.reason
+      }
+
       if (!finalHeartbeat.heartbeat) {
         throw new ProviderAdmissionLeaseLostError(finalHeartbeat.reason)
+      }
+
+      if (providerAdmissionHeartbeat.signal.aborted) {
+        throw providerAdmissionHeartbeat.signal.reason
       }
 
       return result

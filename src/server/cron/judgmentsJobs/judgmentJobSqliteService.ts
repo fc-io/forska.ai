@@ -1562,6 +1562,17 @@ const deleteJobFiles = (jobId: string) => {
   rmSync(getJudgmentJobLeasePath(jobId), {force: true})
 }
 
+const hasJudgmentJobFileArtifact = (jobId: string) => {
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  return (
+    existsSync(sqlitePath)
+    || existsSync(`${sqlitePath}-shm`)
+    || existsSync(`${sqlitePath}-wal`)
+    || existsSync(getJudgmentJobLeasePath(jobId))
+  )
+}
+
 const getSqliteCleanupCandidateJobIds = async ({
   jobId,
   storageState,
@@ -1571,19 +1582,37 @@ const getSqliteCleanupCandidateJobIds = async ({
 }) => {
   const existingJobIds = await getTrackedJudgmentJobIds(jobId)
 
-  return existingJobIds.length === 0
-    ? []
-    : (
-        await getAppDatabaseService().queryJson<JudgmentJobStorageRow>(`
+  if (storageState === 'draining' && existingJobIds.length === 0) {
+    return []
+  }
+
+  const idFilter =
+    storageState === 'draining'
+      ? `AND id IN (${getQuotedStringList(existingJobIds).join(', ')})`
+      : jobId
+        ? `AND id = ${getSqlLiteral(jobId)}`
+        : ''
+
+  const candidateRows =
+    storageState === 'drained' || existingJobIds.length > 0
+      ? await getAppDatabaseService().queryJson<JudgmentJobStorageRow>(`
            SELECT id
            FROM app.judgment_job
-           WHERE id IN (${getQuotedStringList(existingJobIds).join(', ')})
-             AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
+           WHERE status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
              AND storage_state = ${getSqlLiteral(storageState)}
+             ${idFilter}
          `)
-      ).map((row) => {
-        return row.id
-      })
+      : []
+
+  return candidateRows.length === 0
+    ? []
+    : candidateRows
+        .map((row) => {
+          return row.id
+        })
+        .filter((candidateJobId) => {
+          return storageState === 'draining' || hasJudgmentJobFileArtifact(candidateJobId)
+        })
 }
 
 const getActiveQueueRowCount = (database: Database) => {
@@ -2133,6 +2162,13 @@ const deleteDrainedSqliteJobs = async ({
   }
 
   try {
+    if (!existsSync(getJudgmentJobSqlitePath(currentJobId))) {
+      deleteJobFiles(currentJobId)
+      await publishHealthProjection({health: getEmptyHealthSnapshot(), jobId: currentJobId})
+
+      return [currentJobId, ...(await deleteDrainedSqliteJobs({jobIds: jobIds.slice(1), serverJobId}))]
+    }
+
     const shouldDelete = await withOwnedJobDatabase(
       currentJobId,
       false,

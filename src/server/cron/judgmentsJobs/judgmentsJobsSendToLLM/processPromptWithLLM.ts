@@ -25,7 +25,7 @@ import {
   type PromptCloseoutReason,
   type PromptNoRequestSuccessReason,
 } from '../judgmentJobSqliteService.ts'
-import {reserveJudgmentPromptRequestWork} from '../judgmentsRequestRuntime.ts'
+import {isProviderAdmissionLeaseLostError, reserveJudgmentPromptRequestWork} from '../judgmentsRequestRuntime.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 import {prepareLiveArticleForJudging} from './prepareLiveArticleForJudging.ts'
 
@@ -884,6 +884,24 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
 
             if (error instanceof JudgmentPersistenceError) {
               terminalState = {kind: 'ready', retryAfterMs: null}
+              throw error
+            }
+
+            if (isProviderAdmissionLeaseLostError(error)) {
+              terminalState = {kind: 'ready', retryAfterMs: null}
+              processPromptFailureLogger.warn(
+                'llm.prompt.providerAdmissionLeaseLostRequeued',
+                '[llm] Requeued prompt after provider admission lease loss',
+                {
+                  articleId: promptToProcess.articleId,
+                  component: processPromptComponent,
+                  error: error.message,
+                  event: 'providerAdmissionLeaseLostRequeued',
+                  jobId: promptToProcess.jobId,
+                  promptId: promptToProcess.promptId,
+                  recordId: promptToProcess.recordId,
+                },
+              )
               throw error
             }
 
