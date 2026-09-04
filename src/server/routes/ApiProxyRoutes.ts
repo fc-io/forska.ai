@@ -7,6 +7,7 @@ import {
   getDuckdbOwnerConnectionRuntimeVersionError,
 } from '../utils/duckdbOwnerConnections.ts'
 import {env} from '../utils/env.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {probeDuckdbOwnerCutoverCompatibility, probeDuckdbOwnerRuntimeReadiness} from '../utils/runtimeCutover.ts'
 import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from '../utils/serverRuntimeRole.ts'
@@ -56,6 +57,7 @@ const duckdbOwnerProxyHopByHopResponseHeaders = new Set([
   'transfer-encoding',
   'upgrade',
 ])
+const duckdbOwnerProxyLogger = createRateLimitedLogger({windowMs: 30_000})
 const duckdbOwnerDiagnosticProxyTimeoutPathnames = new Set([
   '/api/admin/duckdb-runtime-workloads',
   `${duckdbOwnerPrivateApiPrefix}/api/llmstatus`,
@@ -159,6 +161,86 @@ const getPublicDuckdbOwnerProxyPathname = (requestTemplate: DuckdbOwnerProxyRequ
     : requestTemplate.pathname
 
   return normalizeApiRoutePathname(publicPathname)
+}
+
+const getDuckdbOwnerProxyRouteDiagnosticName = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  const publicPathname = getPublicDuckdbOwnerProxyPathname(requestTemplate)
+
+  if (
+    requestTemplate.method === 'POST'
+    && publicPathname.match(/^\/api\/comparison-projects\/[^/]+\/conflict-resolution$/) !== null
+  ) {
+    return 'comparison-project-conflict-resolution-save'
+  }
+
+  if (
+    requestTemplate.method === 'POST'
+    && publicPathname.match(/^\/api\/comparison-projects\/[^/]+\/conflict-resolution\/reset$/) !== null
+  ) {
+    return 'comparison-project-conflict-resolution-reset'
+  }
+
+  return `${requestTemplate.method} ${publicPathname}`
+}
+
+const getDuckdbOwnerProxyErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const getDuckdbOwnerProxyDiagnosticContext = (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  extra: Record<string, unknown> = {},
+) => {
+  return {
+    classification: requestTemplate.classification,
+    failClosedWithoutDuckdbOwner: requestTemplate.failClosedWithoutDuckdbOwner,
+    method: requestTemplate.method,
+    pathname: requestTemplate.pathname,
+    publicPathname: getPublicDuckdbOwnerProxyPathname(requestTemplate),
+    retryableMutation: isRetryableDuckdbOwnerProxyMutation(requestTemplate),
+    route: getDuckdbOwnerProxyRouteDiagnosticName(requestTemplate),
+    search: requestTemplate.search,
+    ...extra,
+  }
+}
+
+const warnDuckdbOwnerProxyFailure = (
+  key: string,
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  extra: Record<string, unknown> = {},
+) => {
+  duckdbOwnerProxyLogger.warn(
+    key,
+    '[api-proxy] DuckDB owner proxy could not forward request',
+    getDuckdbOwnerProxyDiagnosticContext(requestTemplate, extra),
+  )
+}
+
+const warnDuckdbOwnerProxyOwnerErrorResponse = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  response: Response,
+  duckdbOwnerUrl: string,
+) => {
+  if (response.status < 500) {
+    return
+  }
+
+  const bodyPreview = await response
+    .clone()
+    .text()
+    .then((body) => {
+      return body.slice(0, 1_000)
+    })
+    .catch((error) => {
+      return `unable to read owner error body: ${getDuckdbOwnerProxyErrorMessage(error)}`
+    })
+
+  warnDuckdbOwnerProxyFailure('api-proxy:duckdb-owner-error-response', requestTemplate, {
+    bodyPreview,
+    duckdbOwnerUrl,
+    status: response.status,
+    statusText: response.statusText,
+  })
 }
 
 const isRetryableDuckdbOwnerProxyMutation = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
@@ -347,6 +429,13 @@ const waitForDuckdbOwnerProxyTarget = async (
   }
 
   if (Date.now() >= deadlineMs) {
+    warnDuckdbOwnerProxyFailure('api-proxy:duckdb-owner-readiness-timeout', requestTemplate, {
+      duckdbOwnerUrl,
+      readiness:
+        result.status === 'unreachable'
+          ? {error: getDuckdbOwnerProxyErrorMessage(result.error), status: result.status}
+          : {message: result.message, runtimeVersion: result.runtimeVersion, status: result.status},
+    })
     return {response: getDuckdbOwnerProxyUnavailableResponse()}
   }
 
@@ -445,7 +534,11 @@ const getRetriedProxyResponse = async (
       }
 
       return await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
-    } catch {
+    } catch (error) {
+      warnDuckdbOwnerProxyFailure('api-proxy:duckdb-owner-retry-forward-failed', requestTemplate, {
+        duckdbOwnerUrl: currentDuckdbOwnerUrl,
+        error: getDuckdbOwnerProxyErrorMessage(error),
+      })
       continue
     }
   }
@@ -467,7 +560,13 @@ const waitForDuckdbOwnerProxyTargetUrl = async (
     await waitForDuckdbOwnerProxyRetry()
   }
 
-  return getCurrentServerDuckdbOwnerUrl()
+  const finalDuckdbOwnerUrl = await getCurrentServerDuckdbOwnerUrl()
+
+  if (finalDuckdbOwnerUrl === null) {
+    warnDuckdbOwnerProxyFailure('api-proxy:duckdb-owner-url-discovery-timeout', requestTemplate)
+  }
+
+  return finalDuckdbOwnerUrl
 }
 
 const isBufferedDuckdbOwnerProxyRequestTemplate = (
@@ -635,10 +734,28 @@ const getDuckdbOwnerProxyTargetFailureResponse = async (
       return {response: null}
     }
 
+    if (isBufferedDuckdbOwnerProxyRequestTemplate(requestTemplate)) {
+      warnDuckdbOwnerProxyFailure('api-proxy:duckdb-owner-url-unavailable', requestTemplate)
+    } else {
+      duckdbOwnerProxyLogger.warn(
+        'api-proxy:duckdb-owner-streaming-url-unavailable',
+        '[api-proxy] DuckDB owner proxy could not forward streaming request',
+        {
+          classification: requestTemplate.classification,
+          failClosedWithoutDuckdbOwner: requestTemplate.failClosedWithoutDuckdbOwner,
+          method: requestTemplate.method,
+          pathname: requestTemplate.pathname,
+          search: requestTemplate.search,
+        },
+      )
+    }
     return {response: getDuckdbOwnerProxyFailureResponse(requestTemplate)}
   }
 
   if (isCurrentServerDuckdbOwnerUrl(duckdbOwnerUrl)) {
+    if (isBufferedDuckdbOwnerProxyRequestTemplate(requestTemplate)) {
+      warnDuckdbOwnerProxyFailure('api-proxy:duckdb-owner-self-target', requestTemplate, {duckdbOwnerUrl})
+    }
     return {
       response: Response.json(
         {data: null, error: `DuckDB owner proxy target must not point to this same API server (${duckdbOwnerUrl})`},
@@ -663,7 +780,19 @@ const forwardStreamingApiRequestToDuckdbOwner = async (
     return getDuckdbOwnerProxyResponse(
       await fetchDuckdbOwnerStreamingProxyResponse(requestTemplate, target.duckdbOwnerUrl),
     )
-  } catch {
+  } catch (error) {
+    duckdbOwnerProxyLogger.warn(
+      'api-proxy:duckdb-owner-streaming-forward-failed',
+      '[api-proxy] DuckDB owner proxy streaming forward failed',
+      {
+        classification: requestTemplate.classification,
+        duckdbOwnerUrl: target.duckdbOwnerUrl,
+        error: getDuckdbOwnerProxyErrorMessage(error),
+        method: requestTemplate.method,
+        pathname: requestTemplate.pathname,
+        search: requestTemplate.search,
+      },
+    )
     return getDuckdbOwnerProxyFailureResponse(requestTemplate)
   }
 }
@@ -696,10 +825,16 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
       ? await fetchRetryableDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
       : await fetchNonRetryableDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
 
+    await warnDuckdbOwnerProxyOwnerErrorResponse(requestTemplate, response, target.duckdbOwnerUrl)
     const ownerResponse = getDuckdbOwnerProxyResponse(response)
 
     return getImportArtifactFallbackForOwnerFailure(ownerResponse, importArtifactFallbackResponse)
-  } catch {
+  } catch (error) {
+    warnDuckdbOwnerProxyFailure('api-proxy:duckdb-owner-forward-failed', requestTemplate, {
+      duckdbOwnerUrl: target.duckdbOwnerUrl,
+      error: getDuckdbOwnerProxyErrorMessage(error),
+      retryable: shouldRetryProxyRequest,
+    })
     if (!shouldRetryProxyRequest) {
       return getImportArtifactFallbackForOwnerFailure(
         getDuckdbOwnerProxyFailureResponse(requestTemplate),
