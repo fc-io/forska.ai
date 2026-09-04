@@ -103,6 +103,22 @@ test('simple PDF creates grouped radio rows for single-choice fields', () => {
   expect(output).not.toContain('/T (resolution.yes)')
 })
 
+test('simple PDF creates visible and hidden text fields', () => {
+  const pdf = new SimplePdfDocument()
+  pdf.addTextField({fieldName: 'forska.reviewer.displayName', label: 'Reviewer name', value: ''})
+  pdf.addTextField({fieldName: 'forska.import.format', hidden: true, value: 'metadata'})
+
+  const output = pdf.toBuffer().toString('latin1')
+
+  expect(output).toContain('/AcroForm')
+  expect(output).toContain('/FT /Tx')
+  expect(output).toContain('/T (forska.reviewer.displayName)')
+  expect(output).toContain('/T (forska.import.format)')
+  expect(output).toContain('/V (metadata)')
+  expect(output).toContain('/Rect [0.00 0.00 0.00 0.00]')
+  expect(output).toContain('(Reviewer name)')
+})
+
 test('simple PDF continues panel layout across page breaks without resetting to the first page bottom', () => {
   const pdf = new SimplePdfDocument()
   pdf.addPanel({title: 'LLM assessment'}, () => {
