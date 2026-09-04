@@ -16,6 +16,7 @@ import {
   duckdbOwnerPrivateApiPrefix,
   getDuckdbOwnerProxyPathname,
   isProjectTransferStreamingUploadPath,
+  normalizeApiRoutePathname,
   shouldApiRouteFailClosedWithoutDuckdbOwner,
   shouldApiRouteProxyToDuckdbOwner,
 } from './apiRouteClassification.ts'
@@ -153,9 +154,11 @@ const getDuckdbOwnerProxyRequest = (
 }
 
 const getPublicDuckdbOwnerProxyPathname = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
-  return requestTemplate.pathname.startsWith(duckdbOwnerPrivateApiPrefix)
+  const publicPathname = requestTemplate.pathname.startsWith(duckdbOwnerPrivateApiPrefix)
     ? requestTemplate.pathname.slice(duckdbOwnerPrivateApiPrefix.length)
     : requestTemplate.pathname
+
+  return normalizeApiRoutePathname(publicPathname)
 }
 
 const isRetryableDuckdbOwnerProxyMutation = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
@@ -433,7 +436,15 @@ const getRetriedProxyResponse = async (
 
     try {
       const nextDuckdbOwnerUrl = (await getCurrentServerDuckdbOwnerUrl()) ?? currentDuckdbOwnerUrl
-      return await fetchDuckdbOwnerProxyResponse(requestTemplate, nextDuckdbOwnerUrl)
+      const target = isRetryableDuckdbOwnerProxyMutation(requestTemplate)
+        ? await waitForDuckdbOwnerProxyTarget(requestTemplate, nextDuckdbOwnerUrl, deadlineMs)
+        : {duckdbOwnerUrl: nextDuckdbOwnerUrl}
+
+      if ('response' in target) {
+        return target.response
+      }
+
+      return await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
     } catch {
       continue
     }

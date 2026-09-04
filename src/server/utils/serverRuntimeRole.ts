@@ -134,6 +134,7 @@ const isDuckdbOwnerProxyDisabledByConfig = () => {
     !isAutoServerRole(getRuntimeEnv().SERVER_ROLE)
     && shouldCurrentServerProxyApiToOwner()
     && getManualDuckdbOwnerUrl() === null
+    && serverRuntimeState.lastKnownDuckdbOwnerUrl === null
   )
 }
 
@@ -448,11 +449,12 @@ export const initializeServerRuntimeRole = async () => {
   const env = getRuntimeEnv()
 
   setCurrentServerRole(getEffectiveServerRole(env.SERVER_ROLE))
-  setLastKnownDuckdbOwnerUrl(
-    canServerRoleOwnDuckdb(env.SERVER_ROLE) ? getCurrentServerUrl() : getManualDuckdbOwnerUrl(),
-  )
-
   const manualDuckdbOwnerUrl = getManualDuckdbOwnerUrl()
+  setLastKnownDuckdbOwnerUrl(canServerRoleOwnDuckdb(env.SERVER_ROLE) ? getCurrentServerUrl() : manualDuckdbOwnerUrl)
+
+  if (shouldCurrentServerProxyApiToOwner() && manualDuckdbOwnerUrl === null) {
+    await readDuckdbOwnerUrlFromLease()
+  }
 
   if (shouldCurrentServerProxyApiToOwner() && manualDuckdbOwnerUrl !== null) {
     await assertReachableDuckdbOwnerCutoverCompatible(manualDuckdbOwnerUrl, 'configured DuckDB owner URL')
@@ -537,8 +539,12 @@ export const getCurrentServerDuckdbOwnerUrl = async () => {
   if (!isAutoServerRole(getRuntimeEnv().SERVER_ROLE)) {
     const manualDuckdbOwnerUrl = getManualDuckdbOwnerUrl()
 
-    setLastKnownDuckdbOwnerUrl(manualDuckdbOwnerUrl)
-    return manualDuckdbOwnerUrl
+    if (manualDuckdbOwnerUrl !== null) {
+      setLastKnownDuckdbOwnerUrl(manualDuckdbOwnerUrl)
+      return manualDuckdbOwnerUrl
+    }
+
+    return readDuckdbOwnerUrlFromLease()
   }
 
   await syncAutoServerRole()
@@ -558,7 +564,7 @@ export const getCurrentServerWorkerRegistryOwnerUrl = async () => {
   }
 
   if (!isAutoServerRole(getRuntimeEnv().SERVER_ROLE)) {
-    return null
+    return readDuckdbOwnerUrlFromLease()
   }
 
   await syncAutoServerRole()

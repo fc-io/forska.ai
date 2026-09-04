@@ -385,6 +385,56 @@ apiProxyServerTest(
 )
 
 apiProxyServerTest(
+  'api role discovers DuckDB owner from lease when explicit owner URL is missing',
+  async () => {
+    const ownerPort = 34987
+    const apiPort = 34988
+    const duckdbPath = join(tmpdir(), `f1-duckdb-api-proxy-lease-fallback-${Date.now()}.duckdb`)
+    const ownerServer = startServer({
+      API_SERVER_PORT: String(ownerPort),
+      DUCKDB_PATH: duckdbPath,
+      RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+      RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+      SERVER_ROLE: 'maintenance-worker',
+      VITE_PORT: '4307',
+    })
+
+    try {
+      await waitForServer(ownerPort, apiProxyServerStartupTimeoutMs, ownerServer)
+
+      const apiServer = startServer({
+        API_SERVER_PORT: String(apiPort),
+        DUCKDB_PATH: duckdbPath,
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'api',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '4308',
+      })
+
+      try {
+        await waitForServer(apiPort, apiProxyServerStartupTimeoutMs, apiServer)
+
+        const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`)
+        const body = (await response.json()) as {data: unknown; error?: string}
+
+        expect(response.ok).toBe(true)
+        expect(body.error ?? null).toBe(null)
+        expect(body.data).not.toBe(null)
+      } finally {
+        await stopServer(apiServer)
+      }
+    } finally {
+      await stopServer(ownerServer)
+      removeFileIfExists(duckdbPath)
+      removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+      removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    }
+  },
+  apiProxyIntegrationTestTimeoutMs,
+)
+
+apiProxyServerTest(
   'api server without DuckDB owner fails closed for owner-dependent product routes',
   async () => {
     const apiPort = 34998

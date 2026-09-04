@@ -11,18 +11,18 @@ export type ApiRouteClassification =
   | 'owner-dependent'
   | 'unclassified'
 
-const normalizePathname = (pathname: string) => {
+export const normalizeApiRoutePathname = (pathname: string) => {
   return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
 }
 
 export const isProjectTransferStreamingUploadPath = (pathname: string, method: string) => {
-  const normalizedPathname = normalizePathname(pathname)
+  const normalizedPathname = normalizeApiRoutePathname(pathname)
 
   return method.toUpperCase() === 'PUT' && normalizedPathname.match(/^\/api\/projects\/import\/[^/]+\/upload$/) !== null
 }
 
 export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClassification => {
-  const normalizedPathname = normalizePathname(pathname)
+  const normalizedPathname = normalizeApiRoutePathname(pathname)
   const routeSurfaceRoute = findRouteSurfaceRoute({method, pathname: normalizedPathname})
 
   return !normalizedPathname.startsWith('/api/')
