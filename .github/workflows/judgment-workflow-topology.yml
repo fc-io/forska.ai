@@ -13,8 +13,12 @@ on:
       - "SUPPORT*"
       - "LICENSE*"
       - "NOTICE*"
+      - "*PLAN*"
+      - "*plan*"
       - "**/*.md"
       - "**/*.mdx"
+      - "**/*PLAN*"
+      - "**/*plan*"
       - "docs/**"
   workflow_dispatch:
 
