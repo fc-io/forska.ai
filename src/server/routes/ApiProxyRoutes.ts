@@ -8,7 +8,7 @@ import {
 } from '../utils/duckdbOwnerConnections.ts'
 import {env} from '../utils/env.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
-import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
+import {probeDuckdbOwnerCutoverCompatibility, probeDuckdbOwnerRuntimeReadiness} from '../utils/runtimeCutover.ts'
 import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from '../utils/serverRuntimeRole.ts'
 import {
   type ApiRouteClassification,
@@ -332,23 +332,24 @@ const waitForDuckdbOwnerProxyTarget = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   duckdbOwnerUrl: string,
   deadlineMs = Date.now() + getDuckdbOwnerProxyRetryTimeoutMs(requestTemplate),
-): Promise<Response | null> => {
-  const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'DuckDB owner proxy target')
+): Promise<{duckdbOwnerUrl: string} | {response: Response}> => {
+  const result = await probeDuckdbOwnerRuntimeReadiness(duckdbOwnerUrl, 'DuckDB owner proxy target')
 
-  if (result.status === 'incompatible') {
-    return Response.json({data: null, error: result.message}, {status: 426})
+  if (result.status === 'incompatible' && !result.message.includes('is not ready owner')) {
+    return {response: Response.json({data: null, error: result.message}, {status: 426})}
   }
 
   if (result.status === 'compatible') {
-    return null
+    return {duckdbOwnerUrl}
   }
 
   if (Date.now() >= deadlineMs) {
-    return getDuckdbOwnerProxyUnavailableResponse()
+    return {response: getDuckdbOwnerProxyUnavailableResponse()}
   }
 
   await waitForDuckdbOwnerProxyRetry()
-  return waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl, deadlineMs)
+  const nextDuckdbOwnerUrl = (await getCurrentServerDuckdbOwnerUrl()) ?? duckdbOwnerUrl
+  return waitForDuckdbOwnerProxyTarget(requestTemplate, nextDuckdbOwnerUrl, deadlineMs)
 }
 
 const fetchDuckdbOwnerProxyResponse = async (
@@ -368,13 +369,13 @@ const fetchNonRetryableDuckdbOwnerProxyResponse = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   duckdbOwnerUrl: string,
 ) => {
-  const targetFailureResponse = await waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl)
+  const target = await waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl)
 
-  if (targetFailureResponse !== null) {
-    return targetFailureResponse
+  if ('response' in target) {
+    return target.response
   }
 
-  return fetchDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl)
+  return fetchDuckdbOwnerProxyRequest(requestTemplate, target.duckdbOwnerUrl)
 }
 
 const fetchRetryableDuckdbOwnerProxyResponse = async (
@@ -382,11 +383,13 @@ const fetchRetryableDuckdbOwnerProxyResponse = async (
   duckdbOwnerUrl: string,
 ) => {
   if (isRetryableDuckdbOwnerProxyMutation(requestTemplate)) {
-    const targetFailureResponse = await waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl)
+    const target = await waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl)
 
-    if (targetFailureResponse !== null) {
-      return targetFailureResponse
+    if ('response' in target) {
+      return target.response
     }
+
+    return fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
   }
 
   return fetchDuckdbOwnerProxyResponse(requestTemplate, duckdbOwnerUrl)
@@ -437,6 +440,29 @@ const getRetriedProxyResponse = async (
   }
 
   return null
+}
+
+const waitForDuckdbOwnerProxyTargetUrl = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  deadlineMs = Date.now() + getDuckdbOwnerProxyRetryTimeoutMs(requestTemplate),
+): Promise<string | null> => {
+  while (Date.now() < deadlineMs) {
+    const duckdbOwnerUrl = await getCurrentServerDuckdbOwnerUrl()
+
+    if (duckdbOwnerUrl !== null) {
+      return duckdbOwnerUrl
+    }
+
+    await waitForDuckdbOwnerProxyRetry()
+  }
+
+  return getCurrentServerDuckdbOwnerUrl()
+}
+
+const isBufferedDuckdbOwnerProxyRequestTemplate = (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate | DuckdbOwnerStreamingProxyRequestTemplate,
+): requestTemplate is DuckdbOwnerProxyRequestTemplate => {
+  return requestTemplate.body === null || requestTemplate.body instanceof ArrayBuffer
 }
 
 const getDuckdbOwnerProxyUnavailableResponse = () => {
@@ -585,11 +611,19 @@ const getIncompatibleDuckdbOwnerPeerResponse = (request: Request) => {
   return error === null ? null : Response.json({data: null, error: error.message}, {status: 426})
 }
 
-const getDuckdbOwnerProxyTargetFailureResponse = async (requestTemplate: {
-  failClosedWithoutDuckdbOwner: boolean
-}): Promise<{duckdbOwnerUrl: string} | {response: Response | null}> => {
-  const duckdbOwnerUrl = await getCurrentServerDuckdbOwnerUrl()
+const getDuckdbOwnerProxyTargetFailureResponse = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate | DuckdbOwnerStreamingProxyRequestTemplate,
+): Promise<{duckdbOwnerUrl: string} | {response: Response | null}> => {
+  const duckdbOwnerUrl =
+    isBufferedDuckdbOwnerProxyRequestTemplate(requestTemplate) && isRetryableDuckdbOwnerProxyMutation(requestTemplate)
+      ? await waitForDuckdbOwnerProxyTargetUrl(requestTemplate)
+      : await getCurrentServerDuckdbOwnerUrl()
+
   if (duckdbOwnerUrl === null) {
+    if (!shouldCurrentServerProxyApiToOwner()) {
+      return {response: null}
+    }
+
     return {response: getDuckdbOwnerProxyFailureResponse(requestTemplate)}
   }
 

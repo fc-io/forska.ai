@@ -549,6 +549,17 @@ const CompareProjectJudgmentsPage = () => {
   const refetchComparisonProjectMetadata = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-metadata', comparisonProjectId()]})
   }
+  const refreshConflictResolutionQueries = () => {
+    const refreshes = [
+      shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage(),
+      refetchComparisonProjectStats(),
+      refetchComparisonProjectMetadata(),
+    ]
+
+    void Promise.all(refreshes).catch((error) => {
+      console.error('Failed to refresh comparison project conflict-resolution data', error)
+    })
+  }
   const refetchCommittedImportQueries = async () => {
     await Promise.all(
       getConflictResolutionImportRefreshQueryKeys(comparisonProjectId()).map((queryKey) => {
@@ -581,11 +592,7 @@ const CompareProjectJudgmentsPage = () => {
     try {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
       updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
-      await Promise.all([
-        shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage(),
-        refetchComparisonProjectStats(),
-        refetchComparisonProjectMetadata(),
-      ])
+      refreshConflictResolutionQueries()
     } catch (error) {
       updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
@@ -605,11 +612,7 @@ const CompareProjectJudgmentsPage = () => {
     try {
       await resetComparisonProjectConflictResolution(comparisonProjectId(), {articleId})
       updateCurrentJudgmentsPageConflictResolution(articleId, null)
-      await Promise.all([
-        shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage(),
-        refetchComparisonProjectStats(),
-        refetchComparisonProjectMetadata(),
-      ])
+      refreshConflictResolutionQueries()
     } catch (error) {
       updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to reset conflict resolution')

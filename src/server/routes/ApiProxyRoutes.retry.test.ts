@@ -29,14 +29,17 @@ const textEncoder = new TextEncoder()
 const importArtifactTestRoot = join(process.cwd(), 'tmp/project-transfer/import/api-proxy-status-artifact-test')
 const exportArtifactTestRoot = join(process.cwd(), 'tmp/project-transfer/export/api-proxy-export-artifact-test')
 
-const state: {ownerUrls: string[]; shouldProxy: boolean} = {ownerUrls: ['http://owner-1:34991'], shouldProxy: true}
+const state: {ownerUrls: Array<string | null>; shouldProxy: boolean} = {
+  ownerUrls: ['http://owner-1:34991'],
+  shouldProxy: true,
+}
 
 const getCurrentServerDuckdbOwnerUrl = mock(async () => {
   if (state.ownerUrls.length === 0) {
     return null
   }
 
-  const [currentOwnerUrl = '', ...remainingOwnerUrls] = state.ownerUrls
+  const [currentOwnerUrl = null, ...remainingOwnerUrls] = state.ownerUrls
   state.ownerUrls = remainingOwnerUrls.length === 0 ? [currentOwnerUrl] : remainingOwnerUrls
   return currentOwnerUrl
 })
@@ -81,7 +84,13 @@ const isRuntimeReadyUrl = (url: string) => {
 const getCompatibleRuntimeReadyResponse = () => {
   const runtimeVersion = actualRuntimeCutoverModule.getRuntimeCutoverVersion()
 
-  return Response.json({data: {ready: true, runtimeVersion}})
+  return Response.json({data: {duckdbOwner: true, ready: true, runtimeVersion}})
+}
+
+const getNotReadyRuntimeReadyResponse = () => {
+  const runtimeVersion = actualRuntimeCutoverModule.getRuntimeCutoverVersion()
+
+  return Response.json({data: {duckdbOwner: true, ready: false, runtimeVersion}})
 }
 
 const getOwnerFetchCallUrls = (calls: Array<[Request | URL | string]>) => {
@@ -699,6 +708,108 @@ test.serial(
   },
   10_000,
 )
+
+test.serial(
+  'api proxy waits for conflict-resolution POST owner readiness instead of treating it as incompatible',
+  async () => {
+    const app = await loadRoutes()
+    let notReadyCount = 2
+    const fetchMock = mock(async (request: Request | URL | string) => {
+      const url = getRequestUrl(request)
+
+      if (isRuntimeReadyUrl(url) && notReadyCount > 0) {
+        notReadyCount -= 1
+        return getNotReadyRuntimeReadyResponse()
+      }
+
+      return isRuntimeReadyUrl(url)
+        ? getCompatibleRuntimeReadyResponse()
+        : Response.json({data: {articleId: 'article-1', label: 'Yes', value: 'yes'}, error: null})
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const response = await app.handle(
+      new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution', {
+        body: JSON.stringify({articleId: 'article-1', value: 'yes'}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+      }),
+    )
+    const body = (await response.json()) as {data: {articleId: string; value: string}; error: string | null}
+
+    expect(response.status).toBe(200)
+    expect(body.data).toEqual({articleId: 'article-1', label: 'Yes', value: 'yes'})
+    expect(notReadyCount).toBe(0)
+  },
+)
+
+test.serial('api proxy waits for conflict-resolution POST owner URL discovery instead of failing fast', async () => {
+  const app = await loadRoutes()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    return isRuntimeReadyUrl(url)
+      ? getCompatibleRuntimeReadyResponse()
+      : Response.json({data: {articleId: 'article-1', label: 'Yes', value: 'yes'}, error: null})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+  state.ownerUrls = [null, null, 'http://owner-1:34991']
+
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution', {
+      body: JSON.stringify({articleId: 'article-1', value: 'yes'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {articleId: string; value: string}; error: string | null}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+  const forwardedPostUrls = ownerFetchCallUrls.filter((url) => {
+    return !isRuntimeReadyUrl(url)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({articleId: 'article-1', label: 'Yes', value: 'yes'})
+  expect(forwardedPostUrls).toEqual([
+    'http://owner-1:34991/__duckdb-owner-rpc/api/comparison-projects/comparison-project-1/conflict-resolution',
+  ])
+})
+
+test.serial('api proxy rediscovers moved conflict-resolution POST owner during readiness wait', async () => {
+  const app = await loadRoutes()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url) && url.startsWith('http://owner-1:34991')) {
+      throw new Error('old owner unavailable')
+    }
+
+    return isRuntimeReadyUrl(url)
+      ? getCompatibleRuntimeReadyResponse()
+      : Response.json({data: {articleId: 'article-1', label: 'Yes', value: 'yes'}, error: null})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+  state.ownerUrls = ['http://owner-1:34991', 'http://owner-2:34992']
+
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution', {
+      body: JSON.stringify({articleId: 'article-1', value: 'yes'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {articleId: string; value: string}; error: string | null}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+  const forwardedPostUrls = ownerFetchCallUrls.filter((url) => {
+    return !isRuntimeReadyUrl(url)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({articleId: 'article-1', label: 'Yes', value: 'yes'})
+  expect(forwardedPostUrls).toEqual([
+    'http://owner-2:34992/__duckdb-owner-rpc/api/comparison-projects/comparison-project-1/conflict-resolution',
+  ])
+})
 
 test.serial('api proxy retries conflict-resolution POST after a temporary same-owner transport failure', async () => {
   const app = await loadRoutes()

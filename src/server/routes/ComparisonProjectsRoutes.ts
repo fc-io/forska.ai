@@ -527,6 +527,23 @@ const checkpointComparisonProjectMutation = async () => {
   await appDatabaseService.maintenance('checkpoint', getMaintenanceDuckdbWorkloadContext('comparisonProjectMutation'))
 }
 
+const deferredComparisonProjectConflictResolutionCheckpointDelayMs = 1000
+let deferredComparisonProjectConflictResolutionCheckpoint: ReturnType<typeof setTimeout> | null = null
+
+const scheduleComparisonProjectConflictResolutionCheckpoint = () => {
+  if (deferredComparisonProjectConflictResolutionCheckpoint !== null) {
+    return
+  }
+
+  deferredComparisonProjectConflictResolutionCheckpoint = setTimeout(() => {
+    deferredComparisonProjectConflictResolutionCheckpoint = null
+    void checkpointComparisonProjectMutation().catch((error) => {
+      console.error('[comparison-projects] conflict-resolution checkpoint failed', error)
+    })
+  }, deferredComparisonProjectConflictResolutionCheckpointDelayMs)
+  deferredComparisonProjectConflictResolutionCheckpoint.unref?.()
+}
+
 const getComparisonProjectServingGenerationTxDependencies = (tx: AppTx) => {
   return {
     queryJson: tx.queryJson,
@@ -3430,6 +3447,23 @@ const getComparisonProjectConflictResolutionTargetRow = async (scope: Comparison
     throw new HttpError(400, 'Conflict resolution is not enabled for this comparison project')
   }
 
+  if (scope.activeGeneration !== null) {
+    const [servingRow] = await appDatabaseService.queryJson<{hasConflict: boolean}>(`
+      SELECT has_conflict AS hasConflict
+      FROM mart.comparison_article_serving
+      WHERE comparison_project_id = ${getSqlLiteral(scope.id)}
+        AND generation = ${getSqlLiteral(scope.activeGeneration)}
+        AND article_id = ${getSqlLiteral(articleId)}
+      LIMIT 1
+    `)
+
+    if (!servingRow?.hasConflict) {
+      throw new HttpError(400, 'Conflict resolution is only available for conflicting articles')
+    }
+
+    return servingRow
+  }
+
   const [row] = await getComparisonProjectRowsForArticles(scope, [articleId])
 
   if (!row?.hasConflict) {
@@ -5077,7 +5111,7 @@ export const comparisonProjectsRoutes = new Elysia()
       }
 
       const data = await setComparisonProjectConflictResolution({articleId: body.articleId, value: body.value, scope})
-      await checkpointComparisonProjectMutation()
+      scheduleComparisonProjectConflictResolutionCheckpoint()
 
       return {data}
     },
@@ -5095,7 +5129,7 @@ export const comparisonProjectsRoutes = new Elysia()
       }
 
       const data = await resetComparisonProjectConflictResolution({articleId: body.articleId, scope})
-      await checkpointComparisonProjectMutation()
+      scheduleComparisonProjectConflictResolutionCheckpoint()
 
       return {data}
     },
