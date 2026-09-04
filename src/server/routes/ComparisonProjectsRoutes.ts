@@ -131,8 +131,10 @@ type ComparisonProjectContentVariant = {
 }
 type ComparisonProjectPromptConfig = {
   id: string
+  originalText: string
   promptHeading: string | null
   promptLabel: string
+  transformedText: string | null
   type: string | null
   order: number
   criteriaDisposition: ProjectPromptCriteriaDisposition | null
@@ -227,7 +229,9 @@ type ComparisonProjectPdfSummaryJudgment = {
 }
 type ComparisonProjectSourcePrompt = {
   id: string
+  originalText: string
   promptHeading: string | null
+  transformedText: string | null
   order: number
   criteriaDisposition: ProjectPromptCriteriaDisposition | null
   criteriaSectionKey: string | null
@@ -1027,7 +1031,9 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
     appDatabaseService.queryJson<{
       projectId: string
       promptId: string
+      originalText: string
       promptHeading: string | null
+      transformedText: string | null
       order: number | null
       criteriaDisposition: ProjectPromptCriteriaDisposition | null
       criteriaSectionKey: string | null
@@ -1036,7 +1042,9 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       SELECT
         pp.project_id AS projectId,
         p.id AS promptId,
+        p.original_text AS originalText,
         p.prompt_heading AS promptHeading,
+        p.transformed_text AS transformedText,
         pp.prompt_order AS "order",
         pp.criteria_disposition AS criteriaDisposition,
         pp.criteria_section_key AS criteriaSectionKey,
@@ -1100,7 +1108,9 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
         prompts: sourcePromptRows.map<ComparisonProjectSourcePrompt>((promptRow, index) => {
           return {
             id: promptRow.promptId,
+            originalText: promptRow.originalText,
             promptHeading: promptRow.promptHeading,
+            transformedText: promptRow.transformedText,
             order: promptRow.order ?? index,
             criteriaDisposition: promptRow.criteriaDisposition,
             criteriaSectionKey: promptRow.criteriaSectionKey,
@@ -1198,7 +1208,9 @@ const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: 
   const rows = await appDatabaseService.queryJson<{
     sourceProjectId: string
     id: string
+    originalText: string
     promptHeading: string | null
+    transformedText: string | null
     type: string | null
     order: number | null
     criteriaDisposition: ProjectPromptCriteriaDisposition | null
@@ -1208,7 +1220,9 @@ const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: 
     SELECT
       pp.project_id AS sourceProjectId,
       p.id AS id,
+      p.original_text AS originalText,
       p.prompt_heading AS promptHeading,
+      p.transformed_text AS transformedText,
       p.type AS type,
       pp.prompt_order AS "order",
       pp.criteria_disposition AS criteriaDisposition,
@@ -1232,8 +1246,10 @@ const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: 
     return {
       id: row.id,
       sourceProjectId: row.sourceProjectId,
+      originalText: row.originalText,
       promptHeading: row.promptHeading,
       promptLabel: getPromptLabel(row.promptHeading, order),
+      transformedText: row.transformedText,
       type: row.type,
       order,
       criteriaDisposition: row.criteriaDisposition,
@@ -1326,10 +1342,18 @@ const getComparisonProjectPromptConfigsForSelections = async (
     return []
   }
 
-  const rows = await db.queryJson<{id: string; promptHeading: string | null; type: string | null}>(`
+  const rows = await db.queryJson<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    transformedText: string | null
+    type: string | null
+  }>(`
     SELECT
       id,
+      original_text AS originalText,
       prompt_heading AS promptHeading,
+      transformed_text AS transformedText,
       type
     FROM ${promptTable}
     WHERE id IN (${getInClause(
@@ -1357,8 +1381,10 @@ const getComparisonProjectPromptConfigsForSelections = async (
 
     return {
       id: row.id,
+      originalText: row.originalText,
       promptHeading: row.promptHeading,
       promptLabel: getPromptLabel(row.promptHeading, order),
+      transformedText: row.transformedText,
       type: row.type,
       order,
       criteriaDisposition: promptSelection.criteriaDisposition ?? null,
@@ -1435,8 +1461,10 @@ const getComparisonProjectSourceSummaryPromptConfigsFromSources = (
       return {
         id: promptSelection.promptId,
         sourceProjectId: sourceProject.id,
+        originalText: sourcePrompt?.originalText ?? '',
         promptHeading: sourcePrompt?.promptHeading ?? null,
         promptLabel: getPromptLabel(sourcePrompt?.promptHeading ?? null, order),
+        transformedText: sourcePrompt?.transformedText ?? null,
         type: null,
         order,
         criteriaDisposition: promptSelection.criteriaDisposition ?? null,
@@ -2827,7 +2855,9 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const [promptRows, routeRows, sourceProjectLinkRows, servingStatus] = await Promise.all([
     appDatabaseService.queryJson<{
       id: string
+      originalText: string
       promptHeading: string | null
+      transformedText: string | null
       type: string | null
       order: number | null
       criteriaDisposition: ProjectPromptCriteriaDisposition | null
@@ -2836,7 +2866,9 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     }>(`
       SELECT
         p.id AS id,
+        p.original_text AS originalText,
         p.prompt_heading AS promptHeading,
+        p.transformed_text AS transformedText,
         p.type AS type,
         cpp.prompt_order AS "order",
         cpp.criteria_disposition AS criteriaDisposition,
@@ -2871,8 +2903,10 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
 
     return {
       id: promptRow.id,
+      originalText: promptRow.originalText,
       promptHeading: promptRow.promptHeading,
       promptLabel: getPromptLabel(promptRow.promptHeading, order),
+      transformedText: promptRow.transformedText,
       type: promptRow.type,
       order,
       criteriaDisposition: promptRow.criteriaDisposition,
@@ -4096,6 +4130,54 @@ const addComparisonProjectPdfFrontPage = (params: {
   })
 }
 
+const getComparisonProjectPdfPromptOverviewPrompts = (scope: ComparisonProjectScope) => {
+  return getIsSummaryMode(scope) && scope.sourceProjectSummaryPrompts.length > 0
+    ? scope.sourceProjectSummaryPrompts
+    : scope.prompts
+}
+
+const addComparisonProjectPdfPromptOverviewPage = (pdf: SimplePdfDocument, scope: ComparisonProjectScope) => {
+  const prompts = getComparisonProjectPdfPromptOverviewPrompts(scope)
+
+  if (prompts.length === 0) {
+    return
+  }
+
+  const frontPageFontSizes = comparisonProjectPdfFrontPageFontSizes
+
+  pdf.addPage()
+  pdf.addText('Prompts in this review', {font: 'bold', fontSize: frontPageFontSizes.title, gapAfter: 10})
+  pdf.addText('These are the study-review prompts used for the judgments in this comparison project.', {
+    fontSize: frontPageFontSizes.body,
+    gapAfter: 12,
+  })
+
+  prompts.forEach((prompt) => {
+    const heading = prompt.promptHeading?.trim()
+    const title = heading ? `${prompt.order + 1}. ${heading}` : `${prompt.order + 1}. ${prompt.promptLabel}`
+    const metaParts = [
+      prompt.type ? `Type: ${prompt.type}` : null,
+      prompt.criteriaSectionLabel ? `Criteria: ${prompt.criteriaSectionLabel}` : null,
+      prompt.criteriaDisposition ? `Disposition: ${prompt.criteriaDisposition}` : null,
+    ].filter(isDefined)
+
+    pdf.ensureSpace(80)
+    pdf.addText(title, {font: 'bold', fontSize: frontPageFontSizes.heading, gapAfter: 3})
+
+    if (metaParts.length > 0) {
+      pdf.addText(metaParts.join(' | '), {fontSize: frontPageFontSizes.body, gapAfter: 4})
+    }
+
+    pdf.addText('Original Text', {font: 'bold', fontSize: frontPageFontSizes.body, gapAfter: 2})
+    pdf.addText(prompt.originalText, {fontSize: frontPageFontSizes.body, gapAfter: prompt.transformedText ? 5 : 12})
+
+    if (prompt.transformedText) {
+      pdf.addText('Transformed Text', {font: 'bold', fontSize: frontPageFontSizes.body, gapAfter: 2})
+      pdf.addText(prompt.transformedText, {fontSize: frontPageFontSizes.body, gapAfter: 12})
+    }
+  })
+}
+
 const addComparisonProjectPdfConflictResolution = (
   pdf: SimplePdfDocument,
   scope: ComparisonProjectScope,
@@ -4343,6 +4425,7 @@ const getComparisonProjectPdfExportResponse = async (
   let rowIndex = 0
 
   addComparisonProjectPdfFrontPage({exportFilters, exportedAt, pdf, scope, totalCount: totalCountResult.totalCount})
+  addComparisonProjectPdfPromptOverviewPage(pdf, scope)
 
   if (!scope.archived && scope.prompts.length > 0 && orderedColumns.length > 0) {
     await forEachComparisonProjectServingJudgmentRowBatch({
