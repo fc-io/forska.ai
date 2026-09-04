@@ -3944,11 +3944,6 @@ const addComparisonProjectPdfLlmAssessmentSection = (
     summaryJudgments.forEach((summaryJudgment) => {
       pdf.ensureSpace(30)
       pdf.addText(summaryJudgment.sourceLabel, {font: 'bold', fontSize: 10})
-      pdf.addText(`Summary answer: ${summaryJudgment.answer}`, {fontSize: 10, indent: 12})
-
-      if (summaryJudgment.contentLabel) {
-        pdf.addText(`Content used: ${summaryJudgment.contentLabel}`, {fontSize: 10, indent: 12})
-      }
 
       summaryJudgment.details.forEach((detail) => {
         addComparisonProjectPdfAssessmentDetail(pdf, detail)
@@ -3973,8 +3968,22 @@ const addComparisonProjectPdfSummaryJudgmentSection = (
 
     Array.from(columnsByPrompt.entries()).forEach(([, promptColumns]) => {
       const [firstColumn] = promptColumns
+      const contentLabels = Array.from(
+        new Set(
+          promptColumns
+            .filter((column) => {
+              return column.kind === 'llm' && column.contentLabel
+            })
+            .map((column) => {
+              return column.contentLabel ?? ''
+            }),
+        ),
+      )
       pdf.addText('Prompt', {font: 'bold', fontSize: 10})
       pdf.addText(firstColumn?.promptLabel ?? 'Prompt', {fontSize: 10, gapAfter: 4})
+      contentLabels.forEach((contentLabel) => {
+        pdf.addText(`Content used: ${contentLabel}`, {fontSize: 10, indent: 12})
+      })
 
       promptColumns.forEach((column) => {
         const answer = getComparisonProjectExportCellValue(row.cells[column.id]) || 'Not answered'
@@ -3983,10 +3992,6 @@ const addComparisonProjectPdfSummaryJudgmentSection = (
         pdf.ensureSpace(30)
         pdf.addText(sourceLabel, {font: 'bold', fontSize: 10})
         pdf.addText(`Answer: ${answer}`, {fontSize: 10, indent: 12})
-
-        if (column.kind === 'llm' && column.contentLabel) {
-          pdf.addText(`Content used: ${column.contentLabel}`, {fontSize: 10, indent: 12})
-        }
 
         pdf.addGap(5)
       })

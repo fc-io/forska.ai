@@ -45,11 +45,11 @@ const getPdfSafeName = (value: string) => {
 }
 
 const hasCjkText = (value: string) => {
-  return /[\u3400-\u9FFF\uF900-\uFAFF]/.test(value)
+  return /[\u3000-\u303F\u3400-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/.test(value)
 }
 
 const isCjkCharacter = (value: string) => {
-  return /^[\u3400-\u9FFF\uF900-\uFAFF]$/.test(value)
+  return /^[\u3000-\u303F\u3400-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]$/.test(value)
 }
 
 const getUtf16BeHexText = (value: string) => {
@@ -66,7 +66,27 @@ const getUtf16BeHexText = (value: string) => {
 
 const getPdfTextCommand = (line: string, font: string, fontSize: number, x: number, y: number) => {
   if (hasCjkText(line)) {
-    return `BT /F3 ${fontSize} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td <${getUtf16BeHexText(line)}> Tj ET`
+    const segments = Array.from(line).reduce<Array<{font: string; text: string}>>((textSegments, character) => {
+      const segmentFont = isCjkCharacter(character) ? 'F3' : font
+      const lastSegment = textSegments[textSegments.length - 1]
+
+      if (lastSegment?.font === segmentFont) {
+        lastSegment.text += character
+        return textSegments
+      }
+
+      textSegments.push({font: segmentFont, text: character})
+      return textSegments
+    }, [])
+    const textCommands = segments
+      .map((segment) => {
+        return segment.font === 'F3'
+          ? `/F3 ${fontSize} Tf <${getUtf16BeHexText(segment.text)}> Tj`
+          : `/${font} ${fontSize} Tf (${getPdfSafeAsciiText(segment.text)}) Tj`
+      })
+      .join(' ')
+
+    return `BT ${x.toFixed(2)} ${y.toFixed(2)} Td ${textCommands} ET`
   }
 
   return `BT /${font} ${fontSize} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td (${getPdfSafeAsciiText(line)}) Tj ET`
