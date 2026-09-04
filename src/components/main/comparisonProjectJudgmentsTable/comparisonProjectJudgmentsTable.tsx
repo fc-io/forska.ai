@@ -193,11 +193,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                         >
                           <div class="flex items-start gap-2">
                             <select
-                              ref={(element) => {
-                                queueMicrotask(() => {
-                                  element.value = row.conflictResolution?.value ?? ''
-                                })
-                              }}
+                              value={row.conflictResolution?.value ?? ''}
                               disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
                               aria-label={`Conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
                               class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs disabled:opacity-60"
@@ -209,19 +205,12 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                 }
                               }}
                             >
-                              <option value="" disabled selected={!row.conflictResolution}>
+                              <option value="" disabled>
                                 Conflict resolution:
                               </option>
                               <For each={conflictResolutionOptions()}>
                                 {(option) => {
-                                  return (
-                                    <option
-                                      value={option.value}
-                                      selected={row.conflictResolution?.value === option.value}
-                                    >
-                                      {option.label}
-                                    </option>
-                                  )
+                                  return <option value={option.value}>{option.label}</option>
                                 }}
                               </For>
                             </select>

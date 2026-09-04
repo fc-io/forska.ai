@@ -526,6 +526,23 @@ const CompareProjectJudgmentsPage = () => {
   const shouldDeferCurrentJudgmentsPageRefetch = () => {
     return showConflictResolutionFilter() && conflictResolutionFilter() !== 'all'
   }
+  const getOptimisticConflictResolution = (
+    articleId: string,
+    value: string,
+    previousConflictResolution: ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'],
+  ): ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'] => {
+    const option = conflictResolutionOptions().find((candidate) => {
+      return candidate.value === value
+    })
+
+    return {
+      articleId,
+      label: option?.label ?? value,
+      reviewerDisplayName: previousConflictResolution?.reviewerDisplayName ?? null,
+      reviewerUserId: previousConflictResolution?.reviewerUserId ?? null,
+      value,
+    }
+  }
   const refetchComparisonProjectStats = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-stats', comparisonProjectId()]})
   }
@@ -552,6 +569,14 @@ const CompareProjectJudgmentsPage = () => {
   const handleConflictResolutionSelect = async (articleId: string, value: string) => {
     setConflictResolutionPendingArticleId(articleId)
     setConflictResolutionError(null)
+    const previousConflictResolution =
+      visibleJudgmentRows().find((row) => {
+        return row.canonicalArticleId === articleId
+      })?.conflictResolution ?? null
+    updateCurrentJudgmentsPageConflictResolution(
+      articleId,
+      getOptimisticConflictResolution(articleId, value, previousConflictResolution),
+    )
 
     try {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
@@ -562,6 +587,7 @@ const CompareProjectJudgmentsPage = () => {
         refetchComparisonProjectMetadata(),
       ])
     } catch (error) {
+      updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
     } finally {
       setConflictResolutionPendingArticleId(null)
@@ -570,6 +596,11 @@ const CompareProjectJudgmentsPage = () => {
   const handleConflictResolutionReset = async (articleId: string) => {
     setConflictResolutionPendingArticleId(articleId)
     setConflictResolutionError(null)
+    const previousConflictResolution =
+      visibleJudgmentRows().find((row) => {
+        return row.canonicalArticleId === articleId
+      })?.conflictResolution ?? null
+    updateCurrentJudgmentsPageConflictResolution(articleId, null)
 
     try {
       await resetComparisonProjectConflictResolution(comparisonProjectId(), {articleId})
@@ -580,6 +611,7 @@ const CompareProjectJudgmentsPage = () => {
         refetchComparisonProjectMetadata(),
       ])
     } catch (error) {
+      updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to reset conflict resolution')
     } finally {
       setConflictResolutionPendingArticleId(null)
