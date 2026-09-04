@@ -51,6 +51,10 @@ test('background server stack clamps darwin maintenance-worker DuckDB memory to 
   expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(32 * gibibyte, 'darwin')).toBe('6400MiB')
 })
 
+test('background server stack clamps win32 maintenance-worker DuckDB memory to the stable ceiling', () => {
+  expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(64 * gibibyte, 'win32')).toBe('6400MiB')
+})
+
 test('background server stack defaults maintenance-worker port to api port plus one', () => {
   expect(getBackgroundServerStackConfig({API_SERVER_PORT: '3001'}, defaultLocalAppSettings)).toEqual({
     apiPort: 3001,

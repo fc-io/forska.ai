@@ -185,6 +185,12 @@ const getDuckdbOwnerProxyTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTe
     : duckdbOwnerMutationProxyTimeoutMs
 }
 
+const getDuckdbOwnerProxyRetryTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return requestTemplate.method === 'GET' || requestTemplate.method === 'HEAD' || requestTemplate.method === 'OPTIONS'
+    ? Math.max(duckdbOwnerProxyRetryTimeoutMs, getDuckdbOwnerProxyTimeoutMs(requestTemplate))
+    : duckdbOwnerProxyRetryTimeoutMs
+}
+
 const getDuckdbOwnerProxyTimeoutResponse = (timeoutMs: number) => {
   return Response.json({data: null, error: `DuckDB owner proxy target timed out after ${timeoutMs} ms`}, {status: 504})
 }
@@ -296,8 +302,9 @@ const fetchDuckdbOwnerProxyRequest = async (
 }
 
 const waitForDuckdbOwnerProxyTarget = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
   duckdbOwnerUrl: string,
-  deadlineMs = Date.now() + duckdbOwnerProxyRetryTimeoutMs,
+  deadlineMs = Date.now() + getDuckdbOwnerProxyRetryTimeoutMs(requestTemplate),
 ): Promise<Response | null> => {
   const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'DuckDB owner proxy target')
 
@@ -314,7 +321,7 @@ const waitForDuckdbOwnerProxyTarget = async (
   }
 
   await waitForDuckdbOwnerProxyRetry()
-  return waitForDuckdbOwnerProxyTarget(duckdbOwnerUrl, deadlineMs)
+  return waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl, deadlineMs)
 }
 
 const fetchDuckdbOwnerProxyResponse = async (
@@ -334,7 +341,7 @@ const fetchNonRetryableDuckdbOwnerProxyResponse = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   duckdbOwnerUrl: string,
 ) => {
-  const targetFailureResponse = await waitForDuckdbOwnerProxyTarget(duckdbOwnerUrl)
+  const targetFailureResponse = await waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl)
 
   if (targetFailureResponse !== null) {
     return targetFailureResponse
@@ -374,7 +381,7 @@ const getRetriedProxyResponse = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   currentDuckdbOwnerUrl: string,
 ) => {
-  const deadlineMs = Date.now() + duckdbOwnerProxyRetryTimeoutMs
+  const deadlineMs = Date.now() + getDuckdbOwnerProxyRetryTimeoutMs(requestTemplate)
 
   while (Date.now() < deadlineMs) {
     await waitForDuckdbOwnerProxyRetry()

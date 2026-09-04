@@ -214,6 +214,40 @@ test.serial('api proxy retries idempotent GET requests after a transport failure
   expect(ownerFetchCallUrls).toHaveLength(4)
 })
 
+test.serial(
+  'api proxy waits through a DuckDB owner restart for idempotent project reads',
+  async () => {
+    const app = await loadRoutes()
+    let readinessFailureCount = 40
+    const fetchMock = mock(async (request: Request | URL | string) => {
+      const url = getRequestUrl(request)
+
+      if (url.startsWith('http://owner-1:34991') && readinessFailureCount > 0) {
+        readinessFailureCount -= 1
+        throw new Error('owner restarting')
+      }
+
+      return isRuntimeReadyUrl(url)
+        ? getCompatibleRuntimeReadyResponse()
+        : Response.json({data: {ok: true}, error: null})
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const startedAt = Date.now()
+    const response = await app.handle(new Request('http://localhost/api/projects', {method: 'GET'}))
+    const elapsedMs = Date.now() - startedAt
+    const body = (await response.json()) as {data: {ok: boolean}; error: string | null}
+    const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+
+    expect(response.status).toBe(200)
+    expect(body.data.ok).toBe(true)
+    expect(readinessFailureCount).toBe(0)
+    expect(elapsedMs).toBeGreaterThanOrEqual(4_000)
+    expect(ownerFetchCallUrls.at(-1)).toBe('http://owner-1:34991/__duckdb-owner-rpc/api/projects')
+  },
+  10_000,
+)
+
 test.serial('api proxy times out wedged DuckDB owner diagnostic GET requests', async () => {
   const app = await loadRoutes()
   const fetchMock = mock(async (request: Request | URL | string) => {
