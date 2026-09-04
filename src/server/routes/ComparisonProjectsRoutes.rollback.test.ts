@@ -962,6 +962,19 @@ const postComparisonProjectConflictResolution = (
   )
 }
 
+const postComparisonProjectConflictResolutionReset = (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown>,
+) => {
+  return app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution/reset', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+}
+
 const postComparisonProjectConflictResolutionImportAnalyze = (
   app: {handle: (request: Request) => Promise<Response>},
   body: Record<string, unknown>,
@@ -3847,6 +3860,58 @@ test('comparison project conflict resolution PDF import names blank reviewers as
   expect(response.status).toBe(200)
   expect(state.lastUserConfigInsertStatement ?? '').toContain('Unnamed reviewer')
   expect(state.conflictResolutionRows.at(-1)?.reviewerUserId).toMatch(/^pdf-import:/)
+})
+
+test('comparison project conflict resolution PDF import does not create reviewer rows for no-op commits', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'no',
+        articleId: 'article-2',
+        comparisonProjectId: 'comparison-project-1',
+        id: 'existing-resolution-1',
+        promptId: null,
+      },
+    ],
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionPdfImportCommit(app, {importMode: 'all-matched'})
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  expect(response.status).toBe(200)
+  expect(state.lastUserConfigInsertStatement).toBeNull()
+  expect(state.lastConflictResolutionInsertStatement).toBeNull()
+  expect(state.conflictResolutionRows).toEqual([
+    {
+      answerValue: 'no',
+      articleId: 'article-2',
+      comparisonProjectId: 'comparison-project-1',
+      id: 'existing-resolution-1',
+      promptId: null,
+    },
+  ])
 })
 
 test('comparison project conflict resolution PDF import does not reset existing resolutions selected as Not set', async () => {
@@ -6747,6 +6812,42 @@ test('summary comparison conflict resolution API can change maybe to yes', async
   expect(state.maintenanceCommands).toEqual([])
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
+})
+
+test('comparison conflict resolution reset is rejected when conflict resolution is disabled', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: false,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-1',
+        comparisonProjectId: 'comparison-project-1',
+        id: 'existing-resolution-1',
+        promptId: null,
+      },
+    ],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionReset(app, {articleId: 'article-1'})
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(400)
+  expect(
+    state.runStatements.some((statement) => {
+      return statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
+    }),
+  ).toBe(false)
 })
 
 test('summary comparison judgments count and export support conflict-resolution filters', async () => {

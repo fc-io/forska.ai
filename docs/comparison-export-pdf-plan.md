@@ -1,6 +1,6 @@
 # Comparison Export PDF Plan
 
-Status: draft layout for review.
+Status: historical implementation plan. The PDF export exists; keep this file as background notes only.
 
 ## Goal
 
@@ -35,9 +35,8 @@ One article starts on a new page unless the article is very short and the user l
 │ Conflict resolution                                                          │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ Current resolution: Not set                                                  │
-│ Reviewer: Not set                                                            │
-│                                                                              │
 │ Choose resolution                                                            │
+│ ( ) Not set                                                                  │
 │ ( ) Include / Yes                                                            │
 │ ( ) Exclude / No                                                             │
 │ ( ) Maybe / Unsure                                                           │
@@ -129,7 +128,7 @@ Conflict-resolution rows should store who set the resolution.
 
 - Add a nullable local-user reference on `app.comparison_project_conflict_resolution`, for example `reviewer_user_id VARCHAR`, populated when a conflict resolution is created or changed.
 - The reviewer should be the current local user id, not a display-name copy. Resolve the display name at read/export time from `app.user_config`.
-- The PDF conflict-resolution section should show `Reviewer: Not set` when no resolution is set, and `Reviewer: <display name>` when a resolution exists with a local user id.
+- The PDF conflict-resolution section should not expose reviewer IDs or repeat per-row reviewer labels. Import reviewer identity is collected on the PDF front page as `Your name:`, and the import commit creates an internal reviewer instance ID.
 - First-run local user setup should generate a unique stable user id rather than relying on a shared/default constant across installations.
 - First-run local user setup should also create a human-readable display name. A good default is something like the OS account full name when available, then OS username, then `Local reviewer`.
 - Existing installs need a migration/backfill path: preserve the existing local user if present, but ensure it has a unique id and non-empty display name before new reviewer references are written.

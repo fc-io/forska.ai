@@ -159,6 +159,61 @@ test('full text conversion model config ignores missing and non-selectable confi
   expect(await userConfigQueryService.getFullTextConversionModelConfig()).toBeNull()
 })
 
+test('user config reads ignore PDF import reviewer rows', async () => {
+  if (!database || !userConfigQueryService) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await seedDoclingModelFixture({connectionId: 'local-config-connection', modelId: 'local-config-model'})
+  await seedUserConfig('local-config-model')
+  await database.run(`
+    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id)
+    VALUES (
+      'pdf-import:test-reviewer',
+      'Imported PDF reviewer',
+      'pdf-import:test-reviewer@pdf-import.forska.local',
+      NULL,
+      NULL
+    );
+  `)
+
+  const userConfig = await userConfigQueryService.getOrCreateUserConfig()
+  const fullTextConfig = await userConfigQueryService.getFullTextConversionModelConfig()
+
+  expect(userConfig).toMatchObject({id: localUserDefaults.id, name: localUserDefaults.name})
+  expect(fullTextConfig).toMatchObject({modelId: 'local-config-model'})
+})
+
+test('user config creates a local row when only PDF import reviewers exist', async () => {
+  if (!database || !userConfigQueryService) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await database.run(`
+    DELETE FROM app.user_config;
+
+    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id)
+    VALUES (
+      'pdf-import:only-reviewer',
+      'Imported PDF reviewer',
+      'pdf-import:only-reviewer@pdf-import.forska.local',
+      NULL,
+      NULL
+    );
+  `)
+
+  const userConfig = await userConfigQueryService.getOrCreateUserConfig()
+  const rows = await database.queryJson<{id: string; name: string}>(
+    'SELECT id, name FROM app.user_config ORDER BY id ASC',
+  )
+
+  expect(userConfig.id).toBe(localUserDefaults.id)
+  expect(rows).toEqual([
+    {id: localUserDefaults.id, name: localUserDefaults.name},
+    {id: 'pdf-import:only-reviewer', name: 'Imported PDF reviewer'},
+  ])
+})
+
 test('user config update rejects archived or config-disabled conversion models', async () => {
   if (!database || !userConfigQueryService) {
     throw new Error('Test dependencies not initialized')

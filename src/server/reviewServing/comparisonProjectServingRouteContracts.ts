@@ -70,15 +70,17 @@ export const comparisonProjectServingRouteContracts = [
     servingContract: 'comparison.judgmentCount.activeGeneration',
   },
   {
-    handling: 'owner-write-plus-serving-rebuild',
+    handling: 'owner-write',
     method: 'POST',
-    migrationTarget: 'resolution writes stay owner-routed and invalidate comparison serving',
+    migrationTarget:
+      'resolution writes stay owner-routed; serving reads join active rows with live owner resolution state',
     routePath: '/api/comparison-projects/:id/conflict-resolution',
   },
   {
-    handling: 'owner-write-plus-serving-rebuild',
+    handling: 'owner-write',
     method: 'POST',
-    migrationTarget: 'resolution reset stays owner-routed and invalidates comparison serving',
+    migrationTarget:
+      'resolution reset stays owner-routed; serving reads join active rows with live owner resolution state',
     routePath: '/api/comparison-projects/:id/conflict-resolution/reset',
   },
   {

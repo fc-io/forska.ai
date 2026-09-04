@@ -245,7 +245,9 @@ const CompareProjectJudgmentsPage = () => {
   )
   const [retainedConflictResolutionRowsByArticleId, setRetainedConflictResolutionRowsByArticleId] =
     createSignal<RetainedComparisonProjectJudgmentRows>({})
-  const [conflictResolutionPendingArticleId, setConflictResolutionPendingArticleId] = createSignal<string | null>(null)
+  const [conflictResolutionPendingArticleIds, setConflictResolutionPendingArticleIds] = createSignal<
+    Record<string, true>
+  >({})
   const [conflictResolutionError, setConflictResolutionError] = createSignal<string | null>(null)
   const [searchInitialized, setSearchInitialized] = createSignal(false)
 
@@ -549,9 +551,13 @@ const CompareProjectJudgmentsPage = () => {
   const refetchComparisonProjectMetadata = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-metadata', comparisonProjectId()]})
   }
+  const refetchComparisonProjectJudgmentsCount = async () => {
+    await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-count', comparisonProjectId()]})
+  }
   const refreshConflictResolutionQueries = () => {
     const refreshes = [
       shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage(),
+      refetchComparisonProjectJudgmentsCount(),
       refetchComparisonProjectStats(),
       refetchComparisonProjectMetadata(),
     ]
@@ -577,8 +583,26 @@ const CompareProjectJudgmentsPage = () => {
       void refetchCommittedImportQueries()
     }),
   )
+  const setConflictResolutionArticlePending = (articleId: string, pending: boolean) => {
+    setConflictResolutionPendingArticleIds((currentArticleIds) => {
+      if (pending) {
+        return currentArticleIds[articleId] ? currentArticleIds : {...currentArticleIds, [articleId]: true}
+      }
+
+      if (!currentArticleIds[articleId]) {
+        return currentArticleIds
+      }
+
+      const {[articleId]: _removedArticleId, ...nextArticleIds} = currentArticleIds
+
+      return nextArticleIds
+    })
+  }
+  const conflictResolutionPendingArticleIdList = () => {
+    return Object.keys(conflictResolutionPendingArticleIds())
+  }
   const handleConflictResolutionSelect = async (articleId: string, value: string) => {
-    setConflictResolutionPendingArticleId(articleId)
+    setConflictResolutionArticlePending(articleId, true)
     setConflictResolutionError(null)
     const previousConflictResolution =
       visibleJudgmentRows().find((row) => {
@@ -597,11 +621,11 @@ const CompareProjectJudgmentsPage = () => {
       updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
     } finally {
-      setConflictResolutionPendingArticleId(null)
+      setConflictResolutionArticlePending(articleId, false)
     }
   }
   const handleConflictResolutionReset = async (articleId: string) => {
-    setConflictResolutionPendingArticleId(articleId)
+    setConflictResolutionArticlePending(articleId, true)
     setConflictResolutionError(null)
     const previousConflictResolution =
       visibleJudgmentRows().find((row) => {
@@ -617,7 +641,7 @@ const CompareProjectJudgmentsPage = () => {
       updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to reset conflict resolution')
     } finally {
-      setConflictResolutionPendingArticleId(null)
+      setConflictResolutionArticlePending(articleId, false)
     }
   }
 
@@ -946,7 +970,7 @@ const CompareProjectJudgmentsPage = () => {
                     <ComparisonProjectJudgmentsTable
                       columns={orderedColumns()}
                       conflictResolutionEnabled={comparisonProject().allowConflictResolution}
-                      conflictResolutionPendingArticleId={conflictResolutionPendingArticleId()}
+                      conflictResolutionPendingArticleIds={conflictResolutionPendingArticleIdList()}
                       conflictResolutionOptions={conflictResolutionOptions()}
                       onConflictResolutionReset={handleConflictResolutionReset}
                       onConflictResolutionSelect={handleConflictResolutionSelect}

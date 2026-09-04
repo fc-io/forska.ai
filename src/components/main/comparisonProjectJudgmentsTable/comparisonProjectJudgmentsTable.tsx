@@ -15,7 +15,7 @@ export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsCo
 type ComparisonProjectJudgmentsTableProps = {
   conflictResolutionEnabled?: boolean
   conflictResolutionOptions?: Array<{label: string; value: string}>
-  conflictResolutionPendingArticleId?: string | null
+  conflictResolutionPendingArticleIds?: string[]
   columns: ComparisonProjectJudgmentsTableColumn[]
   onConflictResolutionReset?: (articleId: string) => void | Promise<void>
   onConflictResolutionSelect?: (articleId: string, value: string) => void | Promise<void>
@@ -68,7 +68,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
     return props.conflictResolutionOptions ?? []
   }
   const getIsConflictResolutionPending = (articleId: string) => {
-    return props.conflictResolutionPendingArticleId === articleId
+    return props.conflictResolutionPendingArticleIds?.includes(articleId) ?? false
   }
 
   return (
