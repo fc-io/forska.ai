@@ -40,6 +40,19 @@ test('simple PDF wraps mixed Chinese text inside indented containers', () => {
   expect(output).toContain('0.96 0.98 1.00 rg')
 })
 
+test('simple PDF keeps Latin labels in Helvetica on mixed Chinese lines', () => {
+  const pdf = new SimplePdfDocument()
+
+  pdf.addText('Quotes: 针灸治疗慢性疼痛 and following English')
+
+  const output = pdf.toBuffer().toString('latin1')
+
+  expect(output).toContain('/F1 10 Tf (Quotes: ) Tj /F3 10 Tf')
+  expect(output).toContain('<948870786CBB75976162602775BC75DB>')
+  expect(output).toContain('/F1 10 Tf ( and following English) Tj')
+  expect(output).not.toContain('/F3 10 Tf 48.00')
+})
+
 test('simple PDF panel padding grows outward so panel title aligns with page text', () => {
   const pdf = new SimplePdfDocument()
   pdf.addPanel({title: 'Conflict resolution'}, () => {
