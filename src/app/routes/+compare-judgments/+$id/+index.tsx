@@ -511,7 +511,7 @@ const CompareProjectJudgmentsPage = () => {
                 return {
                   ...page,
                   data: page.data.map((row) => {
-                    return row.id === articleId ? {...row, conflictResolution} : row
+                    return row.canonicalArticleId === articleId ? {...row, conflictResolution} : row
                   }),
                 }
               }),

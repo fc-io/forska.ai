@@ -205,12 +205,19 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                 }
                               }}
                             >
-                              <option value="" disabled>
+                              <option value="" disabled selected={!row.conflictResolution}>
                                 Conflict resolution:
                               </option>
                               <For each={conflictResolutionOptions()}>
                                 {(option) => {
-                                  return <option value={option.value}>{option.label}</option>
+                                  return (
+                                    <option
+                                      value={option.value}
+                                      selected={row.conflictResolution?.value === option.value}
+                                    >
+                                      {option.label}
+                                    </option>
+                                  )
                                 }}
                               </For>
                             </select>
