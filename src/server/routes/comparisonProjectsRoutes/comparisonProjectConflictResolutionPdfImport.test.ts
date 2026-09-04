@@ -34,13 +34,7 @@ const createFilledImportPdf = () => {
       humanJudgmentMode: 'summary',
     }),
   })
-  pdf.addTextField({
-    fieldName: 'forska.reviewer.instance',
-    hidden: true,
-    value: getMetadataValue({reviewerInstanceId: 'reviewer-instance-1'}),
-  })
   pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr Reviewer'})
-  pdf.addTextField({fieldName: 'forska.reviewer.instanceId', value: 'reviewer-instance-visible'})
   pdf.addTextField({
     fieldName: 'comparison.comparison-project-1.article.article-1.metadata',
     hidden: true,
@@ -76,7 +70,7 @@ const createFilledImportPdf = () => {
 }
 
 describe('comparison project conflict-resolution PDF import', () => {
-  test('parses reviewer metadata and filled conflict-resolution radio fields', () => {
+  test('parses reviewer name and filled conflict-resolution radio fields', () => {
     const parsedImport = parsePdfConflictResolutionImport(createFilledImportPdf())
 
     expect(parsedImport.source).toEqual({
@@ -86,7 +80,7 @@ describe('comparison project conflict-resolution PDF import', () => {
       formatVersion: 1,
       humanJudgmentMode: 'summary',
     })
-    expect(parsedImport.reviewer).toEqual({displayName: 'Dr Reviewer', instanceId: 'reviewer-instance-visible'})
+    expect(parsedImport.reviewer).toEqual({displayName: 'Dr Reviewer', instanceId: null})
     expect(parsedImport.rows).toEqual([
       {
         fieldName: 'comparison.comparison-project-1.article.article-1.resolution',
@@ -106,6 +100,26 @@ describe('comparison project conflict-resolution PDF import', () => {
         resolutionValue: 'yes',
       },
     ])
+  })
+
+  test('ignores legacy reviewer IDs from PDF fields and metadata', () => {
+    const pdf = new SimplePdfDocument()
+
+    pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr Reviewer'})
+    pdf.addTextField({fieldName: 'forska.reviewer.instanceId', value: 'legacy-visible-id'})
+    pdf.addTextField({
+      fieldName: 'forska.reviewer.instance',
+      hidden: true,
+      value: getMetadataValue({reviewerInstanceId: 'legacy-hidden-id'}),
+    })
+    pdf.addRadioRow('comparison.comparison-project-1.article.article-1.resolution', 'yes', [
+      {label: 'Yes', value: 'yes'},
+      {label: 'No', value: 'no'},
+    ])
+
+    const parsedImport = parsePdfConflictResolutionImport(pdf.toBuffer())
+
+    expect(parsedImport.reviewer).toEqual({displayName: 'Dr Reviewer', instanceId: null})
   })
 
   test('treats the explicit PDF Not set radio choice as no imported resolution', () => {

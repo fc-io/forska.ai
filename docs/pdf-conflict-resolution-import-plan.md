@@ -45,16 +45,14 @@ The front page should contain:
 - export filters and export time
 - row count
 - GitHub link: `https://github.com/fc-io/forska.ai`
-- visible fillable reviewer name field: `forska.reviewer.displayName`
-- visible fillable reviewer ID field: `forska.reviewer.instanceId`
+- visible fillable reviewer name field labeled `Your name:`: `forska.reviewer.displayName`
 
-The reviewer ID should be generated into the PDF at export time. The user can leave it as-is. This lets two reviewers with the same display name remain separate during import. If the same filled PDF is imported again, the ID also gives the importer a stable reviewer identity for overwrite/duplicate handling.
+The reviewer ID should not be stored in the PDF. Import should create a new internal reviewer instance ID when committing the PDF, so two reviewers with the same display name remain separate without exposing or asking users to preserve an ID in the file.
 
 PDF export should also embed hidden machine-readable fields:
 
 - `forska.import.format`
 - `forska.import.comparisonProject`
-- `forska.reviewer.instance`
 - `comparison.<project>.article.<article>.metadata`
 
 The first implementation can embed project/article metadata using hidden AcroForm text fields with base64url-encoded JSON values. Longer term, a document-level metadata object or attachment can replace this if needed, but hidden fields are easy to inspect and parse with the existing custom PDF writer.
@@ -87,7 +85,6 @@ type ParsedPdfConflictResolutionImport = {
   }
   reviewer: {
     displayName: string | null
-    instanceId: string | null
   }
   rows: Array<{
     fieldName: string
@@ -174,7 +171,7 @@ Default should be `skip-existing`. `overwrite-different` should be an intentiona
 When overwriting:
 
 - record the reviewer display name from the PDF front page
-- record or create a reviewer user ID derived from the PDF reviewer instance ID
+- create a reviewer user ID during import; do not trust or require any reviewer ID from the PDF
 - preserve enough information in the result summary to audit what changed
 - schedule the existing deferred comparison-project checkpoint behavior
 
@@ -186,7 +183,7 @@ Update the existing import page:
 - detect file type by extension and MIME, then validate server-side
 - keep JSON import behavior unchanged
 - for PDF, upload to analyze endpoint instead of reading client-side JSON
-- show reviewer name/ID parsed from PDF
+- show reviewer name parsed from PDF
 - show warning if reviewer name is blank
 - show overwrite mode control only when analyze finds overwrite candidates
 - show clear errors for flattened PDFs or PDFs without filled resolution fields
@@ -202,7 +199,7 @@ Update the existing import page:
 
 ### Parser Tests
 
-- Reads reviewer display name and reviewer instance ID.
+- Reads reviewer display name and does not read reviewer IDs from the PDF.
 - Reads selected radio values.
 - Ignores `/Off`.
 - Rejects invalid field names.
@@ -220,7 +217,7 @@ Update the existing import page:
 - Commit with `overwrite-different` and assert rows change.
 - Reject invalid resolution values.
 - Reject project/mode mismatch cleanly.
-- Verify imported reviewer display name and generated/stable reviewer ID are persisted.
+- Verify imported reviewer display name and import-generated reviewer ID are persisted.
 
 ### UI Tests
 
@@ -258,4 +255,3 @@ Run against the local dev stack with a real generated export:
 5. Run local unit/server/UI/build gates.
 6. Run the real-world PDF export/fill/import test.
 7. Open PR and require GitHub topology on Ubuntu, macOS, and Windows.
-

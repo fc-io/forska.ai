@@ -991,13 +991,7 @@ const getComparisonProjectConflictResolutionPdfImportFile = () => {
       }),
     ).toString('base64url'),
   })
-  pdf.addTextField({
-    fieldName: 'forska.reviewer.instance',
-    hidden: true,
-    value: Buffer.from(JSON.stringify({reviewerInstanceId: 'reviewer-instance-1'})).toString('base64url'),
-  })
   pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr PDF'})
-  pdf.addTextField({fieldName: 'forska.reviewer.instanceId', value: 'reviewer-instance-1'})
   pdf.addTextField({
     fieldName: 'comparison.comparison-project-1.article.article-2.metadata',
     hidden: true,
@@ -3718,7 +3712,7 @@ test('comparison project conflict resolution PDF import analyzes filled radio fi
     comparisonProjectId: 'comparison-project-1',
     comparisonProjectName: 'PDF source project',
     importKind: 'pdf',
-    reviewer: {displayName: 'Dr PDF', instanceId: 'reviewer-instance-1'},
+    reviewer: {displayName: 'Dr PDF', instanceId: null},
   })
   expect(body.data.summary).toMatchObject({importable: 1, matched: 1, scanned: 1, skipped: 0})
   expect(body.data.importableRows).toMatchObject([
@@ -3784,14 +3778,15 @@ test('comparison project conflict resolution PDF import can overwrite different 
   expect(response.status).toBe(200)
   expect(body.data.summary).toMatchObject({importable: 1, inserted: 1, overwriteCandidates: 1, skippedExisting: 0})
   expect(body.data.importableRows).toMatchObject([{reason: 'overwrite-candidate', selectedResolution: 'no'}])
-  expect(body.data.source.reviewer).toEqual({displayName: 'Dr PDF', instanceId: 'reviewer-instance-1'})
-  expect(state.lastConflictResolutionInsertStatement ?? '').toContain('pdf-import:reviewer-instance-1')
+  expect(body.data.source.reviewer).toEqual({displayName: 'Dr PDF', instanceId: null})
+  expect(state.lastConflictResolutionInsertStatement ?? '').toContain('pdf-import:')
+  expect(state.lastConflictResolutionInsertStatement ?? '').not.toContain('reviewer-instance-1')
   expect(state.conflictResolutionRows.at(-1)).toMatchObject({
     answerValue: 'no',
     articleId: 'article-2',
     comparisonProjectId: 'comparison-project-1',
-    reviewerUserId: 'pdf-import:reviewer-instance-1',
   })
+  expect(state.conflictResolutionRows.at(-1)?.reviewerUserId).toMatch(/^pdf-import:/)
 })
 
 test('comparison project conflict resolution PDF import does not reset existing resolutions selected as Not set', async () => {
@@ -7153,12 +7148,13 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(response.headers.get('Content-Disposition') ?? '').toContain('.pdf')
   expect(pdf.startsWith('%PDF-1.4')).toBe(true)
   expect(pdf).toContain('Forska.ai comparison review PDF')
-  expect(pdf).toContain('GitHub: https://github.com/fc-io/forska.ai')
+  expect(pdf).toContain('For more information about Forska.ai, visit https://github.com/fc-io/forska.ai.')
   expect(pdf).toContain('Reviewer identity for import')
   expect(pdf).toContain('/FT /Tx')
   expect(pdf).toContain('/T (forska.reviewer.displayName)')
-  expect(pdf).toContain('/T (forska.reviewer.instance)')
-  expect(pdf).toContain('/T (forska.reviewer.instanceId)')
+  expect(pdf).toContain('(Your name:)')
+  expect(pdf).not.toContain('/T (forska.reviewer.instance)')
+  expect(pdf).not.toContain('/T (forska.reviewer.instanceId)')
   expect(pdf).toContain('/T (forska.import.format)')
   expect(pdf).toContain('/T (forska.import.comparisonProject)')
   expect(pdf).toContain('Article 1 of 1 | Article ID: article-1')
