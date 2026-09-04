@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import {createSignal} from 'solid-js'
 import {render} from 'solid-js/web'
 import {afterEach, describe, expect, test, vi} from 'vitest'
 
@@ -152,6 +153,74 @@ describe('ComparisonProjectJudgmentsTable', () => {
       select.dispatchEvent(new Event('change', {bubbles: true}))
 
       expect(onConflictResolutionSelect).toHaveBeenCalledWith('article-chinese-1', 'yes')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('keeps the newly selected conflict resolution after an optimistic parent update', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const [rows, setRows] = createSignal([
+      getConflictRow({
+        conflictResolution: {
+          articleId: 'article-chinese-1',
+          label: 'maybe',
+          reviewerDisplayName: 'Reviewer',
+          reviewerUserId: 'reviewer-1',
+          value: 'maybe',
+        },
+      }),
+    ])
+    const dispose = render(() => {
+      return (
+        <ComparisonProjectJudgmentsTable
+          columns={columns}
+          conflictResolutionEnabled={true}
+          conflictResolutionOptions={[
+            {label: 'yes', value: 'yes'},
+            {label: 'no', value: 'no'},
+            {label: 'maybe', value: 'maybe'},
+          ]}
+          rows={rows()}
+          onConflictResolutionSelect={(articleId, value) => {
+            setRows((currentRows) => {
+              return currentRows.map((row) => {
+                return row.canonicalArticleId === articleId
+                  ? {
+                      ...row,
+                      conflictResolution: {
+                        articleId,
+                        label: value,
+                        reviewerDisplayName: 'Reviewer',
+                        reviewerUserId: 'reviewer-1',
+                        value,
+                      },
+                    }
+                  : row
+              })
+            })
+          }}
+        />
+      )
+    }, container)
+
+    try {
+      await Promise.resolve()
+      const select = container.querySelector<HTMLSelectElement>(
+        'select[aria-label="Conflict resolution for Chinese conflict article"]',
+      )
+
+      expect(select).not.toBeNull()
+      if (!select) {
+        throw new Error('Missing conflict resolution select')
+      }
+
+      select.value = 'yes'
+      select.dispatchEvent(new Event('change', {bubbles: true}))
+      await Promise.resolve()
+
+      expect(select.value).toBe('yes')
     } finally {
       dispose()
     }
