@@ -72,6 +72,7 @@ const getResolution = (
 }
 
 const renderTable = (props: {
+  conflictResolutionPendingArticleIds?: string[]
   onConflictResolutionReset?: (articleId: string) => void
   onConflictResolutionSelect?: (articleId: string, value: string) => void
   rows?: ComparisonProjectJudgmentsRow[]
@@ -88,6 +89,7 @@ const renderTable = (props: {
           {label: 'no', value: 'no'},
           {label: 'maybe', value: 'maybe'},
         ]}
+        conflictResolutionPendingArticleIds={props.conflictResolutionPendingArticleIds}
         rows={props.rows ?? [getConflictRow()]}
         onConflictResolutionReset={props.onConflictResolutionReset}
         onConflictResolutionSelect={props.onConflictResolutionSelect}
@@ -299,6 +301,37 @@ describe('ComparisonProjectJudgmentsTable', () => {
           return select.value
         }),
       ).toEqual(['yes', 'no', ''])
+    } finally {
+      dispose()
+    }
+  })
+
+  test('disables only rows whose conflict-resolution save is pending', async () => {
+    const {container, dispose} = renderTable({
+      conflictResolutionPendingArticleIds: ['article-chinese-2'],
+      rows: [
+        getConflictRow({
+          articleTitle: 'Chinese conflict article 1',
+          canonicalArticleId: 'article-chinese-1',
+          conflictResolution: getResolution('article-chinese-1', 'maybe'),
+          id: 'article-chinese-1',
+        }),
+        getConflictRow({
+          articleTitle: 'Chinese conflict article 2',
+          canonicalArticleId: 'article-chinese-2',
+          conflictResolution: getResolution('article-chinese-2', 'no'),
+          id: 'article-chinese-2',
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const selects = Array.from(container.querySelectorAll<HTMLSelectElement>('select'))
+
+      expect(selects).toHaveLength(2)
+      expect(selects[0]?.disabled).toBe(false)
+      expect(selects[1]?.disabled).toBe(true)
     } finally {
       dispose()
     }

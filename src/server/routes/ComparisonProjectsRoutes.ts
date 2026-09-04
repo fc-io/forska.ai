@@ -1962,6 +1962,8 @@ const getOrCreateComparisonProjectConflictResolutionReviewer = async (tx: AppTx)
   const [existing] = await tx.queryJson<{id: string; name: string}>(`
     SELECT id, name
     FROM app.user_config
+    WHERE id NOT LIKE 'pdf-import:%'
+    ORDER BY created_at ASC, id ASC
     LIMIT 1
   `)
 
@@ -2334,10 +2336,10 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
       scope,
       tx,
     })
-    const importedReviewer = await getOrCreatePdfConflictResolutionImportReviewer({
-      displayName: reviewer.displayName,
-      tx,
-    })
+    const importedReviewer =
+      plan.candidates.length === 0
+        ? null
+        : await getOrCreatePdfConflictResolutionImportReviewer({displayName: reviewer.displayName, tx})
     const inserted = await insertComparisonProjectConflictResolutionImportCandidates({
       candidates: plan.candidates,
       comparisonProjectId: scope.id,
@@ -3736,6 +3738,8 @@ const setComparisonProjectConflictResolution = async (params: {
 }
 
 const resetComparisonProjectConflictResolution = async (params: {articleId: string; scope: ComparisonProjectScope}) => {
+  await getComparisonProjectConflictResolutionTargetRow(params.scope, params.articleId)
+
   await appDatabaseService.run(`
     DELETE FROM ${comparisonProjectConflictResolutionTable}
     WHERE comparison_project_id = ${getSqlLiteral(params.scope.id)}

@@ -1,5 +1,13 @@
 # PDF Conflict-Resolution Import Plan
 
+Status: implemented in PRs #396 and #400-#405. Keep this document as the design record and regression checklist for future changes.
+
+Known follow-ups:
+
+- PDF import is intentionally limited to summary-mode comparison projects; prompt-mode import should either be implemented explicitly or remain rejected at analyze/commit time.
+- Existing PDFs use the current summary answer values (`yes`, `no`, `maybe`) and prompt IDs as radio values. If future resolution options allow spaces, punctuation, slashes, or non-ASCII values, add an option-value metadata map instead of using raw PDF radio names as semantic values.
+- PDF article metadata currently includes project/article IDs, title, external article ID, current resolution, and conflict state. Cross-project matching would be more reliable if the export also embedded DOI/PMID/arXiv identifiers from the same identity source used by JSON conflict-resolution export.
+
 ## Goal
 
 Let reviewers fill conflict-resolution radio boxes in Forska.ai comparison export PDFs, then import those completed PDFs back into Forska.ai with a safe preview/commit flow.
@@ -33,9 +41,9 @@ Relevant code:
 - `src/app/routes/+compare-judgments/+$id/+import-resolutions.tsx`
 - `src/app/routes/+compare-judgments/+$id/+import-resolutions/compareProjectImportResolutionsHelpers.ts`
 
-## Export Work Already Started
+## Implemented Export Shape
 
-PDF export should include a front page before article pages.
+PDF export includes a front page before article pages and a prompt-overview page immediately after it.
 
 The front page should contain:
 
@@ -47,6 +55,8 @@ The front page should contain:
 - row count
 - GitHub link: `https://github.com/fc-io/forska.ai`
 - visible fillable reviewer name field labeled `Your name:`: `forska.reviewer.displayName`
+- brief explanations of conflict resolution, summary judgment, and LLM assessment
+- a prompt overview page listing the study prompts used for the review
 
 The front page should use exactly three font-size levels: title, section heading, and body text. Project metadata, help copy, field labels, and the GitHub link should all use the body size instead of introducing extra small print styles.
 
@@ -58,13 +68,13 @@ PDF export should also embed hidden machine-readable fields:
 - `forska.import.comparisonProject`
 - `comparison.<project>.article.<article>.metadata`
 
-The first implementation can embed project/article metadata using hidden AcroForm text fields with base64url-encoded JSON values. Longer term, a document-level metadata object or attachment can replace this if needed, but hidden fields are easy to inspect and parse with the existing custom PDF writer.
+The implementation embeds project/article metadata using hidden AcroForm text fields with base64url-encoded JSON values. Longer term, a document-level metadata object or attachment can replace this if needed, but hidden fields are easy to inspect and parse with the existing custom PDF writer.
 
 ## Import Design
 
 ### Parser
 
-Add a server-side PDF form parser. Do not parse PDFs in the browser.
+The implemented importer uses a server-side PDF form parser. PDFs are not parsed in the browser.
 
 Parser responsibilities:
 
@@ -72,6 +82,7 @@ Parser responsibilities:
 - extract `forska.*` metadata fields
 - extract filled `comparison.*.article.*.resolution` radio values
 - ignore `/Off`
+- ignore the explicit PDF `Not set` radio sentinel so it never resets an existing resolution
 - reject malformed field names
 - reject unknown resolution values before commit
 - report if the PDF has no AcroForm, no resolution fields, or appears flattened/printed
@@ -86,9 +97,7 @@ type ParsedPdfConflictResolutionImport = {
     exportedAt: string | null
     formatVersion: number | null
   }
-  reviewer: {
-    displayName: string | null
-  }
+  reviewer: {displayName: string | null}
   rows: Array<{
     fieldName: string
     sourceArticleRowId: string | null
@@ -129,17 +138,12 @@ For old PDFs without hidden metadata:
 
 ### Analyze/Commit
 
-Reuse existing endpoints where possible:
+PDF import reuses the same internal import analyzer/committer as JSON import.
 
 - `/api/comparison-projects/:id/conflict-resolutions/import/analyze`
 - `/api/comparison-projects/:id/conflict-resolutions/import/commit`
 
-Two possible endpoint shapes:
-
-1. Extend existing endpoints to accept both JSON and multipart PDF.
-2. Add PDF-specific upload endpoints that parse to an artifact and then call the same internal analyze/commit helpers.
-
-Recommended first slice: add PDF-specific analyze/commit upload endpoints to keep content-type behavior explicit:
+PDF-specific upload endpoints keep content-type behavior explicit:
 
 - `POST /api/comparison-projects/:id/conflict-resolutions/import/pdf/analyze`
 - `POST /api/comparison-projects/:id/conflict-resolutions/import/pdf/commit`
@@ -180,16 +184,15 @@ When overwriting:
 
 ## UI Work
 
-Update the existing import page:
+The existing import page supports PDF and JSON imports:
 
-- accept `.json` and `.pdf`
-- detect file type by extension and MIME, then validate server-side
-- keep JSON import behavior unchanged
-- for PDF, upload to analyze endpoint instead of reading client-side JSON
-- show reviewer name parsed from PDF
-- show warning if reviewer name is blank
-- show overwrite mode control only when analyze finds overwrite candidates
-- show clear errors for flattened PDFs or PDFs without filled resolution fields
+- accepts `.json` and `.pdf`
+- detects file type by extension and MIME, then validates server-side
+- keeps JSON import behavior unchanged
+- uploads PDF files to the PDF analyze endpoint instead of reading them client-side as JSON
+- shows the reviewer name parsed from the PDF, or `Unnamed reviewer` when blank
+- shows overwrite controls only when analyze finds overwrite candidates
+- shows clear errors for flattened PDFs or PDFs without filled resolution fields
 
 ## Test Plan
 
@@ -251,10 +254,14 @@ Run against the local dev stack with a real generated export:
 
 ## Rollout Sequence
 
+Completed:
+
 1. Land PDF export front page and metadata.
 2. Add PDF parser and artifact adapter behind tests.
 3. Add server PDF analyze/commit endpoints.
 4. Add UI upload/preview/overwrite controls.
-5. Run local unit/server/UI/build gates.
-6. Run the real-world PDF export/fill/import test.
-7. Open PR and require GitHub topology on Ubuntu, macOS, and Windows.
+5. Add explicit PDF `Not set` handling.
+6. Remove exported reviewer IDs and generate reviewer IDs during import commit.
+7. Add the prompt overview page after the front page.
+8. Run local unit/server/UI/build gates and real-stack smoke tests.
+9. Rebase-merge after GitHub topology passed on Ubuntu, macOS, and Windows.

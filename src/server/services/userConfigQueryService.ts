@@ -43,6 +43,9 @@ const userConfigSelectClause = `
   updated_at AS updatedAt
 `
 
+const localUserConfigWhereClause = "id NOT LIKE 'pdf-import:%'"
+const localUserConfigAliasWhereClause = "uc.id NOT LIKE 'pdf-import:%'"
+
 const getNullableTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
 
@@ -91,6 +94,8 @@ const getUserConfig = async (): Promise<UserRecord | null> => {
   const [row] = await getAppDatabaseService().queryJson<UserConfigRow>(`
     SELECT ${userConfigSelectClause}
     FROM app.user_config
+    WHERE ${localUserConfigWhereClause}
+    ORDER BY created_at ASC, id ASC
     LIMIT 1
   `)
 
@@ -143,6 +148,7 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
     WHERE NOT EXISTS (
       SELECT 1
       FROM app.user_config
+      WHERE ${localUserConfigWhereClause}
     )
     RETURNING ${userConfigSelectClause}
   `)
@@ -281,7 +287,8 @@ const getFullTextConversionModelConfig = async (): Promise<{
     FROM app.user_config uc
     INNER JOIN app.model m ON m.id = uc.full_text_conversion_model_id
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE pc.provider_kind = 'docling'
+    WHERE ${localUserConfigAliasWhereClause}
+      AND pc.provider_kind = 'docling'
       AND COALESCE(m.enabled, TRUE) = TRUE
       AND COALESCE(pc.enabled, TRUE) = TRUE
     LIMIT 1
