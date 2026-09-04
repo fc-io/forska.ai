@@ -3843,6 +3843,89 @@ const getComparisonProjectPdfFieldNamePart = (value: string) => {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
+const getComparisonProjectPdfMetadataValue = (value: unknown) => {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
+}
+
+const addComparisonProjectPdfHiddenMetadata = (pdf: SimplePdfDocument, fieldName: string, value: unknown) => {
+  pdf.addTextField({fieldName, hidden: true, value: getComparisonProjectPdfMetadataValue(value)})
+}
+
+const getComparisonProjectPdfArticleFieldPrefix = (scope: ComparisonProjectScope, row: ComparisonProjectExportRow) => {
+  return [
+    'comparison',
+    getComparisonProjectPdfFieldNamePart(scope.id),
+    'article',
+    getComparisonProjectPdfFieldNamePart(row.canonicalArticleId),
+  ].join('.')
+}
+
+const addComparisonProjectPdfFrontPage = (params: {
+  exportFilters: string
+  exportedAt: string
+  pdf: SimplePdfDocument
+  scope: ComparisonProjectScope
+  totalCount: number
+}) => {
+  const {exportFilters, exportedAt, pdf, scope, totalCount} = params
+  const documentId = crypto.randomUUID()
+  const reviewerInstanceId = crypto.randomUUID()
+
+  addComparisonProjectPdfHiddenMetadata(pdf, 'forska.import.format', {
+    documentId,
+    format: 'forska.comparisonProject.pdfConflictResolutionImport',
+    github: 'https://github.com/fc-io/forska.ai',
+    version: 1,
+  })
+  addComparisonProjectPdfHiddenMetadata(pdf, 'forska.import.comparisonProject', {
+    allowConflictResolution: scope.allowConflictResolution,
+    comparisonProjectId: scope.id,
+    comparisonProjectName: scope.name,
+    exportedAt,
+    filters: exportFilters,
+    humanJudgmentMode: scope.humanJudgmentMode,
+    totalCount,
+  })
+  addComparisonProjectPdfHiddenMetadata(pdf, 'forska.reviewer.instance', {reviewerInstanceId})
+
+  pdf.addText('Forska.ai comparison review PDF', {font: 'bold', fontSize: 18, gapAfter: 10})
+  pdf.addText(
+    'Use this PDF to review comparison-project conflicts offline. Fill the conflict-resolution radio boxes for the articles you reviewed, then import the completed PDF back into Forska.ai to save those decisions.',
+    {fontSize: 11, gapAfter: 8},
+  )
+  pdf.addText('Project', {font: 'bold', fontSize: 11, gapAfter: 4})
+  pdf.addText(scope.name, {fontSize: 10})
+  pdf.addText(`Comparison project ID: ${scope.id}`, {fontSize: 8})
+  pdf.addText(`Exported: ${exportedAt}`, {fontSize: 8})
+  pdf.addText(`Rows in export: ${totalCount}`, {fontSize: 8})
+  pdf.addText(`Filters: ${exportFilters}`, {fontSize: 8, gapAfter: 12})
+  pdf.addText('Forska.ai', {font: 'bold', fontSize: 11, gapAfter: 4})
+  pdf.addText('GitHub: https://github.com/fc-io/forska.ai', {fontSize: 10, gapAfter: 12})
+  pdf.addText('Reviewer identity for import', {font: 'bold', fontSize: 11, gapAfter: 4})
+  pdf.addText(
+    'Enter the reviewer name that should be attached to imported resolutions. Forska.ai will create a separate reviewer ID during import so reviewers with the same displayed name remain distinct.',
+    {fontSize: 10, gapAfter: 8},
+  )
+  pdf.addTextField({
+    fieldName: 'forska.reviewer.displayName',
+    label: 'Reviewer name',
+    value: '',
+    width: 320,
+    gapAfter: 8,
+  })
+  pdf.addTextField({
+    fieldName: 'forska.reviewer.instanceId',
+    label: 'Reviewer ID',
+    value: reviewerInstanceId,
+    width: 320,
+    gapAfter: 12,
+  })
+  pdf.addText(
+    'Keep the reviewer ID unless you intentionally want this PDF to count as a different reviewer. If a filled PDF is imported more than once, Forska.ai should preview overwrites before committing and preserve the reviewer identity chosen for that import.',
+    {fontSize: 9},
+  )
+}
+
 const addComparisonProjectPdfConflictResolution = (
   pdf: SimplePdfDocument,
   scope: ComparisonProjectScope,
@@ -3858,19 +3941,32 @@ const addComparisonProjectPdfConflictResolution = (
     pdf.addText('Choose resolution', {font: 'bold', fontSize: 10, gapAfter: 4})
 
     pdf.addRadioRow(
-      [
-        'comparison',
-        getComparisonProjectPdfFieldNamePart(scope.id),
-        'article',
-        getComparisonProjectPdfFieldNamePart(row.canonicalArticleId),
-        'resolution',
-      ].join('.'),
+      [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'resolution'].join('.'),
       row.conflictResolution?.value,
       getComparisonProjectPdfResolutionOptions(scope).map((option) => {
         return {label: option.label, value: option.value, fontSize: 10, gapAfter: 3}
       }),
     )
   })
+}
+
+const addComparisonProjectPdfRowImportMetadata = (
+  pdf: SimplePdfDocument,
+  scope: ComparisonProjectScope,
+  row: ComparisonProjectExportRow,
+) => {
+  addComparisonProjectPdfHiddenMetadata(
+    pdf,
+    [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'metadata'].join('.'),
+    {
+      articleExternalId: row.articleExternalId,
+      articleTitle: row.articleTitle,
+      canonicalArticleId: row.canonicalArticleId,
+      comparisonProjectId: scope.id,
+      currentResolutionValue: row.conflictResolution?.value ?? null,
+      hasConflict: row.hasConflict,
+    },
+  )
 }
 
 const addComparisonProjectPdfLabeledValue = (
@@ -4046,9 +4142,8 @@ const addComparisonProjectPdfExportRow = (params: {
 }) => {
   const {columns, componentRows, exportFilters, index, pdf, row, scope, totalCount} = params
 
-  if (index > 0) {
-    pdf.addPage()
-  }
+  pdf.addPage()
+  addComparisonProjectPdfRowImportMetadata(pdf, scope, row)
 
   pdf.addText(`Project: ${scope.name}`, {fontSize: 8})
   pdf.addText(`Filters: ${exportFilters}`, {fontSize: 8})
@@ -4091,7 +4186,10 @@ const getComparisonProjectPdfExportResponse = async (
     rowFilter,
     scope,
   })
+  const exportedAt = getComparisonProjectPdfExportedAtLabel()
   let rowIndex = 0
+
+  addComparisonProjectPdfFrontPage({exportFilters, exportedAt, pdf, scope, totalCount: totalCountResult.totalCount})
 
   if (!scope.archived && scope.prompts.length > 0 && orderedColumns.length > 0) {
     await forEachComparisonProjectServingJudgmentRowBatch({
@@ -4139,6 +4237,7 @@ const getComparisonProjectPdfExportResponse = async (
   }
 
   if (rowIndex === 0) {
+    pdf.addPage()
     pdf.addText(`Project: ${scope.name}`, {fontSize: 8})
     pdf.addText(`Filters: ${exportFilters}`, {fontSize: 8, gapAfter: 12})
     pdf.addText('No rows matched the selected export filters.', {font: 'bold', fontSize: 12})

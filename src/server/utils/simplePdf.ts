@@ -4,10 +4,30 @@ type PdfTextOptions = {font?: PdfFont; fontSize?: number; gapAfter?: number; ind
 type PdfCheckboxOptions = {checked?: boolean; fieldName: string; fontSize?: number; gapAfter?: number; indent?: number}
 type PdfCheckboxRowOption = PdfCheckboxOptions & {label: string}
 type PdfRadioRowOption = {fontSize?: number; gapAfter?: number; indent?: number; label: string; value: string}
+type PdfTextFieldOptions = {
+  fieldName: string
+  fontSize?: number
+  gapAfter?: number
+  hidden?: boolean
+  indent?: number
+  label?: string
+  value?: string
+  width?: number
+}
 type PdfPanelOptions = {gapAfter?: number; title: string}
 type PdfCheckboxField = {checked: boolean; fieldName: string; pageIndex: number; size: number; x: number; y: number}
 type PdfRadioField = {pageIndex: number; size: number; value: string; x: number; y: number}
 type PdfRadioGroup = {fieldName: string; fields: PdfRadioField[]; selectedValue?: string}
+type PdfTextField = {
+  fieldName: string
+  fontSize: number
+  hidden: boolean
+  pageIndex: number
+  value: string
+  width: number
+  x: number
+  y: number
+}
 
 const pageWidth = 595
 const pageHeight = 842
@@ -270,6 +290,7 @@ export class SimplePdfDocument {
   private readonly pages: string[][] = [[]]
   private readonly checkboxFields: PdfCheckboxField[] = []
   private readonly radioGroups: PdfRadioGroup[] = []
+  private readonly textFields: PdfTextField[] = []
   private y = pageHeight - marginTop
 
   addPage() {
@@ -388,6 +409,62 @@ export class SimplePdfDocument {
 
     this.radioGroups.push({fieldName, fields, selectedValue: selectedValue ?? undefined})
     this.y -= lineHeight + (options[0]?.gapAfter ?? 0)
+  }
+
+  addTextField(options: PdfTextFieldOptions) {
+    const fontSize = options.fontSize ?? 10
+    const lineHeight = fontSize * lineHeightMultiplier
+    const fieldHeight = Math.max(fontSize + 8, 18)
+    const x = marginX + (options.indent ?? 0)
+    const width = options.width ?? pageWidth - x - marginX
+
+    if (options.hidden) {
+      this.textFields.push({
+        fieldName: options.fieldName,
+        fontSize,
+        hidden: true,
+        pageIndex: this.pages.length - 1,
+        value: options.value ?? '',
+        width: 0,
+        x: 0,
+        y: 0,
+      })
+      return
+    }
+
+    if (this.y - lineHeight - fieldHeight < marginBottom) {
+      this.addPage()
+    }
+
+    if (options.label) {
+      this.addText(options.label, {font: 'bold', fontSize, gapAfter: 3, indent: options.indent})
+    }
+
+    const pageIndex = this.pages.length - 1
+    const topY = this.y
+    const bottomY = topY - fieldHeight
+    this.pages[pageIndex]?.push(
+      [
+        'q',
+        '1 1 1 rg',
+        '0.45 0.52 0.60 RG',
+        '1 w',
+        `${x.toFixed(2)} ${bottomY.toFixed(2)} ${width.toFixed(2)} ${fieldHeight.toFixed(2)} re`,
+        'B',
+        'Q',
+      ].join(' '),
+    )
+    this.textFields.push({
+      fieldName: options.fieldName,
+      fontSize,
+      hidden: false,
+      pageIndex,
+      value: options.value ?? '',
+      width,
+      x,
+      y: topY,
+    })
+    this.y = bottomY - (options.gapAfter ?? 8)
   }
 
   addGap(points: number) {
@@ -551,6 +628,26 @@ export class SimplePdfDocument {
 
       return parentFieldId
     })
+    const textFieldIds = this.textFields.map((field) => {
+      const bottomY = field.y - Math.max(field.fontSize + 8, 18)
+      const rect = field.hidden
+        ? '[0.00 0.00 0.00 0.00]'
+        : `[${field.x.toFixed(2)} ${bottomY.toFixed(2)} ${(field.x + field.width).toFixed(2)} ${field.y.toFixed(2)}]`
+      const flags = field.hidden ? '2' : '4'
+
+      return addObject(
+        [
+          '<< /Type /Annot /Subtype /Widget /FT /Tx',
+          `/T (${getPdfSafeAsciiText(field.fieldName)})`,
+          `/Rect ${rect}`,
+          `/V (${getPdfSafeAsciiText(field.value)}) /DV (${getPdfSafeAsciiText(field.value)}) /F ${flags} /H /P`,
+          `/DA (/F1 ${field.fontSize} Tf 0 0 0 rg)`,
+          '/MK << /BC [0.45 0.52 0.60] /BG [1 1 1] >>',
+          '/BS << /W 1 /S /S >>',
+          '>>',
+        ].join(' '),
+      )
+    })
     const pageIds: number[] = []
 
     this.pages.forEach((pageCommands, index) => {
@@ -559,7 +656,11 @@ export class SimplePdfDocument {
         return this.checkboxFields[fieldIndex]?.pageIndex === index
       })
       const pageRadioWidgetIds = radioWidgetIdsByPage.get(index) ?? []
-      const pageAnnotationIds = [...pageCheckboxIds, ...pageRadioWidgetIds]
+      const pageTextFieldIds = textFieldIds.filter((_, fieldIndex) => {
+        const field = this.textFields[fieldIndex]
+        return field?.pageIndex === index && !field.hidden
+      })
+      const pageAnnotationIds = [...pageCheckboxIds, ...pageRadioWidgetIds, ...pageTextFieldIds]
       const contentId = addStreamObject('', pageCommands.join('\n'))
       const pageId = addObject(
         `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${regularFontId} 0 R /F2 ${boldFontId} 0 R /F3 ${cjkFontId} 0 R >> >> /Contents ${contentId} 0 R${
@@ -578,8 +679,8 @@ export class SimplePdfDocument {
 
     objects[catalogId - 1] = getObject(
       `<< /Type /Catalog /Pages ${pagesId} 0 R${
-        checkboxFieldIds.length > 0 || radioGroupIds.length > 0
-          ? ` /AcroForm << /Fields [${[...checkboxFieldIds, ...radioGroupIds]
+        checkboxFieldIds.length > 0 || radioGroupIds.length > 0 || textFieldIds.length > 0
+          ? ` /AcroForm << /Fields [${[...checkboxFieldIds, ...radioGroupIds, ...textFieldIds]
               .map((fieldId) => {
                 return `${fieldId} 0 R`
               })
