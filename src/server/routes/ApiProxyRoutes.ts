@@ -152,6 +152,30 @@ const getDuckdbOwnerProxyRequest = (
   })
 }
 
+const getPublicDuckdbOwnerProxyPathname = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return requestTemplate.pathname.startsWith(duckdbOwnerPrivateApiPrefix)
+    ? requestTemplate.pathname.slice(duckdbOwnerPrivateApiPrefix.length)
+    : requestTemplate.pathname
+}
+
+const isRetryableDuckdbOwnerProxyMutation = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  if (requestTemplate.method !== 'POST') {
+    return false
+  }
+
+  return (
+    getPublicDuckdbOwnerProxyPathname(requestTemplate).match(
+      /^\/api\/comparison-projects\/[^/]+\/conflict-resolution(?:\/reset)?$/,
+    ) !== null
+  )
+}
+
+const shouldRetryDuckdbOwnerProxyRequest = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return (
+    duckdbOwnerProxyRetryableMethods.has(requestTemplate.method) || isRetryableDuckdbOwnerProxyMutation(requestTemplate)
+  )
+}
+
 const getDuckdbOwnerStreamingProxyRequest = (
   requestTemplate: DuckdbOwnerStreamingProxyRequestTemplate,
   duckdbOwnerUrl: string,
@@ -186,7 +210,10 @@ const getDuckdbOwnerProxyTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTe
 }
 
 const getDuckdbOwnerProxyRetryTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
-  return requestTemplate.method === 'GET' || requestTemplate.method === 'HEAD' || requestTemplate.method === 'OPTIONS'
+  return requestTemplate.method === 'GET'
+    || requestTemplate.method === 'HEAD'
+    || requestTemplate.method === 'OPTIONS'
+    || isRetryableDuckdbOwnerProxyMutation(requestTemplate)
     ? Math.max(duckdbOwnerProxyRetryTimeoutMs, getDuckdbOwnerProxyTimeoutMs(requestTemplate))
     : duckdbOwnerProxyRetryTimeoutMs
 }
@@ -350,6 +377,21 @@ const fetchNonRetryableDuckdbOwnerProxyResponse = async (
   return fetchDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl)
 }
 
+const fetchRetryableDuckdbOwnerProxyResponse = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  duckdbOwnerUrl: string,
+) => {
+  if (isRetryableDuckdbOwnerProxyMutation(requestTemplate)) {
+    const targetFailureResponse = await waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl)
+
+    if (targetFailureResponse !== null) {
+      return targetFailureResponse
+    }
+  }
+
+  return fetchDuckdbOwnerProxyResponse(requestTemplate, duckdbOwnerUrl)
+}
+
 const fetchDuckdbOwnerStreamingProxyResponse = async (
   requestTemplate: DuckdbOwnerStreamingProxyRequestTemplate,
   duckdbOwnerUrl: string,
@@ -410,9 +452,7 @@ const getImportSessionIdFromProxyPathname = (requestTemplate: DuckdbOwnerProxyRe
     return null
   }
 
-  const publicPathname = requestTemplate.pathname.startsWith(duckdbOwnerPrivateApiPrefix)
-    ? requestTemplate.pathname.slice(duckdbOwnerPrivateApiPrefix.length)
-    : requestTemplate.pathname
+  const publicPathname = getPublicDuckdbOwnerProxyPathname(requestTemplate)
   const match = publicPathname.match(/^\/api\/projects\/import\/([^/]+)$/)
 
   if (match === null) {
@@ -431,9 +471,7 @@ const getExportSessionIdFromProxyPathname = (requestTemplate: DuckdbOwnerProxyRe
     return null
   }
 
-  const publicPathname = requestTemplate.pathname.startsWith(duckdbOwnerPrivateApiPrefix)
-    ? requestTemplate.pathname.slice(duckdbOwnerPrivateApiPrefix.length)
-    : requestTemplate.pathname
+  const publicPathname = getPublicDuckdbOwnerProxyPathname(requestTemplate)
   const match = publicPathname.match(/^\/api\/projects\/export\/([^/]+)$/)
 
   if (match === null) {
@@ -606,11 +644,11 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
     return getImportArtifactFallbackForOwnerFailure(target.response, importArtifactFallbackResponse)
   }
 
-  const shouldRetryProxyRequest = duckdbOwnerProxyRetryableMethods.has(requestTemplate.method)
+  const shouldRetryProxyRequest = shouldRetryDuckdbOwnerProxyRequest(requestTemplate)
 
   try {
     const response = shouldRetryProxyRequest
-      ? await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
+      ? await fetchRetryableDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
       : await fetchNonRetryableDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
 
     const ownerResponse = getDuckdbOwnerProxyResponse(response)
