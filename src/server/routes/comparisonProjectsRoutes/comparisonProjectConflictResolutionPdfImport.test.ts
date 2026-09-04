@@ -4,6 +4,7 @@ import {SimplePdfDocument} from '../../utils/simplePdf.ts'
 import {
   getComparisonProjectConflictResolutionTransferArtifactFromPdfImport,
   parsePdfConflictResolutionImport,
+  pdfConflictResolutionNotSetValue,
 } from './comparisonProjectConflictResolutionPdfImport.ts'
 
 const getMetadataValue = (value: unknown) => {
@@ -105,6 +106,46 @@ describe('comparison project conflict-resolution PDF import', () => {
         resolutionValue: 'yes',
       },
     ])
+  })
+
+  test('treats the explicit PDF Not set radio choice as no imported resolution', () => {
+    const pdf = new SimplePdfDocument()
+
+    pdf.addRadioRow('comparison.comparison-project-1.article.article-1.resolution', pdfConflictResolutionNotSetValue, [
+      {label: 'Not set', value: pdfConflictResolutionNotSetValue},
+      {label: 'Yes', value: 'yes'},
+    ])
+    pdf.addRadioRow('comparison.comparison-project-1.article.article-2.resolution', 'yes', [
+      {label: 'Not set', value: pdfConflictResolutionNotSetValue},
+      {label: 'Yes', value: 'yes'},
+    ])
+
+    const parsedImport = parsePdfConflictResolutionImport(pdf.toBuffer())
+
+    expect(parsedImport.rows).toEqual([
+      {
+        fieldName: 'comparison.comparison-project-1.article.article-2.resolution',
+        sourceArticleRowId: 'article-2',
+        canonicalArticleId: 'article-2',
+        externalArticleId: null,
+        title: null,
+        identifiers: [],
+        resolutionValue: 'yes',
+      },
+    ])
+  })
+
+  test('reports PDFs where every conflict-resolution radio field is explicitly Not set', () => {
+    const pdf = new SimplePdfDocument()
+
+    pdf.addRadioRow('comparison.comparison-project-1.article.article-1.resolution', pdfConflictResolutionNotSetValue, [
+      {label: 'Not set', value: pdfConflictResolutionNotSetValue},
+      {label: 'Yes', value: 'yes'},
+    ])
+
+    expect(() => {
+      parsePdfConflictResolutionImport(pdf.toBuffer())
+    }).toThrow('no filled conflict-resolution radio fields')
   })
 
   test('converts parsed PDF fields to the existing transfer artifact model', () => {

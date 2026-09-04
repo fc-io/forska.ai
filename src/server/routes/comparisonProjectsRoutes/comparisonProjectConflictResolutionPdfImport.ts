@@ -32,6 +32,7 @@ type PdfFormField = {name: string; value: string | null; fieldType: 'button' | '
 const conflictResolutionFieldPattern = /^comparison\.([^.]+)\.article\.([^.]+)\.resolution$/
 const articleMetadataFieldPattern = /^comparison\.([^.]+)\.article\.([^.]+)\.metadata$/
 const supportedPdfImportFormat = 'forska.comparisonProject.pdfConflictResolutionImport'
+export const pdfConflictResolutionNotSetValue = '__forska_conflict_resolution_not_set__'
 
 const getPdfText = (input: Buffer | Uint8Array | ArrayBuffer | string) => {
   if (typeof input === 'string') {
@@ -371,7 +372,7 @@ export const parsePdfConflictResolutionImport = (
 
     const resolutionValue = getTrimmedValue(field.value)
 
-    if (!resolutionValue || resolutionValue === 'Off') {
+    if (!resolutionValue || resolutionValue === 'Off' || resolutionValue === pdfConflictResolutionNotSetValue) {
       return []
     }
 
