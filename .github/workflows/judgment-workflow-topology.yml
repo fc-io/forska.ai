@@ -2,6 +2,9 @@ name: Judgment workflow topology
 
 on:
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   workflow_dispatch:
 
 permissions:
