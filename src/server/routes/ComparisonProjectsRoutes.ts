@@ -3982,7 +3982,7 @@ const addComparisonProjectPdfSummaryJudgmentSection = (
       pdf.addText('Prompt', {font: 'bold', fontSize: 10})
       pdf.addText(firstColumn?.promptLabel ?? 'Prompt', {fontSize: 10, gapAfter: 4})
       contentLabels.forEach((contentLabel) => {
-        pdf.addText(`Content used: ${contentLabel}`, {fontSize: 10, indent: 12})
+        pdf.addText(`Content used: ${contentLabel}`, {fontSize: 10})
       })
 
       promptColumns.forEach((column) => {
