@@ -281,54 +281,66 @@ const sourceProjectPromptRows = [
     criteriaSectionKey: 'population',
     criteriaSectionLabel: 'Population',
     order: 0,
+    originalText: promptRows['prompt-1'].originalText,
     projectId: 'source-project-1',
     promptHeading: 'Prompt 1',
     promptId: 'prompt-1',
+    transformedText: null,
   },
   {
     criteriaDisposition: 'exclude',
     criteriaSectionKey: 'outcome',
     criteriaSectionLabel: 'Outcome',
     order: 1,
+    originalText: promptRows['prompt-2'].originalText,
     projectId: 'source-project-1',
     promptHeading: 'Prompt 2',
     promptId: 'prompt-2',
+    transformedText: null,
   },
   {
     criteriaDisposition: 'include',
     criteriaSectionKey: 'population',
     criteriaSectionLabel: 'Population',
     order: 0,
+    originalText: promptRows['prompt-1'].originalText,
     projectId: 'source-project-2',
     promptHeading: 'Prompt 1',
     promptId: 'prompt-1',
+    transformedText: null,
   },
   {
     criteriaDisposition: 'exclude',
     criteriaSectionKey: 'outcome',
     criteriaSectionLabel: 'Outcome',
     order: 1,
+    originalText: promptRows['prompt-2'].originalText,
     projectId: 'source-project-2',
     promptHeading: 'Prompt 2',
     promptId: 'prompt-2',
+    transformedText: null,
   },
   {
     criteriaDisposition: 'include',
     criteriaSectionKey: 'intervention',
     criteriaSectionLabel: 'Intervention',
     order: 0,
+    originalText: promptRows['prompt-1'].originalText,
     projectId: 'source-project-mismatch',
     promptHeading: 'Prompt 1',
     promptId: 'prompt-1',
+    transformedText: null,
   },
   {
     criteriaDisposition: null,
     criteriaSectionKey: null,
     criteriaSectionLabel: null,
     order: 0,
+    originalText: promptRows['prompt-1'].originalText,
     projectId: 'prompt-project-1',
     promptHeading: 'Prompt 1',
     promptId: 'prompt-1',
+    transformedText: null,
   },
 ] as const
 
@@ -406,6 +418,7 @@ const getPromptRows = (
       order: link.order,
       originalText: promptRow.originalText,
       promptHeading: promptRow.promptHeading,
+      transformedText: null,
       type: promptRow.type,
     }
   })
@@ -438,7 +451,13 @@ const getValidatedPromptRows = (statement: string) => {
     .map((promptId) => {
       const promptRow = promptRows[promptId as keyof typeof promptRows]
 
-      return {id: promptId, promptHeading: promptRow.promptHeading, type: promptRow.type}
+      return {
+        id: promptId,
+        originalText: promptRow.originalText,
+        promptHeading: promptRow.promptHeading,
+        transformedText: null,
+        type: promptRow.type,
+      }
     })
 }
 
@@ -7198,6 +7217,16 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('/FT /Tx')
   expect(pdf).toContain('/T (forska.reviewer.displayName)')
   expect(pdf).toContain('(Your name:)')
+  expect(pdf).toContain('Prompts in this review')
+  expect(pdf).toContain('These are the study-review prompts used for the judgments in this comparison project.')
+  expect(pdf).toContain('1. Prompt 1')
+  expect(pdf).toContain("Type: 'yes' | 'no' | 'maybe'")
+  expect(pdf).toContain('Original Text')
+  expect(pdf).toContain('Original prompt')
+  expect(pdf).toContain('2. Prompt 2')
+  expect(pdf).toContain('Replacement prompt')
+  expect(pdf.indexOf('Prompts in this review')).toBeGreaterThan(pdf.indexOf('Reviewer identity for import'))
+  expect(pdf.indexOf('Prompts in this review')).toBeLessThan(pdf.indexOf('Article 1 of 1'))
   expect(pdf).not.toContain('/T (forska.reviewer.instance)')
   expect(pdf).not.toContain('/T (forska.reviewer.instanceId)')
   expect(pdf).toContain('/T (forska.import.format)')
@@ -7346,6 +7375,11 @@ test('comparison project pdf export shows individual assessments behind summary 
   const state = getMockDatabaseState()
 
   expect(response.status).toBe(200)
+  expect(pdf).toContain('Prompts in this review')
+  expect(pdf).toContain('Criteria: Population')
+  expect(pdf).toContain('Disposition: include')
+  expect(pdf).toContain('Original prompt')
+  expect(pdf.indexOf('Prompts in this review')).toBeLessThan(pdf.indexOf('Article 1 of 1'))
   expect(pdf).toContain('Summary judgment')
   expect(pdf).toContain('LLM assessment')
   expect(pdf.lastIndexOf('Summary judgment')).toBeLessThan(pdf.lastIndexOf('LLM assessment'))
