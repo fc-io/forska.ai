@@ -64,6 +64,13 @@ const getConflictRow = (overrides: Partial<ComparisonProjectJudgmentsRow> = {}):
   }
 }
 
+const getResolution = (
+  articleId: string,
+  value: string,
+): NonNullable<ComparisonProjectJudgmentsRow['conflictResolution']> => {
+  return {articleId, label: value, reviewerDisplayName: 'Reviewer', reviewerUserId: 'reviewer-1', value}
+}
+
 const renderTable = (props: {
   onConflictResolutionReset?: (articleId: string) => void
   onConflictResolutionSelect?: (articleId: string, value: string) => void
@@ -221,6 +228,77 @@ describe('ComparisonProjectJudgmentsTable', () => {
       await Promise.resolve()
 
       expect(select.value).toBe('yes')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('keeps conflict resolution changes scoped to the selected row after rerender', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const [rows, setRows] = createSignal([
+      getConflictRow({
+        articleTitle: 'Chinese conflict article 1',
+        canonicalArticleId: 'article-chinese-1',
+        conflictResolution: getResolution('article-chinese-1', 'maybe'),
+        id: 'article-chinese-1',
+      }),
+      getConflictRow({
+        articleTitle: 'Chinese conflict article 2',
+        canonicalArticleId: 'article-chinese-2',
+        conflictResolution: getResolution('article-chinese-2', 'no'),
+        id: 'article-chinese-2',
+      }),
+      getConflictRow({
+        articleTitle: 'Chinese conflict article 3',
+        canonicalArticleId: 'article-chinese-3',
+        conflictResolution: null,
+        id: 'article-chinese-3',
+      }),
+    ])
+    const dispose = render(() => {
+      return (
+        <ComparisonProjectJudgmentsTable
+          columns={columns}
+          conflictResolutionEnabled={true}
+          conflictResolutionOptions={[
+            {label: 'yes', value: 'yes'},
+            {label: 'no', value: 'no'},
+            {label: 'maybe', value: 'maybe'},
+          ]}
+          rows={rows()}
+          onConflictResolutionSelect={(articleId, value) => {
+            setRows((currentRows) => {
+              return currentRows.map((row) => {
+                return row.canonicalArticleId === articleId
+                  ? {...row, conflictResolution: getResolution(articleId, value)}
+                  : {...row}
+              })
+            })
+          }}
+        />
+      )
+    }, container)
+
+    try {
+      await Promise.resolve()
+      const selects = Array.from(container.querySelectorAll<HTMLSelectElement>('select'))
+
+      expect(
+        selects.map((select) => {
+          return select.value
+        }),
+      ).toEqual(['maybe', 'no', ''])
+
+      selects[0].value = 'yes'
+      selects[0].dispatchEvent(new Event('change', {bubbles: true}))
+      await Promise.resolve()
+
+      expect(
+        Array.from(container.querySelectorAll<HTMLSelectElement>('select')).map((select) => {
+          return select.value
+        }),
+      ).toEqual(['yes', 'no', ''])
     } finally {
       dispose()
     }
