@@ -38,6 +38,10 @@ import {
   getSelectableComparisonProjectDifferenceFilters,
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
+  getComparisonProjectJudgmentRowsWithRetainedEdits,
+  type RetainedComparisonProjectJudgmentRows,
+} from '../../../../utils/comparisonProjectRetainedJudgmentRows.ts'
+import {
   type ComparisonProjectRowFilter,
   getComparisonProjectRowFilterLabel,
   getNormalizedComparisonProjectRowFilter,
@@ -239,6 +243,8 @@ const CompareProjectJudgmentsPage = () => {
   const [shouldRefreshCommittedImport, setShouldRefreshCommittedImport] = createSignal(
     getHasConflictResolutionImportCommittedSearchParam(search() as Record<string, unknown>),
   )
+  const [retainedConflictResolutionRowsByArticleId, setRetainedConflictResolutionRowsByArticleId] =
+    createSignal<RetainedComparisonProjectJudgmentRows>({})
   const [conflictResolutionPendingArticleId, setConflictResolutionPendingArticleId] = createSignal<string | null>(null)
   const [conflictResolutionError, setConflictResolutionError] = createSignal<string | null>(null)
   const [searchInitialized, setSearchInitialized] = createSignal(false)
@@ -457,6 +463,21 @@ const CompareProjectJudgmentsPage = () => {
       }) ?? []
     )
   })
+  const visibleJudgmentRows = createMemo(() => {
+    return getComparisonProjectJudgmentRowsWithRetainedEdits(
+      serverFilteredRows(),
+      retainedConflictResolutionRowsByArticleId(),
+    )
+  })
+  createEffect(
+    on(
+      [comparisonProjectId, pageLimit, rowFilter, differenceFilter, articleCategoryFilter, conflictResolutionFilter],
+      () => {
+        setRetainedConflictResolutionRowsByArticleId({})
+      },
+      {defer: true},
+    ),
+  )
   const hasRowFilters = createMemo(() => {
     return (
       rowFilter() !== 'all'
@@ -469,6 +490,17 @@ const CompareProjectJudgmentsPage = () => {
     articleId: string,
     conflictResolution: ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'],
   ) => {
+    const currentRow = visibleJudgmentRows().find((row) => {
+      return row.canonicalArticleId === articleId
+    })
+    const updatedRow = currentRow ? {...currentRow, conflictResolution} : null
+
+    if (updatedRow && showConflictResolutionFilter() && conflictResolutionFilter() !== 'all') {
+      setRetainedConflictResolutionRowsByArticleId((currentRows) => {
+        return {...currentRows, [articleId]: updatedRow}
+      })
+    }
+
     queryClient.setQueryData<InfiniteData<ComparisonProjectJudgmentsPage, string | null>>(
       getCurrentJudgmentsPageQueryKey(),
       (currentPageData) => {
@@ -490,6 +522,9 @@ const CompareProjectJudgmentsPage = () => {
   }
   const refetchCurrentJudgmentsPage = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-page', comparisonProjectId()]})
+  }
+  const shouldDeferCurrentJudgmentsPageRefetch = () => {
+    return showConflictResolutionFilter() && conflictResolutionFilter() !== 'all'
   }
   const refetchComparisonProjectStats = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-stats', comparisonProjectId()]})
@@ -522,7 +557,7 @@ const CompareProjectJudgmentsPage = () => {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
       updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
       await Promise.all([
-        refetchCurrentJudgmentsPage(),
+        shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage(),
         refetchComparisonProjectStats(),
         refetchComparisonProjectMetadata(),
       ])
@@ -540,7 +575,7 @@ const CompareProjectJudgmentsPage = () => {
       await resetComparisonProjectConflictResolution(comparisonProjectId(), {articleId})
       updateCurrentJudgmentsPageConflictResolution(articleId, null)
       await Promise.all([
-        refetchCurrentJudgmentsPage(),
+        shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage(),
         refetchComparisonProjectStats(),
         refetchComparisonProjectMetadata(),
       ])
@@ -690,12 +725,12 @@ const CompareProjectJudgmentsPage = () => {
                                 when={exactTotalCount() !== null}
                                 fallback={
                                   <span class="inline-flex items-center gap-2">
-                                    <span>{getPendingCountRangeLabel(serverFilteredRows().length)}</span>
+                                    <span>{getPendingCountRangeLabel(visibleJudgmentRows().length)}</span>
                                     <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
                                   </span>
                                 }
                               >
-                                {getLoadedRangeLabel(serverFilteredRows().length, exactTotalCount() ?? 0)}
+                                {getLoadedRangeLabel(visibleJudgmentRows().length, exactTotalCount() ?? 0)}
                               </Show>
                             </Show>
                           }
@@ -850,7 +885,7 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
-                    && serverFilteredRows().length === 0
+                    && visibleJudgmentRows().length === 0
                     && servingUnavailableState()
                   }
                 >
@@ -869,7 +904,7 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
-                    && serverFilteredRows().length > 0
+                    && visibleJudgmentRows().length > 0
                   }
                 >
                   <>
@@ -880,7 +915,7 @@ const CompareProjectJudgmentsPage = () => {
                       conflictResolutionOptions={conflictResolutionOptions()}
                       onConflictResolutionReset={handleConflictResolutionReset}
                       onConflictResolutionSelect={handleConflictResolutionSelect}
-                      rows={serverFilteredRows()}
+                      rows={visibleJudgmentRows()}
                     />
                     <div class="flex justify-center">
                       <Button
@@ -911,7 +946,7 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
-                    && serverFilteredRows().length === 0
+                    && visibleJudgmentRows().length === 0
                     && !servingUnavailableState()
                   }
                 >
