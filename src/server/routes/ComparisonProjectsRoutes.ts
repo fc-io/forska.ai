@@ -1264,12 +1264,8 @@ const getPdfConflictResolutionImportReviewerId = (instanceId: string) => {
   return `pdf-import:${normalizedInstanceId || crypto.randomUUID()}`
 }
 
-const getOrCreatePdfConflictResolutionImportReviewer = async (params: {
-  displayName?: string | null
-  instanceId?: string | null
-  tx: AppTx
-}) => {
-  const reviewerId = getPdfConflictResolutionImportReviewerId(params.instanceId ?? crypto.randomUUID())
+const getOrCreatePdfConflictResolutionImportReviewer = async (params: {displayName?: string | null; tx: AppTx}) => {
+  const reviewerId = getPdfConflictResolutionImportReviewerId(crypto.randomUUID())
   const reviewerName = params.displayName?.trim() || 'PDF reviewer'
   const [reviewer] = await params.tx.queryJson<{id: string; name: string}>(`
     INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
@@ -2312,7 +2308,6 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
     })
     const importedReviewer = await getOrCreatePdfConflictResolutionImportReviewer({
       displayName: reviewer.displayName,
-      instanceId: reviewer.instanceId,
       tx,
     })
     const inserted = await insertComparisonProjectConflictResolutionImportCandidates({
@@ -4042,7 +4037,6 @@ const addComparisonProjectPdfFrontPage = (params: {
 }) => {
   const {exportFilters, exportedAt, pdf, scope, totalCount} = params
   const documentId = crypto.randomUUID()
-  const reviewerInstanceId = crypto.randomUUID()
 
   addComparisonProjectPdfHiddenMetadata(pdf, 'forska.import.format', {
     documentId,
@@ -4059,7 +4053,6 @@ const addComparisonProjectPdfFrontPage = (params: {
     humanJudgmentMode: scope.humanJudgmentMode,
     totalCount,
   })
-  addComparisonProjectPdfHiddenMetadata(pdf, 'forska.reviewer.instance', {reviewerInstanceId})
 
   pdf.addText('Forska.ai comparison review PDF', {font: 'bold', fontSize: 18, gapAfter: 10})
   pdf.addText(
@@ -4072,31 +4065,18 @@ const addComparisonProjectPdfFrontPage = (params: {
   pdf.addText(`Exported: ${exportedAt}`, {fontSize: 8})
   pdf.addText(`Rows in export: ${totalCount}`, {fontSize: 8})
   pdf.addText(`Filters: ${exportFilters}`, {fontSize: 8, gapAfter: 12})
-  pdf.addText('Forska.ai', {font: 'bold', fontSize: 11, gapAfter: 4})
-  pdf.addText('GitHub: https://github.com/fc-io/forska.ai', {fontSize: 10, gapAfter: 12})
   pdf.addText('Reviewer identity for import', {font: 'bold', fontSize: 11, gapAfter: 4})
   pdf.addText(
-    'Enter the reviewer name that should be attached to imported resolutions. Forska.ai will create a separate reviewer ID during import so reviewers with the same displayed name remain distinct.',
-    {fontSize: 10, gapAfter: 8},
+    'Enter the name that should be attached to imported resolutions. Forska.ai creates a separate reviewer ID during import so people with the same displayed name remain distinct.',
+    {fontSize: 10, gapAfter: 12},
   )
-  pdf.addTextField({
-    fieldName: 'forska.reviewer.displayName',
-    label: 'Reviewer name',
-    value: '',
-    width: 320,
-    gapAfter: 8,
-  })
-  pdf.addTextField({
-    fieldName: 'forska.reviewer.instanceId',
-    label: 'Reviewer ID',
-    value: reviewerInstanceId,
-    width: 320,
-    gapAfter: 12,
-  })
+  pdf.addGap(4)
+  pdf.addTextField({fieldName: 'forska.reviewer.displayName', label: 'Your name:', value: '', width: 320, gapAfter: 18})
   pdf.addText(
-    'Keep the reviewer ID unless you intentionally want this PDF to count as a different reviewer. If a filled PDF is imported more than once, Forska.ai should preview overwrites before committing and preserve the reviewer identity chosen for that import.',
-    {fontSize: 9},
+    'If a filled PDF is imported more than once, Forska.ai previews existing values and overwrite choices before committing.',
+    {fontSize: 9, gapAfter: 18},
   )
+  pdf.addText('For more information about Forska.ai, visit https://github.com/fc-io/forska.ai.', {fontSize: 10})
 }
 
 const addComparisonProjectPdfConflictResolution = (

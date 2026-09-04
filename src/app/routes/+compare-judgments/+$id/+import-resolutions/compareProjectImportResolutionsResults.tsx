@@ -175,8 +175,7 @@ export const CompareProjectImportResolutionsResults = (props: CompareProjectImpo
             </p>
             <Show when={props.preview.source.importKind === 'pdf' && props.preview.source.reviewer}>
               <p class="mt-1 text-xs text-gray-500">
-                Reviewer: {getOptionalImportValueLabel(props.preview.source.reviewer?.displayName)} · ID:{' '}
-                {getOptionalImportValueLabel(props.preview.source.reviewer?.instanceId)}
+                Reviewer: {getOptionalImportValueLabel(props.preview.source.reviewer?.displayName)}
               </p>
             </Show>
           </div>

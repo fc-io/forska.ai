@@ -14,7 +14,7 @@ export type ParsedPdfConflictResolutionImport = {
     formatVersion: number | null
     humanJudgmentMode: HumanJudgmentMode | null
   }
-  reviewer: {displayName: string | null; instanceId: string | null}
+  reviewer: {displayName: string | null; instanceId: null}
   rows: Array<{
     fieldName: string
     sourceArticleRowId: string | null
@@ -258,13 +258,6 @@ const getMetadataNumber = (metadata: Record<string, unknown> | null, key: string
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-const getReviewerInstanceId = (params: {
-  reviewerFieldValue: string | null | undefined
-  reviewerMetadata: Record<string, unknown> | null
-}) => {
-  return getTrimmedValue(params.reviewerFieldValue) ?? getMetadataString(params.reviewerMetadata, 'reviewerInstanceId')
-}
-
 const getResolutionLabel = (value: string) => {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
@@ -334,7 +327,6 @@ export const parsePdfConflictResolutionImport = (
   const projectMetadata = getDecodedJsonMetadata<Record<string, unknown>>(
     fieldMap.get('forska.import.comparisonProject'),
   )
-  const reviewerMetadata = getDecodedJsonMetadata<Record<string, unknown>>(fieldMap.get('forska.reviewer.instance'))
   const metadataByArticleId = new Map<string, Record<string, unknown>>()
   const resolutionProjectIds = new Set<string>()
   const warnings: string[] = []
@@ -429,13 +421,7 @@ export const parsePdfConflictResolutionImport = (
       formatVersion: getMetadataNumber(formatMetadata, 'version'),
       humanJudgmentMode: projectMetadata ? getResolutionMode(projectMetadata) : null,
     },
-    reviewer: {
-      displayName: getTrimmedValue(fieldMap.get('forska.reviewer.displayName')),
-      instanceId: getReviewerInstanceId({
-        reviewerFieldValue: fieldMap.get('forska.reviewer.instanceId'),
-        reviewerMetadata,
-      }),
-    },
+    reviewer: {displayName: getTrimmedValue(fieldMap.get('forska.reviewer.displayName')), instanceId: null},
     rows,
     warnings,
   }
