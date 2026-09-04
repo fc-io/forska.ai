@@ -95,7 +95,7 @@ describe('compare project import resolutions helpers', () => {
 
   test('keeps analyze disabled until a valid artifact is parsed', () => {
     expect(getAnalyzeImportDisabledReason({hasArtifact: false, isAnalyzing: false, isCommitting: false})).toBe(
-      'Choose a valid JSON export file first.',
+      'Choose a valid JSON or PDF export file first.',
     )
     expect(getAnalyzeImportDisabledReason({hasArtifact: true, isAnalyzing: false, isCommitting: false})).toBeNull()
   })
@@ -120,6 +120,8 @@ describe('compare project import resolutions helpers', () => {
         skippedNoUsableKey: 0,
         skippedNotConflicting: 0,
         skippedUnsupportedMode: 0,
+        sameValue: 1,
+        overwriteCandidates: 1,
       }).map((stat) => {
         return [stat.label, stat.value]
       }),
@@ -129,6 +131,8 @@ describe('compare project import resolutions helpers', () => {
       ['Will import', 2],
       ['Skipped', 2],
       ['Already resolved', 1],
+      ['Same value', 1],
+      ['Will overwrite', 1],
       ['Deduped', 1],
     ])
   })
@@ -150,6 +154,8 @@ describe('compare project import resolutions helpers', () => {
         skippedNoUsableKey: 0,
         skippedNotConflicting: 0,
         skippedUnsupportedMode: 0,
+        sameValue: 0,
+        overwriteCandidates: 0,
       }).map((stat) => {
         return [stat.label, stat.value]
       }),

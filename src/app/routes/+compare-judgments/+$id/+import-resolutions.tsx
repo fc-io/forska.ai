@@ -5,18 +5,24 @@ import {createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 import {Button} from '../../../../components/ui/button'
 import {
   analyzeComparisonProjectConflictResolutionImport,
+  analyzeComparisonProjectConflictResolutionPdfImport,
   commitComparisonProjectConflictResolutionImport,
+  commitComparisonProjectConflictResolutionPdfImport,
   type ComparisonProjectConflictResolutionImportAnalyzePreview,
   type ComparisonProjectConflictResolutionImportCommitResponse,
   type ComparisonProjectConflictResolutionImportMode,
+  type ComparisonProjectConflictResolutionImportOverwriteMode,
   type ComparisonProjectConflictResolutionImportRequest,
+  type ComparisonProjectConflictResolutionPdfImportRequest,
   type ComparisonProjectConflictResolutionTransferArtifact,
   fetchComparisonProjectJudgmentsMetadata,
 } from '../../../../services/comparisonProjectsService.ts'
 import {
+  type ConflictResolutionImportFileKind,
   getAnalyzeImportDisabledReason,
   getCommitImportDisabledReason,
   getCommitSummaryStats,
+  getConflictResolutionImportFileKind,
   getResolutionCountLabel,
   readConflictResolutionImportFile,
 } from './+import-resolutions/compareProjectImportResolutionsHelpers.ts'
@@ -55,6 +61,23 @@ const conflictResolutionImportModeOptions: Array<{
   },
 ]
 
+const conflictResolutionImportOverwriteModeOptions: Array<{
+  description: string
+  label: string
+  value: ComparisonProjectConflictResolutionImportOverwriteMode
+}> = [
+  {
+    description: 'Keep existing target decisions and import only empty target rows.',
+    label: 'Skip existing',
+    value: 'skip-existing',
+  },
+  {
+    description: 'Replace target decisions only when the PDF contains a different selected value.',
+    label: 'Overwrite different',
+    value: 'overwrite-different',
+  },
+]
+
 export const CompareProjectImportResolutionsPage = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
@@ -65,6 +88,8 @@ export const CompareProjectImportResolutionsPage = () => {
   const [parsedArtifact, setParsedArtifact] = createSignal<ComparisonProjectConflictResolutionTransferArtifact | null>(
     null,
   )
+  const [selectedFileKind, setSelectedFileKind] = createSignal<ConflictResolutionImportFileKind | null>(null)
+  const [selectedPdfFile, setSelectedPdfFile] = createSignal<File | null>(null)
   const [fileError, setFileError] = createSignal<string | null>(null)
   const [analyzeError, setAnalyzeError] = createSignal<string | null>(null)
   const [commitError, setCommitError] = createSignal<string | null>(null)
@@ -74,6 +99,8 @@ export const CompareProjectImportResolutionsPage = () => {
     null,
   )
   const [importMode, setImportMode] = createSignal<ComparisonProjectConflictResolutionImportMode>('conflicting-only')
+  const [overwriteMode, setOverwriteMode] =
+    createSignal<ComparisonProjectConflictResolutionImportOverwriteMode>('skip-existing')
   const [isDraggingFile, setIsDraggingFile] = createSignal(false)
 
   const comparisonProjectQuery = useQuery(() => {
@@ -89,11 +116,18 @@ export const CompareProjectImportResolutionsPage = () => {
 
   const analyzeMutation = useMutation(() => {
     return {
-      mutationFn: (request: ComparisonProjectConflictResolutionImportRequest) => {
-        return analyzeComparisonProjectConflictResolutionImport(comparisonProjectId(), request)
+      mutationFn: (
+        request: ComparisonProjectConflictResolutionImportRequest | ComparisonProjectConflictResolutionPdfImportRequest,
+      ) => {
+        return 'file' in request
+          ? analyzeComparisonProjectConflictResolutionPdfImport(comparisonProjectId(), request)
+          : analyzeComparisonProjectConflictResolutionImport(comparisonProjectId(), request)
       },
-      onError: (error: unknown, request: ComparisonProjectConflictResolutionImportRequest) => {
-        if (parsedArtifact() !== request.artifact || importMode() !== request.importMode) {
+      onError: (
+        error: unknown,
+        request: ComparisonProjectConflictResolutionImportRequest | ComparisonProjectConflictResolutionPdfImportRequest,
+      ) => {
+        if (!isCurrentImportRequest(request)) {
           return
         }
 
@@ -101,9 +135,9 @@ export const CompareProjectImportResolutionsPage = () => {
       },
       onSuccess: (
         preview: ComparisonProjectConflictResolutionImportAnalyzePreview,
-        request: ComparisonProjectConflictResolutionImportRequest,
+        request: ComparisonProjectConflictResolutionImportRequest | ComparisonProjectConflictResolutionPdfImportRequest,
       ) => {
-        if (parsedArtifact() !== request.artifact || importMode() !== request.importMode) {
+        if (!isCurrentImportRequest(request)) {
           return
         }
 
@@ -116,8 +150,12 @@ export const CompareProjectImportResolutionsPage = () => {
 
   const commitMutation = useMutation(() => {
     return {
-      mutationFn: (request: ComparisonProjectConflictResolutionImportRequest) => {
-        return commitComparisonProjectConflictResolutionImport(comparisonProjectId(), request)
+      mutationFn: (
+        request: ComparisonProjectConflictResolutionImportRequest | ComparisonProjectConflictResolutionPdfImportRequest,
+      ) => {
+        return 'file' in request
+          ? commitComparisonProjectConflictResolutionPdfImport(comparisonProjectId(), request)
+          : commitComparisonProjectConflictResolutionImport(comparisonProjectId(), request)
       },
       onError: (error: unknown) => {
         setCommitError(getErrorMessage(error, 'Failed to commit import'))
@@ -142,7 +180,34 @@ export const CompareProjectImportResolutionsPage = () => {
     setCommitError(null)
   }
   const getImportRequest = (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
-    return {artifact, importMode: importMode()}
+    return {artifact, importMode: importMode(), overwriteMode: overwriteMode()}
+  }
+  const getPdfImportRequest = (file: File) => {
+    return {file, importMode: importMode(), overwriteMode: overwriteMode()}
+  }
+  const getSelectedImportRequest = () => {
+    const pdfFile = selectedPdfFile()
+
+    if (selectedFileKind() === 'pdf' && pdfFile) {
+      return getPdfImportRequest(pdfFile)
+    }
+
+    const artifact = parsedArtifact()
+
+    return artifact ? getImportRequest(artifact) : null
+  }
+  const isCurrentImportRequest = (
+    request: ComparisonProjectConflictResolutionImportRequest | ComparisonProjectConflictResolutionPdfImportRequest,
+  ) => {
+    return 'file' in request
+      ? selectedPdfFile() === request.file
+          && selectedFileKind() === 'pdf'
+          && importMode() === request.importMode
+          && overwriteMode() === request.overwriteMode
+      : parsedArtifact() === request.artifact
+          && selectedFileKind() === 'json'
+          && importMode() === request.importMode
+          && overwriteMode() === request.overwriteMode
   }
   const handleFile = async (file: File | null) => {
     setFileError(null)
@@ -151,25 +216,48 @@ export const CompareProjectImportResolutionsPage = () => {
     if (!file) {
       setSelectedFileName(null)
       setParsedArtifact(null)
+      setSelectedPdfFile(null)
+      setSelectedFileKind(null)
       return
     }
 
     setSelectedFileName(file.name)
+    const fileKind = getConflictResolutionImportFileKind(file)
+
+    if (!fileKind) {
+      setParsedArtifact(null)
+      setSelectedPdfFile(null)
+      setSelectedFileKind(null)
+      setFileError('Choose a .json or .pdf conflict-resolution export file.')
+      return
+    }
+
+    setSelectedFileKind(fileKind)
 
     try {
+      if (fileKind === 'pdf') {
+        setParsedArtifact(null)
+        setSelectedPdfFile(file)
+        analyzeMutation.mutate(getPdfImportRequest(file))
+        return
+      }
+
       const parsedFile = await readConflictResolutionImportFile(file)
       setParsedArtifact(parsedFile.artifact)
+      setSelectedPdfFile(null)
       analyzeMutation.mutate(getImportRequest(parsedFile.artifact))
     } catch (error) {
       setParsedArtifact(null)
+      setSelectedPdfFile(null)
+      setSelectedFileKind(null)
       setFileError(getErrorMessage(error, 'Failed to read selected file'))
     }
   }
   const handleAnalyze = () => {
-    const artifact = parsedArtifact()
+    const request = getSelectedImportRequest()
 
-    if (!artifact) {
-      setAnalyzeError('Choose a valid JSON export file before analyzing.')
+    if (!request) {
+      setAnalyzeError('Choose a valid JSON or PDF export file before analyzing.')
       return
     }
 
@@ -177,32 +265,50 @@ export const CompareProjectImportResolutionsPage = () => {
     setAnalyzePreview(null)
     setAnalyzeError(null)
     setCommitError(null)
-    analyzeMutation.mutate(getImportRequest(artifact))
+    analyzeMutation.mutate(request)
   }
   const handleCommit = () => {
-    const artifact = parsedArtifact()
+    const request = getSelectedImportRequest()
 
-    if (!artifact) {
-      setCommitError('Choose a valid JSON export file before committing.')
+    if (!request) {
+      setCommitError('Choose a valid JSON or PDF export file before committing.')
       return
     }
 
     setCommitError(null)
-    commitMutation.mutate(getImportRequest(artifact))
+    commitMutation.mutate(request)
   }
   const handleImportModeChange = (nextImportMode: ComparisonProjectConflictResolutionImportMode) => {
     setImportMode(nextImportMode)
     resetReviewState()
 
-    const artifact = parsedArtifact()
+    const request = getSelectedImportRequest()
 
-    if (artifact) {
-      analyzeMutation.mutate({artifact, importMode: nextImportMode})
+    if (request) {
+      analyzeMutation.mutate({...request, importMode: nextImportMode})
     }
+  }
+  const handleOverwriteModeChange = (nextOverwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode) => {
+    setOverwriteMode(nextOverwriteMode)
+    resetReviewState()
+
+    const request = getSelectedImportRequest()
+
+    if (request) {
+      analyzeMutation.mutate({...request, overwriteMode: nextOverwriteMode})
+    }
+  }
+  const hasImportFile = () => {
+    return Boolean(parsedArtifact() || selectedPdfFile())
+  }
+  const shouldShowOverwriteMode = () => {
+    const summary = analyzePreview()?.summary
+
+    return Boolean(summary && (summary.skippedExisting > 0 || summary.overwriteCandidates > 0))
   }
   const analyzeDisabledReason = createMemo(() => {
     return getAnalyzeImportDisabledReason({
-      hasArtifact: Boolean(parsedArtifact()),
+      hasArtifact: hasImportFile(),
       isAnalyzing: analyzeMutation.isPending,
       isCommitting: commitMutation.isPending,
     })
@@ -210,7 +316,7 @@ export const CompareProjectImportResolutionsPage = () => {
   const commitDisabledReason = createMemo(() => {
     return getCommitImportDisabledReason({
       analyzeSucceeded: Boolean(analyzePreview()),
-      hasArtifact: Boolean(parsedArtifact()),
+      hasArtifact: hasImportFile(),
       hasCommitted: Boolean(commitResult()),
       importableCount: analyzePreview()?.summary.importable ?? 0,
       isAnalyzing: analyzeMutation.isPending,
@@ -320,6 +426,35 @@ export const CompareProjectImportResolutionsPage = () => {
                   </div>
                 </div>
 
+                <Show when={shouldShowOverwriteMode()}>
+                  <div class="mt-5 rounded-md border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-sm font-medium text-gray-900">Existing target decisions</p>
+                    <div class="mt-3 grid gap-3 md:grid-cols-2">
+                      <For each={conflictResolutionImportOverwriteModeOptions}>
+                        {(option) => {
+                          return (
+                            <label class="flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 bg-white p-3 hover:bg-gray-50">
+                              <input
+                                checked={overwriteMode() === option.value}
+                                class="mt-1"
+                                name="conflict-resolution-import-overwrite-mode"
+                                onChange={() => {
+                                  handleOverwriteModeChange(option.value)
+                                }}
+                                type="radio"
+                              />
+                              <span>
+                                <span class="block text-sm font-medium text-gray-900">{option.label}</span>
+                                <span class="mt-1 block text-xs text-gray-500">{option.description}</span>
+                              </span>
+                            </label>
+                          )
+                        }}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+
                 <label
                   class={`mt-5 flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed px-4 py-6 text-center transition-colors ${
                     isDraggingFile() ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
@@ -341,13 +476,13 @@ export const CompareProjectImportResolutionsPage = () => {
                   }}
                 >
                   <span class="text-sm font-medium text-gray-900">
-                    Choose or drop a .json conflict-resolution export
+                    Choose or drop a .json or .pdf conflict-resolution export
                   </span>
                   <span class="mt-1 text-xs text-gray-500">
                     Selected file is analyzed automatically before any decisions are saved.
                   </span>
                   <input
-                    accept=".json,application/json"
+                    accept=".json,.pdf,application/json,application/pdf"
                     class="sr-only"
                     data-testid="conflict-resolution-import-file"
                     onChange={(event) => {

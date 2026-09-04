@@ -57,6 +57,8 @@ const mockState = vi.hoisted(() => {
       skippedNoUsableKey: 0,
       skippedNotConflicting: 0,
       skippedUnsupportedMode: 0,
+      sameValue: 0,
+      overwriteCandidates: 0,
     },
     warnings: [],
   }
@@ -67,7 +69,13 @@ const mockState = vi.hoisted(() => {
         return analyzePreview
       },
     ),
+    analyzeComparisonProjectConflictResolutionPdfImport: vi.fn(
+      async (_comparisonProjectId: string, _artifact: unknown) => {
+        return {...analyzePreview, source: {...analyzePreview.source, importKind: 'pdf' as const}}
+      },
+    ),
     commitComparisonProjectConflictResolutionImport: vi.fn(),
+    commitComparisonProjectConflictResolutionPdfImport: vi.fn(),
     fetchComparisonProjectJudgmentsMetadata: vi.fn(async () => {
       return {allowConflictResolution: true, name: 'Target comparison'}
     }),
@@ -155,7 +163,9 @@ vi.mock('../../../../components/ui/button', () => {
 vi.mock('../../../../services/comparisonProjectsService.ts', () => {
   return {
     analyzeComparisonProjectConflictResolutionImport: mockState.analyzeComparisonProjectConflictResolutionImport,
+    analyzeComparisonProjectConflictResolutionPdfImport: mockState.analyzeComparisonProjectConflictResolutionPdfImport,
     commitComparisonProjectConflictResolutionImport: mockState.commitComparisonProjectConflictResolutionImport,
+    commitComparisonProjectConflictResolutionPdfImport: mockState.commitComparisonProjectConflictResolutionPdfImport,
     fetchComparisonProjectJudgmentsMetadata: mockState.fetchComparisonProjectJudgmentsMetadata,
   }
 })
@@ -220,7 +230,9 @@ const renderImportResolutionsPage = async () => {
 beforeEach(() => {
   document.body.innerHTML = ''
   mockState.analyzeComparisonProjectConflictResolutionImport.mockClear()
+  mockState.analyzeComparisonProjectConflictResolutionPdfImport.mockClear()
   mockState.commitComparisonProjectConflictResolutionImport.mockClear()
+  mockState.commitComparisonProjectConflictResolutionPdfImport.mockClear()
   mockState.fetchComparisonProjectJudgmentsMetadata.mockClear()
   mockState.queryClient.invalidateQueries.mockClear()
 })
@@ -249,7 +261,7 @@ describe('CompareProjectImportResolutionsPage', () => {
       await waitForCondition(() => {
         expect(mockState.analyzeComparisonProjectConflictResolutionImport).toHaveBeenCalledWith(
           'comparison-project-1',
-          {artifact: mockState.transferArtifact, importMode: 'conflicting-only'},
+          {artifact: mockState.transferArtifact, importMode: 'conflicting-only', overwriteMode: 'skip-existing'},
         )
         expect(container.textContent).toContain('Analyze result')
       })
@@ -284,8 +296,35 @@ describe('CompareProjectImportResolutionsPage', () => {
       await waitForCondition(() => {
         expect(mockState.analyzeComparisonProjectConflictResolutionImport).toHaveBeenCalledWith(
           'comparison-project-1',
-          {artifact: mockState.transferArtifact, importMode: 'all-matched'},
+          {artifact: mockState.transferArtifact, importMode: 'all-matched', overwriteMode: 'skip-existing'},
         )
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('sends PDF exports to the server-side PDF analyzer', async () => {
+    const {container, dispose} = await renderImportResolutionsPage()
+
+    try {
+      const input = container.querySelector('[data-testid="conflict-resolution-import-file"]')
+      const file = new File(['%PDF-1.7'], 'conflict-resolutions.pdf', {type: 'application/pdf'})
+
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error('Import file input not found')
+      }
+
+      Object.defineProperty(input, 'files', {configurable: true, value: getFileList(file)})
+      input.dispatchEvent(new Event('change', {bubbles: true}))
+
+      await waitForCondition(() => {
+        expect(mockState.analyzeComparisonProjectConflictResolutionPdfImport).toHaveBeenCalledWith(
+          'comparison-project-1',
+          {file, importMode: 'conflicting-only', overwriteMode: 'skip-existing'},
+        )
+        expect(mockState.analyzeComparisonProjectConflictResolutionImport).not.toHaveBeenCalled()
       })
     } finally {
       dispose()

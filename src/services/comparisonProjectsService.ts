@@ -33,6 +33,7 @@ export type CreateComparisonProjectInput = {
 }
 
 export type ComparisonProjectConflictResolutionImportMode = 'all-matched' | 'conflicting-only'
+export type ComparisonProjectConflictResolutionImportOverwriteMode = 'overwrite-different' | 'skip-existing'
 
 export type CreateComparisonProjectFromProjectInput = {
   name: string
@@ -478,6 +479,12 @@ export type ComparisonProjectConflictResolutionTransferArtifact = {
 export type ComparisonProjectConflictResolutionImportRequest = {
   artifact: ComparisonProjectConflictResolutionTransferArtifact
   importMode?: ComparisonProjectConflictResolutionImportMode
+  overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
+}
+export type ComparisonProjectConflictResolutionPdfImportRequest = {
+  file: File
+  importMode?: ComparisonProjectConflictResolutionImportMode
+  overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
 }
 export type ComparisonProjectConflictResolutionExportResult = {
   artifact: ComparisonProjectConflictResolutionTransferArtifact
@@ -492,6 +499,7 @@ export type ComparisonProjectConflictResolutionImportSkipReason =
   | 'no-usable-key'
   | 'no-target-match'
   | 'not-conflicting'
+  | 'same-value'
   | 'unsupported-mode'
 export type ComparisonProjectConflictResolutionImportWarningCode =
   | 'ambiguous-target-match'
@@ -533,6 +541,9 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSource = {
   comparisonProjectDescription: string | null
   exportedAt: string
   format: string
+  importKind?: 'json' | 'pdf'
+  pdfWarnings?: string[]
+  reviewer?: {displayName: string | null; instanceId: string | null}
   version: number
   rowCount: number
 }
@@ -550,6 +561,8 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSummary = {
   skippedAmbiguousTarget: number
   skippedConflicting: number
   skippedInvalidValue: number
+  sameValue: number
+  overwriteCandidates: number
 }
 export type ComparisonProjectConflictResolutionImportAnalyzeRowBase = {
   sourceTitle: string | null
@@ -568,7 +581,10 @@ export type ComparisonProjectConflictResolutionImportAnalyzeRowBase = {
   matchKey: string | null
 }
 export type ComparisonProjectConflictResolutionImportImportableRow =
-  ComparisonProjectConflictResolutionImportAnalyzeRowBase & {reason: 'importable'; targetArticleId: string}
+  ComparisonProjectConflictResolutionImportAnalyzeRowBase & {
+    reason: 'importable' | 'overwrite-candidate'
+    targetArticleId: string
+  }
 export type ComparisonProjectConflictResolutionImportSkippedRow =
   ComparisonProjectConflictResolutionImportAnalyzeRowBase & {
     reason: ComparisonProjectConflictResolutionImportSkipReason
@@ -645,6 +661,44 @@ const readComparisonProjectConflictResolutionExportResponse = async (
     },
     errorMessage,
   )
+}
+
+const getComparisonProjectConflictResolutionPdfImportFormData = (
+  request: ComparisonProjectConflictResolutionPdfImportRequest,
+) => {
+  const formData = new FormData()
+
+  formData.set('file', request.file)
+  formData.set('importMode', request.importMode ?? 'conflicting-only')
+  formData.set('overwriteMode', request.overwriteMode ?? 'skip-existing')
+
+  return formData
+}
+
+const readComparisonProjectConflictResolutionImportResponse = async <
+  T extends
+    | ComparisonProjectConflictResolutionImportAnalyzePreview
+    | ComparisonProjectConflictResolutionImportCommitResponse,
+>(
+  response: Response,
+  errorMessage: string,
+) => {
+  const payload = await getResponseJson(response)
+
+  const result = handleApiResponse<{data?: T | null; error?: unknown}>(
+    {
+      data: response.ok ? (payload as {data?: T | null; error?: unknown}) : undefined,
+      error: response.ok ? undefined : payload,
+      status: response.status,
+    },
+    errorMessage,
+  )
+
+  if (result.data === undefined || result.data === null) {
+    throw new Error(errorMessage)
+  }
+
+  return result.data
 }
 
 type ConflictResolutionImportWarningApiSourceRow = Omit<
@@ -871,6 +925,23 @@ export const analyzeComparisonProjectConflictResolutionImport = async (
   )
 }
 
+export const analyzeComparisonProjectConflictResolutionPdfImport = async (
+  comparisonProjectId: string,
+  request: ComparisonProjectConflictResolutionPdfImportRequest,
+) => {
+  const response = await fetch(
+    getApiRequestUrl(
+      `/api/comparison-projects/${encodeURIComponent(comparisonProjectId)}/conflict-resolutions/import/pdf/analyze`,
+    ),
+    {body: getComparisonProjectConflictResolutionPdfImportFormData(request), credentials: 'include', method: 'POST'},
+  )
+
+  return readComparisonProjectConflictResolutionImportResponse<ComparisonProjectConflictResolutionImportAnalyzePreview>(
+    response,
+    'Failed to analyze comparison project conflict resolution PDF import',
+  )
+}
+
 export const commitComparisonProjectConflictResolutionImport = async (
   comparisonProjectId: string,
   request: ComparisonProjectConflictResolutionImportRequest,
@@ -882,6 +953,23 @@ export const commitComparisonProjectConflictResolutionImport = async (
   return getResponseData<ComparisonProjectConflictResolutionImportCommitResponse>(
     response,
     'Failed to commit comparison project conflict resolution import',
+  )
+}
+
+export const commitComparisonProjectConflictResolutionPdfImport = async (
+  comparisonProjectId: string,
+  request: ComparisonProjectConflictResolutionPdfImportRequest,
+) => {
+  const response = await fetch(
+    getApiRequestUrl(
+      `/api/comparison-projects/${encodeURIComponent(comparisonProjectId)}/conflict-resolutions/import/pdf/commit`,
+    ),
+    {body: getComparisonProjectConflictResolutionPdfImportFormData(request), credentials: 'include', method: 'POST'},
+  )
+
+  return readComparisonProjectConflictResolutionImportResponse<ComparisonProjectConflictResolutionImportCommitResponse>(
+    response,
+    'Failed to commit comparison project conflict resolution PDF import',
   )
 }
 

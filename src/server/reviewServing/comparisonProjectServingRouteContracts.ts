@@ -97,10 +97,25 @@ export const comparisonProjectServingRouteContracts = [
     servingContract: 'comparison.conflictResolutionImport.activeGeneration',
   },
   {
+    handling: 'serving-read',
+    method: 'POST',
+    migrationTarget:
+      'PDF import analysis parses uploaded form fields, then target-matches against active comparison serving article/identifier rows',
+    routePath: '/api/comparison-projects/:id/conflict-resolutions/import/pdf/analyze',
+    servingContract: 'comparison.conflictResolutionPdfImport.activeGeneration',
+  },
+  {
     handling: 'owner-write-plus-serving-rebuild',
     method: 'POST',
     migrationTarget: 'import commit writes resolutions and queues comparison serving rebuild',
     routePath: '/api/comparison-projects/:id/conflict-resolutions/import/commit',
+  },
+  {
+    handling: 'owner-write-plus-serving-rebuild',
+    method: 'POST',
+    migrationTarget:
+      'PDF import commit writes resolutions with the PDF reviewer identity and queues comparison serving rebuild',
+    routePath: '/api/comparison-projects/:id/conflict-resolutions/import/pdf/commit',
   },
   {
     handling: 'serving-read',

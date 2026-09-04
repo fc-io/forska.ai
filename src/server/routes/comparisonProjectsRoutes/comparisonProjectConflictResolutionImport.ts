@@ -65,6 +65,7 @@ export type ComparisonProjectConflictResolutionImportTargetArticle = {
   doiKeys?: readonly (string | null | undefined)[] | null
   externalArticleId?: string | null
   hasExistingResolution?: boolean
+  existingResolutionValue?: string | null
   identifierKeys?: readonly (string | null | undefined)[] | null
   identifiers?: readonly ComparisonProjectConflictResolutionImportIdentifier[] | null
   legacyDoi?: string | null
@@ -74,6 +75,7 @@ export type ComparisonProjectConflictResolutionImportTargetArticle = {
 }
 
 export type ComparisonProjectConflictResolutionImportMode = 'all-matched' | 'conflicting-only'
+export type ComparisonProjectConflictResolutionImportOverwriteMode = 'skip-existing' | 'overwrite-different'
 
 export type ComparisonProjectConflictResolutionImportTargetArticleQueryRow = Omit<
   ComparisonProjectConflictResolutionImportTargetArticle,
@@ -101,6 +103,7 @@ export type ComparisonProjectConflictResolutionImportSkipReason =
   | 'no-usable-key'
   | 'no-target-match'
   | 'not-conflicting'
+  | 'same-value'
   | 'unsupported-mode'
 
 export type ComparisonProjectConflictResolutionImportSkippedRow = {
@@ -118,6 +121,7 @@ export type ComparisonProjectConflictResolutionImportSkipCounts = {
   noUsableKey: number
   notConflicting: number
   unsupportedMode: number
+  sameValue: number
 }
 
 export type ComparisonProjectConflictResolutionImportErrorCode =
@@ -186,6 +190,7 @@ export type ComparisonProjectConflictResolutionImportPlan = {
 
 export type ComparisonProjectConflictResolutionImportPlanParams = {
   importMode?: ComparisonProjectConflictResolutionImportMode
+  overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
   targetArticles: readonly ComparisonProjectConflictResolutionImportTargetArticle[]
   targetSummaryOptionValues: readonly string[]
@@ -206,6 +211,8 @@ export type ComparisonProjectConflictResolutionImportSummary = {
   skippedNoUsableKey: number
   skippedNotConflicting: number
   skippedUnsupportedMode: number
+  sameValue: number
+  overwriteCandidates: number
   warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 
@@ -215,6 +222,9 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSource = {
   comparisonProjectDescription: string | null
   exportedAt: string
   format: string
+  importKind?: 'json' | 'pdf'
+  pdfWarnings?: string[]
+  reviewer?: {displayName: string | null; instanceId: string | null}
   version: number
   rowCount: number
 }
@@ -233,10 +243,14 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSummary = {
   skippedAmbiguousTarget: number
   skippedConflicting: number
   skippedInvalidValue: number
+  sameValue: number
+  overwriteCandidates: number
 }
 
 export type ComparisonProjectConflictResolutionImportAnalyzeRowReason =
   | 'importable'
+  | 'same-value'
+  | 'overwrite-candidate'
   | ComparisonProjectConflictResolutionImportSkipReason
 
 export type ComparisonProjectConflictResolutionImportAnalyzeRow = {
@@ -291,6 +305,7 @@ type NormalizedTargetArticle = Omit<
 > & {doiKeys: string[]; identifierKeys: NormalizedIdentifierKey[]; idTitleKey: string | null; titleKey: string | null}
 
 type ImportCandidateRow = {
+  isOverwrite: boolean
   matchKey: string
   matchKind: ComparisonProjectConflictResolutionImportMatchKind
   resolutionValue: string
@@ -1509,6 +1524,7 @@ const getCandidateRow = (params: {
   targetArticle: NormalizedTargetArticle
 }): ImportCandidateRow => {
   return {
+    isOverwrite: params.targetArticle.hasExistingResolution === true,
     matchKey: params.matchKey,
     matchKind: params.matchKind,
     resolutionValue: params.row.resolutionValue,
@@ -1541,8 +1557,22 @@ const getHasConflictingIdentifierMatches = (matches: readonly ImportTargetArticl
 const getExistingTargetResolutionResult = (
   row: NormalizedSourceRow,
   selectedMatch: ImportTargetArticleMatch,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
 ): ImportCandidateRowResult | null => {
-  return selectedMatch.targetArticle.hasExistingResolution
+  if (!selectedMatch.targetArticle.hasExistingResolution) {
+    return null
+  }
+
+  if (selectedMatch.targetArticle.existingResolutionValue === row.resolutionValue) {
+    return {
+      candidate: null,
+      detail: getImportRowMatchDetailFromMatch(row, selectedMatch),
+      skippedRow: getSkippedRow(row.sourceRowId, 'same-value'),
+      warnings: [],
+    }
+  }
+
+  return overwriteMode === 'skip-existing'
     ? {
         candidate: null,
         detail: getImportRowMatchDetailFromMatch(row, selectedMatch),
@@ -1560,6 +1590,7 @@ const getIdentifierKeysForTier = (row: NormalizedSourceRow, tier: SourceIdentifi
 
 const getIdentifierImportCandidateRowForTier = (
   importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
   tier: SourceIdentifierTier,
@@ -1583,7 +1614,9 @@ const getIdentifierImportCandidateRowForTier = (
           : selectedMatch
             ? null
             : 'ambiguous-target-match'
-  const existingResolutionResult = selectedMatch ? getExistingTargetResolutionResult(row, selectedMatch) : null
+  const existingResolutionResult = selectedMatch
+    ? getExistingTargetResolutionResult(row, selectedMatch, overwriteMode)
+    : null
 
   return existingResolutionResult
     ? existingResolutionResult
@@ -1630,16 +1663,18 @@ const getIdentifierImportCandidateRowForTier = (
 
 const getIdentifierImportCandidateRow = (
   importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ) => {
   return sourceIdentifierTierOrder.reduce<ImportCandidateRowResult | null>((result, tier) => {
-    return result ?? getIdentifierImportCandidateRowForTier(importMode, row, targetArticleMaps, tier)
+    return result ?? getIdentifierImportCandidateRowForTier(importMode, overwriteMode, row, targetArticleMaps, tier)
   }, null)
 }
 
 const getArticleIdImportCandidateRow = (
   importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult | null => {
@@ -1649,7 +1684,9 @@ const getArticleIdImportCandidateRow = (
     : null
   const eligibleMatch =
     targetMatch && getIsTargetArticleImportEligible(importMode, targetMatch.targetArticle) ? targetMatch : null
-  const existingResolutionResult = eligibleMatch ? getExistingTargetResolutionResult(row, eligibleMatch) : null
+  const existingResolutionResult = eligibleMatch
+    ? getExistingTargetResolutionResult(row, eligibleMatch, overwriteMode)
+    : null
 
   return existingResolutionResult
     ? existingResolutionResult
@@ -1677,6 +1714,7 @@ const getArticleIdImportCandidateRow = (
 
 const getIdTitleImportCandidateRow = (
   importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult => {
@@ -1693,7 +1731,9 @@ const getIdTitleImportCandidateRow = (
   )
   const eligibleMatches = getEligibleTargetMatches(targetMatches, importMode)
   const selectedMatch = eligibleMatches.length === 1 ? eligibleMatches[0] : null
-  const existingResolutionResult = selectedMatch ? getExistingTargetResolutionResult(row, selectedMatch) : null
+  const existingResolutionResult = selectedMatch
+    ? getExistingTargetResolutionResult(row, selectedMatch, overwriteMode)
+    : null
   const skipReason =
     targetMatches.length === 0
       ? 'no-target-match'
@@ -1742,6 +1782,7 @@ const getIdTitleImportCandidateRow = (
 
 const getTitleImportCandidateRow = (
   importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult | null => {
@@ -1758,7 +1799,9 @@ const getTitleImportCandidateRow = (
   )
   const eligibleMatches = getEligibleTargetMatches(targetMatches, importMode)
   const selectedMatch = eligibleMatches.length === 1 ? eligibleMatches[0] : null
-  const existingResolutionResult = selectedMatch ? getExistingTargetResolutionResult(row, selectedMatch) : null
+  const existingResolutionResult = selectedMatch
+    ? getExistingTargetResolutionResult(row, selectedMatch, overwriteMode)
+    : null
   const skipReason =
     targetMatches.length === 0
       ? 'no-target-match'
@@ -1820,15 +1863,22 @@ const getNoTargetMatchImportCandidateRow = (row: NormalizedSourceRow): ImportCan
 
 const getImportCandidateRow = (
   importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult => {
   const hasUsableKey = row.identifierKeys.length > 0 || Boolean(row.idTitleKey) || Boolean(row.titleKey)
-  const articleIdResult = getArticleIdImportCandidateRow(importMode, row, targetArticleMaps)
+  const articleIdResult = getArticleIdImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
   const identifierResult =
-    row.identifierKeys.length > 0 ? getIdentifierImportCandidateRow(importMode, row, targetArticleMaps) : null
-  const idTitleResult = row.idTitleKey ? getIdTitleImportCandidateRow(importMode, row, targetArticleMaps) : null
-  const titleResult = row.titleKey ? getTitleImportCandidateRow(importMode, row, targetArticleMaps) : null
+    row.identifierKeys.length > 0
+      ? getIdentifierImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
+      : null
+  const idTitleResult = row.idTitleKey
+    ? getIdTitleImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
+    : null
+  const titleResult = row.titleKey
+    ? getTitleImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
+    : null
 
   return row.resolutionMode !== 'summary'
     ? {
@@ -1857,13 +1907,14 @@ const getImportCandidateRow = (
 
 const getCandidateRows = (
   importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
   sourceRows: readonly NormalizedSourceRow[],
   targetArticles: readonly NormalizedTargetArticle[],
 ) => {
   const targetArticleMaps = getTargetArticleMaps(targetArticles)
 
   return sourceRows.map((row) => {
-    return getImportCandidateRow(importMode, row, targetArticleMaps)
+    return getImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
   })
 }
 
@@ -1883,6 +1934,7 @@ const getSkipCounts = (
         noTargetMatch: counts.noTargetMatch + (skippedRow.reason === 'no-target-match' ? 1 : 0),
         noUsableKey: counts.noUsableKey + (skippedRow.reason === 'no-usable-key' ? 1 : 0),
         notConflicting: counts.notConflicting + (skippedRow.reason === 'not-conflicting' ? 1 : 0),
+        sameValue: counts.sameValue + (skippedRow.reason === 'same-value' ? 1 : 0),
         unsupportedMode: counts.unsupportedMode + (skippedRow.reason === 'unsupported-mode' ? 1 : 0),
       }
     },
@@ -1895,6 +1947,7 @@ const getSkipCounts = (
       noTargetMatch: 0,
       noUsableKey: 0,
       notConflicting: 0,
+      sameValue: 0,
       unsupportedMode: 0,
     },
   )
@@ -2047,13 +2100,19 @@ const getDedupedCount = (candidates: readonly ComparisonProjectConflictResolutio
 
 const getComparisonProjectConflictResolutionImportPlanState = ({
   importMode = 'conflicting-only',
+  overwriteMode = 'skip-existing',
   sourceRows,
   targetArticles,
   targetSummaryOptionValues,
 }: ComparisonProjectConflictResolutionImportPlanParams) => {
   const normalizedSourceRows = getNormalizedSourceRows(sourceRows)
   const normalizedTargetArticles = getNormalizedTargetArticles(targetArticles)
-  const candidateRowResults = getCandidateRows(importMode, normalizedSourceRows, normalizedTargetArticles)
+  const candidateRowResults = getCandidateRows(
+    importMode,
+    overwriteMode,
+    normalizedSourceRows,
+    normalizedTargetArticles,
+  )
   const candidateRows = candidateRowResults
     .map((result) => {
       return result.candidate
@@ -2184,7 +2243,7 @@ const getAnalyzeRowFromCandidateRow = (
       sourceRow: candidateRow.sourceRow,
       targetArticles: [candidateRow.targetArticle],
     }),
-    reason: 'importable',
+    reason: candidateRow.isOverwrite ? 'overwrite-candidate' : 'importable',
     selectedResolution: candidateRow.resolutionValue,
   })
 }
@@ -2274,6 +2333,7 @@ const getAnalyzeSummary = (params: {
     + params.plan.skipCounts.noTargetMatch
     + params.plan.skipCounts.noUsableKey
     + params.plan.skipCounts.notConflicting
+    + params.plan.skipCounts.sameValue
     + params.plan.skipCounts.unsupportedMode
 
   return {
@@ -2292,24 +2352,29 @@ const getAnalyzeSummary = (params: {
     skippedAmbiguousTarget: params.plan.skipCounts.ambiguousTarget,
     skippedConflicting,
     skippedInvalidValue: params.plan.skipCounts.invalidValue,
+    sameValue: params.plan.skipCounts.sameValue,
+    overwriteCandidates: 0,
   }
 }
 
 export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params: {
   artifact: ComparisonProjectConflictResolutionTransferArtifactV1
   importMode?: ComparisonProjectConflictResolutionImportMode
+  overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
   targetArticles: readonly ComparisonProjectConflictResolutionImportTargetArticle[]
   targetSummaryOptionValues: readonly string[]
 }): ComparisonProjectConflictResolutionImportAnalyzeResult => {
   const planState = getComparisonProjectConflictResolutionImportPlanState({
     importMode: params.importMode,
+    overwriteMode: params.overwriteMode,
     sourceRows: params.sourceRows,
     targetArticles: params.targetArticles,
     targetSummaryOptionValues: params.targetSummaryOptionValues,
   })
   const plan = getComparisonProjectConflictResolutionImportPlan({
     importMode: params.importMode,
+    overwriteMode: params.overwriteMode,
     sourceRows: params.sourceRows,
     targetArticles: params.targetArticles,
     targetSummaryOptionValues: params.targetSummaryOptionValues,
@@ -2332,7 +2397,12 @@ export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params
 
   return {
     source: getAnalyzeSource(params.artifact),
-    summary: getAnalyzeSummary({importableCount: plan.candidates.length, plan, scannedCount: params.sourceRows.length}),
+    summary: {
+      ...getAnalyzeSummary({importableCount: plan.candidates.length, plan, scannedCount: params.sourceRows.length}),
+      overwriteCandidates: importableCandidateRows.filter((candidateRow) => {
+        return candidateRow.isOverwrite
+      }).length,
+    },
     importableRows: importableCandidateRows.map(getAnalyzeRowFromCandidateRow),
     skippedRows,
     warnings: plan.warnings,
