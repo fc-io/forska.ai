@@ -152,6 +152,7 @@ type MockDatabaseState = {
   includeSingleAnswerArticle: boolean
   isInTransaction: boolean
   lastConflictResolutionInsertStatement: string | null
+  lastUserConfigInsertStatement: string | null
   lastPromptInsertStatement: string | null
   lastUpdateStatement: string | null
   maintenanceCommands: string[]
@@ -968,7 +969,7 @@ const postComparisonProjectConflictResolutionImportCommit = (
   )
 }
 
-const getComparisonProjectConflictResolutionPdfImportFile = () => {
+const getComparisonProjectConflictResolutionPdfImportFile = (params: {reviewerDisplayName?: string} = {}) => {
   const pdf = new SimplePdfDocument()
 
   pdf.addTextField({
@@ -991,7 +992,7 @@ const getComparisonProjectConflictResolutionPdfImportFile = () => {
       }),
     ).toString('base64url'),
   })
-  pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr PDF'})
+  pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: params.reviewerDisplayName ?? 'Dr PDF'})
   pdf.addTextField({
     fieldName: 'comparison.comparison-project-1.article.article-2.metadata',
     hidden: true,
@@ -1654,6 +1655,7 @@ const queryJson = async (
   }
 
   if (statement.includes('INSERT INTO app.user_config')) {
+    getMockDatabaseState().lastUserConfigInsertStatement = statement
     const pdfReviewerId = statement.match(/'pdf-import:[^']+'/)?.[0]?.slice(1, -1) ?? null
 
     if (pdfReviewerId) {
@@ -2558,6 +2560,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     includeSingleAnswerArticle: false,
     isInTransaction: false,
     lastConflictResolutionInsertStatement: null,
+    lastUserConfigInsertStatement: null,
     lastPromptInsertStatement: null,
     lastUpdateStatement: null,
     maintenanceCommands: [],
@@ -3786,6 +3789,44 @@ test('comparison project conflict resolution PDF import can overwrite different 
     articleId: 'article-2',
     comparisonProjectId: 'comparison-project-1',
   })
+  expect(state.conflictResolutionRows.at(-1)?.reviewerUserId).toMatch(/^pdf-import:/)
+})
+
+test('comparison project conflict resolution PDF import names blank reviewers as unnamed', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionPdfImportCommit(app, {
+    file: getComparisonProjectConflictResolutionPdfImportFile({reviewerDisplayName: '   '}),
+    importMode: 'all-matched',
+  })
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(state.lastUserConfigInsertStatement ?? '').toContain('Unnamed reviewer')
   expect(state.conflictResolutionRows.at(-1)?.reviewerUserId).toMatch(/^pdf-import:/)
 })
 
@@ -7147,7 +7188,11 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(response.headers.get('Content-Disposition') ?? '').toContain('Rollback_test_project_comparison_export_')
   expect(response.headers.get('Content-Disposition') ?? '').toContain('.pdf')
   expect(pdf.startsWith('%PDF-1.4')).toBe(true)
-  expect(pdf).toContain('Forska.ai comparison review PDF')
+  expect(pdf).toContain('Forska.ai conflict resolutions review')
+  expect(pdf).not.toContain('Forska.ai comparison review PDF')
+  expect(pdf).toContain('Conflict resolution is the final reviewer choice')
+  expect(pdf).toContain('judgment is the overall answer')
+  expect(pdf).toContain('LLM assessment shows the model-specific reasoning')
   expect(pdf).toContain('For more information about Forska.ai, visit https://github.com/fc-io/forska.ai.')
   expect(pdf).toContain('Reviewer identity for import')
   expect(pdf).toContain('/FT /Tx')
@@ -7164,7 +7209,7 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('0.96 0.98 1.00 rg')
   expect(pdf).toContain('Conflict resolution')
   expect(pdf).toContain('Current resolution: Prompt 2')
-  expect(pdf).toContain('Reviewer: Dr Reviewer')
+  expect(pdf).not.toContain('Reviewer: Dr Reviewer')
   expect(pdf).toContain('/AcroForm')
   expect(pdf).toContain('/FT /Btn')
   expect(pdf).toContain('/Ff 49152')
@@ -7175,7 +7220,7 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('/AS /prompt-2')
   expect(pdf).not.toContain('(x) Prompt 2')
   expect(pdf).toContain('Summary judgment')
-  expect(pdf).not.toContain('LLM assessment')
+  expect(pdf).not.toMatch(/BT \/F2 12 Tf \d+\.\d+ \d+\.\d+ Td \(LLM assessment\) Tj ET/)
   expect(pdf).not.toContain('Confidence')
   expect(
     state.queryStatements.some((statement) => {
@@ -7303,10 +7348,10 @@ test('comparison project pdf export shows individual assessments behind summary 
   expect(response.status).toBe(200)
   expect(pdf).toContain('Summary judgment')
   expect(pdf).toContain('LLM assessment')
-  expect(pdf.indexOf('Summary judgment')).toBeLessThan(pdf.indexOf('LLM assessment'))
+  expect(pdf.lastIndexOf('Summary judgment')).toBeLessThan(pdf.lastIndexOf('LLM assessment'))
   expect(pdf).not.toContain('Individual assessments')
   expect(pdf.indexOf('Overall decision')).toBeLessThan(pdf.indexOf('Content used: Article Title and Abstract'))
-  expect(pdf.indexOf('Content used: Article Title and Abstract')).toBeLessThan(pdf.indexOf('LLM assessment'))
+  expect(pdf.indexOf('Content used: Article Title and Abstract')).toBeLessThan(pdf.lastIndexOf('LLM assessment'))
   expect(pdf).toMatch(/BT \/F1 10 Tf 48\.00 \d+\.\d+ Td \(Content used: Article Title and Abstract\) Tj ET/)
   expect(pdf).toContain('Prompt 1')
   expect(pdf).not.toContain('Summary answer: yes')
@@ -7357,10 +7402,10 @@ test('comparison project pdf export shows individual assessments for import-scop
   expect(response.status).toBe(200)
   expect(pdf).toContain('Summary judgment')
   expect(pdf).toContain('LLM assessment')
-  expect(pdf.indexOf('Summary judgment')).toBeLessThan(pdf.indexOf('LLM assessment'))
+  expect(pdf.lastIndexOf('Summary judgment')).toBeLessThan(pdf.lastIndexOf('LLM assessment'))
   expect(pdf).not.toContain('Individual assessments')
   expect(pdf.indexOf('Overall decision')).toBeLessThan(pdf.indexOf('Content used: Article Title and Abstract'))
-  expect(pdf.indexOf('Content used: Article Title and Abstract')).toBeLessThan(pdf.indexOf('LLM assessment'))
+  expect(pdf.indexOf('Content used: Article Title and Abstract')).toBeLessThan(pdf.lastIndexOf('LLM assessment'))
   expect(pdf).toMatch(/BT \/F1 10 Tf 48\.00 \d+\.\d+ Td \(Content used: Article Title and Abstract\) Tj ET/)
   expect(pdf).toContain('Prompt 1')
   expect(pdf).not.toContain('Summary answer: no')

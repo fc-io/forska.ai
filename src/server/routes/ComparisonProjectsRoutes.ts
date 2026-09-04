@@ -1266,7 +1266,7 @@ const getPdfConflictResolutionImportReviewerId = (instanceId: string) => {
 
 const getOrCreatePdfConflictResolutionImportReviewer = async (params: {displayName?: string | null; tx: AppTx}) => {
   const reviewerId = getPdfConflictResolutionImportReviewerId(crypto.randomUUID())
-  const reviewerName = params.displayName?.trim() || 'PDF reviewer'
+  const reviewerName = params.displayName?.trim() || 'Unnamed reviewer'
   const [reviewer] = await params.tx.queryJson<{id: string; name: string}>(`
     INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
     VALUES (
@@ -4019,6 +4019,8 @@ const addComparisonProjectPdfHiddenMetadata = (pdf: SimplePdfDocument, fieldName
   pdf.addTextField({fieldName, hidden: true, value: getComparisonProjectPdfMetadataValue(value)})
 }
 
+const comparisonProjectPdfFrontPageFontSizes = {body: 10, heading: 11, title: 18} as const
+
 const getComparisonProjectPdfArticleFieldPrefix = (scope: ComparisonProjectScope, row: ComparisonProjectExportRow) => {
   return [
     'comparison',
@@ -4054,29 +4056,44 @@ const addComparisonProjectPdfFrontPage = (params: {
     totalCount,
   })
 
-  pdf.addText('Forska.ai comparison review PDF', {font: 'bold', fontSize: 18, gapAfter: 10})
+  const frontPageFontSizes = comparisonProjectPdfFrontPageFontSizes
+
+  pdf.addText('Forska.ai conflict resolutions review', {font: 'bold', fontSize: frontPageFontSizes.title, gapAfter: 10})
   pdf.addText(
     'Use this PDF to review comparison-project conflicts offline. Fill the conflict-resolution radio boxes for the articles you reviewed, then import the completed PDF back into Forska.ai to save those decisions.',
-    {fontSize: 11, gapAfter: 8},
+    {fontSize: frontPageFontSizes.body, gapAfter: 8},
   )
-  pdf.addText('Project', {font: 'bold', fontSize: 11, gapAfter: 4})
-  pdf.addText(scope.name, {fontSize: 10})
-  pdf.addText(`Comparison project ID: ${scope.id}`, {fontSize: 8})
-  pdf.addText(`Exported: ${exportedAt}`, {fontSize: 8})
-  pdf.addText(`Rows in export: ${totalCount}`, {fontSize: 8})
-  pdf.addText(`Filters: ${exportFilters}`, {fontSize: 8, gapAfter: 12})
-  pdf.addText('Reviewer identity for import', {font: 'bold', fontSize: 11, gapAfter: 4})
+  pdf.addText(
+    'Conflict resolution is the final reviewer choice used to settle rows where judgments disagree. Summary judgment is the overall answer for an article. LLM assessment shows the model-specific reasoning and answer that led to the disagreement.',
+    {fontSize: frontPageFontSizes.body, gapAfter: 12},
+  )
+  pdf.addText('Project', {font: 'bold', fontSize: frontPageFontSizes.heading, gapAfter: 4})
+  pdf.addText(scope.name, {fontSize: frontPageFontSizes.body})
+  pdf.addText(`Comparison project ID: ${scope.id}`, {fontSize: frontPageFontSizes.body})
+  pdf.addText(`Exported: ${exportedAt}`, {fontSize: frontPageFontSizes.body})
+  pdf.addText(`Rows in export: ${totalCount}`, {fontSize: frontPageFontSizes.body})
+  pdf.addText(`Filters: ${exportFilters}`, {fontSize: frontPageFontSizes.body, gapAfter: 12})
+  pdf.addText('Reviewer identity for import', {font: 'bold', fontSize: frontPageFontSizes.heading, gapAfter: 4})
   pdf.addText(
     'Enter the name that should be attached to imported resolutions. Forska.ai creates a separate reviewer ID during import so people with the same displayed name remain distinct.',
-    {fontSize: 10, gapAfter: 12},
+    {fontSize: frontPageFontSizes.body, gapAfter: 12},
   )
   pdf.addGap(4)
-  pdf.addTextField({fieldName: 'forska.reviewer.displayName', label: 'Your name:', value: '', width: 320, gapAfter: 18})
+  pdf.addTextField({
+    fieldName: 'forska.reviewer.displayName',
+    fontSize: frontPageFontSizes.body,
+    label: 'Your name:',
+    value: '',
+    width: 320,
+    gapAfter: 18,
+  })
   pdf.addText(
     'If a filled PDF is imported more than once, Forska.ai previews existing values and overwrite choices before committing.',
-    {fontSize: 9, gapAfter: 18},
+    {fontSize: frontPageFontSizes.body, gapAfter: 18},
   )
-  pdf.addText('For more information about Forska.ai, visit https://github.com/fc-io/forska.ai.', {fontSize: 10})
+  pdf.addText('For more information about Forska.ai, visit https://github.com/fc-io/forska.ai.', {
+    fontSize: frontPageFontSizes.body,
+  })
 }
 
 const addComparisonProjectPdfConflictResolution = (
@@ -4090,7 +4107,6 @@ const addComparisonProjectPdfConflictResolution = (
 
   pdf.addPanel({title: 'Conflict resolution'}, () => {
     pdf.addText(`Current resolution: ${row.conflictResolution?.label ?? 'Not set'}`, {fontSize: 10})
-    pdf.addText(`Reviewer: ${row.conflictResolution?.reviewerDisplayName ?? 'Not set'}`, {fontSize: 10, gapAfter: 6})
     pdf.addText('Choose resolution', {font: 'bold', fontSize: 10, gapAfter: 4})
 
     pdf.addRadioRow(

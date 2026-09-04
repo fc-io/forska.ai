@@ -39,6 +39,7 @@ PDF export should include a front page before article pages.
 
 The front page should contain:
 
+- title: `Forska.ai conflict resolutions review`
 - short explanation of Forska.ai comparison review PDFs
 - intended offline review/import use case
 - project name and comparison project ID
@@ -46,6 +47,8 @@ The front page should contain:
 - row count
 - GitHub link: `https://github.com/fc-io/forska.ai`
 - visible fillable reviewer name field labeled `Your name:`: `forska.reviewer.displayName`
+
+The front page should use exactly three font-size levels: title, section heading, and body text. Project metadata, help copy, field labels, and the GitHub link should all use the body size instead of introducing extra small print styles.
 
 The reviewer ID should not be stored in the PDF. Import should create a new internal reviewer instance ID when committing the PDF, so two reviewers with the same display name remain separate without exposing or asking users to preserve an ID in the file.
 
