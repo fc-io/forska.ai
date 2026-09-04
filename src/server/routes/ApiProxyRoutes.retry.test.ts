@@ -658,6 +658,89 @@ test.serial('api proxy waits for owner readiness before forwarding a non-idempot
   expect(forwardedPatchUrls).toEqual(['http://owner-1:34991/__duckdb-owner-rpc/api/projects/project-1/edit'])
 })
 
+test.serial(
+  'api proxy waits through owner restart before forwarding conflict-resolution POST once',
+  async () => {
+    const app = await loadRoutes()
+    let readinessFailureCount = 20
+    const fetchMock = mock(async (request: Request | URL | string) => {
+      const url = getRequestUrl(request)
+
+      if (isRuntimeReadyUrl(url) && readinessFailureCount > 0) {
+        readinessFailureCount -= 1
+        throw new Error('owner restarting')
+      }
+
+      return isRuntimeReadyUrl(url)
+        ? getCompatibleRuntimeReadyResponse()
+        : Response.json({data: {articleId: 'article-1', label: 'Yes', value: 'yes'}, error: null})
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const response = await app.handle(
+      new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution', {
+        body: JSON.stringify({articleId: 'article-1', value: 'yes'}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+      }),
+    )
+    const body = (await response.json()) as {data: {articleId: string; value: string}; error: string | null}
+    const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+    const forwardedPostUrls = ownerFetchCallUrls.filter((url) => {
+      return !isRuntimeReadyUrl(url)
+    })
+
+    expect(response.status).toBe(200)
+    expect(body.data).toEqual({articleId: 'article-1', label: 'Yes', value: 'yes'})
+    expect(readinessFailureCount).toBe(0)
+    expect(forwardedPostUrls).toEqual([
+      'http://owner-1:34991/__duckdb-owner-rpc/api/comparison-projects/comparison-project-1/conflict-resolution',
+    ])
+  },
+  10_000,
+)
+
+test.serial('api proxy retries conflict-resolution POST after a temporary same-owner transport failure', async () => {
+  const app = await loadRoutes()
+  let shouldFail = true
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
+    if (shouldFail) {
+      shouldFail = false
+      throw new Error('owner unavailable')
+    }
+
+    return Response.json({data: {articleId: 'article-1', label: 'Yes', value: 'yes'}, error: null})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+  state.ownerUrls = ['http://owner-1:34991']
+
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution', {
+      body: JSON.stringify({articleId: 'article-1', value: 'yes'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {articleId: string; value: string}; error: string | null}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+  const forwardedPostUrls = ownerFetchCallUrls.filter((url) => {
+    return !isRuntimeReadyUrl(url)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({articleId: 'article-1', label: 'Yes', value: 'yes'})
+  expect(forwardedPostUrls).toEqual([
+    'http://owner-1:34991/__duckdb-owner-rpc/api/comparison-projects/comparison-project-1/conflict-resolution',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/comparison-projects/comparison-project-1/conflict-resolution',
+  ])
+})
+
 test.serial('api proxy retries idempotent DELETE requests after a temporary same-owner transport failure', async () => {
   const app = await loadRoutes()
   let shouldFail = true
