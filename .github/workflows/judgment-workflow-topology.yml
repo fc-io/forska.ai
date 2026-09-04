@@ -3,7 +3,18 @@ name: Judgment workflow topology
 on:
   pull_request:
     paths-ignore:
+      - "*.md"
+      - "*.mdx"
+      - "README*"
+      - "CHANGELOG*"
+      - "CONTRIBUTING*"
+      - "SECURITY*"
+      - "CODE_OF_CONDUCT*"
+      - "SUPPORT*"
+      - "LICENSE*"
+      - "NOTICE*"
       - "**/*.md"
+      - "**/*.mdx"
       - "docs/**"
   workflow_dispatch:
 
