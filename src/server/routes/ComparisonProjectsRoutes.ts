@@ -88,6 +88,7 @@ import {
 import {
   getComparisonProjectConflictResolutionTransferArtifactFromPdfImport,
   parsePdfConflictResolutionImport,
+  pdfConflictResolutionNotSetValue,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionPdfImport.ts'
 import {
   type ComparisonProjectConflictResolutionFilter,
@@ -3989,13 +3990,16 @@ const getComparisonProjectPdfHeaderFilters = (params: {
 const getComparisonProjectPdfResolutionOptions = (scope: ComparisonProjectScope) => {
   const options = getComparisonProjectConflictResolutionOptions(scope)
 
-  return options.length > 0
-    ? options
-    : [
-        {label: 'Include / Yes', value: 'yes'},
-        {label: 'Exclude / No', value: 'no'},
-        {label: 'Maybe / Unsure', value: 'maybe'},
-      ]
+  const resolutionOptions =
+    options.length > 0
+      ? options
+      : [
+          {label: 'Include / Yes', value: 'yes'},
+          {label: 'Exclude / No', value: 'no'},
+          {label: 'Maybe / Unsure', value: 'maybe'},
+        ]
+
+  return [{label: 'Not set', value: pdfConflictResolutionNotSetValue}, ...resolutionOptions]
 }
 
 const getComparisonProjectPdfExportedAtLabel = (date = new Date()) => {
@@ -4111,7 +4115,7 @@ const addComparisonProjectPdfConflictResolution = (
 
     pdf.addRadioRow(
       [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'resolution'].join('.'),
-      row.conflictResolution?.value,
+      row.conflictResolution?.value ?? pdfConflictResolutionNotSetValue,
       getComparisonProjectPdfResolutionOptions(scope).map((option) => {
         return {label: option.label, value: option.value, fontSize: 10, gapAfter: 3}
       }),

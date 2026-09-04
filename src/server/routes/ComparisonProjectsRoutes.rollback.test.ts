@@ -17,6 +17,7 @@ import {
   comparisonProjectConflictResolutionTransferFormat,
   comparisonProjectConflictResolutionTransferVersion,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
+import {pdfConflictResolutionNotSetValue} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionPdfImport.ts'
 
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
 const comparisonProjectServingRebuildServiceModulePath = new URL(
@@ -1010,6 +1011,18 @@ const getComparisonProjectConflictResolutionPdfImportFile = () => {
   ])
 
   return new File([pdf.toBuffer()], 'conflict-resolutions.pdf', {type: 'application/pdf'})
+}
+
+const getComparisonProjectConflictResolutionPdfImportNotSetFile = () => {
+  const pdf = new SimplePdfDocument()
+
+  pdf.addRadioRow('comparison.comparison-project-1.article.article-2.resolution', pdfConflictResolutionNotSetValue, [
+    {label: 'Not set', value: pdfConflictResolutionNotSetValue},
+    {label: 'Yes', value: 'yes'},
+    {label: 'No', value: 'no'},
+  ])
+
+  return new File([pdf.toBuffer()], 'conflict-resolutions-not-set.pdf', {type: 'application/pdf'})
 }
 
 const postComparisonProjectConflictResolutionPdfImportAnalyze = (
@@ -3779,6 +3792,63 @@ test('comparison project conflict resolution PDF import can overwrite different 
     comparisonProjectId: 'comparison-project-1',
     reviewerUserId: 'pdf-import:reviewer-instance-1',
   })
+})
+
+test('comparison project conflict resolution PDF import does not reset existing resolutions selected as Not set', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-2',
+        comparisonProjectId: 'comparison-project-1',
+        id: 'existing-resolution-1',
+        promptId: null,
+      },
+    ],
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionPdfImportCommit(app, {
+    file: getComparisonProjectConflictResolutionPdfImportNotSetFile(),
+    importMode: 'all-matched',
+    overwriteMode: 'overwrite-different',
+  })
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain('no filled conflict-resolution radio fields')
+  expect(state.lastConflictResolutionInsertStatement).toBeNull()
+  expect(
+    state.runStatements.some((statement) => {
+      return statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
+    }),
+  ).toBe(false)
+  expect(state.conflictResolutionRows).toEqual([
+    {
+      answerValue: 'yes',
+      articleId: 'article-2',
+      comparisonProjectId: 'comparison-project-1',
+      id: 'existing-resolution-1',
+      promptId: null,
+    },
+  ])
 })
 
 test('comparison project conflict resolution PDF import rejects malformed PDFs cleanly', async () => {
@@ -7104,6 +7174,7 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('/Ff 49152')
   expect(pdf).toContain('/T (comparison.comparison-project-1.article.article-1.resolution)')
   expect(pdf).toContain('/T (comparison.comparison-project-1.article.article-1.metadata)')
+  expect(pdf).toContain('(Not set)')
   expect(pdf).toContain('/V /prompt-2')
   expect(pdf).toContain('/AS /prompt-2')
   expect(pdf).not.toContain('(x) Prompt 2')
@@ -7118,6 +7189,38 @@ test('comparison project export can render a readable pdf with matching filters 
       )
     }),
   ).toBe(true)
+})
+
+test('comparison project pdf export selects the explicit Not set conflict-resolution option for unresolved rows', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {
+    articleCategoryFilter: 'all',
+    differenceFilter: 'all',
+    format: 'pdf',
+    rowFilter: 'fully-answered',
+  })
+  const pdf = Buffer.from(await response.arrayBuffer()).toString('latin1')
+  const safeNotSetValue = pdfConflictResolutionNotSetValue.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+  expect(response.status).toBe(200)
+  expect(pdf).toContain('(Not set)')
+  expect(pdf).toContain(`/V /${safeNotSetValue}`)
+  expect(pdf).toContain(`/AS /${safeNotSetValue}`)
 })
 
 test('comparison project pdf export preserves Chinese title and abstract glyph text', async () => {
