@@ -173,12 +173,18 @@ export const CompareProjectImportResolutionsResults = (props: CompareProjectImpo
             <p class="mt-1 text-sm text-gray-600">
               Source: {props.preview.source.comparisonProjectName} · {getRowCountLabel(props.preview.source.rowCount)}
             </p>
+            <Show when={props.preview.source.importKind === 'pdf' && props.preview.source.reviewer}>
+              <p class="mt-1 text-xs text-gray-500">
+                Reviewer: {getOptionalImportValueLabel(props.preview.source.reviewer?.displayName)} · ID:{' '}
+                {getOptionalImportValueLabel(props.preview.source.reviewer?.instanceId)}
+              </p>
+            </Show>
           </div>
           <div class="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
             {getResolutionCountLabel(props.preview.summary.importable)} ready to import
           </div>
         </div>
-        <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <For each={stats()}>
             {(stat) => {
               return (
@@ -191,6 +197,18 @@ export const CompareProjectImportResolutionsResults = (props: CompareProjectImpo
             }}
           </For>
         </div>
+        <Show when={(props.preview.source.pdfWarnings?.length ?? 0) > 0}>
+          <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <p class="font-medium">PDF import notes</p>
+            <ul class="mt-2 list-disc space-y-1 pl-5">
+              <For each={props.preview.source.pdfWarnings}>
+                {(warning) => {
+                  return <li>{warning}</li>
+                }}
+              </For>
+            </ul>
+          </div>
+        </Show>
       </div>
 
       <div class="rounded-lg bg-white p-6 shadow">

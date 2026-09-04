@@ -12,6 +12,7 @@ import {
   comparisonProjectRowFilters,
   getComparisonProjectPassesRowFilter,
 } from '../../utils/comparisonProjectRowFilter.ts'
+import {SimplePdfDocument} from '../utils/simplePdf.ts'
 import {
   comparisonProjectConflictResolutionTransferFormat,
   comparisonProjectConflictResolutionTransferVersion,
@@ -579,6 +580,7 @@ const getMockConflictResolutionImportServingTargetRows = (statement: string) => 
         articleId: row.articleId,
         doi: row.doi,
         externalArticleId: row.externalArticleId,
+        hasConflict: true,
         identifierKeys: row.identifierKeys,
         legacyDoi: row.doi,
         pubmedId: null,
@@ -601,7 +603,7 @@ const getMockConflictResolutionExistingTargetResolutionRows = (
       )
     })
     .map((row) => {
-      return {articleId: row.articleId}
+      return {answerValue: row.answerValue, articleId: row.articleId, promptId: row.promptId}
     })
 }
 
@@ -962,6 +964,95 @@ const postComparisonProjectConflictResolutionImportCommit = (
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
+  )
+}
+
+const getComparisonProjectConflictResolutionPdfImportFile = () => {
+  const pdf = new SimplePdfDocument()
+
+  pdf.addTextField({
+    fieldName: 'forska.import.format',
+    hidden: true,
+    value: Buffer.from(
+      JSON.stringify({format: 'forska.comparisonProject.pdfConflictResolutionImport', version: 1}),
+    ).toString('base64url'),
+  })
+  pdf.addTextField({
+    fieldName: 'forska.import.comparisonProject',
+    hidden: true,
+    value: Buffer.from(
+      JSON.stringify({
+        allowConflictResolution: true,
+        comparisonProjectId: 'comparison-project-1',
+        comparisonProjectName: 'PDF source project',
+        exportedAt: '2026-06-10T10:00:00.000Z',
+        humanJudgmentMode: 'summary',
+      }),
+    ).toString('base64url'),
+  })
+  pdf.addTextField({
+    fieldName: 'forska.reviewer.instance',
+    hidden: true,
+    value: Buffer.from(JSON.stringify({reviewerInstanceId: 'reviewer-instance-1'})).toString('base64url'),
+  })
+  pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr PDF'})
+  pdf.addTextField({fieldName: 'forska.reviewer.instanceId', value: 'reviewer-instance-1'})
+  pdf.addTextField({
+    fieldName: 'comparison.comparison-project-1.article.article-2.metadata',
+    hidden: true,
+    value: Buffer.from(
+      JSON.stringify({articleExternalId: 'source-ext-2', articleTitle: 'Article 2', canonicalArticleId: 'article-2'}),
+    ).toString('base64url'),
+  })
+  pdf.addRadioRow('comparison.comparison-project-1.article.article-2.resolution', 'no', [
+    {label: 'Yes', value: 'yes'},
+    {label: 'No', value: 'no'},
+  ])
+
+  return new File([pdf.toBuffer()], 'conflict-resolutions.pdf', {type: 'application/pdf'})
+}
+
+const postComparisonProjectConflictResolutionPdfImportAnalyze = (
+  app: {handle: (request: Request) => Promise<Response>},
+  input: {file?: File; importMode?: string; overwriteMode?: string} = {},
+) => {
+  const formData = new FormData()
+
+  formData.set('file', input.file ?? getComparisonProjectConflictResolutionPdfImportFile())
+  if (input.importMode) {
+    formData.set('importMode', input.importMode)
+  }
+  if (input.overwriteMode) {
+    formData.set('overwriteMode', input.overwriteMode)
+  }
+
+  return app.handle(
+    new Request(
+      'http://localhost/api/comparison-projects/comparison-project-1/conflict-resolutions/import/pdf/analyze',
+      {body: formData, method: 'POST'},
+    ),
+  )
+}
+
+const postComparisonProjectConflictResolutionPdfImportCommit = (
+  app: {handle: (request: Request) => Promise<Response>},
+  input: {file?: File; importMode?: string; overwriteMode?: string} = {},
+) => {
+  const formData = new FormData()
+
+  formData.set('file', input.file ?? getComparisonProjectConflictResolutionPdfImportFile())
+  if (input.importMode) {
+    formData.set('importMode', input.importMode)
+  }
+  if (input.overwriteMode) {
+    formData.set('overwriteMode', input.overwriteMode)
+  }
+
+  return app.handle(
+    new Request(
+      'http://localhost/api/comparison-projects/comparison-project-1/conflict-resolutions/import/pdf/commit',
+      {body: formData, method: 'POST'},
+    ),
   )
 }
 
@@ -1556,6 +1647,12 @@ const queryJson = async (
   }
 
   if (statement.includes('INSERT INTO app.user_config')) {
+    const pdfReviewerId = statement.match(/'pdf-import:[^']+'/)?.[0]?.slice(1, -1) ?? null
+
+    if (pdfReviewerId) {
+      return [{id: pdfReviewerId, name: 'Dr PDF'}]
+    }
+
     return [{id: 'test-reviewer', name: 'Test reviewer'}]
   }
 
@@ -3251,6 +3348,8 @@ test('comparison project create-from-project imports selected conflict resolutio
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
     warnings: [],
   })
   expect(insertedResolution).toMatchObject({
@@ -3347,6 +3446,8 @@ test('comparison project conflict resolution import preview returns counts witho
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
     warnings: [],
   })
   expect(state.createdComparisonProjectIds).toEqual([])
@@ -3486,6 +3587,8 @@ test('comparison project conflict resolution import analyze returns row details 
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 1,
+    sameValue: 0,
+    overwriteCandidates: 0,
   })
   expect(body.data.importableRows).toMatchObject([
     {
@@ -3559,6 +3662,147 @@ test('comparison project conflict resolution import analyze returns row details 
       return statement.includes('target_identifier AS (') || statement.includes('articleScopeConditions')
     }),
   ).toBe(false)
+})
+
+test('comparison project conflict resolution PDF import analyzes filled radio fields with reviewer metadata', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionPdfImportAnalyze(app, {importMode: 'all-matched'})
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {
+    data: {
+      source: Record<string, unknown>
+      summary: Record<string, number>
+      importableRows: Array<Record<string, unknown>>
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.source).toMatchObject({
+    comparisonProjectId: 'comparison-project-1',
+    comparisonProjectName: 'PDF source project',
+    importKind: 'pdf',
+    reviewer: {displayName: 'Dr PDF', instanceId: 'reviewer-instance-1'},
+  })
+  expect(body.data.summary).toMatchObject({importable: 1, matched: 1, scanned: 1, skipped: 0})
+  expect(body.data.importableRows).toMatchObject([
+    {
+      matchKind: 'article-id',
+      reason: 'importable',
+      selectedResolution: 'no',
+      sourceArticleRowId: 'article-2',
+      targetArticleId: 'article-2',
+    },
+  ])
+})
+
+test('comparison project conflict resolution PDF import can overwrite different existing target resolutions', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-2',
+        comparisonProjectId: 'comparison-project-1',
+        id: 'existing-resolution-1',
+        promptId: null,
+      },
+    ],
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionPdfImportCommit(app, {
+    importMode: 'all-matched',
+    overwriteMode: 'overwrite-different',
+  })
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {
+    data: {
+      summary: Record<string, number>
+      importableRows: Array<Record<string, unknown>>
+      source: Record<string, unknown>
+    }
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.summary).toMatchObject({importable: 1, inserted: 1, overwriteCandidates: 1, skippedExisting: 0})
+  expect(body.data.importableRows).toMatchObject([{reason: 'overwrite-candidate', selectedResolution: 'no'}])
+  expect(body.data.source.reviewer).toEqual({displayName: 'Dr PDF', instanceId: 'reviewer-instance-1'})
+  expect(state.lastConflictResolutionInsertStatement ?? '').toContain('pdf-import:reviewer-instance-1')
+  expect(state.conflictResolutionRows.at(-1)).toMatchObject({
+    answerValue: 'no',
+    articleId: 'article-2',
+    comparisonProjectId: 'comparison-project-1',
+    reviewerUserId: 'pdf-import:reviewer-instance-1',
+  })
+})
+
+test('comparison project conflict resolution PDF import rejects malformed PDFs cleanly', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionPdfImportAnalyze(app, {
+    file: new File(['not a pdf'], 'broken.pdf', {type: 'application/pdf'}),
+  })
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain('no fillable form fields')
 })
 
 test('comparison project conflict resolution import matches same article rows before identifier lookup', async () => {
@@ -3735,6 +3979,8 @@ test('comparison project conflict resolution import commit writes safe rows and 
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
   })
   expect(body.data.importableRows).toMatchObject([
     {
@@ -3847,6 +4093,8 @@ test('comparison project conflict resolution import commit can include non-confl
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
   })
   expect(body.data.importableRows).toMatchObject([
     {
@@ -3957,6 +4205,8 @@ test('comparison project conflict resolution import commit skips rows that becam
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
   })
   expect(commitBody.data.importableRows).toEqual([])
   expect(commitBody.data.skippedRows).toMatchObject([
@@ -4097,6 +4347,8 @@ test('comparison project create-from-project dedupes duplicate conflict resoluti
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
     warnings: [],
   })
   expect(insertedResolutions).toHaveLength(1)
@@ -4187,6 +4439,8 @@ test('comparison project create-from-project can import non-conflicting matched 
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
     warnings: [],
   })
   expect(insertedResolutions).toEqual([

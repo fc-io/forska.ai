@@ -12,6 +12,7 @@ export type ParsedConflictResolutionImportFile = {
   fileName: string
   rowCount: number
 }
+export type ConflictResolutionImportFileKind = 'json' | 'pdf'
 
 export type AnalyzeImportDisabledState = {hasArtifact: boolean; isAnalyzing: boolean; isCommitting: boolean}
 
@@ -26,8 +27,18 @@ export type ImportSummaryStat = {label: string; value: number; description: stri
 export const conflictResolutionImportInvalidJsonCopy =
   'Could not parse the selected file as JSON. Choose a valid conflict-resolution export file.'
 
-const getJsonFileExtensionError = (fileName: string) => {
-  return fileName.toLowerCase().endsWith('.json') ? null : 'Choose a .json conflict-resolution export file.'
+export const getConflictResolutionImportFileKind = (file: File): ConflictResolutionImportFileKind | null => {
+  const fileName = file.name.toLowerCase()
+
+  if (file.type === 'application/pdf' || fileName.endsWith('.pdf')) {
+    return 'pdf'
+  }
+
+  if (file.type === 'application/json' || fileName.endsWith('.json')) {
+    return 'json'
+  }
+
+  return null
 }
 
 export const getOptionalImportValueLabel = (value: string | null | undefined) => {
@@ -59,6 +70,16 @@ export const getImportSummaryStats = (
       value: summary.skippedExisting,
       description: 'Rows with an existing target conflict resolution.',
     },
+    {
+      label: 'Same value',
+      value: summary.sameValue,
+      description: 'Rows already saved with the same conflict-resolution value.',
+    },
+    {
+      label: 'Will overwrite',
+      value: summary.overwriteCandidates,
+      description: 'Existing target decisions that will be replaced when committed.',
+    },
     {label: 'Deduped', value: summary.deduped, description: 'Duplicate compatible source rows folded into one import.'},
   ]
 }
@@ -82,6 +103,7 @@ export const getSkipReasonLabel = (reason: ComparisonProjectConflictResolutionIm
     'no-target-match': 'No target match',
     'no-usable-key': 'No usable match key',
     'not-conflicting': 'Target article is not conflicting',
+    'same-value': 'Same target resolution',
     'unsupported-mode': 'Unsupported resolution mode',
   }
 
@@ -127,7 +149,7 @@ export const getTargetExternalArticleIds = (row: ComparisonProjectConflictResolu
 
 export const getAnalyzeImportDisabledReason = (state: AnalyzeImportDisabledState) => {
   if (!state.hasArtifact) {
-    return 'Choose a valid JSON export file first.'
+    return 'Choose a valid JSON or PDF export file first.'
   }
 
   if (state.isAnalyzing) {
@@ -139,7 +161,7 @@ export const getAnalyzeImportDisabledReason = (state: AnalyzeImportDisabledState
 
 export const getCommitImportDisabledReason = (state: CommitImportDisabledState) => {
   if (!state.hasArtifact) {
-    return 'Choose a valid JSON export file first.'
+    return 'Choose a valid JSON or PDF export file first.'
   }
 
   if (state.isAnalyzing) {
@@ -162,10 +184,8 @@ export const getCommitImportDisabledReason = (state: CommitImportDisabledState) 
 }
 
 export const readConflictResolutionImportFile = async (file: File): Promise<ParsedConflictResolutionImportFile> => {
-  const extensionError = getJsonFileExtensionError(file.name)
-
-  if (extensionError) {
-    throw new Error(extensionError)
+  if (getConflictResolutionImportFileKind(file) !== 'json') {
+    throw new Error('Choose a .json or .pdf conflict-resolution export file.')
   }
 
   try {

@@ -42,6 +42,11 @@ test('comparison serving read routes declare active-generation contracts', () =>
       '/api/comparison-projects/:id/conflict-resolutions/import/analyze',
       'comparison.conflictResolutionImport.activeGeneration',
     ],
+    [
+      'POST',
+      '/api/comparison-projects/:id/conflict-resolutions/import/pdf/analyze',
+      'comparison.conflictResolutionPdfImport.activeGeneration',
+    ],
     ['POST', '/api/comparison-projects/:id/export', 'comparison.export.activeGeneration'],
   ])
   expect(

@@ -59,6 +59,7 @@ import {
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 import {
   type ComparisonProjectConflictResolutionImportMode,
+  type ComparisonProjectConflictResolutionImportOverwriteMode,
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportSummary,
@@ -84,6 +85,10 @@ import {
   getComparisonProjectConflictResolutionImportTitleTargetArticlesSql,
   mergeComparisonProjectConflictResolutionImportTargetArticleRows,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
+import {
+  getComparisonProjectConflictResolutionTransferArtifactFromPdfImport,
+  parsePdfConflictResolutionImport,
+} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionPdfImport.ts'
 import {
   type ComparisonProjectConflictResolutionFilter,
   type ComparisonProjectJudgmentHumanRow,
@@ -1252,6 +1257,42 @@ const getConflictResolutionImportRejectedError = (message: string) => {
   return new HttpError(400, message)
 }
 
+const getPdfConflictResolutionImportReviewerId = (instanceId: string) => {
+  const normalizedInstanceId = instanceId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '_')
+
+  return `pdf-import:${normalizedInstanceId || crypto.randomUUID()}`
+}
+
+const getOrCreatePdfConflictResolutionImportReviewer = async (params: {
+  displayName?: string | null
+  instanceId?: string | null
+  tx: AppTx
+}) => {
+  const reviewerId = getPdfConflictResolutionImportReviewerId(params.instanceId ?? crypto.randomUUID())
+  const reviewerName = params.displayName?.trim() || 'PDF reviewer'
+  const [reviewer] = await params.tx.queryJson<{id: string; name: string}>(`
+    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
+    VALUES (
+      ${getSqlLiteral(reviewerId)},
+      ${getSqlLiteral(reviewerName)},
+      ${getSqlLiteral(`${reviewerId}@pdf-import.forska.local`)},
+      NULL,
+      NULL,
+      NULL
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      updated_at = current_timestamp
+    RETURNING id, name
+  `)
+
+  if (!reviewer) {
+    throw new Error('Failed to create PDF import reviewer')
+  }
+
+  return reviewer
+}
+
 const getValidatedConflictResolutionImportMode = (value: unknown): ComparisonProjectConflictResolutionImportMode => {
   if (value === undefined || value === null) {
     return 'conflicting-only'
@@ -1262,6 +1303,20 @@ const getValidatedConflictResolutionImportMode = (value: unknown): ComparisonPro
   }
 
   throw getConflictResolutionImportRejectedError('Conflict resolution import mode is invalid')
+}
+
+const getValidatedConflictResolutionImportOverwriteMode = (
+  value: unknown,
+): ComparisonProjectConflictResolutionImportOverwriteMode => {
+  if (value === undefined || value === null) {
+    return 'skip-existing'
+  }
+
+  if (value === 'skip-existing' || value === 'overwrite-different') {
+    return value
+  }
+
+  throw getConflictResolutionImportRejectedError('Conflict resolution import overwrite mode is invalid')
 }
 
 const getComparisonProjectPromptConfigsForSelections = async (
@@ -1733,27 +1788,28 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
   ])
 }
 
-const getConflictResolutionImportExistingTargetResolutionIds = async (params: {
+const getConflictResolutionImportExistingTargetResolutionValues = async (params: {
   articleIds: string[]
   comparisonProjectId: string
   tx: AppQueryRunner
 }) => {
   if (params.articleIds.length === 0) {
-    return new Set<string>()
+    return new Map<string, string | null>()
   }
 
-  const rows = await params.tx.queryJson<{articleId: string}>(`
-    SELECT article_id AS articleId
+  const rows = await params.tx.queryJson<{articleId: string; answerValue: string | null; promptId: string | null}>(`
+    SELECT
+      article_id AS articleId,
+      answer_value AS answerValue,
+      prompt_id AS promptId
     FROM ${comparisonProjectConflictResolutionTable}
     WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
       AND article_id IN (${getInClause(params.articleIds)})
   `)
 
-  return new Set(
-    rows.map((row) => {
-      return row.articleId
-    }),
-  )
+  return rows.reduce<Map<string, string | null>>((resolutionValues, row) => {
+    return resolutionValues.set(row.articleId, row.answerValue ?? row.promptId ?? null)
+  }, new Map<string, string | null>())
 }
 
 const getConflictResolutionImportTargetArticles = async (params: {
@@ -1781,7 +1837,7 @@ const getConflictResolutionImportTargetArticles = async (params: {
         return row.canonicalArticleId
       }),
   )
-  const existingTargetResolutionIds = await getConflictResolutionImportExistingTargetResolutionIds({
+  const existingTargetResolutionValues = await getConflictResolutionImportExistingTargetResolutionValues({
     articleIds,
     comparisonProjectId: params.scope.id,
     tx: params.tx,
@@ -1790,7 +1846,8 @@ const getConflictResolutionImportTargetArticles = async (params: {
   return candidateRows.map((row) => {
     return {
       ...row,
-      hasExistingResolution: existingTargetResolutionIds.has(row.articleId),
+      existingResolutionValue: existingTargetResolutionValues.get(row.articleId) ?? null,
+      hasExistingResolution: existingTargetResolutionValues.has(row.articleId),
       isConflictResolutionEligible: conflictingArticleIds.has(row.articleId),
     }
   })
@@ -1828,6 +1885,7 @@ const getConflictResolutionImportSummary = (params: {
     + params.plan.skipCounts.noTargetMatch
     + params.plan.skipCounts.noUsableKey
     + params.plan.skipCounts.notConflicting
+    + params.plan.skipCounts.sameValue
     + params.plan.skipCounts.unsupportedMode
 
   return {
@@ -1847,6 +1905,8 @@ const getConflictResolutionImportSummary = (params: {
     skippedNoUsableKey: params.plan.skipCounts.noUsableKey,
     skippedNotConflicting: params.plan.skipCounts.notConflicting,
     skippedUnsupportedMode: params.plan.skipCounts.unsupportedMode,
+    sameValue: params.plan.skipCounts.sameValue,
+    overwriteCandidates: 0,
     warnings: params.plan.warnings,
   }
 }
@@ -1867,6 +1927,8 @@ const getEmptyConflictResolutionImportSummary = (): ComparisonProjectConflictRes
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
+    sameValue: 0,
+    overwriteCandidates: 0,
     warnings: [],
   }
 }
@@ -1929,13 +1991,14 @@ const getOrCreateComparisonProjectConflictResolutionReviewer = async (tx: AppTx)
 const insertComparisonProjectConflictResolutionImportCandidates = async (params: {
   candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
   comparisonProjectId: string
+  reviewer?: {id: string; name: string} | null
   tx: AppTx
 }) => {
   if (params.candidates.length === 0) {
     return 0
   }
 
-  const reviewer = await getOrCreateComparisonProjectConflictResolutionReviewer(params.tx)
+  const reviewer = params.reviewer ?? (await getOrCreateComparisonProjectConflictResolutionReviewer(params.tx))
 
   await params.tx.run(`
     INSERT INTO ${comparisonProjectConflictResolutionTable} (
@@ -1958,6 +2021,11 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
         )`
       })
       .join(',\n')}
+    ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET
+      prompt_id = excluded.prompt_id,
+      answer_value = excluded.answer_value,
+      reviewer_user_id = excluded.reviewer_user_id,
+      updated_at = now()
   `)
 
   return params.candidates.length
@@ -2083,8 +2151,50 @@ const getComparisonProjectConflictResolutionArtifactImportRequest = (body: unkno
   const bodyRecord = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
   const artifact = bodyRecord && 'artifact' in bodyRecord ? bodyRecord.artifact : body
   const importMode = bodyRecord ? getValidatedConflictResolutionImportMode(bodyRecord.importMode) : 'conflicting-only'
+  const overwriteMode = bodyRecord
+    ? getValidatedConflictResolutionImportOverwriteMode(bodyRecord.overwriteMode)
+    : 'skip-existing'
 
-  return {artifact: getValidatedComparisonProjectConflictResolutionImportArtifact(artifact), importMode}
+  return {artifact: getValidatedComparisonProjectConflictResolutionImportArtifact(artifact), importMode, overwriteMode}
+}
+
+type ComparisonProjectConflictResolutionArtifactImportRequest = ReturnType<
+  typeof getComparisonProjectConflictResolutionArtifactImportRequest
+>
+
+type ComparisonProjectConflictResolutionPdfImportBody = {file: File; importMode?: unknown; overwriteMode?: unknown}
+
+const getComparisonProjectConflictResolutionPdfImportRequest = async (
+  scope: ComparisonProjectScope,
+  body: ComparisonProjectConflictResolutionPdfImportBody,
+): Promise<
+  ComparisonProjectConflictResolutionArtifactImportRequest & {
+    pdfWarnings: string[]
+    reviewer: {displayName: string | null; instanceId: string | null}
+  }
+> => {
+  let parsedImport: ReturnType<typeof parsePdfConflictResolutionImport>
+  let artifact: ReturnType<typeof getComparisonProjectConflictResolutionTransferArtifactFromPdfImport>
+
+  try {
+    parsedImport = parsePdfConflictResolutionImport(await body.file.arrayBuffer())
+    artifact = getComparisonProjectConflictResolutionTransferArtifactFromPdfImport({
+      parsedImport,
+      targetComparisonProjectId: scope.id,
+    })
+  } catch (error) {
+    throw getConflictResolutionImportRejectedError(
+      error instanceof Error ? error.message : 'Invalid PDF conflict resolution import file',
+    )
+  }
+
+  return {
+    artifact: getValidatedComparisonProjectConflictResolutionImportArtifact(artifact),
+    importMode: getValidatedConflictResolutionImportMode(body.importMode),
+    overwriteMode: getValidatedConflictResolutionImportOverwriteMode(body.overwriteMode),
+    pdfWarnings: parsedImport.warnings,
+    reviewer: parsedImport.reviewer,
+  }
 }
 
 const validateConflictResolutionImportAnalyzeTarget = (scope: ComparisonProjectScope) => {
@@ -2104,17 +2214,40 @@ const validateConflictResolutionImportAnalyzeTarget = (scope: ComparisonProjectS
 const analyzeComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
   validateConflictResolutionImportAnalyzeTarget(scope)
 
-  const {artifact, importMode} = getComparisonProjectConflictResolutionArtifactImportRequest(body)
+  const {artifact, importMode, overwriteMode} = getComparisonProjectConflictResolutionArtifactImportRequest(body)
   const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
   const targetArticles = await getConflictResolutionImportTargetArticles({sourceRows, scope, tx: appDatabaseService})
 
   return getComparisonProjectConflictResolutionImportAnalyzeResult({
     artifact,
     importMode,
+    overwriteMode,
     sourceRows,
     targetArticles,
     targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
   })
+}
+
+const analyzeComparisonProjectConflictResolutionPdfImport = async (
+  scope: ComparisonProjectScope,
+  body: ComparisonProjectConflictResolutionPdfImportBody,
+) => {
+  validateConflictResolutionImportAnalyzeTarget(scope)
+
+  const {artifact, importMode, overwriteMode, pdfWarnings, reviewer} =
+    await getComparisonProjectConflictResolutionPdfImportRequest(scope, body)
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
+  const targetArticles = await getConflictResolutionImportTargetArticles({sourceRows, scope, tx: appDatabaseService})
+  const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
+    artifact,
+    importMode,
+    overwriteMode,
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
+  })
+
+  return {...analyzeResult, source: {...analyzeResult.source, importKind: 'pdf' as const, pdfWarnings, reviewer}}
 }
 
 const getConflictResolutionArtifactImportAnalysis = async (params: {
@@ -2124,7 +2257,7 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
 }) => {
   validateConflictResolutionImportAnalyzeTarget(params.scope)
 
-  const {artifact, importMode} = getComparisonProjectConflictResolutionArtifactImportRequest(params.body)
+  const {artifact, importMode, overwriteMode} = getComparisonProjectConflictResolutionArtifactImportRequest(params.body)
   const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
   const targetArticles = await getConflictResolutionImportTargetArticles({
     sourceRows,
@@ -2134,6 +2267,7 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
   const targetSummaryOptionValues = getComparisonProjectScopeSummaryOptionValues(params.scope)
   const plan = getComparisonProjectConflictResolutionImportPlan({
     importMode,
+    overwriteMode,
     sourceRows,
     targetArticles,
     targetSummaryOptionValues,
@@ -2141,6 +2275,7 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
   const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
     artifact,
     importMode,
+    overwriteMode,
     sourceRows,
     targetArticles,
     targetSummaryOptionValues,
@@ -2159,6 +2294,40 @@ const commitComparisonProjectConflictResolutionImport = async (scope: Comparison
     })
 
     return getComparisonProjectConflictResolutionImportCommitResult({analyzeResult, inserted})
+  })
+}
+
+const commitComparisonProjectConflictResolutionPdfImport = async (
+  scope: ComparisonProjectScope,
+  body: ComparisonProjectConflictResolutionPdfImportBody,
+) => {
+  return appDatabaseService.transaction(async (tx) => {
+    const {artifact, importMode, overwriteMode, pdfWarnings, reviewer} =
+      await getComparisonProjectConflictResolutionPdfImportRequest(scope, body)
+    const {analyzeResult, plan} = await getConflictResolutionArtifactImportAnalysis({
+      body: {artifact, importMode, overwriteMode},
+      scope,
+      tx,
+    })
+    const importedReviewer = await getOrCreatePdfConflictResolutionImportReviewer({
+      displayName: reviewer.displayName,
+      instanceId: reviewer.instanceId,
+      tx,
+    })
+    const inserted = await insertComparisonProjectConflictResolutionImportCandidates({
+      candidates: plan.candidates,
+      comparisonProjectId: scope.id,
+      reviewer: importedReviewer,
+      tx,
+    })
+
+    return getComparisonProjectConflictResolutionImportCommitResult({
+      analyzeResult: {
+        ...analyzeResult,
+        source: {...analyzeResult.source, importKind: 'pdf' as const, pdfWarnings, reviewer},
+      },
+      inserted,
+    })
   })
 }
 
@@ -5268,6 +5437,23 @@ export const comparisonProjectsRoutes = new Elysia()
     {body: t.Any()},
   )
   .post(
+    '/api/comparison-projects/:id/conflict-resolutions/import/pdf/analyze',
+    async (context) => {
+      const {params, set} = context
+      const scope = await getComparisonProjectScope(params.id)
+
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const data = await analyzeComparisonProjectConflictResolutionPdfImport(scope, context.body)
+
+      return {data}
+    },
+    {body: t.Object({file: t.File(), importMode: t.Optional(t.String()), overwriteMode: t.Optional(t.String())})},
+  )
+  .post(
     '/api/comparison-projects/:id/conflict-resolutions/import/commit',
     async (context) => {
       const {params, set} = context
@@ -5284,6 +5470,24 @@ export const comparisonProjectsRoutes = new Elysia()
       return {data}
     },
     {body: t.Any()},
+  )
+  .post(
+    '/api/comparison-projects/:id/conflict-resolutions/import/pdf/commit',
+    async (context) => {
+      const {params, set} = context
+      const scope = await getComparisonProjectScope(params.id)
+
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const data = await commitComparisonProjectConflictResolutionPdfImport(scope, context.body)
+      await checkpointComparisonProjectMutation()
+
+      return {data}
+    },
+    {body: t.Object({file: t.File(), importMode: t.Optional(t.String()), overwriteMode: t.Optional(t.String())})},
   )
   .post(
     '/api/comparison-projects/:id/export',

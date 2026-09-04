@@ -95,6 +95,7 @@ const getSkipCounts = (overrides: Partial<ReturnType<typeof getPlan>['skipCounts
     noTargetMatch: 0,
     noUsableKey: 0,
     notConflicting: 0,
+    sameValue: 0,
     unsupportedMode: 0,
     ...overrides,
   }
@@ -599,6 +600,8 @@ test('analyzes transfer artifact rows with stable importable and skipped details
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 1,
+    sameValue: 0,
+    overwriteCandidates: 0,
   })
   expect(result.importableRows).toEqual([
     {
