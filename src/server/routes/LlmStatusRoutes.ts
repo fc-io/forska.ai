@@ -16,6 +16,52 @@ const llmStatusRowsWorkloadContext: DuckdbWorkloadContext = {
   ...llmStatusRouteWorkloadContext,
   maxResultRows: llmStatusRowsLimit,
 }
+const llmStatusForegroundBudgetMs = 2500
+
+type LlmStatusRow = {
+  ts: string
+  instanceId: string
+  modelName: string
+  engineVersion: string | null
+  prefillTps: number | null
+  genTps: number | null
+  rps: number | null
+  numQueueReqs: number | null
+  numRunningReqs: number | null
+  numGrammarQueueReqs: number | null
+  numRunningReqsOfflineBatch: number | null
+  numPrefillPreallocQueueReqs: number | null
+  numPrefillInflightQueueReqs: number | null
+  numDecodePreallocQueueReqs: number | null
+  numDecodeTransferQueueReqs: number | null
+  utilization: number | null
+  cacheHitRate: number | null
+  inFlight: number | null
+  maxInFlight: number | null
+}
+
+type LlmStatusResponseBody = {data: LlmStatusRow[]; hasMetricsCompatibleJob: boolean}
+
+let cachedLlmStatus: LlmStatusResponseBody | null = null
+let pendingLlmStatusRefresh: Promise<LlmStatusResponseBody> | null = null
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> => {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timeout = setTimeout(() => {
+      resolve(null)
+    }, timeoutMs)
+  })
+
+  const result = await Promise.race([promise, timeoutPromise])
+
+  if (timeout !== null) {
+    clearTimeout(timeout)
+  }
+
+  return result
+}
 
 const hasMetricsCompatibleRunningJob = async (): Promise<boolean> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(
@@ -37,7 +83,7 @@ const hasMetricsCompatibleRunningJob = async (): Promise<boolean> => {
   return (rows[0]?.count ?? 0) > 0
 }
 
-export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/llmstatus', async () => {
+const readLlmStatus = async (): Promise<LlmStatusResponseBody> => {
   const hasCompatibleJob = await hasMetricsCompatibleRunningJob()
 
   const [tableRow] = await getAppDatabaseService().queryJson<{tableName: string}>(
@@ -55,27 +101,7 @@ export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/ll
     return {data: [], hasMetricsCompatibleJob: hasCompatibleJob}
   }
 
-  const data = await getAppDatabaseService().queryJson<{
-    ts: string
-    instanceId: string
-    modelName: string
-    engineVersion: string | null
-    prefillTps: number | null
-    genTps: number | null
-    rps: number | null
-    numQueueReqs: number | null
-    numRunningReqs: number | null
-    numGrammarQueueReqs: number | null
-    numRunningReqsOfflineBatch: number | null
-    numPrefillPreallocQueueReqs: number | null
-    numPrefillInflightQueueReqs: number | null
-    numDecodePreallocQueueReqs: number | null
-    numDecodeTransferQueueReqs: number | null
-    utilization: number | null
-    cacheHitRate: number | null
-    inFlight: number | null
-    maxInFlight: number | null
-  }>(
+  const data = await getAppDatabaseService().queryJson<LlmStatusRow>(
     `
     SELECT
       ts,
@@ -106,4 +132,33 @@ export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/ll
   )
 
   return {data, hasMetricsCompatibleJob: hasCompatibleJob}
+}
+
+const refreshLlmStatus = async () => {
+  pendingLlmStatusRefresh ??= readLlmStatus()
+    .then((status) => {
+      cachedLlmStatus = status
+      return status
+    })
+    .finally(() => {
+      pendingLlmStatusRefresh = null
+    })
+
+  return pendingLlmStatusRefresh
+}
+
+export const __resetLlmStatusCacheForTests = () => {
+  cachedLlmStatus = null
+  pendingLlmStatusRefresh = null
+}
+
+export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/llmstatus', async () => {
+  if (cachedLlmStatus !== null) {
+    void refreshLlmStatus().catch(() => {})
+    return cachedLlmStatus
+  }
+
+  const status = await withTimeout(refreshLlmStatus(), llmStatusForegroundBudgetMs)
+
+  return status ?? {data: [], hasMetricsCompatibleJob: false}
 })

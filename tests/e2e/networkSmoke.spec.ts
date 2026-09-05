@@ -245,9 +245,23 @@ const isMutationDisabledCurrentDbQueuedBacklog = (indexing: ReviewsWarningsData[
 }
 
 const isCurrentDbHistoricalMaintenanceFailure = (data: ReviewsWarningsData, path: string) => {
+  const isDirtyWorkLifecycleDiagnostic =
+    /^data\.indexing\.serving\.diagnostics\.dirtyWork\.lifecycleReasonCounts\[\d+\]\.status$/.test(path)
+  const isNonTerminalDirtyWorkLifecycleDiagnostic =
+    isDirtyWorkLifecycleDiagnostic
+    && data.indexing.maintenance.terminalDirtyWorkCount === 0
+    && data.indexing.serving.diagnostics.dirtyWork?.failedCount === 0
+  const isHistoricalTerminalDiagnostic =
+    path === 'data.indexing.serving.diagnostics.rebuildChunks.failedCount'
+    || path === 'data.indexing.serving.diagnostics.dirtyWork.failedCount'
+
+  if (networkSmokeDbMode === 'current' && isNonTerminalDirtyWorkLifecycleDiagnostic) {
+    return true
+  }
+
   return (
     networkSmokeDbMode === 'current'
-    && path === 'data.indexing.serving.diagnostics.rebuildChunks.failedCount'
+    && isHistoricalTerminalDiagnostic
     && data.indexing.status === 'ready'
     && data.indexing.progressState === 'completed'
     && data.indexing.serving.readable

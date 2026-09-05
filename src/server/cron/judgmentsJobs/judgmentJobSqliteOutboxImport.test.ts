@@ -1079,12 +1079,14 @@ test('background import records metadata and quarantines repeated failures for t
   ).toBe(true)
 })
 
-test('background import records transient SQLite locks and lease conflicts without increasing quarantine failure count', () => {
+test('background import skips transient SQLite locks and lease conflicts without recording failure state', () => {
+  const outputPath = join(tempRuntimeRoot.rootDirectory, `transient-lock-import-${Date.now()}.json`)
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
+        const {writeFileSync} = await import('node:fs')
         const {mock} = await import('bun:test')
 
         const getModulePath = (relativePath) => {
@@ -1113,7 +1115,7 @@ test('background import records transient SQLite locks and lease conflicts witho
                   queryStatements.push(statement)
 
                   if (statement.includes("storage_state = 'draining'") && statement.includes('status IN')) {
-                    return [{id: 'lock-job'}]
+                    return [{id: 'lock-job'}, {id: 'next-job'}]
                   }
 
                   if (statement.includes("WHERE id = 'lock-job'")) {
@@ -1149,6 +1151,18 @@ test('background import records transient SQLite locks and lease conflicts witho
           return {
             runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
               attemptedJobIds.push(jobId)
+              if (jobId === 'next-job') {
+                return {
+                  claimedBy: 'test-server',
+                  discardedCount: 0,
+                  duplicateCount: 0,
+                  importedCount: 0,
+                  jobId,
+                  outboxClaimId: null,
+                  outboxRowCount: 0,
+                  status: 'idle',
+                }
+              }
               throw new Error(currentErrorMessage)
             },
           }
@@ -1160,10 +1174,17 @@ test('background import records transient SQLite locks and lease conflicts witho
           summaries.push(await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'}))
         }
 
-        console.log(JSON.stringify({attemptedJobIds, queryStatements, runStatements, summaries}))
+        writeFileSync(
+          process.env.JUDGMENT_SQLITE_TRANSIENT_LOCK_IMPORT_OUTPUT_PATH,
+          JSON.stringify({attemptedJobIds, queryStatements, runStatements, summaries}),
+        )
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env}},
+    {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {...process.env, JUDGMENT_SQLITE_TRANSIENT_LOCK_IMPORT_OUTPUT_PATH: outputPath},
+    },
   )
 
   if (runScript.exitCode !== 0) {
@@ -1174,17 +1195,17 @@ test('background import records transient SQLite locks and lease conflicts witho
     )
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+  const result = JSON.parse(readFileSync(outputPath, 'utf8')) as {
     attemptedJobIds: string[]
     queryStatements: string[]
     runStatements: string[]
     summaries: Array<{attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}>
   }
 
-  expect(result.attemptedJobIds).toEqual(['lock-job', 'lock-job'])
+  expect(result.attemptedJobIds).toEqual(['lock-job', 'next-job', 'lock-job', 'next-job'])
   expect(result.summaries).toEqual([
-    {attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0},
-    {attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0},
+    {attemptedCount: 2, failedCount: 0, skippedCount: 2, succeededCount: 0},
+    {attemptedCount: 2, failedCount: 0, skippedCount: 2, succeededCount: 0},
   ])
   expect(
     result.queryStatements.some((statement) => {
@@ -1200,7 +1221,7 @@ test('background import records transient SQLite locks and lease conflicts witho
     result.queryStatements.some((statement) => {
       return statement.includes("WHERE id = 'lock-job'") && statement.includes('last_import_error')
     }),
-  ).toBe(true)
+  ).toBe(false)
 })
 
 test('background import releases an owned sqlite lease and continues scanning idle jobs', () => {

@@ -310,29 +310,6 @@ const recordImportFailure = async ({
   )
 }
 
-const recordTransientImportFailure = async ({
-  errorMessage,
-  exitCode,
-  jobId,
-}: {
-  errorMessage: string
-  exitCode: number
-  jobId: string
-}) => {
-  return queryBackground<{importFailureCount: number; storageState: string}>(
-    `
-    UPDATE app.judgment_job
-    SET last_import_error_at = current_timestamp,
-        last_import_error = ${getSqlLiteral(errorMessage)},
-        last_import_exit_code = ${getSqlLiteral(exitCode)},
-        updated_at = current_timestamp
-    WHERE id = ${getSqlLiteral(jobId)}
-    RETURNING import_failure_count AS importFailureCount, storage_state AS storageState
-  `,
-    {...judgmentJobSqliteBackgroundImportWorkloadContext, maxResultRows: 1},
-  )
-}
-
 const runJudgmentJobSqliteBackgroundImportAttempt = async ({
   claimedBy,
   job,
@@ -366,19 +343,17 @@ const runJudgmentJobSqliteBackgroundImportAttempt = async ({
     const errorMessage = getJudgmentJobSqliteErrorMessage(error)
     const isTransientLock = isTransientJudgmentJobSqliteLockMessage(errorMessage)
 
-    if (job.storageState === 'draining' && isTransientLock) {
+    if (isTransientLock) {
       judgmentJobSqliteBackgroundImportLogger.log(
         `judgment-job-sqlite-background-import:skipped:${jobId}`,
-        '[judgment-job-sqlite-background-import] skipped draining job because SQLite lease is unavailable',
+        '[judgment-job-sqlite-background-import] skipped job because SQLite lease is temporarily unavailable',
         {claimedBy, errorMessage, jobId, storageState: job.storageState},
       )
 
       return {continueToNextJob: true, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}}
     }
 
-    const [failureState] = isTransientLock
-      ? await recordTransientImportFailure({errorMessage, exitCode: 1, jobId})
-      : await recordImportFailure({errorMessage, exitCode: 1, jobId})
+    const [failureState] = await recordImportFailure({errorMessage, exitCode: 1, jobId})
 
     judgmentJobSqliteBackgroundImportLogger.warn(
       `judgment-job-sqlite-background-import:failed:${jobId}`,

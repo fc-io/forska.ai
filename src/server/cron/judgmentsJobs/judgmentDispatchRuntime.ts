@@ -290,6 +290,18 @@ const createJudgmentDispatchRuntimeLayer = (
         })
       }
 
+      const getDispatchPromptKey = (prompt: PromptToProcess): string => {
+        return `${prompt.jobId}\n${prompt.recordId}`
+      }
+
+      const getInFlightPromptKeys = (state: ProviderDispatchState): Set<string> => {
+        return new Set(
+          [...state.activePrompts, ...state.queuedPrompts].map((entry) => {
+            return getDispatchPromptKey(entry.prompt)
+          }),
+        )
+      }
+
       const getProviderDispatchStats = ({
         jobId,
         ...input
@@ -428,8 +440,20 @@ const createJudgmentDispatchRuntimeLayer = (
 
               const providerState = yield* getOrCreateProviderState(getPromptProviderQueueInput(firstPrompt))
               const remainingCapacity = getProviderAvailablePromptCapacity(providerState)
-              const acceptedPrompts = providerPrompts.slice(0, remainingCapacity)
-              const rejectedProviderPrompts = providerPrompts.slice(remainingCapacity)
+              const inFlightPromptKeys = getInFlightPromptKeys(providerState)
+              const uniqueProviderPrompts = providerPrompts.filter((prompt) => {
+                const key = getDispatchPromptKey(prompt)
+
+                if (inFlightPromptKeys.has(key)) {
+                  return false
+                }
+
+                inFlightPromptKeys.add(key)
+                return true
+              })
+              const duplicatePromptCount = providerPrompts.length - uniqueProviderPrompts.length
+              const acceptedPrompts = uniqueProviderPrompts.slice(0, remainingCapacity)
+              const rejectedProviderPrompts = uniqueProviderPrompts.slice(remainingCapacity)
 
               if (acceptedPrompts.length > 0) {
                 providerState.queuedPrompts = [
@@ -439,9 +463,9 @@ const createJudgmentDispatchRuntimeLayer = (
                   }),
                 ]
                 yield* launchAvailablePrompts(providerState)
-                acceptedCount += acceptedPrompts.length
               }
 
+              acceptedCount += acceptedPrompts.length + duplicatePromptCount
               rejectedPrompts = [...rejectedPrompts, ...rejectedProviderPrompts]
             }
 
