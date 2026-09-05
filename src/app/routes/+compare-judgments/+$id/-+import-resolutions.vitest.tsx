@@ -70,8 +70,16 @@ const mockState = vi.hoisted(() => {
       },
     ),
     analyzeComparisonProjectConflictResolutionPdfImport: vi.fn(
-      async (_comparisonProjectId: string, _artifact: unknown) => {
-        return {...analyzePreview, source: {...analyzePreview.source, importKind: 'pdf' as const}}
+      async (_comparisonProjectId: string, request: {pdfUndecidedMode?: 'clear' | 'ignore'}) => {
+        return {
+          ...analyzePreview,
+          source: {
+            ...analyzePreview.source,
+            importKind: 'pdf' as const,
+            pdfUndecidedMode: request.pdfUndecidedMode ?? 'ignore',
+            pdfUndecidedRowCount: 2,
+          },
+        }
       },
     ),
     commitComparisonProjectConflictResolutionImport: vi.fn(),
@@ -322,9 +330,43 @@ describe('CompareProjectImportResolutionsPage', () => {
       await waitForCondition(() => {
         expect(mockState.analyzeComparisonProjectConflictResolutionPdfImport).toHaveBeenCalledWith(
           'comparison-project-1',
-          {file, importMode: 'conflicting-only', overwriteMode: 'skip-existing'},
+          {file, importMode: 'conflicting-only', overwriteMode: 'skip-existing', pdfUndecidedMode: 'ignore'},
         )
         expect(mockState.analyzeComparisonProjectConflictResolutionImport).not.toHaveBeenCalled()
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('reanalyzes PDF imports when undecided handling changes', async () => {
+    const {container, dispose} = await renderImportResolutionsPage()
+
+    try {
+      const input = container.querySelector('[data-testid="conflict-resolution-import-file"]')
+      const file = new File(['%PDF-1.7'], 'conflict-resolutions.pdf', {type: 'application/pdf'})
+
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error('Import file input not found')
+      }
+
+      Object.defineProperty(input, 'files', {configurable: true, value: getFileList(file)})
+      input.dispatchEvent(new Event('change', {bubbles: true}))
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Undecided PDF selections')
+        expect(container.textContent).toContain('Ignore undecided')
+        expect(container.textContent).toContain('Set to not set')
+      })
+
+      getInputFromLabel(container, 'Set to not set').click()
+
+      await waitForCondition(() => {
+        expect(mockState.analyzeComparisonProjectConflictResolutionPdfImport).toHaveBeenCalledWith(
+          'comparison-project-1',
+          {file, importMode: 'conflicting-only', overwriteMode: 'skip-existing', pdfUndecidedMode: 'clear'},
+        )
       })
     } finally {
       dispose()

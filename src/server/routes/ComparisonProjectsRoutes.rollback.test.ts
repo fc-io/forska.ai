@@ -1044,7 +1044,7 @@ const getComparisonProjectConflictResolutionPdfImportNotSetFile = () => {
   const pdf = new SimplePdfDocument()
 
   pdf.addRadioRow('comparison.comparison-project-1.article.article-2.resolution', pdfConflictResolutionNotSetValue, [
-    {label: 'Not set', value: pdfConflictResolutionNotSetValue},
+    {label: 'Undecided', value: pdfConflictResolutionNotSetValue},
     {label: 'Yes', value: 'yes'},
     {label: 'No', value: 'no'},
   ])
@@ -1054,7 +1054,7 @@ const getComparisonProjectConflictResolutionPdfImportNotSetFile = () => {
 
 const postComparisonProjectConflictResolutionPdfImportAnalyze = (
   app: {handle: (request: Request) => Promise<Response>},
-  input: {file?: File; importMode?: string; overwriteMode?: string} = {},
+  input: {file?: File; importMode?: string; overwriteMode?: string; pdfUndecidedMode?: string} = {},
 ) => {
   const formData = new FormData()
 
@@ -1064,6 +1064,9 @@ const postComparisonProjectConflictResolutionPdfImportAnalyze = (
   }
   if (input.overwriteMode) {
     formData.set('overwriteMode', input.overwriteMode)
+  }
+  if (input.pdfUndecidedMode) {
+    formData.set('pdfUndecidedMode', input.pdfUndecidedMode)
   }
 
   return app.handle(
@@ -1076,7 +1079,7 @@ const postComparisonProjectConflictResolutionPdfImportAnalyze = (
 
 const postComparisonProjectConflictResolutionPdfImportCommit = (
   app: {handle: (request: Request) => Promise<Response>},
-  input: {file?: File; importMode?: string; overwriteMode?: string} = {},
+  input: {file?: File; importMode?: string; overwriteMode?: string; pdfUndecidedMode?: string} = {},
 ) => {
   const formData = new FormData()
 
@@ -1086,6 +1089,9 @@ const postComparisonProjectConflictResolutionPdfImportCommit = (
   }
   if (input.overwriteMode) {
     formData.set('overwriteMode', input.overwriteMode)
+  }
+  if (input.pdfUndecidedMode) {
+    formData.set('pdfUndecidedMode', input.pdfUndecidedMode)
   }
 
   return app.handle(
@@ -2372,7 +2378,10 @@ const registerModuleMocks = () => {
             const result = await work({
               queryJson: async <R>(statement: string) => {
                 getMockDatabaseState().queryStatements.push(statement)
-                if (statement.includes('DELETE FROM app.comparison_project')) {
+                if (
+                  statement.includes('DELETE FROM app.comparison_project')
+                  && !statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
+                ) {
                   if (
                     pendingComparisonProject.archived
                     && !pendingDeletedComparisonProjectIds.includes(pendingComparisonProject.id)
@@ -2382,6 +2391,31 @@ const registerModuleMocks = () => {
                   }
 
                   return [] as R[]
+                }
+
+                if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
+                  const deletedRows = pendingConflictResolutionRows
+                    .filter((row) => {
+                      return statement.includes(`'${row.articleId}'`)
+                    })
+                    .map((row) => {
+                      return {articleId: row.articleId}
+                    })
+                  const deletedArticleIds = new Set(
+                    deletedRows.map((row) => {
+                      return row.articleId
+                    }),
+                  )
+
+                  pendingConflictResolutionRows.splice(
+                    0,
+                    pendingConflictResolutionRows.length,
+                    ...pendingConflictResolutionRows.filter((row) => {
+                      return !deletedArticleIds.has(row.articleId)
+                    }),
+                  )
+
+                  return deletedRows as R[]
                 }
 
                 return (await queryJson(statement, {
@@ -3914,7 +3948,7 @@ test('comparison project conflict resolution PDF import does not create reviewer
   ])
 })
 
-test('comparison project conflict resolution PDF import does not reset existing resolutions selected as Not set', async () => {
+test('comparison project conflict resolution PDF import ignores undecided selections by default', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
@@ -3952,8 +3986,15 @@ test('comparison project conflict resolution PDF import does not reset existing 
   const bodyText = await response.text()
   const state = getMockDatabaseState()
 
-  expect(response.status).toBe(400)
-  expect(bodyText).toContain('no filled conflict-resolution radio fields')
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {data: {source: Record<string, unknown>; summary: Record<string, number>}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.source).toMatchObject({importKind: 'pdf', pdfUndecidedMode: 'ignore', pdfUndecidedRowCount: 1})
+  expect(body.data.summary).toMatchObject({cleared: 0, importable: 0, inserted: 0, scanned: 0})
   expect(state.lastConflictResolutionInsertStatement).toBeNull()
   expect(
     state.runStatements.some((statement) => {
@@ -3969,6 +4010,72 @@ test('comparison project conflict resolution PDF import does not reset existing 
       promptId: null,
     },
   ])
+})
+
+test('comparison project conflict resolution PDF import can clear existing resolutions selected as undecided', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-2',
+        comparisonProjectId: 'comparison-project-1',
+        id: 'existing-resolution-1',
+        promptId: null,
+      },
+    ],
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionPdfImportCommit(app, {
+    file: getComparisonProjectConflictResolutionPdfImportNotSetFile(),
+    importMode: 'all-matched',
+    overwriteMode: 'overwrite-different',
+    pdfUndecidedMode: 'clear',
+  })
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {
+    data: {
+      importableRows: Array<Record<string, unknown>>
+      source: Record<string, unknown>
+      summary: Record<string, number>
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.source).toMatchObject({importKind: 'pdf', pdfUndecidedMode: 'clear', pdfUndecidedRowCount: 1})
+  expect(body.data.summary).toMatchObject({cleared: 1, importable: 1, inserted: 0, scanned: 1})
+  expect(body.data.importableRows).toMatchObject([
+    {reason: 'overwrite-candidate', selectedResolution: 'Undecided', targetArticleId: 'article-2'},
+  ])
+  expect(state.lastConflictResolutionInsertStatement).toBeNull()
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
+    }),
+  ).toBe(true)
+  expect(state.conflictResolutionRows).toEqual([])
 })
 
 test('comparison project conflict resolution PDF import rejects malformed PDFs cleanly', async () => {
@@ -7312,7 +7419,9 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).not.toContain('Forska.ai comparison review PDF')
   expect(pdf).toContain('Use this PDF to assess review conflicts offline')
   expect(pdf).toContain('conflict resolution radio buttons')
-  expect(pdf).toContain("articles you've reviewed. This PDF can then be imported into forska.ai to compare results.")
+  expect(pdf).toContain(
+    "articles you've reviewed. This PDF can then be imported into a forska.ai project to compare results.",
+  )
   expect(pdf).not.toContain('Use this PDF to review comparison-project conflicts offline')
   expect(pdf).toContain('Project')
   expect(pdf).toContain('Comparison project ID: comparison-project-1')
@@ -7333,7 +7442,7 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).not.toContain('If a filled PDF is imported more than once')
   expect(pdf).toContain('For more information about forska.ai, visit https://github.com/fc-io/forska.ai.')
   expect(pdf).not.toContain('Reviewer identity for import')
-  expect(pdf).toContain('Enter the name that should be attached to imported resolutions')
+  expect(pdf).toContain('Enter the name that should be attached to imported conflict resolutions')
   expect(pdf).toContain('Optional, but helps distinguish different reviewers.')
   expect(pdf).not.toContain('Forska.ai creates a separate reviewer ID during import')
   expect(pdf).toContain('/FT /Tx')
@@ -7353,11 +7462,11 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('Replacement prompt')
   expect(pdf.indexOf('(Project)')).toBeGreaterThan(pdf.indexOf('forska.ai conflict resolutions review'))
   expect(pdf.indexOf('(Project)')).toBeLessThan(pdf.indexOf('Use this PDF to assess review conflicts offline'))
-  expect(pdf.indexOf('Enter the name that should be attached to imported resolutions')).toBeGreaterThan(
+  expect(pdf.indexOf('Enter the name that should be attached to imported conflict resolutions')).toBeGreaterThan(
     pdf.indexOf('(Your name:)'),
   )
   expect(pdf.indexOf('Terminology')).toBeGreaterThan(
-    pdf.indexOf('Enter the name that should be attached to imported resolutions'),
+    pdf.indexOf('Enter the name that should be attached to imported conflict resolutions'),
   )
   expect(pdf.indexOf('Review conflict')).toBeLessThan(pdf.indexOf('An article where AIs, or an AI and human reviewers'))
   expect(pdf.indexOf('Terminology')).toBeLessThan(
@@ -7391,9 +7500,11 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('/Ff 49152')
   expect(pdf).toContain('/T (comparison.comparison-project-1.article.article-1.resolution)')
   expect(pdf).toContain('/T (comparison.comparison-project-1.article.article-1.metadata)')
-  expect(pdf).toContain('(Not set)')
-  expect(pdf).toContain('/V /prompt-2')
-  expect(pdf).toContain('/AS /prompt-2')
+  expect(pdf).toContain('(Undecided)')
+  expect(pdf).not.toContain('(Not set)')
+  expect(pdf).toContain('/V /Off')
+  expect(pdf).not.toContain('/V /prompt-2')
+  expect(pdf).not.toContain('/AS /prompt-2')
   expect(pdf).not.toContain('(x) Prompt 2')
   expect(pdf).toContain('Summary judgment')
   expect(pdf).not.toMatch(/BT \/F2 12 Tf \d+\.\d+ \d+\.\d+ Td \(LLM assessment\) Tj ET/)
@@ -7408,7 +7519,7 @@ test('comparison project export can render a readable pdf with matching filters 
   ).toBe(true)
 })
 
-test('comparison project pdf export selects the explicit Not set conflict-resolution option for unresolved rows', async () => {
+test('comparison project pdf export does not preselect undecided for unresolved rows', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
@@ -7435,9 +7546,10 @@ test('comparison project pdf export selects the explicit Not set conflict-resolu
   const safeNotSetValue = pdfConflictResolutionNotSetValue.replace(/[^a-zA-Z0-9_-]/g, '_')
 
   expect(response.status).toBe(200)
-  expect(pdf).toContain('(Not set)')
-  expect(pdf).toContain(`/V /${safeNotSetValue}`)
-  expect(pdf).toContain(`/AS /${safeNotSetValue}`)
+  expect(pdf).toContain('(Undecided)')
+  expect(pdf).toContain('/V /Off')
+  expect(pdf).not.toContain(`/V /${safeNotSetValue}`)
+  expect(pdf).not.toContain(`/AS /${safeNotSetValue}`)
 })
 
 test('comparison project pdf export preserves Chinese title and abstract glyph text', async () => {
@@ -7523,8 +7635,8 @@ test('comparison project pdf export shows individual assessments behind summary 
 
   expect(response.status).toBe(200)
   expect(pdf).toContain('Prompts in this review')
-  expect(pdf).toContain('Criteria: Population')
-  expect(pdf).toContain('Disposition: include')
+  expect(pdf).not.toContain('Criteria: Population')
+  expect(pdf).not.toContain('Disposition: include')
   expect(pdf).toContain('Original prompt')
   expect(pdf.indexOf('Prompts in this review')).toBeLessThan(pdf.indexOf('Article 1 of 1'))
   expect(pdf).toContain('Summary judgment')
@@ -7533,7 +7645,7 @@ test('comparison project pdf export shows individual assessments behind summary 
   expect(pdf).not.toContain('Individual assessments')
   expect(pdf.indexOf('Include this study?')).toBeLessThan(pdf.lastIndexOf('LLM assessment'))
   expect(pdf).not.toContain('Content used: Article Title and Abstract')
-  expect(pdf).toMatch(/BT \/F1 10 Tf 48\.00 \d+\.\d+ Td \(Include this study\?\) Tj ET/)
+  expect(pdf).toMatch(/BT \/F2 10 Tf 48\.00 \d+\.\d+ Td \(Include this study\?\) Tj ET/)
   expect(pdf).toContain('Prompt 1')
   expect(pdf).not.toContain('Summary answer: yes')
   expect(pdf).toContain('Answer: yes')
@@ -7587,7 +7699,7 @@ test('comparison project pdf export shows individual assessments for import-scop
   expect(pdf).not.toContain('Individual assessments')
   expect(pdf.indexOf('Include this study?')).toBeLessThan(pdf.lastIndexOf('LLM assessment'))
   expect(pdf).not.toContain('Content used: Article Title and Abstract')
-  expect(pdf).toMatch(/BT \/F1 10 Tf 48\.00 \d+\.\d+ Td \(Include this study\?\) Tj ET/)
+  expect(pdf).toMatch(/BT \/F2 10 Tf 48\.00 \d+\.\d+ Td \(Include this study\?\) Tj ET/)
   expect(pdf).toContain('Prompt 1')
   expect(pdf).not.toContain('Summary answer: no')
   expect(pdf).toContain('Answer: yes')

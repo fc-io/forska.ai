@@ -58,6 +58,7 @@ import {
   validateComparisonProjectConflictResolutionTransferArtifact,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 import {
+  type ComparisonProjectConflictResolutionImportAnalyzeResult,
   type ComparisonProjectConflictResolutionImportMode,
   type ComparisonProjectConflictResolutionImportOverwriteMode,
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
@@ -87,6 +88,7 @@ import {
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
 import {
   getComparisonProjectConflictResolutionTransferArtifactFromPdfImport,
+  type ParsedPdfConflictResolutionImport,
   parsePdfConflictResolutionImport,
   pdfConflictResolutionNotSetValue,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionPdfImport.ts'
@@ -121,6 +123,7 @@ type PromptSelection = {
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
 type AppQueryRunner = Pick<AppTx, 'queryJson'>
+type ComparisonProjectConflictResolutionPdfUndecidedMode = 'clear' | 'ignore'
 type ComparisonProjectContentVariant = {
   key: string
   label: string
@@ -2058,6 +2061,31 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   return params.candidates.length
 }
 
+const clearComparisonProjectConflictResolutionImportCandidates = async (params: {
+  candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
+  comparisonProjectId: string
+  tx: AppTx
+}) => {
+  const targetArticleIds = getUniqueStringValues(
+    params.candidates.map((candidate) => {
+      return candidate.targetArticleId
+    }),
+  )
+
+  if (targetArticleIds.length === 0) {
+    return 0
+  }
+
+  const deletedRows = await params.tx.queryJson<{articleId: string}>(`
+    DELETE FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND article_id IN (${getQuotedStringList(targetArticleIds).join(', ')})
+    RETURNING article_id AS articleId
+  `)
+
+  return deletedRows.length
+}
+
 const getConflictResolutionImportPlanResult = async (params: {
   importMode?: ComparisonProjectConflictResolutionImportMode
   promptSelections: PromptSelection[]
@@ -2189,13 +2217,146 @@ type ComparisonProjectConflictResolutionArtifactImportRequest = ReturnType<
   typeof getComparisonProjectConflictResolutionArtifactImportRequest
 >
 
-type ComparisonProjectConflictResolutionPdfImportBody = {file: File; importMode?: unknown; overwriteMode?: unknown}
+type ComparisonProjectConflictResolutionPdfImportBody = {
+  file: File
+  importMode?: unknown
+  overwriteMode?: unknown
+  pdfUndecidedMode?: unknown
+}
+
+const getValidatedPdfUndecidedMode = (value: unknown): ComparisonProjectConflictResolutionPdfUndecidedMode => {
+  if (value === undefined || value === null || value === '') {
+    return 'ignore'
+  }
+
+  if (value === 'ignore' || value === 'clear') {
+    return value
+  }
+
+  throw getConflictResolutionImportRejectedError('PDF undecided import mode is invalid')
+}
+
+const getPdfUndecidedTransferArtifact = (parsedImport: ParsedPdfConflictResolutionImport) => {
+  return getComparisonProjectConflictResolutionTransferArtifactFromPdfImport({
+    parsedImport: {...parsedImport, rows: parsedImport.undecidedRows},
+  })
+}
+
+const getPdfUndecidedImportAnalysis = async (params: {
+  importMode: ComparisonProjectConflictResolutionImportMode
+  parsedImport: ParsedPdfConflictResolutionImport
+  scope: ComparisonProjectScope
+  tx: AppQueryRunner
+}) => {
+  const artifact = getPdfUndecidedTransferArtifact(params.parsedImport)
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
+  const targetArticles = await getConflictResolutionImportTargetArticles({
+    sourceRows,
+    scope: params.scope,
+    tx: params.tx,
+  })
+  const plan = getComparisonProjectConflictResolutionImportPlan({
+    importMode: params.importMode,
+    overwriteMode: 'overwrite-different',
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues: [pdfConflictResolutionNotSetValue],
+  })
+  const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
+    artifact,
+    importMode: params.importMode,
+    overwriteMode: 'overwrite-different',
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues: [pdfConflictResolutionNotSetValue],
+  })
+
+  return {analyzeResult, plan}
+}
+
+const getPdfUndecidedAnalyzeRow = (
+  row: ComparisonProjectConflictResolutionImportAnalyzeResult['importableRows'][number],
+) => {
+  return {...row, selectedResolution: 'Undecided'}
+}
+
+const addPdfUndecidedAnalyzeSummary = (
+  left: ComparisonProjectConflictResolutionImportAnalyzeResult['summary'],
+  right: ComparisonProjectConflictResolutionImportAnalyzeResult['summary'],
+) => {
+  return {
+    scanned: left.scanned + right.scanned,
+    matched: left.matched + right.matched,
+    importable: left.importable + right.importable,
+    deduped: left.deduped + right.deduped,
+    skipped: left.skipped + right.skipped,
+    skippedExisting: left.skippedExisting + right.skippedExisting,
+    skippedUnsupportedMode: left.skippedUnsupportedMode + right.skippedUnsupportedMode,
+    skippedNoUsableKey: left.skippedNoUsableKey + right.skippedNoUsableKey,
+    skippedNoTargetMatch: left.skippedNoTargetMatch + right.skippedNoTargetMatch,
+    skippedNotConflicting: left.skippedNotConflicting + right.skippedNotConflicting,
+    skippedAmbiguousTarget: left.skippedAmbiguousTarget + right.skippedAmbiguousTarget,
+    skippedConflicting: left.skippedConflicting + right.skippedConflicting,
+    skippedInvalidValue: left.skippedInvalidValue + right.skippedInvalidValue,
+    sameValue: left.sameValue + right.sameValue,
+    overwriteCandidates: left.overwriteCandidates + right.overwriteCandidates,
+  }
+}
+
+const getPdfImportAnalyzeResult = async (params: {
+  analyzeResult: ComparisonProjectConflictResolutionImportAnalyzeResult
+  importMode: ComparisonProjectConflictResolutionImportMode
+  parsedImport: ParsedPdfConflictResolutionImport
+  pdfUndecidedMode: ComparisonProjectConflictResolutionPdfUndecidedMode
+  pdfWarnings: string[]
+  reviewer: {displayName: string | null; instanceId: string | null}
+  scope: ComparisonProjectScope
+  tx: AppQueryRunner
+}) => {
+  const source = {
+    ...params.analyzeResult.source,
+    importKind: 'pdf' as const,
+    pdfUndecidedMode: params.pdfUndecidedMode,
+    pdfUndecidedRowCount: params.parsedImport.undecidedRows.length,
+    pdfWarnings: params.pdfWarnings,
+    reviewer: params.reviewer,
+    rowCount: params.parsedImport.rows.length + params.parsedImport.undecidedRows.length,
+  }
+
+  if (params.pdfUndecidedMode === 'ignore' || params.parsedImport.undecidedRows.length === 0) {
+    return {...params.analyzeResult, source}
+  }
+
+  const undecidedAnalysis = await getPdfUndecidedImportAnalysis({
+    importMode: params.importMode,
+    parsedImport: params.parsedImport,
+    scope: params.scope,
+    tx: params.tx,
+  })
+
+  return {
+    ...params.analyzeResult,
+    source,
+    summary: addPdfUndecidedAnalyzeSummary(params.analyzeResult.summary, undecidedAnalysis.analyzeResult.summary),
+    importableRows: [
+      ...params.analyzeResult.importableRows,
+      ...undecidedAnalysis.analyzeResult.importableRows.map(getPdfUndecidedAnalyzeRow),
+    ],
+    skippedRows: [
+      ...params.analyzeResult.skippedRows,
+      ...undecidedAnalysis.analyzeResult.skippedRows.map(getPdfUndecidedAnalyzeRow),
+    ],
+    warnings: [...params.analyzeResult.warnings, ...undecidedAnalysis.analyzeResult.warnings],
+  }
+}
 
 const getComparisonProjectConflictResolutionPdfImportRequest = async (
   scope: ComparisonProjectScope,
   body: ComparisonProjectConflictResolutionPdfImportBody,
 ): Promise<
   ComparisonProjectConflictResolutionArtifactImportRequest & {
+    parsedImport: ParsedPdfConflictResolutionImport
+    pdfUndecidedMode: ComparisonProjectConflictResolutionPdfUndecidedMode
     pdfWarnings: string[]
     reviewer: {displayName: string | null; instanceId: string | null}
   }
@@ -2219,6 +2380,8 @@ const getComparisonProjectConflictResolutionPdfImportRequest = async (
     artifact: getValidatedComparisonProjectConflictResolutionImportArtifact(artifact),
     importMode: getValidatedConflictResolutionImportMode(body.importMode),
     overwriteMode: getValidatedConflictResolutionImportOverwriteMode(body.overwriteMode),
+    parsedImport,
+    pdfUndecidedMode: getValidatedPdfUndecidedMode(body.pdfUndecidedMode),
     pdfWarnings: parsedImport.warnings,
     reviewer: parsedImport.reviewer,
   }
@@ -2261,7 +2424,7 @@ const analyzeComparisonProjectConflictResolutionPdfImport = async (
 ) => {
   validateConflictResolutionImportAnalyzeTarget(scope)
 
-  const {artifact, importMode, overwriteMode, pdfWarnings, reviewer} =
+  const {artifact, importMode, overwriteMode, parsedImport, pdfUndecidedMode, pdfWarnings, reviewer} =
     await getComparisonProjectConflictResolutionPdfImportRequest(scope, body)
   const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
   const targetArticles = await getConflictResolutionImportTargetArticles({sourceRows, scope, tx: appDatabaseService})
@@ -2274,7 +2437,16 @@ const analyzeComparisonProjectConflictResolutionPdfImport = async (
     targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
   })
 
-  return {...analyzeResult, source: {...analyzeResult.source, importKind: 'pdf' as const, pdfWarnings, reviewer}}
+  return getPdfImportAnalyzeResult({
+    analyzeResult,
+    importMode,
+    parsedImport,
+    pdfUndecidedMode,
+    pdfWarnings,
+    reviewer,
+    scope,
+    tx: appDatabaseService,
+  })
 }
 
 const getConflictResolutionArtifactImportAnalysis = async (params: {
@@ -2329,10 +2501,20 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
   body: ComparisonProjectConflictResolutionPdfImportBody,
 ) => {
   return appDatabaseService.transaction(async (tx) => {
-    const {artifact, importMode, overwriteMode, pdfWarnings, reviewer} =
+    const {artifact, importMode, overwriteMode, parsedImport, pdfUndecidedMode, pdfWarnings, reviewer} =
       await getComparisonProjectConflictResolutionPdfImportRequest(scope, body)
     const {analyzeResult, plan} = await getConflictResolutionArtifactImportAnalysis({
       body: {artifact, importMode, overwriteMode},
+      scope,
+      tx,
+    })
+    const pdfAnalyzeResult = await getPdfImportAnalyzeResult({
+      analyzeResult,
+      importMode,
+      parsedImport,
+      pdfUndecidedMode,
+      pdfWarnings,
+      reviewer,
       scope,
       tx,
     })
@@ -2346,13 +2528,19 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
       reviewer: importedReviewer,
       tx,
     })
+    const cleared =
+      pdfUndecidedMode === 'clear' && parsedImport.undecidedRows.length > 0
+        ? await clearComparisonProjectConflictResolutionImportCandidates({
+            candidates: (await getPdfUndecidedImportAnalysis({importMode, parsedImport, scope, tx})).plan.candidates,
+            comparisonProjectId: scope.id,
+            tx,
+          })
+        : 0
 
     return getComparisonProjectConflictResolutionImportCommitResult({
-      analyzeResult: {
-        ...analyzeResult,
-        source: {...analyzeResult.source, importKind: 'pdf' as const, pdfWarnings, reviewer},
-      },
+      analyzeResult: pdfAnalyzeResult,
       inserted,
+      cleared,
     })
   })
 }
@@ -4032,7 +4220,7 @@ const getComparisonProjectPdfResolutionOptions = (scope: ComparisonProjectScope)
           {label: 'Maybe / Unsure', value: 'maybe'},
         ]
 
-  return [{label: 'Not set', value: pdfConflictResolutionNotSetValue}, ...resolutionOptions]
+  return [{label: 'Undecided', value: pdfConflictResolutionNotSetValue}, ...resolutionOptions]
 }
 
 const getComparisonProjectPdfExportedAtLabel = (date = new Date()) => {
@@ -4059,7 +4247,7 @@ const addComparisonProjectPdfHiddenMetadata = (pdf: SimplePdfDocument, fieldName
 
 const comparisonProjectPdfFrontPageFontSizes = {body: 10, heading: 11, title: 18} as const
 const comparisonProjectPdfReviewerNameHelperText =
-  'Enter the name that should be attached to imported resolutions.\nOptional, but helps distinguish different reviewers.'
+  'Enter the name that should be attached to imported conflict resolutions.\nOptional, but helps distinguish different reviewers.'
 
 const getComparisonProjectPdfArticleFieldPrefix = (scope: ComparisonProjectScope, row: ComparisonProjectExportRow) => {
   return [
@@ -4107,7 +4295,7 @@ const addComparisonProjectPdfFrontPage = (params: {
   pdf.addText(`Filters: ${exportFilters}`, {fontSize: frontPageFontSizes.body, gapAfter: 12})
   pdf.addText('Offline review', {font: 'bold', fontSize: frontPageFontSizes.heading, gapAfter: 4})
   pdf.addText(
-    "Use this PDF to assess review conflicts offline. Fill in or change the conflict resolution radio buttons for the articles you've reviewed. This PDF can then be imported into forska.ai to compare results.",
+    "Use this PDF to assess review conflicts offline. Fill in or change the conflict resolution radio buttons for the articles you've reviewed. This PDF can then be imported into a forska.ai project to compare results.",
     {fontSize: frontPageFontSizes.body, gapAfter: 12},
   )
   pdf.addTextField({
@@ -4203,7 +4391,7 @@ const addComparisonProjectPdfConflictResolution = (
 
     pdf.addRadioRow(
       [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'resolution'].join('.'),
-      row.conflictResolution?.value ?? pdfConflictResolutionNotSetValue,
+      null,
       getComparisonProjectPdfResolutionOptions(scope).map((option) => {
         return {label: option.label, value: option.value, fontSize: 10, gapAfter: 3}
       }),
@@ -4358,7 +4546,7 @@ const addComparisonProjectPdfSummaryJudgmentSection = (
     }, new Map<string, ComparisonProjectJudgmentsColumn[]>())
 
     Array.from(columnsByPrompt.entries()).forEach(([, promptColumns]) => {
-      pdf.addText('Include this study?', {fontSize: 10, gapAfter: 4})
+      pdf.addText('Include this study?', {font: 'bold', fontSize: 10, gapAfter: 4})
 
       promptColumns.forEach((column) => {
         const answer = getComparisonProjectExportCellValue(row.cells[column.id]) || 'Not answered'
@@ -5528,7 +5716,14 @@ export const comparisonProjectsRoutes = new Elysia()
 
       return {data}
     },
-    {body: t.Object({file: t.File(), importMode: t.Optional(t.String()), overwriteMode: t.Optional(t.String())})},
+    {
+      body: t.Object({
+        file: t.File(),
+        importMode: t.Optional(t.String()),
+        overwriteMode: t.Optional(t.String()),
+        pdfUndecidedMode: t.Optional(t.String()),
+      }),
+    },
   )
   .post(
     '/api/comparison-projects/:id/conflict-resolutions/import/commit',
@@ -5564,7 +5759,14 @@ export const comparisonProjectsRoutes = new Elysia()
 
       return {data}
     },
-    {body: t.Object({file: t.File(), importMode: t.Optional(t.String()), overwriteMode: t.Optional(t.String())})},
+    {
+      body: t.Object({
+        file: t.File(),
+        importMode: t.Optional(t.String()),
+        overwriteMode: t.Optional(t.String()),
+        pdfUndecidedMode: t.Optional(t.String()),
+      }),
+    },
   )
   .post(
     '/api/comparison-projects/:id/export',

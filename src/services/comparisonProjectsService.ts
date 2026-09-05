@@ -34,6 +34,7 @@ export type CreateComparisonProjectInput = {
 
 export type ComparisonProjectConflictResolutionImportMode = 'all-matched' | 'conflicting-only'
 export type ComparisonProjectConflictResolutionImportOverwriteMode = 'overwrite-different' | 'skip-existing'
+export type ComparisonProjectConflictResolutionPdfUndecidedMode = 'clear' | 'ignore'
 
 export type CreateComparisonProjectFromProjectInput = {
   name: string
@@ -485,6 +486,7 @@ export type ComparisonProjectConflictResolutionPdfImportRequest = {
   file: File
   importMode?: ComparisonProjectConflictResolutionImportMode
   overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
+  pdfUndecidedMode?: ComparisonProjectConflictResolutionPdfUndecidedMode
 }
 export type ComparisonProjectConflictResolutionExportResult = {
   artifact: ComparisonProjectConflictResolutionTransferArtifact
@@ -542,6 +544,8 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSource = {
   exportedAt: string
   format: string
   importKind?: 'json' | 'pdf'
+  pdfUndecidedMode?: ComparisonProjectConflictResolutionPdfUndecidedMode
+  pdfUndecidedRowCount?: number
   pdfWarnings?: string[]
   reviewer?: {displayName: string | null; instanceId: string | null}
   version: number
@@ -597,7 +601,7 @@ export type ComparisonProjectConflictResolutionImportAnalyzePreview = {
   warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 export type ComparisonProjectConflictResolutionImportCommitSummary =
-  ComparisonProjectConflictResolutionImportAnalyzeSummary & {inserted: number}
+  ComparisonProjectConflictResolutionImportAnalyzeSummary & {cleared: number; inserted: number}
 export type ComparisonProjectConflictResolutionImportCommitResponse = Omit<
   ComparisonProjectConflictResolutionImportAnalyzePreview,
   'summary'
@@ -671,6 +675,7 @@ const getComparisonProjectConflictResolutionPdfImportFormData = (
   formData.set('file', request.file)
   formData.set('importMode', request.importMode ?? 'conflicting-only')
   formData.set('overwriteMode', request.overwriteMode ?? 'skip-existing')
+  formData.set('pdfUndecidedMode', request.pdfUndecidedMode ?? 'ignore')
 
   return formData
 }
