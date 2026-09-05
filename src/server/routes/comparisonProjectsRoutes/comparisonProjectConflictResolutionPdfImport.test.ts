@@ -122,7 +122,7 @@ describe('comparison project conflict-resolution PDF import', () => {
     expect(parsedImport.reviewer).toEqual({displayName: 'Dr Reviewer', instanceId: null})
   })
 
-  test('treats the explicit PDF Not set radio choice as no imported resolution', () => {
+  test('tracks the explicit PDF undecided radio choice separately from imported resolutions', () => {
     const pdf = new SimplePdfDocument()
 
     pdf.addRadioRow('comparison.comparison-project-1.article.article-1.resolution', pdfConflictResolutionNotSetValue, [
@@ -147,9 +147,20 @@ describe('comparison project conflict-resolution PDF import', () => {
         resolutionValue: 'yes',
       },
     ])
+    expect(parsedImport.undecidedRows).toEqual([
+      {
+        fieldName: 'comparison.comparison-project-1.article.article-1.resolution',
+        sourceArticleRowId: 'article-1',
+        canonicalArticleId: 'article-1',
+        externalArticleId: null,
+        title: null,
+        identifiers: [],
+        resolutionValue: pdfConflictResolutionNotSetValue,
+      },
+    ])
   })
 
-  test('reports PDFs where every conflict-resolution radio field is explicitly Not set', () => {
+  test('accepts PDFs where every conflict-resolution radio field is explicitly undecided', () => {
     const pdf = new SimplePdfDocument()
 
     pdf.addRadioRow('comparison.comparison-project-1.article.article-1.resolution', pdfConflictResolutionNotSetValue, [
@@ -157,9 +168,12 @@ describe('comparison project conflict-resolution PDF import', () => {
       {label: 'Yes', value: 'yes'},
     ])
 
-    expect(() => {
-      parsePdfConflictResolutionImport(pdf.toBuffer())
-    }).toThrow('no filled conflict-resolution radio fields')
+    expect(parsePdfConflictResolutionImport(pdf.toBuffer()).undecidedRows).toMatchObject([
+      {
+        fieldName: 'comparison.comparison-project-1.article.article-1.resolution',
+        resolutionValue: pdfConflictResolutionNotSetValue,
+      },
+    ])
   })
 
   test('converts parsed PDF fields to the existing transfer artifact model', () => {

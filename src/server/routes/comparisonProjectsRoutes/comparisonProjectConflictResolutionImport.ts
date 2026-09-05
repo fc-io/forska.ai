@@ -223,6 +223,8 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSource = {
   exportedAt: string
   format: string
   importKind?: 'json' | 'pdf'
+  pdfUndecidedMode?: 'clear' | 'ignore'
+  pdfUndecidedRowCount?: number
   pdfWarnings?: string[]
   reviewer?: {displayName: string | null; instanceId: string | null}
   version: number
@@ -280,7 +282,7 @@ export type ComparisonProjectConflictResolutionImportAnalyzeResult = {
 }
 
 export type ComparisonProjectConflictResolutionImportCommitSummary =
-  ComparisonProjectConflictResolutionImportAnalyzeSummary & {inserted: number}
+  ComparisonProjectConflictResolutionImportAnalyzeSummary & {cleared: number; inserted: number}
 
 export type ComparisonProjectConflictResolutionImportCommitResult = Omit<
   ComparisonProjectConflictResolutionImportAnalyzeResult,
@@ -2411,7 +2413,11 @@ export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params
 
 export const getComparisonProjectConflictResolutionImportCommitResult = (params: {
   analyzeResult: ComparisonProjectConflictResolutionImportAnalyzeResult
+  cleared?: number
   inserted: number
 }): ComparisonProjectConflictResolutionImportCommitResult => {
-  return {...params.analyzeResult, summary: {...params.analyzeResult.summary, inserted: params.inserted}}
+  return {
+    ...params.analyzeResult,
+    summary: {...params.analyzeResult.summary, cleared: params.cleared ?? 0, inserted: params.inserted},
+  }
 }

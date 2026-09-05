@@ -89,6 +89,11 @@ export const getCommitSummaryStats = (
 ): ImportSummaryStat[] => {
   return [
     {label: 'Inserted', value: summary.inserted, description: 'Saved decisions created in this comparison project.'},
+    {
+      label: 'Cleared',
+      value: summary.cleared ?? 0,
+      description: 'Existing decisions cleared by undecided PDF selections.',
+    },
     {label: 'Skipped', value: summary.skipped, description: 'Rows the server rechecked and left unchanged.'},
   ]
 }

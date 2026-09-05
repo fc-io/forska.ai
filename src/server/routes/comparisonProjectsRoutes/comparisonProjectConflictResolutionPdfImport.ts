@@ -24,6 +24,15 @@ export type ParsedPdfConflictResolutionImport = {
     identifiers: ComparisonProjectConflictResolutionTransferIdentifierV1[]
     resolutionValue: string
   }>
+  undecidedRows: Array<{
+    fieldName: string
+    sourceArticleRowId: string | null
+    canonicalArticleId: string | null
+    externalArticleId: string | null
+    title: string | null
+    identifiers: ComparisonProjectConflictResolutionTransferIdentifierV1[]
+    resolutionValue: typeof pdfConflictResolutionNotSetValue
+  }>
   warnings: string[]
 }
 
@@ -351,7 +360,7 @@ export const parsePdfConflictResolutionImport = (
     }
   })
 
-  const rows = fields.flatMap((field) => {
+  const resolutionRows = fields.flatMap((field) => {
     if (isMalformedComparisonFieldName(field.name)) {
       throw new Error(`Malformed PDF comparison field name: ${field.name}`)
     }
@@ -364,7 +373,7 @@ export const parsePdfConflictResolutionImport = (
 
     const resolutionValue = getTrimmedValue(field.value)
 
-    if (!resolutionValue || resolutionValue === 'Off' || resolutionValue === pdfConflictResolutionNotSetValue) {
+    if (!resolutionValue || resolutionValue === 'Off') {
       return []
     }
 
@@ -396,8 +405,18 @@ export const parsePdfConflictResolutionImport = (
       },
     ]
   })
+  const rows = resolutionRows.filter((row) => {
+    return row.resolutionValue !== pdfConflictResolutionNotSetValue
+  })
+  const undecidedRows = resolutionRows
+    .filter((row) => {
+      return row.resolutionValue === pdfConflictResolutionNotSetValue
+    })
+    .map((row) => {
+      return {...row, resolutionValue: pdfConflictResolutionNotSetValue}
+    })
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && undecidedRows.length === 0) {
     throw new Error('The selected PDF has no filled conflict-resolution radio fields.')
   }
 
@@ -423,6 +442,7 @@ export const parsePdfConflictResolutionImport = (
     },
     reviewer: {displayName: getTrimmedValue(fieldMap.get('forska.reviewer.displayName')), instanceId: null},
     rows,
+    undecidedRows,
     warnings,
   }
 }

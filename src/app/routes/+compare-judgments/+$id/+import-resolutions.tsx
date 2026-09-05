@@ -14,6 +14,7 @@ import {
   type ComparisonProjectConflictResolutionImportOverwriteMode,
   type ComparisonProjectConflictResolutionImportRequest,
   type ComparisonProjectConflictResolutionPdfImportRequest,
+  type ComparisonProjectConflictResolutionPdfUndecidedMode,
   type ComparisonProjectConflictResolutionTransferArtifact,
   fetchComparisonProjectJudgmentsMetadata,
 } from '../../../../services/comparisonProjectsService.ts'
@@ -78,6 +79,23 @@ const conflictResolutionImportOverwriteModeOptions: Array<{
   },
 ]
 
+const pdfUndecidedModeOptions: Array<{
+  description: string
+  label: string
+  value: ComparisonProjectConflictResolutionPdfUndecidedMode
+}> = [
+  {
+    description: 'Leave articles marked Undecided out of the import and keep any existing target resolution.',
+    label: 'Ignore undecided',
+    value: 'ignore',
+  },
+  {
+    description: 'Treat Undecided as a request to clear the target conflict resolution for those articles.',
+    label: 'Set to not set',
+    value: 'clear',
+  },
+]
+
 export const CompareProjectImportResolutionsPage = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
@@ -101,6 +119,8 @@ export const CompareProjectImportResolutionsPage = () => {
   const [importMode, setImportMode] = createSignal<ComparisonProjectConflictResolutionImportMode>('conflicting-only')
   const [overwriteMode, setOverwriteMode] =
     createSignal<ComparisonProjectConflictResolutionImportOverwriteMode>('skip-existing')
+  const [pdfUndecidedMode, setPdfUndecidedMode] =
+    createSignal<ComparisonProjectConflictResolutionPdfUndecidedMode>('ignore')
   const [isDraggingFile, setIsDraggingFile] = createSignal(false)
 
   const comparisonProjectQuery = useQuery(() => {
@@ -183,7 +203,7 @@ export const CompareProjectImportResolutionsPage = () => {
     return {artifact, importMode: importMode(), overwriteMode: overwriteMode()}
   }
   const getPdfImportRequest = (file: File) => {
-    return {file, importMode: importMode(), overwriteMode: overwriteMode()}
+    return {file, importMode: importMode(), overwriteMode: overwriteMode(), pdfUndecidedMode: pdfUndecidedMode()}
   }
   const getSelectedImportRequest = () => {
     const pdfFile = selectedPdfFile()
@@ -204,6 +224,7 @@ export const CompareProjectImportResolutionsPage = () => {
           && selectedFileKind() === 'pdf'
           && importMode() === request.importMode
           && overwriteMode() === request.overwriteMode
+          && pdfUndecidedMode() === request.pdfUndecidedMode
       : parsedArtifact() === request.artifact
           && selectedFileKind() === 'json'
           && importMode() === request.importMode
@@ -298,6 +319,16 @@ export const CompareProjectImportResolutionsPage = () => {
       analyzeMutation.mutate({...request, overwriteMode: nextOverwriteMode})
     }
   }
+  const handlePdfUndecidedModeChange = (nextPdfUndecidedMode: ComparisonProjectConflictResolutionPdfUndecidedMode) => {
+    setPdfUndecidedMode(nextPdfUndecidedMode)
+    resetReviewState()
+
+    const pdfFile = selectedPdfFile()
+
+    if (pdfFile) {
+      analyzeMutation.mutate({...getPdfImportRequest(pdfFile), pdfUndecidedMode: nextPdfUndecidedMode})
+    }
+  }
   const hasImportFile = () => {
     return Boolean(parsedArtifact() || selectedPdfFile())
   }
@@ -305,6 +336,9 @@ export const CompareProjectImportResolutionsPage = () => {
     const summary = analyzePreview()?.summary
 
     return Boolean(summary && (summary.skippedExisting > 0 || summary.overwriteCandidates > 0))
+  }
+  const shouldShowPdfUndecidedMode = () => {
+    return selectedFileKind() === 'pdf' && (analyzePreview()?.source.pdfUndecidedRowCount ?? 0) > 0
   }
   const analyzeDisabledReason = createMemo(() => {
     return getAnalyzeImportDisabledReason({
@@ -440,6 +474,39 @@ export const CompareProjectImportResolutionsPage = () => {
                                 name="conflict-resolution-import-overwrite-mode"
                                 onChange={() => {
                                   handleOverwriteModeChange(option.value)
+                                }}
+                                type="radio"
+                              />
+                              <span>
+                                <span class="block text-sm font-medium text-gray-900">{option.label}</span>
+                                <span class="mt-1 block text-xs text-gray-500">{option.description}</span>
+                              </span>
+                            </label>
+                          )
+                        }}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={shouldShowPdfUndecidedMode()}>
+                  <div class="mt-5 rounded-md border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-sm font-medium text-gray-900">Undecided PDF selections</p>
+                    <p class="mt-1 text-xs text-gray-500">
+                      The PDF contains {getResolutionCountLabel(analyzePreview()?.source.pdfUndecidedRowCount ?? 0)}{' '}
+                      marked Undecided. Choose how those articles should be handled before committing.
+                    </p>
+                    <div class="mt-3 grid gap-3 md:grid-cols-2">
+                      <For each={pdfUndecidedModeOptions}>
+                        {(option) => {
+                          return (
+                            <label class="flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 bg-white p-3 hover:bg-gray-50">
+                              <input
+                                checked={pdfUndecidedMode() === option.value}
+                                class="mt-1"
+                                name="conflict-resolution-pdf-undecided-mode"
+                                onChange={() => {
+                                  handlePdfUndecidedModeChange(option.value)
                                 }}
                                 type="radio"
                               />

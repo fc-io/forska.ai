@@ -161,6 +161,7 @@ describe('compare project import resolutions helpers', () => {
       }),
     ).toEqual([
       ['Inserted', 1],
+      ['Cleared', 0],
       ['Skipped', 2],
     ])
   })
