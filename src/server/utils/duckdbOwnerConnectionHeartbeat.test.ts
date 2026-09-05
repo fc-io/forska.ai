@@ -1,3 +1,7 @@
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 const getLastJsonLine = (value: string) => {
@@ -21,17 +25,29 @@ const getLastJsonLine = (value: string) => {
 }
 
 const runHeartbeatScript = <Result>(script: string) => {
-  const runScript = globalThis.Bun.spawnSync(['bun', '-e', script], {cwd: process.cwd(), env: {...process.env}})
+  const resultDir = mkdtempSync(join(tmpdir(), 'forska-duckdb-owner-heartbeat-test-'))
+  const resultPath = join(resultDir, 'result.json')
+  const runScript = globalThis.Bun.spawnSync(['bun', '-e', script], {
+    cwd: process.cwd(),
+    env: {...process.env, FORSKA_DUCKDB_OWNER_HEARTBEAT_TEST_RESULT_PATH: resultPath},
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
 
-  if (runScript.exitCode !== 0) {
-    throw new Error(
-      runScript.stderr.toString()
-        || runScript.stdout.toString()
-        || 'DuckDB owner connection heartbeat test script failed',
-    )
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'DuckDB owner connection heartbeat test script failed',
+      )
+    }
+
+    const resultJson = readFileSync(resultPath, 'utf8')
+    return JSON.parse(resultJson || getLastJsonLine(runScript.stdout.toString())) as Result
+  } finally {
+    rmSync(resultDir, {force: true, recursive: true})
   }
-
-  return JSON.parse(getLastJsonLine(runScript.stdout.toString())) as Result
 }
 
 test('DuckDB owner connection heartbeat keeps one remote request in flight and consumes responses', () => {
@@ -133,7 +149,7 @@ test('DuckDB owner connection heartbeat keeps one remote request in flight and c
     pendingResponses[1](createResponse())
     await settle()
 
-    console.log(JSON.stringify({
+    await Bun.write(process.env.FORSKA_DUCKDB_OWNER_HEARTBEAT_TEST_RESULT_PATH, JSON.stringify({
       bodyReadCount,
       fetchCountAfterCompletion,
       fetchCountWhilePending,
@@ -254,8 +270,10 @@ test('DuckDB owner connection heartbeat releases its in-flight slot after timeou
     await settle()
     runInterval()
     await settle()
+    runInterval()
+    await settle()
 
-    console.log(JSON.stringify({
+    await Bun.write(process.env.FORSKA_DUCKDB_OWNER_HEARTBEAT_TEST_RESULT_PATH, JSON.stringify({
       bodyReadCount,
       fetchCount,
       fetchCountWhilePending,
@@ -265,8 +283,106 @@ test('DuckDB owner connection heartbeat releases its in-flight slot after timeou
   `)
 
   expect(result.fetchCountWhilePending).toBe(1)
-  expect(result.fetchCount).toBe(2)
-  expect(result.bodyReadCount).toBe(1)
+  expect(result.fetchCount).toBe(3)
+  expect(result.bodyReadCount).toBe(2)
+  expect(result.localUpsertCount).toBe(3)
+  expect(result.warningCount).toBe(1)
+})
+
+test('DuckDB owner connection heartbeat suppresses transient planned-restart misses until repeated failures', () => {
+  const result = runHeartbeatScript<{
+    fetchCount: number
+    localUpsertCount: number
+    warningPayloads: Array<{consecutiveFailureCount: number}>
+  }>(`
+    const {mock} = await import('bun:test')
+    const {resolve} = await import('node:path')
+    const {pathToFileURL} = await import('node:url')
+
+    const getModulePath = (relativePath) => {
+      return pathToFileURL(resolve(relativePath)).href
+    }
+
+    const heartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
+    const ownerConnectionsModulePath = getModulePath('./src/server/utils/duckdbOwnerConnections.ts')
+    const rateLimitedLoggerModulePath = getModulePath('./src/server/utils/rateLimitedLogger.ts')
+    const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+    const intervalCallbacks = []
+    const warningPayloads = []
+    let fetchCount = 0
+    let localUpsertCount = 0
+
+    void mock.module(ownerConnectionsModulePath, () => {
+      return {
+        getDuckdbOwnerConnectionHeartbeatPayload: async () => ({serverId: 'api'}),
+        getDuckdbOwnerConnectionProxyHeaders: () => ({}),
+        upsertDuckdbOwnerConnectionHeartbeat: async () => {
+          localUpsertCount += 1
+        },
+      }
+    })
+    void mock.module(rateLimitedLoggerModulePath, () => {
+      return {
+        createRateLimitedLogger: () => ({
+          warn: (_key, _message, payload) => {
+            warningPayloads.push({consecutiveFailureCount: payload.consecutiveFailureCount})
+          },
+        }),
+      }
+    })
+    void mock.module(runtimeRoleModulePath, () => {
+      return {
+        canCurrentServerOwnDuckdb: () => false,
+        getCurrentServerWorkerRegistryOwnerUrl: async () => 'http://127.0.0.1:3002',
+      }
+    })
+
+    globalThis.setInterval = (callback) => {
+      intervalCallbacks.push(callback)
+      return {unref: () => {}}
+    }
+    globalThis.clearInterval = () => {}
+    Object.defineProperty(AbortSignal, 'timeout', {
+      configurable: true,
+      value: () => new AbortController().signal,
+    })
+    globalThis.fetch = () => {
+      fetchCount += 1
+
+      if (fetchCount <= 2) {
+        return Promise.reject(new Error('owner restarting'))
+      }
+
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new ArrayBuffer(0),
+      })
+    }
+
+    const settle = async () => {
+      for (let index = 0; index < 10; index += 1) {
+        await Promise.resolve()
+      }
+    }
+
+    const {startDuckdbOwnerConnectionHeartbeat} = await import(heartbeatModulePath + '?transient=' + Date.now())
+    startDuckdbOwnerConnectionHeartbeat()
+    await settle()
+
+    const [runInterval] = intervalCallbacks
+    runInterval()
+    await settle()
+    runInterval()
+    await settle()
+
+    await Bun.write(
+      process.env.FORSKA_DUCKDB_OWNER_HEARTBEAT_TEST_RESULT_PATH,
+      JSON.stringify({fetchCount, localUpsertCount, warningPayloads}),
+    )
+  `)
+
+  expect(result.fetchCount).toBe(3)
   expect(result.localUpsertCount).toBe(2)
-  expect(result.warningCount).toBe(2)
+  expect(result.warningPayloads).toEqual([])
 })

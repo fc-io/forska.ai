@@ -75,6 +75,7 @@ type ManagedServerState = {
 }
 type ManagedProcessExitRecord = {exitedAtMs: number; pid: number}
 
+const plannedMaintenanceRestartExitCode = 0
 const restartDelayMs = 1_000
 const maintenanceStartupTimeoutMs = 1_800_000
 const judgeStartupTimeoutMs = 90_000
@@ -910,18 +911,32 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
   setManagedServerProcess(role, null)
   const pid = serverProcess.pid ?? null
   const signal = serverProcess.signalCode
-  const message = `[server:stack] ${role} pid=${pid ?? 'unknown'} exited unexpectedly with code ${String(exitCode)} signal=${signal ?? 'none'}; restart planned`
+  const isPlannedCleanMaintenanceRestart =
+    role === 'maintenance' && exitCode === plannedMaintenanceRestartExitCode && signal === null
+  const message = isPlannedCleanMaintenanceRestart
+    ? `[server:stack] ${role} pid=${pid ?? 'unknown'} exited cleanly for planned restart; restart planned`
+    : `[server:stack] ${role} pid=${pid ?? 'unknown'} exited unexpectedly with code ${String(exitCode)} signal=${signal ?? 'none'}; restart planned`
 
   console.error(message)
 
   try {
     writeRuntimeLogEvent({
-      attrs: {exitCode, pid, restartPlanned: true, role, signal, supervisorPid: process.pid},
-      event: 'server.stack.managed-process-unexpected-exit',
+      attrs: {
+        cleanExit: isPlannedCleanMaintenanceRestart,
+        exitCode,
+        pid,
+        restartPlanned: true,
+        role,
+        signal,
+        supervisorPid: process.pid,
+      },
+      event: isPlannedCleanMaintenanceRestart
+        ? 'server.stack.managed-process-planned-restart'
+        : 'server.stack.managed-process-unexpected-exit',
       message,
       runtimeIdentity: managedProcessRuntimeIdentities.get(serverProcess),
       serverRole: getBackgroundServerRole(role),
-      severity: 'ERROR',
+      severity: isPlannedCleanMaintenanceRestart ? 'WARN' : 'ERROR',
     })
   } catch (error) {
     console.error('[server:stack] failed to write managed process exit to runtime log', error)

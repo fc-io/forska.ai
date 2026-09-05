@@ -151,6 +151,7 @@ const runtimeCrashDiagnosticEvents = new Set([
   'duckdb.statement.end',
   'duckdb.statement.error',
   'duckdb.statement.start',
+  'server.stack.managed-process-planned-restart',
   'server.stack.managed-process-unexpected-exit',
 ])
 const duckdbStatementDiagnosticLinePattern = /^\[duckdb:statement-diagnostic\] (.+)$/u
@@ -390,8 +391,12 @@ const getRuntimeLogRecordsSince = ({logDir, snapshot}: {logDir: string; snapshot
 const getDiagnosticAttrs = (record: RuntimeLogRecord) => {
   const attrs = record.attrs ?? {}
 
-  if (record.event === 'server.stack.managed-process-unexpected-exit') {
+  if (
+    record.event === 'server.stack.managed-process-planned-restart'
+    || record.event === 'server.stack.managed-process-unexpected-exit'
+  ) {
     return {
+      cleanExit: attrs.cleanExit ?? null,
       exitCode: attrs.exitCode ?? null,
       pid: attrs.pid ?? null,
       restartPlanned: attrs.restartPlanned ?? null,
@@ -1051,7 +1056,7 @@ const getRuntimeStabilityFailure = ({
   const maintenanceOnlyRestart =
     apiPidAfter === apiPidBefore && judgePidAfter === judgePidBefore && maintenancePidAfter !== maintenancePidBefore
   const cleanExitPattern = new RegExp(
-    `\\[server:stack\\] maintenance pid=${maintenancePidBefore} exited unexpectedly with code 0 signal=none; restart planned`,
+    `\\[server:stack\\] maintenance pid=${maintenancePidBefore} exited cleanly for planned restart; restart planned`,
   )
   const replacementPattern = new RegExp(`\\[server:stack\\] started maintenance pid=${maintenancePidAfter}(?:\\D|$)`)
   const hasBoundedRestartEvidence =
@@ -1082,7 +1087,7 @@ const omitAcceptedMaintenanceRestartOutput = (output: string, maintenancePidBefo
 
   return output
     .replace(
-      `[server:stack] maintenance pid=${maintenancePidBefore} exited unexpectedly with code 0 signal=none; restart planned`,
+      `[server:stack] maintenance pid=${maintenancePidBefore} exited cleanly for planned restart; restart planned`,
       '',
     )
     .replace('[server:stack] restarting maintenance', '')
@@ -1091,7 +1096,7 @@ const omitAcceptedMaintenanceRestartOutput = (output: string, maintenancePidBefo
 test('runtime stability accepts only healthy bounded maintenance restarts with review-serving progress', () => {
   const base = {
     output:
-      '[server:stack] maintenance pid=20 exited unexpectedly with code 0 signal=none; restart planned\n'
+      '[server:stack] maintenance pid=20 exited cleanly for planned restart; restart planned\n'
       + '[server:stack] restarting maintenance\n'
       + '[server:stack] started maintenance pid=21\n',
     pidsAfter: [10, 21, 30] as RuntimePids,
@@ -1130,7 +1135,7 @@ test('runtime stability accepts only healthy bounded maintenance restarts with r
   expect(getForbiddenDevServerOutputMatches(omitAcceptedMaintenanceRestartOutput(base.output, 20))).toEqual([])
   expect(
     getForbiddenDevServerOutputMatches(omitAcceptedMaintenanceRestartOutput(`${base.output}${base.output}`, 20)),
-  ).toEqual(['maintenance restart', 'maintenance unexpected exit'])
+  ).toEqual(['maintenance restart'])
 })
 
 const expectCurrentDbReviewServingQueuedWorkProgresses = async (
