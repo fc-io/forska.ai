@@ -44,6 +44,7 @@ type DuckdbOwnerStreamingProxyRequestTemplate = {
 
 const duckdbOwnerProxyRetryDelayMs = 250
 const duckdbOwnerProxyRetryTimeoutMs = 4000
+const duckdbOwnerRetryableMutationReadinessTimeoutMs = 180000
 const duckdbOwnerDiagnosticProxyTimeoutMs = 3000
 const duckdbOwnerReadProxyTimeoutMs = 15000
 const duckdbOwnerMutationProxyTimeoutMs = 60000
@@ -295,13 +296,16 @@ const getDuckdbOwnerProxyTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTe
 }
 
 const getDuckdbOwnerProxyRetryTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
-  return requestTemplate.method === 'GET'
-    || requestTemplate.method === 'HEAD'
-    || requestTemplate.method === 'OPTIONS'
-    || isRetryableDuckdbOwnerProxyMutation(requestTemplate)
+  if (isRetryableDuckdbOwnerProxyMutation(requestTemplate)) {
+    return Math.max(duckdbOwnerRetryableMutationReadinessTimeoutMs, getDuckdbOwnerProxyTimeoutMs(requestTemplate))
+  }
+
+  return requestTemplate.method === 'GET' || requestTemplate.method === 'HEAD' || requestTemplate.method === 'OPTIONS'
     ? Math.max(duckdbOwnerProxyRetryTimeoutMs, getDuckdbOwnerProxyTimeoutMs(requestTemplate))
     : duckdbOwnerProxyRetryTimeoutMs
 }
+
+export const getDuckdbOwnerProxyRetryTimeoutMsForTesting = getDuckdbOwnerProxyRetryTimeoutMs
 
 const getDuckdbOwnerProxyTimeoutResponse = (timeoutMs: number) => {
   return Response.json({data: null, error: `DuckDB owner proxy target timed out after ${timeoutMs} ms`}, {status: 504})

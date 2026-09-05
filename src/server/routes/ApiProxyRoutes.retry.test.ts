@@ -709,6 +709,22 @@ test.serial(
   10_000,
 )
 
+test.serial('api proxy gives retryable conflict-resolution POSTs a restart-sized readiness budget', async () => {
+  const {getDuckdbOwnerProxyRetryTimeoutMsForTesting} = await import('./ApiProxyRoutes.ts')
+
+  expect(
+    getDuckdbOwnerProxyRetryTimeoutMsForTesting({
+      body: new ArrayBuffer(0),
+      classification: 'owner-dependent',
+      failClosedWithoutDuckdbOwner: true,
+      headers: new Headers(),
+      method: 'POST',
+      pathname: '/__duckdb-owner-rpc/api/comparison-projects/comparison-project-1/conflict-resolution',
+      search: '',
+    }),
+  ).toBeGreaterThanOrEqual(180_000)
+})
+
 test.serial(
   'api proxy waits for conflict-resolution POST owner readiness instead of treating it as incompatible',
   async () => {
