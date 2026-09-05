@@ -102,6 +102,45 @@ describe('comparison project conflict-resolution PDF import', () => {
     ])
   })
 
+  test('parses compact PDF dictionaries rewritten by PDF editors', () => {
+    const metadata = getMetadataValue({
+      articleExternalId: 'EXT-1',
+      articleTitle: 'Article 1',
+      canonicalArticleId: 'article-1',
+      comparisonProjectId: 'comparison-project-1',
+      hasConflict: true,
+    })
+    const pdfSource = `%PDF-1.4
+1 0 obj
+<</FT/Btn/Ff 49152/Kids[ 2 0 R 3 0 R ]/T(comparison.comparison-project-1.article.article-1.resolution)/V/no>>
+endobj
+2 0 obj
+<</AP<</N<</Off 4 0 R /yes 5 0 R>>>>/AS/Off/Parent 1 0 R/Subtype/Widget/Type/Annot>>
+endobj
+3 0 obj
+<</AP<</N<</Off 4 0 R /no 5 0 R>>>>/AS/no/Parent 1 0 R/Subtype/Widget/Type/Annot>>
+endobj
+4 0 obj
+<</FT/Tx/T(forska.reviewer.displayName)/V(Dr Reviewer)>>
+endobj
+5 0 obj
+<</FT/Tx/T(comparison.comparison-project-1.article.article-1.metadata)/V(${metadata})>>
+endobj`
+
+    const parsedImport = parsePdfConflictResolutionImport(pdfSource)
+
+    expect(parsedImport.reviewer).toEqual({displayName: 'Dr Reviewer', instanceId: null})
+    expect(parsedImport.rows).toMatchObject([
+      {
+        fieldName: 'comparison.comparison-project-1.article.article-1.resolution',
+        canonicalArticleId: 'article-1',
+        externalArticleId: 'EXT-1',
+        resolutionValue: 'no',
+        title: 'Article 1',
+      },
+    ])
+  })
+
   test('ignores legacy reviewer IDs from PDF fields and metadata', () => {
     const pdf = new SimplePdfDocument()
 

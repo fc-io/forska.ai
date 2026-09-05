@@ -3893,6 +3893,8 @@ test('comparison project conflict resolution PDF import names blank reviewers as
 
   expect(response.status).toBe(200)
   expect(state.lastUserConfigInsertStatement ?? '').toContain('Unnamed reviewer')
+  expect(state.lastUserConfigInsertStatement ?? '').toContain('updated_at = now()')
+  expect(state.lastUserConfigInsertStatement ?? '').not.toContain('updated_at = current_timestamp')
   expect(state.conflictResolutionRows.at(-1)?.reviewerUserId).toMatch(/^pdf-import:/)
 })
 
