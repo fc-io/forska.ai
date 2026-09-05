@@ -69,12 +69,12 @@ const conflictResolutionImportOverwriteModeOptions: Array<{
 }> = [
   {
     description: 'Keep existing target decisions and import only empty target rows.',
-    label: 'Skip existing',
+    label: 'Skip existing target resolutions',
     value: 'skip-existing',
   },
   {
-    description: 'Replace target decisions only when the PDF contains a different selected value.',
-    label: 'Overwrite different',
+    description: 'Replace existing target decisions when the imported selection is different.',
+    label: 'Overwrite existing target resolutions',
     value: 'overwrite-different',
   },
 ]
@@ -199,6 +199,11 @@ export const CompareProjectImportResolutionsPage = () => {
     setAnalyzeError(null)
     setCommitError(null)
   }
+  const resetReviewFeedback = () => {
+    setCommitResult(null)
+    setAnalyzeError(null)
+    setCommitError(null)
+  }
   const getImportRequest = (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
     return {artifact, importMode: importMode(), overwriteMode: overwriteMode()}
   }
@@ -301,7 +306,7 @@ export const CompareProjectImportResolutionsPage = () => {
   }
   const handleImportModeChange = (nextImportMode: ComparisonProjectConflictResolutionImportMode) => {
     setImportMode(nextImportMode)
-    resetReviewState()
+    resetReviewFeedback()
 
     const request = getSelectedImportRequest()
 
@@ -311,7 +316,7 @@ export const CompareProjectImportResolutionsPage = () => {
   }
   const handleOverwriteModeChange = (nextOverwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode) => {
     setOverwriteMode(nextOverwriteMode)
-    resetReviewState()
+    resetReviewFeedback()
 
     const request = getSelectedImportRequest()
 
@@ -321,7 +326,7 @@ export const CompareProjectImportResolutionsPage = () => {
   }
   const handlePdfUndecidedModeChange = (nextPdfUndecidedMode: ComparisonProjectConflictResolutionPdfUndecidedMode) => {
     setPdfUndecidedMode(nextPdfUndecidedMode)
-    resetReviewState()
+    resetReviewFeedback()
 
     const pdfFile = selectedPdfFile()
 

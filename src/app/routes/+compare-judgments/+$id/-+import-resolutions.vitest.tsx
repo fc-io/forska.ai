@@ -64,6 +64,7 @@ const mockState = vi.hoisted(() => {
   }
 
   return {
+    analyzePreview,
     analyzeComparisonProjectConflictResolutionImport: vi.fn(
       async (_comparisonProjectId: string, _artifact: unknown) => {
         return analyzePreview
@@ -305,6 +306,50 @@ describe('CompareProjectImportResolutionsPage', () => {
         expect(mockState.analyzeComparisonProjectConflictResolutionImport).toHaveBeenCalledWith(
           'comparison-project-1',
           {artifact: mockState.transferArtifact, importMode: 'all-matched', overwriteMode: 'skip-existing'},
+        )
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('offers overwrite mode when rows are skipped by existing target resolutions', async () => {
+    mockState.analyzeComparisonProjectConflictResolutionImport.mockResolvedValueOnce({
+      ...mockState.analyzePreview,
+      summary: {...mockState.analyzePreview.summary, importable: 0, skipped: 1, skippedExisting: 1},
+    })
+
+    const {container, dispose} = await renderImportResolutionsPage()
+
+    try {
+      const input = container.querySelector('[data-testid="conflict-resolution-import-file"]')
+      const file = new File([JSON.stringify(mockState.transferArtifact)], 'conflict-resolutions.json', {
+        type: 'application/json',
+      })
+
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error('Import file input not found')
+      }
+
+      Object.defineProperty(input, 'files', {configurable: true, value: getFileList(file)})
+      input.dispatchEvent(new Event('change', {bubbles: true}))
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Existing target decisions')
+        expect(container.textContent).toContain('Skip existing target resolutions')
+        expect(container.textContent).toContain('Overwrite existing target resolutions')
+      })
+
+      getInputFromLabel(container, 'Overwrite existing target resolutions').click()
+
+      expect(container.textContent).toContain('Analyze result')
+      expect(container.textContent).toContain('Existing target decisions')
+
+      await waitForCondition(() => {
+        expect(mockState.analyzeComparisonProjectConflictResolutionImport).toHaveBeenCalledWith(
+          'comparison-project-1',
+          {artifact: mockState.transferArtifact, importMode: 'conflicting-only', overwriteMode: 'overwrite-different'},
         )
       })
     } finally {

@@ -1298,7 +1298,7 @@ const getOrCreatePdfConflictResolutionImportReviewer = async (params: {displayNa
     )
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
-      updated_at = current_timestamp
+      updated_at = now()
     RETURNING id, name
   `)
 

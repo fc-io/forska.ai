@@ -103,7 +103,7 @@ export const getSkipReasonLabel = (reason: ComparisonProjectConflictResolutionIm
     'ambiguous-target-match': 'Ambiguous target match',
     'conflicting-identifiers': 'Conflicting identifiers',
     'conflicting-resolution-values': 'Conflicting resolution values',
-    'existing-target-resolution': 'Existing target resolution',
+    'existing-target-resolution': 'Skipped because target already has a resolution',
     'invalid-target-resolution-value': 'Invalid target resolution value',
     'no-target-match': 'No target match',
     'no-usable-key': 'No usable match key',

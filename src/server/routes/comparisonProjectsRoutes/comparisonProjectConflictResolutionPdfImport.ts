@@ -191,20 +191,34 @@ const parsePdfLiteralStringAt = (source: string, startIndex: number) => {
   return null
 }
 
-const getPdfLiteralStringValue = (dictionary: string, key: string) => {
-  const keyIndex = dictionary.indexOf(`/${key} `)
+const getPdfDictionaryValueStartIndex = (dictionary: string, key: string) => {
+  const match = new RegExp(`/${key}(?=[\\s/<()[\\]])\\s*`).exec(dictionary)
 
-  if (keyIndex === -1) {
+  return match ? match.index + match[0].length : null
+}
+
+const hasPdfDictionaryKey = (dictionary: string, key: string) => {
+  return getPdfDictionaryValueStartIndex(dictionary, key) !== null
+}
+
+const getPdfLiteralStringValue = (dictionary: string, key: string) => {
+  const valueStartIndex = getPdfDictionaryValueStartIndex(dictionary, key)
+
+  if (valueStartIndex === null || dictionary[valueStartIndex] !== '(') {
     return null
   }
 
-  const valueStartIndex = dictionary.indexOf('(', keyIndex)
-
-  return valueStartIndex === -1 ? null : (parsePdfLiteralStringAt(dictionary, valueStartIndex)?.value ?? null)
+  return parsePdfLiteralStringAt(dictionary, valueStartIndex)?.value ?? null
 }
 
 const getPdfNameValue = (dictionary: string, key: string) => {
-  const match = new RegExp(`/${key}\\s+/([^\\s<>/()[\\]]+)`).exec(dictionary)
+  const valueStartIndex = getPdfDictionaryValueStartIndex(dictionary, key)
+
+  if (valueStartIndex === null || dictionary[valueStartIndex] !== '/') {
+    return null
+  }
+
+  const match = /^\/([^\s<>/()[\]]+)/.exec(dictionary.slice(valueStartIndex))
 
   return match?.[1] ?? null
 }
@@ -212,7 +226,7 @@ const getPdfNameValue = (dictionary: string, key: string) => {
 const getPdfFormFields = (source: string): PdfFormField[] => {
   return getPdfDictionaries(source)
     .filter((dictionary) => {
-      return dictionary.includes('/FT ') && dictionary.includes('/T ')
+      return hasPdfDictionaryKey(dictionary, 'FT') && hasPdfDictionaryKey(dictionary, 'T')
     })
     .flatMap((dictionary) => {
       const name = getPdfLiteralStringValue(dictionary, 'T')
