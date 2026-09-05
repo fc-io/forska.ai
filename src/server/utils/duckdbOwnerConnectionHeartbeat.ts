@@ -10,6 +10,7 @@ import {canCurrentServerOwnDuckdb, getCurrentServerWorkerRegistryOwnerUrl} from 
 const duckdbOwnerConnectionHeartbeatLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const duckdbOwnerConnectionHeartbeatIntervalMs = 15_000
 const duckdbOwnerConnectionHeartbeatRequestTimeoutMs = 10_000
+const duckdbOwnerConnectionHeartbeatWarningFailureCount = 3
 
 const consumeDuckdbOwnerConnectionHeartbeatResponse = async (response: Response) => {
   await response.arrayBuffer()
@@ -48,15 +49,16 @@ const sendDuckdbOwnerConnectionHeartbeat = async () => {
   }
 }
 
-const logDuckdbOwnerConnectionHeartbeatError = (error: unknown) => {
+const logDuckdbOwnerConnectionHeartbeatError = (error: unknown, consecutiveFailureCount: number) => {
   return duckdbOwnerConnectionHeartbeatLogger.warn(
     'duckdb-owner-connection-heartbeat',
     '[duckdb-owner] heartbeat failed',
-    error,
+    {consecutiveFailureCount, error},
   )
 }
 
 export const startDuckdbOwnerConnectionHeartbeat = () => {
+  let consecutiveFailureCount = 0
   let heartbeatInFlight = false
 
   const runHeartbeat = () => {
@@ -67,11 +69,15 @@ export const startDuckdbOwnerConnectionHeartbeat = () => {
     heartbeatInFlight = true
     return void sendDuckdbOwnerConnectionHeartbeat().then(
       () => {
+        consecutiveFailureCount = 0
         heartbeatInFlight = false
       },
       (error) => {
+        consecutiveFailureCount += 1
         heartbeatInFlight = false
-        logDuckdbOwnerConnectionHeartbeatError(error)
+        if (consecutiveFailureCount >= duckdbOwnerConnectionHeartbeatWarningFailureCount) {
+          logDuckdbOwnerConnectionHeartbeatError(error, consecutiveFailureCount)
+        }
       },
     )
   }
