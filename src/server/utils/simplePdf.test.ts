@@ -53,6 +53,36 @@ test('simple PDF keeps Latin labels in Helvetica on mixed Chinese lines', () => 
   expect(output).not.toContain('/F3 10 Tf 48.00')
 })
 
+test('simple PDF renders definition rows with bold terms beside wrapped definitions', () => {
+  const pdf = new SimplePdfDocument()
+
+  pdf.addDefinitionRow(
+    'Review conflict',
+    'An article where AIs, or an AI and human reviewers, do not agree whether a study should be included.',
+  )
+
+  const output = pdf.toBuffer().toString('latin1')
+
+  expect(output).toContain('/F2 10 Tf 48.00')
+  expect(output).toContain('(Review conflict)')
+  expect(output).toContain('/F1 10 Tf 184.00')
+  expect(output).toContain('(An article where AIs, or an AI and human reviewers, do not agree whether a)')
+  expect(output).toContain('(study should be included.)')
+})
+
+test('simple PDF renders inline mixed-font text on one baseline', () => {
+  const pdf = new SimplePdfDocument()
+
+  pdf.addInlineText([{text: 'Current resolution: '}, {font: 'bold', text: 'yes'}])
+
+  const output = pdf.toBuffer().toString('latin1')
+
+  expect(output).toContain('/F1 10 Tf 48.00')
+  expect(output).toContain('(Current resolution: )')
+  expect(output).toContain('/F2 10 Tf')
+  expect(output).toContain('(yes)')
+})
+
 test('simple PDF panel padding grows outward so panel title aligns with page text', () => {
   const pdf = new SimplePdfDocument()
   pdf.addPanel({title: 'Conflict resolution'}, () => {

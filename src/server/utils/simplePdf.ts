@@ -1,6 +1,9 @@
 type PdfFont = 'regular' | 'bold'
 
 type PdfTextOptions = {font?: PdfFont; fontSize?: number; gapAfter?: number; indent?: number}
+type PdfInlineTextSegment = {font?: PdfFont; text: string}
+type PdfInlineTextOptions = {fontSize?: number; gapAfter?: number; indent?: number}
+type PdfDefinitionRowOptions = {fontSize?: number; gapAfter?: number; termWidth?: number}
 type PdfCheckboxOptions = {checked?: boolean; fieldName: string; fontSize?: number; gapAfter?: number; indent?: number}
 type PdfCheckboxRowOption = PdfCheckboxOptions & {label: string}
 type PdfRadioRowOption = {fontSize?: number; gapAfter?: number; indent?: number; label: string; value: string}
@@ -317,6 +320,65 @@ export class SimplePdfDocument {
     })
 
     this.y -= options.gapAfter ?? 0
+  }
+
+  addInlineText(segments: PdfInlineTextSegment[], options: PdfInlineTextOptions = {}) {
+    const fontSize = options.fontSize ?? 10
+    const lineHeight = fontSize * lineHeightMultiplier
+    const startX = marginX + (options.indent ?? 0)
+
+    if (this.y - lineHeight < marginBottom) {
+      this.addPage()
+    }
+
+    segments.reduce((x, segment) => {
+      const text = getNormalizedPdfText(segment.text).replace(/\s+/g, ' ')
+
+      if (!text.trim()) {
+        return x + getTextWidth(text, fontSize)
+      }
+
+      const font = segment.font === 'bold' ? 'F2' : 'F1'
+      this.pages[this.pages.length - 1]?.push(getPdfTextCommand(text, font, fontSize, x, this.y))
+
+      return x + getTextWidth(text, fontSize)
+    }, startX)
+
+    this.y -= lineHeight + (options.gapAfter ?? 0)
+  }
+
+  addDefinitionRow(term: string, definition: string, options: PdfDefinitionRowOptions = {}) {
+    const fontSize = options.fontSize ?? 10
+    const lineHeight = fontSize * lineHeightMultiplier
+    const termWidth = options.termWidth ?? 118
+    const columnGap = 18
+    const termX = marginX
+    const definitionX = termX + termWidth + columnGap
+    const definitionWidth = pageWidth - definitionX - marginX
+    const termLines = getWrappedLines(getNormalizedPdfText(term).trim() || ' ', termWidth, fontSize)
+    const definitionLines = getWrappedLines(getNormalizedPdfText(definition).trim() || ' ', definitionWidth, fontSize)
+    const rowLineCount = Math.max(termLines.length, definitionLines.length)
+    const rowHeight = rowLineCount * lineHeight
+
+    if (this.y - rowHeight < marginBottom) {
+      this.addPage()
+    }
+
+    Array.from({length: rowLineCount}).forEach((_, index) => {
+      const y = this.y - index * lineHeight
+      const termLine = termLines[index]
+      const definitionLine = definitionLines[index]
+
+      if (termLine !== undefined) {
+        this.pages[this.pages.length - 1]?.push(getPdfTextCommand(termLine, 'F2', fontSize, termX, y))
+      }
+
+      if (definitionLine !== undefined) {
+        this.pages[this.pages.length - 1]?.push(getPdfTextCommand(definitionLine, 'F1', fontSize, definitionX, y))
+      }
+    })
+
+    this.y -= rowHeight + (options.gapAfter ?? 0)
   }
 
   addCheckbox(label: string, options: PdfCheckboxOptions) {
