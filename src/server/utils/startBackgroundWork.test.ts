@@ -1,27 +1,8 @@
+import {readFileSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
-
-const getLastJsonLine = (value: string) => {
-  const lines = value
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => {
-      return line.trim()
-    })
-    .filter((line) => {
-      return line.startsWith('{') && line.endsWith('}')
-    })
-
-  const [lastLine = ''] = lines.slice(-1)
-
-  if (lastLine === '') {
-    throw new Error(`Expected JSON output but received: ${value}`)
-  }
-
-  return lastLine
-}
 
 const runStartBackgroundWork = (input: {
   activeDuckdbExclusiveWork?: boolean
@@ -39,6 +20,7 @@ const runStartBackgroundWork = (input: {
   waitAfterStartMs?: number
 }) => {
   const duckdbPath = join(tmpdir(), `forska-start-background-work-${process.pid}-${Date.now()}.duckdb`)
+  const resultPath = join(tmpdir(), `forska-start-background-work-${process.pid}-${Date.now()}.json`)
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -87,6 +69,7 @@ const runStartBackgroundWork = (input: {
               const maxRowsPerWake = options.maxRowsPerWake ?? 'default'
               const maxRunMs = options.maxRunMs ?? 'default'
               const maxWakeMs = options.maxWakeMs ?? 'default'
+              const rebuildChunkBatchMaxRssBytes = options.rebuildChunkBatchMaxRssBytes ?? 'default'
               const rebuildChunkBatchSize = options.rebuildChunkBatchSize ?? 'default'
               calls.push(
                 'reviewServingProjectorWorkerHeartbeat:'
@@ -99,6 +82,8 @@ const runStartBackgroundWork = (input: {
                 + maxRowsPerWake
                 + ':'
                 + maxWakeMs
+                + ':'
+                + rebuildChunkBatchMaxRssBytes
                 + ':'
                 + rebuildChunkBatchSize
                 + ':'
@@ -212,7 +197,7 @@ const runStartBackgroundWork = (input: {
           await new Promise((resolve) => setTimeout(resolve, input.waitAfterStartMs))
         }
         rmSync(pauseMarkerPath, {force: true})
-        console.log(JSON.stringify({calls}))
+        writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({calls}))
       `,
     ],
     {
@@ -239,10 +224,15 @@ const runStartBackgroundWork = (input: {
   )
 
   if (runScript.exitCode !== 0) {
+    rmSync(resultPath, {force: true})
     throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'startBackgroundWork test failed')
   }
 
-  return JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {calls: string[]}
+  try {
+    return JSON.parse(readFileSync(resultPath, 'utf8')) as {calls: string[]}
+  } finally {
+    rmSync(resultPath, {force: true})
+  }
 }
 
 test('startBackgroundWork starts shared infrastructure and maintenance work for maintenance-worker', () => {
@@ -254,7 +244,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
     'comparisonProjectServingMaintenanceWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:false',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:default:false',
   ])
 })
 
@@ -273,7 +263,7 @@ test('startBackgroundWork starts maintenance work after auto owner promotion', (
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
     'comparisonProjectServingMaintenanceWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:false',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:default:false',
   ])
 })
 
@@ -294,7 +284,7 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under low-memor
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false',
   ])
 })
 
@@ -304,7 +294,21 @@ test('startBackgroundWork bounds the projector at the eight GiB owner boundary',
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:6442450944:default:false',
+  ])
+})
+
+test('startBackgroundWork keeps explicit low-memory projector RSS overrides', () => {
+  const result = runStartBackgroundWork({
+    duckdbMemoryLimit: '6400MiB',
+    reviewServingRebuildChunkBatchMaxRssBytes: 4_200_000_000,
+    role: 'maintenance-worker',
+  })
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:4200000000:default:false',
   ])
 })
 
@@ -317,7 +321,7 @@ test('startBackgroundWork keeps full maintenance enabled above the eight GiB own
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
     'comparisonProjectServingMaintenanceWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:false',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:default:false',
   ])
 })
 
@@ -331,7 +335,7 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under normalize
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false',
   ])
 })
 
@@ -341,7 +345,7 @@ test('startBackgroundWork keeps low-memory dev-single review serving restarts in
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false',
   ])
 })
 
@@ -373,7 +377,7 @@ test('startBackgroundWork auto-resumes paused review serving projector when queu
     'duckdbOwnerConnectionHeartbeat',
     'review-serving-projector.paused',
     'review-serving-projector.pause-recovered',
-    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false',
+    'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false',
   ])
 })
 
@@ -393,7 +397,7 @@ test('startBackgroundWork keeps paused review serving projector stopped while Du
     'review-serving-projector.paused',
     'review-serving-projector.pause-recovery-wait',
   ])
-  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false')
+  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false')
 })
 
 test('startBackgroundWork recycles DuckDB once before resuming paused review serving projector above RSS cap', () => {
@@ -408,7 +412,7 @@ test('startBackgroundWork recycles DuckDB once before resuming paused review ser
 
   expect(result.calls).toContain('review-serving-projector.pause-recovery-recycle-duckdb')
   expect(result.calls).toContain('closeDuckdbService')
-  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:default:false')
+  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false')
 })
 
 test('startBackgroundWork skips all background work when server mutations are disabled', () => {

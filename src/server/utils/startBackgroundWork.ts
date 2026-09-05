@@ -34,6 +34,8 @@ const lowMemoryReviewServingProjectorWorkerMaxRowsPerWake = 1
 const lowMemoryReviewServingProjectorWorkerMaxRunMs = 60_000
 const lowMemoryReviewServingProjectorWorkerMaxWakeMs = 1_500
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
+const lowMemoryReviewServingProjectorWorkerMinRebuildChunkBatchMaxRssBytes = 3 * 1024 ** 3
+const lowMemoryReviewServingProjectorWorkerRssToDuckdbLimitRatio = 0.75
 const reviewServingProjectorPauseRecoveryPollIntervalMs = 30_000
 const reviewServingProjectorPauseRecoveryMinAgeMs = 5 * 60_000
 const reviewServingProjectorPauseRecoveryQueueResampleDelayMs = 250
@@ -58,6 +60,23 @@ const shouldDeferNonessentialDuckdbMaintenanceWork = () => {
   return duckdbLimitMiB !== null && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
 }
 
+const getLowMemoryReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = () => {
+  if (process.env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES?.trim()) {
+    return env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
+  }
+
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
+
+  if (duckdbLimitMiB === null) {
+    return getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
+  }
+
+  return Math.max(
+    lowMemoryReviewServingProjectorWorkerMinRebuildChunkBatchMaxRssBytes,
+    Math.floor(duckdbLimitMiB * 1024 ** 2 * lowMemoryReviewServingProjectorWorkerRssToDuckdbLimitRatio),
+  )
+}
+
 const getReviewServingProjectorWorkerHeartbeatOptions = () => {
   return shouldDeferNonessentialDuckdbMaintenanceWork()
     ? {
@@ -66,6 +85,7 @@ const getReviewServingProjectorWorkerHeartbeatOptions = () => {
         maxRowsPerWake: lowMemoryReviewServingProjectorWorkerMaxRowsPerWake,
         maxRunMs: lowMemoryReviewServingProjectorWorkerMaxRunMs,
         maxWakeMs: lowMemoryReviewServingProjectorWorkerMaxWakeMs,
+        rebuildChunkBatchMaxRssBytes: getLowMemoryReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(),
         restartDelayMs: lowMemoryReviewServingProjectorWorkerRestartDelayMs,
       }
     : {}

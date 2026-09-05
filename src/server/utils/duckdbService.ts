@@ -259,6 +259,7 @@ const duckdbCheckpointThresholdMinMiB = 64
 const duckdbLowMemoryDeferredCheckpointThresholdMiB = 1024 * 1024
 const duckdbStartupWalCheckpointMinimumMemoryMiB = 12 * 1024
 const duckdbStartupWalCheckpointTimeoutMs = 1_200_000
+const duckdbStartupWalPreflightTimeoutMs = 120_000
 const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
 const duckdbStartupPreflightLockRetryDelaysMs = [100, 250, 500, 1000]
@@ -4343,6 +4344,7 @@ const getDuckdbStartupPreflightError = (
     stderr: 'pipe',
     stdin: childProcessInput.stdin,
     stdout: 'pipe',
+    timeout: duckdbStartupWalPreflightTimeoutMs,
   })
 
   if (result.exitCode === 0) {

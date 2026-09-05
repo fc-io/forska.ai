@@ -824,6 +824,7 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
         const createOptionsHistory = []
         let checkpointChildOptions = null
         let preflightChildOptions = null
+        let preflightChildTimeout = null
         const runStatements = []
         const originalSpawnSync = globalThis.Bun.spawnSync
 
@@ -834,6 +835,7 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
 
           if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD === 'true') {
             preflightChildOptions = JSON.parse(String(command[4]))
+            preflightChildTimeout = options?.timeout ?? null
             return {
               exitCode: 0,
               signalCode: null,
@@ -902,6 +904,7 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
           checkpointChildOptions,
           createOptionsHistory,
           preflightChildOptions,
+          preflightChildTimeout,
           runStatements,
           walSize: statSync(walPath).size,
         }))
@@ -936,6 +939,7 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
       checkpointChildOptions: {checkpoint_threshold?: string} | null
       createOptionsHistory: Array<{checkpoint_threshold?: string}>
       preflightChildOptions: {checkpoint_threshold?: string} | null
+      preflightChildTimeout: number | null
       runStatements: string[]
       walSize: number
     }>(result.stdout.toString())
@@ -950,6 +954,7 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
     expect(parsed.preflightChildOptions?.checkpoint_threshold).toBe(
       parsed.createOptionsHistory[0]?.checkpoint_threshold,
     )
+    expect(parsed.preflightChildTimeout).toBe(120_000)
     expect(parsed.checkpointChildOptions?.checkpoint_threshold).toBe(
       parsed.createOptionsHistory[0]?.checkpoint_threshold,
     )
