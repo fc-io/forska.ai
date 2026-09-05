@@ -1,4 +1,4 @@
-import {afterEach, expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, spyOn, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {
@@ -112,8 +112,16 @@ type MockConflictResolutionImportSourceRow = {
   resolutionCount: number
 }
 
+type MockArticleRow = {
+  articleCategory?: string | null
+  articleCreatedAt: Date
+  articleId: string
+  articleSummary: string | null
+  articleTitle: string
+}
+
 type MockDatabaseState = {
-  articleRows?: Array<{articleCreatedAt: Date; articleId: string; articleSummary: string | null; articleTitle: string}>
+  articleRows?: MockArticleRow[]
   comparisonProject: {
     archived?: boolean
     allowConflictResolution?: boolean
@@ -649,6 +657,7 @@ const getMockConflictResolutionInsertRows = (statement: string) => {
 }
 
 type MockServingRow = {
+  articleCategory?: string | null
   articleCreatedAt: Date
   articleId: string
   articleSummary: string | null
@@ -1813,6 +1822,7 @@ const queryJson = async (
       .map((row) => {
         return {
           articleCreatedAt: row.articleCreatedAt,
+          articleCategory: row.articleCategory ?? null,
           articleId: row.articleId,
           articleSummary: row.articleSummary,
           articleTitle: row.articleTitle,
@@ -6921,6 +6931,113 @@ test('summary comparison conflict resolution API can change maybe to yes', async
   expect(state.maintenanceCommands).toEqual([])
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
+})
+
+test('comparison conflict resolution save logs owner-side diagnostics for Chinese serving rows', async () => {
+  const consoleInfo = spyOn(console, 'info').mockImplementation(() => {})
+  const consoleError = spyOn(console, 'error').mockImplementation(() => {})
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    articleRows: [
+      {
+        articleCategory: 'chinese',
+        articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'),
+        articleId: 'article-1',
+        articleSummary: 'Chinese article summary',
+        articleTitle: 'Chinese article',
+      },
+    ],
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        id: 'comparison-project-prompt-2',
+        order: 1,
+        promptId: 'prompt-2',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolution(app, {articleId: 'article-1', value: 'yes'})
+  const body = (await response.json()) as {data: {articleId: string; label: string; value: string}}
+  const completedLog = consoleInfo.mock.calls.find(([message]) => {
+    return message === '[comparison-projects] conflict-resolution save completed'
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({articleId: 'article-1', label: 'yes', value: 'yes'})
+  expect(completedLog).toBeDefined()
+  expect(completedLog?.[1]).toMatchObject({
+    activeGeneration: 1,
+    articleCategory: 'chinese',
+    articleId: 'article-1',
+    comparisonProjectId: 'comparison-project-1',
+    hasConflict: true,
+    isSummaryMode: true,
+    requestedValue: 'yes',
+    resolvedValue: 'yes',
+  })
+  expect(completedLog?.[1]).toHaveProperty('durationMs')
+  expect(completedLog?.[1]).toHaveProperty('memory.rssBytes')
+  expect(consoleError).not.toHaveBeenCalledWith(
+    '[comparison-projects] conflict-resolution save failed',
+    expect.anything(),
+  )
+})
+
+test('comparison conflict resolution save logs owner-side failure phase before route handler response', async () => {
+  const consoleError = spyOn(console, 'error').mockImplementation(() => {})
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: false,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolution(app, {articleId: 'article-1', value: 'yes'})
+  const failureLog = consoleError.mock.calls.find(([message]) => {
+    return message === '[comparison-projects] conflict-resolution save failed'
+  })
+
+  expect(response.status).toBe(400)
+  expect(failureLog).toBeDefined()
+  expect(failureLog?.[1]).toMatchObject({
+    articleCategory: null,
+    articleId: 'article-1',
+    comparisonProjectId: 'comparison-project-1',
+    error: {message: 'Conflict resolution is not enabled for this comparison project', name: 'Error'},
+    hasConflict: null,
+    phase: 'target-validation',
+    requestedValue: 'yes',
+  })
+  expect(failureLog?.[1]).toHaveProperty('durationMs')
+  expect(failureLog?.[1]).toHaveProperty('memory.rssBytes')
 })
 
 test('comparison conflict resolution reset is rejected when conflict resolution is disabled', async () => {

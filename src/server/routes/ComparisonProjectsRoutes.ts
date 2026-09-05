@@ -214,6 +214,7 @@ type ComparisonProjectConflictResolution = {
   reviewerUserId: string | null
   value: string
 }
+type ComparisonProjectConflictResolutionTargetRow = {articleCategory: string | null; hasConflict: boolean}
 type ComparisonProjectConflictResolutionExportQueryRow = Omit<
   ComparisonProjectConflictResolutionTransferSourceRow,
   'resolutionLabel' | 'resolutionMode' | 'resolutionValue'
@@ -3831,14 +3832,33 @@ const getComparisonProjectRowsWithConflictResolutions = async (
   })
 }
 
-const getComparisonProjectConflictResolutionTargetRow = async (scope: ComparisonProjectScope, articleId: string) => {
+const getConflictResolutionSaveMemorySnapshot = () => {
+  const memory = process.memoryUsage()
+
+  return {externalBytes: memory.external, heapUsedBytes: memory.heapUsed, rssBytes: memory.rss}
+}
+
+const getConflictResolutionSaveErrorDiagnostic = (error: unknown) => {
+  if (error instanceof Error) {
+    return {message: error.message, name: error.name}
+  }
+
+  return {message: String(error), name: typeof error}
+}
+
+const getComparisonProjectConflictResolutionTargetRow = async (
+  scope: ComparisonProjectScope,
+  articleId: string,
+): Promise<ComparisonProjectConflictResolutionTargetRow> => {
   if (!scope.allowConflictResolution) {
     throw new HttpError(400, 'Conflict resolution is not enabled for this comparison project')
   }
 
   if (scope.activeGeneration !== null) {
-    const [servingRow] = await appDatabaseService.queryJson<{hasConflict: boolean}>(`
-      SELECT has_conflict AS hasConflict
+    const [servingRow] = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionTargetRow>(`
+      SELECT
+        article_category AS articleCategory,
+        has_conflict AS hasConflict
       FROM mart.comparison_article_serving
       WHERE comparison_project_id = ${getSqlLiteral(scope.id)}
         AND generation = ${getSqlLiteral(scope.activeGeneration)}
@@ -3859,7 +3879,7 @@ const getComparisonProjectConflictResolutionTargetRow = async (scope: Comparison
     throw new HttpError(400, 'Conflict resolution is only available for conflicting articles')
   }
 
-  return row
+  return {articleCategory: null, hasConflict: row.hasConflict}
 }
 
 const getValidatedComparisonProjectConflictResolutionOption = (scope: ComparisonProjectScope, value: string) => {
@@ -3882,47 +3902,89 @@ const setComparisonProjectConflictResolution = async (params: {
   value: string
   scope: ComparisonProjectScope
 }) => {
-  await getComparisonProjectConflictResolutionTargetRow(params.scope, params.articleId)
-  const option = getValidatedComparisonProjectConflictResolutionOption(params.scope, params.value)
-  const isSummaryMode = getIsSummaryMode(params.scope)
-  const reviewer = await getUserConfigQueryService().getOrCreateUserConfig()
-  const [resolutionRow] = await appDatabaseService.queryJson<{
-    articleId: string
-    reviewerDisplayName: string | null
-    reviewerUserId: string | null
-  }>(`
-    INSERT INTO ${comparisonProjectConflictResolutionTable} (
-      id,
-      comparison_project_id,
-      article_id,
-      prompt_id,
-      answer_value,
-      reviewer_user_id
-    )
-    VALUES (
-      ${getSqlLiteral(crypto.randomUUID())},
-      ${getSqlLiteral(params.scope.id)},
-      ${getSqlLiteral(params.articleId)},
-      ${getSqlLiteral(isSummaryMode ? null : option.value)},
-      ${getSqlLiteral(isSummaryMode ? option.value : null)},
-      ${getSqlLiteral(reviewer.id)}
-    )
-    ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET
-      prompt_id = excluded.prompt_id,
-      answer_value = excluded.answer_value,
-      reviewer_user_id = excluded.reviewer_user_id,
-      updated_at = now()
-    RETURNING
-      article_id AS articleId,
-      reviewer_user_id AS reviewerUserId,
-      ${getSqlLiteral(reviewer.name)} AS reviewerDisplayName
-  `)
-
-  if (!resolutionRow) {
-    throw new Error('Failed to save conflict resolution')
+  const startedAt = Date.now()
+  const baseDiagnostic = {
+    activeGeneration: params.scope.activeGeneration,
+    articleId: params.articleId,
+    comparisonProjectId: params.scope.id,
+    isSummaryMode: getIsSummaryMode(params.scope),
+    requestedValue: params.value,
   }
+  let phase = 'target-validation'
+  let targetRow: ComparisonProjectConflictResolutionTargetRow | null = null
 
-  return {...resolutionRow, label: option.label, value: option.value}
+  console.info('[comparison-projects] conflict-resolution save started', {
+    ...baseDiagnostic,
+    memory: getConflictResolutionSaveMemorySnapshot(),
+  })
+
+  try {
+    targetRow = await getComparisonProjectConflictResolutionTargetRow(params.scope, params.articleId)
+    phase = 'option-validation'
+    const option = getValidatedComparisonProjectConflictResolutionOption(params.scope, params.value)
+    const isSummaryMode = getIsSummaryMode(params.scope)
+    phase = 'reviewer-load'
+    const reviewer = await getUserConfigQueryService().getOrCreateUserConfig()
+    phase = 'resolution-upsert'
+    const [resolutionRow] = await appDatabaseService.queryJson<{
+      articleId: string
+      reviewerDisplayName: string | null
+      reviewerUserId: string | null
+    }>(`
+      INSERT INTO ${comparisonProjectConflictResolutionTable} (
+        id,
+        comparison_project_id,
+        article_id,
+        prompt_id,
+        answer_value,
+        reviewer_user_id
+      )
+      VALUES (
+        ${getSqlLiteral(crypto.randomUUID())},
+        ${getSqlLiteral(params.scope.id)},
+        ${getSqlLiteral(params.articleId)},
+        ${getSqlLiteral(isSummaryMode ? null : option.value)},
+        ${getSqlLiteral(isSummaryMode ? option.value : null)},
+        ${getSqlLiteral(reviewer.id)}
+      )
+      ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET
+        prompt_id = excluded.prompt_id,
+        answer_value = excluded.answer_value,
+        reviewer_user_id = excluded.reviewer_user_id,
+        updated_at = now()
+      RETURNING
+        article_id AS articleId,
+        reviewer_user_id AS reviewerUserId,
+        ${getSqlLiteral(reviewer.name)} AS reviewerDisplayName
+    `)
+
+    if (!resolutionRow) {
+      throw new Error('Failed to save conflict resolution')
+    }
+
+    console.info('[comparison-projects] conflict-resolution save completed', {
+      ...baseDiagnostic,
+      articleCategory: targetRow.articleCategory,
+      durationMs: Date.now() - startedAt,
+      hasConflict: targetRow.hasConflict,
+      memory: getConflictResolutionSaveMemorySnapshot(),
+      resolvedValue: option.value,
+      reviewerUserId: reviewer.id,
+    })
+
+    return {...resolutionRow, label: option.label, value: option.value}
+  } catch (error) {
+    console.error('[comparison-projects] conflict-resolution save failed', {
+      ...baseDiagnostic,
+      articleCategory: targetRow?.articleCategory ?? null,
+      durationMs: Date.now() - startedAt,
+      error: getConflictResolutionSaveErrorDiagnostic(error),
+      hasConflict: targetRow?.hasConflict ?? null,
+      memory: getConflictResolutionSaveMemorySnapshot(),
+      phase,
+    })
+    throw error
+  }
 }
 
 const resetComparisonProjectConflictResolution = async (params: {articleId: string; scope: ComparisonProjectScope}) => {
