@@ -152,6 +152,57 @@ test('queues one prompt ahead of the active slot and starts it when capacity fre
   await runtime.shutdown('test-complete')
 })
 
+test('ignores duplicate prompts already queued or active in a provider dispatch runtime', async () => {
+  const release = createSignal()
+  const started: string[] = []
+  const processPromptBatch = mock(async ({prompts}: {label: string; prompts: PromptToProcess[]}) => {
+    const [firstPrompt] = prompts
+
+    if (!firstPrompt) {
+      return
+    }
+
+    started.push(firstPrompt.recordId)
+    await release.promise
+  })
+  const runtime = createJudgmentDispatchRuntime({processPromptBatch})
+
+  const firstResult = await runtime.enqueueClaimedPrompts({
+    label: 'duplicate-dispatch',
+    prompts: [createPrompt({recordId: 'record-active'})],
+  })
+  const secondActiveResult = await runtime.enqueueClaimedPrompts({
+    label: 'duplicate-dispatch',
+    prompts: [createPrompt({recordId: 'record-second-active'})],
+  })
+  await flush()
+  const duplicateActiveResult = await runtime.enqueueClaimedPrompts({
+    label: 'duplicate-dispatch',
+    prompts: [createPrompt({claimId: 'claim-active-late', recordId: 'record-active'})],
+  })
+  const queuedResult = await runtime.enqueueClaimedPrompts({
+    label: 'duplicate-dispatch',
+    prompts: [createPrompt({recordId: 'record-queued'})],
+  })
+  const duplicateQueuedResult = await runtime.enqueueClaimedPrompts({
+    label: 'duplicate-dispatch',
+    prompts: [createPrompt({claimId: 'claim-queued-late', recordId: 'record-queued'})],
+  })
+
+  expect(firstResult).toEqual({acceptedCount: 1, rejectedPrompts: []})
+  expect(secondActiveResult).toEqual({acceptedCount: 1, rejectedPrompts: []})
+  expect(duplicateActiveResult).toEqual({acceptedCount: 1, rejectedPrompts: []})
+  expect(queuedResult).toEqual({acceptedCount: 1, rejectedPrompts: []})
+  expect(duplicateQueuedResult).toEqual({acceptedCount: 1, rejectedPrompts: []})
+  expect(started).toEqual(['record-active', 'record-second-active'])
+
+  release.resolve()
+  await flush()
+  expect(started).toEqual(['record-active', 'record-second-active', 'record-queued'])
+
+  await runtime.shutdown('test-complete')
+})
+
 test('applies lower provider caps without restart', async () => {
   const processPromptBatch = mock(async (_input: {label: string; prompts: PromptToProcess[]}) => {})
   const runtime = createJudgmentDispatchRuntime({processPromptBatch})
