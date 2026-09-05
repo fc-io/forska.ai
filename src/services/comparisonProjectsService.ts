@@ -633,10 +633,21 @@ const getResponseEnvelopeData = <TData, TEnvelope extends {data?: TData | null; 
   return {...result, data: result.data}
 }
 
-const getResponseJson = async (response: Response): Promise<unknown> => {
-  return response.json().catch(() => {
+const getResponsePayload = async (response: Response): Promise<unknown> => {
+  const body = await response.text().catch(() => {
+    return ''
+  })
+  const trimmedBody = body.trim()
+
+  if (trimmedBody.length === 0) {
     return null
-  }) as Promise<unknown>
+  }
+
+  try {
+    return JSON.parse(trimmedBody) as unknown
+  } catch {
+    return trimmedBody
+  }
 }
 
 const getHeaderFilename = (contentDisposition: string | null) => {
@@ -655,7 +666,7 @@ const readComparisonProjectConflictResolutionExportResponse = async (
   response: Response,
   errorMessage: string,
 ): Promise<ComparisonProjectConflictResolutionTransferArtifact> => {
-  const payload = await getResponseJson(response)
+  const payload = await getResponsePayload(response)
 
   return handleApiResponse<ComparisonProjectConflictResolutionTransferArtifact>(
     {
@@ -688,7 +699,7 @@ const readComparisonProjectConflictResolutionImportResponse = async <
   response: Response,
   errorMessage: string,
 ) => {
-  const payload = await getResponseJson(response)
+  const payload = await getResponsePayload(response)
 
   const result = handleApiResponse<{data?: T | null; error?: unknown}>(
     {
