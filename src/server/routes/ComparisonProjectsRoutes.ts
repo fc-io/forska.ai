@@ -40,7 +40,7 @@ import {
 } from '../services/comparisonProjectServingRebuildService.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {csvUtf8Bom, getCsvDownloadHeaders} from '../utils/csvResponse.ts'
-import {getMaintenanceDuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {type DuckdbWorkloadContext, getMaintenanceDuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {
   deriveStrictSummaryAnswer,
@@ -123,6 +123,11 @@ type PromptSelection = {
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
 type AppQueryRunner = Pick<AppTx, 'queryJson'>
+const comparisonProjectMetadataWorkloadContext: DuckdbWorkloadContext = {
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'comparisonProjects.detail.metadata',
+  workloadClass: 'foreground-metadata',
+}
 type ComparisonProjectConflictResolutionPdfUndecidedMode = 'clear' | 'ignore'
 type ComparisonProjectContentVariant = {
   key: string
@@ -991,8 +996,11 @@ const getComparisonProjectsList = async (archived: boolean) => {
   })
 }
 
-const getComparisonProjectResolutionCount = async (comparisonProjectId: string) => {
-  const [row] = await appDatabaseService.queryJson<{resolutionCount: unknown}>(`
+const getComparisonProjectResolutionCount = async (
+  comparisonProjectId: string,
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
+  const [row] = await queryRunner.queryJson<{resolutionCount: unknown}>(`
     SELECT COUNT(*) AS resolutionCount
     FROM ${comparisonProjectConflictResolutionTable}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
@@ -1129,12 +1137,15 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
     .filter(isDefined)
 }
 
-const getComparisonProjectSourceProjects = async (sourceProjectIds: string[]) => {
+const getComparisonProjectSourceProjects = async (
+  sourceProjectIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   if (sourceProjectIds.length === 0) {
     return []
   }
 
-  const sourceProjectRows = await appDatabaseService.queryJson<
+  const sourceProjectRows = await queryRunner.queryJson<
     Omit<ComparisonProjectLinkedSourceProject, 'humanJudgmentMode'> & {humanJudgmentMode: HumanJudgmentMode | null}
   >(`
     SELECT
@@ -1174,12 +1185,15 @@ const getSortedUniqueStringValues = (values: string[]) => {
   })
 }
 
-const getSummarySourceProject = async (summarySourceProjectId: string | null) => {
+const getSummarySourceProject = async (
+  summarySourceProjectId: string | null,
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   if (!summarySourceProjectId) {
     return null
   }
 
-  const [sourceProjectRow] = await appDatabaseService.queryJson<
+  const [sourceProjectRow] = await queryRunner.queryJson<
     Omit<ComparisonProjectSummarySourceProject, 'humanJudgmentMode'> & {humanJudgmentMode: HumanJudgmentMode | null}
   >(`
     SELECT
@@ -1204,12 +1218,15 @@ const getSummarySourceProject = async (summarySourceProjectId: string | null) =>
     : null
 }
 
-const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: string[]) => {
+const getComparisonProjectSourceSummaryPromptConfigs = async (
+  sourceProjectIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   if (sourceProjectIds.length === 0) {
     return []
   }
 
-  const rows = await appDatabaseService.queryJson<{
+  const rows = await queryRunner.queryJson<{
     sourceProjectId: string
     id: string
     originalText: string
@@ -2734,12 +2751,13 @@ const getInferredSourceProjectId = async (
   },
   promptConfigs: ComparisonProjectPromptConfig[],
   importRouteIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
 ) => {
   if (promptConfigs.length === 0) {
     return null
   }
 
-  const candidateProjects = await appDatabaseService.queryJson<{id: string; name: string}>(`
+  const candidateProjects = await queryRunner.queryJson<{id: string; name: string}>(`
     SELECT
       id,
       name
@@ -2757,19 +2775,17 @@ const getInferredSourceProjectId = async (
   const candidateProjectIds = candidateProjects.map((candidateProject) => {
     return candidateProject.id
   })
-  const [candidatePromptRows, candidateRouteRows] = await Promise.all([
-    appDatabaseService.queryJson<{projectId: string; promptId: string}>(`
+  const candidatePromptRows = await queryRunner.queryJson<{projectId: string; promptId: string}>(`
       SELECT project_id AS projectId, prompt_id AS promptId
       FROM ${projectPromptTable}
       WHERE project_id IN (${getInClause(candidateProjectIds)})
         AND enabled = TRUE
-    `),
-    appDatabaseService.queryJson<{projectId: string; importRouteId: string}>(`
+    `)
+  const candidateRouteRows = await queryRunner.queryJson<{projectId: string; importRouteId: string}>(`
       SELECT project_id AS projectId, import_route_id AS importRouteId
       FROM ${projectImportRouteTable}
       WHERE project_id IN (${getInClause(candidateProjectIds)})
-    `),
-  ])
+    `)
   const promptIdsByProjectId = candidatePromptRows.reduce<Map<string, string[]>>((rowMap, promptRow) => {
     const currentPromptIds = rowMap.get(promptRow.projectId) ?? []
     currentPromptIds.push(promptRow.promptId)
@@ -2834,11 +2850,12 @@ const getComparisonProjectModels = async (
   },
   promptIds: string[],
   importRouteIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
 ) => {
   const selectedModelIds = comparisonProjectRow.modelIds ?? []
 
   if (selectedModelIds.length > 0) {
-    const modelRows = await appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
+    const modelRows = await queryRunner.queryJson<ComparisonProjectModelConfig>(`
       SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson, pc.provider_kind AS provider, m.variant AS version
       FROM ${modelTable} m
       LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
@@ -2869,7 +2886,7 @@ const getComparisonProjectModels = async (
     comparisonProjectRow.sourceProjectIds,
     comparisonProjectRow.useImportRoutesForScope,
   )
-  return appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
+  return queryRunner.queryJson<ComparisonProjectModelConfig>(`
     SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson, pc.provider_kind AS provider, m.variant AS version
     FROM ${judgmentTable} j
     INNER JOIN ${modelTable} m ON m.id = j.model_id
@@ -2996,8 +3013,11 @@ const getComparisonProjectColumns = (
   return [...llmColumns, ...humanColumns]
 }
 
-const getComparisonProjectScope = async (comparisonProjectId: string): Promise<ComparisonProjectScope | null> => {
-  const [comparisonProjectRow] = await appDatabaseService.queryJson<{
+const getComparisonProjectScope = async (
+  comparisonProjectId: string,
+  queryRunner: AppQueryRunner = appDatabaseService,
+): Promise<ComparisonProjectScope | null> => {
+  const [comparisonProjectRow] = await queryRunner.queryJson<{
     id: string
     name: string
     description: string | null
@@ -3043,18 +3063,17 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
     humanJudgmentMode: comparisonProjectRow.humanJudgmentMode ?? 'prompt',
   }
-  const [promptRows, routeRows, sourceProjectLinkRows, servingStatus] = await Promise.all([
-    appDatabaseService.queryJson<{
-      id: string
-      originalText: string
-      promptHeading: string | null
-      transformedText: string | null
-      type: string | null
-      order: number | null
-      criteriaDisposition: ProjectPromptCriteriaDisposition | null
-      criteriaSectionKey: string | null
-      criteriaSectionLabel: string | null
-    }>(`
+  const promptRows = await queryRunner.queryJson<{
+    id: string
+    originalText: string
+    promptHeading: string | null
+    transformedText: string | null
+    type: string | null
+    order: number | null
+    criteriaDisposition: ProjectPromptCriteriaDisposition | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+  }>(`
       SELECT
         p.id AS id,
         p.original_text AS originalText,
@@ -3069,21 +3088,22 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       INNER JOIN ${promptTable} p ON p.id = cpp.prompt_id
       WHERE cpp.comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
       ORDER BY cpp.prompt_order ASC, p.created_at ASC
-    `),
-    appDatabaseService.queryJson<{importRouteId: string}>(`
+    `)
+  const routeRows = await queryRunner.queryJson<{importRouteId: string}>(`
       SELECT import_route_id AS importRouteId
       FROM ${comparisonProjectImportRouteTable}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
-    `),
-    appDatabaseService.queryJson<{sourceProjectId: string}>(`
+    `)
+  const sourceProjectLinkRows = await queryRunner.queryJson<{sourceProjectId: string}>(`
       SELECT source_project_id AS sourceProjectId
       FROM ${comparisonProjectSourceProjectTable}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
-    `),
-    normalizedComparisonProjectRow.archived
-      ? Promise.resolve(null)
-      : comparisonProjectServingRebuildService.getComparisonProjectServingStatus(comparisonProjectId),
-  ])
+    `)
+  const servingStatus = normalizedComparisonProjectRow.archived
+    ? null
+    : await comparisonProjectServingRebuildService.getComparisonProjectServingStatus(comparisonProjectId, {
+        database: queryRunner,
+      })
   const servingMetadata =
     servingStatus === null
       ? getArchivedComparisonProjectServingMetadata()
@@ -3115,7 +3135,12 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     linkedSourceProjectIds.length > 0
       ? null
       : (normalizedComparisonProjectRow.summarySourceProjectId
-        ?? (await getInferredSourceProjectId(normalizedComparisonProjectRow, promptConfigs, importRouteIds)))
+        ?? (await getInferredSourceProjectId(
+          normalizedComparisonProjectRow,
+          promptConfigs,
+          importRouteIds,
+          queryRunner,
+        )))
   const sourceProjectIds =
     linkedSourceProjectIds.length > 0
       ? linkedSourceProjectIds
@@ -3126,20 +3151,22 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const contentVariants = getComparisonProjectContentVariants(normalizedComparisonProjectRow)
   const useSourceProjectLlmColumns = getIsSummaryMode(normalizedComparisonProjectRow) && !useImportRoutesForScope
   const sourceProjectSummaryPrompts = getIsSummaryMode(normalizedComparisonProjectRow)
-    ? await getComparisonProjectSourceSummaryPromptConfigs(sourceProjectIds)
+    ? await getComparisonProjectSourceSummaryPromptConfigs(sourceProjectIds, queryRunner)
     : []
   const modelPromptConfigs = sourceProjectSummaryPrompts.length > 0 ? sourceProjectSummaryPrompts : promptConfigs
-  const [summarySourceProject, sourceProjects, modelRows] = await Promise.all([
-    getSummarySourceProject(normalizedComparisonProjectRow.summarySourceProjectId),
-    getComparisonProjectSourceProjects(sourceProjectIds),
-    getComparisonProjectModels(
-      {...normalizedComparisonProjectRow, sourceProjectIds, useImportRoutesForScope, contentVariants},
-      modelPromptConfigs.map((prompt) => {
-        return prompt.id
-      }),
-      importRouteIds,
-    ),
-  ])
+  const summarySourceProject = await getSummarySourceProject(
+    normalizedComparisonProjectRow.summarySourceProjectId,
+    queryRunner,
+  )
+  const sourceProjects = await getComparisonProjectSourceProjects(sourceProjectIds, queryRunner)
+  const modelRows = await getComparisonProjectModels(
+    {...normalizedComparisonProjectRow, sourceProjectIds, useImportRoutesForScope, contentVariants},
+    modelPromptConfigs.map((prompt) => {
+      return prompt.id
+    }),
+    importRouteIds,
+    queryRunner,
+  )
   const columns = getComparisonProjectColumns(
     promptConfigs,
     modelRows,
@@ -5568,16 +5595,29 @@ export const comparisonProjectsRoutes = new Elysia()
   })
   .get('/api/comparison-projects/:id', async (context) => {
     const {params, set} = context
-    const data = await getComparisonProjectScope(params.id)
+    const detail: {data: ComparisonProjectScope; resolutionCount: number} | null = await appDatabaseService.transaction(
+      async (tx) => {
+        const data = await getComparisonProjectScope(params.id, tx)
 
-    if (!data) {
+        if (!data) {
+          return null
+        }
+
+        const resolutionCount = await getComparisonProjectResolutionCount(params.id, tx)
+
+        return {data, resolutionCount}
+      },
+      comparisonProjectMetadataWorkloadContext,
+    )
+
+    if (!detail) {
       set.status = 404
       return {data: null, error: 'Comparison project not found'}
     }
 
-    queueUnavailableComparisonProjectServingRebuild(data)
+    const {data, resolutionCount} = detail
 
-    const resolutionCount = await getComparisonProjectResolutionCount(params.id)
+    queueUnavailableComparisonProjectServingRebuild(data)
 
     return {data: {...data, resolutionCount}}
   })

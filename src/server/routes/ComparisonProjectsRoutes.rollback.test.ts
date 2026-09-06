@@ -4274,6 +4274,7 @@ test('comparison project conflict resolution import commit writes safe rows and 
 
   expect(response.status).toBe(200)
   expect(body.data.summary).toEqual({
+    cleared: 0,
     deduped: 0,
     importable: 1,
     inserted: 1,
@@ -4388,6 +4389,7 @@ test('comparison project conflict resolution import commit can include non-confl
 
   expect(response.status).toBe(200)
   expect(body.data.summary).toEqual({
+    cleared: 0,
     deduped: 0,
     importable: 1,
     inserted: 1,
@@ -4500,6 +4502,7 @@ test('comparison project conflict resolution import commit skips rows that becam
   expect(analyzeResponse.status).toBe(200)
   expect(analyzeBody.data.summary.importable).toBe(1)
   expect(commitBody.data.summary).toEqual({
+    cleared: 0,
     deduped: 0,
     importable: 0,
     inserted: 0,
@@ -5451,9 +5454,11 @@ test('comparison project metadata exposes conflict resolution count', async () =
   const app = new Elysia().use(comparisonProjectsRoutes)
   const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
   const body = (await response.json()) as {data: {resolutionCount: number}}
+  const state = getMockDatabaseState()
 
   expect(response.status).toBe(200)
   expect(body.data.resolutionCount).toBe(2)
+  expect(state.transactionCalls).toBe(1)
 })
 
 test('comparison project metadata queues a rebuild when serving is missing', async () => {
@@ -5467,6 +5472,7 @@ test('comparison project metadata queues a rebuild when serving is missing', asy
   expect(response.status).toBe(200)
   expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1'])
   expect(state.staleServingIds).toEqual([])
+  expect(state.transactionCalls).toBe(1)
 })
 
 test('comparison project metadata queues a rebuild when serving is stale with a readable generation', async () => {
