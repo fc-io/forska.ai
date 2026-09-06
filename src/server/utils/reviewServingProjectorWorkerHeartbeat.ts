@@ -215,6 +215,12 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   return process.exit(0)
 }
 
+export const shouldRecycleDuckdbAfterReviewServingProjectorRun = (
+  result: Awaited<ReturnType<typeof runReviewServingProjectorWorker>> | undefined,
+) => {
+  return result?.reason === 'nativeHeavyChunkCompleted' || result?.reason === 'completedChunkLimit'
+}
+
 export const startReviewServingProjectorWorkerHeartbeat = (
   options: ReviewServingProjectorWorkerHeartbeatOptions = {},
 ) => {
@@ -321,14 +327,13 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       signal: loopController.signal,
     })
       .then(async (result) => {
-        if (result?.reason === 'nativeHeavyChunkCompleted') {
+        if (shouldRecycleDuckdbAfterReviewServingProjectorRun(result)) {
           await recycleDuckdbBeforeReviewServingProjectorRestart(options)
           scheduleRestart(restartDelayMs, true)
           return
         }
 
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
-          await recycleDuckdbBeforeReviewServingProjectorRestart(options)
           scheduleRestart(restartDelayMs, true)
         }
       })
