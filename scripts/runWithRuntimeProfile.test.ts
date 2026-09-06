@@ -213,6 +213,11 @@ test('dev server watcher explains busy stack restart timeouts without raw source
   expect(source).toContain('processLockMalformedStaleAfterMs')
   expect(source).toContain('nextFingerprint === watchedPathFingerprint')
   expect(source).toContain('filesystem notification left no source change; keeping server stack running')
+  expect(source).toContain('let restartInFlight: Promise<void> | null = null')
+  expect(source).toContain('let restartRequestedDuringInFlight = false')
+  expect(source).toContain('const runQueuedRestart = async () => {')
+  expect(source).toContain('if (restartInFlight !== null) {')
+  expect(source).toContain('restartRequestedDuringInFlight = true')
   expect(source).not.toContain('Timed out waiting for server stack pid=${currentLock.pid} to release lock')
 })
 

@@ -110,6 +110,8 @@ type RuntimeStateResponse = {data?: {pid?: number}}
 type ProcessInfo = {command: string; parentPid: number}
 
 let restartTimer: ReturnType<typeof setTimeout> | null = null
+let restartInFlight: Promise<void> | null = null
+let restartRequestedDuringInFlight = false
 let serverProcess: ServerProcess | null = null
 let shuttingDown = false
 let attachedToExistingStack = false
@@ -777,8 +779,54 @@ const stopServer = async () => {
   await waitForStackLockRelease()
 }
 
+const restartServerOnce = async () => {
+  const nextFingerprint = await getDevServerWatchFingerprint(watchedPaths)
+
+  if (nextFingerprint === watchedPathFingerprint) {
+    log('filesystem notification left no source change; keeping server stack running')
+    return
+  }
+
+  watchedPathFingerprint = nextFingerprint
+  log('change detected, restarting')
+  await stopServer()
+
+  if (shuttingDown) {
+    return
+  }
+
+  await startServer()
+}
+
+const runQueuedRestart = async () => {
+  while (!shuttingDown) {
+    restartRequestedDuringInFlight = false
+    await restartServerOnce()
+
+    if (!restartRequestedDuringInFlight) {
+      return
+    }
+  }
+}
+
+const startQueuedRestart = () => {
+  restartInFlight = runQueuedRestart()
+    .catch((error) => {
+      logDevServerFatalError(error)
+      process.exit(1)
+    })
+    .finally(() => {
+      restartInFlight = null
+    })
+}
+
 const restartServer = () => {
   if (shuttingDown) {
+    return
+  }
+
+  if (restartInFlight !== null) {
+    restartRequestedDuringInFlight = true
     return
   }
 
@@ -787,23 +835,14 @@ const restartServer = () => {
   }
 
   restartTimer = setTimeout(() => {
-    void (async () => {
-      restartTimer = null
-      const nextFingerprint = await getDevServerWatchFingerprint(watchedPaths)
+    restartTimer = null
 
-      if (nextFingerprint === watchedPathFingerprint) {
-        log('filesystem notification left no source change; keeping server stack running')
-        return
-      }
+    if (restartInFlight !== null) {
+      restartRequestedDuringInFlight = true
+      return
+    }
 
-      watchedPathFingerprint = nextFingerprint
-      log('change detected, restarting')
-      await stopServer()
-      await startServer()
-    })().catch((error) => {
-      logDevServerFatalError(error)
-      process.exit(1)
-    })
+    startQueuedRestart()
   }, restartDelayMs)
 }
 
