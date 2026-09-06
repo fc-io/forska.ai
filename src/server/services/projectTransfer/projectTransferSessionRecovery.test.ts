@@ -1,4 +1,4 @@
-import {mkdtempSync, rmSync} from 'node:fs'
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -171,9 +171,24 @@ test('project transfer recovery keeps initial stale-session scan narrow', async 
 
   expect(initialStaleScan).toContain('FROM app.project_transfer_session')
   expect(initialStaleScan).toContain('LIMIT 10')
+  expect(initialStaleScan).toContain('UNION ALL')
+  expect(initialStaleScan).toContain('recovery_candidates')
   expect(initialStaleScan).not.toContain('progress_json')
   expect(routeOrJobKeys).toContain('projectTransfer.recovery.scan')
   expect(routeOrJobKeys).not.toContain('projectTransfer.recovery')
+})
+
+test('project transfer recovery does not recycle low-memory runtime before finding stale sessions', () => {
+  const source = readFileSync(new URL('./projectTransferSessionRecovery.ts', import.meta.url), 'utf8')
+  const staleScanIndex = source.indexOf('const sessions = await getStaleProjectTransferSessions({')
+  const lowMemoryRecycleIndex = source.indexOf(
+    'const mutationRuntimeReadiness = await recycleProjectTransferRecoveryRuntimeForLowMemoryMutation()',
+  )
+
+  expect(staleScanIndex).toBeGreaterThan(0)
+  expect(lowMemoryRecycleIndex).toBeGreaterThan(staleScanIndex)
+  expect(source).not.toContain('project-transfer.recovery.recycle-low-memory-runtime')
+  expect(source).not.toContain('project-transfer.recovery.defer-low-memory-runtime')
 })
 
 test('project transfer recovery skips database work while exclusive import work is active', async () => {

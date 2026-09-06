@@ -262,6 +262,16 @@ const shouldRetryDuckdbOwnerProxyRequest = (requestTemplate: DuckdbOwnerProxyReq
   )
 }
 
+const shouldWaitForDuckdbOwnerProxyTarget = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return (
+    isRetryableDuckdbOwnerProxyMutation(requestTemplate)
+    || (requestTemplate.classification === 'owner-dependent'
+      && (requestTemplate.method === 'GET'
+        || requestTemplate.method === 'HEAD'
+        || requestTemplate.method === 'OPTIONS'))
+  )
+}
+
 const getDuckdbOwnerStreamingProxyRequest = (
   requestTemplate: DuckdbOwnerStreamingProxyRequestTemplate,
   duckdbOwnerUrl: string,
@@ -478,7 +488,7 @@ const fetchRetryableDuckdbOwnerProxyResponse = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   duckdbOwnerUrl: string,
 ) => {
-  if (isRetryableDuckdbOwnerProxyMutation(requestTemplate)) {
+  if (shouldWaitForDuckdbOwnerProxyTarget(requestTemplate)) {
     const target = await waitForDuckdbOwnerProxyTarget(requestTemplate, duckdbOwnerUrl)
 
     if ('response' in target) {
@@ -529,7 +539,7 @@ const getRetriedProxyResponse = async (
 
     try {
       const nextDuckdbOwnerUrl = (await getCurrentServerDuckdbOwnerUrl()) ?? currentDuckdbOwnerUrl
-      const target = isRetryableDuckdbOwnerProxyMutation(requestTemplate)
+      const target = shouldWaitForDuckdbOwnerProxyTarget(requestTemplate)
         ? await waitForDuckdbOwnerProxyTarget(requestTemplate, nextDuckdbOwnerUrl, deadlineMs)
         : {duckdbOwnerUrl: nextDuckdbOwnerUrl}
 
