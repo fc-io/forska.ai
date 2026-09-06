@@ -78,6 +78,15 @@ export type DuckdbQueueRuntimeMetrics = {
   background: DuckdbSingleQueueRuntimeMetrics
   main: DuckdbSingleQueueRuntimeMetrics
 }
+export type DuckdbServiceReadinessSnapshot = {
+  appendConnectionCount: number
+  appendLaneCount: number
+  backgroundConnectionOpen: boolean
+  controlConnectionOpen: boolean
+  instanceOpen: boolean
+  ready: boolean
+  startupActive: boolean
+}
 export type DuckdbActiveMainWorkRuntimeSnapshot = {
   allowsTempSpill: boolean | null
   durationMs: number
@@ -6341,30 +6350,16 @@ export const getDuckdbTempSpillMetricsSnapshot = (): DuckdbTempSpillMetrics => {
 
 export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBackgroundRuntimeDiagnostics> => {
   const configured = getDuckdbRuntimeConfig()
-  const [settingsRow] = await runDuckdbBackgroundJsonQuery<{
-    checkpointThreshold: string | null
-    memoryLimit: string | null
-    preserveInsertionOrder: boolean | null
-    tempDirectory: string | null
-    threads: string | null
-  }>(`
-    SELECT
-      current_setting('checkpoint_threshold') AS checkpointThreshold,
-      current_setting('memory_limit') AS memoryLimit,
-      current_setting('preserve_insertion_order') AS preserveInsertionOrder,
-      current_setting('threads') AS threads,
-      current_setting('temp_directory') AS tempDirectory
-  `)
 
   return {
     activeMainWork: getDuckdbActiveMainWorkRuntimeSnapshot(),
     configured,
     effective: {
-      checkpointThreshold: settingsRow?.checkpointThreshold ?? null,
-      memoryLimit: settingsRow?.memoryLimit ?? null,
-      preserveInsertionOrder: settingsRow?.preserveInsertionOrder ?? null,
-      tempDirectory: settingsRow?.tempDirectory ?? null,
-      threads: settingsRow?.threads ?? null,
+      checkpointThreshold: configured.checkpointThreshold,
+      memoryLimit: configured.memoryLimit,
+      preserveInsertionOrder: configured.preserveInsertionOrder,
+      tempDirectory: configured.tempDirectory,
+      threads: configured.threads,
     },
     instanceOptions: getDuckdbInstanceOptions(configured),
     queues: getDuckdbQueueRuntimeMetricsSnapshot(),
@@ -6414,6 +6409,30 @@ export const getDuckdbQueueRuntimeMetricsSnapshot = (): DuckdbQueueRuntimeMetric
       totalDurationMs: duckdbServiceState.duckdbTotalDurationMs,
       totalWaitMs: duckdbServiceState.duckdbTotalWaitMs,
     },
+  }
+}
+
+export const getDuckdbServiceReadinessSnapshot = (): DuckdbServiceReadinessSnapshot => {
+  const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
+  const startupActive = duckdbServiceState.startupPromise !== null
+  const instanceOpen = duckdbServiceState.duckdbInstance !== null
+  const controlConnectionOpen = duckdbServiceState.controlConnection !== null
+  const backgroundConnectionOpen = duckdbServiceState.backgroundConnection !== null
+  const appendConnectionCount = duckdbServiceState.appendConnections.length
+
+  return {
+    appendConnectionCount,
+    appendLaneCount,
+    backgroundConnectionOpen,
+    controlConnectionOpen,
+    instanceOpen,
+    ready:
+      !startupActive
+      && instanceOpen
+      && controlConnectionOpen
+      && backgroundConnectionOpen
+      && appendConnectionCount === appendLaneCount,
+    startupActive,
   }
 }
 

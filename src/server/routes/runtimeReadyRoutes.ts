@@ -1,6 +1,7 @@
 import {Elysia} from 'elysia'
 
 import {getActiveDuckdbExclusiveWorkSnapshot} from '../utils/duckdbExclusiveWork.ts'
+import {getDuckdbServiceReadinessSnapshot} from '../utils/duckdbService.ts'
 import {getRuntimeCutoverVersion, probeDuckdbOwnerRuntimeReadiness} from '../utils/runtimeCutover.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {getServerRoleCapabilities} from '../utils/serverRole.ts'
@@ -79,12 +80,22 @@ const getRuntimeReadyDuckdbOwnerUrl = () => {
   return getKnownDuckdbOwnerUrl() ?? getConfiguredDuckdbOwnerUrl()
 }
 
+const getLocalDuckdbOwnerReady = (role: ReturnType<typeof getCurrentServerRole>) => {
+  if (role !== 'maintenance-worker') {
+    return true
+  }
+
+  return getDuckdbServiceReadinessSnapshot().ready
+}
+
 export const runtimeReadyRoutes = new Elysia()
   .get(runtimeReadyPath, async () => {
     const role = getCurrentServerRole()
     const duckdbOwnerUrl = getRuntimeReadyDuckdbOwnerUrl()
     const ownerProxy = shouldCurrentServerProxyApiToOwner()
-    const ready = await getOwnerProxyReady(duckdbOwnerUrl, ownerProxy)
+    const ownerProxyReady = await getOwnerProxyReady(duckdbOwnerUrl, ownerProxy)
+    const localDuckdbOwnerReady = getLocalDuckdbOwnerReady(role)
+    const ready = ownerProxyReady && localDuckdbOwnerReady
 
     return {
       data: {
@@ -92,6 +103,7 @@ export const runtimeReadyRoutes = new Elysia()
         duckdbOwner: canCurrentServerOwnDuckdb(),
         duckdbOwnerUrl,
         duckdbExclusiveWork: {active: getActiveDuckdbExclusiveWorkSnapshot() !== null},
+        duckdbService: canCurrentServerOwnDuckdb() ? getDuckdbServiceReadinessSnapshot() : null,
         localOperatorApiExposed: isLocalOperatorApiExposed(),
         ownerProxy,
         ready,

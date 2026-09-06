@@ -214,43 +214,6 @@ const getLowMemoryProjectTransferRecoveryRssCapBytes = () => {
     : null
 }
 
-const prepareProjectTransferRecoveryRuntime = async () => {
-  const maxRssBytes = getLowMemoryProjectTransferRecoveryRssCapBytes()
-
-  if (maxRssBytes === null) {
-    return {ready: true as const}
-  }
-
-  const rssBytes = process.memoryUsage().rss
-
-  if (rssBytes < maxRssBytes) {
-    return {ready: true as const}
-  }
-
-  const queueState = getProjectTransferRecoveryQueueState()
-
-  if (hasActiveProjectTransferRecoveryQueueWork(queueState)) {
-    writeRuntimeLogEvent({
-      attrs: {maxRssBytes, rssBytes, ...queueState},
-      event: 'project-transfer.recovery.defer-low-memory-runtime',
-      message: '[project-transfer] deferred recovery while low-memory DuckDB owner is busy above RSS cap',
-      severity: 'INFO',
-    })
-    return {ready: false as const}
-  }
-
-  writeRuntimeLogEvent({
-    attrs: {maxRssBytes, rssBytes, ...queueState},
-    event: 'project-transfer.recovery.recycle-low-memory-runtime',
-    message: '[project-transfer] recycling DuckDB before recovery on low-memory owner above RSS cap',
-    severity: 'WARN',
-  })
-  await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
-  globalThis.Bun.gc(true)
-
-  return {ready: true as const}
-}
-
 const recycleProjectTransferRecoveryRuntimeForLowMemoryMutation = async () => {
   if (getLowMemoryProjectTransferRecoveryRssCapBytes() === null) {
     return {ready: true as const}
@@ -335,77 +298,140 @@ const getStaleProjectTransferSessions = async ({
 
   const candidates = await runner.queryJson<ProjectTransferRecoveryCandidate>(
     `
-    SELECT
-      direction,
-      id,
-      owner_token AS ownerToken,
-      CAST(plan_revision AS INTEGER) AS planRevision,
-      CASE
-        WHEN direction = 'import'
+    WITH
+      stale_export_worker AS (
+        SELECT
+          0 AS recoveryPriority,
+          direction,
+          id,
+          owner_token AS ownerToken,
+          CAST(plan_revision AS INTEGER) AS planRevision,
+          'expired_or_terminal' AS recoveryKind,
+          state,
+          COALESCE(heartbeat_at, expires_at) AS recoverySortAt,
+          updated_at AS recoveryUpdatedAt
+        FROM app.project_transfer_session
+        WHERE direction = 'export'
+          AND state IN ('assembling', 'packaging')
+          AND owner_token IS NOT NULL
+          AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleExportHeartbeatBefore)}
+        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        LIMIT ${batchSize}
+      ),
+      stale_import_upload AS (
+        SELECT
+          1 AS recoveryPriority,
+          direction,
+          id,
+          owner_token AS ownerToken,
+          CAST(plan_revision AS INTEGER) AS planRevision,
+          'stale_import_upload' AS recoveryKind,
+          state,
+          COALESCE(heartbeat_at, expires_at) AS recoverySortAt,
+          updated_at AS recoveryUpdatedAt
+        FROM app.project_transfer_session
+        WHERE direction = 'import'
           AND state = 'uploading'
           AND owner_token IS NOT NULL
           AND expires_at > ${getTimestampLiteral(now)}
           AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
-          THEN 'stale_import_upload'
-        WHEN direction = 'import'
+        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        LIMIT ${batchSize}
+      ),
+      stale_import_analysis AS (
+        SELECT
+          2 AS recoveryPriority,
+          direction,
+          id,
+          owner_token AS ownerToken,
+          CAST(plan_revision AS INTEGER) AS planRevision,
+          'stale_import_analysis' AS recoveryKind,
+          state,
+          COALESCE(heartbeat_at, expires_at) AS recoverySortAt,
+          updated_at AS recoveryUpdatedAt
+        FROM app.project_transfer_session
+        WHERE direction = 'import'
           AND state IN ('extracting', 'analyzing')
           AND expires_at > ${getTimestampLiteral(now)}
           AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
-          THEN 'stale_import_analysis'
-        WHEN direction = 'import'
+        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        LIMIT ${batchSize}
+      ),
+      stale_import_commit AS (
+        SELECT
+          3 AS recoveryPriority,
+          direction,
+          id,
+          owner_token AS ownerToken,
+          CAST(plan_revision AS INTEGER) AS planRevision,
+          'stale_import_commit' AS recoveryKind,
+          state,
+          COALESCE(heartbeat_at, expires_at) AS recoverySortAt,
+          updated_at AS recoveryUpdatedAt
+        FROM app.project_transfer_session
+        WHERE direction = 'import'
           AND state = 'committing'
           AND owner_token IS NOT NULL
           AND expires_at > ${getTimestampLiteral(now)}
           AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportCommitHeartbeatBefore)}
-          THEN 'stale_import_commit'
-        ELSE 'expired_or_terminal'
-      END AS recoveryKind,
-      state
-    FROM app.project_transfer_session
-    WHERE (
-        direction = 'import'
-        AND expires_at <= ${getTimestampLiteral(now)}
-        AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
-      )
-      OR (
-        direction = 'import'
-        AND state = 'uploading'
-        AND owner_token IS NOT NULL
-        AND expires_at > ${getTimestampLiteral(now)}
-        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
-      )
-      OR (
-        direction = 'import'
-        AND state IN ('extracting', 'analyzing')
-        AND expires_at > ${getTimestampLiteral(now)}
-        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
-      )
-      OR (
-        direction = 'import'
-        AND state = 'committing'
-        AND owner_token IS NOT NULL
-        AND expires_at > ${getTimestampLiteral(now)}
-        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportCommitHeartbeatBefore)}
-      )
-      OR (
-        direction = 'export'
-        AND (
-          (state = 'ready' AND expires_at <= ${getTimestampLiteral(now)})
-          OR (state = 'queued' AND owner_token IS NULL AND updated_at <= ${getTimestampLiteral(staleExportQueuedBefore)})
-          OR (
-            state IN ('assembling', 'packaging')
-            AND owner_token IS NOT NULL
-            AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleExportHeartbeatBefore)}
+        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        LIMIT ${batchSize}
+      ),
+      expired_import AS (
+        SELECT
+          4 AS recoveryPriority,
+          direction,
+          id,
+          owner_token AS ownerToken,
+          CAST(plan_revision AS INTEGER) AS planRevision,
+          'expired_or_terminal' AS recoveryKind,
+          state,
+          COALESCE(heartbeat_at, expires_at) AS recoverySortAt,
+          updated_at AS recoveryUpdatedAt
+        FROM app.project_transfer_session
+        WHERE direction = 'import'
+          AND expires_at <= ${getTimestampLiteral(now)}
+          AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
+        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        LIMIT ${batchSize}
+      ),
+      stale_export_session AS (
+        SELECT
+          5 AS recoveryPriority,
+          direction,
+          id,
+          owner_token AS ownerToken,
+          CAST(plan_revision AS INTEGER) AS planRevision,
+          'expired_or_terminal' AS recoveryKind,
+          state,
+          COALESCE(heartbeat_at, expires_at) AS recoverySortAt,
+          updated_at AS recoveryUpdatedAt
+        FROM app.project_transfer_session
+        WHERE direction = 'export'
+          AND (
+            (state = 'ready' AND expires_at <= ${getTimestampLiteral(now)})
+            OR (state = 'queued' AND owner_token IS NULL AND updated_at <= ${getTimestampLiteral(staleExportQueuedBefore)})
+            OR (state IN ('failed', 'expired') AND terminal_cleanup_at IS NULL)
           )
-          OR (state IN ('failed', 'expired') AND terminal_cleanup_at IS NULL)
-        )
+        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        LIMIT ${batchSize}
+      ),
+      recovery_candidates AS (
+        SELECT * FROM stale_export_worker
+        UNION ALL
+        SELECT * FROM stale_import_upload
+        UNION ALL
+        SELECT * FROM stale_import_analysis
+        UNION ALL
+        SELECT * FROM stale_import_commit
+        UNION ALL
+        SELECT * FROM expired_import
+        UNION ALL
+        SELECT * FROM stale_export_session
       )
-    ORDER BY
-      CASE WHEN state IN (${terminalStateListSql}) THEN 1 ELSE 0 END ASC,
-      CASE WHEN direction = 'export' AND state IN ('assembling', 'packaging') THEN 0 ELSE 1 END ASC,
-      COALESCE(heartbeat_at, expires_at) ASC,
-      updated_at ASC,
-      id ASC
+    SELECT direction, id, ownerToken, planRevision, recoveryKind, state
+    FROM recovery_candidates
+    ORDER BY recoveryPriority ASC, recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
     LIMIT ${batchSize}
   `,
     projectTransferRecoveryScanWorkloadContext,
@@ -1685,14 +1711,6 @@ const runProjectTransferSessionRecoveryAttempt = async (params: ProjectTransferS
 
   if (hasActiveDuckdbExclusiveWork()) {
     return emptyRecoveryResult(false)
-  }
-
-  if (params.runner === undefined) {
-    const runtimeReadiness = await prepareProjectTransferRecoveryRuntime()
-
-    if (!runtimeReadiness.ready) {
-      return emptyRecoveryResult(false)
-    }
   }
 
   const now = params.now ?? new Date()

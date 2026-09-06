@@ -12,6 +12,7 @@ type RuntimeReadyResponse = {
     duckdbOwner: boolean
     duckdbOwnerUrl: string | null
     duckdbExclusiveWork: {active: boolean}
+    duckdbService: null | {ready: boolean; startupActive: boolean}
     localOperatorApiExposed: boolean
     ready: boolean
     settingsDiagnosticsApiExposed: boolean
@@ -202,6 +203,19 @@ test('runtime diagnostics report active DuckDB exclusive work without making run
       await handle.release()
       resetDuckdbExclusiveWorkForTests()
     }
+  })
+})
+
+test('maintenance owner runtime readiness is false until DuckDB service is open', async () => {
+  await withLocalOperatorApiEnv(undefined, async () => {
+    process.env.SERVER_ROLE = 'maintenance-worker'
+    resetServerRuntimeRoleForTests()
+
+    const response = await getRuntimeReadyResponse()
+
+    expect(response.data.duckdbOwner).toBe(true)
+    expect(response.data.duckdbService).toMatchObject({ready: false, startupActive: false})
+    expect(response.data.ready).toBe(false)
   })
 })
 
