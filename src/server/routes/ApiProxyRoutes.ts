@@ -46,7 +46,8 @@ const duckdbOwnerProxyRetryDelayMs = 250
 const duckdbOwnerProxyRetryTimeoutMs = 4000
 const duckdbOwnerRetryableMutationReadinessTimeoutMs = 180000
 const duckdbOwnerDiagnosticProxyTimeoutMs = 3000
-const duckdbOwnerReadProxyTimeoutMs = 15000
+const duckdbOwnerReadProxyTimeoutMs = 60000
+const duckdbOwnerReadProxyRetryTimeoutMs = 15000
 const duckdbOwnerMutationProxyTimeoutMs = 60000
 const duckdbOwnerStreamingProxyTimeoutMs = 10 * 60 * 1000
 const duckdbOwnerProxyRetryableMethods = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'])
@@ -311,7 +312,7 @@ const getDuckdbOwnerProxyRetryTimeoutMs = (requestTemplate: DuckdbOwnerProxyRequ
   }
 
   return requestTemplate.method === 'GET' || requestTemplate.method === 'HEAD' || requestTemplate.method === 'OPTIONS'
-    ? Math.max(duckdbOwnerProxyRetryTimeoutMs, getDuckdbOwnerProxyTimeoutMs(requestTemplate))
+    ? duckdbOwnerReadProxyRetryTimeoutMs
     : duckdbOwnerProxyRetryTimeoutMs
 }
 

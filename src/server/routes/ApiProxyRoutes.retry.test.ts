@@ -254,7 +254,7 @@ test.serial(
     expect(elapsedMs).toBeGreaterThanOrEqual(4_000)
     expect(ownerFetchCallUrls.at(-1)).toBe('http://owner-1:34991/__duckdb-owner-rpc/api/projects')
   },
-  10_000,
+  15_000,
 )
 
 test.serial('api proxy waits for owner-dependent comparison GET readiness before forwarding', async () => {
@@ -315,6 +315,7 @@ test.serial('api proxy times out wedged DuckDB owner diagnostic GET requests', a
   expect(elapsedMs).toBeLessThan(4_000)
   expect(ownerFetchCallUrls).toEqual([
     'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/api/runtime/ready',
     'http://owner-1:34991/__duckdb-owner-rpc/api/llmstatus',
   ])
 })
@@ -341,9 +342,9 @@ test.serial('api proxy times out wedged owner-dependent GET requests', async () 
 
   expect(response.status).toBe(504)
   expect(body.data).toBe(null)
-  expect(body.error).toContain('DuckDB owner proxy target timed out after 15000 ms')
+  expect(body.error).toContain('DuckDB owner proxy target timed out after 60000 ms')
   expect(elapsedMs).toBeLessThan(1_000)
-  expect(timeoutMock).toHaveBeenCalledWith(15000)
+  expect(timeoutMock).toHaveBeenCalledWith(60000)
   expect(ownerFetchCallUrls).toEqual([
     'http://owner-1:34991/api/runtime/ready',
     'http://owner-1:34991/api/runtime/ready',
@@ -598,7 +599,7 @@ test.serial('api proxy falls back to stale active import progress when the DuckD
     data: {progress: {message: 'Finalizing import analysis artifacts'}, state: 'analyzing'},
     error: null,
   })
-  expect(timeoutMock).toHaveBeenCalledWith(15000)
+  expect(timeoutMock).toHaveBeenCalledWith(60000)
   expect(getOwnerFetchCallUrls(fetchMock.mock.calls)).toContain(
     'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/api-proxy-status-artifact-test',
   )
@@ -664,7 +665,10 @@ test.serial('api proxy does not retry non-idempotent POST requests after a trans
 
   expect(response.status).toBe(502)
   expect(body.error).toContain('DuckDB owner proxy target unavailable')
-  expect(ownerFetchCallUrls).toHaveLength(2)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/example',
+  ])
 })
 
 test.serial('api proxy waits for owner readiness before forwarding a non-idempotent PATCH once', async () => {
@@ -1099,7 +1103,10 @@ test.serial('api proxy streams project transfer uploads through the owner withou
   expect(uploadPullCount).toBeGreaterThan(0)
   expect(request.bodyUsed).toBe(true)
   expect(cloneMock).toHaveBeenCalledTimes(0)
-  expect(ownerFetchCallUrls).toHaveLength(2)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/session-1/upload?replace=true',
+  ])
 })
 
 test.serial('api proxy fails no-owner project transfer uploads before consuming the body', async () => {
@@ -1146,7 +1153,10 @@ test.serial('api proxy does not retry failed project transfer upload streams', a
   expect(body.error).toContain('DuckDB owner proxy target unavailable')
   expect(request.bodyUsed).toBe(false)
   expect(cloneMock).toHaveBeenCalledTimes(0)
-  expect(ownerFetchCallUrls).toHaveLength(2)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/import/session-1/upload?replace=true',
+  ])
 })
 
 test.serial('api proxy times out wedged project transfer upload streams without buffering', async () => {
@@ -1268,5 +1278,9 @@ test.serial('api proxy keeps project transfer export downloads streaming from th
   expect(await response.text()).toBe('download-body')
   expect(ownerResponse?.bodyUsed ?? false).toBe(true)
   expect(downloadPullCount).toBeGreaterThan(0)
-  expect(ownerFetchCallUrls).toHaveLength(2)
+  expect(ownerFetchCallUrls).toEqual([
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/api/runtime/ready',
+    'http://owner-1:34991/__duckdb-owner-rpc/api/projects/export/export-1/download',
+  ])
 })
