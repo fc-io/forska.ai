@@ -185,6 +185,15 @@ type DuckdbWorkloadDiagnosticContext = {
   queueDepthAtStart: number
 }
 type DuckdbActiveMainWorkRuntimeState = Omit<DuckdbActiveMainWorkRuntimeSnapshot, 'durationMs'> & {startedAtMs: number}
+type DuckdbMainWorkPriority = 'background' | 'foreground'
+type DuckdbQueuedMainWork<T = unknown> = {
+  diagnosticContext: DuckdbWorkloadDiagnosticContext | undefined
+  priority: DuckdbMainWorkPriority
+  queuedAtMs: number
+  reject: (error: unknown) => void
+  resolve: (value: T) => void
+  work: () => Promise<T>
+}
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
@@ -227,6 +236,8 @@ type DuckdbServiceState = {
   duckdbInstance: DuckDBInstance | null
   duckdbLastDurationMs: number | null
   duckdbLastWaitMs: number | null
+  duckdbMainQueueRunning: boolean
+  duckdbMainQueuedWork: DuckdbQueuedMainWork[]
   duckdbMaxQueueDepth: number
   duckdbPendingCount: number
   duckdbQueue: Promise<void>
@@ -2443,6 +2454,8 @@ const getDuckdbServiceState = () => {
     duckdbInstance: null,
     duckdbLastDurationMs: null,
     duckdbLastWaitMs: null,
+    duckdbMainQueueRunning: false,
+    duckdbMainQueuedWork: [],
     duckdbMaxQueueDepth: 0,
     duckdbPendingCount: 0,
     duckdbQueue: Promise.resolve(),
@@ -2464,6 +2477,8 @@ const getDuckdbServiceState = () => {
 const duckdbServiceState = getDuckdbServiceState()
 duckdbServiceState.controlTransactionIndexedMutationTarget ??= null
 duckdbServiceState.activeMainWork ??= null
+duckdbServiceState.duckdbMainQueueRunning ??= false
+duckdbServiceState.duckdbMainQueuedWork ??= []
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
@@ -5113,6 +5128,8 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.duckdbInstance = null
   duckdbServiceState.duckdbLastDurationMs = null
   duckdbServiceState.duckdbLastWaitMs = null
+  duckdbServiceState.duckdbMainQueueRunning = false
+  duckdbServiceState.duckdbMainQueuedWork = []
   duckdbServiceState.duckdbMaxQueueDepth = 0
   duckdbServiceState.duckdbPendingCount = 0
   duckdbServiceState.duckdbQueue = Promise.resolve()
@@ -5636,53 +5653,149 @@ const ensureStartedDuckdbProcess = async () => {
   return duckdbServiceState.startupPromise
 }
 
+const getNextDuckdbQueuedMainWorkIndex = () => {
+  const foregroundWorkIndex = duckdbServiceState.duckdbMainQueuedWork.findIndex((queuedWork) => {
+    return queuedWork.priority === 'foreground'
+  })
+
+  return foregroundWorkIndex === -1 ? 0 : foregroundWorkIndex
+}
+
+const runDuckdbQueuedMainWork = async <T>(queuedWork: DuckdbQueuedMainWork<T>): Promise<T> => {
+  const startedAtMs = Date.now()
+  const waitMs = startedAtMs - queuedWork.queuedAtMs
+  const activeMainWorkId = startDuckdbActiveMainWork({
+    diagnosticContext: queuedWork.diagnosticContext,
+    queuedAtMs: queuedWork.queuedAtMs,
+    queueWaitMs: waitMs,
+    startedAtMs,
+  })
+  const activeDiagnosticContext =
+    queuedWork.diagnosticContext === undefined ? undefined : {...queuedWork.diagnosticContext, activeMainWorkId}
+  duckdbServiceState.duckdbLastWaitMs = waitMs
+  duckdbServiceState.duckdbTasksStarted += 1
+  duckdbServiceState.duckdbTotalWaitMs += waitMs
+
+  try {
+    return await (activeDiagnosticContext === undefined
+      ? queuedWork.work()
+      : duckdbWorkloadDiagnosticStorage.run(activeDiagnosticContext, queuedWork.work))
+  } finally {
+    const durationMs = Date.now() - startedAtMs
+    duckdbServiceState.duckdbLastDurationMs = durationMs
+    duckdbServiceState.duckdbTasksCompleted += 1
+    duckdbServiceState.duckdbTotalDurationMs += durationMs
+    finishDuckdbActiveMainWork(activeMainWorkId)
+  }
+}
+
+const drainDuckdbMainQueue = async () => {
+  if (duckdbServiceState.duckdbMainQueueRunning) {
+    return
+  }
+
+  duckdbServiceState.duckdbMainQueueRunning = true
+
+  try {
+    while (duckdbServiceState.duckdbMainQueuedWork.length > 0) {
+      const queuedWorkIndex = getNextDuckdbQueuedMainWorkIndex()
+      const [queuedWork] = duckdbServiceState.duckdbMainQueuedWork.splice(queuedWorkIndex, 1)
+
+      if (queuedWork === undefined) {
+        continue
+      }
+
+      try {
+        const result = await runDuckdbQueuedMainWork(queuedWork)
+        queuedWork.resolve(result)
+      } catch (error) {
+        queuedWork.reject(error)
+      }
+    }
+  } finally {
+    duckdbServiceState.duckdbMainQueueRunning = false
+  }
+}
+
+const scheduleDuckdbMainQueueDrain = () => {
+  if (duckdbServiceState.duckdbMainQueueRunning) {
+    return
+  }
+
+  duckdbServiceState.duckdbQueue = drainDuckdbMainQueue()
+}
+
+const enqueueDuckdbMainQueueWork = async <T>(
+  work: () => Promise<T>,
+  priority: DuckdbMainWorkPriority,
+  queuedAtMs: number,
+): Promise<T> => {
+  const diagnosticContext = duckdbWorkloadDiagnosticStorage.getStore()
+  const queuedWork = new Promise<T>((resolve, reject) => {
+    duckdbServiceState.duckdbMainQueuedWork.push({diagnosticContext, priority, queuedAtMs, reject, resolve, work})
+  })
+
+  scheduleDuckdbMainQueueDrain()
+  return queuedWork
+}
+
 const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
   const queuedAtMs = Date.now()
-  const diagnosticContext = duckdbWorkloadDiagnosticStorage.getStore()
   duckdbServiceState.duckdbPendingCount += 1
   duckdbServiceState.duckdbMaxQueueDepth = Math.max(
     duckdbServiceState.duckdbMaxQueueDepth,
     duckdbServiceState.duckdbPendingCount,
   )
-  const runQueuedWork = async () => {
-    const startedAtMs = Date.now()
-    const waitMs = startedAtMs - queuedAtMs
-    const activeMainWorkId = startDuckdbActiveMainWork({
-      diagnosticContext,
-      queuedAtMs,
-      queueWaitMs: waitMs,
-      startedAtMs,
-    })
-    const activeDiagnosticContext =
-      diagnosticContext === undefined ? undefined : {...diagnosticContext, activeMainWorkId}
-    duckdbServiceState.duckdbLastWaitMs = waitMs
-    duckdbServiceState.duckdbTasksStarted += 1
-    duckdbServiceState.duckdbTotalWaitMs += waitMs
 
-    try {
-      return await (activeDiagnosticContext === undefined
-        ? work()
-        : duckdbWorkloadDiagnosticStorage.run(activeDiagnosticContext, work))
-    } finally {
-      const durationMs = Date.now() - startedAtMs
-      duckdbServiceState.duckdbLastDurationMs = durationMs
-      duckdbServiceState.duckdbTasksCompleted += 1
-      duckdbServiceState.duckdbTotalDurationMs += durationMs
-      finishDuckdbActiveMainWork(activeMainWorkId)
-    }
-  }
-  const queuedWork = duckdbServiceState.duckdbQueue.then(() => {
-    return diagnosticContext === undefined
-      ? runQueuedWork()
-      : duckdbWorkloadDiagnosticStorage.run(diagnosticContext, runQueuedWork)
-  })
-  duckdbServiceState.duckdbQueue = queuedWork.then(
+  const queuedWork = enqueueDuckdbMainQueueWork(work, 'foreground', queuedAtMs)
+  queuedWork.then(
     () => {
       duckdbServiceState.duckdbPendingCount = Math.max(0, duckdbServiceState.duckdbPendingCount - 1)
       return undefined
     },
     () => {
       duckdbServiceState.duckdbPendingCount = Math.max(0, duckdbServiceState.duckdbPendingCount - 1)
+      return undefined
+    },
+  )
+  return queuedWork
+}
+
+const enqueueDuckdbSerializedBackgroundWork = async <T>(work: () => Promise<T>): Promise<T> => {
+  const queuedAtMs = Date.now()
+  duckdbServiceState.backgroundPendingCount += 1
+  duckdbServiceState.backgroundMaxQueueDepth = Math.max(
+    duckdbServiceState.backgroundMaxQueueDepth,
+    duckdbServiceState.backgroundPendingCount,
+  )
+  const queuedWork = enqueueDuckdbMainQueueWork(
+    async () => {
+      const startedAtMs = Date.now()
+      const waitMs = startedAtMs - queuedAtMs
+      duckdbServiceState.backgroundLastWaitMs = waitMs
+      duckdbServiceState.backgroundTasksStarted += 1
+      duckdbServiceState.backgroundTotalWaitMs += waitMs
+
+      try {
+        return await work()
+      } finally {
+        const durationMs = Date.now() - startedAtMs
+        duckdbServiceState.backgroundLastDurationMs = durationMs
+        duckdbServiceState.backgroundTasksCompleted += 1
+        duckdbServiceState.backgroundTotalDurationMs += durationMs
+      }
+    },
+    'background',
+    queuedAtMs,
+  )
+
+  queuedWork.then(
+    () => {
+      duckdbServiceState.backgroundPendingCount = Math.max(0, duckdbServiceState.backgroundPendingCount - 1)
+      return undefined
+    },
+    () => {
+      duckdbServiceState.backgroundPendingCount = Math.max(0, duckdbServiceState.backgroundPendingCount - 1)
       return undefined
     },
   )
@@ -6836,7 +6949,7 @@ export const runDuckdbBackgroundJsonQuery = async <T>(
           return withNormalizedDuckdbError(() => {
             return waitForDuckdbAppendBarrier().then(() => {
               const enqueue = getDuckdbRuntimeConfigValue().serializeConcurrentWork
-                ? enqueueDuckdbWork
+                ? enqueueDuckdbSerializedBackgroundWork
                 : enqueueDuckdbBackgroundWork
 
               return enqueue(async () => {
@@ -6870,7 +6983,7 @@ export const runDuckdbBackgroundStatement = async (statement: string, workloadCo
           return withNormalizedDuckdbError(() => {
             return waitForDuckdbAppendBarrier().then(() => {
               const enqueue = getDuckdbRuntimeConfigValue().serializeConcurrentWork
-                ? enqueueDuckdbWork
+                ? enqueueDuckdbSerializedBackgroundWork
                 : enqueueDuckdbBackgroundWork
 
               return enqueue(async () => {

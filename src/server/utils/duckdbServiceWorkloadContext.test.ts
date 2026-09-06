@@ -198,6 +198,113 @@ test('duckdb workload context rejects over-budget query results and records metr
   }
 })
 
+test('serialized low-memory owner prioritizes queued foreground work over queued background work', async () => {
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+  const previousDuckdbPath = process.env.DUCKDB_PATH
+  const previousServerRole = process.env.SERVER_ROLE
+  let releaseFirstBackground = () => {}
+  const reads: string[] = []
+
+  const waitFor = async (predicate: () => boolean, remainingAttempts = 1000): Promise<boolean> => {
+    if (predicate()) {
+      return true
+    }
+
+    if (remainingAttempts <= 0) {
+      return false
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1)
+    })
+    return waitFor(predicate, remainingAttempts - 1)
+  }
+
+  void mock.module(serverRuntimeRoleModulePath, () => {
+    return getServerRuntimeRoleMock({canOwnDuckdb: true, currentRole: 'maintenance-worker', shouldProxyToOwner: false})
+  })
+
+  void mock.module('@duckdb/node-api', () => {
+    class MockConnection {
+      async run() {}
+
+      async runAndReadAll(statement: string) {
+        const label = statement.includes('background-first')
+          ? 'background-first'
+          : statement.includes('background-second')
+            ? 'background-second'
+            : 'foreground'
+
+        reads.push(label)
+
+        if (label === 'background-first') {
+          await new Promise<void>((resolve) => {
+            releaseFirstBackground = resolve
+          })
+        }
+
+        return {
+          getRowObjectsJson() {
+            return [{label}]
+          },
+        }
+      }
+
+      interrupt() {}
+
+      closeSync() {}
+    }
+
+    class MockInstance {
+      static async create() {
+        return new MockInstance()
+      }
+
+      async connect() {
+        return new MockConnection()
+      }
+
+      closeSync() {}
+    }
+
+    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+  })
+
+  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+  process.env.DUCKDB_PATH = ':memory:'
+  process.env.SERVER_ROLE = 'maintenance-worker'
+
+  try {
+    const duckdbService = await getImportedDuckdbService('serialized-foreground-priority')
+    const firstBackgroundPromise = duckdbService.runDuckdbBackgroundJsonQuery("SELECT 'background-first' AS label")
+    const firstBackgroundStarted = await waitFor(() => {
+      return reads.includes('background-first')
+    })
+    const secondBackgroundPromise = duckdbService.runDuckdbBackgroundJsonQuery("SELECT 'background-second' AS label")
+    const foregroundPromise = duckdbService.runDuckdbJsonQuery("SELECT 'foreground' AS label")
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10)
+    })
+    const queueDepthsWhileBlocked = duckdbService.getDuckdbQueueRuntimeMetricsSnapshot()
+
+    releaseFirstBackground()
+    await Promise.all([firstBackgroundPromise, secondBackgroundPromise, foregroundPromise])
+
+    expect(firstBackgroundStarted).toBe(true)
+    expect(queueDepthsWhileBlocked.main.queueDepth).toBe(1)
+    expect(queueDepthsWhileBlocked.background.queueDepth).toBe(2)
+    expect(reads).toEqual(['background-first', 'foreground', 'background-second'])
+    await duckdbService.closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+  } finally {
+    restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
+    restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
+    restoreEnvValue('SERVER_ROLE', previousServerRole)
+    mock.restore()
+  }
+})
+
 test('api-role foreground DuckDB work requires workload context before connection acquisition by default', async () => {
   const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
   const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
