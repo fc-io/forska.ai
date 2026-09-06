@@ -1003,10 +1003,10 @@ const rebuildNextUnavailableComparisonProjectServing = async (
 
 const getComparisonProjectServingStatus = async (
   comparisonProjectId: string,
-  overrides: Pick<ComparisonProjectServingRebuildDependencyOverrides, 'database'> = {},
+  overrides: {database?: Pick<ComparisonProjectServingRebuildDatabase, 'queryJson'>} = {},
 ) => {
-  const dependencies = getComparisonProjectServingRebuildDependencies(overrides)
-  const [row = null] = await dependencies.database.queryJson<ComparisonProjectServingStatusRecordRow>(`
+  const database = overrides.database ?? getComparisonProjectServingRebuildDependencies({}).database
+  const [row = null] = await database.queryJson<ComparisonProjectServingStatusRecordRow>(`
     SELECT
       CAST(active_generation AS INTEGER) AS activeGeneration,
       generation_updated_at AS generationUpdatedAt,
