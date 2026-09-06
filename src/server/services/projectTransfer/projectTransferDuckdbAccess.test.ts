@@ -63,6 +63,9 @@ test('project transfer exclusive DuckDB work stays scoped to heavy import phases
 
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.session'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery'")
+  expect(workloadSource).toContain(
+    "projectTransferRecoveryScanWorkloadContext = getProjectTransferWorkloadContext({\n  allowsTempSpill: true,\n  fallbackIntent: 'reject',\n  routeOrJobKey: 'projectTransfer.recovery.scan'",
+  )
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.scan'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.mutation'")
   expect(workloadSource).toContain("routeOrJobKey: 'projectTransfer.recovery.cleanup'")

@@ -36,6 +36,7 @@ export const projectTransferRecoveryWorkloadContext = getProjectTransferWorkload
 })
 
 export const projectTransferRecoveryScanWorkloadContext = getProjectTransferWorkloadContext({
+  allowsTempSpill: true,
   fallbackIntent: 'reject',
   routeOrJobKey: 'projectTransfer.recovery.scan',
 })
