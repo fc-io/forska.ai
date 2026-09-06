@@ -5,7 +5,10 @@ import {resolve} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
-import {getReviewServingProjectorWorkerHardRestartRssBytes} from './reviewServingProjectorWorkerHeartbeat.ts'
+import {
+  getReviewServingProjectorWorkerHardRestartRssBytes,
+  shouldRecycleDuckdbAfterReviewServingProjectorRun,
+} from './reviewServingProjectorWorkerHeartbeat.ts'
 
 const repoRoot = resolve(import.meta.dir, '../../..')
 
@@ -299,6 +302,13 @@ test('review serving projector worker hard RSS restart cap adds bounded restart 
   expect(getReviewServingProjectorWorkerHardRestartRssBytes(12 * gibibyte, 128 * gibibyte)).toBe(13 * gibibyte)
 })
 
+test('review serving projector worker heartbeat only recycles DuckDB after native-heavy projector work', () => {
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun(undefined)).toBe(false)
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({reason: 'aborted'})).toBe(false)
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({reason: 'completedChunkLimit'})).toBe(true)
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({reason: 'nativeHeavyChunkCompleted'})).toBe(true)
+})
+
 test('review serving projector worker heartbeat restarts bounded low-memory worker bursts without closing DuckDB', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -387,97 +397,6 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
   expect(runEvents.length).toBeGreaterThanOrEqual(2)
   expect(result.events).toContainEqual(['abort', 0])
   expect(result.events).not.toContainEqual(['recycle'])
-})
-
-test('review serving projector worker heartbeat recycles DuckDB before high-RSS bounded restart', () => {
-  const runScript = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {mock} = await import('bun:test')
-
-        const getModulePath = (relativePath) => {
-          return new URL(relativePath, 'file://' + process.cwd() + '/').href
-        }
-
-        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
-        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
-        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
-        const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
-        const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
-        const events = []
-
-        Object.defineProperty(process, 'memoryUsage', {
-          value: () => {
-            return {arrayBuffers: 0, external: 0, heapTotal: 0, heapUsed: 0, rss: 200}
-          },
-        })
-        globalThis.Bun.gc = () => {
-          events.push(['gc'])
-        }
-
-        void mock.module(runtimeRoleModulePath, () => {
-          return {
-            registerDuckdbOwnerDemotionHandler: () => {},
-            shouldCurrentServerRunMaintenanceLoops: () => true,
-          }
-        })
-        void mock.module(workerModulePath, () => {
-          return {
-            runReviewServingProjectorWorker: async (options) => {
-              events.push(['run'])
-              await new Promise((resolve) => {
-                options.signal.addEventListener('abort', resolve, {once: true})
-              })
-            },
-          }
-        })
-        void mock.module(duckdbServiceModulePath, () => {
-          return {
-            closeDuckdbService: async (options) => {
-              events.push(['recycle', options.checkpointBeforeClose, options.releaseOwnerLease])
-            },
-          }
-        })
-        void mock.module(projectTransferSessionRepositoryModulePath, () => {
-          return {
-            getProjectTransferSessionRepository: () => ({
-              hasActiveProjectTransferSessions: async () => false,
-            }),
-          }
-        })
-        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?rss-recycle=' + Date.now())
-        const stop = startReviewServingProjectorWorkerHeartbeat({
-          maxRunMs: 5,
-          pollIntervalMs: 1,
-          rebuildChunkBatchMaxRssBytes: 100,
-          restartDelayMs: 50,
-        })
-
-        await new Promise((resolve) => {
-          setTimeout(resolve, 20)
-        })
-        stop()
-
-        console.log(JSON.stringify({events}))
-      `,
-    ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB'}},
-  )
-
-  if (runScript.exitCode !== 0) {
-    throw new Error(
-      runScript.stderr.toString()
-        || runScript.stdout.toString()
-        || 'Review serving projector worker heartbeat high RSS recycle test failed',
-    )
-  }
-
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<boolean | string>>}
-
-  expect(result.events).toContainEqual(['recycle', false, false])
-  expect(result.events).toContainEqual(['gc'])
 })
 
 test('review serving projector worker heartbeat skips high-RSS recycle while foreground DuckDB work is active', () => {
