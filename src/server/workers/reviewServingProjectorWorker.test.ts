@@ -709,7 +709,7 @@ test('worker finalizes prepared fallback rebuild requests after completed writes
     statements.push(statement)
 
     if (statement.includes('COUNT(*) AS pendingChunkCount')) {
-      return [{pendingChunkCount: 0}] as T[]
+      return [{pendingChunkCount: 1}] as T[]
     }
 
     return [] as T[]
@@ -1648,7 +1648,7 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
   expect(joined).toContain('payloadBatchWriter')
 })
 
-test('worker writes compatible search rebuild chunks through one range batch writer', async () => {
+test('worker claims one search rebuild range at a time so foreground reads can run between chunks', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
   const firstChunkInput = {
@@ -1674,6 +1674,7 @@ test('worker writes compatible search rebuild chunks through one range batch wri
       ...input,
       chunkId: `chunk-search-batch-${index + 1}`,
       parentChunkId: 'chunk-search-parent',
+      requestId: 'request-search-batch',
       splitDepth: 1,
     } satisfies ReviewServingRebuildChunkManifest
   })
@@ -1704,6 +1705,10 @@ test('worker writes compatible search rebuild chunks through one range batch wri
 
   harness.database.queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
       const chunkId = [...chunksById.keys()].find((id) => {
@@ -1763,16 +1768,12 @@ test('worker writes compatible search rebuild chunks through one range batch wri
   )
   const joined = statements.join('\n')
 
-  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-batch-9', status: 'completed'})
-  expect(result.chunkBatchCount).toBe(9)
-  expect(harness.claimInputs).toHaveLength(9)
-  expect(harness.runChunkInputs).toEqual([])
-  expect(joined).toContain("scope.article_id >= 'article-001'")
-  expect(joined).toContain("scope.article_id <= 'article-008'")
-  expect(joined).toContain("scope.article_id >= 'article-065'")
-  expect(joined).toContain("scope.article_id <= 'article-072'")
-  expect(joined).toContain('CROSS JOIN unnest(regexp_split_to_array')
-  expect(joined).toContain('searchBatchWriter')
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-batch-1'})
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toEqual([firstChunk])
+  expect(joined).not.toContain("scope.article_id >= 'article-065'")
+  expect(joined).not.toContain("scope.article_id <= 'article-072'")
+  expect(joined).not.toContain('searchBatchWriter')
 })
 
 test('worker writes compatible queue rebuild chunks through one batch writer', async () => {
