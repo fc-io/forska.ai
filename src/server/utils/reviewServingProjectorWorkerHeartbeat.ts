@@ -6,6 +6,7 @@ import {getActiveDuckdbExclusiveWorkSnapshot, hasActiveDuckdbExclusiveWork} from
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
+import {pauseReviewServingProjector} from './reviewServingProjectorPause.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
@@ -207,10 +208,12 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
     return
   }
 
+  const pauseMarker = pauseReviewServingProjector({reason: 'high-rss-after-duckdb-recycle'})
+
   reviewServingProjectorWorkerWarningLogger.warn(
     'review-serving-projector.heartbeat-high-rss-process-restart',
     '[reviewServingProjectorWorker] restarting maintenance worker after DuckDB recycle left RSS above restart cap',
-    {hardRestartRssBytes, maxRssBytes, rssBytesAfterRecycle},
+    {hardRestartRssBytes, maxRssBytes, pauseMarker, rssBytesAfterRecycle},
   )
   return process.exit(0)
 }

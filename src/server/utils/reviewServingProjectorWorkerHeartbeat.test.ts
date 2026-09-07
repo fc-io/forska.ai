@@ -993,6 +993,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const pauseModulePath = getModulePath('./src/server/utils/reviewServingProjectorPause.ts')
         const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
         const events = []
 
@@ -1022,6 +1023,14 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
             getProjectTransferSessionRepository: () => ({
               hasActiveProjectTransferSessions: async () => false,
             }),
+          }
+        })
+        void mock.module(pauseModulePath, () => {
+          return {
+            pauseReviewServingProjector: (input) => {
+              events.push(['pauseProjector', input.reason])
+              return {markerPath: '/tmp/review-serving-projector-paused', paused: true}
+            },
           }
         })
 
@@ -1076,6 +1085,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
     ['closeDuckdb', false, false],
     ['gc', true],
     ['memoryUsage'],
+    ['pauseProjector', 'high-rss-after-duckdb-recycle'],
     ['exit', 0],
   ])
 })
@@ -1096,6 +1106,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
         const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const pauseModulePath = getModulePath('./src/server/utils/reviewServingProjectorPause.ts')
         const projectTransferSessionRepositoryModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
         const events = []
 
@@ -1125,6 +1136,14 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
             getProjectTransferSessionRepository: () => ({
               hasActiveProjectTransferSessions: async () => false,
             }),
+          }
+        })
+        void mock.module(pauseModulePath, () => {
+          return {
+            pauseReviewServingProjector: (input) => {
+              events.push(['pauseProjector', input.reason])
+              return {markerPath: '/tmp/review-serving-projector-paused', paused: true}
+            },
           }
         })
 
@@ -1179,6 +1198,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
     ['closeDuckdb', false, false],
     ['gc', true],
     ['memoryUsage'],
+    ['pauseProjector', 'high-rss-after-duckdb-recycle'],
     ['exit', 0],
   ])
 })
