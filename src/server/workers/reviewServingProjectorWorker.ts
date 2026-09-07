@@ -136,6 +136,7 @@ type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupIn
 
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
 type ReviewServingProjectorWorkerMemoryUsage = {rss: number}
+type ReviewServingProjectorWorkerRssDiagnostics = {rssAfterBytes: number; rssBeforeBytes: number; rssDeltaBytes: number}
 
 type ClaimedReviewServingProjectorWorkerRebuildChunk = {
   chunk: ReviewServingRebuildChunkManifest
@@ -243,6 +244,24 @@ const getNonNegativeElapsedMs = (startedAtMs: number) => {
 
 const getProjectorResultDiagnosticsJson = (result: object) => {
   return (result as {diagnosticsJson?: unknown}).diagnosticsJson ?? {}
+}
+
+const getRebuildChunkBatchWriterFanoutDiagnostics = (input: {
+  batchRangeCount: number
+  chunk: ReviewServingRebuildChunkManifest
+  snapshotIds: readonly string[]
+}) => {
+  const estimatedInputRows = Math.max(0, input.chunk.estimatedInputRows ?? 0)
+  const estimatedOutputRows = Math.max(0, input.chunk.estimatedOutputRows ?? 0)
+
+  return {
+    estimatedInputRows,
+    estimatedOutputRows,
+    estimatedOutputRowsPerInputRow:
+      estimatedInputRows > 0 ? Math.round((estimatedOutputRows / estimatedInputRows) * 100) / 100 : null,
+    rangeCount: input.batchRangeCount,
+    snapshotCount: input.snapshotIds.length,
+  }
 }
 
 const isReviewServingRetentionCleanupEnabled = () => {
@@ -2237,6 +2256,7 @@ const canRunSummaryRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChu
 const completeSummaryRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteRss: ReviewServingProjectorWorkerRssDiagnostics
     batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
@@ -2249,7 +2269,8 @@ const completeSummaryRebuildChunkAfterBatchWrite = async (
       ...input.chunk,
       diagnosticsJson: {
         phaseTimings: {batchWriteMs: input.batchWriteMs},
-        summaryBatchWriter: {rangeCount: input.batchRangeCount},
+        phaseRss: {batchWrite: input.batchWriteRss},
+        summaryBatchWriter: getRebuildChunkBatchWriterFanoutDiagnostics(input),
       },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
@@ -2292,6 +2313,7 @@ const runSummaryRebuildChunkBatch = async (
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
   const batchWriteStartedAtMs = Date.now()
+  const batchWriteRssBeforeBytes = getCurrentReviewServingProjectorWorkerRssBytes()
 
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
@@ -2328,11 +2350,19 @@ const runSummaryRebuildChunkBatch = async (
     }, Promise.resolve())
   })
   const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
+  const batchWriteRss = getReviewServingProjectorWorkerRssDiagnostics(batchWriteRssBeforeBytes)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeSummaryRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {
+        batchRangeCount: input.chunks.length,
+        batchWriteMs,
+        batchWriteRss,
+        chunk,
+        leaseOwner: input.leaseOwner,
+        snapshotIds,
+      },
       database,
     )
   }, Promise.resolve())
@@ -3644,6 +3674,7 @@ const canRunSearchRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChun
 const completeSearchRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteRss: ReviewServingProjectorWorkerRssDiagnostics
     batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
@@ -3656,7 +3687,8 @@ const completeSearchRebuildChunkAfterBatchWrite = async (
       ...input.chunk,
       diagnosticsJson: {
         phaseTimings: {batchWriteMs: input.batchWriteMs},
-        searchBatchWriter: {rangeCount: input.batchRangeCount},
+        phaseRss: {batchWrite: input.batchWriteRss},
+        searchBatchWriter: getRebuildChunkBatchWriterFanoutDiagnostics(input),
       },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
@@ -3702,6 +3734,7 @@ const runSearchRebuildChunkBatch = async (
   })
 
   const batchWriteStartedAtMs = Date.now()
+  const batchWriteRssBeforeBytes = getCurrentReviewServingProjectorWorkerRssBytes()
   await snapshots.reduce<Promise<void>>(async (previousSnapshot, snapshot) => {
     await previousSnapshot
     await database.transaction(async (tx) => {
@@ -3730,11 +3763,19 @@ const runSearchRebuildChunkBatch = async (
     })
   }, Promise.resolve())
   const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
+  const batchWriteRss = getReviewServingProjectorWorkerRssDiagnostics(batchWriteRssBeforeBytes)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeSearchRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {
+        batchRangeCount: input.chunks.length,
+        batchWriteMs,
+        batchWriteRss,
+        chunk,
+        leaseOwner: input.leaseOwner,
+        snapshotIds,
+      },
       database,
     )
   }, Promise.resolve())
@@ -4263,6 +4304,7 @@ const canRunPostingRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChu
 const completePostingRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteRss: ReviewServingProjectorWorkerRssDiagnostics
     batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
@@ -4275,7 +4317,8 @@ const completePostingRebuildChunkAfterBatchWrite = async (
       ...input.chunk,
       diagnosticsJson: {
         phaseTimings: {batchWriteMs: input.batchWriteMs},
-        postingBatchWriter: {rangeCount: input.batchRangeCount},
+        phaseRss: {batchWrite: input.batchWriteRss},
+        postingBatchWriter: getRebuildChunkBatchWriterFanoutDiagnostics(input),
       },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
@@ -4320,6 +4363,7 @@ const runPostingRebuildChunkBatch = async (
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
   const batchWriteStartedAtMs = Date.now()
+  const batchWriteRssBeforeBytes = getCurrentReviewServingProjectorWorkerRssBytes()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -4355,11 +4399,19 @@ const runPostingRebuildChunkBatch = async (
     }, Promise.resolve())
   })
   const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
+  const batchWriteRss = getReviewServingProjectorWorkerRssDiagnostics(batchWriteRssBeforeBytes)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completePostingRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {
+        batchRangeCount: input.chunks.length,
+        batchWriteMs,
+        batchWriteRss,
+        chunk,
+        leaseOwner: input.leaseOwner,
+        snapshotIds,
+      },
       database,
     )
   }, Promise.resolve())
@@ -6576,12 +6628,14 @@ const measureReviewServingProjectorWorkerPhase = async <T>(
   operation: () => Promise<T>,
 ) => {
   const startedAtMs = Date.now()
+  const rssBeforeBytes = getCurrentReviewServingProjectorWorkerRssBytes()
 
   try {
     return await operation()
   } finally {
     if (timings !== undefined) {
       timings[phase] = Math.max(0, Date.now() - startedAtMs)
+      recordReviewServingProjectorWorkerPhaseRssDiagnostics(timings, phase, rssBeforeBytes)
     }
   }
 }
@@ -6635,6 +6689,34 @@ const getRoundedMs = (value: number) => {
   return Math.round(Math.max(0, value))
 }
 
+const getCurrentReviewServingProjectorWorkerRssBytes = () => {
+  return Math.max(0, process.memoryUsage().rss)
+}
+
+const getReviewServingProjectorWorkerRssDiagnostics = (
+  rssBeforeBytes: number,
+): ReviewServingProjectorWorkerRssDiagnostics => {
+  const rssAfterBytes = getCurrentReviewServingProjectorWorkerRssBytes()
+
+  return {rssAfterBytes, rssBeforeBytes, rssDeltaBytes: rssAfterBytes - rssBeforeBytes}
+}
+
+const recordReviewServingProjectorWorkerPhaseRssDiagnostics = (
+  timings: Record<string, number>,
+  phase: string,
+  rssBeforeBytes: number,
+) => {
+  const rss = getReviewServingProjectorWorkerRssDiagnostics(rssBeforeBytes)
+
+  timings[`${phase}.rssBeforeBytes`] = rss.rssBeforeBytes
+  timings[`${phase}.rssAfterBytes`] = rss.rssAfterBytes
+  timings[`${phase}.rssDeltaBytes`] = rss.rssDeltaBytes
+}
+
+const isReviewServingProjectorWorkerRssTimingMetric = (phase: string) => {
+  return phase.endsWith('.rssBeforeBytes') || phase.endsWith('.rssAfterBytes') || phase.endsWith('.rssDeltaBytes')
+}
+
 const getTimingsTotalMs = (timings: Record<string, number>) => {
   return Object.entries(timings).reduce((sum, [phase, value]) => {
     if (phase.includes('.')) {
@@ -6653,6 +6735,10 @@ const getMergedTimingTotals = (
   const nextTarget = {...target}
 
   for (const [phase, value] of Object.entries(timings)) {
+    if (isReviewServingProjectorWorkerRssTimingMetric(phase)) {
+      continue
+    }
+
     nextTarget[phase] = merge(nextTarget[phase] ?? 0, Math.max(0, value))
   }
 
@@ -6664,6 +6750,10 @@ const summarizeReviewServingProjectorWorkerTimingBucket = (
 ): ReviewServingProjectorWorkerTimingSummary => {
   const count = Math.max(1, bucket.count)
   const phaseAvgMs = Object.entries(bucket.phaseTotalMs).reduce<Record<string, number>>((summary, [phase, totalMs]) => {
+    if (isReviewServingProjectorWorkerRssTimingMetric(phase)) {
+      return summary
+    }
+
     summary[phase] = getRoundedMs(totalMs / count)
 
     return summary
@@ -6679,9 +6769,13 @@ const summarizeReviewServingProjectorWorkerTimingBucket = (
     minTotalMs: getRoundedMs(bucket.minTotalMs),
     phaseAvgMs,
     phaseMaxMs: Object.fromEntries(
-      Object.entries(bucket.phaseMaxMs).map(([phase, value]) => {
-        return [phase, getRoundedMs(value)]
-      }),
+      Object.entries(bucket.phaseMaxMs)
+        .filter(([phase]) => {
+          return !isReviewServingProjectorWorkerRssTimingMetric(phase)
+        })
+        .map(([phase, value]) => {
+          return [phase, getRoundedMs(value)]
+        }),
     ),
     projectId: bucket.projectId,
     requestId: bucket.requestId,
