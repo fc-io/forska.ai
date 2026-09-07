@@ -3,9 +3,9 @@ import {rmSync, writeFileSync} from 'node:fs'
 import {afterEach, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-import {reviewServingStatusRoutes} from './reviewServingStatusRoutes.ts'
 import {getReviewServingProjectorPauseMarkerPath} from '../utils/reviewServingProjectorPause.ts'
 import {runtimeReviewServingStatusPath} from '../utils/runtimeReadyContract.ts'
+import {reviewServingStatusRoutes} from './reviewServingStatusRoutes.ts'
 
 const markerPath = getReviewServingProjectorPauseMarkerPath('/tmp/forska-review-serving-status-test.duckdb')
 const originalDuckdbPath = process.env.DUCKDB_PATH

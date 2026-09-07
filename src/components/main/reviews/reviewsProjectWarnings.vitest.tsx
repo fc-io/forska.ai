@@ -109,12 +109,18 @@ beforeEach(() => {
   mockState.statusData = null
 })
 
+afterEach(() => {
+  document.body.innerHTML = ''
+})
+
 test('renders ownerless recovery status when the detailed warning request is unavailable', async () => {
   mockState.statusData = {pauseMarker: {exists: true}}
   const {ReviewsProjectWarnings} = await import('./reviewsProjectWarnings.tsx')
   const container = document.createElement('div')
   document.body.appendChild(container)
-  const dispose = render(() => <ReviewsProjectWarnings projectId="project-1" />, container)
+  const dispose = render(() => {
+    return <ReviewsProjectWarnings projectId="project-1" />
+  }, container)
 
   try {
     expect(container.textContent).toContain('Review indexing recovering after memory pressure')
@@ -122,10 +128,6 @@ test('renders ownerless recovery status when the detailed warning request is una
   } finally {
     dispose()
   }
-})
-
-afterEach(() => {
-  document.body.innerHTML = ''
 })
 
 test('renders queued review indexing without active progress copy', async () => {
