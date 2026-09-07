@@ -1776,6 +1776,99 @@ test('worker claims one search rebuild range at a time so foreground reads can r
   expect(joined).not.toContain('searchBatchWriter')
 })
 
+test('worker splits 512-row foreground search rebuild ranges before writer execution', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const searchChunkInput = {
+    ...chunkInput,
+    estimatedInputRows: 512,
+    estimatedOutputRows: 512,
+    projectionComponent: 'search' as const,
+    projectionIdentity: 'search:project-1',
+    requestId: 'request-search-512',
+  }
+  const searchChunk = {
+    ...chunkManifest,
+    ...searchChunkInput,
+    chunkId: 'chunk-search-512',
+    splitDepth: 1,
+  } satisfies ReviewServingRebuildChunkManifest
+  const splitRanges = Array.from({length: 8}, (_, index) => {
+    const start = index * 8 + 1
+    const end = start + 7
+
+    return {
+      articleCount: 64,
+      chunkEndKey: `article-${end.toString().padStart(3, '0')}`,
+      chunkStartKey: `article-${start.toString().padStart(3, '0')}`,
+    }
+  })
+  let prepared = false
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return searchChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return searchChunkInput
+    },
+    heartbeatChunk: async () => {
+      return searchChunk
+    },
+    prepareClaimedChunk: async () => {
+      prepared = true
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM mart.project_scope_article scope')) {
+      return splitRanges as T[]
+    }
+
+    if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+      return [{chunkId: searchChunk.chunkId}] as T[]
+    }
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: splitRanges.length}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 64, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result.chunk).toMatchObject({chunkId: searchChunk.chunkId, status: 'completed'})
+  expect(prepared).toBe(false)
+  expect(harness.runChunkInputs).toEqual([])
+  expect(joined).toContain('NTILE(8) OVER (ORDER BY scope.article_id)')
+  expect(childInserts).toHaveLength(splitRanges.length)
+  expect(joined).toContain('"splitReason":"admitted_oversized"')
+  expect(joined).not.toContain('INSERT INTO mart.review_title_search_serving_v4')
+  expect(joined).not.toContain('searchBatchWriter')
+})
+
 test('worker writes compatible queue rebuild chunks through one batch writer', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
@@ -2527,8 +2620,8 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       ...chunkInput,
       chunkEndKey: batchCase.endKeys[0],
       chunkStartKey: batchCase.startKeys[0],
-      estimatedInputRows: 512,
-      estimatedOutputRows: 512,
+      estimatedInputRows: batchCase.component === 'search' ? 64 : 512,
+      estimatedOutputRows: batchCase.component === 'search' ? 64 : 512,
       projectionComponent: batchCase.component,
       projectionIdentity: batchCase.identity,
       requestId: 'rebuild:foreground-status',

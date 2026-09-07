@@ -418,18 +418,9 @@ test('wake requests V4 rebuild and releases claims when a snapshot is not ready 
   expect(failedClaimIds).toEqual([])
 })
 
-test('wake routes broad search dirty work through chunked rebuilds instead of direct projection', async () => {
+test('wake routes search dirty work through chunked rebuilds instead of direct projection', async () => {
   const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
-    search: [
-      {
-        ...getClaim({component: 'search', dirtyWorkId: 'search-project-1'}),
-        articleId: null,
-        dirtyKind: 'project.reviewConfig.updated',
-        scopeId: 'project-1',
-        scopeKind: 'project',
-        sourcePartition: 'projectReviewConfig:project-1',
-      },
-    ],
+    search: [getClaim({component: 'search', dirtyWorkId: 'search-article-1'})],
   })
   const rebuildRequests: Array<{
     components: readonly ReviewServingProjectionComponent[] | undefined
@@ -468,9 +459,9 @@ test('wake routes broad search dirty work through chunked rebuilds instead of di
   ])
   expect(runnerCalled).toBe(false)
   expect(rebuildRequests).toEqual([
-    {components: ['search'], priority: 5_000, projectId: 'project-1', reason: 'broadSearchDirtyWork'},
+    {components: ['search'], priority: 5_000, projectId: 'project-1', reason: 'searchDirtyWork'},
   ])
-  expect(completedClaimIds).toEqual(['search-project-1'])
+  expect(completedClaimIds).toEqual(['search-article-1'])
   expect(failedClaimIds).toEqual([])
   expect(releasedClaimIds).toEqual([])
 })
