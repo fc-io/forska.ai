@@ -19,6 +19,7 @@ import {
 export type ReviewServingSummaryProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ReviewServingSummarySnapshotReductionInput = {
+  onFinalizationPhaseComplete?: (phase: ReviewServingSummaryFinalizationPhase) => Promise<void> | void
   requestId: string
   snapshots: readonly {
     hasSummaryRebuildChunks?: boolean
@@ -26,6 +27,32 @@ export type ReviewServingSummarySnapshotReductionInput = {
     reviewConfigHash: string | null
     snapshotId: string
   }[]
+}
+
+export type ReviewServingSummaryFinalizationPhase =
+  | 'accumulatorChunkBatch'
+  | 'accumulatorReduction'
+  | 'countPublication'
+  | 'facetPublication'
+  | 'snapshot'
+
+export type ReviewServingSummarySnapshotReductionDiagnostics = {
+  accumulatorChunkBatchCount: number
+  accumulatorPartialCount: number
+  chunkCount: number
+  countPublicationRowCount: number
+  facetPublicationRowCount: number
+  maxAccumulatorChunkBatchSize: number
+  phaseTimings: Record<string, number>
+  projectId: string
+  reviewConfigHash: string
+  skipped: boolean
+  snapshotId: string
+}
+
+export type ReviewServingSummaryReductionDiagnostics = {
+  requestId: string
+  snapshots: ReviewServingSummarySnapshotReductionDiagnostics[]
 }
 
 export type ProjectReviewServingSummariesInput = {
@@ -92,6 +119,34 @@ const getClaimSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[])
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
+}
+
+const defaultSummaryFinalizationSchedulerYield = async () => {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
+const measureSummaryFinalizationPhase = async <T>(
+  phaseTimings: Record<string, number>,
+  phase: string,
+  operation: () => Promise<T>,
+) => {
+  const startedAtMs = Date.now()
+  const result = await operation()
+  phaseTimings[phase] = (phaseTimings[phase] ?? 0) + getNonNegativeElapsedMs(startedAtMs)
+
+  return result
+}
+
+const yieldSummaryFinalizationPhase = async (input: {
+  onFinalizationPhaseComplete?: (phase: ReviewServingSummaryFinalizationPhase) => Promise<void> | void
+  phase: ReviewServingSummaryFinalizationPhase
+  phaseTimings: Record<string, number>
+}) => {
+  await measureSummaryFinalizationPhase(input.phaseTimings, `${input.phase}YieldMs`, async () => {
+    await (input.onFinalizationPhaseComplete ?? defaultSummaryFinalizationSchedulerYield)(input.phase)
+  })
 }
 
 const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -1022,212 +1077,345 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
 const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
   input: {
     chunkIds: readonly string[]
+    onFinalizationPhaseComplete?: (phase: ReviewServingSummaryFinalizationPhase) => Promise<void> | void
+    phaseTimings: Record<string, number>
     projectId: string
     requestId: string
     reviewConfigHash: string
     snapshotId: string
   },
   database: ReviewServingSummaryProjectorDatabase,
-): Promise<void> => {
+): Promise<number> => {
+  let batchCount = 0
+
   for (let offset = 0; offset < input.chunkIds.length; offset += summaryRebuildPartialReductionBatchSize) {
     const chunkIds = getNextSummaryRebuildPartialReductionChunkIds(input, offset)
     if (chunkIds.length > 0) {
       await reduceSummaryRebuildPartialChunkBatchIntoAccumulator({...input, chunkIds}, database)
+      batchCount += 1
+      await yieldSummaryFinalizationPhase({
+        onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
+        phase: 'accumulatorChunkBatch',
+        phaseTimings: input.phaseTimings,
+      })
     }
   }
+
+  return batchCount
+}
+
+const getSummaryTemporaryRowCount = async (
+  table: 'temp_summary_rebuild_count_publication' | 'temp_summary_rebuild_facet_publication',
+  database: Pick<ReviewServingSummaryProjectorDatabase, 'queryJson'>,
+) => {
+  const rows = await database.queryJson<{rowCount: number}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+    FROM ${table}
+  `)
+
+  return Number(rows[0]?.rowCount ?? 0)
+}
+
+const publishSummaryRebuildCountPartials = async (
+  input: {
+    phaseTimings: Record<string, number>
+    projectId: string
+    requestId: string
+    reviewConfigHash: string
+    snapshotId: string
+  },
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  return measureSummaryFinalizationPhase(input.phaseTimings, 'countPublicationMs', async () => {
+    return database.transaction(async (tx) => {
+      const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'accumulator'})
+      await tx.run(`
+        DROP TABLE IF EXISTS temp_summary_rebuild_count_publication
+      `)
+      await tx.run(`
+        CREATE TEMPORARY TABLE temp_summary_rebuild_count_publication AS
+        SELECT
+          accumulator.project_id,
+          accumulator.review_config_hash,
+          accumulator.snapshot_id,
+          ANY_VALUE(summary_identity) AS summary_identity,
+          COALESCE(list_mode_key, 'global') AS list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
+          ANY_VALUE(availability) AS availability,
+          ANY_VALUE(stale_reason) AS stale_reason
+        FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator
+        WHERE ${scopePredicate}
+          AND ${getCompletedSummaryRebuildAccumulatorExistsPredicate('accumulator')}
+          AND summary_kind = 'count'
+        GROUP BY accumulator.project_id, accumulator.review_config_hash, accumulator.snapshot_id, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
+      `)
+      const rowCount = await getSummaryTemporaryRowCount('temp_summary_rebuild_count_publication', tx)
+      await tx.run(`
+        DELETE FROM mart.review_article_count_serving_v4 serving
+        USING temp_summary_rebuild_count_publication replacement
+        WHERE serving.project_id = replacement.project_id
+          AND serving.review_config_hash = replacement.review_config_hash
+          AND serving.snapshot_id = replacement.snapshot_id
+          AND serving.list_mode_key = replacement.list_mode_key
+          AND serving.count_kind = replacement.count_kind
+          AND serving.summary_definition_version = replacement.summary_definition_version
+          AND serving.filter_key IS NOT DISTINCT FROM replacement.filter_key
+      `)
+      await tx.run(`
+        INSERT INTO mart.review_article_count_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value,
+          availability,
+          stale_reason
+        )
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value,
+          availability,
+          stale_reason
+        FROM temp_summary_rebuild_count_publication
+      `)
+      await tx.run(`
+        DROP TABLE IF EXISTS temp_summary_rebuild_count_publication
+      `)
+
+      return rowCount
+    })
+  })
+}
+
+const publishSummaryRebuildFacetPartials = async (
+  input: {
+    phaseTimings: Record<string, number>
+    projectId: string
+    requestId: string
+    reviewConfigHash: string
+    snapshotId: string
+  },
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  return measureSummaryFinalizationPhase(input.phaseTimings, 'facetPublicationMs', async () => {
+    return database.transaction(async (tx) => {
+      const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'accumulator'})
+      await tx.run(`
+        DROP TABLE IF EXISTS temp_summary_rebuild_facet_publication
+      `)
+      await tx.run(`
+        CREATE TEMPORARY TABLE temp_summary_rebuild_facet_publication AS
+        SELECT
+          accumulator.project_id,
+          accumulator.review_config_hash,
+          accumulator.snapshot_id,
+          summary_identity,
+          facet_kind,
+          facet_key,
+          facet_value,
+          ANY_VALUE(prompt_id) AS prompt_id,
+          ANY_VALUE(answer_id) AS answer_id,
+          ANY_VALUE(answer_value) AS answer_value,
+          summary_definition_version,
+          CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
+          ANY_VALUE(availability) AS availability
+        FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator
+        WHERE ${scopePredicate}
+          AND ${getCompletedSummaryRebuildAccumulatorExistsPredicate('accumulator')}
+          AND summary_kind = 'facet'
+        GROUP BY accumulator.project_id, accumulator.review_config_hash, accumulator.snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
+      `)
+      const rowCount = await getSummaryTemporaryRowCount('temp_summary_rebuild_facet_publication', tx)
+      await tx.run(`
+        DELETE FROM mart.review_filter_facet_serving_v4 serving
+        USING temp_summary_rebuild_facet_publication replacement
+        WHERE serving.project_id = replacement.project_id
+          AND serving.review_config_hash = replacement.review_config_hash
+          AND serving.snapshot_id = replacement.snapshot_id
+          AND serving.summary_identity = replacement.summary_identity
+          AND serving.facet_kind = replacement.facet_kind
+          AND serving.facet_key = replacement.facet_key
+          AND serving.facet_value = replacement.facet_value
+          AND serving.summary_definition_version = replacement.summary_definition_version
+      `)
+      await tx.run(`
+        INSERT INTO mart.review_filter_facet_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          facet_kind,
+          facet_key,
+          facet_value,
+          prompt_id,
+          answer_id,
+          answer_value,
+          summary_definition_version,
+          count_value,
+          availability
+        )
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          facet_kind,
+          facet_key,
+          facet_value,
+          prompt_id,
+          answer_id,
+          answer_value,
+          summary_definition_version,
+          count_value,
+          availability
+        FROM temp_summary_rebuild_facet_publication
+      `)
+      await tx.run(`
+        DROP TABLE IF EXISTS temp_summary_rebuild_facet_publication
+      `)
+
+      return rowCount
+    })
+  })
 }
 
 const reduceSummaryRebuildPartialsForRequestSnapshot = async (
   input: {
     hasSummaryRebuildChunks?: boolean
+    onFinalizationPhaseComplete?: (phase: ReviewServingSummaryFinalizationPhase) => Promise<void> | void
     projectId: string
     requestId: string
     reviewConfigHash: string
     snapshotId: string
   },
   database: ReviewServingSummaryProjectorDatabase,
-) => {
-  const {chunkIds} = await getSummaryRebuildPartialAccumulatorState(input, database)
-  const scopedInput = {...input, chunkIds}
+): Promise<ReviewServingSummarySnapshotReductionDiagnostics> => {
+  const phaseTimings: Record<string, number> = {}
+  const {chunkIds} = await measureSummaryFinalizationPhase(phaseTimings, 'readAccumulatorStateMs', async () => {
+    return getSummaryRebuildPartialAccumulatorState(input, database)
+  })
+  const scopedInput = {...input, chunkIds, phaseTimings}
 
-  await reduceSummaryRebuildPartialBatchesIntoAccumulator(scopedInput, database)
+  const accumulatorChunkBatchCount = await measureSummaryFinalizationPhase(
+    phaseTimings,
+    'accumulatorReductionMs',
+    async () => {
+      return reduceSummaryRebuildPartialBatchesIntoAccumulator(scopedInput, database)
+    },
+  )
+  await yieldSummaryFinalizationPhase({
+    onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
+    phase: 'accumulatorReduction',
+    phaseTimings,
+  })
 
-  const accumulatorPartialCount = await getSummaryRebuildAccumulatorPartialCount(scopedInput, database)
+  const accumulatorPartialCount = await measureSummaryFinalizationPhase(
+    phaseTimings,
+    'accumulatorPartialCountMs',
+    async () => {
+      return getSummaryRebuildAccumulatorPartialCount(scopedInput, database)
+    },
+  )
 
   if (accumulatorPartialCount === 0 && input.hasSummaryRebuildChunks !== true) {
-    return
+    return {
+      accumulatorChunkBatchCount,
+      accumulatorPartialCount,
+      chunkCount: chunkIds.length,
+      countPublicationRowCount: 0,
+      facetPublicationRowCount: 0,
+      maxAccumulatorChunkBatchSize: summaryRebuildPartialReductionBatchSize,
+      phaseTimings,
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      skipped: true,
+      snapshotId: input.snapshotId,
+    }
   }
 
-  await database.transaction(async (tx) => {
-    const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'accumulator'})
-    await tx.run(`
-      DROP TABLE IF EXISTS temp_summary_rebuild_count_publication
-    `)
-    await tx.run(`
-      CREATE TEMPORARY TABLE temp_summary_rebuild_count_publication AS
-      SELECT
-        accumulator.project_id,
-        accumulator.review_config_hash,
-        accumulator.snapshot_id,
-        ANY_VALUE(summary_identity) AS summary_identity,
-        COALESCE(list_mode_key, 'global') AS list_mode_key,
-        count_kind,
-        summary_definition_version,
-        filter_key,
-        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
-        ANY_VALUE(availability) AS availability,
-        ANY_VALUE(stale_reason) AS stale_reason
-      FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator
-      WHERE ${scopePredicate}
-        AND ${getCompletedSummaryRebuildAccumulatorExistsPredicate('accumulator')}
-        AND summary_kind = 'count'
-      GROUP BY accumulator.project_id, accumulator.review_config_hash, accumulator.snapshot_id, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_article_count_serving_v4 serving
-      USING temp_summary_rebuild_count_publication replacement
-      WHERE serving.project_id = replacement.project_id
-        AND serving.review_config_hash = replacement.review_config_hash
-        AND serving.snapshot_id = replacement.snapshot_id
-        AND serving.list_mode_key = replacement.list_mode_key
-        AND serving.count_kind = replacement.count_kind
-        AND serving.summary_definition_version = replacement.summary_definition_version
-        AND serving.filter_key IS NOT DISTINCT FROM replacement.filter_key
-    `)
-    await tx.run(`
-      INSERT INTO mart.review_article_count_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        list_mode_key,
-        count_kind,
-        summary_definition_version,
-        filter_key,
-        count_value,
-        availability,
-        stale_reason
-      )
-      SELECT
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        list_mode_key,
-        count_kind,
-        summary_definition_version,
-        filter_key,
-        count_value,
-        availability,
-        stale_reason
-      FROM temp_summary_rebuild_count_publication
-    `)
-    await tx.run(`
-      DROP TABLE IF EXISTS temp_summary_rebuild_facet_publication
-    `)
-    await tx.run(`
-      CREATE TEMPORARY TABLE temp_summary_rebuild_facet_publication AS
-      SELECT
-        accumulator.project_id,
-        accumulator.review_config_hash,
-        accumulator.snapshot_id,
-        summary_identity,
-        facet_kind,
-        facet_key,
-        facet_value,
-        ANY_VALUE(prompt_id) AS prompt_id,
-        ANY_VALUE(answer_id) AS answer_id,
-        ANY_VALUE(answer_value) AS answer_value,
-        summary_definition_version,
-        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
-        ANY_VALUE(availability) AS availability
-      FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator
-      WHERE ${scopePredicate}
-        AND ${getCompletedSummaryRebuildAccumulatorExistsPredicate('accumulator')}
-        AND summary_kind = 'facet'
-      GROUP BY accumulator.project_id, accumulator.review_config_hash, accumulator.snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_filter_facet_serving_v4 serving
-      USING temp_summary_rebuild_facet_publication replacement
-      WHERE serving.project_id = replacement.project_id
-        AND serving.review_config_hash = replacement.review_config_hash
-        AND serving.snapshot_id = replacement.snapshot_id
-        AND serving.summary_identity = replacement.summary_identity
-        AND serving.facet_kind = replacement.facet_kind
-        AND serving.facet_key = replacement.facet_key
-        AND serving.facet_value = replacement.facet_value
-        AND serving.summary_definition_version = replacement.summary_definition_version
-    `)
-    await tx.run(`
-      INSERT INTO mart.review_filter_facet_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        facet_kind,
-        facet_key,
-        facet_value,
-        prompt_id,
-        answer_id,
-        answer_value,
-        summary_definition_version,
-        count_value,
-        availability
-      )
-      SELECT
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        facet_kind,
-        facet_key,
-        facet_value,
-        prompt_id,
-        answer_id,
-        answer_value,
-        summary_definition_version,
-        count_value,
-        availability
-      FROM temp_summary_rebuild_facet_publication
-    `)
-    await tx.run(`
-      DROP TABLE IF EXISTS temp_summary_rebuild_count_publication
-    `)
-    await tx.run(`
-      DROP TABLE IF EXISTS temp_summary_rebuild_facet_publication
-    `)
+  const countPublicationRowCount = await publishSummaryRebuildCountPartials({...input, phaseTimings}, database)
+  await yieldSummaryFinalizationPhase({
+    onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
+    phase: 'countPublication',
+    phaseTimings,
   })
+  const facetPublicationRowCount = await publishSummaryRebuildFacetPartials({...input, phaseTimings}, database)
+  await yieldSummaryFinalizationPhase({
+    onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
+    phase: 'facetPublication',
+    phaseTimings,
+  })
+
+  return {
+    accumulatorChunkBatchCount,
+    accumulatorPartialCount,
+    chunkCount: chunkIds.length,
+    countPublicationRowCount,
+    facetPublicationRowCount,
+    maxAccumulatorChunkBatchSize: summaryRebuildPartialReductionBatchSize,
+    phaseTimings,
+    projectId: input.projectId,
+    reviewConfigHash: input.reviewConfigHash,
+    skipped: false,
+    snapshotId: input.snapshotId,
+  }
 }
 
 export const reduceReviewServingSummaryRebuildPartialsForRequestSnapshots = async (
   input: ReviewServingSummarySnapshotReductionInput,
   database: ReviewServingSummaryProjectorDatabase,
-) => {
-  await input.snapshots.reduce<Promise<void>>(async (previous, row) => {
-    await previous
+): Promise<ReviewServingSummaryReductionDiagnostics> => {
+  const snapshots = await input.snapshots.reduce<Promise<ReviewServingSummarySnapshotReductionDiagnostics[]>>(
+    async (previous, row) => {
+      const diagnostics = await previous
 
-    if (row.reviewConfigHash === null && row.hasSummaryRebuildChunks === true) {
-      throw new Error(
-        `cannot reduce summary rebuild partials without review config hash for snapshot ${row.snapshotId}`,
+      if (row.reviewConfigHash === null && row.hasSummaryRebuildChunks === true) {
+        throw new Error(
+          `cannot reduce summary rebuild partials without review config hash for snapshot ${row.snapshotId}`,
+        )
+      }
+
+      if (row.reviewConfigHash === null) {
+        return diagnostics
+      }
+
+      const snapshotDiagnostics = await reduceSummaryRebuildPartialsForRequestSnapshot(
+        {
+          hasSummaryRebuildChunks: row.hasSummaryRebuildChunks,
+          onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
+          projectId: row.projectId,
+          requestId: input.requestId,
+          reviewConfigHash: row.reviewConfigHash,
+          snapshotId: row.snapshotId,
+        },
+        database,
       )
-    }
+      await yieldSummaryFinalizationPhase({
+        onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
+        phase: 'snapshot',
+        phaseTimings: snapshotDiagnostics.phaseTimings,
+      })
 
-    if (row.reviewConfigHash === null) {
-      return
-    }
+      return [...diagnostics, snapshotDiagnostics]
+    },
+    Promise.resolve([]),
+  )
 
-    await reduceSummaryRebuildPartialsForRequestSnapshot(
-      {
-        hasSummaryRebuildChunks: row.hasSummaryRebuildChunks,
-        projectId: row.projectId,
-        requestId: input.requestId,
-        reviewConfigHash: row.reviewConfigHash,
-        snapshotId: row.snapshotId,
-      },
-      database,
-    )
-  }, Promise.resolve())
+  return {requestId: input.requestId, snapshots}
 }
 
 const projectDirectFullReviewServingSummaries = async (input: {
