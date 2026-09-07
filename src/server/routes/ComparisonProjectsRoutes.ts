@@ -4476,7 +4476,7 @@ const addComparisonProjectPdfConflictResolution = (
       [{text: 'Current resolution: '}, {font: 'bold', text: row.conflictResolution?.label ?? 'Not set'}],
       {fontSize: 10, gapAfter: 6},
     )
-    pdf.addText('Choose resolution', {fontSize: 10, gapAfter: 4})
+    pdf.addText(getIsSummaryMode(scope) ? 'Include this study?' : 'Choose resolution', {fontSize: 10, gapAfter: 4})
 
     pdf.addRadioRow(
       [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'resolution'].join('.'),
