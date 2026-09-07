@@ -93,7 +93,9 @@ const getReviewServingProjectorWorkerHeartbeatOptions = () => {
 
 const getReviewServingProjectorPauseRecoveryMaxRssBytes = () => {
   return (
-    env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
+    getReviewServingProjectorWorkerHeartbeatOptions().rebuildChunkBatchMaxRssBytes
+    ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
+    ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
   )
 }
 
