@@ -248,20 +248,15 @@ const isMissingSnapshotDiagnostic = (diagnostic: string) => {
   )
 }
 
-const isBroadSearchDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
-  return (
-    claim.projectionComponent === 'search'
-    && claim.scopeKind === 'project'
-    && claim.projectId !== null
-    && claim.articleId === null
-  )
+const isSearchDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
+  return claim.projectionComponent === 'search' && claim.projectId !== null
 }
 
-const getBroadSearchDirtyWorkProjectIds = (
+const getSearchDirtyWorkProjectIds = (
   component: ReviewServingProjectionComponent,
   claims: readonly ReviewServingDirtyWorkClaim[],
 ) => {
-  return component === 'search' && claims.some(isBroadSearchDirtyWorkClaim) ? getClaimProjectIds(claims) : []
+  return component === 'search' && claims.some(isSearchDirtyWorkClaim) ? getClaimProjectIds(claims) : []
 }
 
 const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServingSourcePartitionWatermarks => {
@@ -485,16 +480,16 @@ export const wakeReviewServingProjectorService = async (
         return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
       }
 
-      const broadSearchProjectIds = getBroadSearchDirtyWorkProjectIds(component, claims)
+      const searchDirtyWorkProjectIds = getSearchDirtyWorkProjectIds(component, claims)
 
-      if (broadSearchProjectIds.length > 0) {
+      if (searchDirtyWorkProjectIds.length > 0) {
         const rebuildResult = await Effect.runPromise(
           Effect.either(
             Effect.forEach(
-              broadSearchProjectIds,
+              searchDirtyWorkProjectIds,
               (projectId) => {
                 return requestRebuild(
-                  {components: ['search'], priority: 5_000, projectId, reason: 'broadSearchDirtyWork'},
+                  {components: ['search'], priority: 5_000, projectId, reason: 'searchDirtyWork'},
                   database,
                 )
               },

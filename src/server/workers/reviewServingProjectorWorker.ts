@@ -627,7 +627,8 @@ const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
 const highFanoutArticleRangeRebuildChunkPresplitRowLimit = 5_000
 const summaryArticleRangeRebuildChunkPresplitRowLimit = 512
 const statusArticleRangeRebuildChunkPresplitRowLimit = 512
-const searchArticleRangeRebuildRuntimeRowLimit = 512
+// Live evidence showed 512-row title-search ranges can hold DuckDB main writes for 20s+.
+const searchArticleRangeRebuildRuntimeRowLimit = 64
 const articleRangeRebuildChunkPresplitMaxBucketCount = 16
 const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
 const summaryArticleRangeRebuildChunkPresplitMaxBucketCount = 512
