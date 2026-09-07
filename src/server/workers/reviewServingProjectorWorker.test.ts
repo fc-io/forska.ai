@@ -3044,6 +3044,195 @@ test('worker limits opt-in rebuild chunk batches to one chunk when RSS cap is re
   expect(harness.runChunkInputs).toEqual([firstChunk])
 })
 
+test('worker limits native-heavy rebuild chunk batches to one chunk above the soft RSS cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'summary' as const,
+    projectionIdentity: 'summary:project-1',
+    requestId: 'rebuild-summary-soft-rss',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-summary-soft-rss-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-summary-soft-rss-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 900}
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async () => {
+      return firstChunk
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchMaxRssBytes: 1_000, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, projectionComponent: 'summary', status: 'completed'})
+  expect(result.chunkBatchCount).toBe(1)
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toEqual([firstChunk])
+})
+
+test('worker limits native-heavy rebuild chunk batches when RSS is rising quickly below the soft cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'posting' as const,
+    projectionIdentity: 'posting:project-1',
+    requestId: 'rebuild-posting-rising-rss',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-posting-rising-rss-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-posting-rising-rss-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 1_500_000_000}
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async () => {
+      return firstChunk
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {
+      previousRssBytes: 1_000_000_000,
+      rebuildChunkBatchMaxRssBytes: 2_000_000_000,
+      rebuildChunkBatchSize: 2,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, projectionComponent: 'posting', status: 'completed'})
+  expect(result.chunkBatchCount).toBe(1)
+  expect(harness.claimInputs).toHaveLength(1)
+})
+
+test('worker keeps low-risk rebuild chunk batches full above the native-heavy soft RSS cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-project-scope-soft-rss-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-project-scope-soft-rss-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 900}
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchMaxRssBytes: 1_000, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
+  expect(result.chunkBatchCount).toBe(2)
+  expect(harness.claimInputs).toHaveLength(2)
+})
+
+test('worker shrinks projector wake and delta intake row budgets above the soft RSS cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const deltaPartitionStatements: string[] = []
+
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 900}
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+    if (workloadContext) {
+      harness.workloadContexts.push(workloadContext)
+    }
+
+    if (statement.includes('FROM app.review_change_delta') || statement.includes('FROM app.import_run_article_delta')) {
+      deltaPartitionStatements.push(statement)
+    }
+
+    return [] as T[]
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {maxRowsPerWake: 100, rebuildChunkBatchMaxRssBytes: 1_000, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs[0]).toMatchObject({maxRowsPerWake: 25})
+  expect(deltaPartitionStatements.join('\n')).toContain('LIMIT 25')
+})
+
 test('worker returns a failed chunk from a rebuild chunk batch', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {
@@ -4190,6 +4379,68 @@ test('bounded worker drains request-associated native-heavy chunks up to the com
       maxCompletedRebuildChunksPerRun: 2,
       rebuildChunkBatchMaxRssBytes: 1_000,
       rebuildChunkBatchSize: 1,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result).toEqual({reason: 'completedChunkLimit'})
+  expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 2))
+  expect(harness.recycledChunks).toEqual(summaryChunks.slice(0, 2))
+  expect(harness.garbageCollectedChunks).toEqual(summaryChunks.slice(0, 2))
+  expect(sleepCalls).toEqual([lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs])
+})
+
+test('bounded worker does not starve native-heavy chunks while soft RSS pressure is active', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const sleepCalls: number[] = []
+  const summaryChunks = Array.from({length: 3}, (_, index) => {
+    return {
+      ...chunkManifest,
+      chunkId: `chunk-summary-soft-pressure-${index + 1}`,
+      projectionComponent: 'summary' as const,
+      projectionIdentity: 'summary:project-1',
+      requestId: 'rebuild-summary-soft-pressure',
+    }
+  }) satisfies ReviewServingRebuildChunkManifest[]
+  let claimIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return summaryChunks[Math.min(claimIndex, summaryChunks.length - 1)]
+    },
+    getNextChunk: async () => {
+      const chunk = summaryChunks[Math.min(claimIndex, summaryChunks.length - 1)]
+
+      if (chunk === undefined) {
+        throw new Error('expected soft-pressure summary chunk')
+      }
+
+      return {...chunkInput, ...chunk}
+    },
+    heartbeatChunk: async () => {
+      return summaryChunks[Math.min(claimIndex, summaryChunks.length - 1)]
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+      claimIndex += 1
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = async (delayMs: number) => {
+    sleepCalls.push(delayMs)
+  }
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 900}
+  }
+
+  const result = await runReviewServingProjectorWorker(
+    {
+      maxCompletedRebuildChunksPerRun: 2,
+      rebuildChunkBatchMaxRssBytes: 1_000,
+      rebuildChunkBatchSize: 2,
       workerId: 'worker-1',
     },
     harness.dependencies,

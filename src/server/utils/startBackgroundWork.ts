@@ -36,6 +36,7 @@ const lowMemoryReviewServingProjectorWorkerMaxWakeMs = 1_500
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const lowMemoryReviewServingProjectorWorkerMinRebuildChunkBatchMaxRssBytes = 3 * 1024 ** 3
 const lowMemoryReviewServingProjectorWorkerRssToDuckdbLimitRatio = 0.75
+const lowMemoryReviewServingProjectorWorkerSoftRssRatio = 0.85
 const reviewServingProjectorPauseRecoveryPollIntervalMs = 30_000
 const reviewServingProjectorPauseRecoveryMinAgeMs = 5 * 60_000
 const reviewServingProjectorPauseRecoveryQueueResampleDelayMs = 250
@@ -77,6 +78,13 @@ const getLowMemoryReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = () 
   )
 }
 
+const getLowMemoryReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes = () => {
+  return Math.floor(
+    getLowMemoryReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes()
+      * lowMemoryReviewServingProjectorWorkerSoftRssRatio,
+  )
+}
+
 const getReviewServingProjectorWorkerHeartbeatOptions = () => {
   return shouldDeferNonessentialDuckdbMaintenanceWork()
     ? {
@@ -86,6 +94,7 @@ const getReviewServingProjectorWorkerHeartbeatOptions = () => {
         maxRunMs: lowMemoryReviewServingProjectorWorkerMaxRunMs,
         maxWakeMs: lowMemoryReviewServingProjectorWorkerMaxWakeMs,
         rebuildChunkBatchMaxRssBytes: getLowMemoryReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(),
+        rebuildChunkBatchSoftRssBytes: getLowMemoryReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(),
         restartDelayMs: lowMemoryReviewServingProjectorWorkerRestartDelayMs,
       }
     : {}
