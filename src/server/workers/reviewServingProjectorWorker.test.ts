@@ -325,8 +325,18 @@ test('rebuild timing summaries keep compact aggregate phase stats', () => {
     lastObservedAtMs: 61_000,
     maxTotalMs: 130,
     minTotalMs: 70,
-    phaseMaxMs: {executeMs: 100, finalizeRequestMs: 30},
-    phaseTotalMs: {executeMs: 240, finalizeRequestMs: 60},
+    phaseMaxMs: {
+      executeMs: 100,
+      'executeMs.rssDeltaBytes': 4096,
+      finalizeRequestMs: 30,
+      'recoverOversized.splitRangeMs': 12,
+    },
+    phaseTotalMs: {
+      executeMs: 240,
+      'executeMs.rssDeltaBytes': 8192,
+      finalizeRequestMs: 60,
+      'recoverOversized.splitRangeMs': 12,
+    },
     projectId: 'project-1',
     requestId: 'rebuild-1',
     slowestChunkId: 'chunk-3',
@@ -343,8 +353,8 @@ test('rebuild timing summaries keep compact aggregate phase stats', () => {
     estimatedOutputRows: 4800,
     maxTotalMs: 130,
     minTotalMs: 70,
-    phaseAvgMs: {executeMs: 80, finalizeRequestMs: 20},
-    phaseMaxMs: {executeMs: 100, finalizeRequestMs: 30},
+    phaseAvgMs: {executeMs: 80, finalizeRequestMs: 20, 'recoverOversized.splitRangeMs': 4},
+    phaseMaxMs: {executeMs: 100, finalizeRequestMs: 30, 'recoverOversized.splitRangeMs': 12},
     projectId: 'project-1',
     requestId: 'rebuild-1',
     slowestChunkId: 'chunk-3',
@@ -353,6 +363,50 @@ test('rebuild timing summaries keep compact aggregate phase stats', () => {
     totalMs: 300,
     windowMs: 60_000,
   })
+})
+
+test('worker records RSS before after and delta on rebuild chunk phase timings', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const originalMemoryUsage = process.memoryUsage
+  const rssValues = [100, 140, 160, 220, 260, 250, 300, 330, 360, 390]
+  const mockMemoryUsage = (() => {
+    return {...originalMemoryUsage(), rss: rssValues.shift() ?? 390}
+  }) as typeof process.memoryUsage
+
+  mockMemoryUsage.rss = () => {
+    return rssValues[0] ?? 390
+  }
+  process.memoryUsage = mockMemoryUsage
+
+  try {
+    const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+    const timingSink = (harness.getNextChunkInputs[0] as {timings?: Record<string, number>}).timings
+
+    expect(result.chunk).toMatchObject({chunkId: chunkManifest.chunkId, status: 'completed'})
+    expect(timingSink).toMatchObject({
+      'claimSelectMs.rssAfterBytes': 140,
+      'claimSelectMs.rssBeforeBytes': 100,
+      'claimSelectMs.rssDeltaBytes': 40,
+    })
+    expect(timingSink?.claimSelectMs).toBeGreaterThanOrEqual(0)
+  } finally {
+    process.memoryUsage = originalMemoryUsage
+  }
+})
+
+test('batch fanout diagnostics stay manifest derived without foreground diagnostic queries', () => {
+  const source = readWorkerSource()
+  const helperSource =
+    source.match(
+      /const getRebuildChunkBatchWriterFanoutDiagnostics = \([\s\S]*?\n}\n\nconst isReviewServingRetentionCleanupEnabled/,
+    )?.[0] ?? ''
+
+  expect(helperSource).toContain('estimatedInputRows')
+  expect(helperSource).toContain('snapshotIds.length')
+  expect(helperSource).not.toContain('queryJson')
+  expect(helperSource).not.toContain('database')
+  expect(helperSource).not.toContain('SELECT')
+  expect(source).toContain('phaseRss: {batchWrite: input.batchWriteRss}')
 })
 
 test('worker yields before draining rebuild chunks while foreground DuckDB work is queued', async () => {
@@ -5067,9 +5121,10 @@ test('posting rebuild batches use the range projector while preserving per-chunk
   expect(batchSource).not.toContain('refreshReviewServingFilterPostingStats')
   expect(batchSource).toContain('completePostingRebuildChunkAfterBatchWrite')
   expect(batchSource).toContain('const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)')
-  expect(batchSource).toContain('batchWriteMs, chunk')
+  expect(batchSource).toContain('batchWriteRss')
   expect(batchSource).not.toContain('await projectReviewServingFilterPostings(')
   expect(source).toContain('phaseTimings: {batchWriteMs: input.batchWriteMs}')
+  expect(source).toContain('phaseRss: {batchWrite: input.batchWriteRss}')
 })
 
 test('high-fanout rebuild chunks commit idempotent output separately from completion', () => {
