@@ -56,9 +56,10 @@ type FilterStateServingRow = {
 
 type PostingValidationCountRow = {actualChecksum: string | null; actualCount: number | string | null}
 type CompactPostingRow = {articleIds: readonly string[]; filterKind: string; filterValue: string; listModeKey: string}
-type FullRebuildServingRowsWriteOptions = {appendSegmentedFullRebuildPostingRows?: boolean}
 
 const filterPostingProjectorName = 'filter-posting-projector'
+const compactPostingWriteMaxArticleIds = 2_000
+const compactPostingWriteMaxRows = 100
 const stateFilterKinds = new Set(['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus', 'llmHasJudgment'])
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -683,7 +684,36 @@ const getCompactPostingValuesSql = (rows: readonly CompactPostingRow[]) => {
 }
 
 const getMergePostingArticleIdsSql = (incomingArticleIdsSql: string, existingArticleIdsSql: string) => {
-  return `(SELECT LIST(DISTINCT article_id ORDER BY article_id) FROM (SELECT UNNEST(COALESCE(${existingArticleIdsSql}, []::VARCHAR[])) AS article_id UNION ALL SELECT UNNEST(${incomingArticleIdsSql}) AS article_id))`
+  return `list_sort(list_distinct(list_concat(COALESCE(${existingArticleIdsSql}, []::VARCHAR[]), COALESCE(${incomingArticleIdsSql}, []::VARCHAR[]))))`
+}
+
+const splitCompactPostingRowsForStatements = (rows: readonly CompactPostingRow[]) => {
+  const batches: CompactPostingRow[][] = []
+  let currentBatch: CompactPostingRow[] = []
+  let currentArticleIdCount = 0
+
+  rows.forEach((row) => {
+    const rowArticleIdCount = row.articleIds.length
+    const shouldStartNextBatch =
+      currentBatch.length > 0
+      && (currentBatch.length >= compactPostingWriteMaxRows
+        || currentArticleIdCount + rowArticleIdCount > compactPostingWriteMaxArticleIds)
+
+    if (shouldStartNextBatch) {
+      batches.push(currentBatch)
+      currentBatch = []
+      currentArticleIdCount = 0
+    }
+
+    currentBatch.push(row)
+    currentArticleIdCount += rowArticleIdCount
+  })
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch)
+  }
+
+  return batches
 }
 
 const getDeleteServingRowsStatement = (
@@ -691,11 +721,6 @@ const getDeleteServingRowsStatement = (
   tombstoneRows: readonly PostingContributionRow[],
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
-  const tombstoneValues = getCompactPostingRows(tombstoneRows)
-    .map((row) => {
-      return `(${getSqlLiteral(row.filterKind)}, ${getSqlLiteral(row.filterValue)}, ${getSqlLiteral(row.listModeKey)}, ${getArticleIdsArraySql(row.articleIds)})`
-    })
-    .join(', ')
 
   return articleIds.length > 0
     ? [
@@ -717,10 +742,13 @@ const getDeleteServingRowsStatement = (
           AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}`,
         ]
-      : tombstoneValues.length === 0
+      : tombstoneRows.length === 0
         ? []
-        : [
-            `WITH deleted(filter_kind, filter_value, list_mode_key, article_ids) AS (
+        : splitCompactPostingRowsForStatements(getCompactPostingRows(tombstoneRows)).flatMap((rowBatch) => {
+            const tombstoneValues = getCompactPostingValuesSql(rowBatch)
+
+            return [
+              `WITH deleted(filter_kind, filter_value, list_mode_key, article_ids) AS (
           SELECT * FROM (VALUES ${tombstoneValues})
         )
         UPDATE mart.review_article_filter_posting_serving_v4 serving
@@ -733,7 +761,8 @@ const getDeleteServingRowsStatement = (
           AND serving.filter_value = deleted.filter_value
           AND serving.list_mode_key = deleted.list_mode_key
           AND list_has_any(serving.article_ids, deleted.article_ids)`,
-          ]
+            ]
+          })
 }
 
 const getSubtractFullRebuildServingRowsStatement = (
@@ -831,34 +860,10 @@ const getResetListModeStateRowsStatement = (
         : null
 }
 
-const getResetListModeStateRangeRowsStatement = (
-  input: ProjectReviewServingFilterPostingsInput,
-  ranges: readonly ProjectReviewServingFilterPostingsInput[],
-) => {
-  if (ranges.length === 0) {
-    return getResetListModeStateRowsStatement(input)
-  }
-
-  return `WITH ${getRangeValuesCte(ranges)}
-    UPDATE mart.review_article_serving_list_mode_state_v4 state
-    SET duplicate_flag = FALSE,
-        conflict_flag = FALSE,
-        llm_status = NULL,
-        human_status = NULL,
-        llm_has_judgment = FALSE
-    FROM article_range_filter range_filter
-    WHERE state.project_id = ${getSqlLiteral(input.projectId)}
-      AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND (range_filter.chunk_start_article_id IS NULL OR state.article_id >= range_filter.chunk_start_article_id)
-      AND (range_filter.chunk_end_article_id IS NULL OR state.article_id <= range_filter.chunk_end_article_id)`
-}
-
 const getInsertFullRebuildServingRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   ranges?: readonly ProjectReviewServingFilterPostingsInput[],
   postingSourceSql = getFullRebuildPostingContributionRowsStatement(input, ranges),
-  options: FullRebuildServingRowsWriteOptions = {},
 ) => {
   const servingSourceCteSql = `WITH posting_source AS (${postingSourceSql}),
     serving_source AS (
@@ -893,10 +898,7 @@ const getInsertFullRebuildServingRowsStatement = (
       posting.filterValue AS filter_value,
       posting.listModeKey AS list_mode_key,
       posting.articleIds AS article_ids
-    FROM serving_source posting${
-      options.appendSegmentedFullRebuildPostingRows === true
-        ? ''
-        : `
+    FROM serving_source posting
     WHERE NOT EXISTS (
       SELECT 1
       FROM mart.review_article_filter_posting_serving_v4 serving
@@ -907,11 +909,6 @@ const getInsertFullRebuildServingRowsStatement = (
         AND serving.filter_value = posting.filterValue
         AND serving.list_mode_key = posting.listModeKey
     )`
-    }`
-
-  if (options.appendSegmentedFullRebuildPostingRows === true) {
-    return [insertStatement]
-  }
 
   return [
     `UPDATE mart.review_article_filter_posting_serving_v4 serving
@@ -930,18 +927,19 @@ const getInsertFullRebuildServingRowsStatement = (
   ]
 }
 
-const getInsertCompactServingRowsStatement = (
+const getInsertCompactServingRowsStatements = (
   input: ProjectReviewServingFilterPostingsInput,
   rows: readonly CompactPostingRow[],
 ) => {
   if (rows.length === 0) {
-    return null
+    return []
   }
 
-  const compactRowsSql = `(VALUES ${getCompactPostingValuesSql(rows)}) AS row(filter_kind, filter_value, list_mode_key, article_ids)`
+  return splitCompactPostingRowsForStatements(rows).flatMap((rowBatch) => {
+    const compactRowsSql = `(VALUES ${getCompactPostingValuesSql(rowBatch)}) AS row(filter_kind, filter_value, list_mode_key, article_ids)`
 
-  return [
-    `UPDATE mart.review_article_filter_posting_serving_v4 serving
+    return [
+      `UPDATE mart.review_article_filter_posting_serving_v4 serving
     SET article_ids = ${getMergePostingArticleIdsSql('row.article_ids', 'serving.article_ids')}
     FROM ${compactRowsSql}
     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
@@ -950,7 +948,7 @@ const getInsertCompactServingRowsStatement = (
       AND serving.filter_kind = row.filter_kind
       AND serving.filter_value = row.filter_value
       AND serving.list_mode_key = row.list_mode_key`,
-    `INSERT INTO mart.review_article_filter_posting_serving_v4 (
+      `INSERT INTO mart.review_article_filter_posting_serving_v4 (
       project_id,
       review_config_hash,
       snapshot_id,
@@ -978,7 +976,8 @@ const getInsertCompactServingRowsStatement = (
         AND serving.filter_value = row.filter_value
         AND serving.list_mode_key = row.list_mode_key
     )`,
-  ]
+    ]
+  })
 }
 
 const getFilterStateValuesSql = (rows: readonly FilterStateServingRow[]) => {
@@ -1084,15 +1083,17 @@ const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPos
   return firstRange.listModeKeys.length === 0
     ? []
     : [
-        getCreateFullRebuildPostingSourceStatement(firstRange, input.ranges),
         getDeleteLazyPromptAnswerPostingRowsStatement(firstRange),
-        getSubtractFullRebuildServingRowsStatement(firstRange, input.ranges),
-        ...getInsertFullRebuildServingRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql(), {
-          appendSegmentedFullRebuildPostingRows: true,
+        ...input.ranges.flatMap((range) => {
+          return [
+            getCreateFullRebuildPostingSourceStatement(range),
+            getSubtractFullRebuildServingRowsStatement(range),
+            ...getInsertFullRebuildServingRowsStatement(range, undefined, getFullRebuildPostingSourceSelectSql()),
+            getResetListModeStateRowsStatement(range),
+            getUpdateFullRebuildListModeStateRowsStatement(range, undefined, getFullRebuildPostingSourceSelectSql()),
+            getDropFullRebuildPostingSourceStatement(),
+          ]
         }),
-        getResetListModeStateRangeRowsStatement(firstRange, input.ranges),
-        getUpdateFullRebuildListModeStateRowsStatement(firstRange, undefined, getFullRebuildPostingSourceSelectSql()),
-        getDropFullRebuildPostingSourceStatement(),
       ]
 }
 
@@ -1326,28 +1327,32 @@ export const projectReviewServingFilterPostings = async (
     return {compactServingRows: nextCompactServingRows, stateRows: nextStateRows}
   })
   const servingRowCount = compactServingRows.length + stateRows.length
-  const {writeStatements} = measureSync('deleteStatementBuildMs', () => {
-    const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(
-      input,
-      contributionRows.filter((row) => {
+  const {compactServingRowBatchCount, compactTombstoneRowBatchCount, writeStatements} = measureSync(
+    'deleteStatementBuildMs',
+    () => {
+      const tombstoneRows = contributionRows.filter((row) => {
         return row.tombstone
-      }),
-    )
-    const nextInsertServingRowsStatement = getInsertCompactServingRowsStatement(input, compactServingRows)
-    const nextResetStateRowsStatement = getResetListModeStateRowsStatement(input)
-    const nextUpdateStateRowsStatement = getUpdateCompactListModeStateRowsStatement(input, stateRows)
+      })
+      const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(input, tombstoneRows)
+      const nextInsertServingRowsStatements = getInsertCompactServingRowsStatements(input, compactServingRows)
+      const nextResetStateRowsStatement = getResetListModeStateRowsStatement(input)
+      const nextUpdateStateRowsStatement = getUpdateCompactListModeStateRowsStatement(input, stateRows)
 
-    return {
-      writeStatements: [
-        ...nextDeleteServingRowsStatement,
-        ...(nextInsertServingRowsStatement ?? []),
-        nextResetStateRowsStatement,
-        nextUpdateStateRowsStatement,
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-    }
-  })
+      return {
+        compactServingRowBatchCount: splitCompactPostingRowsForStatements(compactServingRows).length,
+        compactTombstoneRowBatchCount: splitCompactPostingRowsForStatements(getCompactPostingRows(tombstoneRows))
+          .length,
+        writeStatements: [
+          ...nextDeleteServingRowsStatement,
+          ...nextInsertServingRowsStatements,
+          nextResetStateRowsStatement,
+          nextUpdateStateRowsStatement,
+        ].flatMap((statement) => {
+          return statement === null ? [] : [statement]
+        }),
+      }
+    },
+  )
   const writerResult = await measure('writerMs', async () => {
     const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
 
@@ -1380,6 +1385,8 @@ export const projectReviewServingFilterPostings = async (
         contributionRecordCount: 0,
         contributionRowCount: contributionRows.length,
         existingRowCount: existingRows.length,
+        compactServingRowBatchCount,
+        compactTombstoneRowBatchCount,
         liveRowCount: liveRows.length,
         newRowCount: newRows.length,
         stateRowCount: stateRows.length,
