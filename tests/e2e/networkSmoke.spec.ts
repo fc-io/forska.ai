@@ -244,6 +244,21 @@ const isMutationDisabledCurrentDbQueuedBacklog = (indexing: ReviewsWarningsData[
   )
 }
 
+const isCurrentDbReadableMemoryRecoveryState = (indexing: ReviewsWarningsData['indexing']) => {
+  return (
+    networkSmokeDbMode === 'current'
+    && areServerMutationsDisabled
+    && indexing.status === 'blocked'
+    && indexing.progressState === 'blocked'
+    && indexing.blockedReason === 'paused_by_policy'
+    && indexing.serving.readable
+    && indexing.serving.usable
+    && indexing.pendingRefreshCount > 0
+    && indexing.inFlightRefreshCount === 0
+    && indexing.activeWorkCount === 0
+  )
+}
+
 const isCurrentDbHistoricalMaintenanceFailure = (data: ReviewsWarningsData, path: string) => {
   const isDirtyWorkLifecycleDiagnostic =
     /^data\.indexing\.serving\.diagnostics\.dirtyWork\.lifecycleReasonCounts\[\d+\]\.status$/.test(path)
@@ -283,7 +298,9 @@ const isCurrentDbOperatorBlockedWarningState = (indexing: ReviewsWarningsData['i
 }
 
 const getBlockingWarningDetails = (indexing: ReviewsWarningsData['indexing']) => {
-  return isMutationDisabledCurrentDbQueuedBacklog(indexing) || isCurrentDbOperatorBlockedWarningState(indexing)
+  return isMutationDisabledCurrentDbQueuedBacklog(indexing)
+    || isCurrentDbReadableMemoryRecoveryState(indexing)
+    || isCurrentDbOperatorBlockedWarningState(indexing)
     ? null
     : indexing.progressState === 'blocked' || indexing.status === 'blocked'
       ? `warning response returned blocked review indexing: ${formatIndexingState(indexing)}`
