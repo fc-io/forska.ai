@@ -244,7 +244,7 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain('ON CONFLICT')
-  expect(joined).toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
+  expect(joined).toContain('article_ids = list_sort(list_distinct(list_concat')
   expect(joined).toContain(
     'LIST(DISTINCT CAST(posting.articleId AS VARCHAR) ORDER BY CAST(posting.articleId AS VARCHAR)) AS articleIds',
   )
@@ -363,7 +363,7 @@ test('chunked full posting rebuilds skip retired stats refresh', async () => {
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
 })
 
-test('posting range rebuilds append segmented serving rows without merging existing posting arrays', async () => {
+test('posting range rebuilds stage and merge one range at a time', async () => {
   const {database, statements} = createPostingDatabase()
 
   const result = await projectReviewServingFilterPostingRanges(
@@ -382,24 +382,56 @@ test('posting range rebuilds append segmented serving rows without merging exist
   const joined = statements.join('\n')
 
   expect(result.diagnosticsJson.postingProjector).toMatchObject({fullRebuildMode: 'range-set-based', rangeCount: 2})
-  expect(servingInserts).toHaveLength(1)
-  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
-  expect(joined).toContain("('article-1', 'article-3'), ('article-4', 'article-9')")
+  const postingSourceCreates = statements.filter((statement) => {
+    return statement.includes('CREATE OR REPLACE TEMP TABLE review_filter_posting_source_v4')
+  })
+
+  expect(servingInserts).toHaveLength(2)
+  expect(postingSourceCreates).toHaveLength(2)
+  expect(joined).not.toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
   expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('SET article_ids = list_filter')
-  expect(joined).not.toContain('article_ids = (SELECT LIST(DISTINCT article_id ORDER BY article_id)')
-  expect(joined).toContain('SELECT DISTINCT scope.article_id')
-  expect(countOccurrences(joined, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(1)
+  expect(joined).toContain('article_ids = list_sort(list_distinct(list_concat')
+  expect(joined).toContain('SELECT scope.article_id')
+  expect(countOccurrences(joined, 'mart.review_article_judgment_detail_serving_v4 detail')).toBe(2)
   expect(joined).toContain('judgment_detail_source AS')
   expect(joined).toContain('article_judgment_status AS')
-  expect(joined).toContain('range.chunk_start_article_id IS NULL OR scope.article_id >= range.chunk_start_article_id')
-  expect(joined).toContain('range.chunk_end_article_id IS NULL OR scope.article_id <= range.chunk_end_article_id')
+  expect(joined).toContain("scope.article_id >= 'article-1'")
+  expect(joined).toContain("scope.article_id <= 'article-3'")
+  expect(joined).toContain("scope.article_id >= 'article-4'")
+  expect(joined).toContain("scope.article_id <= 'article-9'")
   expect(servingInserts[0]).not.toContain('posting_identity')
-  expect(servingInserts[0]).not.toContain('WHERE NOT EXISTS')
+  expect(servingInserts[0]).toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
-  expect(joined).not.toContain('WHERE NOT EXISTS')
   expectNoLegacyPostingSourcePatchTables(joined)
+})
+
+test('dirty posting writes split compact serving rows into bounded statement batches', async () => {
+  const newRows = Array.from({length: 101}, (_, index) => {
+    return postingRow({filterKind: 'importRoute', filterValue: `route-${String(index + 1).padStart(3, '0')}`})
+  })
+  const {database, statements} = createPostingDatabase({existingRows: [], newRows})
+
+  const result = await projectReviewServingFilterPostings(projectInput([postingClaim()]), database)
+  const servingInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  })
+  const servingUpdates = statements.filter((statement) => {
+    return (
+      statement.includes('UPDATE mart.review_article_filter_posting_serving_v4 serving')
+      && statement.includes('FROM (VALUES')
+    )
+  })
+
+  expect(result.servingRowCount).toBe(101)
+  expect(result.diagnosticsJson.postingProjector).toMatchObject({compactServingRowBatchCount: 2})
+  expect(servingInserts).toHaveLength(2)
+  expect(servingUpdates).toHaveLength(2)
+  expect(servingInserts[0]).toContain('route-001')
+  expect(servingInserts[0]).toContain('route-100')
+  expect(servingInserts[0]).not.toContain('route-101')
+  expect(servingInserts[1]).toContain('route-101')
 })
 
 test('deletes write tombstones and remove serving rows without derived stats writes', async () => {
