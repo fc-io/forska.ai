@@ -482,6 +482,7 @@ export type ComparisonProjectConflictResolutionImportRequest = {
   importMode?: ComparisonProjectConflictResolutionImportMode
   overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
 }
+export type ComparisonProjectConflictResolutionExportRequest = ComparisonProjectRowsRequestFilters
 export type ComparisonProjectConflictResolutionPdfImportRequest = {
   file: File
   importMode?: ComparisonProjectConflictResolutionImportMode
@@ -911,8 +912,11 @@ export const getComparisonProjectConflictResolutionExportRequestUrl = (
 
 export const fetchComparisonProjectConflictResolutionExportArtifact = async (
   comparisonProjectId: string,
+  request: ComparisonProjectConflictResolutionExportRequest = {},
 ): Promise<ComparisonProjectConflictResolutionExportResult> => {
   const response = await fetch(getComparisonProjectConflictResolutionExportRequestUrl(comparisonProjectId), {
+    body: JSON.stringify(request),
+    headers: {'Content-Type': 'application/json'},
     credentials: 'include',
     method: 'POST',
   })

@@ -671,7 +671,6 @@ const CompareProjectJudgmentsPage = () => {
           <CompareProjectResolutionTransferActions
             allowConflictResolution={comparisonProjectQuery.data?.allowConflictResolution}
             comparisonProjectId={comparisonProjectId()}
-            resolutionCount={comparisonProjectQuery.data?.resolutionCount}
           />
           <Show when={comparisonProjectQuery.data?.archived}>
             <span class="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700">

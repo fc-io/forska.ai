@@ -33,6 +33,7 @@ import {
   getCompareProjectExportSearchParams,
   getInitialCompareProjectExportUrlState,
 } from './+export/compareProjectExportUrlState.ts'
+import {CompareProjectResolutionExportSection} from './+export/compareProjectResolutionExportSection.tsx'
 
 const getComparisonProjectId = (params: Record<string, string>) => {
   return 'id' in params ? params.id : ''
@@ -287,6 +288,12 @@ const CompareProjectExportPage = () => {
                 onExportPdf={handlePdfExport}
                 onRowFilterChange={updateRowFilter}
                 rowFilter={rowFilter()}
+              />
+              <CompareProjectResolutionExportSection
+                allowConflictResolution={comparisonProject().allowConflictResolution}
+                comparisonProjectId={comparisonProjectId()}
+                exportRequest={getCompareProjectExportRequestBody(urlState())}
+                resolutionCount={comparisonProject().resolutionCount}
               />
             </div>
           )

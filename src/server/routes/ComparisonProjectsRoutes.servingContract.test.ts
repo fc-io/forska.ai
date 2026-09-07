@@ -65,6 +65,8 @@ test('comparison product reads are admitted through bounded serving helpers', ()
   expect(conflictResolutionExportBody).toContain(
     'Conflict resolution export requires an active comparison serving generation',
   )
+  expect(conflictResolutionExportBody).toContain('forEachComparisonProjectServingJudgmentArticleIdBatch')
+  expect(conflictResolutionExportBody).toContain('getNormalizedComparisonProjectDifferenceFilter')
   expect(conflictResolutionExportBody).toContain('INNER JOIN mart.comparison_article_serving')
   expect(conflictResolutionExportBody).toContain('LEFT JOIN mart.comparison_article_identifier_serving')
   expect(conflictResolutionExportBody).not.toContain('INNER JOIN ${articleTable}')

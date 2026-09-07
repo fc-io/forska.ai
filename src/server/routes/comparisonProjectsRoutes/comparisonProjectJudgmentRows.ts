@@ -134,6 +134,10 @@ type ForEachComparisonProjectServingJudgmentRowBatchParams = ComparisonProjectSe
   onRows: (rows: ComparisonProjectJudgmentRow[]) => Promise<void> | void
 }
 
+type ForEachComparisonProjectServingJudgmentArticleIdBatchParams = ComparisonProjectServingJudgmentRowsParams & {
+  onArticleIds: (articleIds: string[]) => Promise<void> | void
+}
+
 type ComparisonProjectServingJudgmentCountParams = {
   articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
   comparisonProjectId: string
@@ -702,6 +706,29 @@ export const forEachComparisonProjectServingJudgmentRowBatch = async (
 
   return pageResult.nextCursor
     ? forEachComparisonProjectServingJudgmentRowBatch(params, pageResult.nextCursor)
+    : undefined
+}
+
+export const forEachComparisonProjectServingJudgmentArticleIdBatch = async (
+  params: ForEachComparisonProjectServingJudgmentArticleIdBatchParams,
+  cursor: string | null = null,
+): Promise<void> => {
+  const limit = getPositiveInteger(params.limit)
+  const memberRows = await params.queryRunner.queryJson<ComparisonProjectServingMemberRow>(
+    getComparisonProjectServingMemberSql({...params, cursor, limit}),
+  )
+  const pageMemberRows = memberRows.slice(0, limit)
+  const articleIds = pageMemberRows.map((row) => {
+    return row.articleId
+  })
+  const lastPageMemberRow = pageMemberRows[pageMemberRows.length - 1]
+  const nextCursor = getComparisonProjectServingNextCursor(lastPageMemberRow)
+  const articleIdResult = articleIds.length > 0 ? params.onArticleIds(articleIds) : undefined
+
+  await articleIdResult
+
+  return memberRows.length > limit && nextCursor
+    ? forEachComparisonProjectServingJudgmentArticleIdBatch(params, nextCursor)
     : undefined
 }
 

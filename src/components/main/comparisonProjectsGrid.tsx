@@ -9,7 +9,6 @@ import {
   unarchiveComparisonProject,
 } from '../../services/comparisonProjectsService'
 import {Button} from '../ui/button'
-import {CompareProjectResolutionExportAction} from './compareProjectResolutionExportAction'
 
 type ComparisonProject = Awaited<ReturnType<typeof fetchComparisonProjects>>[number]
 
@@ -203,12 +202,6 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                   >
                     Export data
                   </Button>
-                  <Show when={comparisonProject.allowConflictResolution}>
-                    <CompareProjectResolutionExportAction
-                      buttonClass="px-3 py-1 text-sm"
-                      comparisonProjectId={comparisonProject.id}
-                    />
-                  </Show>
                   <Show when={!props.isArchived}>
                     <Button
                       as={Link}
