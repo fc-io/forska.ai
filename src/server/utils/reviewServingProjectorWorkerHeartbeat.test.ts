@@ -137,7 +137,7 @@ test('review serving projector worker heartbeat logs original loop failure and r
         console.log(JSON.stringify({events}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -279,7 +279,7 @@ test('review serving projector worker heartbeat does not start a loop while Duck
         console.log(JSON.stringify({events}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -373,7 +373,7 @@ test('review serving projector worker heartbeat keeps soft RSS pressure below th
         console.log(JSON.stringify({events}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -458,7 +458,7 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
         console.log(JSON.stringify({events}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB'}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '6400MiB'})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -663,7 +663,7 @@ test('review serving projector worker heartbeat keeps skipping high-RSS recycle 
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+      env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'}),
     },
   )
 
@@ -773,7 +773,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle during pr
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+      env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'}),
     },
   )
 
@@ -876,7 +876,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle during ac
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+      env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'}),
     },
   )
 
@@ -959,7 +959,7 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
         console.log(JSON.stringify({restartTimerCleared, restartTimerWasRefed}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -1037,7 +1037,7 @@ test('review serving projector worker heartbeat restarts native-heavy completion
         console.log(JSON.stringify({events, snapshots}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -1142,7 +1142,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+      env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'}),
     },
   )
 
@@ -1255,7 +1255,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+      env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'}),
     },
   )
 
@@ -1340,7 +1340,7 @@ test('review serving projector worker heartbeat cancels pending native-heavy res
         console.log(JSON.stringify({events}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -1406,7 +1406,7 @@ test('review serving projector worker heartbeat ignores obsolete immediate bound
         console.log(JSON.stringify({events}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
   )
 
   if (runScript.exitCode !== 0) {
@@ -1468,7 +1468,7 @@ test('review serving projector worker heartbeat preserves explicit null burst ca
         console.log(JSON.stringify({events}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB'}},
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '6400MiB'})},
   )
 
   if (runScript.exitCode !== 0) {
