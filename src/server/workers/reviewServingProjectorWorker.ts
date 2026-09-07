@@ -286,7 +286,9 @@ type ReviewServingProjectorWorkerCycleOptions = {
   maxRowsPerWake?: number
   maxWakeMs?: number
   now?: Date
+  previousRssBytes?: number | null
   rebuildChunkBatchMaxRssBytes?: number
+  rebuildChunkBatchSoftRssBytes?: number
   rebuildChunkBatchSize?: number
   rebuildProjectId?: string | null
   workerId?: string
@@ -428,6 +430,8 @@ const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerActiveYieldMs = 1
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
 const defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = 0
+const defaultReviewServingProjectorWorkerRebuildChunkBatchSoftRssRatio = 0.85
+const defaultReviewServingProjectorWorkerRisingRssPressureBytes = 256 * 1024 ** 2
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
 const foregroundHumanStatusRebuildChunkBatchSize = 4
 const foregroundLlmStatusRebuildChunkBatchSize = 8
@@ -5324,6 +5328,24 @@ const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
   )
 }
 
+const getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes = (
+  options: ReviewServingProjectorWorkerCycleOptions,
+) => {
+  const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
+
+  if (maxRssBytes <= 0) {
+    return 0
+  }
+
+  return Math.min(
+    maxRssBytes,
+    getPositiveInteger(
+      options.rebuildChunkBatchSoftRssBytes,
+      Math.floor(maxRssBytes * defaultReviewServingProjectorWorkerRebuildChunkBatchSoftRssRatio),
+    ),
+  )
+}
+
 const hasReviewServingProjectorWorkerReachedRssCap = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
@@ -5331,6 +5353,21 @@ const hasReviewServingProjectorWorkerReachedRssCap = (input: {
   const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(input.options)
 
   return maxRssBytes > 0 && getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss >= maxRssBytes
+}
+
+const hasReviewServingProjectorWorkerSoftMemoryPressure = (input: {
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const softRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(input.options)
+  const rssBytes = getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss
+  const previousRssBytes = input.options.previousRssBytes ?? null
+  const rssDeltaBytes = previousRssBytes === null ? 0 : rssBytes - previousRssBytes
+
+  return (
+    (softRssBytes > 0 && rssBytes >= softRssBytes)
+    || (previousRssBytes !== null && rssDeltaBytes >= defaultReviewServingProjectorWorkerRisingRssPressureBytes)
+  )
 }
 
 const getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize = (input: {
@@ -5356,6 +5393,22 @@ const getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize = (input: {
   }
 
   return batchSize
+}
+
+const getEffectiveReviewServingProjectorWorkerMaxRowsPerWake = (input: {
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const maxRowsPerWake = getNonNegativeInteger(
+    input.options.maxRowsPerWake,
+    defaultReviewServingProjectorWorkerMaxRowsPerWake,
+  )
+
+  if (maxRowsPerWake <= 1 || !hasReviewServingProjectorWorkerSoftMemoryPressure(input)) {
+    return maxRowsPerWake
+  }
+
+  return Math.max(1, Math.floor(maxRowsPerWake / 4))
 }
 
 const getLeaseExpiresAt = (options: ReviewServingProjectorWorkerCycleOptions) => {
@@ -6402,18 +6455,19 @@ const getReviewServingProjectorWorkerDatabase = (
     & ReviewServingRetentionServiceDatabase
 }
 
-const getWakeInput = (
-  options: ReviewServingProjectorWorkerCycleOptions,
-  wakeId: string,
-): WakeReviewServingProjectorServiceInput => {
+const getWakeInput = (input: {
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  wakeId: string
+}): WakeReviewServingProjectorServiceInput => {
   return {
-    batchSize: getPositiveInteger(options.batchSize, defaultReviewServingProjectorWorkerBatchSize),
-    maxActiveImportCount: options.maxActiveImportCount,
-    maxPendingDirtyWorkCount: options.maxPendingDirtyWorkCount,
-    maxRetries: getPositiveInteger(options.maxRetries, defaultReviewServingProjectorWorkerMaxRetries),
-    maxRowsPerWake: getNonNegativeInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake),
-    maxWakeMs: getPositiveInteger(options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs),
-    wakeId,
+    batchSize: getPositiveInteger(input.options.batchSize, defaultReviewServingProjectorWorkerBatchSize),
+    maxActiveImportCount: input.options.maxActiveImportCount,
+    maxPendingDirtyWorkCount: input.options.maxPendingDirtyWorkCount,
+    maxRetries: getPositiveInteger(input.options.maxRetries, defaultReviewServingProjectorWorkerMaxRetries),
+    maxRowsPerWake: getEffectiveReviewServingProjectorWorkerMaxRowsPerWake(input),
+    maxWakeMs: getPositiveInteger(input.options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs),
+    wakeId: input.wakeId,
   }
 }
 
@@ -7066,6 +7120,7 @@ const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
 const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
   batchSize: number
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   const firstClaimedChunk = input.claimedChunks[0]?.chunk
@@ -7081,6 +7136,14 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
     return Math.min(1, remainingCompletedChunkRunBudget)
   }
 
+  if (
+    firstClaimedChunk !== undefined
+    && reviewServingNativeHeavyRebuildComponents.has(firstClaimedChunk.projectionComponent)
+    && hasReviewServingProjectorWorkerSoftMemoryPressure(input)
+  ) {
+    return Math.min(1, remainingCompletedChunkRunBudget)
+  }
+
   if (firstClaimedChunk !== undefined && isForegroundBatchableRebuildChunk(firstClaimedChunk)) {
     return Math.min(getForegroundRebuildChunkBatchSize(firstClaimedChunk), remainingCompletedChunkRunBudget)
   }
@@ -7091,6 +7154,7 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
 const shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch = (input: {
   batchSize: number
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   return input.claimedChunks.length < getReviewServingProjectorWorkerRebuildChunkPreclaimLimit(input)
@@ -7635,6 +7699,7 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
   batchSize: number
   claimedChunks: ClaimedReviewServingProjectorWorkerRebuildChunk[]
   database: ReviewServingChunkManifestRepositoryDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
   service: ReviewServingProjectorWorkerRebuildChunkService
   workerId: string
@@ -7649,6 +7714,7 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
   const preclaimLimit = getReviewServingProjectorWorkerRebuildChunkPreclaimLimit({
     batchSize: input.batchSize,
     claimedChunks: input.claimedChunks,
+    dependencies: input.dependencies,
     options: input.options,
   })
   const remainingLimit = preclaimLimit - input.claimedChunks.length
@@ -7674,6 +7740,7 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
     const preclaimLimit = getReviewServingProjectorWorkerRebuildChunkPreclaimLimit({
       batchSize: input.batchSize,
       claimedChunks: input.claimedChunks,
+      dependencies: input.dependencies,
       options: input.options,
     })
 
@@ -7735,6 +7802,7 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
       !shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({
         batchSize: input.batchSize,
         claimedChunks: input.claimedChunks,
+        dependencies: input.dependencies,
         options: input.options,
       })
       || !shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch(
@@ -7784,6 +7852,7 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
     shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({
       batchSize: input.batchSize,
       claimedChunks,
+      dependencies: input.dependencies,
       options: input.options,
     })
   ) {
@@ -7836,6 +7905,7 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
         batchSize: input.batchSize,
         claimedChunks,
         database: input.database,
+        dependencies: input.dependencies,
         options: input.options,
         service,
         workerId: input.workerId,
@@ -9095,7 +9165,7 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }): Promise<ReviewServingProjectorWorkerDeltaIntakeResult> => {
-  const limit = getNonNegativeInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake)
+  const limit = getEffectiveReviewServingProjectorWorkerMaxRowsPerWake({dependencies, options})
   if (limit === 0) {
     return getIdleReviewServingProjectorWorkerDeltaIntakeResult()
   }
@@ -9247,7 +9317,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const projector = shouldRunOnlyRebuildChunk
     ? getBlockedReviewServingProjectorWakeResult()
     : await runReviewServingProjectorWorkerCyclePhase('wakeProjectors', () => {
-        return dependencies.wakeProjectors(getWakeInput(options, wakeId), {
+        return dependencies.wakeProjectors(getWakeInput({dependencies, options, wakeId}), {
           ...projectorServiceDependencies,
           database,
           nowMs: () => {
@@ -9364,6 +9434,7 @@ export const runReviewServingProjectorWorker = async (
     completedRebuildChunksInRun,
     ...getNextForegroundRebuildDrainOptions({chunk: cycleResult.chunk, dependencies, nowMs, options}),
     lastCleanupAtMs: cycleResult.nextCleanupAtMs,
+    previousRssBytes: getReviewServingProjectorWorkerMemoryUsage(dependencies).rss,
   }
 
   return delayMs > 0

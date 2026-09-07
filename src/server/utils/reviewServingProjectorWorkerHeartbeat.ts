@@ -17,6 +17,7 @@ type ReviewServingProjectorWorkerHeartbeatOptions = {
   maxWakeMs?: number
   pollIntervalMs?: number
   rebuildChunkBatchMaxRssBytes?: number
+  rebuildChunkBatchSoftRssBytes?: number
   rebuildChunkBatchSize?: number
   restartDelayMs?: number
 }
@@ -30,6 +31,7 @@ const lowMemoryMaintenanceDuckdbLimitMiB = 8192
 const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const highRssRestartGraceBytes = gibibyte
+const defaultReviewServingProjectorWorkerSoftRssRatio = 0.85
 let foregroundWorkRecycleDeferStartedAtMs: number | null = null
 let foregroundWorkRecycleDeferCount = 0
 
@@ -72,6 +74,21 @@ const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
     options.rebuildChunkBatchMaxRssBytes
     ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
     ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
+  )
+}
+
+const getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes = (
+  options: ReviewServingProjectorWorkerHeartbeatOptions,
+) => {
+  const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
+
+  if (maxRssBytes <= 0) {
+    return 0
+  }
+
+  return Math.min(
+    maxRssBytes,
+    options.rebuildChunkBatchSoftRssBytes ?? Math.floor(maxRssBytes * defaultReviewServingProjectorWorkerSoftRssRatio),
   )
 }
 
@@ -247,6 +264,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         options.rebuildChunkBatchMaxRssBytes
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
         ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      rebuildChunkBatchSoftRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(options),
       rebuildChunkBatchSize:
         options.rebuildChunkBatchSize
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
@@ -319,6 +337,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       lastCleanupAtMs: Date.now(),
       pollIntervalMs: options.pollIntervalMs,
       rebuildChunkBatchMaxRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options),
+      rebuildChunkBatchSoftRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(options),
       rebuildChunkBatchSize:
         options.rebuildChunkBatchSize
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
