@@ -80,7 +80,7 @@ type RuntimeState = {
   runtimeVersion: string
   serverRole: string | null
 }
-type RuntimeReady = {localOperatorApiExposed: boolean; ready: boolean; settingsDiagnosticsApiExposed?: boolean}
+type RuntimeReady = {ready: boolean; settingsDiagnosticsApiExposed?: boolean}
 type UpdateLocalUserInput = {
   maintenanceWorkerDuckdbMemoryLimit: string
   codexBin: string

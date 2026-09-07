@@ -159,13 +159,8 @@ test('retired project mart admin mutation routes are absent from the live route 
   expect(source).not.toContain('retired legacy rebuild/materialization controls')
 })
 
-test('public route surface gate covers internal, diagnostics, debug, and remove-before-release categories', () => {
-  expect([...publicRouteSurfaceGatedCategories].sort()).toEqual([
-    'internal-runtime-api',
-    'local-diagnostics-api',
-    'maintenance-debug-api',
-    'remove-before-release',
-  ])
+test('public route surface gate only covers internal and remove-before-release categories', () => {
+  expect([...publicRouteSurfaceGatedCategories].sort()).toEqual(['internal-runtime-api', 'remove-before-release'])
 })
 
 test('listener and proxy entrypoints are local by default', () => {

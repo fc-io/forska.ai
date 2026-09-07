@@ -108,6 +108,29 @@ afterEach(() => {
   mock.restore()
 })
 
+test.each(['0', '12'])('conversion stats return a numeric count when DuckDB returns %s', async (count) => {
+  const lastFailed = [
+    {
+      id: 'article-1',
+      articleId: null,
+      title: 'Failed PDF',
+      error: 'PDF conversion failed',
+      attempts: 3,
+      updatedAt: '2026-09-07T10:00:00.000Z',
+    },
+  ]
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('COUNT(*)') ? [{count}] : lastFailed.slice(0, Number(count))
+  }
+
+  const app = await getApp()
+  const response = await app.handle(new Request('http://localhost/api/articles/conversion-stats'))
+  const body: unknown = await response.json()
+
+  expect(response.status).toBe(200)
+  expect(body).toEqual({lastFailed: lastFailed.slice(0, Number(count)), totalFailed: Number(count)})
+})
+
 test('latest articles include URL fields needed for article links', async () => {
   queryJsonRef.current = async () => {
     return [

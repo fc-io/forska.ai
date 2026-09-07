@@ -1,9 +1,10 @@
-import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
+import {PdfConversionControls} from './pdfConversionControls.tsx'
 
 const fetchConversionStats = async () => {
   const response = await apiClient.api.articles['conversion-stats'].get()
@@ -11,50 +12,19 @@ const fetchConversionStats = async () => {
 }
 
 const AdminPdfConversions = () => {
-  const queryClient = useQueryClient()
-
-  const resetMutation = createMutation(() => {
-    return {
-      mutationFn: async () => {
-        const response = await apiClient.api.articles['conversion-reset'].post()
-        return handleApiResponse(response, 'Failed to reset conversions')
-      },
-      onSuccess: () => {
-        void queryClient.invalidateQueries({queryKey: ['articles', 'conversion-stats']})
-      },
-    }
-  })
-
   const statsQuery = useQuery(() => {
     return {
       queryKey: ['articles', 'conversion-stats'],
       queryFn: fetchConversionStats,
       staleTime: 1000 * 30,
       refetchOnWindowFocus: false,
+      suspense: false,
     }
   })
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Failed PDF Conversions</h1>
-        <div class="flex items-center space-x-4">
-          <Show when={statsQuery.data?.totalFailed !== undefined}>
-            <span class="text-sm text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
-              Total Failed: <span class="font-semibold text-gray-900">{statsQuery.data?.totalFailed}</span>
-            </span>
-          </Show>
-          <button
-            onClick={() => {
-              return resetMutation.mutate()
-            }}
-            disabled={resetMutation.isPending || !statsQuery.data?.totalFailed}
-            class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {resetMutation.isPending ? 'Resetting...' : 'Reset All Failed'}
-          </button>
-        </div>
-      </div>
+      <PdfConversionControls totalFailed={statsQuery.data?.totalFailed} />
 
       <Show when={statsQuery.isLoading}>
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
@@ -63,8 +33,8 @@ const AdminPdfConversions = () => {
       </Show>
 
       <Show when={statsQuery.isError}>
-        <div class="p-4 rounded-md bg-red-50 border border-red-200">
-          <p class="text-red-600">Failed to load data</p>
+        <div role="alert" class="p-4 rounded-md bg-red-50 border border-red-200">
+          <p class="text-red-600">{statsQuery.error?.message || 'Failed to load conversion stats'}</p>
           <button
             onClick={() => {
               return void statsQuery.refetch()
@@ -76,7 +46,7 @@ const AdminPdfConversions = () => {
         </div>
       </Show>
 
-      <Show when={!statsQuery.isLoading && !statsQuery.isError}>
+      <Show when={statsQuery.isSuccess}>
         <div class="bg-white shadow overflow-hidden sm:rounded-md">
           <ul class="divide-y divide-gray-200">
             <For each={statsQuery.data?.lastFailed ?? []}>

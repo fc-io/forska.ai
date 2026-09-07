@@ -138,7 +138,7 @@ export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/articles/conversion-stats', async () => {
     const [[totalFailedRow], lastFailedRows] = await Promise.all([
-      getAppDatabaseService().queryJson<{count: number}>(`
+      getAppDatabaseService().queryJson<{count: number | string}>(`
         SELECT COUNT(*) AS count
         FROM app.article
         WHERE full_text_conversion_status = 'failed'
@@ -169,7 +169,7 @@ export const articlesRoutes = new Elysia()
       return {...row, updatedAt: getDateValue(row.updatedAt)}
     })
 
-    return {lastFailed, totalFailed: totalFailedRow?.count ?? 0}
+    return {lastFailed, totalFailed: Number(totalFailedRow?.count ?? 0)}
   })
   .post('/api/articles/conversion-reset', async () => {
     await getAppDatabaseService().run(`

@@ -37,11 +37,9 @@ type RoutePair = readonly [RouteSurfaceRoute['method'], string]
 
 const supportedProductDecision = 'Keep as supported local product API on loopback.'
 const sensitiveProductDecision = 'Keep local-only after public-release sensitivity review.'
-const diagnosticsDecision =
-  'Gated on the public API by default. Expose only with FORSKA_EXPOSE_LOCAL_OPERATOR_API=true for local diagnostics.'
+const diagnosticsDecision = 'Keep local diagnostics available on the loopback API without operator mode.'
 const internalDecision = 'Gated on the public API by default. Keep internal/local-only and omit from public docs.'
-const maintenanceDecision =
-  'Gated on the public API by default. Keep developer/operator-only or remove before public release.'
+const maintenanceDecision = 'Keep local maintenance controls available on the loopback API without operator mode.'
 const removeBeforeReleaseDecision =
   'Gated on the public API by default. Remove before release unless explicitly justified.'
 const settingsDiagnosticsDecision = 'Keep as read-only Settings diagnostics on the local loopback API.'
@@ -189,7 +187,7 @@ export const routeSurfaceEntrypoints: RouteSurfaceEntrypoint[] = [
     category: 'internal-runtime-api',
     defaultBind: 'loopback',
     releaseDecision:
-      'Keep before the owner proxy. Blocks public admin, debug, database, status, internal runtime, and remove-before-release routes by default.',
+      'Keep before the owner proxy. Blocks internal runtime and remove-before-release routes on the public local API.',
     source: 'src/server/routes/publicRouteSurfaceGate.ts',
     surface: 'Public local API route-surface gate',
   },
@@ -369,13 +367,12 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['GET', '/api/articles/search'],
     ['GET', '/api/articles/pdf-fetch-jobs/:jobId'],
   ]),
-  ...ownerDependentDiagnostics('ArticlesRoutes.ts', 'Article conversion and PDF-fetch status.', [
-    ['GET', '/api/articles/conversion-stats'],
-  ]),
   ...ownerDependentSensitive(
     'ArticlesRoutes.ts',
     'Article records, PDFs, external fetches, and destructive article operations.',
     [
+      ['GET', '/api/articles/conversion-stats'],
+      ['POST', '/api/articles/conversion-reset'],
       ['POST', '/api/articles/pdf-fetch-bulk'],
       ['POST', '/api/articles/pdf-fetch-by-filter'],
       ['POST', '/api/articles/pdf-fetch-by-project'],
@@ -384,8 +381,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['DELETE', '/api/articles/:id'],
     ],
   ),
-  ...ownerDependentMaintenance('ArticlesRoutes.ts', 'Article conversion and PDF fetch reset controls.', [
-    ['POST', '/api/articles/conversion-reset'],
+  ...ownerDependentMaintenance('ArticlesRoutes.ts', 'PDF fetch reset control.', [
     ['POST', '/api/articles/pdf-fetch-reset'],
   ]),
   ...ownerDependentSensitive(

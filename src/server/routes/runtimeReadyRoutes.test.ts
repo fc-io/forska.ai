@@ -4,7 +4,6 @@ import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from '../u
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {resetServerRuntimeRoleForTests} from '../utils/serverRuntimeRole.ts'
 import {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} from './apiRouteClassification.ts'
-import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 import {resetRuntimeReadyOwnerProbeCacheForTests, runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
 
 type RuntimeReadyResponse = {
@@ -13,7 +12,6 @@ type RuntimeReadyResponse = {
     duckdbOwnerUrl: string | null
     duckdbExclusiveWork: {active: boolean}
     duckdbService: null | {ready: boolean; startupActive: boolean}
-    localOperatorApiExposed: boolean
     ready: boolean
     settingsDiagnosticsApiExposed: boolean
   }
@@ -60,8 +58,7 @@ const withBunMaxHttpRequestsEnv = async (value: string | undefined, run: () => P
   }
 }
 
-const withLocalOperatorApiEnv = async (value: string | undefined, run: () => Promise<void>) => {
-  const previousValue = process.env[exposeLocalOperatorApiEnvVar]
+const withSingleServerRuntimeEnv = async (run: () => Promise<void>) => {
   const previousRole = process.env.SERVER_ROLE
   const previousOwnerUrl = process.env.SERVER_DUCKDB_OWNER_URL
 
@@ -70,24 +67,8 @@ const withLocalOperatorApiEnv = async (value: string | undefined, run: () => Pro
     delete process.env.SERVER_DUCKDB_OWNER_URL
     resetServerRuntimeRoleForTests()
 
-    if (value === undefined) {
-      delete process.env[exposeLocalOperatorApiEnvVar]
-    }
-
-    if (value !== undefined) {
-      process.env[exposeLocalOperatorApiEnvVar] = value
-    }
-
     await run()
   } finally {
-    if (previousValue === undefined) {
-      delete process.env[exposeLocalOperatorApiEnvVar]
-    }
-
-    if (previousValue !== undefined) {
-      process.env[exposeLocalOperatorApiEnvVar] = previousValue
-    }
-
     if (previousRole === undefined) {
       delete process.env.SERVER_ROLE
     }
@@ -160,26 +141,18 @@ const getRuntimeStateResponse = async () => {
   return (await response.json()) as RuntimeStateResponse
 }
 
-test('runtime readiness reports local operator API exposure', async () => {
-  await withLocalOperatorApiEnv('true', async () => {
+test('runtime readiness exposes settings diagnostics without an operator mode', async () => {
+  await withSingleServerRuntimeEnv(async () => {
     const response = await getRuntimeReadyResponse()
 
     expect(response.data.ready).toBe(true)
-    expect(response.data.localOperatorApiExposed).toBe(true)
-    expect(response.data.settingsDiagnosticsApiExposed).toBe(true)
-  })
-
-  await withLocalOperatorApiEnv(undefined, async () => {
-    const response = await getRuntimeReadyResponse()
-
-    expect(response.data.ready).toBe(true)
-    expect(response.data.localOperatorApiExposed).toBe(false)
+    expect(response.data).not.toHaveProperty('localOperatorApiExposed')
     expect(response.data.settingsDiagnosticsApiExposed).toBe(true)
   })
 })
 
 test('runtime diagnostics report active DuckDB exclusive work without making runtime unready', async () => {
-  await withLocalOperatorApiEnv(undefined, async () => {
+  await withSingleServerRuntimeEnv(async () => {
     process.env.SERVER_ROLE = 'maintenance-worker'
     resetServerRuntimeRoleForTests()
 
@@ -207,7 +180,7 @@ test('runtime diagnostics report active DuckDB exclusive work without making run
 })
 
 test('maintenance owner runtime readiness is false until DuckDB service is open', async () => {
-  await withLocalOperatorApiEnv(undefined, async () => {
+  await withSingleServerRuntimeEnv(async () => {
     process.env.SERVER_ROLE = 'maintenance-worker'
     resetServerRuntimeRoleForTests()
 

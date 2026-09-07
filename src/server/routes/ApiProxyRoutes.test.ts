@@ -12,7 +12,6 @@ import {
   shouldApiRouteProxyToDuckdbOwner,
 } from './apiRouteClassification.ts'
 import {projectTransferRouteSpecs} from './projectTransferRoutes.ts'
-import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 
 type SpawnedServer = {
   process: ReturnType<typeof globalThis.Bun.spawn>
@@ -25,7 +24,6 @@ const csvExportRoute = {endpoint: 'csv-export', method: 'POST', samplePath: '/ap
 const ownerRoutedProjectRoutes = [...projectTransferRouteSpecs, csvExportRoute]
 const apiProxyIntegrationTestTimeoutMs = 120_000
 const apiProxyServerStartupTimeoutMs = 60_000
-const exposeLocalOperatorApiEnv = {[exposeLocalOperatorApiEnvVar]: 'true'}
 
 const canStartLocalServer = () => {
   try {
@@ -287,7 +285,6 @@ apiProxyServerTest(
     const apiPort = 34994
     const duckdbPath = join(tmpdir(), `f1-duckdb-owner-connections-${Date.now()}.duckdb`)
     const ownerServer = startServer({
-      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(ownerPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -296,7 +293,6 @@ apiProxyServerTest(
       VITE_PORT: '4313',
     })
     const apiServer = startServer({
-      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(apiPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -347,7 +343,6 @@ apiProxyServerTest(
     const apiPort = 34999
     const duckdbPath = join(tmpdir(), `f1-owner-proxy-disabled-${Date.now()}.duckdb`)
     const apiServer = startServer({
-      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(apiPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -474,7 +469,6 @@ apiProxyServerTest(
     const secondPort = 34996
     const duckdbPath = join(tmpdir(), `f1-auto-owner-${Date.now()}.duckdb`)
     const firstServer = startServer({
-      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(firstPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -487,7 +481,6 @@ apiProxyServerTest(
       await waitForServer(firstPort, apiProxyServerStartupTimeoutMs, firstServer)
 
       const secondServer = startServer({
-        ...exposeLocalOperatorApiEnv,
         API_SERVER_PORT: String(secondPort),
         DUCKDB_PATH: duckdbPath,
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -556,7 +549,6 @@ apiProxyServerTest(
     const duckdbPath = join(tmpdir(), `f1-auto-stale-heartbeat-${Date.now()}.duckdb`)
     const leasePath = `${duckdbPath}.duckdb-owner.lock`
     const ownerServer = startServer({
-      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(ownerPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -579,7 +571,6 @@ apiProxyServerTest(
       removeFileIfExists(`${snapshotBody.data.snapshotPath}.wal`)
 
       const followerServer = startServer({
-        ...exposeLocalOperatorApiEnv,
         API_SERVER_PORT: String(followerPort),
         DUCKDB_PATH: duckdbPath,
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -655,7 +646,6 @@ apiProxyServerTest(
     )
 
     const server = startServer({
-      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(serverPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',

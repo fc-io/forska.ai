@@ -49,7 +49,6 @@ export default defineConfig({
       env: {
         ...smokeEnv,
         DUCKDB_TEMP_DIRECTORY: duckdbTempDirectory,
-        FORSKA_EXPOSE_LOCAL_OPERATOR_API: process.env.FORSKA_NETWORK_SMOKE_AUDIT === 'true' ? 'true' : 'false',
       },
       port: apiServerPort,
       reuseExistingServer: false,

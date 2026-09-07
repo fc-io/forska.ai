@@ -11,7 +11,6 @@ import {
   getKnownDuckdbOwnerUrl,
   shouldCurrentServerProxyApiToOwner,
 } from '../utils/serverRuntimeRole.ts'
-import {isLocalOperatorApiExposed} from './publicRouteSurfaceGate.ts'
 
 const bunDefaultMaxHttpRequests = 256
 const ownerProxyReadinessFreshMs = 30_000
@@ -104,7 +103,6 @@ export const runtimeReadyRoutes = new Elysia()
         duckdbOwnerUrl,
         duckdbExclusiveWork: {active: getActiveDuckdbExclusiveWorkSnapshot() !== null},
         duckdbService: canCurrentServerOwnDuckdb() ? getDuckdbServiceReadinessSnapshot() : null,
-        localOperatorApiExposed: isLocalOperatorApiExposed(),
         ownerProxy,
         ready,
         role,

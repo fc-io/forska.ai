@@ -3,11 +3,7 @@ import {Elysia} from 'elysia'
 
 import {runtimePrivateApiPrefix} from '../utils/runtimePrivateApi.ts'
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
-import {
-  exposeLocalOperatorApiEnvVar,
-  getPublicRouteSurfaceGateDecision,
-  publicRouteSurfaceGate,
-} from './publicRouteSurfaceGate.ts'
+import {getPublicRouteSurfaceGateDecision, publicRouteSurfaceGate} from './publicRouteSurfaceGate.ts'
 
 const getResponse = (path: string, method = 'GET', headers?: HeadersInit) => {
   const app = new Elysia()
@@ -25,22 +21,75 @@ const getResponse = (path: string, method = 'GET', headers?: HeadersInit) => {
   return app.handle(new Request(`http://localhost${path}`, {headers, method}))
 }
 
-test('public gate blocks admin debug routes by default', async () => {
+test('public gate allows local diagnostics without operator mode', async () => {
   const response = await getResponse('/api/admin/duckdb-append-metrics')
-  const body = (await response.json()) as {data: null; error: string}
+  const body = (await response.json()) as {data: string}
 
-  expect(response.status).toBe(404)
-  expect(body.error).toBe('Route is not available on the public local API surface')
+  expect(response.status).toBe(200)
+  expect(body.data).toBe('public-route')
 })
 
-test('public gate blocks public judgment dispatch telemetry by default', async () => {
+test('public gate allows local judgment dispatch telemetry', async () => {
   const response = await getResponse('/api/admin/judgment-dispatch-runtime/job-a')
 
-  expect(response.status).toBe(404)
+  expect(response.status).toBe(200)
 })
 
-test('public gate blocks database snapshot routes by default', async () => {
+test('public gate allows local database snapshot controls', async () => {
   const response = await getResponse('/api/duckdbStudioSnapshots', 'POST')
+
+  expect(response.status).toBe(200)
+})
+
+test('public gate leaves failed PDF conversion status and reset available to the local app', async () => {
+  const responses = await Promise.all([
+    getResponse('/api/articles/conversion-stats'),
+    getResponse('/api/articles/conversion-reset', 'POST'),
+  ])
+
+  expect(
+    responses.map((response) => {
+      return response.status
+    }),
+  ).toEqual([200, 200])
+})
+
+test('public gate allows the PDF fetch reset control', async () => {
+  const response = await getResponse('/api/articles/pdf-fetch-reset', 'POST')
+
+  expect(response.status).toBe(200)
+})
+
+test.each([
+  ['GET', '/api/nvidiasmi'],
+  ['GET', '/api/models/gpu-info'],
+  ['GET', '/api/admin/list-prompts-with-types'],
+  ['GET', '/api/admin/investigate-unexpected-answers'],
+  ['POST', '/api/admin/delete-unexpected-answers'],
+  ['GET', '/api/prompts/duplicates'],
+  ['GET', '/api/prompts/orphans'],
+  ['GET', '/api/prompts/invalid-judgments'],
+  ['POST', '/api/prompts/merge'],
+  ['DELETE', '/api/prompts/prompt-1'],
+  ['GET', '/api/judgmentsjobs-health'],
+  ['GET', '/api/judgmentsjobs/job-1/health'],
+  ['POST', '/api/judgmentsjobs/job-1/start-clean'],
+  ['POST', '/api/judgmentsjobs/job-1/preflight'],
+  ['POST', '/api/judgmentsjobs/job-1/repair'],
+  ['POST', '/api/judgmentsjobs/job-1/drain'],
+  ['POST', '/api/judgmentsjobs/job-1/checkpoint'],
+  ['POST', '/api/judgmentsjobs/job-1/quarantine'],
+  ['POST', '/api/judgmentsjobs/job-1/unquarantine'],
+  ['POST', '/api/judgmentsjobs/job-1/repair-orphaned-queue'],
+  ['POST', '/api/projects/delete-archived'],
+])('local app control %s %s is available without operator mode', async (method, path) => {
+  const response = await getResponse(path, method)
+
+  expect(response.status).toBe(200)
+})
+
+test('public gate keeps the unreleased FHIR importer blocked', async () => {
+  const response = await getResponse('/api/datasources/import/fhir-ehr-patients', 'POST')
 
   expect(response.status).toBe(404)
 })
@@ -136,12 +185,24 @@ test('public gate leaves runtime-private RPC available for split-runtime interna
   expect(body.data).toBe('runtime-private-route')
 })
 
-test('public gate can expose local operator routes when explicitly enabled', () => {
-  const decision = getPublicRouteSurfaceGateDecision({
-    envValues: {[exposeLocalOperatorApiEnvVar]: 'true'},
-    method: 'GET',
-    pathname: '/api/admin/duckdb-append-metrics',
-  })
+test.each([
+  ['POST', '/api/provideradmissionleases/acquire'],
+  ['POST', '/api/judgmentsjobs/job-1/claim'],
+  ['POST', '/api/judgmentsjobs/job-1/complete'],
+  ['GET', '/api/judgmentsjobs/job-1/runtime'],
+])('retired operator setting cannot expose internal route %s %s', async (method, path) => {
+  const previousValue = process.env.FORSKA_EXPOSE_LOCAL_OPERATOR_API
 
-  expect(decision.shouldGate).toBe(false)
+  try {
+    process.env.FORSKA_EXPOSE_LOCAL_OPERATOR_API = 'true'
+    const response = await getResponse(path, method)
+
+    expect(response.status).toBe(404)
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env.FORSKA_EXPOSE_LOCAL_OPERATOR_API
+    } else {
+      process.env.FORSKA_EXPOSE_LOCAL_OPERATOR_API = previousValue
+    }
+  }
 })
