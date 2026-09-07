@@ -1763,13 +1763,17 @@ const getDispatchCounts = (database: Database): PromptDispatchCounts => {
   return {claimed: Number(row?.claimedCount ?? 0), running: Number(row?.runningCount ?? 0)}
 }
 
+export const getExistingFileByteSize = (filePath: string): number | null => {
+  return statSync(filePath, {throwIfNoEntry: false})?.size ?? null
+}
+
 const getFileByteSize = (filePath: string) => {
-  return existsSync(filePath) ? statSync(filePath).size : 0
+  return getExistingFileByteSize(filePath) ?? 0
 }
 
 const getSqliteFileByteSize = (jobId: string) => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
-  return existsSync(sqlitePath) ? statSync(sqlitePath).size : null
+  return getExistingFileByteSize(sqlitePath)
 }
 
 const getHealthSnapshotFromDatabase = (
