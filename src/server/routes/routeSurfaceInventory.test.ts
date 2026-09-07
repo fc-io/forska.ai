@@ -15,6 +15,7 @@ import {
   routeSurfaceRoutes,
 } from './routeSurfaceInventory.ts'
 import {runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
+import {reviewServingStatusRoutes} from './reviewServingStatusRoutes.ts'
 
 type MountedRoute = {method: string; path: string}
 type SourceFile = {path: string; source: string}
@@ -31,6 +32,7 @@ const removedProjectMartAdminMutationRoutes = [
 const getMountedRoutes = (): MountedRoute[] => {
   return [
     ...runtimeReadyRoutes.routes,
+    ...reviewServingStatusRoutes.routes,
     ...duckdbOwnerConnectionsRoutes.routes,
     ...judgmentDispatchTelemetryRoutes.routes,
     ...getProductApiRoutes().routes,

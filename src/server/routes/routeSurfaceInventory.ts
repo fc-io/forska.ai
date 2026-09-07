@@ -227,6 +227,11 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     [['GET', '/api/runtime/state']],
   ),
   ...ownerlessSettingsDiagnostics(
+    'reviewServingStatusRoutes.ts',
+    'Review-serving pause, owner proxy, queue, and snapshot status.',
+    [['GET', '/api/review-serving/status']],
+  ),
+  ...ownerlessSettingsDiagnostics(
     'DuckdbOwnerConnectionsRoutes.ts',
     'DuckDB owner, follower, host, process, and mart throughput metadata.',
     [['GET', '/api/duckdb_owner_connections']],

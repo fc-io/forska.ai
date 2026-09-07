@@ -4,7 +4,7 @@ import {dirname} from 'node:path'
 
 import {validateReadOnlyDuckdbService} from '../services/readOnlyDuckdbService.ts'
 import {getEnv} from './env.ts'
-import {runtimeReadyPath, runtimeStatePath} from './runtimeReadyContract.ts'
+import {runtimeReadyPath, runtimeReviewServingStatusPath, runtimeStatePath} from './runtimeReadyContract.ts'
 import {canCurrentServerOwnDuckdb} from './serverRuntimeRole.ts'
 
 export type OwnerlessReadableBackend = 'live-read-only-duckdb' | 'ownerless-control-state' | 'process-runtime-state'
@@ -40,6 +40,12 @@ const ownerlessRouteBackendState = getOwnerlessRouteBackendState()
 export const ownerlessRouteDeclarations = [
   {backends: ['process-runtime-state'], method: 'GET', pathname: runtimeReadyPath, routeKind: 'bootstrap'},
   {backends: ['process-runtime-state'], method: 'GET', pathname: runtimeStatePath, routeKind: 'diagnostics'},
+  {
+    backends: ['process-runtime-state'],
+    method: 'GET',
+    pathname: runtimeReviewServingStatusPath,
+    routeKind: 'diagnostics',
+  },
   {
     backends: ['live-read-only-duckdb', 'ownerless-control-state'],
     method: 'GET',

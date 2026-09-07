@@ -14,6 +14,7 @@ import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetr
 import {getProductApiRoutes} from './routes/productApiRoutes.ts'
 import {publicRouteSurfaceGate} from './routes/publicRouteSurfaceGate.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
+import {reviewServingStatusRoutes} from './routes/reviewServingStatusRoutes.ts'
 import {
   type ProjectTransferSessionRecoveryResult,
   runProjectTransferStartupRecovery,
@@ -288,6 +289,7 @@ const duckdbOwnerPrivateApiRoutes = shouldCurrentServerMountDuckdbOwnerPrivateAp
   : new Elysia()
 const _publicAppContract = new Elysia()
   .use(runtimeReadyRoutes)
+  .use(reviewServingStatusRoutes)
   .use(duckdbOwnerConnectionsRoutes)
   .use(getProductApiRoutes())
 
@@ -303,6 +305,7 @@ export const app = new Elysia()
   .use(publicRouteSurfaceGate)
   .use(apiProxyRoutes)
   .use(runtimeReadyRoutes)
+  .use(reviewServingStatusRoutes)
   .use(duckdbOwnerConnectionsRoutes)
   .use(judgmentDispatchTelemetryRoutes)
   .use(maintenanceCronRoutes)

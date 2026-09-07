@@ -7,13 +7,13 @@ import {afterEach, beforeEach, expect, test, vi} from 'vitest'
 import type {ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
 const mockState = vi.hoisted(() => {
-  return {warningsData: null as ReviewsWarningsData | null}
+  return {statusData: null as {pauseMarker: {exists: boolean}} | null, warningsData: null as ReviewsWarningsData | null}
 })
 
 vi.mock('@tanstack/solid-query', () => {
   return {
     useQuery: () => {
-      return {data: mockState.warningsData, isSuccess: mockState.warningsData !== null}
+      return {data: mockState.statusData ?? mockState.warningsData, isSuccess: mockState.warningsData !== null}
     },
   }
 })
@@ -101,6 +101,22 @@ beforeEach(() => {
   vi.resetModules()
   document.body.innerHTML = ''
   mockState.warningsData = null
+  mockState.statusData = null
+})
+
+test('renders ownerless recovery status when the detailed warning request is unavailable', async () => {
+  mockState.statusData = {pauseMarker: {exists: true}}
+  const {ReviewsProjectWarnings} = await import('./reviewsProjectWarnings.tsx')
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const dispose = render(() => <ReviewsProjectWarnings projectId="project-1" />, container)
+
+  try {
+    expect(container.textContent).toContain('Review indexing recovering after memory pressure')
+    expect(container.textContent).toContain('Review pages remain available')
+  } finally {
+    dispose()
+  }
 })
 
 afterEach(() => {
