@@ -52,6 +52,7 @@ export type TopologyJobCleanupState = {
 
 export const topologyLongRunningProcessStdio = {stderr: 'inherit', stdout: 'inherit'} as const
 export const topologyProjectorQuietWindowMs = 10_000
+export const topologyReadinessRegressionGraceMs = 2_000
 
 export const isTopologyJobCleanupComplete = (jobs: TopologyJobCleanupState[]) => {
   return (
@@ -793,9 +794,11 @@ export const startJudgmentWorkflowReadinessMonitor = ({
   ]
   let stopped = false
   let failure: Error | null = null
+  const unhealthySinceByTarget = new Map<string, number>()
   const monitor = async (): Promise<void> => {
     while (!stopped && failure === null) {
       for (const target of targets) {
+        const targetKey = `${target.role}:${target.port}`
         const healthy = await fetch(`http://127.0.0.1:${target.port}${runtimeReadyPath}`)
           .then(async (response) => {
             const body = (await response.json()) as {data?: {ready?: boolean; role?: string}}
@@ -805,7 +808,15 @@ export const startJudgmentWorkflowReadinessMonitor = ({
             return false
           })
 
-        if (!healthy) {
+        if (healthy) {
+          unhealthySinceByTarget.delete(targetKey)
+          continue
+        }
+
+        const unhealthySince = unhealthySinceByTarget.get(targetKey) ?? Date.now()
+        unhealthySinceByTarget.set(targetKey, unhealthySince)
+
+        if (Date.now() - unhealthySince >= topologyReadinessRegressionGraceMs) {
           failure = new Error(`Runtime readiness regressed for ${target.role} on port ${target.port}`)
           return
         }

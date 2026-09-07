@@ -23,6 +23,8 @@ let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
+let getExistingFileByteSize: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getExistingFileByteSize'] | null =
+  null
 let JudgmentJobLeaseError: Awaited<typeof import('./judgmentJobSqliteService.ts')>['JudgmentJobLeaseError'] | null =
   null
 let isRetryableJudgmentJobFileDeleteError:
@@ -97,6 +99,7 @@ beforeAll(async () => {
     return database.run(statement)
   }
   sqliteService = sqliteModule.getJudgmentJobSqliteService
+  getExistingFileByteSize = sqliteModule.getExistingFileByteSize
   JudgmentJobLeaseError = sqliteModule.JudgmentJobLeaseError
   isRetryableJudgmentJobFileDeleteError = sqliteModule.isRetryableJudgmentJobFileDeleteError
 })
@@ -118,6 +121,14 @@ test('classifies only native busy file deletion as retryable', () => {
   )
   expect(isRetryableJudgmentJobFileDeleteError(new Error('busy'))).toBe(false)
   expect(isRetryableJudgmentJobFileDeleteError(null)).toBe(false)
+})
+
+test('reads optional file byte size as null when the file is absent', () => {
+  if (!getExistingFileByteSize) {
+    throw new Error('File size helper not initialized')
+  }
+
+  expect(getExistingFileByteSize(join(tempRuntimeRoot.rootDirectory, `missing-${Date.now()}.sqlite-wal`))).toBeNull()
 })
 
 test('claims and requeues prompts from the per-job SQLite queue', async () => {
