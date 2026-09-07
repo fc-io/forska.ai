@@ -968,6 +968,7 @@ test('chunked full summary rebuild accumulator writes are idempotent through nor
 
 test('summary rebuild request finalization reduces partials in bounded accumulator batches', async () => {
   const statements: string[] = []
+  const finalizationPhases: string[] = []
   const chunkRows = Array.from({length: 257}, (_, index) => {
     return {chunkId: `chunk-${String(index + 1).padStart(3, '0')}`}
   })
@@ -983,6 +984,14 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
         return [{partialCount: 1}] as T[]
       }
 
+      if (statement.includes('FROM temp_summary_rebuild_count_publication')) {
+        return [{rowCount: 2}] as T[]
+      }
+
+      if (statement.includes('FROM temp_summary_rebuild_facet_publication')) {
+        return [{rowCount: 3}] as T[]
+      }
+
       return [] as T[]
     },
     run: async (statement: string) => {
@@ -995,8 +1004,11 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     },
   }
 
-  await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+  const result = await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
     {
+      onFinalizationPhaseComplete: (phase) => {
+        finalizationPhases.push(phase)
+      },
       requestId: 'rebuild-summary-1',
       snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
     },
@@ -1030,6 +1042,36 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(joined).not.toContain('mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(finalizationPhases).toEqual([
+    'accumulatorChunkBatch',
+    'accumulatorChunkBatch',
+    'accumulatorReduction',
+    'countPublication',
+    'facetPublication',
+    'snapshot',
+  ])
+  expect(result).toMatchObject({
+    requestId: 'rebuild-summary-1',
+    snapshots: [
+      {
+        accumulatorChunkBatchCount: 2,
+        accumulatorPartialCount: 1,
+        chunkCount: 257,
+        countPublicationRowCount: 2,
+        facetPublicationRowCount: 3,
+        maxAccumulatorChunkBatchSize: 256,
+        skipped: false,
+      },
+    ],
+  })
+  const phaseTimings = result.snapshots[0]?.phaseTimings ?? {}
+  expect(phaseTimings.accumulatorPartialCountMs).toBeGreaterThanOrEqual(0)
+  expect(phaseTimings.accumulatorReductionMs).toBeGreaterThanOrEqual(0)
+  expect(phaseTimings.countPublicationMs).toBeGreaterThanOrEqual(0)
+  expect(phaseTimings.facetPublicationMs).toBeGreaterThanOrEqual(0)
+  expect(phaseTimings.readAccumulatorStateMs).toBeGreaterThanOrEqual(0)
+  expect(phaseTimings.accumulatorChunkBatchYieldMs).toBeGreaterThanOrEqual(0)
+  expect(phaseTimings.countPublicationYieldMs).toBeGreaterThanOrEqual(0)
 })
 
 test('summary rebuild request finalization accepts normalized membership and ignores stale scope', async () => {

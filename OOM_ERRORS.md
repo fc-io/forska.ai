@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-09-07 - Summary Rebuild Finalization Yielding
+
+- Error: Low-memory review-serving maintenance owners repeatedly crossed the RSS cap and restarted during current-DB backlog drain.
+- Context: Request-associated chunked full-summary rebuild finalization after SQL-native chunk accumulation.
+- Cause: Final count and facet publication still ran as one request-finalization transaction, leaving no scheduler point between independent native reductions.
+- Fix: Split summary finalization into accumulator-batch reduction, count publication, and facet publication phases with scheduler yields between phases, plus diagnostics for chunk batch size/count and publication row counts.
+- Verification: `bun test src/server/reviewServing/reviewServingSummaryProjector.test.ts`.
+
 ## 2026-08-15 - Review-Serving Projector Maintenance Restarts
 
 - Error: The DuckDB maintenance child repeatedly exited natively with code 9 every 8–50 seconds while bootstrapping review-serving state for a newly imported project.
