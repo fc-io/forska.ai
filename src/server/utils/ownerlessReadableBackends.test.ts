@@ -15,7 +15,9 @@ const getLastJsonLine = (output: string) => {
     .trim()
     .split('\n')
     .filter((line) => {
-      return line.trim().startsWith('[')
+      const trimmed = line.trim()
+
+      return trimmed.startsWith('[{') || trimmed.startsWith('[]')
     })
     .at(-1)
 }

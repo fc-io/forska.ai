@@ -830,7 +830,11 @@ const getInsertSummaryRebuildAccumulatorChunkFromSourceStatement = (input: Proje
   const requestId = getRequiredSummaryRebuildRequestId(input)
   const accumulatorScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'accumulator', requestId})
   const existingScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'existing', requestId})
-  const membershipScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'accumulator_chunk', requestId})
+  const membershipScopePredicate = getSummaryRebuildPartialScopePredicate({
+    ...input,
+    alias: 'accumulator_chunk',
+    requestId,
+  })
 
   return `
     DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_chunk;
@@ -1291,11 +1295,7 @@ const projectPartialFullReviewServingSummaries = async (input: {
       : [getInsertSummaryRebuildAccumulatorChunkFromSourceStatement(input.projectorInput)]
   const writerResult = await input.measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
-      {
-        component: 'summary',
-        records: [],
-        statements: accumulatorStatements,
-      },
+      {component: 'summary', records: [], statements: accumulatorStatements},
       input.database,
     )
   })
@@ -1351,12 +1351,7 @@ export const projectReviewServingSummaries = async (
   }
 
   if (isPartialFullSummarySnapshotInput(input)) {
-    return projectPartialFullReviewServingSummaries({
-      database,
-      measure,
-      phaseTimings,
-      projectorInput: input,
-    })
+    return projectPartialFullReviewServingSummaries({database, measure, phaseTimings, projectorInput: input})
   }
 
   const sourceRows = await measure('sourceQueryMs', async () => {

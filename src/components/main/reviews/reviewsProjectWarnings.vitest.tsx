@@ -12,8 +12,13 @@ const mockState = vi.hoisted(() => {
 
 vi.mock('@tanstack/solid-query', () => {
   return {
-    useQuery: () => {
-      return {data: mockState.statusData ?? mockState.warningsData, isSuccess: mockState.warningsData !== null}
+    useQuery: (optionsFactory: () => {queryKey: readonly unknown[]}) => {
+      const queryKey = optionsFactory().queryKey
+      const isStatusQuery = queryKey[0] === 'review-serving-status'
+
+      return isStatusQuery
+        ? {data: mockState.statusData, isSuccess: mockState.statusData !== null}
+        : {data: mockState.warningsData, isSuccess: mockState.warningsData !== null}
     },
   }
 })

@@ -759,7 +759,9 @@ test('chunked full summary rebuild stages aggregate request partials without art
   expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(partialInsertStatements.join('\n')).not.toContain('ON CONFLICT')
   expect(partialInsertStatements.join('\n')).toContain('WHERE NOT EXISTS')
-  expect(partialInsertStatements.join('\n')).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_chunk AS')
+  expect(partialInsertStatements.join('\n')).toContain(
+    'CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_chunk AS',
+  )
   expect(partialInsertStatements.join('\n')).toContain('FROM summary_union')
   expect(partialInsertStatements.join('\n')).toContain('GROUP BY')
   expect(partialInsertStatements.join('\n')).toContain('COUNT(*)')
@@ -829,7 +831,9 @@ test('chunked full summary rebuild aggregates duplicate scalar keys in SQL-nativ
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toEqual({})
   expect(summaryPartialInsertStatement).toBeDefined()
   expect(summaryPartialInsertStatement).toContain('count_value')
-  expect(summaryPartialInsertStatement).toContain("'review.llm.assessedByPrompt' THEN 'review-llm-assessed-by-prompt:v1'")
+  expect(summaryPartialInsertStatement).toContain(
+    "'review.llm.assessedByPrompt' THEN 'review-llm-assessed-by-prompt:v1'",
+  )
   expect(summaryPartialInsertStatement).toContain('GROUP BY')
   expect(summaryPartialInsertStatement).toContain('COUNT(*)')
   expect(summaryPartialInsertStatement).not.toContain('contribution_key')
