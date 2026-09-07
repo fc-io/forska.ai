@@ -6982,6 +6982,10 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
       ? Math.max(1, maxCompletedRebuildChunksPerRun - getPositiveInteger(input.options.completedRebuildChunksInRun, 0))
       : Number.POSITIVE_INFINITY
 
+  if (firstClaimedChunk?.projectionComponent === 'search') {
+    return Math.min(1, remainingCompletedChunkRunBudget)
+  }
+
   if (firstClaimedChunk !== undefined && isForegroundBatchableRebuildChunk(firstClaimedChunk)) {
     return Math.min(getForegroundRebuildChunkBatchSize(firstClaimedChunk), remainingCompletedChunkRunBudget)
   }
