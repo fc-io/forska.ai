@@ -97,6 +97,7 @@ import {
   type ComparisonProjectJudgmentHumanRow,
   type ComparisonProjectJudgmentLlmRow,
   type ComparisonProjectJudgmentRow,
+  forEachComparisonProjectServingJudgmentArticleIdBatch,
   forEachComparisonProjectServingJudgmentRowBatch,
   getComparisonProjectBatchRows,
   getComparisonProjectColumnId,
@@ -4051,6 +4052,10 @@ const getComparisonProjectConflictResolutionExportSourceRow = (
 
 const getComparisonProjectConflictResolutionExportSourceRows = async (
   scope: ComparisonProjectScope,
+  rowFilter: ComparisonProjectRowFilter,
+  differenceFilter: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ): Promise<ComparisonProjectConflictResolutionTransferSourceRow[]> => {
   if (scope.activeGeneration === null) {
     throw new HttpError(409, 'Conflict resolution export requires an active comparison serving generation')
@@ -4059,7 +4064,14 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
   const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
   const comparisonProjectLiteral = getSqlLiteral(scope.id)
   const activeGenerationLiteral = getSqlLiteral(scope.activeGeneration)
-  const rows = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionExportQueryRow>(`
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
+  const sourceRows: ComparisonProjectConflictResolutionTransferSourceRow[] = []
+  const appendSourceRowsForArticleIds = async (articleIds: string[]) => {
+    if (articleIds.length === 0) {
+      return
+    }
+
+    const rows = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionExportQueryRow>(`
     SELECT
       cr.id AS sourceResolutionId,
       cr.article_id AS sourceArticleRowId,
@@ -4088,6 +4100,7 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
      AND ai.generation = a.generation
      AND ai.article_id = a.article_id
     WHERE cr.comparison_project_id = ${comparisonProjectLiteral}
+      AND cr.article_id IN (${getInClause(articleIds)})
     ORDER BY
       cr.created_at ASC,
       cr.id ASC,
@@ -4097,14 +4110,42 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
       ai.source_identifier_id ASC
   `)
 
-  return rows.map((row) => {
-    return getComparisonProjectConflictResolutionExportSourceRow(scope, optionByValue, row)
+    sourceRows.push(
+      ...rows.map((row) => {
+        return getComparisonProjectConflictResolutionExportSourceRow(scope, optionByValue, row)
+      }),
+    )
+  }
+
+  await forEachComparisonProjectServingJudgmentArticleIdBatch({
+    comparisonProjectId: scope.id,
+    articleCategoryFilter,
+    conflictResolutionFilter,
+    differenceFilter: normalizedDifferenceFilter,
+    limit: comparisonProjectJudgmentArticleBatchSize,
+    onArticleIds: appendSourceRowsForArticleIds,
+    queryRunner: appDatabaseService,
+    rowFilter,
   })
+
+  return sourceRows
 }
 
-const getComparisonProjectConflictResolutionExportResponse = async (scope: ComparisonProjectScope) => {
+const getComparisonProjectConflictResolutionExportResponse = async (
+  scope: ComparisonProjectScope,
+  rowFilter: ComparisonProjectRowFilter,
+  differenceFilter: ComparisonProjectDifferenceFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
+) => {
   const exportedAt = new Date()
-  const sourceRows = await getComparisonProjectConflictResolutionExportSourceRows(scope)
+  const sourceRows = await getComparisonProjectConflictResolutionExportSourceRows(
+    scope,
+    rowFilter,
+    differenceFilter,
+    articleCategoryFilter,
+    conflictResolutionFilter,
+  )
   const artifact = createComparisonProjectConflictResolutionTransferArtifact({
     exportedAt,
     source: {
@@ -5770,22 +5811,57 @@ export const comparisonProjectsRoutes = new Elysia()
     },
     {body: t.Object({articleId: t.String()})},
   )
-  .post('/api/comparison-projects/:id/conflict-resolutions/export', async (context) => {
-    const {params, set} = context
-    const scope = await getComparisonProjectScope(params.id)
+  .post(
+    '/api/comparison-projects/:id/conflict-resolutions/export',
+    async (context) => {
+      const {params, body, set} = context
+      const scope = await getComparisonProjectScope(params.id)
 
-    if (!scope) {
-      set.status = 404
-      return {data: null, error: 'Comparison project not found'}
-    }
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
 
-    if (scope.activeGeneration === null) {
-      set.status = 409
-      return {data: null, error: 'Conflict resolution export requires an active comparison serving generation'}
-    }
+      if (scope.activeGeneration === null) {
+        set.status = 409
+        return {data: null, error: 'Conflict resolution export requires an active comparison serving generation'}
+      }
 
-    return getComparisonProjectConflictResolutionExportResponse(scope)
-  })
+      const differenceFilter = getRequestedComparisonProjectDifferenceFilter({differenceFilter: body.differenceFilter})
+      const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
+      const articleCategoryFilter = getNormalizedComparisonProjectArticleCategoryFilter(body.articleCategoryFilter)
+      const conflictResolutionFilter = getNormalizedComparisonProjectConflictResolutionFilter(
+        scope,
+        body.conflictResolutionFilter,
+      )
+
+      return getComparisonProjectConflictResolutionExportResponse(
+        scope,
+        rowFilter,
+        differenceFilter,
+        articleCategoryFilter,
+        conflictResolutionFilter,
+      )
+    },
+    {
+      body: t.Object({
+        rowFilter: t.Optional(t.String()),
+        articleCategoryFilter: t.Optional(t.String()),
+        conflictResolutionFilter: t.Optional(t.String()),
+        differenceFilter: t.Optional(
+          t.Union([
+            t.Literal('all'),
+            t.Literal('human-vs-llm-overlap'),
+            t.Literal('human-vs-llm'),
+            t.Literal('human-vs-llm-true-conflict'),
+            t.Literal('llm-vs-llm'),
+            t.Literal('llm-vs-llm-true-difference'),
+            t.Literal('any-disagreement'),
+          ]),
+        ),
+      }),
+    },
+  )
   .post(
     '/api/comparison-projects/:id/conflict-resolutions/import/analyze',
     async (context) => {

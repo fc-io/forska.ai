@@ -518,7 +518,7 @@ const getMockConflictResolutionExportRows = (statement: string, state: MockDatab
     .filter((row) => {
       const comparisonProjectId = row.comparisonProjectId ?? 'comparison-project-1'
 
-      return statement.includes(`'${comparisonProjectId}'`)
+      return statement.includes(`'${comparisonProjectId}'`) && statement.includes(`'${row.articleId}'`)
     })
     .flatMap((row) => {
       const comparisonProjectId = row.comparisonProjectId ?? 'comparison-project-1'
@@ -950,9 +950,14 @@ const postComparisonProjectExport = (
   )
 }
 
-const postComparisonProjectConflictResolutionExport = (app: {handle: (request: Request) => Promise<Response>}) => {
+const postComparisonProjectConflictResolutionExport = (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown> = {},
+) => {
   return app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolutions/export', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
   )
@@ -7966,37 +7971,99 @@ test('comparison project conflict resolution export returns saved resolutions as
       ],
       resolution: {mode: 'summary', value: 'yes', label: 'yes'},
     },
-    {
-      sourceResolutionId: 'resolution-2',
-      sourceArticleRowId: 'article-2',
-      externalArticleId: 'external-2',
-      title: 'Export Article 2',
-      doi: null,
-      pubmedId: null,
-      arxivId: null,
-      biorxivId: null,
-      medrxivId: null,
-      url: null,
-      identifiers: [],
-      resolution: {mode: 'summary', value: 'maybe', label: 'maybe'},
-    },
   ])
   expect(exportStatement).toContain('FROM app.comparison_project_conflict_resolution cr')
   expect(exportStatement).toContain('INNER JOIN mart.comparison_article_serving a')
   expect(exportStatement).toContain('LEFT JOIN mart.comparison_article_identifier_serving ai')
+  expect(exportStatement).toContain('AND cr.article_id IN')
   expect(exportStatement).toContain('ai.source_identifier_id ASC')
   expect(exportStatement).not.toContain('INNER JOIN app.article a ON a.id = cr.article_id')
   expect(exportStatement).not.toContain('LEFT JOIN app.article_identifier ai ON ai.article_id = a.id')
   expect(exportStatement).not.toContain('mart.comparison_cell_serving')
   expect(exportStatement).not.toContain('ai.id ASC')
   expect(exportStatement).not.toContain('LIMIT')
-  expect(exportStatement).not.toContain('row_filter')
-  expect(exportStatement).not.toContain('difference_filter')
   expect(
     state.queryStatements.some((statement) => {
-      return statement.includes('FROM mart.comparison_cell_serving')
+      return (
+        statement.includes('FROM mart.comparison_filter_stats stats')
+        && statement.includes('row_filter')
+        && statement.includes('difference_filter')
+      )
     }),
   ).toBe(false)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes('article.passes_row_filter_all')
+        && statement.includes('article.passes_difference_filter_all')
+      )
+    }),
+  ).toBe(true)
+})
+
+test('comparison project conflict resolution export applies selected filters', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-1',
+        externalArticleId: 'external-1',
+        id: 'resolution-1',
+        promptId: null,
+        title: 'Export Article 1',
+      },
+      {
+        answerValue: 'maybe',
+        articleId: 'article-2',
+        externalArticleId: 'external-2',
+        id: 'resolution-2',
+        promptId: null,
+        title: 'Export Article 2',
+      },
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionExport(app, {
+    conflictResolutionFilter: 'yes',
+    differenceFilter: 'any-disagreement',
+    rowFilter: 'multiple-answers',
+  })
+  const artifact = (await response.json()) as {rows: Array<{sourceArticleRowId: string}>}
+  const state = getMockDatabaseState()
+  const memberStatement =
+    state.queryStatements.find((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes('conflict_resolution.answer_value')
+      )
+    }) ?? ''
+
+  expect(response.status).toBe(200)
+  expect(
+    artifact.rows.map((row) => {
+      return row.sourceArticleRowId
+    }),
+  ).toEqual(['article-1'])
+  expect(memberStatement).toContain('article.passes_row_filter_multiple_answers')
+  expect(memberStatement).toContain('article.passes_difference_filter_any_disagreement')
+  expect(memberStatement).toContain("conflict_resolution.answer_value = 'yes'")
 })
 
 test('comparison project conflict resolution export fails closed without active serving generation', async () => {

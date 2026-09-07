@@ -5,6 +5,7 @@ import {
   type ComparisonProjectJudgmentLlmRow,
   type ComparisonProjectScopedArticle,
   forEachComparisonProjectJudgmentRowBatch,
+  forEachComparisonProjectServingJudgmentArticleIdBatch,
   forEachComparisonProjectServingJudgmentRowBatch,
   getComparisonProjectBatchCellsByArticle,
   getComparisonProjectBatchRows,
@@ -545,6 +546,56 @@ test('serving row batch iterator walks article-serving rows by keyset cursor', a
       )
     }),
   ).toBe(true)
+})
+
+test('serving article-id batch iterator skips article and cell hydration', async () => {
+  const statements: string[] = []
+  const yieldedArticleIds: string[][] = []
+  let servingMemberQueryCount = 0
+
+  await forEachComparisonProjectServingJudgmentArticleIdBatch({
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: 'all',
+    limit: 1,
+    onArticleIds: (articleIds) => {
+      yieldedArticleIds.push(articleIds)
+    },
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        if (!statement.includes('FROM mart.comparison_article_serving article')) {
+          return [] as T[]
+        }
+
+        const rows = servingMemberQueryCount === 0 ? articles.slice(0, 2) : articles.slice(1, 2)
+        servingMemberQueryCount += 1
+
+        return rows.map((article) => {
+          return {
+            articleId: article.id,
+            generation: 1,
+            rowSortArticleId: article.id,
+            rowSortCreatedAt: article.articleCreatedAt,
+            rowSortTitle: article.articleTitle,
+          }
+        }) as T[]
+      },
+    },
+    rowFilter: 'all',
+  })
+
+  expect(yieldedArticleIds).toEqual([['article-1'], ['article-2']])
+  expect(
+    statements.some((statement) => {
+      return statement.includes('FROM mart.comparison_cell_serving')
+    }),
+  ).toBe(false)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('article.article_external_id AS articleExternalId')
+    }),
+  ).toBe(false)
 })
 
 test('serving judgment rows return empty page when active generation is missing', async () => {

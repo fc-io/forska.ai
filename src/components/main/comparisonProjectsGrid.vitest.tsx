@@ -13,9 +13,6 @@ type MockLinkProps = ParentProps<{class?: string; params?: {id?: string}; to: st
 const mockServiceState = vi.hoisted(() => {
   return {
     archiveComparisonProject: vi.fn(async (_comparisonProjectId: string) => {}),
-    fetchComparisonProjectConflictResolutionExportArtifact: vi.fn(async (_comparisonProjectId: string) => {
-      return exportResult
-    }),
     purgeComparisonProject: vi.fn(async (_comparisonProjectId: string) => {}),
     unarchiveComparisonProject: vi.fn(async (_comparisonProjectId: string) => {}),
   }
@@ -36,39 +33,10 @@ vi.mock('@tanstack/solid-router', () => {
 vi.mock('../../services/comparisonProjectsService.ts', () => {
   return {
     archiveComparisonProject: mockServiceState.archiveComparisonProject,
-    fetchComparisonProjectConflictResolutionExportArtifact:
-      mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact,
     purgeComparisonProject: mockServiceState.purgeComparisonProject,
     unarchiveComparisonProject: mockServiceState.unarchiveComparisonProject,
   }
 })
-
-const originalCreateObjectURL = Reflect.get(URL, 'createObjectURL')
-const originalRevokeObjectURL = Reflect.get(URL, 'revokeObjectURL')
-let anchorClickSpy: ReturnType<typeof vi.spyOn>
-
-const transferArtifact = {
-  exportedAt: '2026-06-10T12:00:00.000Z',
-  format: 'forska.comparisonProject.conflictResolution.transfer',
-  rows: [
-    {
-      externalArticleId: 'external-1',
-      identifiers: [],
-      resolution: {label: 'Yes', mode: 'summary', value: 'yes'},
-      sourceArticleRowId: 'article-1',
-      sourceResolutionId: 'resolution-1',
-      title: 'Article 1',
-    },
-  ],
-  source: {
-    comparisonProjectDescription: null,
-    comparisonProjectId: 'comparison-project-1',
-    comparisonProjectName: 'Comparison project',
-  },
-  version: 1,
-} as const
-
-let exportResult = {artifact: transferArtifact, filename: 'conflict-resolutions-comparison-project-1.json'}
 
 const getComparisonProject = (overrides: Partial<ComparisonProject> = {}): ComparisonProject => {
   return {
@@ -143,83 +111,28 @@ const waitForCondition = async (assertion: () => void, remaining = 30): Promise<
 beforeEach(() => {
   document.body.innerHTML = ''
   mockServiceState.archiveComparisonProject.mockReset()
-  mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact.mockReset()
-  mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact.mockResolvedValue(exportResult)
   mockServiceState.purgeComparisonProject.mockReset()
   mockServiceState.unarchiveComparisonProject.mockReset()
-  exportResult = {artifact: transferArtifact, filename: 'conflict-resolutions-comparison-project-1.json'}
-  Object.defineProperty(URL, 'createObjectURL', {
-    configurable: true,
-    value: vi.fn(() => {
-      return 'blob:comparison-conflict-resolution-transfer'
-    }),
-  })
-  Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: vi.fn()})
-  anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 })
 
 afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  Object.defineProperty(URL, 'createObjectURL', {configurable: true, value: originalCreateObjectURL})
-  Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: originalRevokeObjectURL})
 })
 
-describe('ComparisonProjectsGrid resolution export action', () => {
-  test('renders Export resolutions after Export data without adding grid import', async () => {
+describe('ComparisonProjectsGrid export action', () => {
+  test('links to the export page without offering resolution transfer actions', async () => {
     const {container, dispose} = await renderComparisonProjectsGrid([getComparisonProject()])
 
     try {
       const labels = getActionLabels(container)
-      const exportDataIndex = labels.indexOf('Export data')
 
       expect(
         container.querySelector('a[href="/compare-judgments/comparison-project-1/export"]')?.textContent?.trim(),
       ).toBe('Export data')
-      expect(labels[exportDataIndex + 1]).toBe('Export resolutions')
       expect(labels).not.toContain('Import resolutions')
-    } finally {
-      dispose()
-      container.remove()
-    }
-  })
-
-  test('omits Export resolutions when conflict resolution is disabled', async () => {
-    const {container, dispose} = await renderComparisonProjectsGrid([
-      getComparisonProject({allowConflictResolution: false}),
-    ])
-
-    try {
-      expect(getActionLabels(container)).not.toContain('Export resolutions')
-      expect(
-        container.querySelector('a[href="/compare-judgments/comparison-project-1/export"]')?.textContent?.trim(),
-      ).toBe('Export data')
-    } finally {
-      dispose()
-      container.remove()
-    }
-  })
-
-  test('downloads the grid conflict-resolution export artifact', async () => {
-    const {container, dispose} = await renderComparisonProjectsGrid([getComparisonProject()])
-
-    try {
-      const exportButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export resolutions'
-      })
-
-      exportButton?.click()
-
-      await waitForCondition(() => {
-        expect(mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact).toHaveBeenCalledWith(
-          'comparison-project-1',
-        )
-        expect(anchorClickSpy).toHaveBeenCalled()
-        expect(
-          container.querySelector('a[href="/compare-judgments/comparison-project-1/export"]')?.textContent?.trim(),
-        ).toBe('Export data')
-      })
+      expect(labels).not.toContain('Export resolutions')
     } finally {
       dispose()
       container.remove()

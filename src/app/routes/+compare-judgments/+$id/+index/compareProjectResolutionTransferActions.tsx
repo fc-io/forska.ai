@@ -1,12 +1,10 @@
 import {Show} from 'solid-js'
 
-import {CompareProjectResolutionExportAction} from '../../../../../components/main/compareProjectResolutionExportAction'
 import {Button} from '../../../../../components/ui/button'
 
 type CompareProjectResolutionTransferActionsProps = {
   allowConflictResolution?: boolean | null
   comparisonProjectId: string
-  resolutionCount?: number
 }
 
 export const compareProjectResolutionImportDisabledCopy =
@@ -19,10 +17,6 @@ export const getImportResolutionsHref = (comparisonProjectId: string) => {
 export const CompareProjectResolutionTransferActions = (props: CompareProjectResolutionTransferActionsProps) => {
   return (
     <div class="flex flex-wrap items-center gap-2">
-      <CompareProjectResolutionExportAction
-        comparisonProjectId={props.comparisonProjectId}
-        resolutionCount={props.resolutionCount}
-      />
       <Show when={props.allowConflictResolution === true}>
         <Button as="a" href={getImportResolutionsHref(props.comparisonProjectId)} variant="outline" size="sm">
           Import resolutions

@@ -1,6 +1,7 @@
 import {createSignal, Show} from 'solid-js'
 
 import {
+  type ComparisonProjectConflictResolutionExportRequest,
   type ComparisonProjectConflictResolutionTransferArtifact,
   fetchComparisonProjectConflictResolutionExportArtifact,
 } from '../../services/comparisonProjectsService'
@@ -9,6 +10,7 @@ import {Button} from '../ui/button'
 type CompareProjectResolutionExportActionProps = {
   buttonClass?: string
   comparisonProjectId: string
+  exportRequest?: ComparisonProjectConflictResolutionExportRequest
   resolutionCount?: number
 }
 
@@ -16,6 +18,7 @@ type DownloadJsonArtifactParams = {artifact: ComparisonProjectConflictResolution
 
 type HandleExportResolutionsClickParams = {
   comparisonProjectId: string
+  exportRequest?: ComparisonProjectConflictResolutionExportRequest
   setExportError: (message: string | null) => void
   setIsExporting: (isExporting: boolean) => void
 }
@@ -47,7 +50,10 @@ export const handleExportResolutionsClick = async (params: HandleExportResolutio
   params.setExportError(null)
 
   try {
-    const result = await fetchComparisonProjectConflictResolutionExportArtifact(params.comparisonProjectId)
+    const result = await fetchComparisonProjectConflictResolutionExportArtifact(
+      params.comparisonProjectId,
+      params.exportRequest,
+    )
     downloadJsonArtifact(result)
   } catch (error) {
     params.setExportError(getErrorMessage(error))
@@ -71,6 +77,7 @@ export const CompareProjectResolutionExportAction = (props: CompareProjectResolu
         onClick={() => {
           void handleExportResolutionsClick({
             comparisonProjectId: props.comparisonProjectId,
+            exportRequest: props.exportRequest,
             setExportError,
             setIsExporting,
           })
