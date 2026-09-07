@@ -4,7 +4,11 @@ import {createMemo, Show} from 'solid-js'
 
 import {getReviewIndexingStateCopy} from './getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
-import {createReviewsWarningsQueryOptions, type ReviewsWarningsData} from './reviewsWarningsQuery.ts'
+import {
+  createReviewServingStatusQueryOptions,
+  createReviewsWarningsQueryOptions,
+  type ReviewsWarningsData,
+} from './reviewsWarningsQuery.ts'
 
 const formatQueuedAt = (value: string | null) => {
   const parsed = value ? new Date(value) : null
@@ -82,9 +86,16 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
   const query = useQuery(() => {
     return createReviewsWarningsQueryOptions(props.projectId)
   })
+  const statusQuery = useQuery(() => {
+    return createReviewServingStatusQueryOptions()
+  })
 
   const warningsData = () => {
     return query.isSuccess ? (query.data ?? null) : null
+  }
+
+  const showOwnerlessRecoveryStatus = () => {
+    return warningsData() === null && statusQuery.data?.pauseMarker.exists === true
   }
 
   const noEnabledPrompts = createMemo(() => {
@@ -158,56 +169,69 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
   })
 
   return (
-    <Show when={warningsData()}>
-      <div class="space-y-3">
-        <Show when={showIndexingBanner()}>
-          <div class={`rounded-lg border p-4 ${indexingBannerTone()}`}>
-            <p class="font-medium">{indexingBannerTitle()}</p>
-            <p class="mt-1 text-sm opacity-90">{indexingBannerBody()}</p>
-            <p class="mt-2 break-all text-xs opacity-75">Project ID: {warningsData()?.projectId ?? props.projectId}</p>
-            <Show when={warningsData()?.indexing ?? null}>
-              {(indexing) => {
-                return <ReviewsIndexingProgress indexing={indexing()} />
-              }}
-            </Show>
-            <Show when={indexingBannerMeta()}>
-              {(meta) => {
-                return <p class="mt-2 text-xs opacity-75">{meta()}</p>
-              }}
-            </Show>
-          </div>
-        </Show>
-
-        <Show when={noEnabledPrompts()}>
-          <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <div class="flex items-start justify-between gap-3">
-              <div>
-                <p class="font-medium text-yellow-800">No enabled prompts</p>
-                <p class="text-sm text-yellow-700 mt-1">
-                  This project has 0 enabled prompts, so there is nothing to assess.
-                </p>
-              </div>
-              <Link
-                to="/projects/$id/edit"
-                params={{id: props.projectId} as never}
-                class="text-sm text-yellow-800 underline whitespace-nowrap"
-              >
-                Edit project
-              </Link>
+    <>
+      <Show when={showOwnerlessRecoveryStatus()}>
+        <div class="rounded-lg border border-orange-200 bg-orange-50 p-4 text-orange-900">
+          <p class="font-medium">Review indexing recovering after memory pressure</p>
+          <p class="mt-1 text-sm opacity-90">
+            Review pages remain available while the maintenance worker recovers. Review refresh work will resume
+            automatically once the runtime is ready.
+          </p>
+        </div>
+      </Show>
+      <Show when={warningsData()}>
+        <div class="space-y-3">
+          <Show when={showIndexingBanner()}>
+            <div class={`rounded-lg border p-4 ${indexingBannerTone()}`}>
+              <p class="font-medium">{indexingBannerTitle()}</p>
+              <p class="mt-1 text-sm opacity-90">{indexingBannerBody()}</p>
+              <p class="mt-2 break-all text-xs opacity-75">
+                Project ID: {warningsData()?.projectId ?? props.projectId}
+              </p>
+              <Show when={warningsData()?.indexing ?? null}>
+                {(indexing) => {
+                  return <ReviewsIndexingProgress indexing={indexing()} />
+                }}
+              </Show>
+              <Show when={indexingBannerMeta()}>
+                {(meta) => {
+                  return <p class="mt-2 text-xs opacity-75">{meta()}</p>
+                }}
+              </Show>
             </div>
-          </div>
-        </Show>
+          </Show>
 
-        <Show when={noArticlesInProject()}>
-          <div class="p-4 bg-slate-50 border border-slate-200 rounded-lg">
-            <p class="font-medium text-slate-800">No articles in project</p>
-            <p class="text-sm text-slate-700 mt-1">
-              This project has no scoped articles (no individually imported articles, and no import routes with any
-              matching articles).
-            </p>
-          </div>
-        </Show>
-      </div>
-    </Show>
+          <Show when={noEnabledPrompts()}>
+            <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <p class="font-medium text-yellow-800">No enabled prompts</p>
+                  <p class="text-sm text-yellow-700 mt-1">
+                    This project has 0 enabled prompts, so there is nothing to assess.
+                  </p>
+                </div>
+                <Link
+                  to="/projects/$id/edit"
+                  params={{id: props.projectId} as never}
+                  class="text-sm text-yellow-800 underline whitespace-nowrap"
+                >
+                  Edit project
+                </Link>
+              </div>
+            </div>
+          </Show>
+
+          <Show when={noArticlesInProject()}>
+            <div class="p-4 bg-slate-50 border border-slate-200 rounded-lg">
+              <p class="font-medium text-slate-800">No articles in project</p>
+              <p class="text-sm text-slate-700 mt-1">
+                This project has no scoped articles (no individually imported articles, and no import routes with any
+                matching articles).
+              </p>
+            </div>
+          </Show>
+        </div>
+      </Show>
+    </>
   )
 }

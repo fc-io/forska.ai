@@ -78,6 +78,14 @@ export type ReviewsWarningsData = {
   scope: {hasAnyArticlesInScope: boolean}
 }
 
+export type ReviewServingStatusData = {
+  owner: {proxyConfigured: boolean; readiness: 'not_probed'}
+  pauseMarker: {createdAt: string | null; exists: boolean; updatedAt: string | null}
+  queue: {exclusiveWorkActive: boolean}
+  role: string
+  snapshot: {lastProgressedAt: string | null; readable: boolean | null}
+}
+
 export const createReviewsWarningsQueryOptions = (projectId: string) => {
   return {
     queryKey: ['project-reviews-warnings', projectId],
@@ -86,6 +94,21 @@ export const createReviewsWarningsQueryOptions = (projectId: string) => {
       const data = handleApiResponse(response, 'Failed to load project warnings')
 
       return data.data as unknown as ReviewsWarningsData
+    },
+    refetchInterval: 5000,
+    refetchOnWindowFocus: false,
+    staleTime: 5000,
+  }
+}
+
+export const createReviewServingStatusQueryOptions = () => {
+  return {
+    queryKey: ['review-serving-status'],
+    queryFn: async () => {
+      const response = await fetch('/api/review-serving/status')
+      if (!response.ok) throw new Error(`Failed to load review-serving status (${response.status})`)
+      const body = (await response.json()) as {data: ReviewServingStatusData}
+      return body.data
     },
     refetchInterval: 5000,
     refetchOnWindowFocus: false,

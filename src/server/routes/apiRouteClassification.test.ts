@@ -88,6 +88,14 @@ test('owner connection diagnostics stay ownerless so they can report a wedged ow
   expect(shouldApiRouteFailClosedWithoutDuckdbOwner(classification)).toBe(false)
 })
 
+test('review-serving status stays ownerless while product reads remain owner-dependent', () => {
+  const classification = classifyApiRoute('/api/review-serving/status', 'GET')
+
+  expect(classification).toBe('ownerless-readable-diagnostics')
+  expect(shouldApiRouteProxyToDuckdbOwner(classification)).toBe(false)
+  expect(shouldApiRouteFailClosedWithoutDuckdbOwner(classification)).toBe(false)
+})
+
 test('owner-private owner-backed routes do not re-proxy', () => {
   const results = ownerRoutedRoutes.map((route) => {
     const pathname = `${duckdbOwnerPrivateApiPrefix}${route.samplePath}`
