@@ -295,6 +295,122 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
   `)
 }
 
+const createSummarySourceSchema = async (database: ReviewServingSummaryProjectorDatabase) => {
+  await database.run(`
+    CREATE TABLE app.project (
+      id VARCHAR NOT NULL,
+      human_judgment_mode VARCHAR
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.project_scope_article (
+      project_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_article_serving_base_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      duplicate_flag BOOLEAN NOT NULL,
+      conflict_flag BOOLEAN NOT NULL,
+      human_status VARCHAR,
+      llm_status VARCHAR,
+      has_llm_list_mode BOOLEAN NOT NULL,
+      has_human_list_mode BOOLEAN NOT NULL,
+      has_both_list_mode BOOLEAN NOT NULL,
+      has_unassessed_list_mode BOOLEAN NOT NULL
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_selected_article_import_current_v4 (
+      project_id VARCHAR NOT NULL,
+      project_scope_identity VARCHAR NOT NULL,
+      selected_import_snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      import_route_id VARCHAR,
+      source_record_key VARCHAR,
+      tombstone BOOLEAN NOT NULL
+    )
+  `)
+  await database.run(`
+    CREATE TABLE app.review_import_article_hot_field (
+      import_route_id VARCHAR,
+      article_id VARCHAR,
+      source_record_key VARCHAR,
+      publication_year INTEGER,
+      tombstone BOOLEAN NOT NULL
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      payload_kind VARCHAR NOT NULL,
+      prompt_id VARCHAR,
+      is_answered BOOLEAN,
+      answered_original VARCHAR,
+      answered_original_as_array VARCHAR[]
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_unassessed_queue_serving_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      queue_kind VARCHAR NOT NULL,
+      prompt_ids VARCHAR[]
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_unassessed_queue_article_rank_serving_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      queue_kind VARCHAR NOT NULL
+    )
+  `)
+}
+
+const insertSummarySourceRows = async (database: ReviewServingSummaryProjectorDatabase) => {
+  await database.run("INSERT INTO app.project VALUES ('project-1', 'prompt')")
+  await database.run("INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1')")
+  await database.run(`
+    INSERT INTO mart.review_article_serving_base_v4 VALUES
+      ('project-1', 'review-config-1', 'snapshot-1', 'article-1')
+  `)
+  await database.run(`
+    INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES
+      ('project-1', 'review-config-1', 'snapshot-1', 'article-1', FALSE, FALSE, NULL, 'included', TRUE, FALSE, FALSE, FALSE)
+  `)
+  await database.run(`
+    INSERT INTO mart.review_selected_article_import_current_v4 VALUES
+      ('project-1', 'project-scope-1', 'selected-snapshot-1', 'article-1', 'import-route-1', 'source-record-1', FALSE)
+  `)
+  await database.run(`
+    INSERT INTO app.review_import_article_hot_field VALUES
+      ('import-route-1', 'article-1', 'source-record-1', 2024, FALSE)
+  `)
+  await database.run(`
+    INSERT INTO mart.review_article_judgment_detail_serving_v4 VALUES
+      ('project-1', 'review-config-1', 'snapshot-1', 'article-1', 'llm', 'prompt-1', TRUE, 'yes', NULL)
+  `)
+}
+
 const insertSummaryChunkManifestRows = async (
   database: ReviewServingSummaryProjectorDatabase,
   input: {chunkIds: readonly string[]; requestId?: string; status?: string},
@@ -628,12 +744,13 @@ test('chunked full summary rebuild stages aggregate request partials without art
     )
   })
 
-  expect(result.contributionRowCount).toBe(2)
+  expect(result.contributionRowCount).toBe(0)
   expect(result.diagnosticsJson.summaryProjector).toMatchObject({
     contributionRecordCount: 0,
     directFullSnapshot: true,
+    nativeAccumulatorInsert: true,
     partialFullSnapshot: true,
-    partialRowCount: 2,
+    partialRowCount: null,
   })
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toEqual({})
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
@@ -642,6 +759,11 @@ test('chunked full summary rebuild stages aggregate request partials without art
   expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(partialInsertStatements.join('\n')).not.toContain('ON CONFLICT')
   expect(partialInsertStatements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(partialInsertStatements.join('\n')).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_chunk AS')
+  expect(partialInsertStatements.join('\n')).toContain('FROM summary_union')
+  expect(partialInsertStatements.join('\n')).toContain('GROUP BY')
+  expect(partialInsertStatements.join('\n')).toContain('COUNT(*)')
+  expect(partialInsertStatements.join('\n')).not.toContain('INSERT INTO temp_summary_rebuild_accumulator_chunk')
   expect(partialInsertStatements.join('\n')).toContain("(existing.request_id || '') = (incoming.request_id || '')")
   expect(partialInsertStatements.join('\n')).toContain("WHERE accumulator.request_id = 'rebuild-summary-1'")
   expect(partialInsertStatements.join('\n')).toContain("AND accumulator.project_id = 'project-1'")
@@ -684,7 +806,7 @@ test('chunked full summary rebuild stages aggregate request partials without art
   expect(joined).not.toContain('INSERT INTO mart.review_filter_facet_serving_v4')
 })
 
-test('chunked full summary rebuild aggregates duplicate scalar keys into summary partials only', async () => {
+test('chunked full summary rebuild aggregates duplicate scalar keys in SQL-native summary partials only', async () => {
   const {database, statements} = createSummaryDatabase({
     sourceRows: [sourceCountRow({answerId: 1}), sourceCountRow({answerId: 2})],
   })
@@ -703,17 +825,18 @@ test('chunked full summary rebuild aggregates duplicate scalar keys into summary
     return statement.includes('INSERT INTO mart.review_article_summary_rebuild_accumulator_v4')
   })
 
-  expect(result.contributionRowCount).toBe(2)
+  expect(result.contributionRowCount).toBe(0)
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toEqual({})
   expect(summaryPartialInsertStatement).toBeDefined()
   expect(summaryPartialInsertStatement).toContain('count_value')
-  expect(summaryPartialInsertStatement).toContain("'review.llm.assessedByPrompt', 'llm'")
-  expect(summaryPartialInsertStatement).toContain(", 2, '')")
+  expect(summaryPartialInsertStatement).toContain("'review.llm.assessedByPrompt' THEN 'review-llm-assessed-by-prompt:v1'")
+  expect(summaryPartialInsertStatement).toContain('GROUP BY')
+  expect(summaryPartialInsertStatement).toContain('COUNT(*)')
   expect(summaryPartialInsertStatement).not.toContain('contribution_key')
   expect(statements.join('\n')).not.toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
 })
 
-test('chunked full summary rebuild writes accumulator partials in bounded batches', async () => {
+test('chunked full summary rebuild inserts accumulator partials without JS VALUES batches', async () => {
   const {database, statements} = createSummaryDatabase({
     sourceRows: Array.from({length: 130}, (_, index) => {
       return sourceCountRow({
@@ -739,9 +862,14 @@ test('chunked full summary rebuild writes accumulator partials in bounded batche
     return statement.includes('UPDATE mart.review_article_summary_rebuild_accumulator_v4 accumulator')
   })
 
-  expect(accumulatorStatements).toHaveLength(3)
+  expect(accumulatorStatements).toHaveLength(1)
   for (const statement of accumulatorStatements) {
-    expect(countOccurrences(statement, "('rebuild-summary-1',")).toBeLessThanOrEqual(64)
+    expect(statement).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_chunk AS')
+    expect(statement).toContain('FROM summary_union')
+    expect(statement).toContain('GROUP BY')
+    expect(statement).toContain('COUNT(*)')
+    expect(statement).not.toContain('INSERT INTO temp_summary_rebuild_accumulator_chunk')
+    expect(countOccurrences(statement, "('rebuild-summary-1',")).toBe(0)
     expect(statement).toContain("WHERE accumulator.request_id = 'rebuild-summary-1'")
     expect(statement).toContain("WHERE existing.request_id = 'rebuild-summary-1'")
     expect(statement).toContain("NOT contains(accumulator.source_chunk_ids_key, '\nchunk-summary-1\n')")
@@ -749,6 +877,31 @@ test('chunked full summary rebuild writes accumulator partials in bounded batche
     expect(statement).not.toContain('source_chunk_ids_key =')
     expect(statement).not.toContain('source_chunk_ids_key ||')
   }
+})
+
+test('chunked full summary rebuild keeps empty list-mode chunks as no-op writes', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow()]})
+
+  const result = await projectReviewServingSummaries(
+    {
+      ...projectInput([], []),
+      chunkEndArticleId: 'article-999',
+      chunkId: 'chunk-summary-1',
+      chunkStartArticleId: 'article-001',
+      requestId: 'rebuild-summary-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.diagnosticsJson.summaryProjector).toMatchObject({
+    nativeAccumulatorInsert: false,
+    partialFullSnapshot: true,
+  })
+  expect(result.summaryValues).toEqual([])
+  expect(joined).not.toContain('FROM summary_union')
+  expect(joined).not.toContain('temp_summary_rebuild_accumulator_chunk')
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toEqual({})
 })
 
 test('chunked full summary rebuild accumulator writes are idempotent through normalized chunk membership', async () => {
@@ -776,6 +929,8 @@ test('chunked full summary rebuild accumulator writes are idempotent through nor
 
     try {
       await createSummaryReductionSchema(database)
+      await createSummarySourceSchema(database)
+      await insertSummarySourceRows(database)
       await database.run(accumulatorStatement ?? '')
       await database.run(accumulatorStatement ?? '')
 
@@ -785,10 +940,16 @@ test('chunked full summary rebuild accumulator writes are idempotent through nor
           CAST(SUM(count_value) AS VARCHAR) AS countValue,
           ANY_VALUE(source_chunk_ids_key) AS sourceChunkIdsKey
         FROM mart.review_article_summary_rebuild_accumulator_v4
+        WHERE summary_kind = 'count'
+          AND count_kind = 'review.llm.assessedByPrompt'
+          AND filter_key = 'prompt:prompt-1'
       `)
       const membershipRows = await database.queryJson<{total: string}>(`
         SELECT CAST(COUNT(*) AS VARCHAR) AS total
         FROM mart.review_article_summary_rebuild_accumulator_chunk_v4
+        WHERE summary_kind = 'count'
+          AND count_kind = 'review.llm.assessedByPrompt'
+          AND filter_key = 'prompt:prompt-1'
       `)
 
       expect(accumulatorRows).toEqual([{countValue: '1', sourceChunkIdsKey: '', total: '1'}])
