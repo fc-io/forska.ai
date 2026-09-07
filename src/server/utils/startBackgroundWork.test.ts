@@ -17,6 +17,7 @@ const runStartBackgroundWork = (input: {
   reviewServingRebuildChunkBatchMaxRssBytes?: number
   promoteAfterStart?: boolean
   role: 'api' | 'dev-single' | 'judge-worker' | 'maintenance-worker'
+  rssBytes?: number
   waitAfterStartMs?: number
 }) => {
   const duckdbPath = join(tmpdir(), `forska-start-background-work-${process.pid}-${Date.now()}.duckdb`)
@@ -55,6 +56,13 @@ const runStartBackgroundWork = (input: {
         const pauseMarkerPath = process.env.DUCKDB_PATH + '.review-serving-projector-paused'
         const promotionHandlers = []
         let currentRole = input.role
+        const originalMemoryUsage = process.memoryUsage
+
+        if (input.rssBytes !== undefined) {
+          process.memoryUsage = () => {
+            return {...originalMemoryUsage(), rss: input.rssBytes}
+          }
+        }
 
         if (input.pauseReviewServingProjector) {
           writeFileSync(pauseMarkerPath, 'operator recovery pause')
@@ -412,6 +420,21 @@ test('startBackgroundWork recycles DuckDB once before resuming paused review ser
 
   expect(result.calls).toContain('review-serving-projector.pause-recovery-recycle-duckdb')
   expect(result.calls).toContain('closeDuckdbService')
+  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false')
+})
+
+test('startBackgroundWork keeps paused review serving projector stopped above the low-memory RSS cap', () => {
+  const result = runStartBackgroundWork({
+    duckdbMemoryLimit: '6400MiB',
+    pauseRecoveryMinAgeMs: 1,
+    pauseReviewServingProjector: true,
+    role: 'maintenance-worker',
+    rssBytes: 5_640_000_000,
+    waitAfterStartMs: 25,
+  })
+
+  expect(result.calls).toContain('review-serving-projector.pause-recovery-recycle-duckdb')
+  expect(result.calls).not.toContain('review-serving-projector.pause-recovered')
   expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:default:false')
 })
 
