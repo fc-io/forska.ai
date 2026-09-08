@@ -90,4 +90,9 @@ Upstream regression files included:
 
 ## Removal criterion
 
+Every DuckDB dependency or engine upgrade must run the
+[DuckDB upgrade gate in TESTS.md](../../TESTS.md#duckdb-upgrades-checkpoint-memory-regression-gate)
+against the actual candidate engine, including an unpatched official build when
+evaluating removal of this backport.
+
 When an official stable DuckDB/Node binding release contains both upstream fixes, replace the custom build with that pinned official package and remove the patch/build override in the same change. First rerun the synthetic regression, upstream transaction/rollback cases, and current-DB progress gate at the same memory limits. Do not keep patched and unpatched container engine paths as permanent alternatives.
