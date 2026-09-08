@@ -1,13 +1,18 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
+const testDirectory = createScriptTestDirectory('recoverDirtyRefreshClaims')
+
+afterAll(testDirectory.cleanup)
 const defaultEnv = {
   ...process.env,
+  DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39105',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
@@ -33,12 +38,6 @@ const getLastJsonLine = (output: string) => {
   }
 
   return lastLine
-}
-
-const removeFileIfExists = (filePath: string) => {
-  if (existsSync(filePath)) {
-    rmSync(filePath, {force: true, recursive: true})
-  }
 }
 
 const runSeed = (duckdbPath: string, sql: string) => {
@@ -96,8 +95,7 @@ const runQuery = <T>(duckdbPath: string, sql: string) => {
 }
 
 test('recoverDirtyRefreshClaims lists dirty materialization, quarantine, refresh, and large rebuild risks', () => {
-  const duckdbPath = join(projectRoot, '.tmp', `recover-dirty-refresh-claims-list-${Date.now()}.duckdb`)
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, `recover-dirty-refresh-claims-list-${Date.now()}.duckdb`)
   runSeed(
     duckdbPath,
     `
@@ -212,8 +210,7 @@ test('recoverDirtyRefreshClaims lists dirty materialization, quarantine, refresh
 })
 
 test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with explicit confirmation', () => {
-  const duckdbPath = join(projectRoot, '.tmp', `recover-dirty-refresh-claims-apply-${Date.now()}.duckdb`)
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, `recover-dirty-refresh-claims-apply-${Date.now()}.duckdb`)
   runSeed(
     duckdbPath,
     `
@@ -468,8 +465,7 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
 })
 
 test('recoverDirtyRefreshClaims blocks mutation without legacy admin acknowledgement', () => {
-  const duckdbPath = join(projectRoot, '.tmp', `recover-dirty-refresh-claims-ack-${Date.now()}.duckdb`)
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, `recover-dirty-refresh-claims-ack-${Date.now()}.duckdb`)
   runSeed(
     duckdbPath,
     `

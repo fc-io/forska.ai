@@ -4,6 +4,7 @@ import {join} from 'node:path'
 
 import {afterEach, expect, test} from 'bun:test'
 
+import {parseSinglePromptJudgment} from '../../src/agent/judge/parseSinglePromptJudgment.ts'
 import {
   getRealArticleCanonicalContent,
   getRealArticleContentSha256,
@@ -14,6 +15,7 @@ import {
   realCodexOptInEnvironmentVariable,
   realCodexPinnedModel,
   realCodexPinnedThinking,
+  realCodexPromptType,
   type RealCodexProvisionedFixture,
   type RealCodexTopologyAdapter,
   runRealCodexSmoke,
@@ -21,6 +23,18 @@ import {
 import {createRealCodexTopologyAdapter} from './realCodexTopologyAdapter.ts'
 
 const roots: string[] = []
+
+test.each(['yes', 'no'])('real Codex prompt accepts its intended %s answer through the production parser', (answer) => {
+  const response = {answer, explanation: 'Evidence from the title and abstract.', quotes: null}
+  expect(parseSinglePromptJudgment(JSON.stringify(response), realCodexPromptType)).toEqual(response)
+})
+
+test('real Codex prompt rejects an answer outside its yes/no contract', () => {
+  const response = {answer: 'maybe', explanation: 'Uncertain.', quotes: null}
+  expect(() => {
+    return parseSinglePromptJudgment(JSON.stringify(response), realCodexPromptType)
+  }).toThrow()
+})
 
 const getError = async (promise: Promise<unknown>) => {
   return promise.then(

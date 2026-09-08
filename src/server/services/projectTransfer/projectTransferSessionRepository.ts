@@ -745,10 +745,7 @@ const updateProjectTransferSessionProgress = async (params: UpdateProjectTransfe
 
   return params.runner
     ? work(params.runner)
-    : (getAppDatabaseService().transaction(
-        work,
-        projectTransferSessionWorkloadContext,
-      ) as Promise<ProjectTransferSessionRecord | null>)
+    : getAppDatabaseService().transaction(work, projectTransferSessionWorkloadContext)
 }
 
 const persistProjectTransferSessionCompletion = async (params: PersistProjectTransferSessionCompletionParams) => {

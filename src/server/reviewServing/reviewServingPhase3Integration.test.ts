@@ -1,7 +1,8 @@
 import {readdirSync, readFileSync} from 'node:fs'
 import {join, relative} from 'node:path'
 
-import {expect, test} from 'bun:test'
+import {expect, mock, test} from 'bun:test'
+import {Effect} from 'effect'
 
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkInput, ReviewServingDirtyWorkRecord} from './reviewServingDirtyWorkService.ts'
@@ -17,6 +18,7 @@ import {
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
+import type {RequestReviewServingV4RebuildInput} from './reviewServingV4RebuildRequestService.ts'
 
 const workspaceRoot = join(import.meta.dir, '../../..')
 
@@ -102,6 +104,10 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   const pending: Partial<Record<ReviewServingProjectionComponent, RunningReviewServingDirtyWorkRecord[]>> = {}
   const upserts: ReviewServingDirtyWorkInput[] = []
   const promotions: PromoteReviewServingProjectorSnapshotInput[] = []
+  const rebuildRequests: RequestReviewServingV4RebuildInput[] = []
+  const searchRunner = mock(async () => {
+    return {processedCount: 0}
+  })
   const deltas = [
     getScope({
       changeKind: 'judgment.llm.updated',
@@ -160,6 +166,36 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     releaseDirtyWork: async (dirtyWorkIds) => {
       return {releasedCount: dirtyWorkIds.length}
     },
+    requestRebuild: (input, rebuildDatabase) => {
+      expect(rebuildDatabase).toBe(database)
+      rebuildRequests.push(input)
+
+      return Effect.succeed({
+        admissionState: 'admitted',
+        admittedAt: '2026-01-01T00:00:00.000Z',
+        completedAt: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        diagnosticsJson: null,
+        failedAt: null,
+        identityJson: null,
+        lastError: null,
+        leaseExpiresAt: null,
+        leaseOwner: null,
+        oomCategory: null,
+        overBudgetReason: null,
+        priority: input.priority ?? 0,
+        projectId: input.projectId,
+        reason: input.reason,
+        requestedComponents: [...(input.components ?? [])],
+        requestId: 'search-rebuild-1',
+        retryAfter: null,
+        retryCount: 0,
+        retryPolicyJson: null,
+        sourceWatermarksJson: null,
+        status: 'admitted',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      })
+    },
     runners: {
       display: async ({claims, component}) => {
         await writeReviewServingProjectorComponent(
@@ -214,30 +250,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
 
         return {processedCount: claims.length}
       },
-      search: async ({claims, component}) => {
-        await writeReviewServingProjectorComponent(
-          {
-            acknowledgements: claims,
-            component,
-            records: [
-              {
-                keyColumns: ['project_id', 'search_identity', 'snapshot_id', 'token', 'article_id'],
-                table: 'mart.review_title_search_serving_v4',
-                values: {
-                  article_id: 'article-1',
-                  project_id: 'project-1',
-                  search_identity: 'search:identity',
-                  snapshot_id: 'snapshot-1',
-                  token: 'display',
-                },
-              },
-            ],
-          },
-          database,
-        )
-
-        return {processedCount: claims.length}
-      },
+      search: searchRunner,
       selectedImport: async ({claims, component}) => {
         await writeReviewServingProjectorComponent(
           {
@@ -343,6 +356,15 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   const joined = statements.join('\n')
 
   expect(result.status).toBe('completed')
+  expect(searchRunner).not.toHaveBeenCalled()
+  expect(rebuildRequests).toEqual([
+    {components: ['search'], priority: 5_000, projectId: 'project-1', reason: 'searchDirtyWork'},
+  ])
+  expect(
+    result.runs.find((run) => {
+      return run.component === 'search'
+    }),
+  ).toEqual({attempts: 1, claimCount: 2, component: 'search', processedCount: 0, status: 'completed'})
   expect(
     upserts.map((input) => {
       return input.projectionComponent
@@ -384,7 +406,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(joined).toContain('INSERT INTO mart.review_article_serving_base_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).not.toContain('mart.review_article_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_title_search_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_selected_article_import_staging_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).not.toContain('_patch_v4')

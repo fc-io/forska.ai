@@ -414,7 +414,7 @@ const mutateRowsBatchTx = async (tx: AppRunner, mutation: CleanupMutation, proje
 const mutateRowsBatch = async (mutation: CleanupMutation, projectId: string, batchSize: number): Promise<number> => {
   return getAppDatabaseService().transaction(async (tx) => {
     return mutateRowsBatchTx(tx, mutation, projectId, batchSize)
-  }, archivedProjectCleanupWorkloadContext) as Promise<number>
+  }, archivedProjectCleanupWorkloadContext)
 }
 
 const runFirstMutationBatch = async (

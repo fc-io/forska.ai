@@ -27,6 +27,7 @@ test('captures request-boundary inclusion evidence without persisting prompt tex
   const manifestPath = join(root, 'manifest.json')
   const fixture = {
     abstract: 'UNIQUE_ABSTRACT',
+    articleId: crypto.randomUUID(),
     fixtureId: 'article-a',
     fulltextSentinel: 'EXCLUDED_FULLTEXT',
     imageSentinelUrl: 'EXCLUDED_IMAGE',
@@ -39,7 +40,7 @@ test('captures request-boundary inclusion evidence without persisting prompt tex
   process.env.FORSKA_TEST_JUDGE_REQUEST_EVIDENCE_ROOT = root
 
   await captureJudgmentRequestEvidence({
-    articleId: 'article-a',
+    articleId: fixture.articleId,
     jobId: 'job-a',
     prompt: 'UNIQUE_TITLE\nUNIQUE_ABSTRACT',
     systemPrompt: 'system',
@@ -58,6 +59,22 @@ test('captures request-boundary inclusion evidence without persisting prompt tex
   expect(evidence.requestPayloadSha256).toBeString()
   expect(evidenceText).not.toContain('UNIQUE_TITLE')
   expect(evidenceText).not.toContain('UNIQUE_ABSTRACT')
+
+  await captureJudgmentRequestEvidence({
+    articleId: fixture.articleId,
+    jobId: 'job-a',
+    prompt: 'UNIQUE_TITLE EXCLUDED_FULLTEXT EXCLUDED_IMAGE',
+    systemPrompt: 'system',
+  })
+  const rows = (await readFile(outputPath, 'utf8')).trim().split('\n')
+  expect(rows).toHaveLength(2)
+  expect(JSON.parse(rows[1] ?? '') as unknown).toMatchObject({
+    articleFixtureId: fixture.fixtureId,
+    hasAbstract: false,
+    hasExcludedFulltext: true,
+    hasExcludedImage: true,
+    hasTitle: true,
+  })
 })
 
 test('is inert outside the test environment even when hook variables are present', async () => {
@@ -133,6 +150,7 @@ test('rejects an in-root output symlink that points outside the declared test ro
   const manifestPath = join(root, 'manifest.json')
   const fixture = {
     abstract: 'ABSTRACT',
+    articleId: 'canonical-article-a',
     fixtureId: 'article-a',
     fulltextSentinel: 'FULLTEXT',
     imageSentinelUrl: 'IMAGE',
@@ -148,7 +166,7 @@ test('rejects an in-root output symlink that points outside the declared test ro
   let error: unknown
   try {
     await captureJudgmentRequestEvidence({
-      articleId: fixture.fixtureId,
+      articleId: fixture.articleId,
       jobId: 'job-a',
       prompt: `${fixture.title}\n${fixture.abstract}`,
       systemPrompt: 'system',

@@ -384,7 +384,7 @@ const withTransaction = async <T>(
   runner: RefreshStateRunner | undefined,
   work: (tx: RefreshStateRunner) => Promise<T>,
 ): Promise<T> => {
-  return runner ? work(runner) : (getAppDatabaseService().transaction(work) as Promise<T>)
+  return runner ? work(runner) : getAppDatabaseService().transaction(work)
 }
 
 const getProjectRefreshStateRecord = async (runner: RefreshStateRunner, projectId: string) => {
@@ -1651,9 +1651,9 @@ const completeDirtyArticleBatchForClaim = async ({
 
 const completeProjectRefresh = async ({completedToken, now, projectId, workerId}: CompleteProjectRefreshParams) => {
   const currentNow = getNow(now)
-  const completion = (await getAppDatabaseService().transaction(async (tx) => {
+  const completion = await getAppDatabaseService().transaction(async (tx) => {
     return completeRunningProjectRefreshState({completedToken, currentNow, projectId, tx, workerId})
-  })) as ProjectRefreshBatchCompletion
+  })
 
   if (completion.isClaimComplete || completion.isBlockedByQuarantine) {
     await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({

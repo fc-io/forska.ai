@@ -223,7 +223,7 @@ const withTransaction = <T>(
 ) => {
   return runner
     ? work(runner)
-    : (getAppDatabaseService().transaction(work, projectTransferCommitTransactionWorkloadContext) as Promise<T>)
+    : getAppDatabaseService().transaction(work, projectTransferCommitTransactionWorkloadContext)
 }
 
 const initializeTargetStateCoverage = async ({

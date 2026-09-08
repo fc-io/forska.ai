@@ -38,7 +38,7 @@ export const dataSourcesImportRoutesPostStructuredFileCreate = async (body: {
     sourceFileName: body.sourceFileName,
   })
   const cursor = getStructuredFileImportCursor(config)
-  const result = (await getAppDatabaseService().transaction(async (tx) => {
+  const result = await getAppDatabaseService().transaction(async (tx) => {
     const [existingRoute] = await tx.queryJson<{id: string}>(`
       SELECT id
       FROM app.import_route
@@ -81,7 +81,7 @@ export const dataSourcesImportRoutesPostStructuredFileCreate = async (body: {
     `)
 
     return importResult
-  }, articleImportStoreWorkloadContext)) as Awaited<ReturnType<typeof importStructuredFileFromConfig>>
+  }, articleImportStoreWorkloadContext)
 
   const dataSource = await getDataSourceQueryService().getDataSourceById(dataSourceId)
 

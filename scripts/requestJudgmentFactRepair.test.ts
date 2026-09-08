@@ -1,13 +1,18 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
+const testDirectory = createScriptTestDirectory('requestJudgmentFactRepair')
+
+afterAll(testDirectory.cleanup)
 const defaultEnv = {
   ...process.env,
+  DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39106',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
@@ -33,12 +38,6 @@ const getLastJsonLine = (output: string) => {
   }
 
   return lastLine
-}
-
-const removeFileIfExists = (filePath: string) => {
-  if (existsSync(filePath)) {
-    rmSync(filePath, {force: true, recursive: true})
-  }
 }
 
 const runDatabaseMutation = (duckdbPath: string, sql: string) => {
@@ -177,8 +176,7 @@ const runQuery = (duckdbPath: string, sql: string): unknown => {
 }
 
 test('requestJudgmentFactRepair schedules V4 repair work without legacy mart rebuild state', () => {
-  const duckdbPath = join(projectRoot, '.tmp', `request-judgment-fact-repair-${Date.now()}.duckdb`)
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, `request-judgment-fact-repair-${Date.now()}.duckdb`)
   seedDatabase(duckdbPath)
 
   const runScript = globalThis.Bun.spawnSync(
@@ -236,8 +234,7 @@ test('requestJudgmentFactRepair schedules V4 repair work without legacy mart reb
 })
 
 test('requestJudgmentFactRepair continues all-active repairs after an empty project fails', () => {
-  const duckdbPath = join(projectRoot, '.tmp', `request-judgment-fact-repair-all-active-${Date.now()}.duckdb`)
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, `request-judgment-fact-repair-all-active-${Date.now()}.duckdb`)
   seedDatabase(duckdbPath)
   runDatabaseMutation(
     duckdbPath,

@@ -1,6 +1,11 @@
+import {mkdtemp, rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from '../utils/duckdbExclusiveWork.ts'
+import {closeDuckdbService, runDuckdbJsonQuery} from '../utils/duckdbService.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {resetServerRuntimeRoleForTests} from '../utils/serverRuntimeRole.ts'
 import {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} from './apiRouteClassification.ts'
@@ -151,30 +156,56 @@ test('runtime readiness exposes settings diagnostics without an operator mode', 
   })
 })
 
-test('runtime diagnostics report active DuckDB exclusive work without making runtime unready', async () => {
+test('runtime diagnostics keep an open maintenance owner ready during DuckDB exclusive work', async () => {
   await withSingleServerRuntimeEnv(async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'forska-runtime-ready-'))
+    const previousDuckdbPath = process.env.DUCKDB_PATH
+    const previousMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+    process.env.DUCKDB_PATH = join(directory, 'runtime.duckdb')
+    process.env.DUCKDB_MEMORY_LIMIT = '256MiB'
     process.env.SERVER_ROLE = 'maintenance-worker'
     resetServerRuntimeRoleForTests()
 
-    const handle = await prepareDuckdbExclusiveWork({
-      kind: 'project_transfer_import',
-      phase: 'analyze',
-      sessionId: 'session-1',
-    })
-
     try {
-      const readyResponse = await getRuntimeReadyResponse()
-      const stateResponse = await getRuntimeStateResponse()
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+      await runDuckdbJsonQuery('SELECT 1 AS ready')
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
 
-      expect(readyResponse.data.ready).toBe(true)
-      expect(readyResponse.data.duckdbExclusiveWork.active).toBe(true)
-      expect(stateResponse.data.duckdbExclusiveWork).toMatchObject({
-        active: true,
-        current: {admissionState: 'ready', kind: 'project_transfer_import', phase: 'analyze', sessionId: 'session-1'},
+      const handle = await prepareDuckdbExclusiveWork({
+        kind: 'project_transfer_import',
+        phase: 'analyze',
+        sessionId: 'session-1',
       })
+
+      try {
+        const readyResponse = await getRuntimeReadyResponse()
+        const stateResponse = await getRuntimeStateResponse()
+
+        expect(readyResponse.data.duckdbService).toMatchObject({ready: true, startupActive: false})
+        expect(readyResponse.data.ready).toBe(true)
+        expect(readyResponse.data.duckdbExclusiveWork.active).toBe(true)
+        expect(stateResponse.data.duckdbExclusiveWork).toMatchObject({
+          active: true,
+          current: {admissionState: 'ready', kind: 'project_transfer_import', phase: 'analyze', sessionId: 'session-1'},
+        })
+      } finally {
+        await handle.release()
+        resetDuckdbExclusiveWorkForTests()
+      }
+
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
+      await closeDuckdbService({checkpointBeforeClose: false})
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
     } finally {
-      await handle.release()
-      resetDuckdbExclusiveWorkForTests()
+      await closeDuckdbService({checkpointBeforeClose: false})
+
+      if (previousDuckdbPath === undefined) delete process.env.DUCKDB_PATH
+      else process.env.DUCKDB_PATH = previousDuckdbPath
+
+      if (previousMemoryLimit === undefined) delete process.env.DUCKDB_MEMORY_LIMIT
+      else process.env.DUCKDB_MEMORY_LIMIT = previousMemoryLimit
+
+      await rm(directory, {recursive: true, force: true})
     }
   })
 })

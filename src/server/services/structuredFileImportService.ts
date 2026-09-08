@@ -274,7 +274,7 @@ const getSummaryFallback = (value: unknown) => {
 }
 
 const getItemIdentity = (value: unknown) => {
-  return getNestedScalarMatch(value, idKeySet) ?? getStructuredFileItemHash(value)
+  return getScalarText(getNestedValueMatch(value, idKeySet)) ?? getStructuredFileItemHash(value)
 }
 
 const getSafeIdentityPart = (value: string) => {
@@ -313,6 +313,7 @@ const getStructuredFileImportRow = (context: StructuredFileItemContext): Article
   const fullText = getStructuredFileItemFullText(articleTitle, context.item)
 
   return {
+    allowUnidentifiedCreate: true,
     articleId,
     articleTitle,
     articleSummary,
@@ -495,6 +496,20 @@ const getStructuredFileConfigCursor = (config: StructuredFileImportConfig) => {
   return JSON.stringify(config)
 }
 
+const getUniqueStructuredFileImportRows = (rows: ArticleImportStoreRow[]) => {
+  const rowsByIdentity = rows.reduce((byIdentity, row) => {
+    const existing = byIdentity.get(row.articleId)
+
+    if (existing && getStableJsonValue(existing.originalData) !== getStableJsonValue(row.originalData)) {
+      throw new Error(`Structured file has conflicting records for source identity ${row.articleId}`)
+    }
+
+    return byIdentity.set(row.articleId, row)
+  }, new Map<string, ArticleImportStoreRow>())
+
+  return Array.from(rowsByIdentity.values())
+}
+
 const getImportResultFromConfig = async (params: {
   config: StructuredFileImportConfig
   dataSourceTitle: string
@@ -505,30 +520,27 @@ const getImportResultFromConfig = async (params: {
   const parsedValue = getParsedStructuredFile(content, params.config.format)
   const items = getBoundaryItems(parsedValue, params.config.boundaryPointer)
   const importedAt = new Date()
-  const rows = items.map((item, index) => {
-    return getStructuredFileImportRow({
-      config: params.config,
-      dataSourceTitle: params.dataSourceTitle,
-      importRoute: params.importRoute,
-      importedAt,
-      index,
-      item,
-    })
-  })
+  const rows = getUniqueStructuredFileImportRows(
+    items.map((item, index) => {
+      return getStructuredFileImportRow({
+        config: params.config,
+        dataSourceTitle: params.dataSourceTitle,
+        importRoute: params.importRoute,
+        importedAt,
+        index,
+        item,
+      })
+    }),
+  )
+  const importRefreshState = params.tx
+    ? await storeImportedArticlesWithTx(params.tx, rows)
+    : await storeImportedArticles(rows)
 
-  if (params.tx) {
-    const importRefreshState = await storeImportedArticlesWithTx(params.tx, rows)
-
-    return {
-      config: params.config,
-      importRouteIds: importRefreshState.importRouteIds,
-      stats: {itemCount: rows.length, importedCount: rows.length},
-    }
+  return {
+    config: params.config,
+    ...(params.tx ? {importRouteIds: importRefreshState.importRouteIds} : {}),
+    stats: {itemCount: items.length, importedCount: importRefreshState.acceptedCount},
   }
-
-  await storeImportedArticles(rows)
-
-  return {config: params.config, stats: {itemCount: rows.length, importedCount: rows.length}}
 }
 
 export const analyzeStructuredFileUpload = async (

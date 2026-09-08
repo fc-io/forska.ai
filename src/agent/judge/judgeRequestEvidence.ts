@@ -5,6 +5,7 @@ import {basename, dirname, isAbsolute, relative, resolve, sep} from 'node:path'
 
 type RequestEvidenceFixture = {
   abstract: string
+  articleId: string
   fixtureId: string
   fulltextSentinel: string
   imageSentinelUrl: string
@@ -69,8 +70,8 @@ export const captureJudgmentRequestEvidence = async ({
   const manifest = await getManifest()
   if (!manifest) return
 
-  const fixture = manifest.fixtures.find(({fixtureId}) => {
-    return articleId === fixtureId || articleId.endsWith(`:${fixtureId}`)
+  const fixture = manifest.fixtures.find((fixture) => {
+    return articleId === fixture.articleId
   })
   if (!fixture) return
 

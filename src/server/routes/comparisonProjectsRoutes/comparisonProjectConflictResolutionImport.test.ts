@@ -661,7 +661,7 @@ test('analyzes transfer artifact rows with stable importable and skipped details
   expect(result.warnings).toMatchObject([{code: 'invalid-target-resolution-value'}])
 })
 
-test('commit result keeps analyze shape and adds inserted count', () => {
+test('commit result keeps analyze shape and adds inserted and cleared counts', () => {
   const artifact = {
     format: comparisonProjectConflictResolutionTransferFormat,
     version: comparisonProjectConflictResolutionTransferVersion,
@@ -691,8 +691,16 @@ test('commit result keeps analyze shape and adds inserted count', () => {
     targetSummaryOptionValues: ['yes', 'no'],
   })
   const commitResult = getComparisonProjectConflictResolutionImportCommitResult({analyzeResult, inserted: 1})
+  const clearingCommitResult = getComparisonProjectConflictResolutionImportCommitResult({
+    analyzeResult,
+    cleared: 2,
+    inserted: 1,
+  })
 
-  expect(commitResult).toEqual({...analyzeResult, summary: {...analyzeResult.summary, inserted: 1}})
+  expect(commitResult).toEqual({...analyzeResult, summary: {...analyzeResult.summary, cleared: 0, inserted: 1}})
+  expect(clearingCommitResult).toEqual({...analyzeResult, summary: {...analyzeResult.summary, cleared: 2, inserted: 1}})
+  expect(analyzeResult.summary).not.toHaveProperty('cleared')
+  expect(analyzeResult.summary).not.toHaveProperty('inserted')
 })
 
 test('import plan matches file-backed articles by canonical PMID', () => {

@@ -13,11 +13,15 @@ import {
 import {
   type RealCodexContentFlags,
   type RealCodexEvidence,
+  realCodexPromptType,
   type RealCodexProvisionedFixture,
   type RealCodexSeedArticle,
   type RealCodexTerminalObservation,
   type RealCodexTopologyAdapter,
 } from './realCodexSmoke.ts'
+import {getProviderConnections} from './realCodexTopologyAdapter/getProviderConnections.ts'
+import {getRequestEvidenceFixture} from './realCodexTopologyAdapter/getRequestEvidenceFixture.ts'
+import {getSnapshotInputEvidence} from './realCodexTopologyAdapter/getSnapshotInputEvidence.ts'
 
 type JsonRecord = Record<string, unknown>
 type RunningTopology = Awaited<ReturnType<typeof startJudgmentWorkflowTopology>>
@@ -152,7 +156,11 @@ const getSnapshotIdentities = (sqlitePath: string): SnapshotIdentity[] => {
   }
 }
 
-const getSnapshotEvidence = async (baseUrl: string, identities: SnapshotIdentity[]) => {
+const getSnapshotEvidence = async (
+  baseUrl: string,
+  identities: SnapshotIdentity[],
+  articles: RealCodexSeedArticle[],
+) => {
   return Promise.all(
     identities.map(async (identity) => {
       const query = new URLSearchParams({executionSnapshotHash: identity.executionSnapshotHash})
@@ -163,15 +171,7 @@ const getSnapshotEvidence = async (baseUrl: string, identities: SnapshotIdentity
       )
       const payload = getRecord(getDataRecord(body, 'execution snapshot').payload, 'execution snapshot payload')
       const article = getRecord(payload.article, 'execution snapshot article')
-      if (article.fullText !== null || article.fullTextHtml !== null || article.originalData !== null) {
-        throw new Error(`Execution snapshot ${identity.executionSnapshotId} retained excluded article content`)
-      }
-      return {
-        articleFixtureId: identity.articleId.split(':').at(-1) ?? identity.articleId,
-        hasAbstract: typeof article.articleSummary === 'string' && article.articleSummary.length > 0,
-        hasExcludedContent: false,
-        hasTitle: typeof article.articleTitle === 'string' && article.articleTitle.length > 0,
-      }
+      return getSnapshotInputEvidence(article, articles)
     }),
   )
 }
@@ -179,6 +179,7 @@ const getSnapshotEvidence = async (baseUrl: string, identities: SnapshotIdentity
 export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
   let running: RunningTopology | null = null
   let articleCount = 0
+  let seedArticles: RealCodexSeedArticle[] = []
   let provisionedFixture: RealCodexProvisionedFixture | null = null
   let requestEvidenceManifestPath: string | null = null
   let requestEvidenceOutputPath: string | null = null
@@ -223,19 +224,10 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
     provisionThroughHttp: async ({articles, contentFlags, model, prompt}) => {
       const baseUrl = getBaseUrl()
       articleCount = articles.length
+      seedArticles = articles
       if (!requestEvidenceManifestPath || !requestEvidenceOutputPath) {
         throw new Error('Real Codex request evidence paths were not initialized')
       }
-      await writeFile(
-        requestEvidenceManifestPath,
-        JSON.stringify({
-          fixtures: articles.map(({abstract, fixtureId, fulltextSentinel, imageSentinelUrl, title}) => {
-            return {abstract, fixtureId, fulltextSentinel, imageSentinelUrl, title}
-          }),
-          outputPath: requestEvidenceOutputPath,
-        }),
-        'utf8',
-      )
       const ensured = getDataRecord(
         await requestJson(baseUrl, 'POST', '/api/models/ensure', {
           modelName: model.remoteModelId,
@@ -247,13 +239,24 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
       )
       const modelId = getString(ensured.modelId, 'ensured model id')
       const importRoute = await createArticleDataSource(baseUrl, articles)
+      const requestFixtures = await Promise.all(
+        articles.map(async (article) => {
+          const body = await requestJson(baseUrl, 'GET', `/api/articles/search?q=${encodeURIComponent(article.title)}`)
+          return getRequestEvidenceFixture(body, article)
+        }),
+      )
+      await writeFile(
+        requestEvidenceManifestPath,
+        JSON.stringify({fixtures: requestFixtures, outputPath: requestEvidenceOutputPath}),
+        'utf8',
+      )
       const project = getDataRecord(
         await requestJson(baseUrl, 'POST', '/api/projects', {
           ...contentFlags,
           importRoutes: [importRoute],
           modelId,
           name: `Real Codex smoke ${crypto.randomUUID()}`,
-          prompts: [{content: prompt, order: 0, promptHeading: 'Empirical human research', type: 'yes_no'}],
+          prompts: [{content: prompt, order: 0, promptHeading: 'Empirical human research', type: realCodexPromptType}],
         }),
         'project creation',
       )
@@ -263,15 +266,10 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
       const promptId = getString(getRecord(prompts[0], 'created project prompt').id, 'created prompt id')
       const job = getDataRecord(await requestJson(baseUrl, 'POST', '/api/judgmentsjobs', {projectId}), 'job creation')
       const jobId = getString(job.jobId, 'created judgment job id')
-      const connectionsBody = getRecord(await requestJson(baseUrl, 'GET', '/api/provider-connections'), 'connections')
-      const connections = Array.isArray(connectionsBody.data) ? connectionsBody.data : []
-      const connection = connections
-        .map((value) => {
-          return getRecord(value, 'connection')
-        })
-        .find((value) => {
-          return value.providerKind === 'codex'
-        })
+      const connections = getProviderConnections(await requestJson(baseUrl, 'GET', '/api/provider-connections'))
+      const connection = connections.find((value) => {
+        return value.providerKind === 'codex'
+      })
       if (!connection) throw new Error('Codex provider connection was not created')
       provisionedFixture = {
         jobId,
@@ -357,7 +355,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
       const sqlitePath = join(active.topology.root, 'data', 'judgment-jobs', `${fixture.jobId}.sqlite`)
       const snapshotIdentities =
         retainedSnapshotIdentities.length > 0 ? retainedSnapshotIdentities : getSnapshotIdentities(sqlitePath)
-      const executionInputs = await getSnapshotEvidence(getBaseUrl(), snapshotIdentities)
+      const executionInputs = await getSnapshotEvidence(getOwnerBaseUrl(), snapshotIdentities, seedArticles)
       if (!requestEvidenceOutputPath) throw new Error('Real Codex request evidence path is unavailable')
       const requestInputs = (await readFile(requestEvidenceOutputPath, 'utf8'))
         .trim()
@@ -372,22 +370,17 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
             return getRecord(value, 'canonical judgment')
           })
         : []
-      const project = getDataRecord(
-        await requestJson(getBaseUrl(), 'GET', `/api/projects/${fixture.projectId}`),
-        'real Codex project detail',
+      const project = getRecord(
+        getDataRecord(
+          await requestJson(getBaseUrl(), 'GET', `/api/projects/${fixture.projectId}`),
+          'real Codex project detail',
+        ).project,
+        'real Codex project',
       )
-      const connectionsBody = getRecord(
-        await requestJson(getBaseUrl(), 'GET', '/api/provider-connections'),
-        'connections',
-      )
-      const connections = Array.isArray(connectionsBody.data) ? connectionsBody.data : []
-      const connection = connections
-        .map((value) => {
-          return getRecord(value, 'connection')
-        })
-        .find((value) => {
-          return value.id === fixture.providerConnectionId
-        })
+      const connections = getProviderConnections(await requestJson(getBaseUrl(), 'GET', '/api/provider-connections'))
+      const connection = connections.find((value) => {
+        return value.id === fixture.providerConnectionId
+      })
       const storedModelsBody = getRecord(await requestJson(getBaseUrl(), 'GET', '/api/models/stored'), 'stored models')
       const storedModels = Array.isArray(storedModelsBody.data) ? storedModelsBody.data : []
       const storedModel = storedModels

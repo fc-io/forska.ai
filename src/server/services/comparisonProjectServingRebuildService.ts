@@ -160,7 +160,7 @@ const getDefaultComparisonProjectServingRebuildDependencies = (): ComparisonProj
     transaction: <T>(operation: (runner: ComparisonProjectServingRebuildRunner) => Promise<T>) => {
       return database.transaction((runner) => {
         return operation(runner)
-      }, comparisonProjectServingRebuildWorkloadContext) as Promise<T>
+      }, comparisonProjectServingRebuildWorkloadContext)
     },
   }
 

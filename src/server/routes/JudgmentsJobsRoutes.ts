@@ -3368,7 +3368,7 @@ export const judgmentsJobsRoutes = new Elysia()
         clearTransientQuarantine = clearTransientQuarantine || preflightResult.clearTransientQuarantine
       }
 
-      const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
+      const updatedJob = await getAppDatabaseService().transaction(async (tx) => {
         const storageAssignments = getJudgmentJobMutationStorageAssignments({
           clearTransientQuarantine,
           status: body.status,
@@ -3383,7 +3383,7 @@ export const judgmentsJobsRoutes = new Elysia()
         `)
 
         return getJudgmentJobMutationState(tx, params.id)
-      })) as JudgmentJobMutationState | null
+      })
 
       if (body.status === 'paused') {
         await sqliteService.clearActiveQueue(params.id)
@@ -3453,7 +3453,7 @@ export const judgmentsJobsRoutes = new Elysia()
       await sqliteService.initializeJob(params.id)
       await assertJudgmentJobCanRunSqlitePreflight({jobId: params.id, quarantineReason: null, storageState: 'active'})
 
-      const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
+      const updatedJob = await getAppDatabaseService().transaction(async (tx) => {
         await tx.run(`
           UPDATE app.judgment_job
           SET status = 'running',
@@ -3467,7 +3467,7 @@ export const judgmentsJobsRoutes = new Elysia()
         `)
 
         return getJudgmentJobMutationState(tx, params.id)
-      })) as JudgmentJobMutationState | null
+      })
 
       if (!updatedJob) {
         throw new Error('Job not found')

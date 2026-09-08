@@ -383,7 +383,7 @@ const deleteProviderConnectionWithFallback = async (
   options: DeleteProviderConnectionOptions = {},
 ): Promise<DeleteProviderConnectionResult> => {
   try {
-    return (await getAppDatabaseService().transaction(async (databaseRunner) => {
+    return await getAppDatabaseService().transaction(async (databaseRunner) => {
       const usage = await getProviderConnectionUsage(databaseRunner, deleteTarget.connectionIds)
 
       if (!usage) {
@@ -414,13 +414,13 @@ const deleteProviderConnectionWithFallback = async (
       await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.delete'})
 
       return getDeletedDeleteResult(usage)
-    }, providerConnectionDeleteWorkloadContext)) as DeleteProviderConnectionResult
+    }, providerConnectionDeleteWorkloadContext)
   } catch (error) {
     if (!isForeignKeyConstraintError(error)) {
       throw error
     }
 
-    return (await getAppDatabaseService().transaction(async (databaseRunner) => {
+    return await getAppDatabaseService().transaction(async (databaseRunner) => {
       const usage = await getProviderConnectionUsage(databaseRunner, deleteTarget.connectionIds)
 
       if (!usage) {
@@ -436,7 +436,7 @@ const deleteProviderConnectionWithFallback = async (
       await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.archive'})
 
       return getArchivedDeleteResult(usage)
-    }, providerConnectionArchiveWorkloadContext)) as DeleteProviderConnectionResult
+    }, providerConnectionArchiveWorkloadContext)
   }
 }
 
@@ -625,7 +625,7 @@ export const createProviderConnection = async ({
   }
 
   const persistedConfig = getPersistedProviderConnectionConfigValue({config, providerKind})
-  const [created] = (await getAppDatabaseService().transaction(async (databaseRunner) => {
+  const [created] = await getAppDatabaseService().transaction(async (databaseRunner) => {
     const rows = await databaseRunner.queryJson<ProviderConnectionRow>(`
       INSERT INTO app.provider_connection (
         id,
@@ -677,7 +677,7 @@ export const createProviderConnection = async ({
     }
 
     return rows
-  }, providerConnectionCreateWorkloadContext)) as ProviderConnectionRow[]
+  }, providerConnectionCreateWorkloadContext)
 
   if (!created) {
     throw new Error('Failed to create provider connection')
@@ -712,7 +712,7 @@ export const updateProviderConnection = async ({
   }
 
   const persistedConfig = getPersistedProviderConnectionConfigValue({config, providerKind: current.providerKind})
-  const updated = (await getAppDatabaseService().transaction(async (tx) => {
+  const updated = await getAppDatabaseService().transaction(async (tx) => {
     const [nextConnection] = await tx.queryJson<ProviderConnectionRow>(`
       UPDATE app.provider_connection
       SET label = ${getSqlLiteral(label)},
@@ -752,7 +752,7 @@ export const updateProviderConnection = async ({
     await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner: tx, reason: 'providerConnection.update'})
 
     return getProviderConnectionRecordFromRow(nextConnection)
-  }, providerConnectionUpdateWorkloadContext)) as ProviderConnectionRecord
+  }, providerConnectionUpdateWorkloadContext)
 
   return updated ?? current
 }

@@ -9,16 +9,18 @@ type StructuredFileImportServiceModule = typeof import('./structuredFileImportSe
 
 const storedRowsRef: {current: Array<Array<Record<string, unknown>>>} = {current: []}
 const createdAssetPathsRef: {current: string[]} = {current: []}
+const acceptedCountRef: {current: number | null} = {current: null}
 
 void mock.module(articleImportStoreServiceModulePath, () => {
   return {
     markImportedArticleProjectsDirty: async (_importRouteIds: string[]) => {},
     storeImportedArticles: async (rows: Array<Record<string, unknown>>) => {
       storedRowsRef.current.push(rows)
+      return {acceptedCount: acceptedCountRef.current ?? rows.length, importRouteIds: []}
     },
     storeImportedArticlesWithTx: async (_tx: unknown, rows: Array<Record<string, unknown>>) => {
       storedRowsRef.current.push(rows)
-      return {importRouteIds: []}
+      return {acceptedCount: acceptedCountRef.current ?? rows.length, importRouteIds: []}
     },
   }
 })
@@ -54,8 +56,30 @@ const loadStructuredFileImportService = async (): Promise<StructuredFileImportSe
   return moduleUnknown as StructuredFileImportServiceModule
 }
 
+const getStructuredImportTestInput = async (records: unknown[]) => {
+  const service = await loadStructuredFileImportService()
+  const analysis = await service.analyzeStructuredFileUpload(
+    new File([JSON.stringify({records})], 'import-counts.json', {type: 'application/json'}),
+  )
+  trackAssetPath(analysis.upload.assetPath)
+
+  return {
+    input: {
+      config: service.buildStructuredFileImportConfig({
+        ...analysis.upload,
+        boundaryDisplayPath: '$.records[]',
+        boundaryPointer: '/records',
+      }),
+      dataSourceTitle: 'Import count fixture',
+      importRoute: 'imported-file:counts',
+    },
+    service,
+  }
+}
+
 afterEach(() => {
   storedRowsRef.current = []
+  acceptedCountRef.current = null
   createdAssetPathsRef.current.forEach((assetPath) => {
     rmSync(assetPath, {force: true})
   })
@@ -215,6 +239,7 @@ test('importStructuredFileFromConfig builds article rows from selected boundary'
   expect(result.stats).toEqual({itemCount: 2, importedCount: 2})
   expect(getStoredRows()).toHaveLength(2)
   expect(getStoredRows()[0]).toMatchObject({
+    allowUnidentifiedCreate: true,
     articleAuthors: ['Alice Example'],
     articleId: 'imported-file:test-datasource:item-1',
     articleSummary: 'Alpha summary',
@@ -270,4 +295,48 @@ test('importStructuredFileFromConfig keeps long explicit ids distinct', async ()
   expect(storedRows[0]?.articleId).not.toBe(storedRows[1]?.articleId)
   expect(storedRows[0]?.articleId).toMatch(/^imported-file:test-datasource:/)
   expect(storedRows[1]?.articleId).toMatch(/^imported-file:test-datasource:/)
+})
+
+test.each([
+  [false, 0],
+  [false, 1],
+  [true, 0],
+  [true, 1],
+] as const)(
+  'structured imports report accepted counts with transaction=%s and accepted=%i',
+  async (withTx, accepted) => {
+    const {input, service} = await getStructuredImportTestInput([
+      {id: 'one', title: 'One'},
+      {id: 'two', title: 'Two'},
+    ])
+    const tx = {
+      queryJson: async <T>() => {
+        return [] as T[]
+      },
+      run: async () => {},
+    }
+    acceptedCountRef.current = accepted
+
+    const result = await service.importStructuredFileFromConfig({...input, ...(withTx ? {tx} : {})})
+
+    expect(result.stats).toEqual({importedCount: accepted, itemCount: 2})
+    expect(getStoredRows()).toHaveLength(2)
+  },
+)
+
+test('structured imports reject conflicting records with the same explicit source identity before writes', async () => {
+  const {input, service} = await getStructuredImportTestInput([
+    {id: 'same', title: 'One'},
+    {id: 'same', title: 'Two'},
+  ])
+
+  const error = await service.importStructuredFileFromConfig(input).catch((caught: unknown) => {
+    return caught
+  })
+
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toBe(
+    'Structured file has conflicting records for source identity imported-file:counts:same',
+  )
+  expect(getStoredRows()).toEqual([])
 })

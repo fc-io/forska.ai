@@ -457,8 +457,8 @@ test('duckdb service serializes append work with the main queue on low-memory wo
   }
 })
 
-test('duckdb recycle barrier blocks foreground work until background work drains', () => {
-  const duckdbPath = join(tmpdir(), `f1-duckdb-service-recycle-foreground-barrier-${Date.now()}.duckdb`)
+test.each([true, false])('duckdb recycle barrier drains background work before foreground work (owner=%s)', (owner) => {
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-recycle-foreground-barrier-${owner}-${Date.now()}.duckdb`)
 
   try {
     const stdout = getSpawnOutput(
@@ -489,7 +489,7 @@ test('duckdb recycle barrier blocks foreground work until background work drains
 
             void mock.module(serverRuntimeRoleModulePath, () => {
               return {
-                canCurrentServerOwnDuckdb: () => true,
+                canCurrentServerOwnDuckdb: () => ${owner},
                 ensureCurrentDuckdbOwnerLease: async () => {},
                 registerDuckdbOwnerDemotionHandler: () => {},
                 releaseCurrentDuckdbOwnerLease: async () => {},
@@ -510,6 +510,7 @@ test('duckdb recycle barrier blocks foreground work until background work drains
                     })
                   }
 
+                  events.push(['read-finished', label])
                   return {getRowObjectsJson: () => [{label}]}
                 }
 
@@ -540,7 +541,13 @@ test('duckdb recycle barrier blocks foreground work until background work drains
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?recycle-foreground-barrier=' + Date.now())
-            const backgroundPromise = duckdbService.runDuckdbBackgroundJsonQuery("SELECT 'background' AS label")
+            const workloadContext = {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'test.recycleForegroundBarrier',
+              workloadClass: 'test',
+            }
+            const backgroundPromise = duckdbService.runDuckdbBackgroundJsonQuery("SELECT 'background' AS label", workloadContext)
 
             const backgroundStarted = await waitFor(() => events.some((event) => event[0] === 'read' && event[1] === 'background'))
 
@@ -548,16 +555,18 @@ test('duckdb recycle barrier blocks foreground work until background work drains
 
             const barrierActive = await waitFor(() => globalThis.__forskaDuckdbServiceState.appendBarrier !== null)
 
-            const mainPromise = duckdbService.runDuckdbJsonQuery("SELECT 'main' AS label")
+            const mainPromise = duckdbService.runDuckdbJsonQuery("SELECT 'main' AS label", workloadContext)
 
             await new Promise((resolve) => setTimeout(resolve, 10))
 
-            const pendingWhileBarrier = globalThis.__forskaDuckdbServiceState.duckdbPendingCount
+            const queuesWhileBarrier = duckdbService.getDuckdbQueueRuntimeMetricsSnapshot()
+            const eventsWhileBarrier = [...events]
 
             releaseBackground()
-            await Promise.all([backgroundPromise, closePromise, mainPromise])
+            const [backgroundRows, , mainRows] = await Promise.all([backgroundPromise, closePromise, mainPromise])
 
-            console.log(JSON.stringify({backgroundStarted, barrierActive, events, pendingWhileBarrier}))
+            const queuesAfterDrain = duckdbService.getDuckdbQueueRuntimeMetricsSnapshot()
+            console.log(JSON.stringify({backgroundStarted, backgroundRows, barrierActive, events, eventsWhileBarrier, mainRows, queuesAfterDrain, queuesWhileBarrier}))
             await duckdbService.closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
           `,
         ],
@@ -575,9 +584,13 @@ test('duckdb recycle barrier blocks foreground work until background work drains
 
     const result = JSON.parse(stdout) as {
       backgroundStarted: boolean
+      backgroundRows: Array<{label: string}>
       barrierActive: boolean
       events: Array<Array<string>>
-      pendingWhileBarrier: number
+      eventsWhileBarrier: Array<Array<string>>
+      mainRows: Array<{label: string}>
+      queuesAfterDrain: {background: {queueDepth: number}; main: {queueDepth: number}}
+      queuesWhileBarrier: {background: {queueDepth: number}; main: {queueDepth: number}}
     }
     const mainReadIndex = result.events.findIndex((event) => {
       return event[0] === 'read' && event[1] === 'main'
@@ -585,12 +598,22 @@ test('duckdb recycle barrier blocks foreground work until background work drains
     const firstCloseIndex = result.events.findIndex((event) => {
       return event[0] === 'close'
     })
+    const backgroundFinishedIndex = result.events.findIndex((event) => {
+      return event[0] === 'read-finished' && event[1] === 'background'
+    })
 
     expect(result.backgroundStarted).toBe(true)
     expect(result.barrierActive).toBe(true)
-    expect(result.pendingWhileBarrier).toBe(2)
-    expect(firstCloseIndex).toBeGreaterThan(-1)
+    expect(result.eventsWhileBarrier).toEqual([['read', 'background']])
+    expect(result.queuesWhileBarrier.background.queueDepth).toBe(1)
+    expect(result.queuesWhileBarrier.main.queueDepth).toBe(owner ? 1 : 0)
+    expect(backgroundFinishedIndex).toBeGreaterThan(-1)
+    expect(firstCloseIndex).toBeGreaterThan(backgroundFinishedIndex)
     expect(mainReadIndex).toBeGreaterThan(firstCloseIndex)
+    expect(result.backgroundRows).toEqual([{label: 'background'}])
+    expect(result.mainRows).toEqual([{label: 'main'}])
+    expect(result.queuesAfterDrain.background.queueDepth).toBe(0)
+    expect(result.queuesAfterDrain.main.queueDepth).toBe(0)
   } finally {
     removeDuckdbFiles(duckdbPath)
   }

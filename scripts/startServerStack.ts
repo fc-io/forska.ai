@@ -26,6 +26,7 @@ import {
   readJsonProcessLockState,
   readProcessLockForAcquisition,
 } from './processLockAcquisition.ts'
+import {releaseStoppedServerLocks} from './releaseStoppedServerLocks.ts'
 
 type ManagedRole = 'api' | 'judge' | 'maintenance'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
@@ -637,6 +638,25 @@ const stopManagedServerProcess = async (role: ManagedRole, serverProcess = getMa
   }
 
   await stopServerProcess(serverProcess)
+  await releaseManagedServerLocks(role, serverProcess)
+}
+
+const releaseManagedServerLocks = async (role: ManagedRole, serverProcess: ServerProcess) => {
+  const identity = managedProcessRuntimeIdentities.get(serverProcess)
+  if (identity === undefined) {
+    return
+  }
+  await serverProcess.exited
+  await Effect.runPromise(
+    releaseStoppedServerLocks({
+      pid: identity.pid,
+      processStartedAt: identity.processStartedAt,
+      exitedAt: new Date().toISOString(),
+      role,
+      envValues: getBackgroundServerEnv({baseEnv: process.env, role: getBackgroundServerRole(role)}),
+      cwd: process.cwd(),
+    }),
+  )
 }
 
 const ensureManagedServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
@@ -907,6 +927,7 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
     return
   }
 
+  await releaseManagedServerLocks(role, serverProcess)
   setLastExitedManagedProcess(role, serverProcess)
   setManagedServerProcess(role, null)
   const pid = serverProcess.pid ?? null
