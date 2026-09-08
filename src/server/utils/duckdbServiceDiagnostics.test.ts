@@ -1,5 +1,7 @@
 import {expect, test} from 'bun:test'
 
+import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
+
 type DiagnosticEvent = {
   attrs: {
     connectionRole: string
@@ -110,7 +112,7 @@ test('duckdb active main work diagnostics expose in-flight workload without SQL 
               closeSync() {}
             }
 
-            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
           })
 
           const service = await import('./src/server/utils/duckdbService.ts')
@@ -284,7 +286,7 @@ test('duckdb native statement diagnostics identify workload and connection witho
               closeSync() {}
             }
 
-            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
           })
 
           const service = await import('./src/server/utils/duckdbService.ts')
@@ -540,7 +542,7 @@ test('duckdb native statement lifecycle diagnostics are opt-in while errors stay
               closeSync() {}
             }
 
-            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
           })
 
           const service = await import('./src/server/utils/duckdbService.ts')

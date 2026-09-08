@@ -3,6 +3,10 @@ import {existsSync} from 'node:fs'
 import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 
 import {
+  getDuckdbLegacyWalCompatibilityError,
+  isDuckdbLegacyWalCompatibilityError,
+} from '../utils/duckdbEngineCompatibility.ts'
+import {
   type DuckdbWorkloadContext,
   getReadOnlyDuckdbRuntimeOptions,
   runDuckdbBackgroundJsonQuery,
@@ -131,7 +135,13 @@ const createReadOnlyDuckdbInstance = async (runtimeConfig: ReadOnlyDuckdbRuntime
   return DuckDBInstance.create(
     runtimeConfig.databasePath,
     getReadOnlyDuckdbRuntimeOptions({memoryLimit: runtimeConfig.memoryLimit}),
-  )
+  ).catch((error: unknown) => {
+    if (error instanceof Error && isDuckdbLegacyWalCompatibilityError(error.message)) {
+      throw getDuckdbLegacyWalCompatibilityError(runtimeConfig.databasePath, error)
+    }
+
+    throw error
+  })
 }
 
 const startReadOnlyDuckdbService = async (context: ReadOnlyDuckdbContext): Promise<DuckDBConnection> => {

@@ -1,4 +1,10 @@
-# DuckDB checkpoint memory backport
+# Historical DuckDB checkpoint memory backport
+
+**Superseded:** normal installs, containers, and desktop now use the pinned
+official 2.0 alpha described in [the distribution guide](../../vendor/duckdb/README.md).
+The old C++ build and patch files were removed in that cutover. This document
+records the earlier diagnosis, reviewed backport, and evidence; its build
+commands and container-only scope are historical, not current instructions.
 
 Scope: database engine and container build; no application schema or authoritative-row changes. The Apple container uses a patched Linux ARM64 DuckDB library. Host web and desktop installations are not replaced by this container build.
 
@@ -88,7 +94,7 @@ Upstream regression files included:
 - `test/sql/storage/partial_delete_pending_compress.test`
 - `test/sql/storage/piecemeal_delete_checkpoint_compress.test`
 
-## Removal criterion
+## Historical removal criterion
 
 Every DuckDB dependency or engine upgrade must run the
 [DuckDB upgrade gate in TESTS.md](../../TESTS.md#duckdb-upgrades-checkpoint-memory-regression-gate)
@@ -96,3 +102,8 @@ against the actual candidate engine, including an unpatched official build when
 evaluating removal of this backport.
 
 When an official stable DuckDB/Node binding release contains both upstream fixes, replace the custom build with that pinned official package and remove the patch/build override in the same change. First rerun the synthetic regression, upstream transaction/rollback cases, and current-DB progress gate at the same memory limits. Do not keep patched and unpatched container engine paths as permanent alternatives.
+
+The removal criterion was subsequently widened by an explicit decision to adopt
+the tested official 2.0 alpha. That cutover removes the custom build rather than
+keeping both engines as interchangeable runtime alternatives. Legacy-WAL
+migration remains an explicit operator concern, not an automatic deletion.

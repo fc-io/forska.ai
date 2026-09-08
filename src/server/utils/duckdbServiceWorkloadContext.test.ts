@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs'
 
 import {expect, mock, test} from 'bun:test'
 
+import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
 import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from './duckdbExclusiveWork.ts'
 
 type DuckdbServiceModule = typeof import('./duckdbService.ts')
@@ -148,7 +149,13 @@ test('duckdb workload context rejects over-budget query results and records metr
       closeSync() {}
     }
 
-    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+    return {
+      DuckDBConnection: MockConnection,
+      DuckDBInstance: MockInstance,
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
   })
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'
@@ -268,7 +275,13 @@ test('serialized low-memory owner prioritizes queued foreground work over queued
       closeSync() {}
     }
 
-    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+    return {
+      DuckDBConnection: MockConnection,
+      DuckDBInstance: MockInstance,
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
   })
 
   process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
@@ -347,7 +360,13 @@ test('api-role foreground DuckDB work requires workload context before connectio
       closeSync() {}
     }
 
-    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+    return {
+      DuckDBConnection: MockConnection,
+      DuckDBInstance: MockInstance,
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
   })
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'
@@ -462,7 +481,13 @@ test('api-role foreground DuckDB workload-context guard has an explicit rollout 
       closeSync() {}
     }
 
-    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+    return {
+      DuckDBConnection: MockConnection,
+      DuckDBInstance: MockInstance,
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
   })
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'
@@ -529,7 +554,13 @@ test('app database foreground wrappers inherit API-role missing-context rejectio
       closeSync() {}
     }
 
-    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+    return {
+      DuckDBConnection: MockConnection,
+      DuckDBInstance: MockInstance,
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
   })
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'
@@ -618,7 +649,13 @@ test('owner and background DuckDB scopes remain allowed without foreground workl
       closeSync() {}
     }
 
-    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+    return {
+      DuckDBConnection: MockConnection,
+      DuckDBInstance: MockInstance,
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
   })
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'

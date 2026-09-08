@@ -1,5 +1,11 @@
 # DuckDB 2.0 preview evaluation — 2026-09-08
 
+**Historical evaluation:** the pinned alpha is now distributed through the shared
+[platform packages](../../vendor/duckdb/README.md). The trial results below remain
+evidence; statements about unchanged dependencies or trial-only configuration
+describe the state at the time. The legacy-WAL and upstream correctness caveats
+are not erased by packaging the engine.
+
 Scope: native engine compatibility investigation and isolated live dev trial.
 Production dependencies, the container image, and the original primary database
 were not changed. Trial-only source/configuration was bind-mounted into the test

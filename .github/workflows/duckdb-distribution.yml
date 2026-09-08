@@ -1,0 +1,59 @@
+name: DuckDB distribution
+
+on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'bun.lock'
+      - 'vendor/duckdb/**'
+      - 'scripts/buildDuckdbDistribution*'
+      - 'scripts/buildDuckdbDistribution/**'
+      - 'scripts/verifyDuckdbDistribution*'
+      - 'scripts/verifyDuckdbDistribution/**'
+      - 'scripts/verifyDesktopDuckdbDistribution*'
+      - 'scripts/verifyDesktopDuckdbDistribution/**'
+      - 'scripts/duckdbCheckpointMemoryRegression.ts'
+      - 'src/server/utils/duckdbEngineCompatibility*'
+      - 'src/server/utils/duckdbEngineContract*'
+      - 'src/server/utils/duckdbService.ts'
+      - 'containers/apple/**'
+      - 'electrobun.config.ts'
+      - '.github/workflows/duckdb-distribution.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-install:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux, arch: x64, runner: ubuntu-24.04, desktop: true}
+          - {platform: linux, arch: arm64, runner: ubuntu-24.04-arm, desktop: false}
+          - {platform: darwin, arch: arm64, runner: macos-14, desktop: true}
+          - {platform: darwin, arch: x64, runner: macos-15-intel, desktop: false}
+          - {platform: win32, arch: x64, runner: windows-2025, desktop: true}
+          - {platform: win32, arch: arm64, runner: windows-11-arm, desktop: false}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Confirm native runner architecture
+        run: bun -e "if (process.platform !== '${{ matrix.platform }}' || process.arch !== '${{ matrix.arch }}') throw new Error('Runner is not the native target'); console.log(process.platform, process.arch)"
+      - name: Install locked packages without a custom native installer
+        run: bun install --frozen-lockfile
+      - name: Native package and copied-bundle boundaries
+        run: bun test scripts/verifyDuckdbDistribution scripts/verifyDesktopDuckdbDistribution.test.ts --timeout 120000
+      - name: Validate installed engine, bindings, WAL and checkpoint
+        run: bun scripts/verifyDuckdbDistribution.ts
+      - name: Runtime compatibility and legacy WAL handling
+        run: bun test src/server/utils/duckdbEngineCompatibility.test.ts --timeout 120000
+      - name: Build desktop and verify its copied native package
+        if: matrix.desktop
+        run: bun run desktop:build

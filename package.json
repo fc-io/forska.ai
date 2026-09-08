@@ -80,12 +80,14 @@
     "db:duck:run-archived-project-bounded-cleanup": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runArchivedProjectBoundedCleanup.ts",
     "db:duck:backfill-source-metadata": "bun scripts/backfillArticleSourceMetadata.ts",
     "db:duck:backfill-ppr-host-labels": "bun scripts/backfillPprHostLabels.ts",
-    "db:studio": "bun scripts/dbStudio.ts"
+    "db:studio": "bun scripts/dbStudio.ts",
+    "test:duckdb-distribution": "bun scripts/verifyDuckdbDistribution.ts",
+    "build:duckdb-distribution": "bun scripts/buildDuckdbDistribution.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.41",
     "@ark-ui/solid": "^5.34.1",
-    "@duckdb/node-api": "^1.5.1-r.1",
+    "@duckdb/node-api": "1.5.1-r.1",
     "@elysiajs/cors": "^1.4.1",
     "@elysiajs/cron": "^1.4.1",
     "@elysiajs/eden": "^1.4.8",
@@ -142,5 +144,13 @@
     "vite-plugin-solid": "^2.11.10",
     "vitest": "^4.1.0"
   },
-  "module": "src/index.js"
+  "module": "src/index.js",
+  "overrides": {
+    "@duckdb/node-bindings-darwin-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.1.tgz",
+    "@duckdb/node-bindings-darwin-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.1.tgz",
+    "@duckdb/node-bindings-linux-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.1.tgz",
+    "@duckdb/node-bindings-linux-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.1.tgz",
+    "@duckdb/node-bindings-win32-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.1.tgz",
+    "@duckdb/node-bindings-win32-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.1.tgz"
+  }
 }
