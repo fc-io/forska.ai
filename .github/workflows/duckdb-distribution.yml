@@ -16,6 +16,9 @@ on:
       - 'src/server/utils/duckdbEngineCompatibility*'
       - 'src/server/utils/duckdbEngineContract*'
       - 'src/server/utils/duckdbService.ts'
+      - 'src/db/migrateDuckdb*'
+      - 'src/db/duckdbMigrations/**'
+      - 'src/server/reviewServing/**'
       - 'containers/apple/**'
       - 'electrobun.config.ts'
       - '.github/workflows/duckdb-distribution.yml'
@@ -54,6 +57,8 @@ jobs:
         run: bun scripts/verifyDuckdbDistribution.ts
       - name: Runtime compatibility and legacy WAL handling
         run: bun test src/server/utils/duckdbEngineCompatibility.test.ts --timeout 120000
+      - name: Fresh database migration and projector compatibility
+        run: bun test src/db/migrateDuckdb.fresh.test.ts --timeout 120000
       - name: Build desktop and verify its copied native package
         if: matrix.desktop
         run: bun run desktop:build

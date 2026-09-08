@@ -350,7 +350,7 @@ export const getRemoveReviewServingTitleSearchArticleIdsStatements = (
 
   return [
     `UPDATE mart.review_title_search_serving_v4
-      SET article_ids = list_filter(article_ids, article_id -> NOT list_contains(${articleIdsSql}, article_id))
+      SET article_ids = list_filter(article_ids, lambda article_id: NOT list_contains(${articleIdsSql}, article_id))
       WHERE ${scopedPredicate}
         AND list_has_any(article_ids, ${articleIdsSql})`,
     `DELETE FROM mart.review_title_search_serving_v4

@@ -30,6 +30,10 @@ For every engine, binding, or native-package update:
   for copied-package containment, native-library symlink rejection, and target-only
   pruning. Existing mock-heavy runtime suites require the per-file runner
   `bun run test:bun`, not concatenating their paths into a shared Bun process.
+- Run `bun test src/db/migrateDuckdb.fresh.test.ts --timeout 120000` for a genuinely
+  fresh database, all historical migrations, title-posting projector writes, and
+  idempotent migration reruns preserving data and applied timestamps. This catches
+  alpha SQL changes that a small hand-built table or an already-migrated DB misses.
 - Keep `bun scripts/duckdbCheckpointMemoryRegression.ts` as the standalone
   memory gate. Require exact rows, ID sum, and WAL-marker preservation after a
   fresh-process reopen. Do not increase the cap or change the fixture to pass.

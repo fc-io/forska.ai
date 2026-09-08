@@ -725,7 +725,7 @@ const getDeleteServingRowsStatement = (
   return articleIds.length > 0
     ? [
         `UPDATE mart.review_article_filter_posting_serving_v4 serving
-        SET article_ids = list_filter(article_ids, article_id -> NOT list_contains(${getArticleIdsArraySql(articleIds)}, article_id))
+        SET article_ids = list_filter(article_ids, lambda article_id: NOT list_contains(${getArticleIdsArraySql(articleIds)}, article_id))
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
@@ -734,7 +734,7 @@ const getDeleteServingRowsStatement = (
     : hasChunkArticleRange(input)
       ? [
           `UPDATE mart.review_article_filter_posting_serving_v4 serving
-        SET article_ids = list_filter(article_ids, article_id -> NOT (
+        SET article_ids = list_filter(article_ids, lambda article_id: NOT (
           ${input.chunkStartArticleId === undefined || input.chunkStartArticleId === null ? 'TRUE' : `article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`}
           AND ${input.chunkEndArticleId === undefined || input.chunkEndArticleId === null ? 'TRUE' : `article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`}
         ))
@@ -752,7 +752,7 @@ const getDeleteServingRowsStatement = (
           SELECT * FROM (VALUES ${tombstoneValues})
         )
         UPDATE mart.review_article_filter_posting_serving_v4 serving
-        SET article_ids = list_filter(serving.article_ids, article_id -> NOT list_contains(deleted.article_ids, article_id))
+        SET article_ids = list_filter(serving.article_ids, lambda article_id: NOT list_contains(deleted.article_ids, article_id))
         USING deleted
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
@@ -786,7 +786,7 @@ const getSubtractFullRebuildServingRowsStatement = (
       .join(' OR ')
 
     return `UPDATE mart.review_article_filter_posting_serving_v4 serving
-    SET article_ids = list_filter(article_ids, article_id -> NOT (${rangePredicate}))
+    SET article_ids = list_filter(article_ids, lambda article_id: NOT (${rangePredicate}))
     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
       AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
@@ -1138,7 +1138,7 @@ const getFullPostingRebuildOutputValidationResult = async (
   database: ReviewServingFilterPostingProjectorDatabase,
 ) => {
   const postingArticleCountExpression = hasChunkArticleRange(input)
-    ? `array_length(list_filter(serving.article_ids, article_id -> ${getArticleRangeExpression({articleIdSql: 'article_id', ...input})}))`
+    ? `array_length(list_filter(serving.article_ids, lambda article_id: ${getArticleRangeExpression({articleIdSql: 'article_id', ...input})}))`
     : 'array_length(serving.article_ids)'
   const [row] = await database.queryJson<PostingValidationCountRow>(`
     SELECT
