@@ -11,7 +11,7 @@ CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair (
 INSERT INTO mart.review_article_serving_payload_v4_coverage_repair
 WITH existing_payload AS (
   SELECT
-    COLUMNS(column_name -> column_name IN (
+    COLUMNS(lambda column_name: column_name IN (
       'project_id',
       'display_identity',
       'payload_identity',

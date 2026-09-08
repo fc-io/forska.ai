@@ -19,7 +19,7 @@ CREATE TABLE mart.review_article_count_serving_v4_repair (
 );
 
 INSERT INTO mart.review_article_count_serving_v4_repair BY NAME
-SELECT COLUMNS(column_name -> column_name != 'count_updated_at')
+SELECT COLUMNS(lambda column_name: column_name != 'count_updated_at')
 FROM mart.review_article_count_serving_v4;
 
 DROP TABLE mart.review_article_count_serving_v4;
@@ -55,7 +55,7 @@ CREATE TABLE mart.review_filter_facet_serving_v4_repair (
 );
 
 INSERT INTO mart.review_filter_facet_serving_v4_repair BY NAME
-SELECT COLUMNS(column_name -> column_name != 'facet_updated_at')
+SELECT COLUMNS(lambda column_name: column_name != 'facet_updated_at')
 FROM mart.review_filter_facet_serving_v4;
 
 DROP TABLE mart.review_filter_facet_serving_v4;
@@ -92,7 +92,7 @@ CREATE TABLE mart.review_filter_option_serving_v4_repair (
 );
 
 INSERT INTO mart.review_filter_option_serving_v4_repair BY NAME
-SELECT COLUMNS(column_name -> column_name != 'option_updated_at')
+SELECT COLUMNS(lambda column_name: column_name != 'option_updated_at')
 FROM mart.review_filter_option_serving_v4;
 
 DROP TABLE mart.review_filter_option_serving_v4;

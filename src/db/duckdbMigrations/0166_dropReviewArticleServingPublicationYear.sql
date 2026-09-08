@@ -22,7 +22,7 @@ CREATE TABLE mart.review_article_serving_v4_publication_year_repair (
 );
 
 INSERT INTO mart.review_article_serving_v4_publication_year_repair BY NAME
-SELECT COLUMNS(column_name -> column_name IN ('project_id', 'review_config_hash', 'snapshot_id', 'base_generation', 'patch_watermark', 'list_mode_key', 'article_id', 'article_created_at', 'sort_key', 'activity_sort_at'))
+SELECT COLUMNS(lambda column_name: column_name IN ('project_id', 'review_config_hash', 'snapshot_id', 'base_generation', 'patch_watermark', 'list_mode_key', 'article_id', 'article_created_at', 'sort_key', 'activity_sort_at'))
 FROM mart.review_article_serving_v4;
 
 DROP TABLE mart.review_article_serving_v4;

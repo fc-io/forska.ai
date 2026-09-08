@@ -1514,7 +1514,7 @@ const getPostingRebuildChunkOutputCount = async (
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
-  const postingArticleCountExpression = `array_length(list_filter(serving.article_ids, article_id -> ${getChunkArticleRangeExpression({articleIdSql: 'article_id', chunk: input.chunk})}))`
+  const postingArticleCountExpression = `array_length(list_filter(serving.article_ids, lambda article_id: ${getChunkArticleRangeExpression({articleIdSql: 'article_id', chunk: input.chunk})}))`
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     SELECT
       CAST(posting_count.actual_count + state_count.actual_count AS INTEGER) AS actualCount,

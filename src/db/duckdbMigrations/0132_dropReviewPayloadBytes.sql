@@ -17,7 +17,7 @@ CREATE TABLE mart.review_article_serving_payload_v4_repair (
 );
 
 INSERT INTO mart.review_article_serving_payload_v4_repair BY NAME
-SELECT COLUMNS(column_name -> column_name IN ('project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'))
+SELECT COLUMNS(lambda column_name: column_name IN ('project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'))
 FROM mart.review_article_serving_payload_v4;
 
 DROP TABLE mart.review_article_serving_payload_v4;

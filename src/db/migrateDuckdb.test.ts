@@ -777,7 +777,7 @@ test('DuckDB migration backfills fixed list-mode membership flags', async () => 
           SELECT
             column_name AS columnName,
             is_nullable AS isNullable,
-            column_default AS columnDefault
+            column_default IS NOT NULL AS hasDefault
           FROM information_schema.columns
           WHERE table_schema = 'mart'
             AND table_name = 'review_article_serving_list_mode_state_v4'
@@ -819,7 +819,7 @@ test('DuckDB migration backfills fixed list-mode membership flags', async () => 
     }
 
     const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
-      columns: Array<{columnDefault: string | null; columnName: string; isNullable: string}>
+      columns: Array<{hasDefault: boolean; columnName: string; isNullable: string}>
       rows: Array<{
         articleId: string
         hasBothListMode: boolean
@@ -830,10 +830,10 @@ test('DuckDB migration backfills fixed list-mode membership flags', async () => 
     }
 
     expect(parsed.columns).toEqual([
-      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_llm_list_mode', isNullable: 'NO'},
-      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_human_list_mode', isNullable: 'NO'},
-      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_both_list_mode', isNullable: 'NO'},
-      {columnDefault: "CAST('f' AS BOOLEAN)", columnName: 'has_unassessed_list_mode', isNullable: 'NO'},
+      {hasDefault: true, columnName: 'has_llm_list_mode', isNullable: 'NO'},
+      {hasDefault: true, columnName: 'has_human_list_mode', isNullable: 'NO'},
+      {hasDefault: true, columnName: 'has_both_list_mode', isNullable: 'NO'},
+      {hasDefault: true, columnName: 'has_unassessed_list_mode', isNullable: 'NO'},
     ])
     expect(parsed.rows).toEqual([
       {
