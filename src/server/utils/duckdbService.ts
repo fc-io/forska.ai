@@ -194,7 +194,7 @@ type DuckdbQueuedMainWork<T = unknown> = {
   resolve: (value: T) => void
   work: () => Promise<T>
 }
-type DuckdbTransactionRunner = {
+export type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }

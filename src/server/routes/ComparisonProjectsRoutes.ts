@@ -1,3 +1,5 @@
+import {freemem, totalmem} from 'node:os'
+
 import {Elysia, t} from 'elysia'
 
 import type {
@@ -40,7 +42,12 @@ import {
 } from '../services/comparisonProjectServingRebuildService.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {csvUtf8Bom, getCsvDownloadHeaders} from '../utils/csvResponse.ts'
-import {type DuckdbWorkloadContext, getMaintenanceDuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
+import {
+  type DuckdbWorkloadContext,
+  getDuckdbRuntimeConfig,
+  getMaintenanceDuckdbWorkloadContext,
+} from '../utils/duckdbService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {
   deriveStrictSummaryAnswer,
@@ -49,6 +56,8 @@ import {
   normalizeSummaryAnswerValue,
 } from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {getRuntimeBuildInfo} from '../utils/runtimeBuildInfo.ts'
+import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 import {SimplePdfDocument} from '../utils/simplePdf.ts'
 import {
   type ComparisonProjectConflictResolutionTransferSourceRow,
@@ -543,22 +552,48 @@ const markComparisonProjectServingStaleAndQueueRebuild = async (comparisonProjec
   void queueComparisonProjectServingRebuild(comparisonProjectId)
 }
 
-const checkpointComparisonProjectMutation = async () => {
+type ConflictResolutionSaveBaseDiagnostic = {
+  activeGeneration: number | null
+  articleId: string
+  comparisonProjectId: string
+  isSummaryMode: boolean
+  requestedValue: string
+}
+
+type ComparisonProjectConflictResolutionSavedRow = {
+  articleId: string
+  replacedExistingResolution: boolean
+  reviewerDisplayName: string | null
+  reviewerUserId: string | null
+}
+
+const checkpointComparisonProjectMutation = async (diagnostic?: ConflictResolutionSaveBaseDiagnostic) => {
+  if (diagnostic) {
+    logConflictResolutionSavePhase('deferred-checkpoint:start', diagnostic)
+  }
   await appDatabaseService.maintenance('checkpoint', getMaintenanceDuckdbWorkloadContext('comparisonProjectMutation'))
+  if (diagnostic) {
+    logConflictResolutionSavePhase('deferred-checkpoint:complete', diagnostic)
+  }
 }
 
 const deferredComparisonProjectConflictResolutionCheckpointDelayMs = 1000
 let deferredComparisonProjectConflictResolutionCheckpoint: ReturnType<typeof setTimeout> | null = null
 
-const scheduleComparisonProjectConflictResolutionCheckpoint = () => {
+const scheduleComparisonProjectConflictResolutionCheckpoint = (diagnostic: ConflictResolutionSaveBaseDiagnostic) => {
   if (deferredComparisonProjectConflictResolutionCheckpoint !== null) {
     return
   }
 
   deferredComparisonProjectConflictResolutionCheckpoint = setTimeout(() => {
     deferredComparisonProjectConflictResolutionCheckpoint = null
-    void checkpointComparisonProjectMutation().catch((error) => {
-      console.error('[comparison-projects] conflict-resolution checkpoint failed', error)
+    void checkpointComparisonProjectMutation(diagnostic).catch((error) => {
+      console.error('[comparison-projects] conflict-resolution checkpoint failed', {
+        ...diagnostic,
+        error: getConflictResolutionSaveErrorDiagnostic(error),
+        memory: getConflictResolutionSaveMemorySnapshot(),
+        runtime: getConflictResolutionSaveRuntimeDiagnostic(),
+      })
     })
   }, deferredComparisonProjectConflictResolutionCheckpointDelayMs)
   deferredComparisonProjectConflictResolutionCheckpoint.unref?.()
@@ -3866,6 +3901,46 @@ const getConflictResolutionSaveMemorySnapshot = () => {
   return {externalBytes: memory.external, heapUsedBytes: memory.heapUsed, rssBytes: memory.rss}
 }
 
+const getConflictResolutionSaveRuntimeDiagnostic = () => {
+  const duckdbRuntimeConfig = getDuckdbRuntimeConfig()
+  const buildInfo = getRuntimeBuildInfo()
+
+  return {
+    commitSha: buildInfo.commitSha,
+    commitShaSource: buildInfo.commitShaSource,
+    duckdbCheckpointThreshold: duckdbRuntimeConfig.checkpointThreshold,
+    duckdbMemoryLimit: duckdbRuntimeConfig.memoryLimit,
+    duckdbMemoryLimitMiB: parseDuckdbMemoryLimitToMiB(duckdbRuntimeConfig.memoryLimit),
+    duckdbTempDirectory: duckdbRuntimeConfig.tempDirectory,
+    duckdbThreads: duckdbRuntimeConfig.threads,
+    freeSystemMemoryBytes: freemem(),
+    pid: process.pid,
+    platform: process.platform,
+    role: getCurrentServerRole(),
+    totalSystemMemoryBytes: totalmem(),
+  }
+}
+
+const getConflictResolutionSaveDiagnostic = (params: ConflictResolutionSaveBaseDiagnostic) => {
+  return {
+    ...params,
+    memory: getConflictResolutionSaveMemorySnapshot(),
+    runtime: getConflictResolutionSaveRuntimeDiagnostic(),
+  }
+}
+
+const logConflictResolutionSavePhase = (
+  phase: string,
+  params: ConflictResolutionSaveBaseDiagnostic,
+  extra: Record<string, unknown> = {},
+) => {
+  console.info('[comparison-projects] conflict-resolution save phase', {
+    ...getConflictResolutionSaveDiagnostic(params),
+    ...extra,
+    phase,
+  })
+}
+
 const getConflictResolutionSaveErrorDiagnostic = (error: unknown) => {
   if (error instanceof Error) {
     return {message: error.message, name: error.name}
@@ -3883,7 +3958,8 @@ const getComparisonProjectConflictResolutionTargetRow = async (
   }
 
   if (scope.activeGeneration !== null) {
-    const [servingRow] = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionTargetRow>(`
+    const [servingRow] = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionTargetRow>(
+      `
       SELECT
         article_category AS articleCategory,
         has_conflict AS hasConflict
@@ -3892,7 +3968,9 @@ const getComparisonProjectConflictResolutionTargetRow = async (
         AND generation = ${getSqlLiteral(scope.activeGeneration)}
         AND article_id = ${getSqlLiteral(articleId)}
       LIMIT 1
-    `)
+    `,
+      getMaintenanceDuckdbWorkloadContext('comparisonProjectConflictResolution.targetValidation'),
+    )
 
     if (!servingRow?.hasConflict) {
       throw new HttpError(400, 'Conflict resolution is only available for conflicting articles')
@@ -3941,54 +4019,83 @@ const setComparisonProjectConflictResolution = async (params: {
   let phase = 'target-validation'
   let targetRow: ComparisonProjectConflictResolutionTargetRow | null = null
 
-  console.info('[comparison-projects] conflict-resolution save started', {
-    ...baseDiagnostic,
-    memory: getConflictResolutionSaveMemorySnapshot(),
-  })
+  console.info(
+    '[comparison-projects] conflict-resolution save started',
+    getConflictResolutionSaveDiagnostic(baseDiagnostic),
+  )
 
   try {
+    logConflictResolutionSavePhase('target-validation:start', baseDiagnostic)
     targetRow = await getComparisonProjectConflictResolutionTargetRow(params.scope, params.articleId)
+    logConflictResolutionSavePhase('target-validation:complete', baseDiagnostic, {
+      articleCategory: targetRow.articleCategory,
+      hasConflict: targetRow.hasConflict,
+    })
     phase = 'option-validation'
+    logConflictResolutionSavePhase('option-validation:start', baseDiagnostic)
     const option = getValidatedComparisonProjectConflictResolutionOption(params.scope, params.value)
     const isSummaryMode = getIsSummaryMode(params.scope)
+    logConflictResolutionSavePhase('option-validation:complete', baseDiagnostic, {resolvedValue: option.value})
     phase = 'reviewer-load'
+    logConflictResolutionSavePhase('reviewer-load:start', baseDiagnostic)
     const reviewer = await getUserConfigQueryService().getOrCreateUserConfig()
-    phase = 'resolution-upsert'
-    const [resolutionRow] = await appDatabaseService.queryJson<{
-      articleId: string
-      reviewerDisplayName: string | null
-      reviewerUserId: string | null
-    }>(`
-      INSERT INTO ${comparisonProjectConflictResolutionTable} (
-        id,
-        comparison_project_id,
-        article_id,
-        prompt_id,
-        answer_value,
-        reviewer_user_id
-      )
-      VALUES (
-        ${getSqlLiteral(crypto.randomUUID())},
-        ${getSqlLiteral(params.scope.id)},
-        ${getSqlLiteral(params.articleId)},
-        ${getSqlLiteral(isSummaryMode ? null : option.value)},
-        ${getSqlLiteral(isSummaryMode ? option.value : null)},
-        ${getSqlLiteral(reviewer.id)}
-      )
-      ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET
-        prompt_id = excluded.prompt_id,
-        answer_value = excluded.answer_value,
-        reviewer_user_id = excluded.reviewer_user_id,
-        updated_at = now()
-      RETURNING
-        article_id AS articleId,
-        reviewer_user_id AS reviewerUserId,
-        ${getSqlLiteral(reviewer.name)} AS reviewerDisplayName
-    `)
+    logConflictResolutionSavePhase('reviewer-load:complete', baseDiagnostic, {reviewerUserId: reviewer.id})
+    phase = 'resolution-replace'
+    logConflictResolutionSavePhase('resolution-replace:start', baseDiagnostic, {reviewerUserId: reviewer.id})
+    const resolutionRow = await appDatabaseService.transaction<ComparisonProjectConflictResolutionSavedRow>(
+      async (tx): Promise<ComparisonProjectConflictResolutionSavedRow> => {
+        const deletedRows = await tx.queryJson<{articleId: string}>(
+          `
+          DELETE FROM ${comparisonProjectConflictResolutionTable}
+          WHERE comparison_project_id = ${getSqlLiteral(params.scope.id)}
+            AND article_id = ${getSqlLiteral(params.articleId)}
+          RETURNING article_id AS articleId
+        `,
+        )
+        const [insertedRow] = await tx.queryJson<{
+          articleId: string
+          reviewerDisplayName: string | null
+          reviewerUserId: string | null
+        }>(`
+          INSERT INTO ${comparisonProjectConflictResolutionTable} (
+            id,
+            comparison_project_id,
+            article_id,
+            prompt_id,
+            answer_value,
+            reviewer_user_id
+          )
+          VALUES (
+            ${getSqlLiteral(crypto.randomUUID())},
+            ${getSqlLiteral(params.scope.id)},
+            ${getSqlLiteral(params.articleId)},
+            ${getSqlLiteral(isSummaryMode ? null : option.value)},
+            ${getSqlLiteral(isSummaryMode ? option.value : null)},
+            ${getSqlLiteral(reviewer.id)}
+          )
+          RETURNING
+            article_id AS articleId,
+            reviewer_user_id AS reviewerUserId,
+            ${getSqlLiteral(reviewer.name)} AS reviewerDisplayName
+        `)
+
+        if (!insertedRow) {
+          throw new Error('Failed to save conflict resolution')
+        }
+
+        return {...insertedRow, replacedExistingResolution: deletedRows.length > 0}
+      },
+      getMaintenanceDuckdbWorkloadContext('comparisonProjectConflictResolution.replace'),
+    )
 
     if (!resolutionRow) {
       throw new Error('Failed to save conflict resolution')
     }
+    logConflictResolutionSavePhase('resolution-replace:complete', baseDiagnostic, {
+      replacedExistingResolution: resolutionRow.replacedExistingResolution,
+      returnedArticleId: resolutionRow.articleId,
+      reviewerUserId: reviewer.id,
+    })
 
     console.info('[comparison-projects] conflict-resolution save completed', {
       ...baseDiagnostic,
@@ -3998,9 +4105,10 @@ const setComparisonProjectConflictResolution = async (params: {
       memory: getConflictResolutionSaveMemorySnapshot(),
       resolvedValue: option.value,
       reviewerUserId: reviewer.id,
+      runtime: getConflictResolutionSaveRuntimeDiagnostic(),
     })
 
-    return {...resolutionRow, label: option.label, value: option.value}
+    return {articleId: resolutionRow.articleId, label: option.label, value: option.value}
   } catch (error) {
     console.error('[comparison-projects] conflict-resolution save failed', {
       ...baseDiagnostic,
@@ -4010,6 +4118,7 @@ const setComparisonProjectConflictResolution = async (params: {
       hasConflict: targetRow?.hasConflict ?? null,
       memory: getConflictResolutionSaveMemorySnapshot(),
       phase,
+      runtime: getConflictResolutionSaveRuntimeDiagnostic(),
     })
     throw error
   }
@@ -5786,8 +5895,16 @@ export const comparisonProjectsRoutes = new Elysia()
         return {data: null, error: 'Comparison project not found'}
       }
 
+      const checkpointDiagnostic = {
+        activeGeneration: scope.activeGeneration,
+        articleId: body.articleId,
+        comparisonProjectId: scope.id,
+        isSummaryMode: getIsSummaryMode(scope),
+        requestedValue: body.value,
+      }
       const data = await setComparisonProjectConflictResolution({articleId: body.articleId, value: body.value, scope})
-      scheduleComparisonProjectConflictResolutionCheckpoint()
+      scheduleComparisonProjectConflictResolutionCheckpoint(checkpointDiagnostic)
+      logConflictResolutionSavePhase('deferred-checkpoint:scheduled', checkpointDiagnostic)
 
       return {data}
     },
@@ -5999,9 +6116,9 @@ export const comparisonProjectsRoutes = new Elysia()
     '/api/comparison-projects',
     async (context) => {
       const {body} = context
-      const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
+      const createdComparisonProject = await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, body)
-      })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
+      })
       await checkpointComparisonProjectMutation()
       await markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)
 

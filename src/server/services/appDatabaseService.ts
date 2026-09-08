@@ -5,6 +5,7 @@ import {
   deleteDuckdbSnapshot,
   type DuckdbAppendRuntimeMetrics,
   type DuckdbSnapshot,
+  type DuckdbTransactionRunner,
   type DuckdbWorkloadContext,
   getDuckdbAppendRuntimeMetrics,
   getDuckdbRuntimeConfig,
@@ -252,8 +253,8 @@ const appDatabaseService = {
       return runDuckdbBackgroundStatement(statement, workloadContext)
     })
   },
-  transaction: async (
-    operation: Parameters<typeof runDuckdbTransaction>[0],
+  transaction: async <T>(
+    operation: (runner: DuckdbTransactionRunner) => Promise<T>,
     workloadContext?: DuckdbWorkloadContext,
   ) => {
     return withDuckdbOwnerWriteTracking('transaction', () => {

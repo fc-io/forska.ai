@@ -13,8 +13,8 @@ import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoute
 import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetryRoutes.ts'
 import {getProductApiRoutes} from './routes/productApiRoutes.ts'
 import {publicRouteSurfaceGate} from './routes/publicRouteSurfaceGate.ts'
-import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
 import {reviewServingStatusRoutes} from './routes/reviewServingStatusRoutes.ts'
+import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
 import {
   type ProjectTransferSessionRecoveryResult,
   runProjectTransferStartupRecovery,
@@ -28,6 +28,7 @@ import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalIdentity.ts'
 import {validateOwnerlessRouteBackends} from './utils/ownerlessReadableBackends.ts'
+import {getRuntimeBuildInfo} from './utils/runtimeBuildInfo.ts'
 import {writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
 import {shouldDisableServerMutationWork} from './utils/serverMutationMode.ts'
 import {
@@ -180,6 +181,7 @@ const startProjectTransferTtlRecoveryScheduler = () => {
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
 const lowMemoryMaintenanceDuckdbLimitMiB = 8192
+const runtimeBuildInfo = getRuntimeBuildInfo()
 const shouldDeferMaintenanceCronsForLowMemoryOwner = () => {
   const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
 
@@ -324,6 +326,10 @@ writeRuntimeOperatorLogEvent({
   attrs: {
     apiServerPort: env.API_SERVER_PORT,
     bunConfigMaxHttpRequests: inferenceRuntimeConfig.bunConfigMaxHttpRequests,
+    commitSha: runtimeBuildInfo.commitSha,
+    commitShaSource: runtimeBuildInfo.commitShaSource,
+    duckdbMemoryLimit: env.DUCKDB_MEMORY_LIMIT,
+    duckdbMemoryLimitMiB: parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT),
     duckdbPath: env.DUCKDB_PATH,
     gpuGpusPerNode: inferenceRuntimeConfig.gpuGpusPerNode,
     gpuNnodes: inferenceRuntimeConfig.gpuNnodes,
@@ -336,13 +342,20 @@ writeRuntimeOperatorLogEvent({
     dpSize: inferenceRuntimeConfig.dpSize,
   },
   event: 'server.startup.port-bound',
-  message: `[duckdb] path=${env.DUCKDB_PATH}\n🦊 Elysia is running on 127.0.0.1:${env.API_SERVER_PORT} (nodes=${inferenceRuntimeConfig.gpuNnodes}, gpus/node=${inferenceRuntimeConfig.gpuGpusPerNode}, total_gpus=${inferenceRuntimeConfig.gpuTotalGpus}, shape=${inferenceRuntimeConfig.gpuShape ?? 'not set'}, tp=${inferenceRuntimeConfig.tpSize}, pp=${inferenceRuntimeConfig.ppSize}, dp=${inferenceRuntimeConfig.dpSize}, SGLANG_MAX_RUNNING_REQUESTS=${inferenceRuntimeConfig.sglangMaxRunningRequests}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${inferenceRuntimeConfig.sglangApiMaxInflightRequests}, BUN_CONFIG_MAX_HTTP_REQUESTS=${inferenceRuntimeConfig.bunConfigMaxHttpRequests ?? 'not set'})`,
+  message: `[duckdb] path=${env.DUCKDB_PATH} memory_limit=${env.DUCKDB_MEMORY_LIMIT} commit=${runtimeBuildInfo.shortCommitSha}\n🦊 Elysia is running on 127.0.0.1:${env.API_SERVER_PORT} (nodes=${inferenceRuntimeConfig.gpuNnodes}, gpus/node=${inferenceRuntimeConfig.gpuGpusPerNode}, total_gpus=${inferenceRuntimeConfig.gpuTotalGpus}, shape=${inferenceRuntimeConfig.gpuShape ?? 'not set'}, tp=${inferenceRuntimeConfig.tpSize}, pp=${inferenceRuntimeConfig.ppSize}, dp=${inferenceRuntimeConfig.dpSize}, SGLANG_MAX_RUNNING_REQUESTS=${inferenceRuntimeConfig.sglangMaxRunningRequests}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${inferenceRuntimeConfig.sglangApiMaxInflightRequests}, BUN_CONFIG_MAX_HTTP_REQUESTS=${inferenceRuntimeConfig.bunConfigMaxHttpRequests ?? 'not set'})`,
   severity: 'INFO',
 })
 writeRuntimeOperatorLogEvent({
-  attrs: {configuredRole: env.SERVER_ROLE, duckdbOwner: canCurrentServerOwnDuckdb(), role: getCurrentServerRole()},
+  attrs: {
+    commitSha: runtimeBuildInfo.commitSha,
+    configuredRole: env.SERVER_ROLE,
+    duckdbMemoryLimit: env.DUCKDB_MEMORY_LIMIT,
+    duckdbMemoryLimitMiB: parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT),
+    duckdbOwner: canCurrentServerOwnDuckdb(),
+    role: getCurrentServerRole(),
+  },
   event: 'server.startup.role-summary',
-  message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_owner=${canCurrentServerOwnDuckdb()}`,
+  message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_owner=${canCurrentServerOwnDuckdb()} duckdb_memory_limit=${env.DUCKDB_MEMORY_LIMIT} commit=${runtimeBuildInfo.shortCommitSha}`,
   severity: 'INFO',
 })
 if (shouldRunMutatingServerWork && getCurrentServerRole() === 'judge-worker') {

@@ -2433,6 +2433,25 @@ const registerModuleMocks = () => {
                   return deletedRows as R[]
                 }
 
+                if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
+                  state.lastConflictResolutionInsertStatement = statement
+                  const insertedRows = getMockConflictResolutionInsertRows(statement)
+
+                  if (insertedRows.length === 0) {
+                    throw new Error(`Unhandled conflict resolution insert: ${statement}`)
+                  }
+
+                  pendingConflictResolutionRows.push(...insertedRows)
+
+                  return insertedRows.map((row) => {
+                    return {
+                      articleId: row.articleId,
+                      reviewerDisplayName: 'Test User',
+                      reviewerUserId: row.reviewerUserId,
+                    }
+                  }) as R[]
+                }
+
                 return (await queryJson(statement, {
                   comparisonProject: pendingComparisonProject,
                   createdComparisonProjectIds: pendingCreatedComparisonProjectIds,
@@ -6847,7 +6866,7 @@ test('summary comparison judgments apply rowFilter modes to shown summary column
   expect(allRowsWithDifferenceTotalCount).toBe(1)
 })
 
-test('comparison conflict resolution upsert uses DuckDB-safe timestamp function', async () => {
+test('comparison conflict resolution save replaces rows without DuckDB ON CONFLICT write', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
     comparisonProject: {
@@ -6880,8 +6899,9 @@ test('comparison conflict resolution upsert uses DuckDB-safe timestamp function'
 
   expect(response.status).toBe(200)
   expect(body.data).toEqual({articleId: 'article-1', label: 'Prompt 2', value: 'prompt-2'})
-  expect(insertStatement).toContain('updated_at = now()')
-  expect(insertStatement).not.toContain('updated_at = current_timestamp')
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE')
+  expect(state.transactionCalls).toBe(1)
   expect(state.maintenanceCommands).toEqual([])
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
@@ -6936,9 +6956,13 @@ test('summary comparison conflict resolution API can change maybe to yes', async
 
   expect(response.status).toBe(200)
   expect(body.data).toEqual({articleId: 'article-1', label: 'yes', value: 'yes'})
-  expect(insertStatement).toContain('ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET')
-  expect(insertStatement).toContain('answer_value = excluded.answer_value')
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE')
   expect(insertStatement).toContain("'yes'")
+  expect(state.conflictResolutionRows).toMatchObject([
+    {answerValue: 'yes', articleId: 'article-1', comparisonProjectId: 'comparison-project-1', promptId: null},
+  ])
+  expect(state.transactionCalls).toBe(1)
   expect(state.maintenanceCommands).toEqual([])
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
@@ -6990,6 +7014,9 @@ test('comparison conflict resolution save logs owner-side diagnostics for Chines
   const app = new Elysia().use(comparisonProjectsRoutes)
   const response = await postComparisonProjectConflictResolution(app, {articleId: 'article-1', value: 'yes'})
   const body = (await response.json()) as {data: {articleId: string; label: string; value: string}}
+  const phaseLogs = consoleInfo.mock.calls.filter(([message]) => {
+    return message === '[comparison-projects] conflict-resolution save phase'
+  })
   const completedLog = consoleInfo.mock.calls.find(([message]) => {
     return message === '[comparison-projects] conflict-resolution save completed'
   })
@@ -7009,6 +7036,26 @@ test('comparison conflict resolution save logs owner-side diagnostics for Chines
   })
   expect(completedLog?.[1]).toHaveProperty('durationMs')
   expect(completedLog?.[1]).toHaveProperty('memory.rssBytes')
+  expect(completedLog?.[1]).toHaveProperty('runtime.duckdbMemoryLimit')
+  expect(completedLog?.[1]).toHaveProperty('runtime.duckdbMemoryLimitMiB')
+  expect(completedLog?.[1]).toHaveProperty('runtime.commitSha')
+  expect(
+    phaseLogs.map(([, details]) => {
+      return (details as {phase: string}).phase
+    }),
+  ).toEqual([
+    'target-validation:start',
+    'target-validation:complete',
+    'option-validation:start',
+    'option-validation:complete',
+    'reviewer-load:start',
+    'reviewer-load:complete',
+    'resolution-replace:start',
+    'resolution-replace:complete',
+    'deferred-checkpoint:scheduled',
+  ])
+  expect(phaseLogs[6]?.[1]).toHaveProperty('memory.rssBytes')
+  expect(phaseLogs[6]?.[1]).toHaveProperty('runtime.duckdbMemoryLimit')
   expect(consoleError).not.toHaveBeenCalledWith(
     '[comparison-projects] conflict-resolution save failed',
     expect.anything(),
@@ -7049,6 +7096,8 @@ test('comparison conflict resolution save logs owner-side failure phase before r
   })
   expect(failureLog?.[1]).toHaveProperty('durationMs')
   expect(failureLog?.[1]).toHaveProperty('memory.rssBytes')
+  expect(failureLog?.[1]).toHaveProperty('runtime.duckdbMemoryLimit')
+  expect(failureLog?.[1]).toHaveProperty('runtime.commitSha')
 })
 
 test('comparison conflict resolution reset is rejected when conflict resolution is disabled', async () => {
