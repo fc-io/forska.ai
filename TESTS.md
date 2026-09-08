@@ -5,6 +5,39 @@ Run tests through `bun run ...` from the repo root.
 This file is for correctness, smoke, and regression tests. Benchmark and
 performance-measurement commands live in [PERF.md](PERF.md).
 
+## DuckDB upgrades: checkpoint-memory regression gate
+
+When upgrading `@duckdb/node-api`, `@duckdb/node-bindings`, or the container's native
+engine, rerun this gate against the **actual candidate engine**, not just the
+currently patched container. On 2026-09-08, unmodified DuckDB 1.5.1 and 1.5.5 both
+failed the real-DB checkpoint at a 4 GB DuckDB / 8 GiB VM limit. The container's
+1.5.5 backport passed; a version bump alone is not evidence that the bug is fixed.
+
+- Check whether the official release includes upstream
+  [#23964](https://github.com/duckdb/duckdb/pull/23964) and
+  [#24336](https://github.com/duckdb/duckdb/pull/24336). Record the actual loaded
+  engine version and Node binding version.
+- Run `bun scripts/duckdbCheckpointMemoryRegression.ts` in the candidate runtime.
+  Require the unchanged 32 MiB full-checkpoint fixture and fresh-process reopen
+  to pass with exact row count, ID sum, and WAL-marker verification. Do not raise
+  the cap to make an upgrade pass. The script uses a disposable DB and preserves
+  its artifacts; unpatched 1.5.1/1.5.5 are known failing baselines.
+- Rerun the upstream transaction/snapshot/rollback cases and host → candidate →
+  host file-compatibility check described in the
+  [backport verification guide](containers/apple/duckdb-backport.md#quality-gates).
+- Preserve DB/WAL evidence, verify a normal full checkpoint on a consistent
+  current-DB clone at the same 4 GB / 8 GiB limits, then verify live API/owner
+  readiness and advancing review-indexing counters. Follow the
+  [container recovery and verification guidance](containers/apple/README.md).
+- Verify affected web/container and desktop platforms separately. A Linux
+  checkpoint pass does **not** establish that the Windows conflict-resolution
+  owner crash is fixed; reproduce that save on the affected Windows workload.
+
+Once an official release includes both fixes and passes these gates **without
+the custom patch**, pin that release and remove the custom engine build and
+backport in the same change; see the
+[removal criterion](containers/apple/duckdb-backport.md#removal-criterion).
+
 Focused comparison PDF import/export changes should run:
 
 ```bash
