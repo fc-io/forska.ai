@@ -2,6 +2,7 @@ import {DuckDBInstance} from '@duckdb/node-api'
 import {Effect} from 'effect'
 
 import {type AppDatabaseSnapshot, getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {createDuckdbInstance} from '../src/server/utils/createDuckdbInstance.ts'
 import {createDuckdbSnapshotForCli} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getReadOnlyDuckdbRuntimeOptions} from '../src/server/utils/duckdbService.ts'
 
@@ -38,7 +39,11 @@ const deleteSnapshot = (snapshot: AppDatabaseSnapshot) => {
 }
 
 const getSnapshotQueryRuntime = async (snapshotPath: string) => {
-  const duckdbInstance = await DuckDBInstance.create(snapshotPath, getReadOnlyDuckdbRuntimeOptions())
+  const duckdbInstance = await createDuckdbInstance({
+    create: DuckDBInstance.create.bind(DuckDBInstance),
+    databasePath: snapshotPath,
+    options: getReadOnlyDuckdbRuntimeOptions(),
+  })
   const connection = await duckdbInstance.connect()
 
   return {connection, duckdbInstance}

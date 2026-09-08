@@ -14,6 +14,9 @@ on:
       - 'scripts/verifyDesktopDuckdbDistribution/**'
       - 'scripts/duckdbCheckpointMemoryRegression.ts'
       - 'src/server/utils/duckdbEngineCompatibility*'
+      - 'src/server/utils/duckdbEngineCompatibility/**'
+      - 'src/server/utils/createDuckdbInstance*'
+      - 'src/server/utils/duckdbWalRecoverySafety*'
       - 'src/server/utils/duckdbEngineContract*'
       - 'src/server/utils/duckdbService.ts'
       - 'src/db/migrateDuckdb*'
@@ -59,6 +62,10 @@ jobs:
         run: bun test src/server/utils/duckdbEngineCompatibility.test.ts --timeout 120000
       - name: WAL preservation after fatal-query recovery
         run: bun test src/server/utils/duckdbWalRecoverySafety.test.ts --timeout 120000
+      - name: Native instance initialization and offline full-schema WAL replay
+        run: |
+          bun test src/server/utils/createDuckdbInstance.test.ts --timeout 120000
+          bun test src/server/utils/createDuckdbInstance.wal.test.ts --timeout 120000
       - name: Fresh database migration and projector compatibility
         run: bun test src/db/migrateDuckdb.fresh.test.ts --timeout 120000
       - name: Build desktop and verify its copied native package

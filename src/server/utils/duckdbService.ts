@@ -17,6 +17,7 @@ import {DuckDBConnection, DuckDBInstance, type DuckDBType, type DuckDBValue} fro
 import {Effect} from 'effect'
 
 import {getSelectedImportCurrentStartupMutationProbeSql} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
+import {createDuckdbInstance as createInitializedDuckdbInstance} from './createDuckdbInstance.ts'
 import {
   getDuckdbEngineOptions,
   getDuckdbLegacyWalCompatibilityError,
@@ -3229,6 +3230,7 @@ const getDuckdbStartupPreflightScript = () => {
     const activeRepairSpecPath = JSON.parse(process.argv[4])
     const {writeFileSync} = await import('node:fs')
     const {DuckDBInstance} = await import('@duckdb/node-api')
+    const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
     let connection = null
     let instance = null
@@ -3484,7 +3486,7 @@ const getDuckdbStartupPreflightScript = () => {
     }
 
     try {
-      instance = await DuckDBInstance.create(databasePath, options)
+      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
       connection = await instance.connect()
       await connection.run('SELECT 1')
 
@@ -3695,6 +3697,7 @@ const getDuckdbIndexedTableRepairScript = () => {
     const criticalProtectedTableSpecs = JSON.parse(process.argv[5])
     const preservedDatabasePath = JSON.parse(process.argv[6])
     const {DuckDBInstance} = await import('@duckdb/node-api')
+    const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
     let connection = null
     let instance = null
@@ -3934,9 +3937,10 @@ const getDuckdbIndexedTableRepairScript = () => {
       let preservedInstance = null
 
       try {
-        preservedInstance = await DuckDBInstance.create(preservedDatabasePath, {
-          ...options,
-          access_mode: 'READ_ONLY',
+        preservedInstance = await createInitializedDuckdbInstance({
+          create: DuckDBInstance.create.bind(DuckDBInstance),
+          databasePath: preservedDatabasePath,
+          options: {...options, access_mode: 'READ_ONLY'},
         })
         preservedConnection = await preservedInstance.connect()
 
@@ -4147,7 +4151,7 @@ const getDuckdbIndexedTableRepairScript = () => {
     }
 
     try {
-      instance = await DuckDBInstance.create(databasePath, options)
+      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
       connection = await instance.connect()
       const repairedTableKeys = new Set(
         tableRepairSpecs.map((spec) => {
@@ -4418,8 +4422,9 @@ const getDuckdbStartupFileLockProbeScript = () => {
     const databasePath = JSON.parse(process.argv[1])
     const options = JSON.parse(process.argv[2])
     const {DuckDBInstance} = await import('@duckdb/node-api')
+    const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
-    const instance = await DuckDBInstance.create(databasePath, options)
+    const instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
     instance.closeSync()
   `
 }
@@ -4429,12 +4434,13 @@ const getDuckdbStartupWalCheckpointScript = () => {
     const databasePath = JSON.parse(process.argv[1])
     const options = JSON.parse(process.argv[2])
     const {DuckDBInstance} = await import('@duckdb/node-api')
+    const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
     let connection = null
     let instance = null
 
     try {
-      instance = await DuckDBInstance.create(databasePath, options)
+      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
       connection = await instance.connect()
       await connection.run('CHECKPOINT')
     } finally {
@@ -5489,7 +5495,11 @@ const registerDuckdbShutdownHooks = () => {
 }
 
 const createDuckdbInstance = async (runtimeConfig: DuckdbRuntimeConfig) => {
-  return DuckDBInstance.create(runtimeConfig.databasePath, getDuckdbInstanceOptions(runtimeConfig))
+  return createInitializedDuckdbInstance({
+    create: DuckDBInstance.create.bind(DuckDBInstance),
+    databasePath: runtimeConfig.databasePath,
+    options: getDuckdbInstanceOptions(runtimeConfig),
+  })
 }
 
 const cleanupFailedDuckdbStart = async (params: {
@@ -7205,7 +7215,11 @@ export const runDuckdbMaintenance = async (
 }
 
 const materializeCopiedDuckdbSnapshot = async (snapshotPath: string, runtimeConfig: DuckdbRuntimeConfig) => {
-  const duckdbInstance = await DuckDBInstance.create(snapshotPath, getDuckdbInstanceOptions(runtimeConfig))
+  const duckdbInstance = await createInitializedDuckdbInstance({
+    create: DuckDBInstance.create.bind(DuckDBInstance),
+    databasePath: snapshotPath,
+    options: getDuckdbInstanceOptions(runtimeConfig),
+  })
   const connection = await duckdbInstance.connect()
 
   try {
