@@ -1,6 +1,6 @@
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {For, Show} from 'solid-js'
+import {createMemo, For, Show} from 'solid-js'
 
 import type {
   ComparisonProjectJudgmentsColumn,
@@ -64,6 +64,11 @@ const getRowHighlightClasses = (state: 'match' | 'mismatch' | 'neutral') => {
 }
 
 export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgmentsTableProps) => {
+  const rowIds = createMemo(() => {
+    return props.rows.map((row) => {
+      return row.id
+    })
+  })
   const conflictResolutionOptions = () => {
     return props.conflictResolutionOptions ?? []
   }
@@ -124,32 +129,41 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-200 bg-white">
-          <For each={props.rows}>
-            {(row) => {
-              const articleCreatedAt = formatArticleCreatedAt(row.articleCreatedAt)
-              const rowHighlightState = getRowHighlightState(row.cells, props.columns)
-              const rowHighlightClasses = getRowHighlightClasses(rowHighlightState)
+          <For each={rowIds()}>
+            {(_rowId, index) => {
+              const row = () => {
+                return props.rows[index()]
+              }
+              const articleCreatedAt = () => {
+                return formatArticleCreatedAt(row().articleCreatedAt)
+              }
+              const rowHighlightState = () => {
+                return getRowHighlightState(row().cells, props.columns)
+              }
+              const rowHighlightClasses = () => {
+                return getRowHighlightClasses(rowHighlightState())
+              }
 
               return (
                 <tr class="align-top">
                   <td
-                    class={`sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] px-3 py-2 ${rowHighlightClasses.stickyCell}`}
+                    class={`sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] px-3 py-2 ${rowHighlightClasses().stickyCell}`}
                   >
                     <div class="space-y-1">
-                      <p class="text-sm font-medium text-gray-900">{row.articleTitle?.trim() || 'Untitled'}</p>
-                      <Show when={articleCreatedAt}>
-                        <p class="text-[11px] text-gray-500">Created: {articleCreatedAt}</p>
+                      <p class="text-sm font-medium text-gray-900">{row().articleTitle?.trim() || 'Untitled'}</p>
+                      <Show when={articleCreatedAt()}>
+                        <p class="text-[11px] text-gray-500">Created: {articleCreatedAt()}</p>
                       </Show>
                     </div>
                   </td>
                   <Show when={props.conflictResolutionEnabled}>
-                    <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-2 py-2 text-xs ${rowHighlightClasses.cell}`}>
-                      <Show when={row.hasConflict} fallback={<span class="text-gray-400">No conflict</span>}>
+                    <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-2 py-2 text-xs ${rowHighlightClasses().cell}`}>
+                      <Show when={row().hasConflict} fallback={<span class="text-gray-400">No conflict</span>}>
                         <Show
                           when={conflictResolutionOptions().length > 0}
                           fallback={
                             <Show
-                              when={row.conflictResolution}
+                              when={row().conflictResolution}
                               fallback={<span class="text-gray-400">No options available</span>}
                             >
                               {(resolution) => {
@@ -165,10 +179,10 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                       type="button"
                                       class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
                                       title="Reset conflict resolution"
-                                      aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
-                                      disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
+                                      aria-label={`Reset conflict resolution for ${row().articleTitle?.trim() || 'article'}`}
+                                      disabled={getIsConflictResolutionPending(row().canonicalArticleId)}
                                       onClick={() => {
-                                        void props.onConflictResolutionReset?.(row.canonicalArticleId)
+                                        void props.onConflictResolutionReset?.(row().canonicalArticleId)
                                       }}
                                     >
                                       <svg
@@ -193,19 +207,19 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                         >
                           <div class="flex items-start gap-2">
                             <select
-                              value={row.conflictResolution?.value ?? ''}
-                              disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
-                              aria-label={`Conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
+                              value={row().conflictResolution?.value ?? ''}
+                              disabled={getIsConflictResolutionPending(row().canonicalArticleId)}
+                              aria-label={`Conflict resolution for ${row().articleTitle?.trim() || 'article'}`}
                               class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs disabled:opacity-60"
                               onChange={(event) => {
                                 const value = event.currentTarget.value
 
-                                if (value && value !== row.conflictResolution?.value) {
-                                  void props.onConflictResolutionSelect?.(row.canonicalArticleId, value)
+                                if (value && value !== row().conflictResolution?.value) {
+                                  void props.onConflictResolutionSelect?.(row().canonicalArticleId, value)
                                 }
                               }}
                             >
-                              <option value="" disabled selected={!row.conflictResolution}>
+                              <option value="" disabled selected={!row().conflictResolution}>
                                 Conflict resolution:
                               </option>
                               <For each={conflictResolutionOptions()}>
@@ -213,7 +227,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                   return (
                                     <option
                                       value={option.value}
-                                      selected={row.conflictResolution?.value === option.value}
+                                      selected={row().conflictResolution?.value === option.value}
                                     >
                                       {option.label}
                                     </option>
@@ -221,15 +235,15 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                 }}
                               </For>
                             </select>
-                            <Show when={row.conflictResolution}>
+                            <Show when={row().conflictResolution}>
                               <button
                                 type="button"
                                 class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
                                 title="Reset conflict resolution"
-                                aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
-                                disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
+                                aria-label={`Reset conflict resolution for ${row().articleTitle?.trim() || 'article'}`}
+                                disabled={getIsConflictResolutionPending(row().canonicalArticleId)}
                                 onClick={() => {
-                                  void props.onConflictResolutionReset?.(row.canonicalArticleId)
+                                  void props.onConflictResolutionReset?.(row().canonicalArticleId)
                                 }}
                               >
                                 <svg
@@ -254,25 +268,27 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                   </Show>
                   <For each={props.columns}>
                     {(column) => {
-                      const cellValue = row.cells[column.id]?.trim() || null
+                      const cellValue = () => {
+                        return row().cells[column.id]?.trim() || null
+                      }
 
                       return (
                         <td
-                          class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-2 py-2 text-xs text-gray-800 ${rowHighlightClasses.cell}`}
+                          class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-2 py-2 text-xs text-gray-800 ${rowHighlightClasses().cell}`}
                         >
-                          <Show when={cellValue} fallback={<span class="text-gray-300">-</span>}>
+                          <Show when={cellValue()} fallback={<span class="text-gray-300">-</span>}>
                             <Show
                               when={column.sourceProjectId}
-                              fallback={<div class="whitespace-pre-wrap break-words leading-5">{cellValue}</div>}
+                              fallback={<div class="whitespace-pre-wrap break-words leading-5">{cellValue()}</div>}
                             >
                               {(sourceProjectId) => {
                                 return (
                                   <Link
                                     to="/projects/$id/reviews-llm/$articleId"
-                                    params={{articleId: row.canonicalArticleId, id: sourceProjectId()} as never}
+                                    params={{articleId: row().canonicalArticleId, id: sourceProjectId()} as never}
                                     class="block whitespace-pre-wrap break-words leading-5 text-blue-600 hover:underline"
                                   >
-                                    {cellValue}
+                                    {cellValue()}
                                   </Link>
                                 )
                               }}

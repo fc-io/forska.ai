@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import {createSignal} from 'solid-js'
+import {createSignal, untrack} from 'solid-js'
 import {render} from 'solid-js/web'
 import {afterEach, describe, expect, test, vi} from 'vitest'
 
@@ -167,19 +167,11 @@ describe('ComparisonProjectJudgmentsTable', () => {
     }
   })
 
-  test('keeps the newly selected conflict resolution after an optimistic parent update', async () => {
+  test.each([null, 'maybe'])('keeps the select mounted after an optimistic update from %s', async (initialValue) => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const [rows, setRows] = createSignal([
-      getConflictRow({
-        conflictResolution: {
-          articleId: 'article-chinese-1',
-          label: 'maybe',
-          reviewerDisplayName: 'Reviewer',
-          reviewerUserId: 'reviewer-1',
-          value: 'maybe',
-        },
-      }),
+      getConflictRow({conflictResolution: initialValue ? getResolution('article-chinese-1', initialValue) : null}),
     ])
     const dispose = render(() => {
       return (
@@ -229,6 +221,8 @@ describe('ComparisonProjectJudgmentsTable', () => {
       select.dispatchEvent(new Event('change', {bubbles: true}))
       await Promise.resolve()
 
+      expect(container.querySelector('select')).toBe(select)
+      expect(select.isConnected).toBe(true)
       expect(select.value).toBe('yes')
     } finally {
       dispose()
@@ -301,6 +295,30 @@ describe('ComparisonProjectJudgmentsTable', () => {
           return select.value
         }),
       ).toEqual(['yes', 'no', ''])
+      expect(Array.from(container.querySelectorAll('select'))).toEqual(selects)
+
+      setRows((currentRows) => {
+        return [...currentRows].reverse().map((row) => {
+          return {...row, articleTitle: `${row.articleTitle} updated`}
+        })
+      })
+      await Promise.resolve()
+
+      expect(Array.from(container.querySelectorAll('select'))).toEqual([...selects].reverse())
+      expect(selects[0].getAttribute('aria-label')).toContain('article 1 updated')
+      selects[0].value = 'no'
+      selects[0].dispatchEvent(new Event('change', {bubbles: true}))
+      expect(
+        untrack(rows).find((row) => {
+          return row.id === 'article-chinese-1'
+        })?.conflictResolution?.value,
+      ).toBe('no')
+
+      setRows((currentRows) => {
+        return currentRows.slice(1)
+      })
+      await Promise.resolve()
+      expect(Array.from(container.querySelectorAll('select'))).toEqual([selects[1], selects[0]])
     } finally {
       dispose()
     }
