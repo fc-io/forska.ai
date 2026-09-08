@@ -5055,6 +5055,16 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
     const markerOnlyRepair = error instanceof Error && error.repairMarkerOnly === true
 
     if (!markerOnlyRepair && hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
+      if (!isDuckdbWalReplayRecoveryError(error)) {
+        throw new Error(
+          `DuckDB startup preflight could not verify WAL replay for ${runtimeConfig.databasePath}. `
+            + 'The database and WAL were left in place; this failure does not establish WAL corruption. '
+            + 'Resolve the reported engine, extension, or resource failure before retrying. Do not delete the WAL. '
+            + errorMessage,
+          {cause: error},
+        )
+      }
+
       await quarantineFailedDuckdbWalReplay(runtimeConfig, error)
       continue
     }

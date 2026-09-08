@@ -1,5 +1,12 @@
 # OOM Errors
 
+## 2026-09-08 - Preserve committed WAL after native-query recovery failures
+
+- Error: A native `Vector::Reference` failure was followed by an extension/replay startup error; automatic WAL quarantine then reopened the last checkpoint without the newly committed `app` schema. A preflight OOM or native signal could take the same path.
+- Cause: Startup treated every failed subprocess with an existing WAL as proof of recoverable WAL corruption, including resource, extension and engine failures.
+- Fix: Existing-WAL quarantine now requires the explicit historical replay-error classification. Unclassified failures stop with database/WAL bytes intact and actionable guidance; an unphased repair marker cannot discard pending committed WAL either.
+- Verification: `bun test src/server/utils/duckdbWalRecoverySafety.test.ts --timeout 120000` exercises query invalidation followed by four reopen-failure classes, byte-preservation, and independent real-engine replay of committed rows. `bun test src/server/utils/duckdbServiceReload.test.ts --timeout 120000` covers lifecycle, classified recovery and protected-marker behavior.
+
 Record every out-of-memory issue and fix here.
 
 Entry format:

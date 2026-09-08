@@ -36,6 +36,33 @@ Ordinary DuckDB 1.5.1 WALs successfully replay in the preview, so users do **not
 
 For that exceptional state, stop every database owner and use the prior compatible engine to checkpoint the database before upgrading. If its checkpoint encounters the old memory bug, test recovery/replay with the verified backported engine on an isolated copy using the historical checkpoint-recovery guidance. This is an operator recovery procedure, not an automatic or competing application runtime. Keep the original data until recovery is verified. Only reset disposable data when its owner explicitly authorizes that loss; installation never makes that decision.
 
+For a concrete macOS/Linux recovery rehearsal, stop Forska and all containers that mount its data, then work on a copy. Set `FORSKA_RECOVERY_SOURCE` to the database path reported by your failing startup; the example is the normal macOS primary profile. Do not run a raw copy while any owner is writing. Keep the original database and WAL together, unchanged, until the repaired copy has been verified.
+
+```sh
+export FORSKA_RECOVERY_SOURCE="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"
+export FORSKA_RECOVERY_ROOT="$(mktemp -d)"
+mkdir "$FORSKA_RECOVERY_ROOT/data"
+cp -p "$FORSKA_RECOVERY_SOURCE" "$FORSKA_RECOVERY_ROOT/data/forska.duckdb"
+cp -p "$FORSKA_RECOVERY_SOURCE.wal" "$FORSKA_RECOVERY_ROOT/data/forska.duckdb.wal"
+git worktree add --detach "$FORSKA_RECOVERY_ROOT/old-engine" 3702d345
+cd "$FORSKA_RECOVERY_ROOT/old-engine"
+bun install --frozen-lockfile
+DUCKDB_PATH="$FORSKA_RECOVERY_ROOT/data/forska.duckdb" bun -e '
+  const {DuckDBInstance, version} = await import("@duckdb/node-api")
+  if (version() !== "v1.5.1") throw new Error("Expected the pinned previous engine")
+  const instance = await DuckDBInstance.create(process.env.DUCKDB_PATH, {memory_limit: "4GB", threads: "1"})
+  const connection = await instance.connect()
+  await connection.run("CHECKPOINT")
+  console.log((await connection.runAndReadAll("SELECT COUNT(*) AS projects FROM app.project")).getRowObjectsJson())
+  connection.closeSync()
+  instance.closeSync()
+'
+```
+
+An unsuccessful checkpoint is not permission to remove the WAL. Keep that output and the original pair. Follow the preserved [checkpoint investigation](../../docs/apple-container-checkpoint-investigation.md) if the old engine encounters the historical low-memory failure. After a successful checkpoint, return to the current checkout and run `bun install --frozen-lockfile`, then validate the copied database using its explicit `DUCKDB_PATH` (including the affected project's rows and review progress). Only replace the stopped application's database after confirming that result; retain the original pair under a separate backup path. On Windows use an equivalent stopped-owner copy and separate worktree, not these POSIX shell commands.
+
+An engine crash, unavailable extension, OOM, or unexplained replay subprocess failure is not proof that the WAL is corrupt. Startup leaves that pair in place and reports the underlying error rather than silently discarding committed work. The narrowly classified historical replay-recovery path remains distinct from these failures.
+
 The six platforms are macOS ARM64/x64, Linux glibc ARM64/x64, and Windows ARM64/x64. A published binary's availability and checked digest do not establish runtime verification on every OS: consult the CI platform matrix and release verification evidence.
 
 ## Quality gates
