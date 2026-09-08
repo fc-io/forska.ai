@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "distributionVersion": "2.0.0-alpha40881.forska.1",
+  "engine": {
+    "version": "v2.0.0-alpha40881",
+    "sourceId": "816a3eb2d5",
+    "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+    "repository": "duckdb/duckdb",
+    "workflowRunId": 34220083513
+  },
+  "nodeBindingsVersion": "1.5.1-r.1",
+  "release": {
+    "tag": "duckdb-v2.0.0-alpha40881-forska.1",
+    "inputAssetMirrors": true,
+    "baseUrl": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/"
+  },
+  "nativeLicense": {
+    "filename": "DUCKDB_LICENSE",
+    "url": "https://raw.githubusercontent.com/duckdb/duckdb/816a3eb2d512ce359efb40d9319f6db59788422a/LICENSE",
+    "sha256": "075c33400ffcb0c586dd106a029d3e733e9da3693f8fcb9cebfc651c8a2f14e3"
+  },
+  "platforms": [
+    {
+      "platform": "darwin",
+      "arch": "arm64",
+      "packageName": "@duckdb/node-bindings-darwin-arm64",
+      "filename": "duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.1.tgz",
+      "sha256": "16b90da3a195a3c07ff8672b633ace0396ebc6bd6abbc2cb32f8f65ef121c008",
+      "integrity": "sha512-K79XNnMpOqxkV0sZo+hQk7Ic4lGyVdc4PRbHBFg+f1YPXh0j3Ypl0KGqyAtiPNujaORdGAQzoz2ek0X0mFmENw==",
+      "artifact": {
+        "id": 10055768523,
+        "filename": "duckdb-shared-libs-osx-universal.tar.gz",
+        "sha256": "56be40b79a60539682d9c03448d91db0628c2cbdaea6e5ca4452d9eead31a614",
+        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10055768523/zip"
+      },
+      "native": {
+        "filename": "libduckdb.dylib",
+        "sha256": "d152c8c81c4ba98d4ac6f48ec1fa846bd42adc7f6b57cf98d3f365cbecee6f77"
+      },
+      "bridge": {
+        "filename": "node-bindings-darwin-arm64-1.5.1-r.1.tgz",
+        "url": "https://registry.npmjs.org/@duckdb/node-bindings-darwin-arm64/-/node-bindings-darwin-arm64-1.5.1-r.1.tgz",
+        "integrity": "sha512-vm0Q/P8/OB/ZDITNTUe80emlg0b7/EcqTPBRu4GmULbt/fFDtkEAjDHDblKZL1yazf7X6JFEabHBGuWL5jmjEw==",
+        "sha256": "f2a4e50cef115ac01bbd5a42ae78754f5a4925695b7b3bd7a1580a2ac248b81d",
+        "binarySha256": "fef7e895d87a8a234465c0abff97b19b9df8c86b19e9dc8b99c0f147bb807f8e",
+        "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      }
+    },
+    {
+      "platform": "darwin",
+      "arch": "x64",
+      "packageName": "@duckdb/node-bindings-darwin-x64",
+      "filename": "duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.1.tgz",
+      "sha256": "f1145b77315913027f493a660dac68b87691627ac927c6331984dc43dd6ee131",
+      "integrity": "sha512-teKglypzEgAo1UP/xmCrIUbio/qinMkn1tDJinyMKrxwWyF/jRq9Ig/vNNAMTdTPtH2VzgQgTr2jLRE6MhzRwA==",
+      "artifact": {
+        "id": 10055768523,
+        "filename": "duckdb-shared-libs-osx-universal.tar.gz",
+        "sha256": "56be40b79a60539682d9c03448d91db0628c2cbdaea6e5ca4452d9eead31a614",
+        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10055768523/zip"
+      },
+      "native": {
+        "filename": "libduckdb.dylib",
+        "sha256": "d152c8c81c4ba98d4ac6f48ec1fa846bd42adc7f6b57cf98d3f365cbecee6f77"
+      },
+      "bridge": {
+        "filename": "node-bindings-darwin-x64-1.5.1-r.1.tgz",
+        "url": "https://registry.npmjs.org/@duckdb/node-bindings-darwin-x64/-/node-bindings-darwin-x64-1.5.1-r.1.tgz",
+        "integrity": "sha512-GOKWYbOP1v5jppGjlCaQzvyzVnY8/dGd7UJcnT213uiSMq/mtQk2yvzZCPhq7UdxmqR0TSd+TKttpozd8ANyOQ==",
+        "sha256": "7ebfd428db651005ffa1f9bfd2cd58560204da3300a961b7a638901da4af638f",
+        "binarySha256": "d9fbcb0972241d7fc0784cac3a4de9d9142964fba5cdba3ceaa45eafbea39e65",
+        "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      }
+    },
+    {
+      "platform": "linux",
+      "arch": "arm64",
+      "packageName": "@duckdb/node-bindings-linux-arm64",
+      "filename": "duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.1.tgz",
+      "sha256": "e8bde3ac8bba38629340f38363d4330b22f354ac60fdc3e311844dd8e018c04d",
+      "integrity": "sha512-lgHBHEiZEmMBoCDT0XZQwCz7f/nF3tKF2BI5kouifLSyErVQJ1E4uwsO2AeFBkvXp+rC6gQeS9t1pbIp5j/qWA==",
+      "artifact": {
+        "id": 10056798239,
+        "filename": "duckdb-shared-libs-linux-arm64.tar.gz",
+        "sha256": "d133035fda338172e1a61c4e4858c3425a667b79c40ee3f596874e95daf2ff6f",
+        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10056798239/zip"
+      },
+      "native": {
+        "filename": "libduckdb.so",
+        "sha256": "27bbf49329a6ecbe576809408a3a024f5192aa83eb005ac8a0bbf7922067b199"
+      },
+      "bridge": {
+        "filename": "node-bindings-linux-arm64-1.5.1-r.1.tgz",
+        "url": "https://registry.npmjs.org/@duckdb/node-bindings-linux-arm64/-/node-bindings-linux-arm64-1.5.1-r.1.tgz",
+        "integrity": "sha512-b0tHCtC+GZnD6gJA+ldUwy8FhnugR1Uq0/LjLiusOQOoK5pRXyfiQjgIe/SiKSeE5iEr+FWUXEprSD81HOaaQg==",
+        "sha256": "cb653871c5e3369ad58d6c33d84c075d600c361ae4c69259e6c4ce3383e96dce",
+        "binarySha256": "37e9c96367ef01994757d7e012e2d33ba7b758012ba6724a19598adf49737eda",
+        "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      }
+    },
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "packageName": "@duckdb/node-bindings-linux-x64",
+      "filename": "duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.1.tgz",
+      "sha256": "cb34fa659da22fbbd3aaa17e197544fe1d5ba0f675290cca80ddaab4d076c4ba",
+      "integrity": "sha512-B4qZxSqbajdzg7m0SVPqy7Fv/avPKbPnlcTgFDsH2KQO7dG4scuBbLOsh78S1wvA//MyAx/slZtn0XFQLAMIOA==",
+      "artifact": {
+        "id": 10057134271,
+        "filename": "duckdb-shared-libs-linux-amd64.tar.gz",
+        "sha256": "76d74cb2133dac6037616da3cb6691a350891d546675b8b52a3678739afd7a6b",
+        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10057134271/zip"
+      },
+      "native": {
+        "filename": "libduckdb.so",
+        "sha256": "29b17b4801f77af11ea8e27d5b2d9c7791aaeb80406afdba8e43cfb32651ee0e"
+      },
+      "bridge": {
+        "filename": "node-bindings-linux-x64-1.5.1-r.1.tgz",
+        "url": "https://registry.npmjs.org/@duckdb/node-bindings-linux-x64/-/node-bindings-linux-x64-1.5.1-r.1.tgz",
+        "integrity": "sha512-AczM4qyMuMXHIa7w1YacIu6FFPpwzUsQSkPUFKsAJzyuRcxAlGEwt+2GnVZSACGQFpKbL9nAkuu3Icq6ttxwag==",
+        "sha256": "72e177c5000451538b71d6df7730a89e1358a095eaf0a712bfb0dd471d974b02",
+        "binarySha256": "23d3df6df054e29143bd876bdb7bfd4ddc767708f3220604bdd71220cfbc62a5",
+        "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      }
+    },
+    {
+      "platform": "win32",
+      "arch": "arm64",
+      "packageName": "@duckdb/node-bindings-win32-arm64",
+      "filename": "duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.1.tgz",
+      "sha256": "01e8b6eed6b353a42929094a15dd1a70ce1fedb91e265fa465c7a25e4bd1d238",
+      "integrity": "sha512-sNiUuwG+ENnDkxlXpmrS7i+mR8c/qCJyZ0bchgtPr1Bb7r/bokdP72sH5i6ulhGRaUkB2lszkIHM4M84ymbKqg==",
+      "artifact": {
+        "id": 10057092411,
+        "filename": "duckdb-shared-libs-windows-arm64.tar.gz",
+        "sha256": "d8a1d0cb6b287582a9e0d3b6f475e29b46b553f4770afe44f79441d56575d03c",
+        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10057092411/zip"
+      },
+      "native": {
+        "filename": "duckdb.dll",
+        "sha256": "b874f33686c2d842e80e177500465ecad4022f3a76d68e4dfcc521114bb4b405"
+      },
+      "bridge": {
+        "filename": "node-bindings-win32-arm64-1.5.1-r.1.tgz",
+        "url": "https://registry.npmjs.org/@duckdb/node-bindings-win32-arm64/-/node-bindings-win32-arm64-1.5.1-r.1.tgz",
+        "integrity": "sha512-SrgAiFttkfFXCCAMrmMBWtnBMtEjVaC38XtG6zEdbvmp2RTEPo/dFcvRP75vS/Hm5Iq8Tgiuoq4tIdovwEw5yg==",
+        "sha256": "e7a1b36352136a77adbb5bd8a23ea77abc501f28eefe8074f31c64790eff4912",
+        "binarySha256": "95db4d85ab8a7342e16f4561287502745bd5af377ca77d7422204433052a9043",
+        "licenseSha256": "4000856a8f007e53fc53150533d644bcaefc64b7461e43c14ccb9d3d66a59cd2"
+      }
+    },
+    {
+      "platform": "win32",
+      "arch": "x64",
+      "packageName": "@duckdb/node-bindings-win32-x64",
+      "filename": "duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.1.tgz",
+      "sha256": "c5a24febb71784e331dc5bef337bc48fc6702e9371546192368d18cb1bff8748",
+      "integrity": "sha512-StVabJysZq/6mv59S+ayZcOaRrYB3Kgp5tCHFLMLhYnhyxngMiFWkZUwKCoCpE0stlDHHi8KPXqX/N4Pul9DxQ==",
+      "artifact": {
+        "id": 10056934811,
+        "filename": "duckdb-shared-libs-windows-amd64.tar.gz",
+        "sha256": "41ae948f23b1f94adf62ef209339e72e077bb60834507e29b2e63db5e42c33aa",
+        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10056934811/zip"
+      },
+      "native": {
+        "filename": "duckdb.dll",
+        "sha256": "d09ed5b20e9097d73ef04f6adc97ac1d1100d83684d20f3e2866b49697ce7401"
+      },
+      "bridge": {
+        "filename": "node-bindings-win32-x64-1.5.1-r.1.tgz",
+        "url": "https://registry.npmjs.org/@duckdb/node-bindings-win32-x64/-/node-bindings-win32-x64-1.5.1-r.1.tgz",
+        "integrity": "sha512-JkL9xvXx9i8ceU1fGJsb9gqgRn30RFi0HyfpuESK2AZInKx5mJn8fvYcj4AQg/Ip9SZ1S4a2Jh5DOFY81koubw==",
+        "sha256": "490c823b67eb61344185fa59f0a839fbbfd871ae5eb09163de665e467e8e7db6",
+        "binarySha256": "fb2875850017ea89df29814cd5e73d01501822fe643a5b9f7c559772fd66c47b",
+        "licenseSha256": "4000856a8f007e53fc53150533d644bcaefc64b7461e43c14ccb9d3d66a59cd2"
+      }
+    }
+  ]
+}
