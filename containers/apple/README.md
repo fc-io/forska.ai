@@ -142,8 +142,8 @@ readiness returned 200, and `/api/comparison-projects` returned 200 through Vite
 Memory was about 1.7 GiB of the configured 8 GiB.
 
 The unpatched engine exhausted its 4GB checkpoint budget on the existing
-approximately 123 GB primary database. The container-only native backport below
-fixes the reproduced deletion-metadata allocation problem: an ordinary full
+approximately 123 GB primary database. The former container-only native backport
+fixed the reproduced deletion-metadata allocation problem: an ordinary full
 checkpoint on the preserved real-DB clone passed at the unchanged literal
 `4GB` DuckDB / `8G` VM limits in 13 seconds, with process RSS about 2.11 GB.
 
@@ -169,49 +169,69 @@ Reproduction commands are in [TESTS.md](../../TESTS.md#apple-container-launcher)
 DB/WAL and logs remain preserved. See the
 [investigation record](../../docs/apple-container-checkpoint-investigation.md)
 and `OOM_ERRORS.md`. The Windows conflict-resolution crash has **not** been
-reproduced or proven fixed; host web/desktop native dependencies are unchanged.
+reproduced or proven fixed by these historical checks. At that point, host
+web/desktop native dependencies had not been changed.
 
-## Container-only DuckDB checkpoint backport
+## Shared pinned DuckDB engine
 
-The container builds DuckDB **1.5.5** from the official source commit
-`d8cdaa33fda8df955cc76ef58a280f68f4cd43fa`, using a SHA-256-verified archive,
-with the checked-in adaptation of upstream fixes
-[#23964](https://github.com/duckdb/duckdb/pull/23964) and
-[#24336](https://github.com/duckdb/duckdb/pull/24336). These fixes compact committed
-row-deletion metadata used by checkpointing. The patch is adapted to the stable
-1.5.5 storage interfaces; it is not a clean cherry-pick from upstream main.
+The container, normal web/server installation, and desktop build now install the
+same official **DuckDB `v2.0.0-alpha40881`** revision
+`816a3eb2d512ce359efb40d9319f6db59788422a` through platform-specific packages.
+The unchanged Node C-API bridge is packaged together with the official native
+library; the package lock pins the distribution. See
+[distribution provenance and update procedure](../../vendor/duckdb/README.md).
 
-The source stage builds `libduckdb.so` with the official bundled-extension
-configuration (ICU, JSON, Parquet and autocomplete) and replaces the Linux ARM64
-node-binding package's engine library. Node's C-API binding remains installed
-from `bun.lock`. No alternate engine or silent fallback remains in the image.
-The image build checks the loaded engine version. Container startup prints
-`/usr/local/share/forska-duckdb-provenance.json`, including source commit,
-upstream fix commits, local backport SHA-256 and resulting library SHA-256.
+The Dockerfile uses `bun install --frozen-lockfile`; it does not compile C++ or
+replace installed native libraries afterward. The native backport build and
+patch files have been removed. The earlier backport investigation remains in
+[the historical record](duckdb-backport.md).
 
-**This changes the DuckDB engine as well as the operating environment.** Host web
-and desktop dependencies remain unchanged. Do not attribute a successful patched
-container run solely to RAM, or call it an identical-engine reproduction of the
-Windows failure. Unbundled extensions may have their own compatibility needs.
+Every image build runs `bun scripts/verifyDuckdbDistribution.ts`: it validates
+which package and engine actually loaded, scalar/nested NULL decoding,
+transaction commit/rollback, new-WAL replay in a fresh process, and the unchanged
+32 MiB checkpoint regression. Startup prints the installed package's provenance.
+Desktop builds remove other platforms’ DuckDB packages from the copied bundle,
+then verify its native files and load that copied engine before packaging; the app does not download DuckDB at
+runtime. Build each desktop target natively so the copied engine can be executed.
 
-The first source build is substantially slower than downloading a prebuilt
-engine. It uses one compiler job with non-unity compilation and LLVM lld to bound
-build/link memory; build layers are cached. Apple's builder VM has its own memory budget,
-independent of the app's default 8 GiB. For example, a newly created builder can be started with
-`container builder start --cpus 4 --memory 8G`. Existing builders retain their
-original resources even when start flags are supplied; inspect
-`container builder status --format json` to confirm the actual budget. Do not
-delete an existing builder merely to change its budget: that can discard build
-cache. This is a build budget, not a change to the application's memory cap.
+Bun currently downloads all six tarball-override packages even though each package
+has platform metadata; the installed loader selects only the current target.
+The image build removes unused targets in the same install layer and keeps the
+Bun download cache outside the image. Desktop pruning touches only copied build
+output, never the developer's installed packages. This bounds delivered image/app
+size; it does not hide or eliminate Bun's extra initial download cost.
 
-The non-unity build also includes a separate one-line header fix for upstream
-1.5.5's jemalloc translation unit (`StringUtil` needs its direct include). It
-does not disable or change the allocator. Its checksum is recorded separately
-in the provenance manifest. BuildKit keeps both the Ninja object directory and
-a bounded 2 GiB ccache between attempts, so a later compile/test failure does
-not discard all completed compilation. The Ninja build subdirectory is derived automatically from the source archive
-and both patch SHA-256 values: adding or removing a patch hunk selects a new
-object directory, even when an unpatched source file has an older timestamp.
-Compiler/version/flag/header changes remain subject to Ninja/ccache dependency
-validation. ccache independently keys compiled objects by their contents and
-compiler inputs.
+No separate engine installation or file copying is required:
+
+```sh
+git pull
+bun install
+bun run dev:container
+```
+
+For ordinary host development use `bun run dev:start` after the same install.
+The image still needs network access for its base image and pinned packages on
+its first build, but no compiler toolchain or custom engine build cache.
+
+### Existing databases and WAL
+
+Do not delete WAL files as a routine upgrade step. A WAL can hold committed data
+not yet written to the database file. This alpha rejects one historical WAL
+shape accepted by 1.5.1. A normal pending 1.5.1 WAL replays successfully, so
+users generally do not need to remove WAL files; new-alpha replay is checked
+separately. The runtime
+must report the compatibility problem rather than silently discard data.
+Follow [the migration/recovery guidance](../../vendor/duckdb/README.md) if an old
+WAL is rejected. Discarding an old WAL is only appropriate for an explicitly
+authorized disposable reset with all database users stopped.
+
+The shared compatibility option `legacy_disable_null_type=true` is required by
+the existing Node bindings and is applied by the application on every relevant
+connection. Without it, the alpha's SQLNULL results can fail decoding even when
+a simple version/query check passes.
+
+An alpha engine and a passing checkpoint regression are not a promise that every
+platform workload is correct. Review the
+[recorded preview findings](duckdb-preview-evaluation.md), require the CI native
+install matrix, and verify the affected Windows conflict-resolution workload
+before claiming that specific crash is fixed.

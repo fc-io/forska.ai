@@ -4,6 +4,7 @@ import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
 import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
 
 const removeFileIfExists = (filePath: string) => {
@@ -227,7 +228,7 @@ test('duckdb service preserves explicit manual checkpoints on low-memory workers
                 closeSync() {}
               }
 
-              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?manual-checkpoint-low-memory=' + Date.now())
@@ -320,7 +321,7 @@ test('duckdb service serializes owner route reads with maintenance work regardle
                 closeSync() {}
               }
 
-              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?serialize-background=' + Date.now())
@@ -419,7 +420,7 @@ test('duckdb service serializes append work with the main queue on low-memory wo
                 closeSync() {}
               }
 
-              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?serialize-append=' + Date.now())
@@ -537,7 +538,7 @@ test.each([true, false])('duckdb recycle barrier drains background work before f
                 }
               }
 
-              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?recycle-foreground-barrier=' + Date.now())
@@ -712,7 +713,7 @@ test('duckdb main transaction blocks append-lane work until commit finishes', ()
                 closeSync() {}
               }
 
-              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
             })
 
             const workloadContext = {
@@ -844,7 +845,7 @@ test('duckdb append transactions are opt-in and stay serialized with main transa
                 closeSync() {}
               }
 
-              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?append-transaction-low-memory=' + Date.now())
@@ -966,7 +967,7 @@ test('duckdb append transactions roll back failed append-lane work before the ne
                 closeSync() {}
               }
 
-              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?append-transaction-rollback=' + Date.now())

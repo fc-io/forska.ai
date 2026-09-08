@@ -6,6 +6,8 @@ import {join} from 'node:path'
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
+
 const rawSpawnSync = globalThis.Bun.spawnSync.bind(globalThis.Bun)
 
 globalThis.Bun.spawnSync = ((command, options) => {
@@ -232,7 +234,7 @@ test('duckdb snapshot creation fails when the pre-copy checkpoint fails', () => 
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?snapshot-checkpoint-failure-test=' + Date.now())
@@ -329,7 +331,7 @@ test('duckdb snapshot close failures still restart the Windows embedded runtime'
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?snapshot-close-failure-test=' + Date.now())
@@ -459,7 +461,7 @@ test('duckdb snapshot restart failure removes the completed Windows snapshot and
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?snapshot-restart-failure-test=' + Date.now())
@@ -762,7 +764,7 @@ test('duckdb service checkpoints before close', () => {
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?checkpoint-close-test=' + Date.now())
@@ -895,7 +897,7 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?skipped-wal-checkpoint-threshold-test=' + Date.now())
@@ -955,12 +957,15 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
       parsed.createOptionsHistory[0]?.checkpoint_threshold,
     )
     expect(parsed.preflightChildTimeout).toBe(120_000)
+    expect(parsed.preflightChildOptions?.legacy_disable_null_type).toBe('true')
+    expect(parsed.checkpointChildOptions?.legacy_disable_null_type).toBe('true')
     expect(parsed.checkpointChildOptions?.checkpoint_threshold).toBe(
       parsed.createOptionsHistory[0]?.checkpoint_threshold,
     )
     expect(parsed.createOptionsHistory).toEqual([
       {
         checkpoint_threshold: parsed.createOptionsHistory[0]?.checkpoint_threshold,
+        legacy_disable_null_type: 'true',
         memory_limit: '6400MiB',
         preserve_insertion_order: 'false',
         temp_directory: join(dataRoot, 'duckdb-temp'),
@@ -1050,7 +1055,7 @@ test('duckdb service skips proactive startup mutation preflight on low-memory wo
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-skip-preflight-test=' + Date.now())
@@ -1399,7 +1404,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-preflight-marker-test=' + Date.now())
@@ -1583,7 +1588,7 @@ test('duckdb service retries stale mutation-probe repair markers before rebuildi
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?stale-mutation-marker-test=' + Date.now())
@@ -1757,7 +1762,7 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?marker-only-repair-test=' + Date.now())
@@ -1918,7 +1923,7 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-checkpoint-preflight-test=' + Date.now())
@@ -2558,7 +2563,7 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-index-marker-test=' + Date.now())
@@ -3073,7 +3078,7 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?anonymous-fatal-index-marker-test=' + Date.now())
@@ -3197,7 +3202,7 @@ test('duckdb service marks judgment job after fatal index-delete import status u
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?judgment-job-fatal-index-marker-test=' + Date.now())
@@ -3342,7 +3347,7 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?commit-fatal-index-marker-test=' + Date.now())
@@ -3493,7 +3498,7 @@ test('duckdb service marks insert-ignore indexed targets when a duplicate-key tr
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?commit-duplicate-index-marker-test=' + Date.now())
@@ -3630,7 +3635,7 @@ test('duckdb service prefers fatal error table name before stale mutating target
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?stale-fatal-index-marker-test=' + Date.now())
@@ -3735,7 +3740,7 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?retry-test=' + Date.now())
@@ -3839,7 +3844,7 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-recovery-test=' + Date.now())
@@ -3988,7 +3993,7 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-test=' + Date.now())
@@ -4161,7 +4166,7 @@ test('duckdb service starts with replayable WAL when startup checkpoint fails', 
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         let errorMessage = null
@@ -4340,7 +4345,7 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-lock-test=' + Date.now())
@@ -4504,7 +4509,7 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-lock-recovery-test=' + Date.now())
@@ -4711,7 +4716,7 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?index-repair-test=' + Date.now())
@@ -5364,7 +5369,7 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-restart-test=' + Date.now())
@@ -5478,7 +5483,7 @@ test('duckdb service restarts and retries after a fatal rollback OOM', () => {
             closeSync() {}
           }
 
-          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-rollback-oom-test=' + Date.now())

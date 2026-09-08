@@ -17,6 +17,11 @@ import {DuckDBConnection, DuckDBInstance, type DuckDBType, type DuckDBValue} fro
 import {Effect} from 'effect'
 
 import {getSelectedImportCurrentStartupMutationProbeSql} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
+import {
+  getDuckdbEngineOptions,
+  getDuckdbLegacyWalCompatibilityError,
+  isDuckdbLegacyWalCompatibilityError,
+} from './duckdbEngineCompatibility.ts'
 import {getActiveDuckdbExclusiveWorkSnapshot, getDuckdbExclusiveWorkAdmissionError} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
@@ -2547,14 +2552,18 @@ const createDuckdbTempDirectory = (runtimeConfig: DuckdbRuntimeConfig) => {
 }
 
 const getDuckdbInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<string, string> => {
+  const engineOptions = getDuckdbEngineOptions()
+
   return runtimeConfig.tempDirectory === null
     ? {
+        ...engineOptions,
         checkpoint_threshold: runtimeConfig.checkpointThreshold,
         memory_limit: runtimeConfig.memoryLimit,
         preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
         threads: runtimeConfig.threads,
       }
     : {
+        ...engineOptions,
         checkpoint_threshold: runtimeConfig.checkpointThreshold,
         memory_limit: runtimeConfig.memoryLimit,
         preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
@@ -2595,6 +2604,7 @@ export const getReadOnlyDuckdbRuntimeOptions = (input: ReadOnlyDuckdbRuntimeOpti
   const runtimeConfig = getDuckdbRuntimeConfigValue()
   const tempDirectory = input.tempDirectory ?? runtimeConfig.tempDirectory
   const baseOptions = {
+    ...getDuckdbEngineOptions(),
     access_mode: input.accessMode ?? 'READ_ONLY',
     checkpoint_threshold: runtimeConfig.checkpointThreshold,
     memory_limit: input.memoryLimit ?? runtimeConfig.memoryLimit,
@@ -2985,17 +2995,23 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
 const isDuckdbStartupRetryableError = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message
 
-  return duckdbStartupRetryableErrorFragments.some((fragment) => {
-    return message.includes(fragment)
-  })
+  return (
+    !isDuckdbLegacyWalCompatibilityError(message)
+    && duckdbStartupRetryableErrorFragments.some((fragment) => {
+      return message.includes(fragment)
+    })
+  )
 }
 
 const isDuckdbWalReplayRecoveryError = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message
 
-  return duckdbWalReplayRecoveryErrorFragments.every((fragment) => {
-    return message.includes(fragment)
-  })
+  return (
+    !isDuckdbLegacyWalCompatibilityError(message)
+    && duckdbWalReplayRecoveryErrorFragments.every((fragment) => {
+      return message.includes(fragment)
+    })
+  )
 }
 
 const isDuckdbTransientFileLockError = (message: string) => {
@@ -3118,6 +3134,12 @@ const quarantineFailedDuckdbWalReplay = async (
     walFileSuffix = 'failed-replay',
   }: {event?: string; message?: string; recovery?: string; walFileSuffix?: string} = {},
 ) => {
+  const normalizedError = getNormalizedDuckdbError(error)
+
+  if (isDuckdbLegacyWalCompatibilityError(normalizedError.message)) {
+    throw getDuckdbLegacyWalCompatibilityError(runtimeConfig.databasePath, normalizedError)
+  }
+
   if (runtimeConfig.databasePath === ':memory:') {
     throw new Error('DuckDB WAL replay recovery is unavailable for :memory: databases')
   }
@@ -4521,6 +4543,10 @@ const checkpointDuckdbStartupWalReplay = async (runtimeConfig: DuckdbRuntimeConf
   const outputText = getDuckdbStartupChildOutputText(result)
   const failureText = outputText === '' ? `exitCode=${result.exitCode ?? 'unknown'}` : outputText
 
+  if (isDuckdbLegacyWalCompatibilityError(failureText)) {
+    throw getDuckdbLegacyWalCompatibilityError(runtimeConfig.databasePath, new Error(failureText))
+  }
+
   writeRuntimeOperatorLogEvent({
     attrs: {databasePath: runtimeConfig.databasePath, error: failureText},
     event: 'duckdb.startup.wal-checkpoint-skipped',
@@ -4993,6 +5019,11 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
     }
 
     const errorMessage = getNormalizedDuckdbError(error).message
+
+    if (isDuckdbLegacyWalCompatibilityError(errorMessage)) {
+      throw getDuckdbLegacyWalCompatibilityError(runtimeConfig.databasePath, getNormalizedDuckdbError(error))
+    }
+
     const compactErrorMessage = getCompactDuckdbErrorMessage(error)
     const retryDelayMs = duckdbStartupPreflightLockRetryDelaysMs[lockRetryCount]
 
@@ -5580,7 +5611,14 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
       controlConnection,
       duckdbInstance,
     })
-    throw cleanupError === null ? error : getChainedDuckdbError(error, cleanupError, 'startup cleanup failed')
+    const normalizedError = getNormalizedDuckdbError(error)
+    const startupError = isDuckdbLegacyWalCompatibilityError(normalizedError.message)
+      ? getDuckdbLegacyWalCompatibilityError(runtimeConfig.databasePath, normalizedError)
+      : error
+
+    throw cleanupError === null
+      ? startupError
+      : getChainedDuckdbError(startupError, cleanupError, 'startup cleanup failed')
   }
 }
 

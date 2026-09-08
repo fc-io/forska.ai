@@ -21,7 +21,9 @@ export default {
       'dist/index.html': 'views/mainview/index.html',
       node_modules: 'node_modules',
       src: 'src',
+      'vendor/duckdb': 'vendor/duckdb',
     },
     watchIgnore: ['dist/**', 'desktopArtifacts/**', 'desktopBuild/**'],
   },
+  scripts: {postBuild: 'scripts/verifyDesktopDuckdbDistribution.ts'},
 } satisfies ElectrobunConfig

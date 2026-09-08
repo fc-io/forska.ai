@@ -645,3 +645,10 @@ Entry format:
 - Verification: Preserved real-DB clone ordinary full checkpoint passed at literal `4GB` / `8G` VM in 13 seconds, RSS about 2.11 GB. Original-DB API/owner/judge readiness returned 200; active-project completed chunks advanced 68→120 and pending 317→265 over 84 seconds with no failed/quarantined/expired chunks. Host 1.5.1→patched checkpoint→host 1.5.1 read-only fixture compatibility, all 13 upstream cases and `bun scripts/duckdbCheckpointMemoryRegression.ts` (32 MiB checkpoint/reopen) passed; see `TESTS.md` and `docs/apple-container-checkpoint-investigation.md`.
 - Live limitation: Scheduled bounded-loop recycling caused a transient owner-not-ready 502 before readiness recovered; no OOM/process crash was observed. Continuous availability during recycling is not established. Browser loaded 100 rows; stack stopped cleanly with SIGTERM.
 - Recovery: Preserve DB/WAL, logs and stale lease evidence; stop all owners before copying/restoring and keep host/container access exclusive. Judge-journal lock checks address a separate startup blocker. The Windows conflict-resolution crash remains unproven and is not claimed fixed.
+
+## 2026-09-08 - Deliver the checkpoint fix to normal installs and desktop
+
+- Error: The historical deleted-row checkpoint allocation OOM remained possible in normal installs because the earlier 1.5.5 backport replaced only the Apple-container engine.
+- Cause: Host, desktop, and container paths installed different native engines.
+- Fix: Pin official DuckDB `v2.0.0-alpha40881` (`816a3eb2d5`) in checksummed platform packages with the existing Node bridge, use those packages in every runtime, and remove the custom C++ build/backport. The shared NULL-type compatibility setting is required; incompatible legacy WAL is not silently deleted.
+- Verification gates: Clean native install matrix, loaded bundle verification in desktop builds, exact new-WAL commit/replay, unchanged 32 MiB checkpoint/reopen regression, and current-DB clone checkpoint/live progress at the original cap; see `TESTS.md`. The separate Windows conflict-save crash still requires its affected-workload verification.

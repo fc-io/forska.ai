@@ -4,6 +4,8 @@ import {join} from 'node:path'
 
 import {expect, mock, test} from 'bun:test'
 
+import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
+
 type DuckdbServiceModule = typeof import('../utils/duckdbService.ts')
 type ReadOnlyDuckdbServiceModule = typeof import('./readOnlyDuckdbService.ts')
 
@@ -62,7 +64,13 @@ test('read-only DuckDB workload context records metrics without using the owner 
       closeSync() {}
     }
 
-    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+    return {
+      DuckDBConnection: MockConnection,
+      DuckDBInstance: MockInstance,
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
   })
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'

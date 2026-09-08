@@ -7,46 +7,59 @@ performance-measurement commands live in [PERF.md](PERF.md).
 
 ## DuckDB upgrades: checkpoint-memory regression gate
 
-When upgrading `@duckdb/node-api`, `@duckdb/node-bindings`, or the container's native
-engine, rerun this gate against the **actual candidate engine**, not just the
-currently patched container. On 2026-09-08, unmodified DuckDB 1.5.1 and 1.5.5 both
-failed the real-DB checkpoint at a 4 GB DuckDB / 8 GiB VM limit. The container's
-1.5.5 backport passed; a version bump alone is not evidence that the bug is fixed.
+Normal installation, container images, and desktop builds use the pinned official
+2.0 alpha in [the distribution manifest](vendor/duckdb/manifest.json). The former
+1.5.5 container-only backport has been removed. A version bump or successful
+native import alone is not evidence that the original memory bug stays fixed.
 
-- Check whether the official release includes upstream
+For every engine, binding, or native-package update:
+
+- Record the actual loaded engine version, source revision, binding version,
+  and checksums; verify inclusion of upstream
   [#23964](https://github.com/duckdb/duckdb/pull/23964) and
-  [#24336](https://github.com/duckdb/duckdb/pull/24336). Record the actual loaded
-  engine version and Node binding version.
-- Run `bun scripts/duckdbCheckpointMemoryRegression.ts` in the candidate runtime.
-  Require the unchanged 32 MiB full-checkpoint fixture and fresh-process reopen
-  to pass with exact row count, ID sum, and WAL-marker verification. Do not raise
-  the cap to make an upgrade pass. The script uses a disposable DB and preserves
-  its artifacts; unpatched 1.5.1/1.5.5 are known failing baselines.
-- Rerun the upstream transaction/snapshot/rollback cases and host → candidate →
-  host file-compatibility check described in the
-  [backport verification guide](containers/apple/duckdb-backport.md#quality-gates).
-- Include replay of the preserved legacy WAL, not only cleanly checkpointed
-  files. The [2.0 alpha40881 evaluation](containers/apple/duckdb-preview-evaluation.md)
-  passed the memory fixture but rejected that WAL with “WAL cannot contain more
-  than one checkpoint marker”; it is not approved as a drop-in upgrade. An
-  explicitly authorized disposable dev reset can skip that legacy state, but is
-  not evidence of a data-preserving migration. Verify new candidate WAL replay.
-- Check scalar and nested NULL decoding through the actual Node/Bun binding and
-  review API. The 2.0 preview required `legacy_disable_null_type=true` with both
-  released bindings 1.5.1-r.1 and 1.5.5-r.4; loading the engine and passing SQL
-  smoke tests alone did not catch `Invalid vector type: SQLNULL` in the live app.
-- Preserve DB/WAL evidence, verify a normal full checkpoint on a consistent
-  current-DB clone at the same 4 GB / 8 GiB limits, then verify live API/owner
-  readiness and advancing review-indexing counters. Follow the
-  [container recovery and verification guidance](containers/apple/README.md).
-- Verify affected web/container and desktop platforms separately. A Linux
-  checkpoint pass does **not** establish that the Windows conflict-resolution
-  owner crash is fixed; reproduce that save on the affected Windows workload.
+  [#24336](https://github.com/duckdb/duckdb/pull/24336).
+- From a clean checkout run `bun install --frozen-lockfile`, then
+  `bun scripts/verifyDuckdbDistribution.ts`. Require the native install CI matrix
+  to pass on each shipped OS/architecture. It checks the installed platform
+  package, loaded version, scalar/nested NULL results, transactions, a committed
+  WAL reopened in a fresh process, and the unchanged 32 MiB checkpoint fixture.
+- Run `bun test src/server/utils/duckdbEngineCompatibility.test.ts --timeout 120000`
+  for all managed reader/writer NULL paths, ordinary 1.5.1 WAL migration, and
+  incompatible-WAL non-deletion checks. This gate runs on each native CI target.
+- Run `bun test scripts/verifyDuckdbDistribution scripts/verifyDesktopDuckdbDistribution.test.ts --timeout 120000`
+  for copied-package containment, native-library symlink rejection, and target-only
+  pruning. Existing mock-heavy runtime suites require the per-file runner
+  `bun run test:bun`, not concatenating their paths into a shared Bun process.
+- Keep `bun scripts/duckdbCheckpointMemoryRegression.ts` as the standalone
+  memory gate. Require exact rows, ID sum, and WAL-marker preservation after a
+  fresh-process reopen. Do not increase the cap or change the fixture to pass.
+  Unmodified stable 1.5.1/1.5.5 are the recorded failing baselines.
+- Run relevant upstream transaction/snapshot/rollback cases and old-engine →
+  candidate → old-engine file compatibility, with engines independently pinned.
+  Historical upstream cases and results are in
+  [the backport record](containers/apple/duckdb-backport.md#quality-gates); they
+  are not rerun or bundled automatically by the prebuilt-engine image build.
+- Include legacy-WAL replay in upgrade testing. The pinned alpha rejects a
+  preserved 1.5.1 WAL with “WAL cannot contain more than one checkpoint marker”.
+  Verify the supported migration/error path and never silently delete that WAL.
+  Explicitly authorized disposable resets do not prove data-preserving upgrades.
+  Require new-candidate WAL replay separately.
+- Preserve DB/WAL evidence and require an ordinary full checkpoint on a
+  consistent current-DB clone at the unchanged 4 GB DuckDB / 8 GiB VM limits.
+  Verify API/owner readiness and advancing live review-indexing counters.
+- Run `bun run desktop:build` on a native target. Its post-build gate resolves
+  and executes the copied bundle's native engine, not checkout dependencies,
+  after removing non-target DuckDB packages from that copy.
+  Test packaged-desktop lifecycle separately; the build gate does not open the
+  user's desktop database or prove window/server shutdown behavior.
+- Reproduce the affected conflict-resolution save on Windows before claiming
+  that distinct owner crash is fixed. Linux/macOS checks do not establish it.
 
-Once an official release includes both fixes and passes these gates **without
-the custom patch**, pin that release and remove the custom engine build and
-backport in the same change; see the
-[removal criterion](containers/apple/duckdb-backport.md#removal-criterion).
+The runtime requires `legacy_disable_null_type=true` with the existing Node
+bridge. Do not remove it until an upgraded binding passes scalar/nested NULL and
+live review-page decoding. Replace the alpha/platform repackaging with an official
+stable Node package once it includes both fixes and passes these gates, removing
+obsolete packaging in the same coherent change.
 
 ## Supervised server lease cleanup
 
@@ -337,31 +350,32 @@ verifies host-port validation, host DB mount paths and refusal of existing owner
 starting the Apple runtime. See `containers/apple/README.md` for the live startup,
 resource and persistence checks (requires Apple's container CLI).
 
-The image build runs `bun scripts/duckdbCheckpointMemoryRegression.ts` against
-its patched native engine. This disposable database regression deliberately
-fails on the unpatched host engine: 256 fragmented row groups must checkpoint
-at 32 MiB and retain exact rows after another process reopens the file. Fixture
-and phase logs are preserved under the printed temporary directory.
+The image build runs `bun scripts/verifyDuckdbDistribution.ts` against its
+frozen-lockfile installed platform package; it no longer compiles DuckDB or
+injects a different engine. The verifier includes the standalone
+`bun scripts/duckdbCheckpointMemoryRegression.ts` gate: 256 fragmented row
+groups must checkpoint at 32 MiB and retain exact rows after another process
+reopens the file. Fixture and phase logs are preserved under the printed
+temporary directory.
 
-The native build also runs the 13 upstream deletion/checkpoint regression cases
-listed in `containers/apple/duckdb-backport.md`. Its JUnit report is included in
-the image; failures or skipped cases must block the image gate. For a host-DB
-change, also verify old-host-engine → patched-container checkpoint → old-host
-reopen on a disposable fixture before the real-DB progress gate.
+The prebuilt image does not claim a fresh upstream C++ test-suite run. The
+historical 13-case results remain recorded in
+`containers/apple/duckdb-backport.md`; rerun upstream tests when qualifying a
+new engine revision, independently of the install smoke.
 
-After building `forska-dev:local`, run the compatibility gate from the checkout
-with its unchanged host dependencies. These commands never use the app DB:
+After building `forska-dev:local`, this host/container roundtrip uses the same
+pinned engine on both sides and never opens the app database:
 
 ```bash
 compat_dir=$(mktemp -d /tmp/forska-checkpoint-compat.XXXXXX)
 bun scripts/duckdbCheckpointMemoryRegression.ts seed "$compat_dir"
 container run --rm --memory 8G --volume "$compat_dir:/compat" --entrypoint bun forska-dev:local scripts/duckdbCheckpointMemoryRegression.ts checkpoint /compat
-bun scripts/duckdbCheckpointMemoryRegression.ts compat-reopen "$compat_dir"
+bun scripts/duckdbCheckpointMemoryRegression.ts reopen "$compat_dir"
 ```
 
-Require all phases to pass: host-engine seed, patched-engine checkpoint at
-32 MiB, then old-host-engine read-only reopen with identical row count, sum,
-and WAL marker. `compat-reopen` uses a fixed 128 MiB because the old engine
-still expands deletion metadata while reading; this is a file-compatibility
-check, not the low-memory fix gate. Default `checkpoint` and `reopen` phases
-remain fixed at 32 MiB. The fixture is retained in `$compat_dir`.
+Require seed, checkpoint, and fresh-process reopen to pass with identical row
+count, sum, and WAL marker. The last two phases stay at 32 MiB. Testing an actual
+old-host-engine upgrade additionally requires a separately installed, pinned old
+engine; using the upgraded checkout for both ends is not backward-compatibility
+evidence. The `compat-reopen` helper phase uses 128 MiB for that older engine's
+read-only verification, not for the low-memory fix gate.
