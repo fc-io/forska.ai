@@ -250,3 +250,10 @@ replace
 review-serving/DuckDB lifecycle changes.
 
 Quality gates: run the narrow test for your change first, then `bun run lint` or `bun run build` when the changed layer needs it.
+
+## Apple-container launcher
+
+`bun test scripts/runAppleContainer.test.ts scripts/appleContainerHostDatabase.test.ts`
+verifies host-port validation, host DB mount paths and refusal of existing owner/writer locks. `bun run dev:container --dry-run` inspects commands without
+starting the Apple runtime. See `containers/apple/README.md` for the live startup,
+resource and persistence checks (requires Apple's container CLI).
