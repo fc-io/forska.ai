@@ -257,3 +257,32 @@ Quality gates: run the narrow test for your change first, then `bun run lint` or
 verifies host-port validation, host DB mount paths and refusal of existing owner/writer locks. `bun run dev:container --dry-run` inspects commands without
 starting the Apple runtime. See `containers/apple/README.md` for the live startup,
 resource and persistence checks (requires Apple's container CLI).
+
+The image build runs `bun scripts/duckdbCheckpointMemoryRegression.ts` against
+its patched native engine. This disposable database regression deliberately
+fails on the unpatched host engine: 256 fragmented row groups must checkpoint
+at 32 MiB and retain exact rows after another process reopens the file. Fixture
+and phase logs are preserved under the printed temporary directory.
+
+The native build also runs the 13 upstream deletion/checkpoint regression cases
+listed in `containers/apple/duckdb-backport.md`. Its JUnit report is included in
+the image; failures or skipped cases must block the image gate. For a host-DB
+change, also verify old-host-engine → patched-container checkpoint → old-host
+reopen on a disposable fixture before the real-DB progress gate.
+
+After building `forska-dev:local`, run the compatibility gate from the checkout
+with its unchanged host dependencies. These commands never use the app DB:
+
+```bash
+compat_dir=$(mktemp -d /tmp/forska-checkpoint-compat.XXXXXX)
+bun scripts/duckdbCheckpointMemoryRegression.ts seed "$compat_dir"
+container run --rm --memory 8G --volume "$compat_dir:/compat" --entrypoint bun forska-dev:local scripts/duckdbCheckpointMemoryRegression.ts checkpoint /compat
+bun scripts/duckdbCheckpointMemoryRegression.ts compat-reopen "$compat_dir"
+```
+
+Require all phases to pass: host-engine seed, patched-engine checkpoint at
+32 MiB, then old-host-engine read-only reopen with identical row count, sum,
+and WAL marker. `compat-reopen` uses a fixed 128 MiB because the old engine
+still expands deletion metadata while reading; this is a file-compatibility
+check, not the low-memory fix gate. Default `checkpoint` and `reopen` phases
+remain fixed at 32 MiB. The fixture is retained in `$compat_dir`.

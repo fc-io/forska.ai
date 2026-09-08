@@ -1,0 +1,10 @@
+diff --git a/src/common/allocator/allocator_jemalloc.cpp b/src/common/allocator/allocator_jemalloc.cpp
+--- a/src/common/allocator/allocator_jemalloc.cpp
++++ b/src/common/allocator/allocator_jemalloc.cpp
+@@ -1,5 +1,6 @@
+ #include "duckdb/common/allocator.hpp"
+ #include "duckdb/common/numeric_utils.hpp"
++#include "duckdb/common/string_util.hpp"
+ 
+ #include <thread>
+ #include <cstdint>

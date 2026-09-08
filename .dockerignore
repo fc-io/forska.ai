@@ -12,6 +12,9 @@
 !containers/apple/
 !containers/apple/Dockerfile
 !containers/apple/start.sh
+!containers/apple/buildDuckdb.sh
+!containers/apple/duckdb-checkpoint-backport.patch
+!containers/apple/duckdb-nonunity-includes.patch
 **/.env*
 **/*.duckdb*
 **/*.sqlite*

@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+cat /usr/local/share/forska-duckdb-provenance.json
 mkdir -p /data/assets /data/local /data/share /data/logs
 setsid "$@" &
 app_pid=$!
