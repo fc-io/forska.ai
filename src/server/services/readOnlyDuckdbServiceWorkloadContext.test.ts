@@ -6,6 +6,9 @@ import {expect, mock, test} from 'bun:test'
 
 import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
 
+type CreateDuckdbInstanceInput = Parameters<
+  (typeof import('../utils/createDuckdbInstance.ts'))['createDuckdbInstance']
+>[0]
 type DuckdbServiceModule = typeof import('../utils/duckdbService.ts')
 type ReadOnlyDuckdbServiceModule = typeof import('./readOnlyDuckdbService.ts')
 
@@ -36,6 +39,14 @@ test('read-only DuckDB workload context records metrics without using the owner 
       ensureCurrentDuckdbOwnerLease: async () => {},
       registerDuckdbOwnerDemotionHandler: () => {},
       releaseCurrentDuckdbOwnerLease: async () => {},
+    }
+  })
+
+  void mock.module(new URL('../utils/createDuckdbInstance.ts', import.meta.url).href, () => {
+    return {
+      createDuckdbInstance: ({create, databasePath, options}: CreateDuckdbInstanceInput) => {
+        return create(databasePath, options)
+      },
     }
   })
 

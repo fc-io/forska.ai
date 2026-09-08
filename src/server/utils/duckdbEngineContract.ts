@@ -1,6 +1,6 @@
 import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
 
-export const duckdbEngineCompatibilityOptions = {legacy_disable_null_type: 'true'}
+export const duckdbEngineCompatibilityOptions = {disabled_optimizers: 'cte_inlining', legacy_disable_null_type: 'true'}
 
 export const assertDuckdbEngineVersion = (actualVersion: string) => {
   const expectedVersion = duckdbDistributionManifest.engine.version

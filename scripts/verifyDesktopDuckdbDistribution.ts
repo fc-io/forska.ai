@@ -37,6 +37,7 @@ if (import.meta.main) {
     'vendor/duckdb/manifest.json',
     'src/server/utils/duckdbEngineContract.ts',
     'src/server/utils/duckdbEngineCompatibility.ts',
+    'src/server/utils/createDuckdbInstance.ts',
   ].map((path) => {
     return assert.equal(
       readFileSync(join(packageRoot, path), 'utf8'),

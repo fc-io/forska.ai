@@ -65,12 +65,15 @@ test.each([
       let probes = 0
       mock.module('@duckdb/node-api', () => ({
         DuckDBConnection: class {},
-        DuckDBInstance: class {
-          static async create() { opens++; return new this() }
+        DuckDBInstance: class MockInstance {
+          static async create() { opens++; return new MockInstance() }
           async connect() {
             return {
               async run() {},
-              async runAndReadAll() {
+              async runAndReadAll(statement) {
+                if (statement.startsWith('SELECT database_name FROM duckdb_databases()')) {
+                  return {getRowObjectsJson: () => [{database_name: 'test'}]}
+                }
                 throw new Error('FATAL Error: database has been invalidated because of a previous fatal error. INTERNAL Error: Vector::Reference BIGINT referenced VARCHAR')
               },
               closeSync() {},

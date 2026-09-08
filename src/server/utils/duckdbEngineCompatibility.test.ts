@@ -84,6 +84,61 @@ test('managed writable, direct read-only, ephemeral and ownerless readers decode
   }
 })
 
+test.each(['Llm', 'Human'])('pinned engine avoids invalid CTE vector references in %s status projection', (kind) => {
+  const root = mkdtempSync(join(tmpdir(), 'forska-alpha-cte-'))
+  const runProjection = (configured: boolean) => {
+    return runIsolated<{error: string | null; rows?: Array<Record<string, unknown>>}>(
+      `
+      const {readFileSync} = await import('node:fs')
+      const {DuckDBInstance} = await import('@duckdb/node-api')
+      const {getDuckdbEngineOptions} = await import('./src/server/utils/duckdbEngineCompatibility.ts')
+      const fixtureRoot = './src/server/utils/duckdbEngineCompatibility/fixtures/'
+      const options = getDuckdbEngineOptions()
+      ${configured ? '' : "options.disabled_optimizers = ''"}
+      const instance = await DuckDBInstance.create(':memory:', options)
+      const connection = await instance.connect()
+      try {
+        await connection.run(readFileSync(fixtureRoot + 'cteInliningSetup.sql', 'utf8'))
+        await connection.run(readFileSync(fixtureRoot + 'cteInlining${kind}Status.sql', 'utf8'))
+        const rows = (await connection.runAndReadAll(\`
+          SELECT llm_status, human_status, llm_has_judgment,
+            CAST(llm_patch_watermark AS INTEGER) AS llm_patch_watermark,
+            CAST(human_patch_watermark AS INTEGER) AS human_patch_watermark,
+            CAST(both_patch_watermark AS INTEGER) AS both_patch_watermark
+          FROM mart.review_article_serving_list_mode_state_v4
+        \`)).getRowObjectsJson()
+        console.log(JSON.stringify({error: null, rows}))
+      } catch (error) {
+        console.log(JSON.stringify({error: error.message}))
+      } finally {
+        connection.closeSync()
+        instance.closeSync()
+      }
+      `,
+      join(root, 'unused.duckdb'),
+    )
+  }
+
+  try {
+    expect(runProjection(false).error).toContain('Vector::Reference used on vector of different type')
+    expect(runProjection(true)).toEqual({
+      error: null,
+      rows: [
+        {
+          llm_status: 'unanswered',
+          human_status: kind === 'Human' ? 'unanswered' : null,
+          llm_has_judgment: false,
+          llm_patch_watermark: 0,
+          human_patch_watermark: 0,
+          both_patch_watermark: 0,
+        },
+      ],
+    })
+  } finally {
+    rmSync(root, {recursive: true, force: true})
+  }
+})
+
 test.each(['preflight', 'checkpoint', 'open'])(
   'legacy WAL incompatibility never retries or quarantines data (%s)',
   (phase) => {

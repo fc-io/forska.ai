@@ -1,5 +1,6 @@
 import {DuckDBInstance} from '@duckdb/node-api'
 
+import {createDuckdbInstance} from './createDuckdbInstance.ts'
 import {
   getDuckdbEngineOptions,
   getDuckdbLegacyWalCompatibilityError,
@@ -29,15 +30,17 @@ export const runEphemeralReadOnlyDuckdbFileJsonQuery = async <T>({
   statement,
   workloadContext,
 }: EphemeralReadOnlyDuckdbFileQueryInput): Promise<T[]> => {
-  const duckdbInstance = await DuckDBInstance.create(databasePath, getReadOnlyOptions(memoryLimit)).catch(
-    (error: unknown) => {
-      if (error instanceof Error && isDuckdbLegacyWalCompatibilityError(error.message)) {
-        throw getDuckdbLegacyWalCompatibilityError(databasePath, error)
-      }
+  const duckdbInstance = await createDuckdbInstance({
+    create: DuckDBInstance.create.bind(DuckDBInstance),
+    databasePath,
+    options: getReadOnlyOptions(memoryLimit),
+  }).catch((error: unknown) => {
+    if (error instanceof Error && isDuckdbLegacyWalCompatibilityError(error.message)) {
+      throw getDuckdbLegacyWalCompatibilityError(databasePath, error)
+    }
 
-      throw error
-    },
-  )
+    throw error
+  })
   const connection = await duckdbInstance.connect()
 
   try {

@@ -28,7 +28,18 @@ The user-facing tarballs belong in the versioned [Forska release](https://github
 
 ## Engine and data compatibility
 
-This is an upstream alpha engine, not an official stable npm release. The released Node bridge requires `legacy_disable_null_type=true`; shared connection setup applies that setting explicitly. New-WAL replay and ordinary checkpoint behavior must be tested, including the unchanged low-memory regression. An incompatible legacy WAL must not be silently deleted during install/startup. Follow the explicit migration/recovery guidance and runtime error before changing existing data.
+This is an upstream alpha engine, not an official stable npm release. Shared connection setup applies two pinned compatibility settings:
+
+- `legacy_disable_null_type=true`: the released Node bridge cannot decode the new untyped NULL vectors.
+- `disabled_optimizers=cte_inlining`: the pinned alpha's CTE inlining can raise native `Vector::Reference` errors in real LLM/human status projections and review-page queries. Only this optimizer pass is disabled; the remaining optimizers and `delim_join_as_cte` retain their normal defaults. Both status-query regressions reproduce on the unconfigured alpha and produce exact expected results with this setting. Disabling `delim_join_as_cte` alone does not fix both cases.
+
+Run `bun test src/server/utils/duckdbEngineCompatibility.test.ts` for scalar/nested NULL, portable CTE negative/positive controls, and WAL compatibility. When upgrading, test the replacement engine with CTE inlining enabled against both retained SQL fixtures. Remove the CTE setting and update the pinned negative-control expectations only after the official engine executes both correctly, then rerun workflow, browser, low-memory checkpoint, and live review-progress gates. Do not retain an obsolete optimizer workaround after that removal gate passes. Retest the NULL setting separately when the binding gains native support.
+
+The same alpha initializes statically linked extensions after opening its primary database. A real application WAL can reference `core_functions`/JSON functions during replay, before that initialization, and incorrectly attempt an unavailable extension download. Every persistent opener therefore uses one up-front lifecycle: initialize an in-memory engine, attach the real DuckDB file, then detach all scratch catalogs before returning the instance. Later connections default to the persistent catalog; read-only access is enforced on the attachment. Startup repair/checkpoint children embed that same initializer, and desktop verification injects its copied package's factory. This does not retry a failed open, download extensions, change the memory budget, or discard WALs.
+
+Run `bun test src/server/utils/createDuckdbInstance.test.ts src/server/utils/createDuckdbInstance.wal.test.ts` for catalog/resource safety and full application migrations plus a killed writer's committed WAL. The regression verifies an offline raw-open negative control, read-only replay without changing either file, generated startup-child replay/checkpoint, and managed owner startup. Remove the bootstrap lifecycle only after a replacement official engine passes direct full-application WAL replay with extension installation disabled, then rerun these lifecycle, desktop/container, and live progress gates.
+
+New-WAL replay and ordinary checkpoint behavior must be tested, including the unchanged low-memory regression. An incompatible legacy WAL must not be silently deleted during install/startup. Follow the explicit migration/recovery guidance and runtime error before changing existing data.
 
 ### Existing databases and WALs
 

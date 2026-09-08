@@ -198,7 +198,10 @@ test('duckdb service preserves explicit manual checkpoints on low-memory workers
               }
             })
 
-            void mock.module('@duckdb/node-api', () => {
+            void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
               class MockConnection {
                 async run(statement) {
                   runStatements.push(statement)
@@ -284,7 +287,10 @@ test('duckdb service serializes owner route reads with maintenance work regardle
               }
             })
 
-            void mock.module('@duckdb/node-api', () => {
+            void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
               class MockConnection {
                 async run() {
                   activeOperations += 1
@@ -385,7 +391,10 @@ test('duckdb service serializes append work with the main queue on low-memory wo
               }
             })
 
-            void mock.module('@duckdb/node-api', () => {
+            void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
               class MockConnection {
                 async run() {}
 
@@ -497,7 +506,10 @@ test.each([true, false])('duckdb recycle barrier drains background work before f
               }
             })
 
-            void mock.module('@duckdb/node-api', () => {
+            void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
               class MockConnection {
                 async run() {}
 
@@ -672,7 +684,10 @@ test('duckdb main transaction blocks append-lane work until commit finishes', ()
               }
             })
 
-            void mock.module('@duckdb/node-api', () => {
+            void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
               class MockConnection {
                 constructor(kind) {
                   this.kind = kind
@@ -810,7 +825,10 @@ test('duckdb append transactions are opt-in and stay serialized with main transa
               }
             })
 
-            void mock.module('@duckdb/node-api', () => {
+            void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
               class MockConnection {
                 constructor(kind) {
                   this.kind = kind
@@ -936,7 +954,10 @@ test('duckdb append transactions roll back failed append-lane work before the ne
               }
             })
 
-            void mock.module('@duckdb/node-api', () => {
+            void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
               class MockConnection {
                 constructor(kind) {
                   this.kind = kind

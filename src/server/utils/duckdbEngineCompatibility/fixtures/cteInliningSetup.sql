@@ -1,0 +1,16 @@
+CREATE SCHEMA app; CREATE SCHEMA mart;
+CREATE TABLE app.project (id VARCHAR, model_id VARCHAR, human_judgment_mode ENUM('prompt','summary'), use_title BOOLEAN, use_abstract BOOLEAN, use_fulltext BOOLEAN, use_fulltext_no_images BOOLEAN);
+INSERT INTO app.project VALUES ('project-1', 'model-1', 'prompt', TRUE, TRUE, FALSE, FALSE);
+CREATE TABLE app.prompt (id VARCHAR, archived BOOLEAN);
+INSERT INTO app.prompt VALUES ('prompt-1', FALSE);
+CREATE TABLE app.project_prompt (project_id VARCHAR, prompt_id VARCHAR, enabled BOOLEAN, archived BOOLEAN);
+INSERT INTO app.project_prompt VALUES ('project-1', 'prompt-1', TRUE, FALSE);
+CREATE TABLE app.judgment (id VARCHAR, article_id VARCHAR, prompt_id VARCHAR, model_id VARCHAR, is_answered BOOLEAN, use_title BOOLEAN, use_abstract BOOLEAN, use_fulltext BOOLEAN, use_fulltext_no_images BOOLEAN, created_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
+CREATE TABLE app.judgment_human (id VARCHAR, project_id VARCHAR, article_id VARCHAR, prompt_id VARCHAR);
+CREATE TABLE app.judgment_human_summary (project_id VARCHAR, article_id VARCHAR, answer VARCHAR);
+CREATE TABLE mart.review_article_serving_base_v4 (project_id VARCHAR, review_config_hash VARCHAR, snapshot_id VARCHAR, article_id VARCHAR, base_generation BIGINT);
+INSERT INTO mart.review_article_serving_base_v4 VALUES ('project-1', 'review-1', 'snapshot-1', 'article-1', '0');
+CREATE TABLE app.review_serving_snapshot_manifest (project_id VARCHAR, snapshot_id VARCHAR, review_config_hash VARCHAR, snapshot_status VARCHAR, component_state_json JSON);
+INSERT INTO app.review_serving_snapshot_manifest VALUES ('project-1', 'snapshot-1', 'review-1', 'active', '{"required": [{"component": "llmStatus", "projectionIdentity": "llmStatus:test"}, {"component": "humanStatus", "projectionIdentity": "humanStatus:test"}], "optional": []}');
+CREATE TABLE mart.review_article_serving_list_mode_state_v4 (project_id VARCHAR, review_config_hash VARCHAR, snapshot_id VARCHAR, article_id VARCHAR, llm_status VARCHAR, human_status VARCHAR, llm_has_judgment BOOLEAN, llm_patch_watermark BIGINT, human_patch_watermark BIGINT, both_patch_watermark BIGINT);
+INSERT INTO mart.review_article_serving_list_mode_state_v4 VALUES ('project-1', 'review-1', 'snapshot-1', 'article-1', 'unanswered', NULL, FALSE, '0', '0', '0');

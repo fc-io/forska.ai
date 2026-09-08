@@ -203,6 +203,9 @@ test('duckdb snapshot creation fails when the pre-copy checkpoint fails', () => 
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run(statement) {
@@ -299,6 +302,9 @@ test('duckdb snapshot close failures still restart the Windows embedded runtime'
         let createCount = 0
         let shouldFailClose = true
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -424,6 +430,9 @@ test('duckdb snapshot restart failure removes the completed Windows snapshot and
         let snapshotPath = null
         let sourceCreateCount = 0
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -736,6 +745,9 @@ test('duckdb service checkpoints before close', () => {
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run(statement) {
@@ -868,6 +880,9 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run(statement) {
@@ -959,12 +974,15 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
     expect(parsed.preflightChildTimeout).toBe(120_000)
     expect(parsed.preflightChildOptions?.legacy_disable_null_type).toBe('true')
     expect(parsed.checkpointChildOptions?.legacy_disable_null_type).toBe('true')
+    expect(parsed.preflightChildOptions?.disabled_optimizers).toBe('cte_inlining')
+    expect(parsed.checkpointChildOptions?.disabled_optimizers).toBe('cte_inlining')
     expect(parsed.checkpointChildOptions?.checkpoint_threshold).toBe(
       parsed.createOptionsHistory[0]?.checkpoint_threshold,
     )
     expect(parsed.createOptionsHistory).toEqual([
       {
         checkpoint_threshold: parsed.createOptionsHistory[0]?.checkpoint_threshold,
+        disabled_optimizers: 'cte_inlining',
         legacy_disable_null_type: 'true',
         memory_limit: '6400MiB',
         preserve_insertion_order: 'false',
@@ -1028,6 +1046,9 @@ test('duckdb service skips proactive startup mutation preflight on low-memory wo
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -1377,6 +1398,9 @@ test('duckdb service preserves pending WAL when an unphased repair marker reques
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -1547,6 +1571,9 @@ test('duckdb service retries stale mutation-probe repair markers before rebuildi
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -1721,6 +1748,9 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -1882,6 +1912,9 @@ test('duckdb service checkpoints replayed WAL before indexed-table startup prefl
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -2519,6 +2552,9 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run(statement) {
@@ -3036,6 +3072,9 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {
@@ -3160,6 +3199,9 @@ test('duckdb service marks judgment job after fatal index-delete import status u
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {
@@ -3293,6 +3335,9 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             constructor(instanceId) {
@@ -3444,6 +3489,9 @@ test('duckdb service marks insert-ignore indexed targets when a duplicate-key tr
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             constructor(instanceId) {
@@ -3595,6 +3643,9 @@ test('duckdb service prefers fatal error table name before stale mutating target
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -3694,6 +3745,9 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -3798,6 +3852,9 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -3952,6 +4009,9 @@ test('duckdb service preserves the WAL when the startup preflight child crashes'
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -4104,6 +4164,9 @@ test('duckdb service starts with replayable WAL when startup checkpoint fails', 
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run(statement) {
@@ -4288,6 +4351,9 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -4452,6 +4518,9 @@ test('duckdb service preserves the WAL after lock retries reveal a native replay
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -4654,6 +4723,9 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             async run() {}
@@ -5284,6 +5356,9 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             constructor(instanceId) {
@@ -5396,6 +5471,9 @@ test('duckdb service restarts and retries after a fatal rollback OOM', () => {
           }
         })
 
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
         void mock.module('@duckdb/node-api', () => {
           class MockConnection {
             constructor(instanceId) {
