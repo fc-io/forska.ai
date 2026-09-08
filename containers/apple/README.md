@@ -137,9 +137,77 @@ ARM64 image. With an isolated database, Chromium rendered the UI, API and owner
 readiness returned 200, and `/api/comparison-projects` returned 200 through Vite.
 Memory was about 1.7 GiB of the configured 8 GiB.
 
-The existing approximately 123 GB primary database is **not verified at 8 GiB**:
-its startup checkpoint exhausted the 4GB DuckDB budget on one run (the owner
-subsequently became ready), and another run became unresponsive near the VM
-memory limit. DB/WAL and boot/application logs were preserved locally. See
-`OOM_ERRORS.md`; neither the checkpoint OOM nor the reported Windows
-conflict-resolution crash is claimed fixed by this container work.
+The unpatched engine exhausted its 4GB checkpoint budget on the existing
+approximately 123 GB primary database. The container-only native backport below
+fixes the reproduced deletion-metadata allocation problem: an ordinary full
+checkpoint on the preserved real-DB clone passed at the unchanged literal
+`4GB` DuckDB / `8G` VM limits in 13 seconds, with process RSS about 2.11 GB.
+
+The patched app also ran against the original host DB: API, DuckDB owner and
+judge readiness returned 200. On an active project, completed rebuild chunks advanced
+68 → 120 and pending chunks fell 317 → 265 between 13:25:12 and 13:26:36 UTC.
+`lastProgressedAt` advanced; failed/quarantined/expired chunk counts stayed zero.
+This is real current-DB progress, not just a readiness smoke test.
+
+Chromium loaded 100 article rows without page errors, and all three readiness
+checks returned 200 again around 13:29 UTC. Normal bounded-loop runtime recycling
+occurred twice after exceeding the 3 GB RSS threshold; an owner-not-ready 502
+was observed during recycling and recovered. No OOM/process crash was observed,
+but uninterrupted request availability across recycling is not established.
+The test stack was then stopped cleanly with SIGTERM.
+
+A disposable host 1.5.1 → patched-container checkpoint → host 1.5.1 read-only
+roundtrip retained exact rows, sum and WAL marker. The old-engine compatibility
+read uses 128 MiB; patched checkpoint and fresh-process reopen gates stay at
+32 MiB. The patched image passed that regression and all 13 upstream native
+cases; five launcher tests, focused lint and the web build also passed.
+Reproduction commands are in [TESTS.md](../../TESTS.md#apple-container-launcher).
+DB/WAL and logs remain preserved. See the
+[investigation record](../../docs/apple-container-checkpoint-investigation.md)
+and `OOM_ERRORS.md`. The Windows conflict-resolution crash has **not** been
+reproduced or proven fixed; host web/desktop native dependencies are unchanged.
+
+## Container-only DuckDB checkpoint backport
+
+The container builds DuckDB **1.5.5** from the official source commit
+`d8cdaa33fda8df955cc76ef58a280f68f4cd43fa`, using a SHA-256-verified archive,
+with the checked-in adaptation of upstream fixes
+[#23964](https://github.com/duckdb/duckdb/pull/23964) and
+[#24336](https://github.com/duckdb/duckdb/pull/24336). These fixes compact committed
+row-deletion metadata used by checkpointing. The patch is adapted to the stable
+1.5.5 storage interfaces; it is not a clean cherry-pick from upstream main.
+
+The source stage builds `libduckdb.so` with the official bundled-extension
+configuration (ICU, JSON, Parquet and autocomplete) and replaces the Linux ARM64
+node-binding package's engine library. Node's C-API binding remains installed
+from `bun.lock`. No alternate engine or silent fallback remains in the image.
+The image build checks the loaded engine version. Container startup prints
+`/usr/local/share/forska-duckdb-provenance.json`, including source commit,
+upstream fix commits, local backport SHA-256 and resulting library SHA-256.
+
+**This changes the DuckDB engine as well as the operating environment.** Host web
+and desktop dependencies remain unchanged. Do not attribute a successful patched
+container run solely to RAM, or call it an identical-engine reproduction of the
+Windows failure. Unbundled extensions may have their own compatibility needs.
+
+The first source build is substantially slower than downloading a prebuilt
+engine. It uses one compiler job with non-unity compilation and LLVM lld to bound
+build/link memory; build layers are cached. Apple's builder VM has its own memory budget,
+independent of the app's default 8 GiB. For example, a newly created builder can be started with
+`container builder start --cpus 4 --memory 8G`. Existing builders retain their
+original resources even when start flags are supplied; inspect
+`container builder status --format json` to confirm the actual budget. Do not
+delete an existing builder merely to change its budget: that can discard build
+cache. This is a build budget, not a change to the application's memory cap.
+
+The non-unity build also includes a separate one-line header fix for upstream
+1.5.5's jemalloc translation unit (`StringUtil` needs its direct include). It
+does not disable or change the allocator. Its checksum is recorded separately
+in the provenance manifest. BuildKit keeps both the Ninja object directory and
+a bounded 2 GiB ccache between attempts, so a later compile/test failure does
+not discard all completed compilation. The Ninja build subdirectory is derived automatically from the source archive
+and both patch SHA-256 values: adding or removing a patch hunk selects a new
+object directory, even when an unpatched source file has an older timestamp.
+Compiler/version/flag/header changes remain subject to Ninja/ccache dependency
+validation. ccache independently keys compiled objects by their contents and
+compiler inputs.

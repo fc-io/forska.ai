@@ -636,3 +636,12 @@ Entry format:
 - Cause: The refill path sorted a broad summary-priority candidate bucket by article activity before applying the small queue limit.
 - Fix: Queue-only raw summary scans now stage bounded `summary_article_candidate` IDs and order by article ID before joining dirty/scope article tables.
 - Verification: `bun test src/services/olap/duckdbOlap.test.ts`; `bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts`; scoped ESLint.
+
+## 2026-09-08 - Apple-container startup WAL checkpoint
+
+- Observed with the existing primary DB in an 8 GiB Linux ARM64 VM: `FATAL Error: Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (3.9 GiB/3.9 GiB used)`.
+- Cause: Ordinary checkpoint initialization loads historical deleted-row metadata. Stable 1.5.1/1.5.5 expand compact masks into retained per-row allocations (`BASE_TABLE` grew to about 3.84 GB while ART stayed near 125 MB). Disabling optional vacuum tasks did not avoid that load.
+- Fix: Container-only pinned DuckDB 1.5.5 source build with upstream #23964/#24336 backported: compact delete masks/constants and snapshot-safe allocation release. No WAL deletion, checkpoint bypass or memory-cap increase; host web/desktop dependencies remain unchanged.
+- Verification: Preserved real-DB clone ordinary full checkpoint passed at literal `4GB` / `8G` VM in 13 seconds, RSS about 2.11 GB. Original-DB API/owner/judge readiness returned 200; active-project completed chunks advanced 68→120 and pending 317→265 over 84 seconds with no failed/quarantined/expired chunks. Host 1.5.1→patched checkpoint→host 1.5.1 read-only fixture compatibility, all 13 upstream cases and `bun scripts/duckdbCheckpointMemoryRegression.ts` (32 MiB checkpoint/reopen) passed; see `TESTS.md` and `docs/apple-container-checkpoint-investigation.md`.
+- Live limitation: Scheduled bounded-loop recycling caused a transient owner-not-ready 502 before readiness recovered; no OOM/process crash was observed. Continuous availability during recycling is not established. Browser loaded 100 rows; stack stopped cleanly with SIGTERM.
+- Recovery: Preserve DB/WAL, logs and stale lease evidence; stop all owners before copying/restoring and keep host/container access exclusive. Judge-journal lock checks address a separate startup blocker. The Windows conflict-resolution crash remains unproven and is not claimed fixed.
