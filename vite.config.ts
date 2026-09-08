@@ -1,7 +1,6 @@
-import path from 'path'
-
 import tailwindcss from '@tailwindcss/vite'
 import {tanstackRouter} from '@tanstack/router-plugin/vite'
+import path from 'path'
 import {defineConfig} from 'vite'
 import solid from 'vite-plugin-solid'
 
@@ -25,7 +24,12 @@ export default defineConfig({
     tailwindcss(),
   ],
   resolve: {alias: {'~': path.resolve(__dirname, './src')}},
-  server: {port: env.VITE_PORT, strictPort: false, proxy: {'/api': {target: apiProxyTarget, changeOrigin: true}}},
+  server: {
+    host: process.env.VITE_HOST,
+    port: env.VITE_PORT,
+    strictPort: false,
+    proxy: {'/api': {target: apiProxyTarget, changeOrigin: true}},
+  },
   build: {target: 'esnext'},
   test: {
     environment: 'happy-dom',
