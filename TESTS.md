@@ -26,6 +26,10 @@ For every engine, binding, or native-package update:
 - Run `bun test src/server/utils/duckdbEngineCompatibility.test.ts --timeout 120000`
   for all managed reader/writer NULL paths, ordinary 1.5.1 WAL migration, and
   incompatible-WAL non-deletion checks. This gate runs on each native CI target.
+- Run `bun test src/server/utils/duckdbWalRecoverySafety.test.ts --timeout 120000`
+  to verify fatal-query recovery leaves real committed WAL bytes untouched when
+  reopen fails with engine, extension, memory, or native-process errors, and that
+  an independent native reopen still reads the committed data.
 - Run `bun test scripts/verifyDuckdbDistribution scripts/verifyDesktopDuckdbDistribution.test.ts --timeout 120000`
   for copied-package containment, native-library symlink rejection, and target-only
   pruning. Existing mock-heavy runtime suites require the per-file runner

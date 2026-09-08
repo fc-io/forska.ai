@@ -1276,7 +1276,7 @@ test('duckdb service skips compact unassessed queue startup repair before compac
   }
 })
 
-test('duckdb service keeps targeted startup preflight recovery on low-memory workers', () => {
+test('duckdb service preserves pending WAL when an unphased repair marker requests recovery', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-low-memory-preflight-marker-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
   const recoveryDirectory = duckdbPath + '.startup-recovery'
@@ -1408,8 +1408,10 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-preflight-marker-test=' + Date.now())
-        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
-        console.log(JSON.stringify({activeMarkerExists: existsSync(activeRepairSpecPath), checkpointCount, createCount, preflightCount, preflightSpecsHistory, recoveryFiles: readdirSync(${JSON.stringify(recoveryDirectory)}), repairCount, rows, walExists: existsSync(walPath)}))
+        let errorMessage = null
+        try { await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value') }
+        catch (error) { errorMessage = error.message }
+        console.log(JSON.stringify({activeMarkerExists: existsSync(activeRepairSpecPath), checkpointCount, createCount, preflightCount, preflightSpecsHistory, recoveryFiles: readdirSync(${JSON.stringify(recoveryDirectory)}), repairCount, errorMessage, walExists: existsSync(walPath)}))
         await duckdbService.closeDuckdbService()
       `,
     ],
@@ -1439,39 +1441,23 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
 
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
-    expect(parsed.preflightCount).toBe(1)
-    expect(
-      parsed.preflightSpecsHistory[0]?.map((spec) => {
-        return `${spec.schemaName}.${spec.tableName}`
-      }),
-    ).toContain('app.review_serving_dirty_work')
-    expect(parsed.activeMarkerExists).toBe(false)
+    expect(parsed.preflightCount).toBe(0)
+    expect(parsed.createCount).toBe(0)
+    expect(parsed.activeMarkerExists).toBe(true)
     expect(parsed.checkpointCount).toBe(0)
-    expect(parsed.repairCount).toBe(1)
-    expect(
-      parsed.recoveryFiles.filter((fileName) => {
-        return fileName.endsWith('.pre-repair.duckdb')
-      }),
-    ).toHaveLength(1)
-    expect(
-      parsed.recoveryFiles.filter((fileName) => {
-        return fileName.endsWith('.recovery.json')
-      }),
-    ).toHaveLength(1)
-    expect(parsed.recoveryFiles).toContain('operator-note.json')
-    expect(
-      parsed.recoveryFiles.some((fileName) => {
-        return fileName.startsWith(staleRecoveryPathPart)
-      }),
-    ).toBe(false)
-    expect(
-      parsed.recoveryFiles.some((fileName) => {
-        return fileName.endsWith('.failed-replay.wal')
-      }),
-    ).toBe(false)
-    expect(parsed.walExists).toBe(false)
-    expect(parsed.createCount).toBe(1)
-    expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.repairCount).toBe(0)
+    expect(parsed.errorMessage).toContain('does not establish WAL corruption')
+    expect(parsed.walExists).toBe(true)
+    expect(readFileSync(duckdbPath, 'utf8')).toBe('database')
+    expect(readFileSync(`${duckdbPath}.wal`, 'utf8')).toBe('committed-wal')
+    expect(parsed.recoveryFiles.sort()).toEqual(
+      [
+        `${staleRecoveryPathPart}.pre-repair.duckdb`,
+        `${staleRecoveryPathPart}.recovery.json`,
+        'operator-note.json',
+        'startup-preflight-active-table.json',
+      ].sort(),
+    )
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -3908,7 +3894,7 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
   }
 })
 
-test('duckdb service preflights startup WAL replay in a child before opening in-process', () => {
+test('duckdb service preserves the WAL when the startup preflight child crashes', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-preflight-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
@@ -3997,7 +3983,9 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-test=' + Date.now())
-        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        let errorMessage = null
+        try { await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value') }
+        catch (error) { errorMessage = error.message }
         const recoveryDirectory = duckdbPath + '.startup-recovery'
         const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
         const manifestName = recoveryFiles.find((fileName) => fileName.endsWith('.recovery.json'))
@@ -4008,7 +3996,7 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
           preflightCount,
           preflightSpecsHistory,
           recoveryFiles,
-          rows,
+          errorMessage,
           walExists: existsSync(duckdbPath + '.wal'),
         }))
         await duckdbService.closeDuckdbService()
@@ -4038,33 +4026,15 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
 
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
-    expect(parsed.preflightCount).toBe(2)
-    expect(parsed.preflightSpecsHistory[0]).toEqual([])
-    expect(
-      parsed.preflightSpecsHistory[1]?.map((spec) => {
-        return `${spec.schemaName}.${spec.tableName}`
-      }),
-    ).toContain('app.review_rebuild_request')
-    expect(parsed.createCount).toBe(1)
-    expect(parsed.rows).toEqual([{value: 1}])
-    expect(parsed.walExists).toBe(false)
-    expect(parsed.manifest?.recovery).toBe('wal-quarantine-retry-from-last-checkpoint')
-    expect(parsed.manifest?.error).toContain('native WAL replay crash')
-    expect(
-      parsed.recoveryFiles.filter((fileName) => {
-        return fileName.endsWith('.duckdb')
-      }),
-    ).toHaveLength(1)
-    expect(
-      parsed.recoveryFiles.filter((fileName) => {
-        return fileName.endsWith('.failed-replay.wal')
-      }),
-    ).toHaveLength(1)
-    expect(
-      parsed.recoveryFiles.filter((fileName) => {
-        return fileName.endsWith('.recovery.json')
-      }),
-    ).toHaveLength(1)
+    expect(parsed.preflightCount).toBe(1)
+    expect(parsed.createCount).toBe(0)
+    expect(parsed.errorMessage).toContain('does not establish WAL corruption')
+    expect(parsed.errorMessage).toContain('native WAL replay crash')
+    expect(parsed.walExists).toBe(true)
+    expect(parsed.recoveryFiles).toEqual([])
+    expect(parsed.manifest).toBeNull()
+    expect(readFileSync(duckdbPath, 'utf8')).toBe('database')
+    expect(readFileSync(`${duckdbPath}.wal`, 'utf8')).toBe('wal')
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -4409,7 +4379,7 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
   }
 })
 
-test('duckdb service preserves recovery attempts after startup WAL preflight lock retries', () => {
+test('duckdb service preserves the WAL after lock retries reveal a native replay crash', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-preflight-lock-recovery-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
@@ -4513,7 +4483,9 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-lock-recovery-test=' + Date.now())
-        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        let errorMessage = null
+        try { await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value') }
+        catch (error) { errorMessage = error.message }
         const recoveryDirectory = duckdbPath + '.startup-recovery'
         const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
         const manifestName = recoveryFiles.find((fileName) => fileName.endsWith('.recovery.json'))
@@ -4523,7 +4495,7 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
           manifest,
           preflightCount,
           recoveryFiles,
-          rows,
+          errorMessage,
           walExists: existsSync(duckdbPath + '.wal'),
         }))
         await duckdbService.closeDuckdbService()
@@ -4555,22 +4527,15 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
 
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
-    expect(parsed.preflightCount).toBe(6)
-    expect(parsed.createCount).toBe(1)
-    expect(parsed.rows).toEqual([{value: 1}])
-    expect(parsed.walExists).toBe(false)
-    expect(parsed.manifest?.recovery).toBe('wal-quarantine-retry-from-last-checkpoint')
-    expect(parsed.manifest?.error).toContain('native WAL replay crash after lock cleared')
-    expect(
-      parsed.recoveryFiles.filter((fileName) => {
-        return fileName.endsWith('.duckdb')
-      }),
-    ).toHaveLength(1)
-    expect(
-      parsed.recoveryFiles.filter((fileName) => {
-        return fileName.endsWith('.failed-replay.wal')
-      }),
-    ).toHaveLength(1)
+    expect(parsed.preflightCount).toBe(5)
+    expect(parsed.createCount).toBe(0)
+    expect(parsed.errorMessage).toContain('does not establish WAL corruption')
+    expect(parsed.errorMessage).toContain('native WAL replay crash after lock cleared')
+    expect(parsed.walExists).toBe(true)
+    expect(parsed.recoveryFiles).toEqual([])
+    expect(parsed.manifest).toBeNull()
+    expect(readFileSync(duckdbPath, 'utf8')).toBe('database')
+    expect(readFileSync(`${duckdbPath}.wal`, 'utf8')).toBe('wal')
   } finally {
     removePathIfExists(dataRoot)
   }
