@@ -3,6 +3,9 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
+import {Effect} from 'effect'
+
+import {releaseStoppedServerLocks} from '../../../scripts/releaseStoppedServerLocks.ts'
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
@@ -203,6 +206,7 @@ test('duckdb shutdown hook skips checkpoint while queued work is active', async 
 
 test('duckdb shutdown hook skips checkpoint and native close under low-memory maintenance profile', async () => {
   const duckdbPath = join(tmpdir(), `f1-duckdb-low-memory-shutdown-${Date.now()}.duckdb`)
+  const processStartedAt = new Date().toISOString()
   const childProcess = globalThis.Bun.spawn(
     [
       'bun',
@@ -246,6 +250,16 @@ test('duckdb shutdown hook skips checkpoint and native close under low-memory ma
     expect(stderr).not.toContain('instance close should not run under low-memory runtime')
     expect(stderr).not.toContain('failed to checkpoint before shutdown')
     expect(existsSync(`${duckdbPath}.duckdb-owner.lock`)).toBe(true)
+    await Effect.runPromise(
+      releaseStoppedServerLocks({
+        pid: childProcess.pid,
+        processStartedAt,
+        exitedAt: new Date().toISOString(),
+        role: 'maintenance',
+        envValues: {DUCKDB_PATH: duckdbPath},
+      }),
+    )
+    expect(existsSync(`${duckdbPath}.duckdb-owner.lock`)).toBe(false)
   } finally {
     if (childProcess.exitCode === null) {
       childProcess.kill('SIGKILL')

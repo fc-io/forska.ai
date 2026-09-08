@@ -509,12 +509,12 @@ export const dataSourcesRoutes = new Elysia()
         return part !== null
       })
 
-      const updated = (await getAppDatabaseService().transaction(
+      const updated = await getAppDatabaseService().transaction(
         async (tx) => {
           return updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
         },
         getDataSourcesWorkloadContext({operation: 'updateTransaction'}),
-      )) as DataSourceRow | null
+      )
 
       if (!updated) {
         throw new Error('Data source not found')
@@ -536,7 +536,7 @@ export const dataSourcesRoutes = new Elysia()
     },
   )
   .delete('/api/datasources/:id', async ({params}) => {
-    const archived = (await getAppDatabaseService().transaction(
+    const archived = await getAppDatabaseService().transaction(
       async (tx) => {
         return updateDataSourceTx(tx, {
           dataSourceId: params.id,
@@ -544,7 +544,7 @@ export const dataSourcesRoutes = new Elysia()
         })
       },
       getDataSourcesWorkloadContext({operation: 'archiveTransaction'}),
-    )) as DataSourceRow | null
+    )
 
     if (!archived) {
       throw new Error('Data source not found')

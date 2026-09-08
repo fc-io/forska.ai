@@ -1491,7 +1491,7 @@ export const projectsRoutes = new Elysia()
         throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
       }
 
-      const newProject = (await getAppDatabaseService().transaction(async (tx) => {
+      const newProject = await getAppDatabaseService().transaction(async (tx) => {
         const newProjectId = crypto.randomUUID()
         const [createdProject] = await tx.queryJson<{
           id: string
@@ -1672,7 +1672,7 @@ export const projectsRoutes = new Elysia()
         })
 
         return getProjectValue(createdProject)
-      })) as ReturnType<typeof getProjectValue>
+      })
 
       return {data: newProject}
     },
@@ -1718,9 +1718,9 @@ export const projectsRoutes = new Elysia()
         return part !== null
       })
 
-      const updatedProject = (await getAppDatabaseService().transaction(async (tx) => {
+      const updatedProject = await getAppDatabaseService().transaction(async (tx) => {
         return updateProjectTx(tx, {projectId: params.id, updateParts})
-      })) as ProjectRow | null
+      })
 
       if (!updatedProject) {
         throw new Error('Project not found')
@@ -2364,7 +2364,7 @@ export const projectsRoutes = new Elysia()
       modelId: sourceProject.modelId,
     })
 
-    const result = (await getAppDatabaseService().transaction(async (tx) => {
+    const result = await getAppDatabaseService().transaction(async (tx) => {
       const clonedProjectId = crypto.randomUUID()
       const [clonedProject] = await tx.queryJson<{
         id: string
@@ -2619,7 +2619,7 @@ export const projectsRoutes = new Elysia()
       })
 
       return getProjectValue(clonedProject)
-    })) as ReturnType<typeof getProjectValue>
+    })
 
     return {data: result}
   })

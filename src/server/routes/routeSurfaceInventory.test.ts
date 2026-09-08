@@ -8,6 +8,7 @@ import {duckdbOwnerConnectionsRoutes} from './DuckdbOwnerConnectionsRoutes.ts'
 import {judgmentDispatchTelemetryRoutes} from './JudgmentDispatchTelemetryRoutes.ts'
 import {getProductApiRoutes} from './productApiRoutes.ts'
 import {publicRouteSurfaceGatedCategories} from './publicRouteSurfaceGate.ts'
+import {reviewServingStatusRoutes} from './reviewServingStatusRoutes.ts'
 import {
   getRouteSurfaceRouteKey,
   routeSurfaceEntrypoints,
@@ -15,7 +16,6 @@ import {
   routeSurfaceRoutes,
 } from './routeSurfaceInventory.ts'
 import {runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
-import {reviewServingStatusRoutes} from './reviewServingStatusRoutes.ts'
 
 type MountedRoute = {method: string; path: string}
 type SourceFile = {path: string; source: string}

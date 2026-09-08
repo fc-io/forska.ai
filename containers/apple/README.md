@@ -38,9 +38,13 @@ container stop --signal SIGTERM --time 60 forska-dev-8gb
 ```
 
 Ctrl-C requests SIGTERM shutdown with a 60-second grace period. The entrypoint
-forwards termination to its app process group and waits for exit. The existing
-low-memory app shutdown path may retain leases; after a stopped-VM verification,
-preserve stale lease evidence before switching back to host-DB mode. The disposable container is removed
+forwards termination to its app process group and waits for exit. The supervisor
+removes its stopped children's DuckDB-owner and judge-journal leases only after
+confirming process exit, matching the host/PID and acquisition time to that child.
+The low-memory owner keeps its lease until exit; cleanup does not force a native
+checkpoint/close or remove the WAL. A killed VM/supervisor can still leave a
+lease: verify the VM is stopped and preserve stale lease evidence before switching
+back to host-DB mode. The disposable container is removed
 on exit; the image, builder, container service and named volume remain. An
 existing container with the same name is not automatically deleted or replaced.
 

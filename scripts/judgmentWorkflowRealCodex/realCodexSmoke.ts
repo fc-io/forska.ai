@@ -13,6 +13,7 @@ type Environment = Record<string, string | undefined>
 export const realCodexOptInEnvironmentVariable = 'FORSKA_RUN_REAL_CODEX_SMOKE'
 export const realCodexPinnedModel = 'gpt-5.6-luna'
 export const realCodexPinnedThinking = 'low'
+export const realCodexPromptType = "'yes' | 'no'"
 export const realCodexOverallTimeoutMs = 20 * 60 * 1_000
 export const realCodexMaximumRecoverableAttemptsPerArticle =
   maximumProviderAttemptsPerJudgeDispatch * (1 + maxRecoverablePromptExtraRetries)

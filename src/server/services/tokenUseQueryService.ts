@@ -496,7 +496,7 @@ const insertTokenUse = async (values: Record<string, unknown>) => {
     }
 
     return tokenUse
-  }, tokenUseInsertWorkloadContext) as Promise<TokenUseRecord | null>
+  }, tokenUseInsertWorkloadContext)
 }
 
 const insertTokenUseOnce = async (values: Record<string, unknown>) => {
@@ -522,7 +522,7 @@ const insertTokenUseOnce = async (values: Record<string, unknown>) => {
     await projectRequestAttemptCloseoutsForTokenUseValue(tx, existingValue)
 
     return existingValue
-  }, tokenUseInsertOnceWorkloadContext) as Promise<TokenUseRecord | null>
+  }, tokenUseInsertOnceWorkloadContext)
 }
 
 const getLargestSingleRequestRows = async (orderColumn: 'total_prompt_tokens' | 'total_completion_tokens') => {

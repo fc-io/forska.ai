@@ -539,7 +539,7 @@ const rebuildRequestAttemptCloseoutsForMaintenanceTx = async ({
 const rebuildRequestAttemptCloseoutsForMaintenance = async (
   input: RequestAttemptCloseoutMaintenanceRebuildInput,
 ): Promise<RequestAttemptCloseoutRebuildResult> => {
-  const runner = (input.runner ?? getAppDatabaseService()) as RequestAttemptCloseoutDatabaseRunner
+  const runner = input.runner ?? getAppDatabaseService()
   const batchSize = getPositiveBatchSize(input.batchSize)
 
   if (input.tokenUseWritersStopped !== true || input.cleanupDisabled !== true) {
@@ -558,7 +558,7 @@ const rebuildRequestAttemptCloseoutsForMaintenance = async (
 const rebuildRequestAttemptCloseoutsOnline = async (
   input: RequestAttemptCloseoutOnlineRebuildInput,
 ): Promise<RequestAttemptCloseoutRebuildResult> => {
-  const runner = (input.runner ?? getAppDatabaseService()) as RequestAttemptCloseoutDatabaseRunner
+  const runner = input.runner ?? getAppDatabaseService()
   const batchSize = getPositiveBatchSize(input.batchSize)
   const highWaterMark = await getRequestAttemptCloseoutHighWaterMark(runner)
   const stagingTableName = getRequestAttemptCloseoutStagingTableName()

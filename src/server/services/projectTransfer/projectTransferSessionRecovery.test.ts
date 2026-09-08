@@ -433,6 +433,102 @@ test('project transfer recovery marks terminal cleanup and prioritizes stale act
   expect(result.afterThirdStates).toEqual(result.afterFirstStates)
 })
 
+test('project transfer recovery prioritizes active imports and exports across bounded terminal backlogs', () => {
+  const result = runRecoveryScript<{
+    afterFirstStates: Record<string, string>
+    finalStates: Record<string, string>
+    finalTempState: Record<string, boolean>
+    firstResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    subsequentResults: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}[]
+    tempAfterFirst: Record<string, boolean>
+  }>(`
+    const sessions = [
+      {direction: 'import', id: 'terminal-import-a', state: 'completed'},
+      {direction: 'import', id: 'terminal-import-b', state: 'completed'},
+      {direction: 'import', id: 'terminal-import-c', state: 'completed'},
+      {direction: 'export', id: 'terminal-export-a', state: 'failed'},
+      {direction: 'export', id: 'terminal-export-b', state: 'failed'},
+      {direction: 'export', id: 'terminal-export-c', state: 'failed'},
+      {direction: 'import', id: 'stale-import', state: 'queued'},
+      {direction: 'export', id: 'stale-export', state: 'ready'},
+    ]
+    const getArtifactPath = (session) => {
+      return session.direction === 'import'
+        ? getProjectTransferImportTempLayout(session.id).uploadPath
+        : getProjectTransferExportTempLayout(session.id).packagePath
+    }
+    await Promise.all(sessions.map(async (session) => {
+      await sessionRepository.createProjectTransferSession({
+        ...session,
+        expiresAt: session.id.startsWith('terminal') ? expiredAt : new Date('2026-05-21T11:00:00.000Z'),
+        now,
+      })
+      await writeRuntimeFile(getArtifactPath(session))
+    }))
+    const getTempState = async () => {
+      return Object.fromEntries(await Promise.all(sessions.map(async (session) => {
+        return [session.id, await fileExists(getArtifactPath(session))]
+      })))
+    }
+    const runBatch = () => recovery.runProjectTransferStartupRecovery({
+      batchSize: 2,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const firstResult = await runBatch()
+    const afterFirstStates = await getStates()
+    const tempAfterFirst = await getTempState()
+    const subsequentResults = [await runBatch(), await runBatch(), await runBatch(), await runBatch()]
+    const finalStates = await getStates()
+    const finalTempState = await getTempState()
+
+    console.log(JSON.stringify({
+      afterFirstStates,
+      finalStates,
+      finalTempState,
+      firstResult,
+      subsequentResults,
+      tempAfterFirst,
+    }))
+  `)
+
+  expect(result.firstResult).toMatchObject({
+    cleanupTempArtifactCount: 2,
+    expiredSessionCount: 2,
+    scannedSessionCount: 2,
+  })
+  expect(result.afterFirstStates).toEqual({
+    'stale-export': 'expired',
+    'stale-import': 'expired',
+    'terminal-export-a': 'failed',
+    'terminal-export-b': 'failed',
+    'terminal-export-c': 'failed',
+    'terminal-import-a': 'completed',
+    'terminal-import-b': 'completed',
+    'terminal-import-c': 'completed',
+  })
+  expect(result.tempAfterFirst).toEqual({
+    'stale-export': false,
+    'stale-import': false,
+    'terminal-export-a': true,
+    'terminal-export-b': true,
+    'terminal-export-c': true,
+    'terminal-import-a': true,
+    'terminal-import-b': true,
+    'terminal-import-c': true,
+  })
+  expect(result.subsequentResults).toMatchObject([
+    {cleanupTempArtifactCount: 2, expiredSessionCount: 0, scannedSessionCount: 2},
+    {cleanupTempArtifactCount: 2, expiredSessionCount: 0, scannedSessionCount: 2},
+    {cleanupTempArtifactCount: 2, expiredSessionCount: 0, scannedSessionCount: 2},
+    {cleanupTempArtifactCount: 0, expiredSessionCount: 0, scannedSessionCount: 0},
+  ])
+  expect(result.finalStates).toEqual(result.afterFirstStates)
+  expect(Object.values(result.finalTempState)).toEqual(Array<boolean>(8).fill(false))
+})
+
 test('project transfer recovery prunes expired terminal-cleaned session rows', () => {
   const result = runRecoveryScript<{
     recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}

@@ -1,26 +1,25 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
+const testDirectory = createScriptTestDirectory('unquarantineDirtyRefreshArticle')
+
+afterAll(testDirectory.cleanup)
 
 const defaultEnv = {
   ...process.env,
+  DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39215',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
   SERVER_DUCKDB_OWNER_URL: '',
   SERVER_ROLE: 'maintenance-worker',
   VITE_PORT: '39925',
-}
-
-const removePathIfExists = (path: string) => {
-  if (existsSync(path)) {
-    rmSync(path, {force: true, recursive: true})
-  }
 }
 
 const getLastJsonLine = (output: string) => {
@@ -71,28 +70,20 @@ const getCliTestScript = (body: string) => {
 
 const runCliTestScript = <T>(body: string) => {
   const duckdbPath = join(
-    projectRoot,
-    '.tmp',
+    testDirectory.path,
     `unquarantine-dirty-refresh-article-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`,
   )
-
-  removePathIfExists(dirname(duckdbPath))
 
   const result = globalThis.Bun.spawnSync(['bun', '-e', getCliTestScript(body)], {
     cwd: projectRoot,
     env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
   })
 
-  try {
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr.toString() || result.stdout.toString() || 'unquarantine CLI test failed')
-    }
-
-    return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
-  } finally {
-    removePathIfExists(dirname(duckdbPath))
-    removePathIfExists('/tmp/duckdb-temp')
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'unquarantine CLI test failed')
   }
+
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
 }
 
 test('unquarantine dirty-refresh article explicitly releases parked state for retry', () => {
@@ -241,7 +232,7 @@ test('unquarantine dirty-refresh article explicitly releases parked state for re
 test('unquarantine dirty-refresh article blocks without legacy admin acknowledgement', () => {
   const runScript = globalThis.Bun.spawnSync(
     ['bun', 'scripts/unquarantineDirtyRefreshArticle.ts', '--article-id=unused-article'],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused-unquarantine-ack.duckdb')}},
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: join(testDirectory.path, 'unused-unquarantine-ack.duckdb')}},
   )
 
   expect(runScript.exitCode).toBe(1)

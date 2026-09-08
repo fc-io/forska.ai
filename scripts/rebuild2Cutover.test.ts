@@ -1,13 +1,18 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
+const testDirectory = createScriptTestDirectory('rebuild2Cutover')
+
+afterAll(testDirectory.cleanup)
 const defaultEnv = {
   ...process.env,
+  DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39213',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
@@ -35,20 +40,11 @@ const getLastJsonLine = (output: string) => {
   return lastLine
 }
 
-const removePathIfExists = (path: string) => {
-  if (existsSync(path)) {
-    rmSync(path, {force: true, recursive: true})
-  }
-}
-
 const runCutoverScript = <T>(body: string) => {
   const duckdbPath = join(
-    projectRoot,
-    '.tmp',
+    testDirectory.path,
     `rebuild2-cutover-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`,
   )
-
-  removePathIfExists(dirname(duckdbPath))
 
   const result = globalThis.Bun.spawnSync(
     [
@@ -69,16 +65,11 @@ const runCutoverScript = <T>(body: string) => {
     {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
-  try {
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr.toString() || result.stdout.toString() || 'rebuild2 cutover test failed')
-    }
-
-    return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
-  } finally {
-    removePathIfExists(dirname(duckdbPath))
-    removePathIfExists('/tmp/duckdb-temp')
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'rebuild2 cutover test failed')
   }
+
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
 }
 
 test('package exposes the rebuild2 cutover command', async () => {

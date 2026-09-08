@@ -379,7 +379,7 @@ const getStaleProjectTransferSessions = async ({
       ),
       expired_import AS (
         SELECT
-          4 AS recoveryPriority,
+          CASE WHEN state IN (${terminalStateListSql}) THEN 6 ELSE 4 END AS recoveryPriority,
           direction,
           id,
           owner_token AS ownerToken,
@@ -392,12 +392,12 @@ const getStaleProjectTransferSessions = async ({
         WHERE direction = 'import'
           AND expires_at <= ${getTimestampLiteral(now)}
           AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
-        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        ORDER BY recoveryPriority ASC, recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
         LIMIT ${batchSize}
       ),
       stale_export_session AS (
         SELECT
-          5 AS recoveryPriority,
+          CASE WHEN state IN (${terminalStateListSql}) THEN 6 ELSE 5 END AS recoveryPriority,
           direction,
           id,
           owner_token AS ownerToken,
@@ -413,7 +413,7 @@ const getStaleProjectTransferSessions = async ({
             OR (state = 'queued' AND owner_token IS NULL AND updated_at <= ${getTimestampLiteral(staleExportQueuedBefore)})
             OR (state IN ('failed', 'expired') AND terminal_cleanup_at IS NULL)
           )
-        ORDER BY recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
+        ORDER BY recoveryPriority ASC, recoverySortAt ASC, recoveryUpdatedAt ASC, id ASC
         LIMIT ${batchSize}
       ),
       recovery_candidates AS (

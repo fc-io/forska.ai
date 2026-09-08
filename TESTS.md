@@ -25,6 +25,16 @@ failed the real-DB checkpoint at a 4 GB DuckDB / 8 GiB VM limit. The container's
 - Rerun the upstream transaction/snapshot/rollback cases and host → candidate →
   host file-compatibility check described in the
   [backport verification guide](containers/apple/duckdb-backport.md#quality-gates).
+- Include replay of the preserved legacy WAL, not only cleanly checkpointed
+  files. The [2.0 alpha40881 evaluation](containers/apple/duckdb-preview-evaluation.md)
+  passed the memory fixture but rejected that WAL with “WAL cannot contain more
+  than one checkpoint marker”; it is not approved as a drop-in upgrade. An
+  explicitly authorized disposable dev reset can skip that legacy state, but is
+  not evidence of a data-preserving migration. Verify new candidate WAL replay.
+- Check scalar and nested NULL decoding through the actual Node/Bun binding and
+  review API. The 2.0 preview required `legacy_disable_null_type=true` with both
+  released bindings 1.5.1-r.1 and 1.5.5-r.4; loading the engine and passing SQL
+  smoke tests alone did not catch `Invalid vector type: SQLNULL` in the live app.
 - Preserve DB/WAL evidence, verify a normal full checkpoint on a consistent
   current-DB clone at the same 4 GB / 8 GiB limits, then verify live API/owner
   readiness and advancing review-indexing counters. Follow the
@@ -37,6 +47,42 @@ Once an official release includes both fixes and passes these gates **without
 the custom patch**, pin that release and remove the custom engine build and
 backport in the same change; see the
 [removal criterion](containers/apple/duckdb-backport.md#removal-criterion).
+
+## Supervised server lease cleanup
+
+```sh
+bun test scripts/releaseStoppedServerLocks.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbOwnerLease.test.ts src/server/utils/judgeWorkerJournalIdentity.test.ts --timeout 120000
+bun test scripts/runWithRuntimeProfile.test.ts scripts/runAppleContainer.test.ts scripts/appleContainerHostDatabase.test.ts --timeout 120000
+```
+
+These cover low-memory owner exit followed by supervisor lease release, retaining
+live/foreign/replacement leases, and leaving database/WAL files untouched. Verify
+host and container startup/readiness, then SIGTERM shutdown leaves no owner or
+primary judge-journal lease. A dead guest PID must never be inferred from the
+Mac PID namespace; see the [recovery steps](containers/apple/README.md#use-the-existing-mac-database).
+
+## Failure-regression and fixture-isolation checks
+
+```sh
+bun test src/server/utils/getDuckdbServiceReadinessSnapshot.test.ts
+bun test src/server/utils/duckdbServiceMemoryLimit.test.ts
+bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts
+bun test src/server/services/structuredFileImportService.test.ts
+bun test src/server/services/structuredFileImportService.integration.test.ts
+bun test scripts/testUtils/createScriptTestDirectory.test.ts scripts/judgmentWorkflowRealCodex/realCodexTopologyAdapter/getProviderConnections.test.ts scripts/judgmentWorkflowRealCodex/realCodexTopologyAdapter/getSnapshotInputEvidence.test.ts
+```
+
+These protect cold readiness without opening DuckDB, background queue draining
+across cold startup and recycle, active-before-terminal bounded transfer
+recovery, the provider-connection response contract, and snapshot fixture
+identity by pinned title/abstract hashes. Structured-import checks require real
+canonical persistence without DOI/PMID/arXiv IDs, stable source identity and
+idempotent reimports, duplicate handling, and actual accepted counts.
+Script fixtures own
+unique temporary database/spill roots; cleanup must preserve sibling suites
+and their live runtime directories. The full Bun inventory includes these
+regressions. Rerun the real-Codex smoke below for its complete HTTP/inference
+contract, and the current-DB smoke for runtime lifecycle changes.
 
 Focused comparison PDF import/export changes should run:
 

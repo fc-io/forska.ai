@@ -1,7 +1,7 @@
 import {Elysia} from 'elysia'
 
 import {getActiveDuckdbExclusiveWorkSnapshot} from '../utils/duckdbExclusiveWork.ts'
-import {getDuckdbServiceReadinessSnapshot} from '../utils/duckdbService.ts'
+import {getDuckdbServiceReadinessSnapshot} from '../utils/getDuckdbServiceReadinessSnapshot.ts'
 import {getRuntimeCutoverVersion, probeDuckdbOwnerRuntimeReadiness} from '../utils/runtimeCutover.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {getServerRoleCapabilities} from '../utils/serverRole.ts'

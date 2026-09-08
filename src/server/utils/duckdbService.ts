@@ -78,15 +78,6 @@ export type DuckdbQueueRuntimeMetrics = {
   background: DuckdbSingleQueueRuntimeMetrics
   main: DuckdbSingleQueueRuntimeMetrics
 }
-export type DuckdbServiceReadinessSnapshot = {
-  appendConnectionCount: number
-  appendLaneCount: number
-  backgroundConnectionOpen: boolean
-  controlConnectionOpen: boolean
-  instanceOpen: boolean
-  ready: boolean
-  startupActive: boolean
-}
 export type DuckdbActiveMainWorkRuntimeSnapshot = {
   allowsTempSpill: boolean | null
   durationMs: number
@@ -5576,7 +5567,6 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
     duckdbServiceState.appendPendingCountByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
     duckdbServiceState.appendMaxQueueDepthByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
     duckdbServiceState.backgroundConnection = backgroundConnection
-    duckdbServiceState.backgroundQueue = Promise.resolve()
     duckdbServiceState.controlConnection = controlConnection
     duckdbServiceState.duckdbInstance = duckdbInstance
     duckdbServiceState.nextAppendLaneIndex = 0
@@ -6522,30 +6512,6 @@ export const getDuckdbQueueRuntimeMetricsSnapshot = (): DuckdbQueueRuntimeMetric
       totalDurationMs: duckdbServiceState.duckdbTotalDurationMs,
       totalWaitMs: duckdbServiceState.duckdbTotalWaitMs,
     },
-  }
-}
-
-export const getDuckdbServiceReadinessSnapshot = (): DuckdbServiceReadinessSnapshot => {
-  const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
-  const startupActive = duckdbServiceState.startupPromise !== null
-  const instanceOpen = duckdbServiceState.duckdbInstance !== null
-  const controlConnectionOpen = duckdbServiceState.controlConnection !== null
-  const backgroundConnectionOpen = duckdbServiceState.backgroundConnection !== null
-  const appendConnectionCount = duckdbServiceState.appendConnections.length
-
-  return {
-    appendConnectionCount,
-    appendLaneCount,
-    backgroundConnectionOpen,
-    controlConnectionOpen,
-    instanceOpen,
-    ready:
-      !startupActive
-      && instanceOpen
-      && controlConnectionOpen
-      && backgroundConnectionOpen
-      && appendConnectionCount === appendLaneCount,
-    startupActive,
   }
 }
 

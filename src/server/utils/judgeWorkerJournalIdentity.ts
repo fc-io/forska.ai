@@ -274,7 +274,7 @@ const isProcessAlive = (pid: number) => {
   }
 }
 
-const removeLockForLease = (lockPath: string, leaseId: string) => {
+export const releaseJudgeWorkerJournalLock = (lockPath: string, leaseId: string) => {
   const currentLock = readLockMetadata(lockPath)
 
   if (currentLock?.leaseId !== leaseId) {
@@ -310,7 +310,7 @@ const acquireLock = (
       identity,
       metadata,
       release: () => {
-        removeLockForLease(identity.lockPath, metadata.leaseId)
+        releaseJudgeWorkerJournalLock(identity.lockPath, metadata.leaseId)
       },
     }
   } catch (error) {

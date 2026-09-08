@@ -2125,8 +2125,8 @@ export const syncImportedArticlesWithTx = async (params: {
 }
 
 export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
-  await getAppDatabaseService().transaction(async (tx) => {
-    return await storeImportedArticlesInTx(tx, rows)
+  return getAppDatabaseService().transaction(async (tx) => {
+    return storeImportedArticlesWithTx(tx, rows)
   }, articleImportStoreWorkloadContext)
 }
 

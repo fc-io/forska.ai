@@ -428,7 +428,7 @@ const repairLegacyTokenUseRow = async (row: LegacyTokenUseRow): Promise<LegacyEv
     await projectLegacyTokenUseCloseoutProjection({runner: tx, tokenUse: updatedRow})
 
     return {convertedCount: 1, pendingRepairCount: 0, quarantinedCount: 0}
-  }) as Promise<LegacyEvidenceRepairResult>
+  })
 }
 
 export const repairLegacyTokenUseEvidenceForJob = async (jobId: string): Promise<LegacyEvidenceRepairResult> => {

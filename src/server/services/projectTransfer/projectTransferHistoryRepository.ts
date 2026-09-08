@@ -278,9 +278,9 @@ const createProjectTransferHistory = async (params: CreateProjectTransferHistory
 
   return params.runner
     ? createProjectTransferHistoryTx({...params, runner: params.runner})
-    : (getAppDatabaseService().transaction((tx) => {
+    : getAppDatabaseService().transaction((tx) => {
         return createProjectTransferHistoryTx({...params, runner: tx as ProjectTransferHistoryWriterRunner})
-      }, projectTransferCommitTransactionWorkloadContext) as Promise<ProjectTransferHistoryRecord>)
+      }, projectTransferCommitTransactionWorkloadContext)
 }
 
 const projectTransferHistoryRepository = {

@@ -489,7 +489,7 @@ export const createProviderModel = async ({
     providerKind: connection.providerKind,
     source: source === 'manual' ? 'manual' : 'provider',
   })
-  const createdRow = (await getAppDatabaseService().transaction(async (databaseRunner) => {
+  const createdRow = await getAppDatabaseService().transaction(async (databaseRunner) => {
     const existingRow = await getProviderModelRowByNaturalKey({
       databaseRunner,
       providerConnectionId: connection.id,
@@ -548,7 +548,7 @@ export const createProviderModel = async ({
     }
 
     return row
-  }, providerModelCreateWorkloadContext)) as ProviderModelRow | null
+  }, providerModelCreateWorkloadContext)
 
   if (!createdRow) {
     throw new Error('Failed to create provider model')
@@ -594,7 +594,7 @@ export const updateProviderModel = async (
     return currentModel
   }
 
-  const refreshedRow = (await getAppDatabaseService().transaction(async (databaseRunner) => {
+  const refreshedRow = await getAppDatabaseService().transaction(async (databaseRunner) => {
     await updateProviderModelRow({
       databaseRunner,
       displayName,
@@ -630,7 +630,7 @@ export const updateProviderModel = async (
     })
 
     return nextRow
-  }, providerModelUpdateWorkloadContext)) as ProviderModelRow | null
+  }, providerModelUpdateWorkloadContext)
 
   if (!refreshedRow) {
     throw new Error('Provider model not found')
@@ -646,7 +646,7 @@ export const upsertDiscoveredModels = async ({
   connection: ProviderConnectionRecord
   models: ProviderListedModel[]
 }): Promise<ProviderModelRecord[]> => {
-  return (await getAppDatabaseService().transaction(async (databaseRunner) => {
+  return await getAppDatabaseService().transaction(async (databaseRunner) => {
     const savedModels = await upsertDiscoveredProviderModelsRecursively({
       connection,
       databaseRunner,
@@ -666,7 +666,7 @@ export const upsertDiscoveredModels = async ({
     }
 
     return savedModels
-  }, providerModelUpsertDiscoveredWorkloadContext)) as ProviderModelRecord[]
+  }, providerModelUpsertDiscoveredWorkloadContext)
 }
 
 export const getProviderModels = async (modelIds: string[]): Promise<Map<string, ProviderModelRecord>> => {

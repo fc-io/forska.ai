@@ -1,13 +1,18 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
+const testDirectory = createScriptTestDirectory('repairOwnedProjectPrompts')
+
+afterAll(testDirectory.cleanup)
 const defaultEnv = {
   ...process.env,
+  DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39107',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
@@ -33,12 +38,6 @@ const getLastJsonLine = (output: string) => {
   }
 
   return lastLine
-}
-
-const removeFileIfExists = (filePath: string) => {
-  if (existsSync(filePath)) {
-    rmSync(filePath, {force: true, recursive: true})
-  }
 }
 
 const seedDatabase = (duckdbPath: string) => {
@@ -109,20 +108,16 @@ const runQuery = (duckdbPath: string, sql: string) => {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
   }
 
-  return JSON.parse(getLastJsonLine(result.stdout.toString()))
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as unknown
 }
 
 test('repairOwnedProjectPrompts marks project-wide dirty refresh state for repaired prompts', () => {
-  const duckdbPath = join(projectRoot, '.tmp', `repair-owned-project-prompts-${Date.now()}.duckdb`)
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, `repair-owned-project-prompts-${Date.now()}.duckdb`)
   seedDatabase(duckdbPath)
 
   const runScript = globalThis.Bun.spawnSync(
     ['bun', 'scripts/repairOwnedProjectPrompts.ts', '--apply', '--project-id=repair-prompts-project'],
-    {
-      cwd: projectRoot,
-      env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-    },
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
   if (runScript.exitCode !== 0) {

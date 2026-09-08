@@ -1,13 +1,18 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
+const testDirectory = createScriptTestDirectory('projectMartDirtyRefreshRecovery')
+
+afterAll(testDirectory.cleanup)
 const defaultEnv = {
   ...process.env,
+  DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39103',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
@@ -34,19 +39,11 @@ const getLastJsonLine = (output: string) => {
   return lastLine
 }
 
-const removeFileIfExists = (filePath: string) => {
-  if (existsSync(filePath)) {
-    rmSync(filePath, {force: true, recursive: true})
-  }
-}
-
 const runDirtyRefreshRecoveryScript = <T>(body: string) => {
   const duckdbPath = join(
-    projectRoot,
-    '.tmp',
+    testDirectory.path,
     `project-mart-dirty-refresh-recovery-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`,
   )
-  removeFileIfExists(dirname(duckdbPath))
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -96,16 +93,11 @@ const runDirtyRefreshRecoveryScript = <T>(body: string) => {
     {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
-  try {
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr.toString() || result.stdout.toString() || 'dirty refresh recovery script failed')
-    }
-
-    return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
-  } finally {
-    removeFileIfExists(dirname(duckdbPath))
-    removeFileIfExists('/tmp/duckdb-temp')
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'dirty refresh recovery script failed')
   }
+
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
 }
 
 test('project refresh ACK reconciliation caps owner ACKs at dirty-token barriers', () => {

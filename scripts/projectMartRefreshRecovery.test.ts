@@ -1,13 +1,18 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 setDefaultTimeout(120_000)
 
 const projectRoot = process.cwd()
+const testDirectory = createScriptTestDirectory('projectMartRefreshRecovery')
+
+afterAll(testDirectory.cleanup)
 const defaultEnv = {
   ...process.env,
+  DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39102',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
@@ -36,12 +41,6 @@ const getLastJsonLine = (output: string) => {
   }
 
   return lastLine
-}
-
-const removeFileIfExists = (filePath: string) => {
-  if (existsSync(filePath)) {
-    rmSync(filePath, {force: true, recursive: true})
-  }
 }
 
 const seedProjectSql = ({
@@ -175,8 +174,7 @@ const runQuery = (duckdbPath: string, sql: string) => {
 }
 
 test('inspectProjectMartRefreshRisk reports scope dirty count and planned mode', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'inspect-project-mart-refresh-risk.duckdb')
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, 'inspect-project-mart-refresh-risk.duckdb')
   seedDatabase({dirtyArticleCount: 4, duckdbPath, projectId: 'project-inspect', refreshStatus: 'idle'})
 
   const runScript = globalThis.Bun.spawnSync(['bun', inspectScriptPath, '--project-id=project-inspect'], {
@@ -206,8 +204,7 @@ test('inspectProjectMartRefreshRisk reports scope dirty count and planned mode',
 })
 
 test('requestReviewServingForDirtyRefreshClaim requests V4 rebuild work and leaves the ledger idle', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-for-dirty-refresh-claim.duckdb')
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, 'request-review-serving-for-dirty-refresh-claim.duckdb')
   seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-run-once', refreshStatus: 'idle'})
 
   const runScript = globalThis.Bun.spawnSync(
@@ -251,7 +248,7 @@ test('requestReviewServingForDirtyRefreshClaim requests V4 rebuild work and leav
 test('requestReviewServingForDirtyRefreshClaim blocks without admin acknowledgement', () => {
   const runScript = globalThis.Bun.spawnSync(['bun', requestDirtyRefreshClaimScriptPath, '--worker-id=test-worker'], {
     cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused-dirty-refresh.duckdb')},
+    env: {...defaultEnv, DUCKDB_PATH: join(testDirectory.path, 'unused-dirty-refresh.duckdb')},
   })
 
   expect(runScript.exitCode).toBe(1)
@@ -263,8 +260,7 @@ test('requestReviewServingForDirtyRefreshClaim blocks without admin acknowledgem
 })
 
 test('requestReviewServingForDirtyRefreshClaim routes dirty refresh claims into V4 rebuild requests', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-for-dirty-refresh-claim-blocked.duckdb')
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, 'request-review-serving-for-dirty-refresh-claim-blocked.duckdb')
   seedDatabase({dirtyArticleCount: 4, duckdbPath, projectId: 'project-blocked', refreshStatus: 'idle'})
 
   const runScript = globalThis.Bun.spawnSync(
@@ -316,8 +312,7 @@ test('requestReviewServingForDirtyRefreshClaim routes dirty refresh claims into 
 })
 
 test('recoverProjectMartRefreshClaims lists and recovers stale claims only when explicitly requested', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'recover-project-mart-refresh-claims.duckdb')
-  removeFileIfExists(dirname(duckdbPath))
+  const duckdbPath = join(testDirectory.path, 'recover-project-mart-refresh-claims.duckdb')
   seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-recover', refreshStatus: 'running'})
 
   const listScript = globalThis.Bun.spawnSync(['bun', recoverScriptPath], {
