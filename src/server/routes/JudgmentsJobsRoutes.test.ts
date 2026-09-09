@@ -1074,6 +1074,156 @@ test('owner-backed completion rejects snapshot mismatch before accepting the cla
   await sqliteService.closeAll()
 })
 
+test('owner-backed completion imports accepted judgment outbox into DuckDB', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const [{getJudgmentJobSqliteService}, {getAppDatabaseService}] = await Promise.all([
+    import('../cron/judgmentsJobs/judgmentJobSqliteService.ts'),
+    import('../services/appDatabaseService.ts'),
+  ])
+  const sqliteService = getJudgmentJobSqliteService()
+  const suffix = Date.now()
+  const projectId = `completion-flush-project-${suffix}`
+  const modelId = `completion-flush-model-${suffix}`
+  const connectionId = `completion-flush-connection-${suffix}`
+  const jobId = `completion-flush-job-${suffix}`
+  const articleId = `completion-flush-article-${suffix}`
+  const promptId = `completion-flush-prompt-${suffix}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES ('${articleId}', 'external-${articleId}', 'Completion flush article', current_timestamp, current_timestamp)
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Completion flush prompt', '${promptId}-hash')
+  `)
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {
+    data: {
+      claims: Array<{
+        articleId: string
+        claimId: string
+        executionSnapshotHash: string
+        executionSnapshotId: string
+        modelId: string
+        projectId: string
+        promptId: string
+        recordId: string
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        useTitle: boolean
+      }>
+    }
+  }
+  const [claim] = claimBody.data.claims
+
+  if (!claim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  const startedAt = '2026-05-03T12:00:00.000Z'
+  const finishedAt = '2026-05-03T12:00:01.000Z'
+  const requestAttempts = [
+    {
+      articleId: claim.articleId,
+      baseURL: 'http://provider.test/v1',
+      claimId: claim.claimId,
+      closeoutKind: 'pending_token_use',
+      completionTokens: 3,
+      error: null,
+      errorCode: null,
+      finishedAt,
+      jobId,
+      outcome: 'success',
+      promptId: claim.promptId,
+      promptIds: [claim.promptId],
+      promptTokens: 7,
+      providerKey: `provider:${connectionId}:default`,
+      queueRecordId: claim.recordId,
+      requestAttemptId: `completion-flush-attempt-${suffix}`,
+      startedAt,
+      totalTokens: 10,
+    },
+  ]
+
+  const completionResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify({
+        articleId: claim.articleId,
+        claimId: claim.claimId,
+        executionSnapshotHash: claim.executionSnapshotHash,
+        executionSnapshotId: claim.executionSnapshotId,
+        jobId,
+        judgment: {answer: 'yes', explanation: 'because', quotes: ['Completion flush article']},
+        modelId: claim.modelId,
+        projectId: claim.projectId,
+        promptId: claim.promptId,
+        queueRecordId: claim.recordId,
+        requestAttempts,
+        tokenUse: {
+          failedRequests: 0,
+          failedRequestsDetails: [],
+          finishedAt,
+          hasFailedRequests: false,
+          modelName: 'Qwen/Qwen3.5-122B-A10B',
+          requestAttempts,
+          startedAt,
+          successfulRequests: 1,
+          totalCompletionTokens: 3,
+          totalFailedCompletionTokens: 0,
+          totalFailedPromptTokens: 0,
+          totalFailedTokens: 0,
+          totalPromptTokens: 7,
+          totalRequests: 1,
+          totalSuccessCompletionTokens: 3,
+          totalSuccessPromptTokens: 7,
+          totalSuccessTokens: 10,
+          totalTokens: 10,
+        },
+        useAbstract: claim.useAbstract,
+        useFulltext: claim.useFulltext,
+        useFulltextNoImages: claim.useFulltextNoImages,
+        useTitle: claim.useTitle,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const [judgmentRow] = await getAppDatabaseService().queryJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment
+    WHERE project_id = '${projectId}'
+      AND article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
+  `)
+
+  expect(completionResponse.status).toBe(200)
+  expect(Number(judgmentRow?.count ?? 0)).toBe(1)
+  expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(0)
+
+  await sqliteService.closeAll()
+})
+
 test('owner-backed completion accepts successful replay after stale claim was requeued but not reclaimed', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

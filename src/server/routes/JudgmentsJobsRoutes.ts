@@ -19,7 +19,10 @@ import {
   isJudgmentJobSqliteIsolatedImportLeaseConflict,
   runJudgmentJobSqliteIsolatedFlush,
 } from '../cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts'
-import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
+import {
+  flushJudgmentJobSqliteOutbox,
+  importJudgmentJobSqliteOutboxBatch,
+} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {assertJudgmentJobCanRunSqlitePreflight} from '../cron/judgmentsJobs/judgmentJobSqlitePreflight.ts'
 import {
   getJudgmentJobSqliteService,
@@ -106,6 +109,24 @@ import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 const judgmentJobServerId = getDefaultJudgmentServerJobId()
 const judgmentsJobsLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+
+const importAcceptedCompletionSqliteOutboxBatch = async (jobId: string): Promise<void> => {
+  try {
+    await importJudgmentJobSqliteOutboxBatch({claimedBy: judgmentJobServerId, jobId})
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const level =
+      isDuckdbExclusiveWorkAdmissionError(error) || isTransientJudgmentJobSqliteLockMessage(errorMessage)
+        ? 'log'
+        : 'warn'
+
+    judgmentsJobsLogger[level](
+      `judgmentsJobs:completion-outbox-flush:${jobId}`,
+      '[judgmentsJobs] deferred accepted completion SQLite outbox flush',
+      {errorMessage, jobId},
+    )
+  }
+}
 
 type JudgmentJobMutationState = {
   error: unknown
@@ -1003,6 +1024,7 @@ const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCom
   }
 
   await applyAcceptedCompletionTokenUseOnce(body)
+  await importAcceptedCompletionSqliteOutboxBatch(jobId)
 
   return {
     data: {claimId: body.claimId, queueRecordId: existingAck.queuePromptId, status: existingAck.status},
@@ -1117,6 +1139,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
     throw error
   }
   await applyAcceptedCompletionTokenUseOnce(body)
+  await importAcceptedCompletionSqliteOutboxBatch(jobId)
 
   return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}, error: null}
 }
