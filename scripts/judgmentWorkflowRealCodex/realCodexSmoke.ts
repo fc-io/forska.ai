@@ -103,7 +103,7 @@ export type RealCodexTopologyAdapter = {
   }) => Promise<RealCodexProvisionedFixture>
   start: (input: {durableRoot: string; inheritedCodexHome: string | null}) => Promise<void>
   startJobThroughHttp: (fixture: RealCodexProvisionedFixture) => Promise<void>
-  stop: () => Promise<void>
+  stop: (options?: {failed?: boolean}) => Promise<void>
   waitForTerminal: (input: {
     jobId: string
     stopAdmissionAfterFailure: true
@@ -311,6 +311,7 @@ export const runRealCodexSmoke = async ({
   const articles = getRealCodexSeedArticles(fixtures)
   const maximumLogicalProviderAttempts = articles.length * realCodexMaximumRecoverableAttemptsPerArticle
   const startedAt = Date.now()
+  let completed = false
 
   console.log(
     `[judgment-real-codex] opt-in accepted; model=${realCodexPinnedModel} thinking=${realCodexPinnedThinking} articles=${articles.length} maximum_logical_provider_attempts=${maximumLogicalProviderAttempts} timeout_ms=${realCodexOverallTimeoutMs}`,
@@ -372,12 +373,20 @@ export const runRealCodexSmoke = async ({
     }
     console.log(`[judgment-real-codex] ${JSON.stringify(result)}`)
 
+    completed = true
     return result
   } finally {
     try {
-      await adapter.stop()
+      await adapter.stop({failed: !completed})
+    } catch (error) {
+      completed = false
+      throw error
     } finally {
-      await rm(durableRoot, {force: true, recursive: true})
+      if (completed) {
+        await rm(durableRoot, {force: true, recursive: true})
+      } else {
+        console.error(`[judgment-real-codex] failed verification evidence preserved at ${durableRoot}`)
+      }
     }
   }
 }

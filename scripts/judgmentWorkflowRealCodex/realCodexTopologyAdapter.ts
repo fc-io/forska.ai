@@ -10,6 +10,7 @@ import {
   startJudgmentWorkflowTopology,
   stopJudgmentWorkflowTopology,
 } from '../judgmentWorkflowTopology.ts'
+import {recordTopologyFailure} from '../judgmentWorkflowTopology/topologyFailureArtifacts.ts'
 import {
   type RealCodexContentFlags,
   type RealCodexEvidence,
@@ -205,7 +206,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
 
   return {
     start: async ({durableRoot, inheritedCodexHome}) => {
-      const topology = createJudgmentWorkflowTopology({cwd: durableRoot})
+      const topology = createJudgmentWorkflowTopology({cwd: durableRoot, preserveFailureArtifacts: true})
       requestEvidenceManifestPath = join(topology.root, 'request-evidence-manifest.json')
       requestEvidenceOutputPath = join(topology.root, 'request-evidence.jsonl')
       await writeFile(
@@ -449,10 +450,11 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
         visibleProjectionCount: Number(canonicalEvidence.visibleProjectionCount ?? 0),
       }
     },
-    stop: async () => {
+    stop: async ({failed = false} = {}) => {
       if (running) {
         const active = running
         running = null
+        if (failed) recordTopologyFailure(active.topology, 'real-codex-smoke')
         await stopJudgmentWorkflowTopology(active)
       }
     },

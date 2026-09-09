@@ -18,6 +18,7 @@ import {
   comparisonProjectConflictResolutionTransferVersion,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 import {pdfConflictResolutionNotSetValue} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionPdfImport.ts'
+import {verifyPersistedConflictReplacement} from './comparisonProjectsRoutes/verifyPersistedConflictReplacement.ts'
 
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).href
 const comparisonProjectServingRebuildServiceModulePath = new URL(
@@ -6905,6 +6906,15 @@ test('comparison conflict resolution save replaces rows without DuckDB ON CONFLI
   expect(state.maintenanceCommands).toEqual([])
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
+  const deleteStatement = state.queryStatements.find((statement) => {
+    return statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
+  })
+  expect(deleteStatement).toBeDefined()
+  verifyPersistedConflictReplacement({
+    deleteStatement: deleteStatement ?? '',
+    insertStatement,
+    expectedValue: 'prompt-2',
+  })
 })
 
 test('summary comparison conflict resolution API can change maybe to yes', async () => {
@@ -6966,6 +6976,11 @@ test('summary comparison conflict resolution API can change maybe to yes', async
   expect(state.maintenanceCommands).toEqual([])
   expect(state.staleServingIds).toEqual([])
   expect(state.queuedServingRebuildIds).toEqual([])
+  const deleteStatement = state.queryStatements.find((statement) => {
+    return statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
+  })
+  expect(deleteStatement).toBeDefined()
+  verifyPersistedConflictReplacement({deleteStatement: deleteStatement ?? '', insertStatement, expectedValue: 'yes'})
 })
 
 test('comparison conflict resolution save logs owner-side diagnostics for Chinese serving rows', async () => {

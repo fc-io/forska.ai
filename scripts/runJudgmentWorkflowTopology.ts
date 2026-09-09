@@ -10,22 +10,21 @@ import {
   stopJudgmentWorkflowTopology,
   stopJudgmentWorkflowTopologyExtraJudge,
 } from './judgmentWorkflowTopology.ts'
+import {recordTopologyFailure} from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
 
 const runScenario = async ({upgrade}: {upgrade: boolean}) => {
   const provider = startJudgmentWorkflowTopologyProvider({holdFirstRequest: true})
-  const preparedTopology = upgrade ? createJudgmentWorkflowTopology() : undefined
+  const preparedTopology = createJudgmentWorkflowTopology()
   let runningTopology: Awaited<ReturnType<typeof startJudgmentWorkflowTopology>> | undefined
   let extraJudge: Awaited<ReturnType<typeof startJudgmentWorkflowTopologyExtraJudge>> | undefined
   let readinessMonitor: ReturnType<typeof startJudgmentWorkflowReadinessMonitor> | undefined
 
   try {
-    if (preparedTopology) {
+    if (upgrade) {
       await prepareJudgmentWorkflowMigrationBoundary(preparedTopology)
     }
 
-    const startedTopology = await startJudgmentWorkflowTopology(
-      preparedTopology ? {topology: preparedTopology} : undefined,
-    )
+    const startedTopology = await startJudgmentWorkflowTopology({topology: preparedTopology})
     runningTopology = startedTopology
     const lifecycle = await runJudgmentWorkflowTopologyLifecycle({
       onDistinctJudgeOwners: () => {
@@ -111,12 +110,21 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
     console.log(
       `[judgment-workflow:topology] complete scenario=${upgrade ? 'migration-boundary' : 'fresh'} api=${runningTopology.topology.apiPort} maintenance=${runningTopology.topology.maintenancePort} judge=${runningTopology.topology.judgePort} judgments=4 provider_max_concurrency=1`,
     )
+  } catch (error) {
+    recordTopologyFailure(preparedTopology, 'lifecycle')
+    throw error
   } finally {
     try {
       await readinessMonitor?.stop()
+    } catch (error) {
+      recordTopologyFailure(preparedTopology, 'readiness-monitor')
+      throw error
     } finally {
       try {
         if (extraJudge) await stopJudgmentWorkflowTopologyExtraJudge(extraJudge)
+      } catch (error) {
+        recordTopologyFailure(preparedTopology, 'extra-judge-shutdown')
+        throw error
       } finally {
         try {
           if (runningTopology) await stopJudgmentWorkflowTopology(runningTopology)
@@ -138,10 +146,11 @@ if (requestedScenario === 'all' || requestedScenario === 'migration-boundary') a
 
 if (requestedScenario === 'all' || requestedScenario === 'journal-replay') {
   const replayProvider = startJudgmentWorkflowTopologyProvider({holdFirstRequest: true})
+  const preparedReplayTopology = createJudgmentWorkflowTopology()
   let replayTopology: Awaited<ReturnType<typeof startJudgmentWorkflowTopology>> | undefined
 
   try {
-    replayTopology = await startJudgmentWorkflowTopology()
+    replayTopology = await startJudgmentWorkflowTopology({topology: preparedReplayTopology})
     const replay = await runJudgmentWorkflowTopologyReplay({
       provider: replayProvider,
       topology: replayTopology.topology,
@@ -149,6 +158,9 @@ if (requestedScenario === 'all' || requestedScenario === 'journal-replay') {
     console.log(
       `[judgment-workflow:topology] complete scenario=journal-replay job=${replay.jobId} claim=${replay.claimId} restarted_pid=${replay.restartedPid}`,
     )
+  } catch (error) {
+    recordTopologyFailure(preparedReplayTopology, 'journal-replay')
+    throw error
   } finally {
     try {
       if (replayTopology) await stopJudgmentWorkflowTopology(replayTopology)

@@ -14,6 +14,8 @@ import {
   resolveJudgeWorkerJournalIdentity,
 } from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
+import {assertNoUnexpectedDuckdbRecovery} from './judgmentWorkflowTopology/assertNoUnexpectedDuckdbRecovery.ts'
+import {cleanupTopologyArtifacts, recordTopologyFailure, topologyFailureArtifactsDirectory} from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
 
 export type JudgmentWorkflowTopology = {
   apiPort: number
@@ -26,6 +28,8 @@ export type JudgmentWorkflowTopology = {
   root: string
   serverStackLockPath: string
   expectedJudgeRestartPid?: number
+  failureRecorded?: boolean
+  preserveFailureArtifacts?: boolean
 }
 
 export type JudgmentWorkflowTopologyProvider = {
@@ -130,9 +134,11 @@ const getAllowedHostEnvironment = (envValues: Record<string, string | undefined>
 export const createJudgmentWorkflowTopology = ({
   cwd = process.cwd(),
   envValues = process.env,
-}: {cwd?: string; envValues?: Record<string, string | undefined>} = {}): JudgmentWorkflowTopology => {
+  preserveFailureArtifacts = envValues.FORSKA_TEST_TOPOLOGY_PRESERVE_FAILURE_ARTIFACTS === 'true',
+}: {cwd?: string; envValues?: Record<string, string | undefined>; preserveFailureArtifacts?: boolean} = {}): JudgmentWorkflowTopology => {
   const [apiPort, maintenancePort, judgePort] = getDistinctPorts()
-  const root = resolve(cwd, '.tmp', `judgment-workflow-topology-${randomUUID()}`)
+  const artifactsParent = preserveFailureArtifacts ? topologyFailureArtifactsDirectory : ''
+  const root = resolve(cwd, '.tmp', artifactsParent, `judgment-workflow-topology-${randomUUID()}`)
   const duckdbPath = join(root, 'data', 'forska.duckdb')
   const workerId = `topology-${randomUUID()}`
   const journalPath = join(root, 'data', 'judge-worker-journals', `${workerId}.sqlite`)
@@ -171,6 +177,7 @@ export const createJudgmentWorkflowTopology = ({
     journalPath,
     journalPaths: [journalPath],
     maintenancePort,
+    preserveFailureArtifacts,
     root,
     serverStackLockPath,
   }
@@ -853,7 +860,8 @@ export const startJudgmentWorkflowTopology = async ({
     })
   } catch (error) {
     rmSync(topology.serverStackLockPath, {force: true})
-    rmSync(topology.root, {force: true, recursive: true})
+    recordTopologyFailure(topology, 'startup')
+    cleanupTopologyArtifacts(topology)
     throw error
   }
   const deadline = Date.now() + startupTimeoutMs
@@ -879,7 +887,8 @@ export const startJudgmentWorkflowTopology = async ({
       await serverStackProcess.exited
     }
     rmSync(topology.serverStackLockPath, {force: true})
-    rmSync(topology.root, {force: true, recursive: true})
+    recordTopologyFailure(topology, 'startup')
+    cleanupTopologyArtifacts(topology)
     throw error
   }
 
@@ -906,7 +915,8 @@ export const prepareJudgmentWorkflowMigrationBoundary = async (topology: Judgmen
   const [exitCode, stderr] = await Promise.all([preparation.exited, new Response(preparation.stderr).text()])
 
   if (exitCode !== 0) {
-    rmSync(topology.root, {force: true, recursive: true})
+    recordTopologyFailure(topology, 'migration-boundary-preparation')
+    cleanupTopologyArtifacts(topology)
     throw new Error(`Failed to prepare migration-boundary topology database: ${stderr}`)
   }
 }
@@ -1033,15 +1043,15 @@ export const stopJudgmentWorkflowTopology = async ({process: serverStackProcess,
     if (missingJournals.length > 0) {
       throw new Error(`Production topology did not persist expected judge journals: ${missingJournals.join(', ')}`)
     }
+    assertNoUnexpectedDuckdbRecovery(topology)
+  } catch (error) {
+    recordTopologyFailure(topology, 'shutdown-verification')
+    throw error
   } finally {
     if (serverStackProcess.exitCode === null) {
       serverStackProcess.kill('SIGKILL')
       await serverStackProcess.exited
     }
-    rmSync(topology.root, {force: true, recursive: true})
-  }
-
-  if (existsSync(topology.root)) {
-    throw new Error(`Production topology root was not removed: ${topology.root}`)
+    cleanupTopologyArtifacts(topology)
   }
 }
