@@ -1,7 +1,10 @@
 import {getReviewServingFilteredCountSignature} from '../src/server/reviewServing/reviewServingFilteredCountService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
-import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
+import {
+  closeDuckdbService as closeDuckdbRuntimeService,
+  getMaintenanceDuckdbWorkloadContext,
+} from '../src/server/utils/duckdbService.ts'
 
 type CountValue = number | string | null
 
@@ -20,6 +23,7 @@ type ProjectCountRow = {
 }
 
 type CacheCountRow = {countValue: CountValue; listModeKey: string; projectId: string}
+type CloseDuckdbService = typeof closeDuckdbRuntimeService
 
 type ComparableCounts = {both: number; human: number; llm: number; unassessed: number}
 
@@ -510,4 +514,44 @@ const main = async () => {
   }
 }
 
-await main()
+export const closeReviewServingCurrentDbTabCountParityRuntime = async (
+  closeDuckdbService: CloseDuckdbService = closeDuckdbRuntimeService,
+) => {
+  await closeDuckdbService({checkpointBeforeClose: false})
+}
+
+export const runReviewServingCurrentDbTabCountParity = async ({
+  closeDuckdbService = closeDuckdbRuntimeService,
+  work = main,
+}: {
+  closeDuckdbService?: CloseDuckdbService
+  work?: () => Promise<void>
+} = {}) => {
+  let workFailed = false
+  let workError: unknown
+
+  try {
+    await work()
+  } catch (error) {
+    workFailed = true
+    workError = error
+  }
+
+  try {
+    await closeReviewServingCurrentDbTabCountParityRuntime(closeDuckdbService)
+  } catch (closeError) {
+    if (!workFailed) {
+      throw closeError
+    }
+
+    console.error('[review-serving] failed to close DuckDB after tab-count parity failure', closeError)
+  }
+
+  if (workFailed) {
+    throw workError
+  }
+}
+
+if (import.meta.main) {
+  await runReviewServingCurrentDbTabCountParity()
+}
