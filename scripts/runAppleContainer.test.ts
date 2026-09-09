@@ -4,6 +4,8 @@ import {expect, test} from 'bun:test'
 
 import {getAppleContainerCommands} from './runAppleContainer.ts'
 
+const appleDockerfile = readFileSync(new URL('../containers/apple/Dockerfile', import.meta.url), 'utf8')
+
 test('validates custom host ports before starting any containers', () => {
   expect(getAppleContainerCommands({port: '65535'})[2]).toContain('127.0.0.1:65535:3000')
   for (const port of ['', '0', '65536', '-1', '3000:3001', 'abc', '3300; echo bad']) {
@@ -30,4 +32,18 @@ test('container build context includes direct scripts used by the image', () => 
 
   expect(dockerignore).toContain('!scripts/*')
   expect(dockerignore).toContain('!scripts/**')
+})
+
+test('copies Apple image source trees through wildcard parent-preserving paths before verifying DuckDB', () => {
+  const sourceCopy = 'COPY --parents vendor/duckdb/**/* src/**/* scripts/**/* ./'
+  const verifierRun =
+    'RUN test -f scripts/verifyDuckdbDistribution.ts && test -f src/server/index.ts && test -f scripts/devStart.ts'
+  const sourceCopyIndex = appleDockerfile.indexOf(sourceCopy)
+  const verifierRunIndex = appleDockerfile.indexOf(verifierRun)
+
+  expect(sourceCopyIndex).toBeGreaterThan(-1)
+  expect(verifierRunIndex).toBeGreaterThan(sourceCopyIndex)
+  expect(appleDockerfile).not.toContain('COPY vendor/duckdb ./vendor/duckdb')
+  expect(appleDockerfile).not.toContain('COPY src ./src')
+  expect(appleDockerfile).not.toContain('COPY scripts ./scripts')
 })
