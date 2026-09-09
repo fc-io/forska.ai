@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import {mkdir, writeFile} from 'node:fs/promises'
+import {mkdir, readFile, writeFile} from 'node:fs/promises'
 import {dirname, join, resolve} from 'node:path'
 import {parseArgs} from 'node:util'
 
@@ -10,7 +10,9 @@ import specification from '../vendor/duckdb/native-build.json'
 import {buildPlatformPackage} from './buildDuckdbDistribution/buildPlatformPackage'
 import type {DistributionManifest, DistributionPlatform} from './buildDuckdbDistribution/distributionManifest'
 import {copyVerifiedReleaseInput} from './combinePatchedDuckdbDistribution/copyVerifiedReleaseInput'
+import type {NativeVerificationEvidence} from './combinePatchedDuckdbDistribution/nativeVerificationEvidence'
 import {retainNativeBuildInputs} from './combinePatchedDuckdbDistribution/retainNativeBuildInputs'
+import {retainNativeVerificationEvidence} from './combinePatchedDuckdbDistribution/retainNativeVerificationEvidence'
 import {type NativeBuild, readNativeBuild} from './stagePatchedDuckdbDistribution/readNativeBuild'
 
 const {values} = parseArgs({options: {'input-dir': {type: 'string'}, 'output-dir': {type: 'string'}}, strict: true})
@@ -26,6 +28,7 @@ assert.equal(paths.length, activeManifest.platforms.length, 'All six separately 
 const manifests: DistributionManifest[] = []
 const platforms: DistributionPlatform[] = []
 const nativeBuilds: NativeBuild[] = []
+const evidence: NativeVerificationEvidence[] = []
 for (const manifestPath of paths) {
   const candidate = dirname(join(input, manifestPath))
   const manifest = (await file(join(candidate, 'manifest.json')).json()) as DistributionManifest
@@ -41,6 +44,13 @@ for (const manifestPath of paths) {
   assert.equal(verified.distributionVersion, manifest.distributionVersion)
   assert.equal(verified.platform, `${platform.platform}-${platform.arch}`)
   assert.deepEqual(verified.engine, manifest.engine)
+  evidence.push({
+    build,
+    platform,
+    engine: manifest.engine,
+    nativeXml: await readFile(join(candidate, '../native-output/native-tests.xml')),
+    verification: await readFile(join(candidate, 'verification.json')),
+  })
   const bridgeArchive = await copyVerifiedReleaseInput(
     join(candidate, platform.bridge.filename),
     platform.bridge.filename,
@@ -107,6 +117,7 @@ const distribution = {
   }),
 }
 const buildInputs = await retainNativeBuildInputs(nativeBuilds, resolve(import.meta.dir, '..'), output)
+const verificationEvidence = await retainNativeVerificationEvidence(evidence, output)
 await writeFile(join(output, 'manifest.json'), `${JSON.stringify(distribution, null, 2)}\n`, {flag: 'wx'})
 const packageHashes = platforms
   .map((platform) => {
@@ -114,9 +125,11 @@ const packageHashes = platforms
   })
   .sort()
   .join('\n')
-await writeFile(join(output, 'SHA256SUMS'), `${packageHashes}\n${buildInputs.sha256}  ${buildInputs.filename}\n`, {
-  flag: 'wx',
-})
+await writeFile(
+  join(output, 'SHA256SUMS'),
+  `${packageHashes}\n${buildInputs.sha256}  ${buildInputs.filename}\n${verificationEvidence.sha256}  ${verificationEvidence.filename}\n`,
+  {flag: 'wx'},
+)
 console.log(
   JSON.stringify({distributionVersion: distribution.distributionVersion, platforms: platforms.length, output}),
 )
