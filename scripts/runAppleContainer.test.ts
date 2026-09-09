@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {expect, test} from 'bun:test'
 
 import {getAppleContainerCommands} from './runAppleContainer.ts'
@@ -21,4 +23,11 @@ test('uses 8 GiB by default and accepts whole GiB comparison budgets', () => {
       return getAppleContainerCommands({memory})
     }).toThrow('FORSKA_CONTAINER_MEMORY')
   }
+})
+
+test('container build context includes direct scripts used by the image', () => {
+  const dockerignore = readFileSync('.dockerignore', 'utf8')
+
+  expect(dockerignore).toContain('!scripts/*')
+  expect(dockerignore).toContain('!scripts/**')
 })

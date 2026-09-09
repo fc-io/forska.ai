@@ -147,14 +147,15 @@ bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test
 bun test src/server/services/structuredFileImportService.test.ts
 bun test src/server/services/structuredFileImportService.integration.test.ts
 bun test scripts/testUtils/createScriptTestDirectory.test.ts scripts/judgmentWorkflowRealCodex/realCodexTopologyAdapter/getProviderConnections.test.ts scripts/judgmentWorkflowRealCodex/realCodexTopologyAdapter/getSnapshotInputEvidence.test.ts
-bun test scripts/buildPlaywrightApp.test.ts
+bun test scripts/buildPlaywrightApp.test.ts scripts/startPlaywrightApiServer.test.ts
 ```
 
 These protect cold readiness without opening DuckDB, background queue draining
 across cold startup and recycle, event-driven foreground-idle admission with
 bounded timeout/cancellation and reset cleanup, active-before-terminal bounded transfer
-recovery, the provider-connection response contract, and snapshot fixture
-identity by pinned title/abstract hashes. The projector worker admission checks
+recovery, the provider-connection response contract, snapshot fixture
+identity by pinned title/abstract hashes, and Playwright current-DB API server
+shutdown releasing its DuckDB owner lease when the parent exits. The projector worker admission checks
 also cover short foreground bursts, the existing remaining wake budget, and
 rechecking exclusive/transfer/append barriers after an idle notification.
 Structured-import checks require real

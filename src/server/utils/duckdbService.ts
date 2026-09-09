@@ -5511,11 +5511,12 @@ const withProjectTransferForegroundMemoryHeadroomIfNeeded = async <T>(
 const closeDuckdbServiceForSignal = async () => {
   duckdbShutdownInProgress = true
   const shouldCloseRuntime = !shouldSerializeDuckdbConcurrentWork(getDuckdbRuntimeConfigValue().memoryLimit)
+  const shouldReleaseOwnerLease = shouldCloseRuntime || process.env.SERVER_ROLE === 'dev-single'
 
   return closeDuckdbServiceWithoutBarrier({
     checkpointBeforeClose: shouldCloseRuntime,
     closeRuntime: shouldCloseRuntime,
-    releaseOwnerLease: shouldCloseRuntime,
+    releaseOwnerLease: shouldReleaseOwnerLease,
   })
 }
 
