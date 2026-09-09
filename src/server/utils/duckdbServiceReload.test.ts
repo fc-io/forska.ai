@@ -953,9 +953,9 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
     }
 
     const parsed = parseJsonSubprocessStdout<{
-      checkpointChildOptions: {checkpoint_threshold?: string} | null
-      createOptionsHistory: Array<{checkpoint_threshold?: string}>
-      preflightChildOptions: {checkpoint_threshold?: string} | null
+      checkpointChildOptions: Record<string, string> | null
+      createOptionsHistory: Array<Record<string, string>>
+      preflightChildOptions: Record<string, string> | null
       preflightChildTimeout: number | null
       runStatements: string[]
       walSize: number
@@ -974,15 +974,15 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
     expect(parsed.preflightChildTimeout).toBe(120_000)
     expect(parsed.preflightChildOptions?.legacy_disable_null_type).toBe('true')
     expect(parsed.checkpointChildOptions?.legacy_disable_null_type).toBe('true')
-    expect(parsed.preflightChildOptions?.disabled_optimizers).toBe('cte_inlining')
-    expect(parsed.checkpointChildOptions?.disabled_optimizers).toBe('cte_inlining')
+    expect(parsed.preflightChildOptions?.disabled_optimizers).toBe('cte_inlining,statistics_propagation')
+    expect(parsed.checkpointChildOptions?.disabled_optimizers).toBe('cte_inlining,statistics_propagation')
     expect(parsed.checkpointChildOptions?.checkpoint_threshold).toBe(
       parsed.createOptionsHistory[0]?.checkpoint_threshold,
     )
     expect(parsed.createOptionsHistory).toEqual([
       {
         checkpoint_threshold: parsed.createOptionsHistory[0]?.checkpoint_threshold,
-        disabled_optimizers: 'cte_inlining',
+        disabled_optimizers: 'cte_inlining,statistics_propagation',
         legacy_disable_null_type: 'true',
         memory_limit: '6400MiB',
         preserve_insertion_order: 'false',

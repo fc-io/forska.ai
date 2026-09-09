@@ -8,6 +8,7 @@ if (!appPort) {
 
 const config = defineConfig({
   testDir: '.',
+  outputDir: process.env.FORSKA_PLAYWRIGHT_OUTPUT_DIR,
   testMatch: 'judgmentWorkflowBrowser.spec.ts',
   timeout: 180_000,
   workers: 1,

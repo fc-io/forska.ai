@@ -1,6 +1,8 @@
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {
   claimReviewServingDirtyWork,
   cleanupReviewServingDirtyWorkRetention,
@@ -134,10 +136,14 @@ const getBaseScope = (
 }
 
 const createDuckdbDirtyWorkDatabase = async () => {
-  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const duckdbInstance = await DuckDBInstance.create(':memory:', {
+    ...duckdbEngineCompatibilityOptions,
+    memory_limit: '256MB',
+  })
   const connection = await duckdbInstance.connect()
 
   await connection.run('CREATE SCHEMA app')
+  await connection.run('CREATE TABLE app.review_serving_dirty_work_id_lookup (dirty_work_id VARCHAR NOT NULL)')
   await connection.run(`
     CREATE TABLE app.review_serving_dirty_work (
       dirty_work_id VARCHAR NOT NULL,
@@ -218,7 +224,7 @@ const createDuckdbDirtyWorkDatabase = async () => {
       await connection.run('BEGIN')
 
       try {
-        const result = await operation(database)
+        const result = await operation({queryJson: database.queryJson, run: database.run})
         await connection.run('COMMIT')
 
         return result
@@ -1591,6 +1597,105 @@ test('claims rebuilt dirty work in DuckDB without returning hidden rowid', async
 
     expect(completion).toEqual({completedCount: 1})
     expect(completedRows).toEqual([{status: 'completed'}])
+  } finally {
+    close()
+  }
+})
+
+test('a completed older claim leaves coalesced new changes claimable in DuckDB', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    const created = await upsertDisplayWork(database, getBaseScope(1), 'delta-1')
+    const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+    expect(claims).toHaveLength(1)
+    await upsertDisplayWork(database, getBaseScope(2), 'delta-2')
+    await completeReviewServingDirtyWorkClaims(claims, database)
+
+    const latest = await getReviewServingDirtyWork(created.dirtyWorkId, database)
+    const nextClaims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+    expect(latest).toMatchObject({latestSourceHighWaterMark: 2, latestDeltaId: 'delta-2', status: 'pending'})
+    expect(nextClaims).toHaveLength(1)
+    expect(nextClaims[0]).toMatchObject({latestSourceHighWaterMark: 2, latestDeltaId: 'delta-2', status: 'running'})
+    await completeReviewServingDirtyWorkClaims(nextClaims, database)
+    expect(await getReviewServingDirtyWork(created.dirtyWorkId, database)).toMatchObject({status: 'completed'})
+  } finally {
+    close()
+  }
+})
+
+test('a completed older claim cannot finish a newer running claim in DuckDB', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    const created = await upsertDisplayWork(database, getBaseScope(1), 'delta-1')
+    const oldClaims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+    await upsertDisplayWork(database, getBaseScope(2), 'delta-2')
+    const newClaims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+    expect(oldClaims).toHaveLength(1)
+    expect(newClaims).toHaveLength(1)
+    await completeReviewServingDirtyWorkClaims(oldClaims, database)
+    expect(await getReviewServingDirtyWork(created.dirtyWorkId, database)).toMatchObject({
+      latestDeltaId: 'delta-2',
+      latestSourceHighWaterMark: 2,
+      status: 'running',
+    })
+    expect(
+      await database.queryJson(`
+        SELECT status, latest_source_high_water_mark::INTEGER AS watermark
+        FROM app.review_serving_dirty_work_claim_state
+        WHERE dirty_work_id = ${getSqlLiteral(created.dirtyWorkId)}
+      `),
+    ).toEqual([{status: 'running', watermark: 2}])
+    await completeReviewServingDirtyWorkClaims(newClaims, database)
+    expect(await getReviewServingDirtyWork(created.dirtyWorkId, database)).toMatchObject({status: 'completed'})
+  } finally {
+    close()
+  }
+})
+
+test('completion rolls back the watermark and base state when claim-state maintenance fails in DuckDB', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    const created = await upsertDisplayWork(database, getBaseScope(1), 'delta-1')
+    const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+    const failingDatabase: ReviewServingDirtyWorkDatabase = {
+      ...database,
+      transaction: async (operation) => {
+        return database.transaction(async (tx) => {
+          return operation({
+            ...tx,
+            run: async (statement) => {
+              if (statement.includes('UPDATE app.review_serving_dirty_work_claim_state')) {
+                throw new Error('claim-state write failed')
+              }
+
+              await tx.run(statement)
+            },
+          })
+        })
+      },
+    }
+
+    const result = await completeReviewServingDirtyWorkClaims(claims, failingDatabase).catch((error: unknown) => {
+      return error
+    })
+
+    expect(result).toEqual(new Error('claim-state write failed'))
+    expect(await getReviewServingDirtyWork(created.dirtyWorkId, database)).toMatchObject({status: 'running'})
+    expect(
+      await database.queryJson('SELECT COUNT(*)::INTEGER AS count FROM app.review_serving_dirty_work_ack'),
+    ).toEqual([{count: 0}])
+    expect(
+      await database.queryJson(
+        'SELECT COUNT(*)::INTEGER AS count FROM app.review_serving_project_dirty_source_watermark',
+      ),
+    ).toEqual([{count: 0}])
   } finally {
     close()
   }

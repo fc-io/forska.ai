@@ -126,7 +126,7 @@ const createWriterDatabase = () => {
         workloadContexts.push(workloadContext)
       }
 
-      return operation(database)
+      return operation({queryJson: database.queryJson, run: database.run})
     },
   }
 

@@ -389,6 +389,8 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
     expect(responseBody.duckdb.configured.threads).toBe('1')
     expect(responseBody.duckdb.instanceOptions).toEqual({
       checkpoint_threshold: '64MiB',
+      disabled_optimizers: 'cte_inlining,statistics_propagation',
+      legacy_disable_null_type: 'true',
       memory_limit: '256MiB',
       preserve_insertion_order: 'false',
       temp_directory: tempDirectory,

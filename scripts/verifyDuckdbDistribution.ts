@@ -6,6 +6,7 @@ import {join, resolve} from 'node:path'
 import {spawnSync} from 'bun'
 
 import {getInstalledDuckdbDistribution} from './verifyDuckdbDistribution/getInstalledDuckdbDistribution.ts'
+import {verifyDuckdbStringStatistics} from './verifyDuckdbDistribution/verifyDuckdbStringStatistics.ts'
 import {verifyDuckdbWal} from './verifyDuckdbDistribution/verifyDuckdbWal.ts'
 
 const packageRoot = resolve(
@@ -42,6 +43,9 @@ const verifyInstalledRuntime = () => {
   runCommand([...command, '--phase=seed'], artifacts, 'seed')
   assert.ok(statSync(join(artifacts, 'new-wal.duckdb.wal')).size > 0, 'Committed data must require actual WAL replay')
   runCommand([...command, '--phase=reopen'], artifacts, 'reopen')
+  ;['statistics-replay', 'statistics-checkpoint', 'statistics-reopen'].map((statisticsPhase) => {
+    return runCommand([...command, `--phase=${statisticsPhase}`], artifacts, statisticsPhase)
+  })
   const regressionPath = join(artifacts, 'duckdbCheckpointMemoryRegression.ts')
   copyFileSync(new URL('./duckdbCheckpointMemoryRegression.ts', import.meta.url), regressionPath)
   symlinkSync(join(packageRoot, 'node_modules'), join(artifacts, 'node_modules'), 'junction')
@@ -51,7 +55,11 @@ const verifyInstalledRuntime = () => {
 
 if (phase !== undefined) {
   assert.ok(directory, 'A child verification phase requires its disposable directory')
-  await verifyDuckdbWal(packageRoot, phase, directory)
+  if (phase.startsWith('statistics-')) {
+    await verifyDuckdbStringStatistics(packageRoot, phase, directory)
+  } else {
+    await verifyDuckdbWal(packageRoot, phase, directory)
+  }
 } else {
   verifyInstalledRuntime()
 }
