@@ -4,9 +4,15 @@ import {existsSync, readFileSync, writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {gunzipSync} from 'node:zlib'
 
+import type {DuckDBInstance} from '@duckdb/node-api'
+
 import {createDuckdbInstance} from '../../src/server/utils/createDuckdbInstance.ts'
 import fixture from '../../src/server/utils/duckdbEngineCompatibility/fixtures/duckdb151StringStatsAlphaWal.json'
-import {duckdbEngineCompatibilityOptions} from '../../src/server/utils/duckdbEngineContract.ts'
+import {
+  duckdbEngineCompatibilityOptions,
+  type DuckdbEngineIdentity,
+  duckdbExpectedEngineIdentity,
+} from '../../src/server/utils/duckdbEngineContract.ts'
 import {getInstalledDuckdbDistribution} from './getInstalledDuckdbDistribution.ts'
 
 const insertedRow = {id: 'projection:10000000000000000000000000000000', n: 408}
@@ -19,7 +25,12 @@ const expectedRows = [
   insertedRow,
 ]
 
-export const verifyDuckdbStringStatistics = async (packageRoot: string, phase: string, directory: string) => {
+export const verifyDuckdbStringStatisticsRuntime = async (
+  runtime: {DuckDBInstance: typeof DuckDBInstance},
+  phase: string,
+  directory: string,
+  expectedEngine: DuckdbEngineIdentity,
+) => {
   assert.ok(['statistics-replay', 'statistics-checkpoint', 'statistics-reopen'].includes(phase))
   const databasePath = join(directory, 'string-statistics.duckdb')
 
@@ -37,13 +48,15 @@ export const verifyDuckdbStringStatistics = async (packageRoot: string, phase: s
     })
   }
 
-  const {DuckDBInstance} = getInstalledDuckdbDistribution(packageRoot)
+  const {DuckDBInstance} = runtime
   const before = phase === 'statistics-replay' ? [readFileSync(databasePath), readFileSync(`${databasePath}.wal`)] : []
   const instance = await createDuckdbInstance({
     create: DuckDBInstance.create.bind(DuckDBInstance),
     databasePath,
+    expectedEngine,
     options: {
       ...duckdbEngineCompatibilityOptions,
+      disabled_optimizers: 'cte_inlining',
       memory_limit: '128MiB',
       threads: '1',
       access_mode: phase === 'statistics-checkpoint' ? 'READ_WRITE' : 'READ_ONLY',
@@ -95,4 +108,13 @@ export const verifyDuckdbStringStatistics = async (packageRoot: string, phase: s
   }
 
   console.log(`duckdb-distribution:${phase}:pass`, {rows: expectedRows.length, exactIds: 2, range: true, join: true})
+}
+
+export const verifyDuckdbStringStatistics = async (packageRoot: string, phase: string, directory: string) => {
+  return verifyDuckdbStringStatisticsRuntime(
+    getInstalledDuckdbDistribution(packageRoot),
+    phase,
+    directory,
+    duckdbExpectedEngineIdentity,
+  )
 }

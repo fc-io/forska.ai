@@ -8,7 +8,7 @@ const writeOctal = (header: Buffer, value: number, offset: number, length: numbe
 }
 
 const createEntry = ([name, contents]: [string, Uint8Array]) => {
-  assert.match(name, /^package\/[a-zA-Z0-9_.-]+$/, 'package entries must be flat regular files')
+  assert.match(name, /^(?:package\/)?[a-zA-Z0-9_.-]+$/, 'package entries must be flat regular files')
   assert.ok(Buffer.byteLength(name) < 100, 'package filename exceeds ustar limit')
   const header = Buffer.alloc(512)
   header.write(name)

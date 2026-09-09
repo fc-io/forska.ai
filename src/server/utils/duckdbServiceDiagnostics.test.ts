@@ -86,6 +86,10 @@ test('duckdb active main work diagnostics expose in-flight workload without SQL 
               async run() {}
 
               async runAndReadAll(statement) {
+                if (statement === 'PRAGMA version') {
+                  return {getRowObjectsJson: () => ${JSON.stringify([{library_version: duckdbDistributionManifest.engine.version, source_id: duckdbDistributionManifest.engine.sourceId}])}}
+                }
+
                 if (statement.includes('BLOCK_ACTIVE_WORK')) {
                   await new Promise((resolve) => {
                     unblockActiveQuery = resolve
@@ -265,7 +269,11 @@ test('duckdb native statement diagnostics identify workload and connection witho
                 }
               }
 
-              async runAndReadAll() {
+              async runAndReadAll(statement) {
+                if (statement === 'PRAGMA version') {
+                  return {getRowObjectsJson: () => ${JSON.stringify([{library_version: duckdbDistributionManifest.engine.version, source_id: duckdbDistributionManifest.engine.sourceId}])}}
+                }
+
                 return {getRowObjectsJson: () => [{value: 1}]}
               }
 
@@ -521,7 +529,11 @@ test('duckdb native statement lifecycle diagnostics are opt-in while errors stay
                 }
               }
 
-              async runAndReadAll() {
+              async runAndReadAll(statement) {
+                if (statement === 'PRAGMA version') {
+                  return {getRowObjectsJson: () => ${JSON.stringify([{library_version: duckdbDistributionManifest.engine.version, source_id: duckdbDistributionManifest.engine.sourceId}])}}
+                }
+
                 return {getRowObjectsJson: () => [{value: 1}]}
               }
 

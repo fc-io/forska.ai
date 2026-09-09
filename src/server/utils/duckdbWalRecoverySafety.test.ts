@@ -71,6 +71,10 @@ test.each([
             return {
               async run() {},
               async runAndReadAll(statement) {
+                if (statement === 'PRAGMA version') {
+                  return {getRowObjectsJson: () => ${JSON.stringify([{library_version: duckdbDistributionManifest.engine.version, source_id: duckdbDistributionManifest.engine.sourceId}])}}
+                }
+
                 if (statement.startsWith('SELECT database_name FROM duckdb_databases()')) {
                   return {getRowObjectsJson: () => [{database_name: 'test'}]}
                 }

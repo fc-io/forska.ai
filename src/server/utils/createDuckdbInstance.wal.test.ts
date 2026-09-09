@@ -5,7 +5,7 @@ import {join} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import {createDuckdbInstance} from './createDuckdbInstance.ts'
-import {duckdbEngineCompatibilityOptions} from './duckdbEngineContract.ts'
+import {duckdbEngineCompatibilityOptions, duckdbExpectedEngineIdentity} from './duckdbEngineContract.ts'
 import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
 
 const runChild = (databasePath: string, script: string) => {
@@ -120,7 +120,7 @@ test('full application WAL from a killed writer replays offline through read-onl
         const {DuckDBInstance} = await import('@duckdb/node-api')
         const createDuckdbInstance = ${createDuckdbInstance.toString()}
         const instance = await createDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance),
-          databasePath: JSON.parse(process.argv[1]), options: JSON.parse(process.argv[2])})
+          databasePath: JSON.parse(process.argv[1]), options: JSON.parse(process.argv[2]), expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)}})
         const connection = await instance.connect()
         const rows = (await connection.runAndReadAll('SELECT * FROM app.wal_replay_probe')).getRowObjectsJson()
         const migrations = (await connection.runAndReadAll('SELECT name FROM app_schema_migration ORDER BY name')).getRowObjectsJson()

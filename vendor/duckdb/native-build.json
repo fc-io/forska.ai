@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "distributionVersion": "2.0.0-alpha40881.forska.2",
+  "engineVersion": "v2.0.0-alpha40881",
+  "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+  "sourceArchive": {
+    "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+    "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+    "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+  },
+  "patches": ["vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch"],
+  "patchSha256": "2fce956e1209df26c2755345f96825aa8c3166e4235b4b18932dcc9c6cb82506",
+  "extensionConfig": ".github/config/bundled_extensions.cmake",
+  "parallelism": 4,
+  "releaseTag": "duckdb-v2.0.0-alpha40881-forska.2"
+}

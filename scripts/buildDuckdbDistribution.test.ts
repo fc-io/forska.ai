@@ -103,6 +103,30 @@ test('package output is deterministic and contains normalized ownership and time
   )
 })
 
+test('a patched candidate records its native origin without mutating the active package manifest', async () => {
+  const originalManifest = structuredClone(manifest)
+  const input = await fixture()
+  const nativeBuild = {sourceRevision: manifest.engine.sourceRevision, patches: [{sha256: 'f'.repeat(64)}]}
+  const distribution = {
+    ...manifest,
+    distributionVersion: '2.0.0-alpha40881.forska.2',
+    engine: {...manifest.engine, sourceId: 'ffffffffff', nativeBuild},
+  }
+  const first = await buildPlatformPackage({...input, distribution, platform: {...input.platform, nativeBuild}})
+  const second = await buildPlatformPackage({...input, distribution, platform: {...input.platform, nativeBuild}})
+  const files = await new Archive(first.bytes).files()
+  const provenance = JSON.parse(await readText(files, 'package/FORSKA_DUCKDB_PROVENANCE.json')) as {
+    distributionVersion: string
+    engine: {sourceId: string}
+    nativeBuild: typeof nativeBuild
+  }
+  expect(first.bytes).toEqual(second.bytes)
+  expect(provenance.distributionVersion).toBe(distribution.distributionVersion)
+  expect(provenance.engine.sourceId).toBe('ffffffffff')
+  expect(provenance.nativeBuild).toEqual(nativeBuild)
+  expect(manifest).toEqual(originalManifest)
+})
+
 test('distribution rejects corrupt native inputs before unpacking', async () => {
   const input = await fixture()
   expect(await getFailureMessage({...input, nativeArchive: bytes('corrupt archive')})).toContain('checksum mismatch')

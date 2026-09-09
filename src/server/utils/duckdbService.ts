@@ -23,6 +23,7 @@ import {
   getDuckdbLegacyWalCompatibilityError,
   isDuckdbLegacyWalCompatibilityError,
 } from './duckdbEngineCompatibility.ts'
+import {duckdbExpectedEngineIdentity} from './duckdbEngineContract.ts'
 import {getActiveDuckdbExclusiveWorkSnapshot, getDuckdbExclusiveWorkAdmissionError} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
@@ -3489,7 +3490,7 @@ const getDuckdbStartupPreflightScript = () => {
     }
 
     try {
-      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
+      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options, expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)}})
       connection = await instance.connect()
       await connection.run('SELECT 1')
 
@@ -3941,6 +3942,7 @@ const getDuckdbIndexedTableRepairScript = () => {
 
       try {
         preservedInstance = await createInitializedDuckdbInstance({
+          expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)},
           create: DuckDBInstance.create.bind(DuckDBInstance),
           databasePath: preservedDatabasePath,
           options: {...options, access_mode: 'READ_ONLY'},
@@ -4154,7 +4156,7 @@ const getDuckdbIndexedTableRepairScript = () => {
     }
 
     try {
-      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
+      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options, expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)}})
       connection = await instance.connect()
       const repairedTableKeys = new Set(
         tableRepairSpecs.map((spec) => {
@@ -4427,7 +4429,7 @@ const getDuckdbStartupFileLockProbeScript = () => {
     const {DuckDBInstance} = await import('@duckdb/node-api')
     const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
-    const instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
+    const instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options, expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)}})
     instance.closeSync()
   `
 }
@@ -4443,7 +4445,7 @@ const getDuckdbStartupWalCheckpointScript = () => {
     let instance = null
 
     try {
-      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options})
+      instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options, expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)}})
       connection = await instance.connect()
       await connection.run('CHECKPOINT')
     } finally {

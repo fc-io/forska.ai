@@ -1,5 +1,12 @@
 import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
 
+export type DuckdbEngineIdentity = Readonly<{version: string; sourceId: string}>
+
+export const duckdbExpectedEngineIdentity: DuckdbEngineIdentity = Object.freeze({
+  version: duckdbDistributionManifest.engine.version,
+  sourceId: duckdbDistributionManifest.engine.sourceId,
+})
+
 export const duckdbEngineCompatibilityOptions = {
   disabled_optimizers: 'cte_inlining,statistics_propagation',
   legacy_disable_null_type: 'true',

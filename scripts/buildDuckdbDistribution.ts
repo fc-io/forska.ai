@@ -9,6 +9,7 @@ import {Effect} from 'effect'
 import manifest from '../vendor/duckdb/manifest.json'
 import {acquireDistributionInput} from './buildDuckdbDistribution/acquireDistributionInput'
 import {buildPlatformPackage} from './buildDuckdbDistribution/buildPlatformPackage'
+import type {DistributionManifest} from './buildDuckdbDistribution/distributionManifest'
 
 export const buildDuckdbDistribution = (options: {
   inputDir: string
@@ -16,11 +17,13 @@ export const buildDuckdbDistribution = (options: {
   platform?: string
   offline: boolean
   upstream?: boolean
+  distribution?: DistributionManifest
 }) => {
   return Effect.gen(function* () {
     const {inputDir, outputDir, offline} = options
+    const distribution = options.distribution ?? manifest
     assert.notEqual(resolve(inputDir), resolve(outputDir), 'Inputs and outputs must be separate directories')
-    const platforms = manifest.platforms.filter((item) => {
+    const platforms = distribution.platforms.filter((item) => {
       return !options.platform || `${item.platform}-${item.arch}` === options.platform
     })
     assert.ok(platforms.length > 0, `Unsupported distribution platform: ${options.platform}`)
@@ -30,16 +33,16 @@ export const buildDuckdbDistribution = (options: {
     const source = <T extends {filename: string}>(input: T) => {
       return {
         ...input,
-        mirrorUrl: options.upstream ? undefined : new URL(input.filename, manifest.release.baseUrl).href,
+        mirrorUrl: options.upstream ? undefined : new URL(input.filename, distribution.release.baseUrl).href,
       }
     }
-    const nativeLicense = yield* acquireDistributionInput(source(manifest.nativeLicense), inputDir, offline)
+    const nativeLicense = yield* acquireDistributionInput(source(distribution.nativeLicense), inputDir, offline)
     const results = yield* Effect.forEach(platforms, (platform) => {
       return Effect.gen(function* () {
         const bridgeArchive = yield* acquireDistributionInput(source(platform.bridge), inputDir, offline)
         const nativeArchive = yield* acquireDistributionInput(source(platform.artifact), inputDir, offline)
         const built = yield* Effect.tryPromise(() => {
-          return buildPlatformPackage({platform, bridgeArchive, nativeArchive, nativeLicense})
+          return buildPlatformPackage({platform, bridgeArchive, nativeArchive, nativeLicense, distribution})
         })
         assert.equal(built.sha256, platform.sha256, `${platform.filename}: distribution is not reproducible`)
         assert.equal(built.integrity, platform.integrity, `${platform.filename}: distribution integrity mismatch`)
@@ -86,6 +89,7 @@ if (import.meta.main) {
       platform: {type: 'string'},
       offline: {type: 'boolean', default: false},
       upstream: {type: 'boolean', default: false},
+      manifest: {type: 'string'},
     },
     strict: true,
   })
@@ -96,6 +100,7 @@ if (import.meta.main) {
       platform: values.platform,
       offline: values.offline,
       upstream: values.upstream,
+      distribution: values.manifest ? ((await file(values.manifest).json()) as DistributionManifest) : undefined,
     }),
   )
 }

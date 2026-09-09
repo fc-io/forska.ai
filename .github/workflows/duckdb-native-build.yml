@@ -1,0 +1,108 @@
+name: Patched DuckDB native build
+
+on:
+  pull_request:
+    paths:
+      - 'vendor/duckdb/native-build.json'
+      - 'vendor/duckdb/native-build.cmake'
+      - 'vendor/duckdb/patches/**'
+      - 'scripts/buildPatchedDuckdb*'
+      - 'scripts/buildPatchedDuckdb/**'
+      - 'scripts/stagePatchedDuckdbDistribution*'
+      - 'scripts/stagePatchedDuckdbDistribution/**'
+      - 'scripts/validatePatchedDuckdbCandidate.ts'
+      - 'scripts/verifyPatchedDuckdb.ts'
+      - 'scripts/verifyPatchedDuckdb/**'
+      - 'scripts/verifyDuckdbDistribution/**'
+      - 'src/server/utils/createDuckdbInstance*'
+      - 'src/server/utils/duckdbEngineContract*'
+      - 'src/server/utils/duckdbEngineCompatibility/fixtures/**'
+      - 'scripts/duckdbCheckpointMemoryRegression.ts'
+      - '.github/workflows/duckdb-native-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-build:
+    name: native-${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux, arch: x64, runner: ubuntu-24.04, container: 'quay.io/pypa/manylinux_2_28_x86_64@sha256:53390351aeb4688114b02c36a23b3e6ce1166ee9b7afc5df1a4f776354fc764c', cache: ccache}
+          - {platform: linux, arch: arm64, runner: ubuntu-24.04-arm, container: 'quay.io/pypa/manylinux_2_28_aarch64@sha256:ad74e53b713f3b07d8c889c526dc0c6500da9827b45e38739570875fef52e28f', cache: ccache}
+          - {platform: darwin, arch: arm64, runner: macos-14, container: null, cache: ccache}
+          - {platform: darwin, arch: x64, runner: macos-15-intel, container: null, cache: ccache}
+          - {platform: win32, arch: x64, runner: windows-2025, container: null, cache: ''}
+          - {platform: win32, arch: arm64, runner: windows-11-arm, container: null, cache: ''}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.native-ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_COMPRESS: 'true'
+      SOURCE_DATE_EPOCH: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build tools
+        if: matrix.platform == 'linux'
+        run: dnf install -y cmake ninja-build ccache git tar gzip
+      - name: Install macOS build tools
+        if: matrix.platform == 'darwin'
+        run: brew install ninja ccache
+      - uses: actions/setup-python@v5
+        if: matrix.platform == 'win32'
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.arch }}
+      - name: Install Windows Ninja
+        if: matrix.platform == 'win32'
+        run: python -m pip install ninja==1.13.0
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.platform == 'win32'
+        with:
+          arch: ${{ matrix.arch }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Confirm native architecture
+        run: bun -e "if (process.platform !== '${{ matrix.platform }}' || process.arch !== '${{ matrix.arch }}') throw new Error('Runner architecture mismatch')"
+      - uses: actions/cache@v4
+        if: matrix.cache != ''
+        with:
+          path: .native-ccache
+          key: native-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('vendor/duckdb/native-build.*', 'vendor/duckdb/patches/**', 'scripts/buildPatchedDuckdb/**') }}
+          restore-keys: native-${{ runner.os }}-${{ matrix.arch }}-
+      - name: Build pinned source and run native regressions
+        shell: bash
+        run: >-
+          bun scripts/buildPatchedDuckdb.ts
+          --input-dir "${{ runner.temp }}/native-inputs"
+          --work-dir "${{ runner.temp }}/native-work"
+          --output-dir "${{ runner.temp }}/native-output"
+          --compiler-cache "${{ matrix.cache }}"
+          --test-filter 'test/sql/storage/truncated_string_max_update.test,[string_stats_truncated_max],test/sql/delete/bulk_delete_version_info_memory.test,test/sql/delete/delete_compression_after_restart.test,test/sql/delete/delete_compression_blocked_by_old_snapshot.test,test/sql/delete/full_vector_delete_conflict.test,test/sql/delete/full_vector_delete_rollback.test,test/sql/delete/piecemeal_delete_checkpoint_compress.test_slow,test/sql/storage/full_vector_delete_checkpoint.test,test/sql/storage/piecemeal_delete_checkpoint_compress.test,test/sql/delete/masked_vector_further_delete.test,test/sql/delete/masked_vector_rollback.test,test/sql/delete/partial_delete_version_info_memory.test,test/sql/storage/partial_delete_checkpoint_mask.test,test/sql/storage/partial_delete_pending_compress.test'
+      - name: Stage immutable native package with official Node bridge
+        run: bun scripts/stagePatchedDuckdbDistribution.ts --native-dir "${{ runner.temp }}/native-output" --output-dir "${{ runner.temp }}/candidate"
+      - name: Verify real predicates, UPDATE, WAL and low-memory checkpoint
+        run: bun scripts/validatePatchedDuckdbCandidate.ts --candidate-dir "${{ runner.temp }}/candidate" --work-dir "${{ runner.temp }}/candidate-verification"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: patched-duckdb-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/native-output
+            ${{ runner.temp }}/candidate
+            ${{ runner.temp }}/candidate-verification/evidence
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        with:
+          name: patched-duckdb-source-input
+          path: ${{ runner.temp }}/native-inputs
+          if-no-files-found: error
+          retention-days: 30

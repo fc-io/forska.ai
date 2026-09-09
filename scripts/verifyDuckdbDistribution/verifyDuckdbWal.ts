@@ -1,19 +1,27 @@
 import assert from 'node:assert/strict'
 import {join} from 'node:path'
 
+import type {DuckDBInstance} from '@duckdb/node-api'
+
 import {createDuckdbInstance} from '../../src/server/utils/createDuckdbInstance.ts'
 import {duckdbEngineCompatibilityOptions} from '../../src/server/utils/duckdbEngineContract.ts'
 import manifest from '../../vendor/duckdb/manifest.json'
 import {getInstalledDuckdbDistribution} from './getInstalledDuckdbDistribution.ts'
 
-export const verifyDuckdbWal = async (packageRoot: string, phase: string, directory: string) => {
+export const verifyDuckdbWalRuntime = async (
+  runtime: {DuckDBInstance: typeof DuckDBInstance},
+  phase: string,
+  directory: string,
+  expectedEngine: {version: string; sourceId: string},
+) => {
   assert.ok(phase === 'seed' || phase === 'reopen', 'Unsupported distribution verification phase')
-  const {DuckDBInstance} = getInstalledDuckdbDistribution(packageRoot)
+  const {DuckDBInstance} = runtime
   const instance = await createDuckdbInstance({
     create: (path, options) => {
       return DuckDBInstance.create(path, options)
     },
     databasePath: join(directory, 'new-wal.duckdb'),
+    expectedEngine,
     options: {
       ...duckdbEngineCompatibilityOptions,
       memory_limit: '128MiB',
@@ -26,8 +34,8 @@ export const verifyDuckdbWal = async (packageRoot: string, phase: string, direct
   try {
     await connection.run('PRAGMA disable_checkpoint_on_shutdown')
     const version = (await connection.runAndReadAll('PRAGMA version')).getRowObjectsJS()[0]
-    assert.equal(version?.library_version, manifest.engine.version)
-    assert.equal(version?.source_id, manifest.engine.sourceId)
+    assert.equal(version?.library_version, expectedEngine.version)
+    assert.equal(version?.source_id, expectedEngine.sourceId)
     const settings = (
       await connection.runAndReadAll(
         "SELECT current_setting('disabled_optimizers') AS disabled_optimizers, current_setting('legacy_disable_null_type') AS legacy_disable_null_type",
@@ -36,7 +44,10 @@ export const verifyDuckdbWal = async (packageRoot: string, phase: string, direct
     assert.equal(settings?.legacy_disable_null_type, true)
     const disabledOptimizers = settings?.disabled_optimizers
     assert.ok(typeof disabledOptimizers === 'string')
-    assert.deepEqual(disabledOptimizers.split(',').sort(), ['cte_inlining', 'statistics_propagation'])
+    assert.deepEqual(
+      disabledOptimizers.split(',').sort(),
+      duckdbEngineCompatibilityOptions.disabled_optimizers.split(',').sort(),
+    )
     const nulls = (
       await connection.runAndReadAll("SELECT NULL AS scalar_null, [NULL] AS list_null, {'value': NULL} AS struct_null")
     ).getRowObjectsJS()
@@ -66,4 +77,8 @@ export const verifyDuckdbWal = async (packageRoot: string, phase: string, direct
     connection.closeSync()
     instance.closeSync()
   }
+}
+
+export const verifyDuckdbWal = async (packageRoot: string, phase: string, directory: string) => {
+  return verifyDuckdbWalRuntime(getInstalledDuckdbDistribution(packageRoot), phase, directory, manifest.engine)
 }
