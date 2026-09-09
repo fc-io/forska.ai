@@ -78,6 +78,6 @@ export const buildPlatformPackage = async (input: {
     'package/DUCKDB_LICENSE': nativeLicense,
     'package/FORSKA_DUCKDB_PROVENANCE.json': encodeJson(provenance),
   }
-  const bytes = createDeterministicTarball(files)
+  const bytes = createDeterministicTarball(files, platform.platform)
   return {bytes, sha256: hashDistributionInput(bytes), integrity: getDistributionIntegrity(bytes)}
 }

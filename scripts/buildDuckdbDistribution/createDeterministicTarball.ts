@@ -29,10 +29,17 @@ const createEntry = ([name, contents]: [string, Uint8Array]) => {
   return Buffer.concat([header, contents, padding])
 }
 
-export const createDeterministicTarball = (files: Record<string, Uint8Array>) => {
+export const createDeterministicTarball = (files: Record<string, Uint8Array>, platform?: string) => {
   const entries = Object.entries(files).sort(([left], [right]) => {
     return left.localeCompare(right, 'en')
   })
   const tar = Buffer.concat([...entries.map(createEntry), Buffer.alloc(1024)])
-  return gzipSync(tar, {level: 9})
+  const bytes = gzipSync(tar, {level: 9})
+  // Preserve the target header emitted by pinned Bun 1.3.13, not the assembler host's header.
+  // New platform-neutral evidence archives use the gzip "unknown OS" value.
+  const operatingSystems: Record<string, number> = {linux: 3, darwin: 19, win32: 10}
+  const operatingSystem = platform === undefined ? 255 : operatingSystems[platform]
+  assert.ok(operatingSystem !== undefined, 'Unsupported gzip target platform')
+  bytes[9] = operatingSystem
+  return bytes
 }
