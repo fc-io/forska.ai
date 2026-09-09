@@ -5,10 +5,9 @@ COPY vendor/duckdb/manifest.json ./vendor/duckdb/manifest.json
 COPY scripts/verifyDuckdbDistribution/pruneDuckdbPlatformPackages.ts ./scripts/verifyDuckdbDistribution/pruneDuckdbPlatformPackages.ts
 RUN --mount=type=cache,id=forska-bun-install,target=/var/cache/forska-bun,sharing=locked BUN_INSTALL_CACHE_DIR=/var/cache/forska-bun bun install --frozen-lockfile \
     && bun -e "import {pruneDuckdbPlatformPackages} from './scripts/verifyDuckdbDistribution/pruneDuckdbPlatformPackages.ts'; console.log(pruneDuckdbPlatformPackages('/app/node_modules', process.platform, process.arch))"
-COPY vendor/duckdb ./vendor/duckdb
-COPY src ./src
-COPY scripts ./scripts
-RUN bun scripts/verifyDuckdbDistribution.ts
+COPY --parents vendor/duckdb/**/* src/**/* scripts/**/* ./
+RUN test -f scripts/verifyDuckdbDistribution.ts && test -f src/server/index.ts && test -f scripts/devStart.ts \
+    && bun scripts/verifyDuckdbDistribution.ts
 RUN bun -e "const path = 'node_modules/@duckdb/node-bindings-' + process.platform + '-' + process.arch + '/FORSKA_DUCKDB_PROVENANCE.json'; await Bun.write('/usr/local/share/forska-duckdb-provenance.json', Bun.file(path))"
 COPY index.html tsconfig.json vite.config.ts ./
 COPY containers/apple/start.sh /usr/local/bin/forska-container-start
