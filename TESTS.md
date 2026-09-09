@@ -117,6 +117,7 @@ Mac PID namespace; see the [recovery steps](containers/apple/README.md#use-the-e
 ```sh
 bun test src/server/utils/getDuckdbServiceReadinessSnapshot.test.ts
 bun test src/server/utils/duckdbServiceMemoryLimit.test.ts
+bun test src/server/utils/duckdbServiceForegroundQueue.test.ts
 bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts
 bun test src/server/services/structuredFileImportService.test.ts
 bun test src/server/services/structuredFileImportService.integration.test.ts
@@ -125,9 +126,13 @@ bun test scripts/buildPlaywrightApp.test.ts
 ```
 
 These protect cold readiness without opening DuckDB, background queue draining
-across cold startup and recycle, active-before-terminal bounded transfer
+across cold startup and recycle, event-driven foreground-idle admission with
+bounded timeout/cancellation and reset cleanup, active-before-terminal bounded transfer
 recovery, the provider-connection response contract, and snapshot fixture
-identity by pinned title/abstract hashes. Structured-import checks require real
+identity by pinned title/abstract hashes. The projector worker admission checks
+also cover short foreground bursts, the existing remaining wake budget, and
+rechecking exclusive/transfer/append barriers after an idle notification.
+Structured-import checks require real
 canonical persistence without DOI/PMID/arXiv IDs, stable source identity and
 idempotent reimports, duplicate handling, and actual accepted counts.
 Script fixtures own

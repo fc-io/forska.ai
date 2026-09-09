@@ -231,6 +231,7 @@ type DuckdbServiceState = {
   controlTransactionIndexedMutationTargets: string[]
   controlTransactionDepth: number
   duckdbInstance: DuckDBInstance | null
+  duckdbForegroundIdleWaiters: Set<(idle: boolean) => void>
   duckdbLastDurationMs: number | null
   duckdbLastWaitMs: number | null
   duckdbMainQueueRunning: boolean
@@ -2449,6 +2450,7 @@ const getDuckdbServiceState = () => {
     controlTransactionIndexedMutationTargets: [],
     controlTransactionDepth: 0,
     duckdbInstance: null,
+    duckdbForegroundIdleWaiters: new Set(),
     duckdbLastDurationMs: null,
     duckdbLastWaitMs: null,
     duckdbMainQueueRunning: false,
@@ -2476,6 +2478,7 @@ duckdbServiceState.controlTransactionIndexedMutationTarget ??= null
 duckdbServiceState.activeMainWork ??= null
 duckdbServiceState.duckdbMainQueueRunning ??= false
 duckdbServiceState.duckdbMainQueuedWork ??= []
+duckdbServiceState.duckdbForegroundIdleWaiters ??= new Set()
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
@@ -5139,6 +5142,10 @@ const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfte
 const resetDuckdbRuntimeState = () => {
   const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
 
+  for (const finish of duckdbServiceState.duckdbForegroundIdleWaiters) {
+    finish(false)
+  }
+
   duckdbServiceState.activeMainWork = null
   duckdbServiceState.appendBarrier = null
   duckdbServiceState.appendConnections = []
@@ -5796,17 +5803,56 @@ const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
   )
 
   const queuedWork = enqueueDuckdbMainQueueWork(work, 'foreground', queuedAtMs)
-  queuedWork.then(
-    () => {
-      duckdbServiceState.duckdbPendingCount = Math.max(0, duckdbServiceState.duckdbPendingCount - 1)
-      return undefined
-    },
-    () => {
-      duckdbServiceState.duckdbPendingCount = Math.max(0, duckdbServiceState.duckdbPendingCount - 1)
-      return undefined
-    },
-  )
+  const complete = () => {
+    duckdbServiceState.duckdbPendingCount = Math.max(0, duckdbServiceState.duckdbPendingCount - 1)
+
+    if (duckdbServiceState.duckdbPendingCount === 0) {
+      for (const finish of duckdbServiceState.duckdbForegroundIdleWaiters) {
+        finish(true)
+      }
+    }
+  }
+
+  queuedWork.then(complete, complete)
   return queuedWork
+}
+
+// Observe the next idle boundary without adding background work to the foreground
+// queue. Callers must recheck their other admission barriers after this resolves.
+export const waitForDuckdbForegroundQueue = ({
+  signal,
+  timeoutMs,
+}: {
+  signal?: AbortSignal
+  timeoutMs: number
+}): Promise<boolean> => {
+  if (signal?.aborted) {
+    return Promise.resolve(false)
+  }
+
+  if (duckdbServiceState.duckdbPendingCount === 0) {
+    return Promise.resolve(true)
+  }
+
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return Promise.resolve(false)
+  }
+
+  return new Promise((resolve) => {
+    const finish = (idle: boolean) => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+      duckdbServiceState.duckdbForegroundIdleWaiters.delete(finish)
+      resolve(idle)
+    }
+    const abort = () => {
+      finish(false)
+    }
+    const timer = setTimeout(abort, timeoutMs)
+
+    duckdbServiceState.duckdbForegroundIdleWaiters.add(finish)
+    signal?.addEventListener('abort', abort, {once: true})
+  })
 }
 
 const enqueueDuckdbSerializedBackgroundWork = async <T>(work: () => Promise<T>): Promise<T> => {
