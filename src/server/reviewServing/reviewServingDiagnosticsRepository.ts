@@ -661,12 +661,23 @@ const getDiagnosticsSummaryRowsEffect = (
         FROM app.review_serving_dirty_work_claim_state
         WHERE project_id = ${getSqlLiteral(input.projectId)}
         GROUP BY status
+      ), unfinished_request AS (
+        SELECT DISTINCT request_id
+        FROM app.review_rebuild_chunk_manifest
+        WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+          AND request_id IS NOT NULL
+          AND status <> 'completed'
       ), latest_request AS (
         SELECT request_id, admission_state, reason, status
         FROM app.review_rebuild_request
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
         ORDER BY
-          CASE WHEN admission_state = 'admitted' AND status IN ('admitted', 'running') THEN 0 ELSE 1 END ASC,
+          CASE
+            WHEN admission_state = 'admitted' AND status IN ('admitted', 'running')
+              AND request_id IN (SELECT request_id FROM unfinished_request) THEN 0
+            WHEN admission_state = 'admitted' AND status IN ('admitted', 'running') THEN 1
+            ELSE 2
+          END ASC,
           updated_at DESC,
           created_at DESC,
           request_id DESC

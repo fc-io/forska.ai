@@ -4,16 +4,18 @@ import {join} from 'node:path'
 
 import {createDeterministicTarball} from '../buildDuckdbDistribution/createDeterministicTarball'
 import {hashDistributionInput} from '../buildDuckdbDistribution/hashDistributionInput'
+import {assertNativeRecipeMatches, normalizeNativeRecipe} from '../stagePatchedDuckdbDistribution/normalizeNativeRecipe'
 import type {NativeBuild} from '../stagePatchedDuckdbDistribution/readNativeBuild'
 
 export const retainNativeBuildInputs = async (builds: NativeBuild[], root: string, output: string) => {
   const first = builds[0]
   assert.ok(first, 'At least one verified build is required')
+  const canonical = normalizeNativeRecipe(first.recipe)
   for (const build of builds) {
-    assert.deepEqual(build.recipe, first.recipe, 'Native targets used different build recipes')
+    assertNativeRecipeMatches(build.recipe, first.recipe)
     assert.deepEqual(build.patches, first.patches, 'Native targets used different engine patches')
   }
-  const inputs = [...first.recipe.inputs, ...first.patches].map((input) => {
+  const inputs = [...canonical.inputs, ...first.patches].map((input) => {
     return {...input, archiveFilename: input.filename.replaceAll('/', '--')}
   })
   assert.equal(
@@ -35,7 +37,14 @@ export const retainNativeBuildInputs = async (builds: NativeBuild[], root: strin
     sourceArchive: first.sourceArchive,
     sourceRevision: first.sourceRevision,
     sourceId: first.sourceId,
-    recipeSha256: first.recipe.sha256,
+    recipeSha256: canonical.sha256,
+    originalRecipes: builds
+      .map((build) => {
+        return {platform: build.platform, arch: build.arch, sha256: build.recipe.sha256}
+      })
+      .sort((left, right) => {
+        return `${left.platform}-${left.arch}`.localeCompare(`${right.platform}-${right.arch}`, 'en')
+      }),
     inputs,
   }
   files['NATIVE_BUILD_INPUTS.json'] = new TextEncoder().encode(`${JSON.stringify(metadata, null, 2)}\n`)

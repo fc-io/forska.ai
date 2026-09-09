@@ -60,7 +60,12 @@ archives, licenses, exact manifest and package hashes. A deterministic
 patch, CMake hook, recipe, build scripts and workflow. `NATIVE_BUILD_INPUTS.json`
 maps each flat archive entry back to its original repository path and checksum.
 Assembly rejects a changed recipe input even when a library checksum still
-matches. Publication is separate:
+matches. Windows and Unix path separators are canonicalized only after each
+original recipe digest is verified. Absolute, drive-qualified, UNC, traversal,
+and duplicate canonical input paths are rejected. The exact canonical path/hash
+inventory must match the current reviewed source and all six platforms. The
+input mirror records that canonical digest and each platform's original digest;
+published native provenance is retained unchanged. Publication is separate:
 never replace an existing versioned release asset. Only after publication and
 public-URL verification should `vendor/duckdb/manifest.json`, root package URLs,
 lockfile, and positive runtime checks move coherently to Forska.2.
@@ -68,5 +73,5 @@ lockfile, and positive runtime checks move coherently to Forska.2.
 Focused build/packaging checks:
 
 ```sh
-bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts --timeout 120000
+bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/stagePatchedDuckdbDistribution scripts/combinePatchedDuckdbDistribution --timeout 120000
 ```

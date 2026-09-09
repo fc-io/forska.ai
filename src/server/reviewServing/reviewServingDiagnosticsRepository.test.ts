@@ -1,5 +1,7 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {
   getReviewServingDiagnostics,
   type ReviewServingDiagnosticsDatabase,
@@ -304,9 +306,7 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('AS claimableCount')
   expect(statements.join('\n')).toContain('AS blockedQueuedCount')
   expect(statements.join('\n')).toContain('visible_chunk.lease_expires_at IS NULL')
-  expect(statements.join('\n')).toContain(
-    "CASE WHEN admission_state = 'admitted' AND status IN ('admitted', 'running')",
-  )
+  expect(statements.join('\n')).toContain("WHEN admission_state = 'admitted' AND status IN ('admitted', 'running')")
   expect(statements.join('\n')).toContain('SELECT request_id, admission_state, reason, status')
   expect(statements.join('\n')).toContain('FROM terminal_request')
   expect(statements.join('\n')).toContain('classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id')
@@ -371,4 +371,71 @@ test('review serving diagnostics preserve project-wide snapshot status counts wh
 
   expect(snapshotStatusStatement).toBeDefined()
   expect(snapshotStatusStatement).not.toContain('review_config_hash IS NOT DISTINCT FROM')
+})
+
+test('live rebuild diagnostics prefer unfinished admitted work over a repeatedly touched empty older request', async () => {
+  const captured = createDiagnosticsDatabase()
+  await getReviewServingDiagnostics({projectId: 'project-1'}, captured.database)
+  const statement = captured.statements.find((sql) => {
+    return sql.includes('WITH active_snapshot AS')
+  })
+  if (statement === undefined) {
+    throw new Error('Production diagnostics summary query was not captured')
+  }
+  const start = statement.includes('unfinished_request AS')
+    ? statement.indexOf('unfinished_request AS')
+    : statement.indexOf('latest_request AS')
+  const end = statement.indexOf(', classified_chunk AS')
+  expect(start).toBeGreaterThan(0)
+  expect(end).toBeGreaterThan(start)
+  // Execute the production request/visible-chunk CTEs, not a second selector implementation.
+  const requestScopeSql = `WITH ${statement.slice(start, end)} SELECT
+    (SELECT request_id FROM latest_request) AS requestId,
+    COUNT(*) FILTER (WHERE status = 'pending')::INTEGER AS pending,
+    COUNT(*) FILTER (WHERE status = 'running')::INTEGER AS running,
+    COUNT(*) FILTER (WHERE status = 'completed')::INTEGER AS completed,
+    COUNT(*) FILTER (WHERE status = 'failed')::INTEGER AS failed
+    FROM visible_chunk`
+  const instance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await instance.connect()
+  try {
+    await connection.run(`CREATE SCHEMA app;
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR, project_id VARCHAR, admission_state VARCHAR,
+        reason VARCHAR, status VARCHAR, created_at TIMESTAMP, updated_at TIMESTAMP);
+      CREATE TABLE app.review_rebuild_chunk_manifest (request_id VARCHAR, project_id VARCHAR, status VARCHAR);
+      INSERT INTO app.review_rebuild_request VALUES
+        ('old-empty', 'project-1', 'admitted', 'searchDirtyWork', 'admitted', '2026-09-07', '2026-09-10'),
+        ('new-work', 'project-1', 'admitted', 'nativeFix', 'admitted', '2026-09-09', '2026-09-09'),
+        ('unrelated', 'project-2', 'admitted', 'otherProject', 'running', '2026-09-11', '2026-09-11');
+      INSERT INTO app.review_rebuild_chunk_manifest VALUES
+        ('old-empty', 'project-1', 'completed'),
+        ('new-work', 'project-1', 'pending'),
+        ('new-work', 'project-1', 'running'),
+        ('new-work', 'project-1', 'completed'),
+        (NULL, 'project-1', 'pending'),
+        ('unrelated', 'project-2', 'pending')`)
+    const read = async () => {
+      return (await connection.runAndReadAll(requestScopeSql)).getRowObjectsJson()
+    }
+    expect(await read()).toEqual([{requestId: 'new-work', pending: 2, running: 1, completed: 1, failed: 0}])
+    await connection.run(
+      `UPDATE app.review_rebuild_request SET updated_at = '2026-09-12' WHERE request_id = 'old-empty'`,
+    )
+    expect(await read()).toEqual([{requestId: 'new-work', pending: 2, running: 1, completed: 1, failed: 0}])
+
+    await connection.run(
+      `UPDATE app.review_rebuild_chunk_manifest SET status = 'completed' WHERE request_id = 'new-work'`,
+    )
+    expect(await read()).toEqual([{requestId: 'old-empty', pending: 1, running: 0, completed: 1, failed: 0}])
+
+    await connection.run(`UPDATE app.review_rebuild_request SET status = 'completed' WHERE project_id = 'project-1';
+      INSERT INTO app.review_rebuild_request VALUES
+        ('terminal', 'project-1', 'blocked_over_budget', 'manualRebuild', 'failed', '2026-09-13', '2026-09-13');
+      INSERT INTO app.review_rebuild_chunk_manifest VALUES ('terminal', 'project-1', 'failed')`)
+    expect(await read()).toEqual([{requestId: 'terminal', pending: 1, running: 0, completed: 0, failed: 1}])
+  } finally {
+    connection.closeSync()
+    instance.closeSync()
+  }
 })
