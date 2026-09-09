@@ -23,10 +23,10 @@ native import alone is not evidence that the original memory bug stays fixed.
 
 For every engine, binding, or native-package update:
 
-- Run `bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts --timeout 120000`
+- Run `bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/combinePatchedDuckdbDistribution --timeout 120000`
   for pinned source/patch identity, required native C++ coverage, exact 18-case
-  JUnit accounting, deterministic candidate packaging, and immutable active
-  manifest behavior. The six-platform patched-native workflow separately
+  JUnit accounting, deterministic candidate packaging/input retention, tampered
+  patch and mixed-recipe rejection, and immutable active manifest behavior. The six-platform patched-native workflow separately
   compiles and executes those cases and the real package/WAL/checkpoint proofs;
   see [the native build recipe](vendor/duckdb/NATIVE_BUILD.md).
 - Record the actual loaded engine version, source revision, binding version,
@@ -61,8 +61,9 @@ For every engine, binding, or native-package update:
   The copied desktop/container verifier runs both synthetic fixtures, including
   the live UPDATE before any checkpoint. Keep their old-engine failing evidence
   and require exact IDs, ranges, joins and unchanged read-only DB/WAL bytes.
-  Remove the temporary statistics setting only after the patched engine passes
-  these native/configured cases and real workload progress at unchanged caps.
+  Statistics propagation remains enabled after the narrow native correction;
+  keep only the separately required CTE exclusion. Remove the native patch only
+  after an official engine passes these cases and live progress at unchanged caps.
 - Run `bun test src/server/utils/duckdbWalRecoverySafety.test.ts --timeout 120000`
   to verify fatal-query recovery leaves real committed WAL bytes untouched when
   reopen fails with engine, extension, memory, or native-process errors, and that

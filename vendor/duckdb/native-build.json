@@ -9,7 +9,7 @@
     "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
   },
   "patches": ["vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch"],
-  "patchSha256": "2fce956e1209df26c2755345f96825aa8c3166e4235b4b18932dcc9c6cb82506",
+  "patchSha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb",
   "extensionConfig": ".github/config/bundled_extensions.cmake",
   "parallelism": 4,
   "releaseTag": "duckdb-v2.0.0-alpha40881-forska.2"

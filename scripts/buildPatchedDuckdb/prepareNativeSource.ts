@@ -6,6 +6,7 @@ import {join, resolve} from 'node:path'
 import {file} from 'bun'
 
 import specification from '../../vendor/duckdb/native-build.json'
+import {getNativeExtractionCommand} from './getNativeExtractionCommand'
 import {runNativeCommand} from './runNativeCommand'
 
 export const prepareNativeSource = async (root: string, inputDirectory: string, source: string, log: string) => {
@@ -27,7 +28,11 @@ export const prepareNativeSource = async (root: string, inputDirectory: string, 
     'Cached source archive checksum mismatch',
   )
   await mkdir(source)
-  await runNativeCommand(['tar', '-xzf', archive, '--strip-components=1', '-C', source], root, log)
+  await runNativeCommand(
+    getNativeExtractionCommand(archive, source, process.platform, process.env.SystemRoot),
+    root,
+    log,
+  )
   const patches = []
   for (const filename of specification.patches) {
     const path = resolve(root, filename)

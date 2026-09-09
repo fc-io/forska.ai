@@ -7,10 +7,7 @@ export const duckdbExpectedEngineIdentity: DuckdbEngineIdentity = Object.freeze(
   sourceId: duckdbDistributionManifest.engine.sourceId,
 })
 
-export const duckdbEngineCompatibilityOptions = {
-  disabled_optimizers: 'cte_inlining,statistics_propagation',
-  legacy_disable_null_type: 'true',
-}
+export const duckdbEngineCompatibilityOptions = {disabled_optimizers: 'cte_inlining', legacy_disable_null_type: 'true'}
 
 export const assertDuckdbEngineVersion = (actualVersion: string) => {
   const expectedVersion = duckdbDistributionManifest.engine.version

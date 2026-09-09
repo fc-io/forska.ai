@@ -55,7 +55,12 @@ bun scripts/buildDuckdbDistribution.ts --manifest /path/to/new-release/manifest.
 Assembly rejects missing or duplicate targets, differing source/patch identities,
 unverified builds, changed input checksums, and non-reproducible npm packages.
 It retains the source archive, all native input archives, original bridge
-archives, licenses, exact manifest and package hashes. Publication is separate:
+archives, licenses, exact manifest and package hashes. A deterministic
+`duckdb-native-build-inputs-<version>.tar.gz` additionally retains the exact
+patch, CMake hook, recipe, build scripts and workflow. `NATIVE_BUILD_INPUTS.json`
+maps each flat archive entry back to its original repository path and checksum.
+Assembly rejects a changed recipe input even when a library checksum still
+matches. Publication is separate:
 never replace an existing versioned release asset. Only after publication and
 public-URL verification should `vendor/duckdb/manifest.json`, root package URLs,
 lockfile, and positive runtime checks move coherently to Forska.2.

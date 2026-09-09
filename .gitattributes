@@ -1,3 +1,4 @@
 * text=auto eol=lf
 # Unified patches preserve blank context lines and tab-indented upstream code.
 containers/apple/*.patch whitespace=-blank-at-eol,-space-before-tab
+vendor/duckdb/patches/*.patch whitespace=-blank-at-eol,-space-before-tab
