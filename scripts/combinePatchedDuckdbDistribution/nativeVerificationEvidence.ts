@@ -5,9 +5,11 @@ export type NativeVerificationEvidence = {
   build: NativeBuild
   platform: DistributionPlatform
   engine: DistributionManifest['engine']
-  nativeXml: Uint8Array
   verification: Uint8Array
-}
+} & (
+  | {nativeXml: Uint8Array; nativeConsole?: never}
+  | {nativeXml?: never; nativeConsole: {log: Uint8Array; job: Uint8Array}}
+)
 
 export const expectedNativeVerificationPhases = [
   'seed',
