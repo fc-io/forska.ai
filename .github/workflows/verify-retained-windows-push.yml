@@ -1,0 +1,48 @@
+name: Verify retained Windows DuckDB candidates
+
+on:
+  push:
+    branches:
+      - codex/duckdb-native-reverify-20260909
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify-retained:
+    name: retained-${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: win32-arm64, runner: windows-11-arm}
+          - {target: win32-x64, runner: windows-2025}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - uses: actions/download-artifact@v4
+        with:
+          name: patched-duckdb-${{ matrix.target }}
+          github-token: ${{ github.token }}
+          run-id: 34318986159
+          path: ${{ runner.temp }}/retained-native
+      - name: Revalidate native proof and unchanged package, then run full native candidate checks
+        run: >-
+          bun scripts/verifyRetainedPatchedDuckdbCandidate.ts
+          --input-dir "${{ runner.temp }}/retained-native"
+          --work-dir "${{ runner.temp }}/reverified-native"
+          --run-id 34318986159
+          --target "${{ matrix.target }}"
+          --repository "${{ github.repository }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reverified-duckdb-${{ matrix.target }}
+          path: ${{ runner.temp }}/reverified-native
+          if-no-files-found: error
+          retention-days: 30
