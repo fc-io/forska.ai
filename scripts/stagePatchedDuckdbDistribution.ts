@@ -22,9 +22,10 @@ const base = manifest.platforms.find(({platform, arch}) => {
 })
 assert.ok(base, 'Native build target is not supported by the official Node bridge')
 assert.equal(base.native.filename, build.library.filename)
-const archive = createDeterministicTarball({
-  [build.library.filename]: await readFile(join(input, build.library.filename)),
-})
+const archive = createDeterministicTarball(
+  {[build.library.filename]: await readFile(join(input, build.library.filename))},
+  build.platform,
+)
 const artifactFilename = `duckdb-patched-libs-${build.platform}-${build.arch}-${specification.distributionVersion}.tar.gz`
 const baseUrl = `https://github.com/fc-io/forska.ai/releases/download/${specification.releaseTag}/`
 const platform = {

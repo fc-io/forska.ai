@@ -28,8 +28,8 @@ const getFailureMessage = async (input: Parameters<typeof buildPlatformPackage>[
   return result.message
 }
 
-const fixture = async (metadataOverride: Record<string, unknown> = {}) => {
-  const base = manifest.platforms[0] as DistributionPlatform
+const fixture = async (metadataOverride: Record<string, unknown> = {}, platformIndex = 0) => {
+  const base = manifest.platforms[platformIndex] as DistributionPlatform
   const bridge = bytes('pinned bridge')
   const license = bytes('pinned MIT bridge license')
   const native = bytes('pinned preview engine')
@@ -101,6 +101,16 @@ test('package output is deterministic and contains normalized ownership and time
   expect(createDeterministicTarball({'package/b': bytes('b'), 'package/a': bytes('a')})).toEqual(
     createDeterministicTarball({'package/a': bytes('a'), 'package/b': bytes('b')}),
   )
+})
+
+test('all six platform packages encode the declared target gzip OS independently of the assembler host', async () => {
+  const operatingSystems: Record<string, number> = {linux: 3, darwin: 19, win32: 10}
+  for (const [index, platform] of manifest.platforms.entries()) {
+    const built = await buildPlatformPackage(await fixture({}, index))
+    expect(built.bytes[9]).toBe(operatingSystems[platform.platform])
+    const files = await new Archive(built.bytes).files()
+    expect(await readText(files, `package/${platform.native.filename}`)).toBe('pinned preview engine')
+  }
 })
 
 test('a patched candidate records its native origin without mutating the active package manifest', async () => {
