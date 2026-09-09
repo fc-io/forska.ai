@@ -5,7 +5,7 @@ import activeManifest from '../../vendor/duckdb/manifest.json'
 import specification from '../../vendor/duckdb/native-build.json'
 import type {NativeVerificationEvidence} from './nativeVerificationEvidence'
 
-export const nativeVerificationFixture = (index = 0): NativeVerificationEvidence => {
+export const nativeVerificationFixture = (index = 0): NativeVerificationEvidence & {nativeXml: Uint8Array} => {
   const base = activeManifest.platforms[index]
   assert.ok(base)
   const platform = {...base, native: {...base.native, sha256: 'e'.repeat(64)}}

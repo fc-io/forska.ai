@@ -11,6 +11,7 @@ import {buildPlatformPackage} from './buildDuckdbDistribution/buildPlatformPacka
 import type {DistributionManifest, DistributionPlatform} from './buildDuckdbDistribution/distributionManifest'
 import {copyVerifiedReleaseInput} from './combinePatchedDuckdbDistribution/copyVerifiedReleaseInput'
 import type {NativeVerificationEvidence} from './combinePatchedDuckdbDistribution/nativeVerificationEvidence'
+import {readNativeTestEvidence} from './combinePatchedDuckdbDistribution/readNativeTestEvidence'
 import {retainNativeBuildInputs} from './combinePatchedDuckdbDistribution/retainNativeBuildInputs'
 import {retainNativeVerificationEvidence} from './combinePatchedDuckdbDistribution/retainNativeVerificationEvidence'
 import {type NativeBuild, readNativeBuild} from './stagePatchedDuckdbDistribution/readNativeBuild'
@@ -48,7 +49,7 @@ for (const manifestPath of paths) {
     build,
     platform,
     engine: manifest.engine,
-    nativeXml: await readFile(join(candidate, '../native-output/native-tests.xml')),
+    ...(await readNativeTestEvidence(join(candidate, '../native-output'))),
     verification: await readFile(join(candidate, 'verification.json')),
   })
   const bridgeArchive = await copyVerifiedReleaseInput(
