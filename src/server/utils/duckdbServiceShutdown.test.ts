@@ -270,6 +270,61 @@ test('duckdb shutdown hook skips checkpoint and native close under low-memory ma
   }
 })
 
+test('duckdb shutdown hook releases owner lease under low-memory dev-single profile', async () => {
+  const duckdbPath = join(tmpdir(), `f1-duckdb-low-memory-dev-single-shutdown-${Date.now()}.duckdb`)
+  const childProcess = globalThis.Bun.spawn(
+    [
+      'bun',
+      '-e',
+      `
+        const {runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
+
+        await runDuckdbJsonQuery('SELECT 1 AS value')
+        globalThis.__forskaDuckdbServiceState.controlConnection.run = async (statement) => {
+          if (statement === 'CHECKPOINT') {
+            throw new Error('checkpoint should not run under low-memory runtime')
+          }
+        }
+        globalThis.__forskaDuckdbServiceState.controlConnection.closeSync = () => {
+          throw new Error('control close should not run under low-memory runtime')
+        }
+        globalThis.__forskaDuckdbServiceState.duckdbInstance.closeSync = () => {
+          throw new Error('instance close should not run under low-memory runtime')
+        }
+        ${terminateCurrentProcessSource}
+        setTimeout(() => {
+          console.log('still alive')
+        }, 3_000)
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'dev-single'},
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+
+  try {
+    expect(await waitForProcessExit(childProcess, 5_000)).toBe(true)
+    const stderr = await new Response(childProcess.stderr).text()
+
+    expect(childProcess.exitCode).toBe(0)
+    expect(stderr).not.toContain('checkpoint should not run under low-memory runtime')
+    expect(stderr).not.toContain('control close should not run under low-memory runtime')
+    expect(stderr).not.toContain('instance close should not run under low-memory runtime')
+    expect(stderr).not.toContain('failed to checkpoint before shutdown')
+    expect(existsSync(`${duckdbPath}.duckdb-owner.lock`)).toBe(false)
+  } finally {
+    if (childProcess.exitCode === null) {
+      childProcess.kill('SIGKILL')
+      await childProcess.exited
+    }
+
+    removeDuckdbFiles(duckdbPath)
+  }
+})
+
 test('duckdb shutdown hook checkpoints on SIGTERM', async () => {
   const duckdbPath = join(tmpdir(), `f1-duckdb-signal-checkpoint-${Date.now()}.duckdb`)
   const childProcess = globalThis.Bun.spawn(
