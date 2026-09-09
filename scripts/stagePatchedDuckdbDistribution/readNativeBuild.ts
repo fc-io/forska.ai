@@ -5,6 +5,7 @@ import {join, resolve} from 'node:path'
 
 import specification from '../../vendor/duckdb/native-build.json'
 import {getNativeRecipeProvenance} from '../buildPatchedDuckdb/getNativeRecipeProvenance'
+import {assertNativeRecipeMatches} from './normalizeNativeRecipe'
 
 export type NativeBuild = {
   schemaVersion: number
@@ -34,7 +35,7 @@ export const readNativeBuild = async (directory: string) => {
   assert.equal(build.sourceRevision, specification.sourceRevision)
   assert.deepEqual(build.sourceArchive, specification.sourceArchive)
   assert.equal(build.extensionConfig, specification.extensionConfig)
-  assert.deepEqual(build.recipe, await getNativeRecipeProvenance(root))
+  assertNativeRecipeMatches(build.recipe, await getNativeRecipeProvenance(root))
   assert.equal(build.patches.length, specification.patches.length)
   for (const [index, filename] of specification.patches.entries()) {
     assert.deepEqual(build.patches[index], {filename, sha256: hash(await readFile(join(root, filename)))})

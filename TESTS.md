@@ -23,7 +23,7 @@ native import alone is not evidence that the original memory bug stays fixed.
 
 For every engine, binding, or native-package update:
 
-- Run `bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/combinePatchedDuckdbDistribution --timeout 120000`
+- Run `bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/combinePatchedDuckdbDistribution scripts/stagePatchedDuckdbDistribution --timeout 120000`
   for pinned source/patch identity, required native C++ coverage, exact 18-case
   JUnit accounting, deterministic candidate packaging/input retention, tampered
   patch and mixed-recipe rejection, and immutable active manifest behavior. The six-platform patched-native workflow separately
@@ -443,3 +443,9 @@ old-host-engine upgrade additionally requires a separately installed, pinned old
 engine; using the upgraded checkout for both ends is not backward-compatibility
 evidence. The `compat-reopen` helper phase uses 128 MiB for that older engine's
 read-only verification, not for the low-memory fix gate.
+
+- Run `bun test src/server/reviewServing/reviewServingDiagnosticsRepository.test.ts`
+  after request/progress diagnostics changes. The real native mixed-request case
+  must keep unfinished admitted work visible when an older empty request is
+  repeatedly touched, preserve project/requestless scoping, and retain empty-work
+  and terminal-request fallback behavior.
