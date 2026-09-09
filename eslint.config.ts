@@ -1,12 +1,12 @@
 import js from '@eslint/js'
 import * as typescriptPlugin from '@typescript-eslint/eslint-plugin'
 import typescriptParser from '@typescript-eslint/parser'
+import vitestPlugin from '@vitest/eslint-plugin'
 import prettierConfig from 'eslint-config-prettier'
 import * as importPlugin from 'eslint-plugin-import'
 import * as prettierPlugin from 'eslint-plugin-prettier'
 import * as simpleImportSortPlugin from 'eslint-plugin-simple-import-sort'
 import solidPlugin from 'eslint-plugin-solid'
-import vitestPlugin from 'eslint-plugin-vitest'
 import globals from 'globals'
 
 const config = [
@@ -23,8 +23,8 @@ const config = [
       parserOptions: {ecmaFeatures: {jsx: true}, project: './tsconfig.json', tsconfigRootDir: import.meta.dirname},
     },
     settings: {
-      // Configure import resolver for TypeScript with Bun
-      'import/resolver': {'typescript-bun': {alwaysTryTypes: true}},
+      // Configure import resolver for TypeScript and Bun modules.
+      'import/resolver': {typescript: {alwaysTryTypes: true, bun: true}},
     },
     plugins: {
       import: importPlugin,
@@ -57,7 +57,7 @@ const config = [
       'solid/prefer-show': 'off',
       'solid/no-proxy-apis': 'off',
 
-      // eslint-plugin-vitest rules with default values
+      // Vitest plugin rules with default values
       'vitest/consistent-test-it': 'off',
       'vitest/expect-expect': 'error',
       'vitest/max-expects': 'off',
