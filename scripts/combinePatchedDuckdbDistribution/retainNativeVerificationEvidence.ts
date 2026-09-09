@@ -70,6 +70,7 @@ export const retainNativeVerificationEvidence = async (entries: NativeVerificati
           passed: true,
           filename: resultFilename,
           sha256: hashDistributionInput(verification),
+          workflow: result.workflow ?? build.workflow,
         },
       }
     })
