@@ -52,6 +52,7 @@ export default defineConfig({
         ...smokeEnv,
         DUCKDB_TEMP_DIRECTORY: duckdbTempDirectory,
       },
+      gracefulShutdown: {signal: 'SIGTERM', timeout: 10_000},
       port: apiServerPort,
       reuseExistingServer: false,
       stdout: 'pipe',
@@ -61,6 +62,7 @@ export default defineConfig({
     {
       command: 'bun scripts/startPlaywrightAppServer.ts',
       env: smokeEnv,
+      gracefulShutdown: {signal: 'SIGTERM', timeout: 10_000},
       port: appServerPort,
       reuseExistingServer: false,
       stdout: 'pipe',
