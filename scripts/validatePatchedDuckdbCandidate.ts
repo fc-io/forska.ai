@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import {copyFile, mkdir, stat, writeFile} from 'node:fs/promises'
 import {join, resolve} from 'node:path'
-import {pathToFileURL} from 'node:url'
 import {parseArgs} from 'node:util'
 
 import {file} from 'bun'
@@ -26,6 +25,7 @@ const platform = distribution.platforms[0]
 assert.ok(platform)
 assert.equal(platform.platform, process.platform)
 assert.equal(platform.arch, process.arch)
+await copyFile(join(candidate, platform.filename), join(root, platform.filename))
 await writeFile(
   join(root, 'package.json'),
   `${JSON.stringify(
@@ -33,7 +33,7 @@ await writeFile(
       name: 'forska-patched-duckdb-verification',
       private: true,
       dependencies: {'@duckdb/node-api': distribution.nodeBindingsVersion},
-      overrides: {[platform.packageName]: pathToFileURL(join(candidate, platform.filename)).href},
+      overrides: {[platform.packageName]: `file:./${platform.filename}`},
     },
     null,
     2,
@@ -89,6 +89,12 @@ await writeFile(
       engine: distribution.engine,
       phases,
       checkpointMemoryMiB: 32,
+      workflow: {
+        repository: process.env.GITHUB_REPOSITORY ?? null,
+        runId: process.env.GITHUB_RUN_ID ?? null,
+        runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
+        commit: process.env.GITHUB_SHA ?? null,
+      },
       passed: true,
     },
     null,
