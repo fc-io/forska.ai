@@ -41,6 +41,50 @@ const canStartLocalServer = () => {
   }
 }
 
+const getAvailablePorts = async (count: number) => {
+  const servers = Array.from({length: count}, () => {
+    return globalThis.Bun.serve({
+      fetch() {
+        return new Response('ok')
+      },
+      hostname: '127.0.0.1',
+      port: 0,
+    })
+  })
+
+  try {
+    return servers.map((server) => {
+      return server.port
+    })
+  } finally {
+    await Promise.all(
+      servers.map((server) => {
+        return server.stop(true)
+      }),
+    )
+  }
+}
+
+const getAvailablePort = async () => {
+  const [port] = await getAvailablePorts(1)
+
+  if (port === undefined) {
+    throw new Error('Unable to allocate test port')
+  }
+
+  return port
+}
+
+const getAvailablePortPair = async () => {
+  const [firstPort, secondPort] = await getAvailablePorts(2)
+
+  if (firstPort === undefined || secondPort === undefined) {
+    throw new Error('Unable to allocate test port pair')
+  }
+
+  return [firstPort, secondPort] as const
+}
+
 const apiProxyServerTest = canStartLocalServer() ? test : test.skip
 
 const removeFileIfExists = (filePath: string) => {
@@ -55,8 +99,30 @@ const waitForServer = async (port: number, timeoutMs: number, server: SpawnedSer
   await new Promise<void>((resolve, reject) => {
     const check = async () => {
       try {
-        await fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
-        resolve()
+        const readyResponse = await fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
+        await readyResponse.arrayBuffer()
+
+        if (!readyResponse.ok) {
+          throw new Error(`Server on port ${port} returned runtime readiness status ${readyResponse.status}`)
+        }
+
+        const stateResponse = await fetch(`http://127.0.0.1:${port}/api/runtime/state`)
+        const stateBody = (await stateResponse.json().catch(() => {
+          return null
+        })) as null | {data?: {pid?: number}}
+
+        if (stateResponse.ok && stateBody?.data?.pid === server.process.pid) {
+          resolve()
+          return
+        }
+
+        if (server.process.exitCode !== null) {
+          const [stderr, stdout] = await Promise.all([server.stderrText, server.stdoutText])
+          reject(
+            new Error(stderr || stdout || `Server on port ${port} exited before its runtime state became reachable`),
+          )
+          return
+        }
       } catch (error) {
         if (server.process.exitCode !== null) {
           const [stderr, stdout] = await Promise.all([server.stderrText, server.stdoutText])
@@ -165,8 +231,7 @@ test('project transfer and CSV export routes are owner-proxied from public API p
 apiProxyServerTest(
   'api role proxies supported API requests to DuckDB owner server',
   async () => {
-    const ownerPort = 34991
-    const apiPort = 34992
+    const [ownerPort, apiPort] = await getAvailablePortPair()
     const duckdbPath = join(tmpdir(), `f1-duckdb-api-proxy-${Date.now()}.duckdb`)
     const ownerServer = startServer({
       API_SERVER_PORT: String(ownerPort),
@@ -209,7 +274,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'api role rejects self-proxy DuckDB owner URLs that point at the same port via a different local alias',
   async () => {
-    const apiPort = 34990
+    const apiPort = await getAvailablePort()
     const duckdbPath = join(tmpdir(), `f1-api-self-proxy-${Date.now()}.duckdb`)
     const apiServer = startServer({
       API_SERVER_PORT: String(apiPort),
@@ -242,7 +307,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'api role rejects self-proxy DuckDB owner URLs that use the machine hostname alias',
   async () => {
-    const apiPort = 34989
+    const apiPort = await getAvailablePort()
     const duckdbPath = join(tmpdir(), `f1-api-self-proxy-hostname-${Date.now()}.duckdb`)
     const machineHostname = hostname().trim()
 
@@ -281,8 +346,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'DuckDB owner connections endpoint stays ownerless and lists follower api processes',
   async () => {
-    const ownerPort = 34993
-    const apiPort = 34994
+    const [ownerPort, apiPort] = await getAvailablePortPair()
     const duckdbPath = join(tmpdir(), `f1-duckdb-owner-connections-${Date.now()}.duckdb`)
     const ownerServer = startServer({
       API_SERVER_PORT: String(ownerPort),
@@ -340,7 +404,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'api server without DuckDB owner reports owner proxy disabled warning',
   async () => {
-    const apiPort = 34999
+    const apiPort = await getAvailablePort()
     const duckdbPath = join(tmpdir(), `f1-owner-proxy-disabled-${Date.now()}.duckdb`)
     const apiServer = startServer({
       API_SERVER_PORT: String(apiPort),
@@ -382,8 +446,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'api role discovers DuckDB owner from lease when explicit owner URL is missing',
   async () => {
-    const ownerPort = 34987
-    const apiPort = 34988
+    const [ownerPort, apiPort] = await getAvailablePortPair()
     const duckdbPath = join(tmpdir(), `f1-duckdb-api-proxy-lease-fallback-${Date.now()}.duckdb`)
     const ownerServer = startServer({
       API_SERVER_PORT: String(ownerPort),
@@ -432,7 +495,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'api server without DuckDB owner fails closed for owner-dependent product routes',
   async () => {
-    const apiPort = 34998
+    const apiPort = await getAvailablePort()
     const duckdbPath = join(tmpdir(), `f1-owner-proxy-fail-closed-${Date.now()}.duckdb`)
     const apiServer = startServer({
       API_SERVER_PORT: String(apiPort),
@@ -465,8 +528,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'auto role elects one DuckDB owner and follower takes over after owner exit',
   async () => {
-    const firstPort = 34995
-    const secondPort = 34996
+    const [firstPort, secondPort] = await getAvailablePortPair()
     const duckdbPath = join(tmpdir(), `f1-auto-owner-${Date.now()}.duckdb`)
     const firstServer = startServer({
       API_SERVER_PORT: String(firstPort),
@@ -544,8 +606,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'auto follower does not take over from a responsive owner with a stale heartbeat',
   async () => {
-    const ownerPort = 34997
-    const followerPort = 34998
+    const [ownerPort, followerPort] = await getAvailablePortPair()
     const duckdbPath = join(tmpdir(), `f1-auto-stale-heartbeat-${Date.now()}.duckdb`)
     const leasePath = `${duckdbPath}.duckdb-owner.lock`
     const ownerServer = startServer({
@@ -622,7 +683,7 @@ apiProxyServerTest(
 apiProxyServerTest(
   'auto role takes over a stale unreachable owner lease on startup',
   async () => {
-    const serverPort = 34999
+    const serverPort = await getAvailablePort()
     const duckdbPath = join(tmpdir(), `f1-auto-stale-legacy-${Date.now()}.duckdb`)
     const leasePath = `${duckdbPath}.duckdb-owner.lock`
 
