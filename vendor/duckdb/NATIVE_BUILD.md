@@ -1,8 +1,21 @@
 # Patched alpha native build
 
-`native-build.json` describes the immutable `2.0.0-alpha40881.forska.2` candidate.
-It is not the active installation manifest until the six verified artifacts are
-published and the root dependencies are updated together.
+`native-build.json` describes the immutable `2.0.0-alpha40881.forska.2` distribution.
+The six platform packages in `manifest.json` are selected by the root dependencies
+and installed with their generated lockfile integrity. Native build evidence is
+retained with the versioned release; the qualifying source build is
+[run 34318986159](https://github.com/fc-io/forska.ai/actions/runs/34318986159).
+
+That original run did not finish green: Windows candidate installation and
+artifact retention had harness failures after native compilation/tests passed.
+The unchanged Windows libraries and packages subsequently passed real Windows
+verification in [run 34322025304](https://github.com/fc-io/forska.ai/actions/runs/34322025304).
+The release retains that exact verification workflow, its source commit, and
+both runs' evidence. Linux's original native XML was not retained; its explicit
+`github-actions-console` evidence contains the original job log and metadata,
+with all 18 completed cases checked strictly. It is not synthesized XML.
+Future builds retain native, package and semantic evidence under one relative
+artifact root to avoid container/host upload-path differences.
 
 The base is official DuckDB commit `816a3eb2d512ce359efb40d9319f6db59788422a`.
 The source archive and narrow truncated-string-maximum patch have separate
@@ -21,6 +34,11 @@ parallelism is capped at four and reusable compiler caches are limited to 2 GiB.
 Compiler versions are recorded because native-build byte reproducibility is
 not assumed across changing runner toolchains. Package reconstruction from the
 retained native inputs must be byte-identical.
+
+Tarball gzip headers use the declared target's pinned Bun 1.3.13 OS byte, not
+the assembler host's byte. This preserves the original qualified package hashes
+when reconstructing another platform on macOS; non-platform evidence archives
+use the portable unknown-OS byte. Full archive SHA-256/SHA-512 checks still apply.
 
 The upstream bundled extension configuration retains `core_functions`, JSON,
 ICU, Parquet, and autocomplete. Each shared library is tested with the unchanged
@@ -70,8 +88,15 @@ never replace an existing versioned release asset. Only after publication and
 public-URL verification should `vendor/duckdb/manifest.json`, root package URLs,
 lockfile, and positive runtime checks move coherently to Forska.2.
 
+For the published Forska.2 release, `ASSEMBLY.json` records source tag
+`duckdb-v2.0.0-alpha40881-forska.2` at `b05711783946b0c585c83922923c199cfab57f09`
+separately from the original native build checkout. Reassemble that release from
+the tagged source and retained inputs. Later workflow edits deliberately have a
+different recipe hash and cannot be substituted into its provenance. Package-only
+reconstruction can use the published manifest and retained archives directly.
+
 Focused build/packaging checks:
 
 ```sh
-bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/stagePatchedDuckdbDistribution scripts/combinePatchedDuckdbDistribution --timeout 120000
+bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/buildDuckdbDistribution scripts/stagePatchedDuckdbDistribution scripts/combinePatchedDuckdbDistribution --timeout 120000
 ```

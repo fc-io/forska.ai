@@ -175,15 +175,18 @@ web/desktop native dependencies had not been changed.
 ## Shared pinned DuckDB engine
 
 The container, normal web/server installation, and desktop build now install the
-same official **DuckDB `v2.0.0-alpha40881`** revision
-`816a3eb2d512ce359efb40d9319f6db59788422a` through platform-specific packages.
-The unchanged Node C-API bridge is packaged together with the official native
-library; the package lock pins the distribution. See
+same **Forska-patched DuckDB `v2.0.0-alpha40881`**, distribution
+`2.0.0-alpha40881.forska.2`, through platform-specific packages. It retains official
+base `816a3eb2d512ce359efb40d9319f6db59788422a` and applies the narrow string-bound
+correction; the runtime source ID is `1a89b7dcc8`. The unchanged official Node
+C-API bridge is packaged with that corrected library; the package lock pins the
+distribution. See
 [distribution provenance and update procedure](../../vendor/duckdb/README.md).
 
 The Dockerfile uses `bun install --frozen-lockfile`; it does not compile C++ or
-replace installed native libraries afterward. The native backport build and
-patch files have been removed. The earlier backport investigation remains in
+replace installed native libraries afterward. The former 1.5.5 container-only backport build and
+patch files have been removed. Corrected alpha libraries are built centrally by
+the six-platform release workflow, not during this image build. The earlier backport investigation remains in
 [the historical record](duckdb-backport.md).
 
 Every image build runs `bun scripts/verifyDuckdbDistribution.ts`: it validates

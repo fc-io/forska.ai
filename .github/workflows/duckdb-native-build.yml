@@ -81,23 +81,24 @@ jobs:
         shell: bash
         run: >-
           bun scripts/buildPatchedDuckdb.ts
-          --input-dir "${{ runner.temp }}/native-inputs"
+          --input-dir "native-inputs"
           --work-dir "${{ runner.temp }}/native-work"
-          --output-dir "${{ runner.temp }}/native-output"
+          --output-dir "native-artifacts/native-output"
           --compiler-cache "${{ matrix.cache }}"
           --test-filter 'test/sql/storage/truncated_string_max_update.test,[string_stats_truncated_max],test/sql/delete/bulk_delete_version_info_memory.test,test/sql/delete/delete_compression_after_restart.test,test/sql/delete/delete_compression_blocked_by_old_snapshot.test,test/sql/delete/full_vector_delete_conflict.test,test/sql/delete/full_vector_delete_rollback.test,test/sql/delete/piecemeal_delete_checkpoint_compress.test_slow,test/sql/storage/full_vector_delete_checkpoint.test,test/sql/storage/piecemeal_delete_checkpoint_compress.test,test/sql/delete/masked_vector_further_delete.test,test/sql/delete/masked_vector_rollback.test,test/sql/delete/partial_delete_version_info_memory.test,test/sql/storage/partial_delete_checkpoint_mask.test,test/sql/storage/partial_delete_pending_compress.test'
       - name: Stage immutable native package with official Node bridge
-        run: bun scripts/stagePatchedDuckdbDistribution.ts --native-dir "${{ runner.temp }}/native-output" --output-dir "${{ runner.temp }}/candidate"
+        run: bun scripts/stagePatchedDuckdbDistribution.ts --native-dir "native-artifacts/native-output" --output-dir "native-artifacts/candidate"
       - name: Verify real predicates, UPDATE, WAL and low-memory checkpoint
-        run: bun scripts/validatePatchedDuckdbCandidate.ts --candidate-dir "${{ runner.temp }}/candidate" --work-dir "${{ runner.temp }}/candidate-verification"
+        run: bun scripts/validatePatchedDuckdbCandidate.ts --candidate-dir "native-artifacts/candidate" --work-dir ".native-verification"
+      - name: Retain semantic evidence under the same artifact root
+        if: always()
+        run: >-
+          bun -e "import {existsSync,cpSync} from 'node:fs'; if(existsSync('.native-verification/evidence')) cpSync('.native-verification/evidence','native-artifacts/candidate-verification/evidence',{recursive:true});"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: patched-duckdb-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            ${{ runner.temp }}/native-output
-            ${{ runner.temp }}/candidate
-            ${{ runner.temp }}/candidate-verification/evidence
+          path: native-artifacts
           if-no-files-found: error
           retention-days: 30
       - uses: actions/cache/save@v4
@@ -109,6 +110,6 @@ jobs:
         if: matrix.platform == 'linux' && matrix.arch == 'x64'
         with:
           name: patched-duckdb-source-input
-          path: ${{ runner.temp }}/native-inputs
+          path: native-inputs
           if-no-files-found: error
           retention-days: 30

@@ -659,3 +659,10 @@ Entry format:
 - Cause: Host, desktop, and container paths installed different native engines.
 - Fix: Pin official DuckDB `v2.0.0-alpha40881` (`816a3eb2d5`) in checksummed platform packages with the existing Node bridge, use those packages in every runtime, and remove the custom C++ build/backport. The shared NULL-type compatibility setting is required; incompatible legacy WAL is not silently deleted.
 - Verification gates: Clean native install matrix, loaded bundle verification in desktop builds, exact new-WAL commit/replay, unchanged 32 MiB checkpoint/reopen regression, and current-DB clone checkpoint/live progress at the original cap; see `TESTS.md`. The separate Windows conflict-save crash still requires its affected-workload verification.
+
+## 2026-09-09 - Shared corrected alpha distribution
+
+- Follow-up: Live correctness tests found an unrelated truncated-string maximum-bound merge bug in the official alpha after UPDATE/WAL replay. It could prune matching rows and hide unfinished rebuild work; increasing memory or deleting WAL cannot repair that engine behavior.
+- Fix: All runtimes now install immutable `2.0.0-alpha40881.forska.2`, the same upstream base with one narrow native bound-merge correction. Builds run centrally for six platforms; users do not compile. The upstream checkpoint-memory fixes remain included, and scan filter pushdown/statistics propagation remain enabled.
+- Evidence: All six binaries pass 18 native cases and real statistics/WAL/32 MiB checkpoint checks. A corrected isolated real-data rebuild completed 385 chunks with 236,081 actual output rows, verified by independent materialized counts, browser search and restart. Final public-package application gates are tracked in the rollout report; no claim is made that the original Windows conflict-save exit was reproduced.
+- Recovery and future removal: Preserve original DB/WAL and follow the isolated-copy playbook in `vendor/duckdb/README.md`. Replace this distribution only when an official pinned package passes all checkpoint, string-bound and live-work gates in `TESTS.md`.
