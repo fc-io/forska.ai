@@ -23,6 +23,12 @@ native import alone is not evidence that the original memory bug stays fixed.
 
 For every engine, binding, or native-package update:
 
+- Run `bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts --timeout 120000`
+  for pinned source/patch identity, required native C++ coverage, exact 18-case
+  JUnit accounting, deterministic candidate packaging, and immutable active
+  manifest behavior. The six-platform patched-native workflow separately
+  compiles and executes those cases and the real package/WAL/checkpoint proofs;
+  see [the native build recipe](vendor/duckdb/NATIVE_BUILD.md).
 - Record the actual loaded engine version, source revision, binding version,
   and checksums; verify inclusion of upstream
   [#23964](https://github.com/duckdb/duckdb/pull/23964) and
@@ -42,15 +48,21 @@ For every engine, binding, or native-package update:
   optimizers to make a failing fixture pass.
 - Run `bun test src/server/utils/duckdbEngineCompatibility.statistics.test.ts --timeout 120000`
   for exact retained/inserted/deleted IDs, range predicates and joins after a
-  1.5.1 checkpoint plus committed alpha WAL. The alpha can merge 8-byte legacy
-  string statistics with 12-byte statistics into incorrect bounds and eliminate
-  real rows. Only `statistics_propagation` is additionally disabled; scan-level
-  pruning and every other optimizer remain enabled. Native, managed, ephemeral,
-  ownerless, checkpoint and fresh-reopen paths must all return the exact rows.
-  The copied desktop/container verifier runs this same fixture. Remove this
-  setting only when the replacement engine passes the raw-alpha negative control
-  as a positive test, all reader and checkpoint cases, and real workload progress
-  at unchanged caps; record any performance effect of this optimizer change.
+  1.5.1 checkpoint plus committed alpha WAL. Require exact results with native
+  statistics propagation enabled, as well as through all configured readers.
+- Run `bun test src/server/utils/duckdbEngineCompatibility.updatedStatistics.test.ts --timeout 120000`
+  for live string UPDATEs across two legacy row groups, another connection,
+  committed-WAL replay, checkpoint and fresh-process reopen. The unpatched alpha
+  merges unequal-length truncated string bounds incorrectly, causing both
+  optimizer and scan-level pruning to discard real rows. Disabling only
+  `statistics_propagation` does not fix scan pruning. These regressions must pass
+  with native statistics/filter pushdown enabled; neither an application-query
+  rewrite nor a checkpoint that heals the in-memory state is sufficient.
+  The copied desktop/container verifier runs both synthetic fixtures, including
+  the live UPDATE before any checkpoint. Keep their old-engine failing evidence
+  and require exact IDs, ranges, joins and unchanged read-only DB/WAL bytes.
+  Remove the temporary statistics setting only after the patched engine passes
+  these native/configured cases and real workload progress at unchanged caps.
 - Run `bun test src/server/utils/duckdbWalRecoverySafety.test.ts --timeout 120000`
   to verify fatal-query recovery leaves real committed WAL bytes untouched when
   reopen fails with engine, extension, memory, or native-process errors, and that
@@ -60,6 +72,11 @@ For every engine, binding, or native-package update:
   as separate processes. Require offline replay of function-bearing, fully
   migrated application WAL, correct persistent default catalog on every
   connection, read-only enforcement, and generated startup-child compatibility.
+  The initializer must reject the wrong native version or source identity before
+  persistent ATTACH, close its bootstrap resources, and leave DB/WAL unchanged;
+  the same-version unpatched engine must not pass merely because its version
+  text matches. Generated children and isolated candidate verifiers must supply
+  their exact expected identity, never a skip-validation flag.
 - Run `bun test scripts/verifyDuckdbDistribution scripts/verifyDesktopDuckdbDistribution.test.ts --timeout 120000`
   for copied-package containment, native-library symlink rejection, and target-only
   pruning. Existing mock-heavy runtime suites require the per-file runner

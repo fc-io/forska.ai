@@ -1,0 +1,252 @@
+From: Forska maintainers
+Subject: Preserve truncated string maximum bounds when merging longer prefixes
+
+Base: DuckDB 816a3eb2d512ce359efb40d9319f6db59788422a
+A shorter truncated maximum includes all suffixes of its prefix. Do not narrow
+it to a longer exact or truncated bound when merging update statistics.
+
+diff --git a/src/storage/statistics/string_stats.cpp b/src/storage/statistics/string_stats.cpp
+--- a/src/storage/statistics/string_stats.cpp
++++ b/src/storage/statistics/string_stats.cpp
+@@ -617,6 +617,22 @@
+ 		target_type = source_type;
+ 		return;
+ 	}
++	if (!is_min && source.GetSize() != target.GetSize()) {
++		const bool source_is_shorter = source.GetSize() < target.GetSize();
++		const auto &shorter = source_is_shorter ? source : target;
++		const auto &longer = source_is_shorter ? target : source;
++		const auto shorter_type = source_is_shorter ? source_type : target_type;
++		// A truncated maximum includes every suffix of its prefix. A longer bound with that
++		// prefix is therefore less extreme, even though ordinary string comparison orders it higher.
++		if (shorter_type == StringStatsType::TRUNCATED_STATS &&
++		    (shorter.GetSize() == 0 || memcmp(shorter.GetData(), longer.GetData(), shorter.GetSize()) == 0)) {
++			if (source_is_shorter) {
++				target = AssignString(stats, source, is_min);
++				target_type = source_type;
++			}
++			return;
++		}
++	}
+ 	// both min/max stats are there - compare
+ 	auto comparison = Comparator::Operation(source, target);
+ 	if (comparison == 0) {
+diff --git a/test/optimizer/CMakeLists.txt b/test/optimizer/CMakeLists.txt
+--- a/test/optimizer/CMakeLists.txt
++++ b/test/optimizer/CMakeLists.txt
+@@ -9,6 +9,7 @@
+   join_order_conflict_detector.cpp
+   logical_plan_verification.cpp
+   relation_statistics.cpp
++  string_stats_truncated_max.cpp
+   remove_unused_columns.cpp
+   unchecked_cast.cpp
+   union_alls.cpp)
+diff --git a/test/optimizer/string_stats_truncated_max.cpp b/test/optimizer/string_stats_truncated_max.cpp
+new file mode 100644
+--- /dev/null
++++ b/test/optimizer/string_stats_truncated_max.cpp
+@@ -0,0 +1,114 @@
++#include "catch.hpp"
++#include "duckdb/storage/statistics/string_stats.hpp"
++#include "duckdb/storage/statistics/base_statistics.hpp"
++
++using namespace duckdb;
++
++static BaseStatistics MaxBound(const string &maximum, StringStatsType type) {
++	auto result = StringStats::CreateEmpty(LogicalType::VARCHAR);
++	result.SetHasNoNullFast();
++	StringStats::SetMin(result, string_t("", 0), StringStatsType::TRUNCATED_STATS);
++	StringStats::SetMax(result, string_t(maximum), type);
++	return result;
++}
++
++static void RequireMax(const BaseStatistics &stats, const string &maximum, StringStatsType type) {
++	REQUIRE(StringStats::Max(stats) == maximum);
++	REQUIRE(StringStats::GetMaxType(stats) == type);
++}
++
++static void RequireMayContain(const BaseStatistics &stats, const string &value) {
++	auto result = StringStats::CheckZonemap(string_t(StringStats::Min(stats)), StringStats::GetMinType(stats),
++	                                      string_t(StringStats::Max(stats)), StringStats::GetMaxType(stats),
++	                                      ExpressionType::COMPARE_EQUAL, string_t(value));
++	REQUIRE(result != FilterPropagateResult::FILTER_ALWAYS_FALSE);
++	REQUIRE(result != FilterPropagateResult::FILTER_FALSE_OR_NULL);
++}
++
++TEST_CASE("Truncated string maxima preserve the wider prefix in both merge orders", "[string_stats_truncated_max]") {
++	const vector<string> prefixes {"rebuild:", "", string("a\0", 2), string("\0", 1), string("\xff", 1)};
++	for (const auto &prefix : prefixes) {
++		for (const auto suffix_type : {StringStatsType::EXACT_STATS, StringStatsType::TRUNCATED_STATS}) {
++			for (bool reverse : {false, true}) {
++				auto short_bound = MaxBound(prefix, StringStatsType::TRUNCATED_STATS);
++				auto long_bound = MaxBound(prefix + "b100", suffix_type);
++				auto merged = reverse ? long_bound.Copy() : short_bound.Copy();
++				StringStats::Merge(merged, reverse ? short_bound : long_bound);
++				RequireMax(merged, prefix, StringStatsType::TRUNCATED_STATS);
++				RequireMayContain(merged, prefix + "b140");
++			}
++		}
++	}
++}
++
++TEST_CASE("Exact short string maxima and unequal prefixes retain ordinary ordering", "[string_stats_truncated_max]") {
++	for (const auto longer_type : {StringStatsType::EXACT_STATS, StringStatsType::TRUNCATED_STATS}) {
++		for (bool reverse : {false, true}) {
++			auto exact = MaxBound("rebuild:", StringStatsType::EXACT_STATS);
++			auto longer = MaxBound("rebuild:b140", longer_type);
++			auto merged = reverse ? longer.Copy() : exact.Copy();
++			StringStats::Merge(merged, reverse ? exact : longer);
++			RequireMax(merged, "rebuild:b140", longer_type);
++		}
++	}
++	// Binary comparisons must include bytes after embedded NUL, not treat them as terminators.
++	auto low = MaxBound(string("a\0b", 3), StringStatsType::TRUNCATED_STATS);
++	auto high = MaxBound(string("a\0cz", 4), StringStatsType::EXACT_STATS);
++	StringStats::Merge(low, high);
++	RequireMax(low, string("a\0cz", 4), StringStatsType::EXACT_STATS);
++	// A correctly disjoint upper bound still permits pruning.
++	REQUIRE(StringStats::CompareStringStats(string_t("b"), string_t(StringStats::Max(low)),
++	                                       StringStats::GetMaxType(low)) > 0);
++}
++
++TEST_CASE("String maximum merges preserve equal, empty and unknown bound semantics", "[string_stats_truncated_max]") {
++	for (bool reverse : {false, true}) {
++		auto exact = MaxBound("same", StringStatsType::EXACT_STATS);
++		auto truncated = MaxBound("same", StringStatsType::TRUNCATED_STATS);
++		auto merged = reverse ? truncated.Copy() : exact.Copy();
++		StringStats::Merge(merged, reverse ? exact : truncated);
++		RequireMax(merged, "same", StringStatsType::TRUNCATED_STATS);
++	}
++	auto bound = MaxBound("rebuild:", StringStatsType::TRUNCATED_STATS);
++	auto empty = StringStats::CreateEmpty(LogicalType::VARCHAR);
++	StringStats::Merge(empty, bound);
++	RequireMax(empty, "rebuild:", StringStatsType::TRUNCATED_STATS);
++	StringStats::Merge(bound, StringStats::CreateEmpty(LogicalType::VARCHAR));
++	RequireMax(bound, "rebuild:", StringStatsType::TRUNCATED_STATS);
++	StringStats::Merge(bound, StringStats::CreateUnknown(LogicalType::VARCHAR));
++	REQUIRE(StringStats::GetMaxType(bound) == StringStatsType::NO_STATS);
++}
++
++TEST_CASE("String maximum unions are associative and preserve every represented suffix", "[string_stats_truncated_max]") {
++	struct Bound {
++		string value;
++		StringStatsType type;
++	};
++	vector<Bound> bounds;
++	for (const auto &value : vector<string> {"", "a", "ab", "abc", "b", string("a\0", 2), string("a\0z", 3)}) {
++		bounds.push_back({value, StringStatsType::EXACT_STATS});
++		bounds.push_back({value, StringStatsType::TRUNCATED_STATS});
++	}
++	for (const auto &a : bounds) {
++		for (const auto &b : bounds) {
++			for (const auto &c : bounds) {
++				auto left = MaxBound(a.value, a.type);
++				StringStats::Merge(left, MaxBound(b.value, b.type));
++				StringStats::Merge(left, MaxBound(c.value, c.type));
++				auto right_pair = MaxBound(b.value, b.type);
++				StringStats::Merge(right_pair, MaxBound(c.value, c.type));
++				auto right = MaxBound(a.value, a.type);
++				StringStats::Merge(right, right_pair);
++				RequireMax(left, StringStats::Max(right), StringStats::GetMaxType(right));
++				for (const auto &input : {a, b, c}) {
++					RequireMayContain(left, input.value);
++					if (input.type == StringStatsType::TRUNCATED_STATS) {
++						for (const auto &suffix : vector<string> {string("\0", 1), "z", string("\xff", 1)}) {
++							RequireMayContain(left, input.value + suffix);
++						}
++					}
++				}
++			}
++		}
++	}
++}
+diff --git a/test/sql/storage/truncated_string_max_update.test b/test/sql/storage/truncated_string_max_update.test
+new file mode 100644
+--- /dev/null
++++ b/test/sql/storage/truncated_string_max_update.test
+@@ -0,0 +1,84 @@
++# name: test/sql/storage/truncated_string_max_update.test
++# description: Updating legacy truncated string statistics must not prune unchanged rows
++# group: [storage]
++
++statement ok
++ATTACH '{TEST_DIR}/truncated_string_max_update.db' AS legacy (STORAGE_VERSION 'v1.5.0', ROW_GROUP_SIZE 2048);
++
++statement ok
++CREATE TABLE legacy.request_chunks AS SELECT 'rebuild:b1400000000000000000000000000000'::VARCHAR request_id, i::INTEGER chunk_id FROM range(2049) r(i);
++
++statement ok
++CHECKPOINT legacy;
++
++statement ok
++DETACH legacy;
++
++# Reopen the eight-byte persisted bounds before merging newer update statistics.
++statement ok
++ATTACH '{TEST_DIR}/truncated_string_max_update.db' AS legacy;
++
++statement ok
++UPDATE legacy.request_chunks SET request_id = 'rebuild:b1000000000000000000000000000000' WHERE chunk_id = 0;
++
++query I
++SELECT count(*) FROM legacy.request_chunks WHERE request_id = 'rebuild:b1400000000000000000000000000000';
++----
++2048
++
++# Exercise scan-level bounds independently of the optimizer's statistics pass.
++statement ok
++SET disabled_optimizers = 'statistics_propagation';
++
++query I
++SELECT count(*) FROM legacy.request_chunks WHERE request_id = 'rebuild:b1400000000000000000000000000000';
++----
++2048
++
++query I
++SELECT count(*) FROM legacy.request_chunks WHERE request_id >= 'rebuild:b1400000000000000000000000000000';
++----
++2048
++
++query I
++SELECT count(*) FROM legacy.request_chunks WHERE request_id = 'rebuild:b1000000000000000000000000000000';
++----
++1
++
++# Close without a checkpoint, so the next attach has to merge the update WAL with old bounds.
++statement ok
++PRAGMA disable_checkpoint_on_shutdown;
++
++statement ok
++DETACH legacy;
++
++# Missing/deleted WAL must fail this check: this is replay coverage, not a clean reopen.
++query I
++SELECT octet_length(content) > 0 FROM read_blob('{TEST_DIR}/truncated_string_max_update.db.wal');
++----
++true
++
++statement ok
++ATTACH '{TEST_DIR}/truncated_string_max_update.db' AS legacy;
++
++query I
++SELECT count(*) FROM legacy.request_chunks WHERE request_id = 'rebuild:b1400000000000000000000000000000';
++----
++2048
++
++statement ok
++CHECKPOINT legacy;
++
++statement ok
++DETACH legacy;
++
++statement ok
++ATTACH '{TEST_DIR}/truncated_string_max_update.db' AS legacy;
++
++query I
++SELECT count(*) FROM legacy.request_chunks WHERE request_id = 'rebuild:b1400000000000000000000000000000';
++----
++2048
++
++statement ok
++RESET disabled_optimizers;

@@ -104,16 +104,14 @@ const runReader = (databasePath: string, mode: 'native' | 'rawAlpha' | 'managed'
   return JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as typeof expectedResults
 }
 
-test('raw pinned alpha misprunes retained string IDs after replaying the committed mixed-version WAL', () => {
+test('patched alpha preserves retained string IDs without disabling statistics propagation after mixed-version WAL replay', () => {
   const root = mkdtempSync(join(tmpdir(), 'forska-alpha-string-stats-control-'))
   const databasePath = join(root, 'test.duckdb')
 
   try {
     const bytes = writeFixture(databasePath)
     const result = runReader(databasePath, 'rawAlpha')
-    expect(result.all).toEqual(expectedRows)
-    expect(result.exact).not.toContainEqual(expectedRows[122])
-    expect(result.range).not.toEqual(expectedResults.range)
+    expect(result).toEqual(expectedResults)
     expect(readFileSync(databasePath)).toEqual(bytes.database)
     expect(readFileSync(`${databasePath}.wal`)).toEqual(bytes.wal)
   } finally {

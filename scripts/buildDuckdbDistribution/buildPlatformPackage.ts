@@ -4,9 +4,10 @@ import {Archive} from 'bun'
 
 import manifest from '../../vendor/duckdb/manifest.json'
 import {createDeterministicTarball} from './createDeterministicTarball'
+import type {DistributionManifest, DistributionPlatform} from './distributionManifest'
 import {assertDistributionHash, getDistributionIntegrity, hashDistributionInput} from './hashDistributionInput'
 
-export type DistributionPlatform = (typeof manifest.platforms)[number]
+export type {DistributionPlatform} from './distributionManifest'
 
 const readArchiveFile = async (files: Map<string, File>, name: string) => {
   const entry = files.get(name)
@@ -23,18 +24,20 @@ export const buildPlatformPackage = async (input: {
   bridgeArchive: Uint8Array
   nativeArchive: Uint8Array
   nativeLicense: Uint8Array
+  distribution?: DistributionManifest
 }) => {
   const {platform, bridgeArchive, nativeArchive, nativeLicense} = input
+  const distribution = input.distribution ?? manifest
   assertDistributionHash(bridgeArchive, platform.bridge.sha256, platform.bridge.filename)
   assert.equal(getDistributionIntegrity(bridgeArchive), platform.bridge.integrity, 'bridge npm integrity mismatch')
   assertDistributionHash(nativeArchive, platform.artifact.sha256, platform.artifact.filename)
-  assertDistributionHash(nativeLicense, manifest.nativeLicense.sha256, 'DuckDB engine license')
+  assertDistributionHash(nativeLicense, distribution.nativeLicense.sha256, 'DuckDB engine license')
   const bridgeFiles = await new Archive(bridgeArchive).files()
   const nativeFiles = await new Archive(nativeArchive).files()
   const metadataBytes = await readArchiveFile(bridgeFiles, 'package/package.json')
   const metadata = JSON.parse(new TextDecoder().decode(metadataBytes)) as Record<string, unknown>
   assert.equal(metadata.name, platform.packageName, 'bridge package name mismatch')
-  assert.equal(metadata.version, manifest.nodeBindingsVersion, 'bridge version mismatch')
+  assert.equal(metadata.version, distribution.nodeBindingsVersion, 'bridge version mismatch')
   assert.deepEqual(metadata.os, [platform.platform], 'bridge OS mismatch')
   assert.deepEqual(metadata.cpu, [platform.arch], 'bridge architecture mismatch')
   assert.equal(metadata.license, 'MIT', 'bridge license mismatch')
@@ -48,23 +51,24 @@ export const buildPlatformPackage = async (input: {
   assertDistributionHash(native, platform.native.sha256, 'DuckDB engine library')
   assertDistributionHash(bridgeLicense, platform.bridge.licenseSha256, 'Node binding license')
   const provenance = {
-    schemaVersion: manifest.schemaVersion,
-    distributionVersion: manifest.distributionVersion,
-    engine: manifest.engine,
-    nodeBindingsVersion: manifest.nodeBindingsVersion,
+    schemaVersion: distribution.schemaVersion,
+    distributionVersion: distribution.distributionVersion,
+    engine: distribution.engine,
+    nodeBindingsVersion: distribution.nodeBindingsVersion,
     platform: platform.platform,
     arch: platform.arch,
     artifact: platform.artifact,
     bridge: platform.bridge,
     files: {'duckdb.node': platform.bridge.binarySha256, [platform.native.filename]: platform.native.sha256},
-    nativeLicense: manifest.nativeLicense,
+    nativeLicense: distribution.nativeLicense,
+    ...(platform.nativeBuild ? {nativeBuild: platform.nativeBuild} : {}),
   }
   const packageMetadata = {
     ...metadata,
-    version: manifest.distributionVersion,
+    version: distribution.distributionVersion,
     main: metadata.main ?? './duckdb.node',
-    description: `Forska distribution of DuckDB ${manifest.engine.version} with the official Node C bridge`,
-    forskaDuckdb: {engineVersion: manifest.engine.version, sourceRevision: manifest.engine.sourceRevision},
+    description: `Forska distribution of DuckDB ${distribution.engine.version} with the official Node C bridge`,
+    forskaDuckdb: {engineVersion: distribution.engine.version, sourceRevision: distribution.engine.sourceRevision},
   }
   const files = {
     'package/package.json': encodeJson(packageMetadata),

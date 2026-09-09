@@ -124,7 +124,20 @@ test('duckdb workload context rejects over-budget query results and records metr
     class MockConnection {
       async run() {}
 
-      async runAndReadAll() {
+      async runAndReadAll(statement: string) {
+        if (statement === 'PRAGMA version') {
+          return {
+            getRowObjectsJson: () => {
+              return [
+                {
+                  library_version: duckdbDistributionManifest.engine.version,
+                  source_id: duckdbDistributionManifest.engine.sourceId,
+                },
+              ]
+            },
+          }
+        }
+
         return {
           getRowObjectsJson() {
             return [{value: 'a'}, {value: 'b'}]
@@ -237,6 +250,19 @@ test('serialized low-memory owner prioritizes queued foreground work over queued
       async run() {}
 
       async runAndReadAll(statement: string) {
+        if (statement === 'PRAGMA version') {
+          return {
+            getRowObjectsJson: () => {
+              return [
+                {
+                  library_version: duckdbDistributionManifest.engine.version,
+                  source_id: duckdbDistributionManifest.engine.sourceId,
+                },
+              ]
+            },
+          }
+        }
+
         const label = statement.includes('background-first')
           ? 'background-first'
           : statement.includes('background-second')
@@ -334,7 +360,20 @@ test('api-role foreground DuckDB work requires workload context before connectio
     class MockConnection {
       async run() {}
 
-      async runAndReadAll() {
+      async runAndReadAll(statement: string) {
+        if (statement === 'PRAGMA version') {
+          return {
+            getRowObjectsJson: () => {
+              return [
+                {
+                  library_version: duckdbDistributionManifest.engine.version,
+                  source_id: duckdbDistributionManifest.engine.sourceId,
+                },
+              ]
+            },
+          }
+        }
+
         return {
           getRowObjectsJson() {
             return [{value: 'a'}]
@@ -455,7 +494,20 @@ test('api-role foreground DuckDB workload-context guard has an explicit rollout 
     class MockConnection {
       async run() {}
 
-      async runAndReadAll() {
+      async runAndReadAll(statement: string) {
+        if (statement === 'PRAGMA version') {
+          return {
+            getRowObjectsJson: () => {
+              return [
+                {
+                  library_version: duckdbDistributionManifest.engine.version,
+                  source_id: duckdbDistributionManifest.engine.sourceId,
+                },
+              ]
+            },
+          }
+        }
+
         return {
           getRowObjectsJson() {
             return [{value: 'a'}]
@@ -528,7 +580,20 @@ test('app database foreground wrappers inherit API-role missing-context rejectio
     class MockConnection {
       async run() {}
 
-      async runAndReadAll() {
+      async runAndReadAll(statement: string) {
+        if (statement === 'PRAGMA version') {
+          return {
+            getRowObjectsJson: () => {
+              return [
+                {
+                  library_version: duckdbDistributionManifest.engine.version,
+                  source_id: duckdbDistributionManifest.engine.sourceId,
+                },
+              ]
+            },
+          }
+        }
+
         return {
           getRowObjectsJson() {
             return [{value: 'a'}]
@@ -624,7 +689,20 @@ test('owner and background DuckDB scopes remain allowed without foreground workl
     class MockConnection {
       async run() {}
 
-      async runAndReadAll() {
+      async runAndReadAll(statement: string) {
+        if (statement === 'PRAGMA version') {
+          return {
+            getRowObjectsJson: () => {
+              return [
+                {
+                  library_version: duckdbDistributionManifest.engine.version,
+                  source_id: duckdbDistributionManifest.engine.sourceId,
+                },
+              ]
+            },
+          }
+        }
+
         return {
           getRowObjectsJson() {
             return [{value: 'a'}]
