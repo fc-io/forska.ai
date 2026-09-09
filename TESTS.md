@@ -16,14 +16,14 @@ transaction, while standalone completion calls create their own transaction.
 
 ## DuckDB upgrades: checkpoint-memory regression gate
 
-Normal installation, container images, and desktop builds use the pinned official
-2.0 alpha in [the distribution manifest](vendor/duckdb/manifest.json). The former
+Normal installation, container images, and desktop builds use the pinned
+Forska-patched 2.0 alpha in [the distribution manifest](vendor/duckdb/manifest.json). The former
 1.5.5 container-only backport has been removed. A version bump or successful
 native import alone is not evidence that the original memory bug stays fixed.
 
 For every engine, binding, or native-package update:
 
-- Run `bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/combinePatchedDuckdbDistribution scripts/stagePatchedDuckdbDistribution --timeout 120000`
+- Run `bun test scripts/buildPatchedDuckdb.test.ts scripts/buildDuckdbDistribution.test.ts scripts/buildDuckdbDistribution scripts/combinePatchedDuckdbDistribution scripts/stagePatchedDuckdbDistribution --timeout 120000`
   for pinned source/patch identity, required native C++ coverage, exact 18-case
   JUnit accounting, deterministic candidate packaging/input retention, tampered
   patch and mixed-recipe rejection, and immutable active manifest behavior. The six-platform patched-native workflow separately
@@ -114,7 +114,8 @@ For every engine, binding, or native-package update:
 The runtime requires `legacy_disable_null_type=true` with the existing Node
 bridge. Do not remove it until an upgraded binding passes scalar/nested NULL and
 live review-page decoding. Replace the alpha/platform repackaging with an official
-stable Node package once it includes both fixes and passes these gates, removing
+stable Node package once it includes the checkpoint-memory and string-bound
+fixes and passes these gates, removing
 obsolete packaging in the same coherent change.
 
 ## Supervised server lease cleanup

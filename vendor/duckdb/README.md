@@ -1,6 +1,6 @@
 # Pinned DuckDB native distribution
 
-Forska installs DuckDB `v2.0.0-alpha40881` (`816a3eb2d512ce359efb40d9319f6db59788422a`) through six platform-specific npm tarballs. They keep the official `@duckdb/node-bindings` `1.5.1-r.1` C bridge and substitute the byte-for-byte official preview library from DuckDB CI run [34220083513](https://github.com/duckdb/duckdb/actions/runs/34220083513). The package version is explicitly `2.0.0-alpha40881.forska.1`.
+Forska installs **Forska-patched DuckDB `v2.0.0-alpha40881`** through six platform-specific npm tarballs, versioned `2.0.0-alpha40881.forska.2`. The engine uses official base `816a3eb2d512ce359efb40d9319f6db59788422a` plus the narrow truncated-string-maximum correction in [the native build recipe](NATIVE_BUILD.md). Its runtime source ID is `1a89b7dcc8`; the complete patch SHA-256 is `1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb`. The official `@duckdb/node-bindings` `1.5.1-r.1` C bridge is unchanged. These are prebuilt Forska binaries, not byte-for-byte official DuckDB artifacts.
 
 No native binaries are committed, compiled on users' machines, or downloaded by a postinstall script. Root `package.json` overrides install the pinned tarballs and `bun.lock` pins their integrity; the existing native loader selects the current operating system and architecture. Unsupported platforms fail instead of silently falling back to an older engine.
 
@@ -8,7 +8,7 @@ Bun 1.3.13 does not retain `os`/`cpu` selectors when resolving URL-tarball overr
 
 ## Provenance and reproducibility
 
-`manifest.json` pins official GitHub artifact IDs and SHA-256 digests, source revision, npm bridge tarball SHA-256 and SHA-512 integrity, and unpacked bridge/library checksums. Every output contains `FORSKA_DUCKDB_PROVENANCE.json`, the Node binding MIT license, and the engine's pinned MIT license. Package archives contain only the selected bridge, preview library, metadata, licenses, and provenance. Tar entries have sorted names, UID/GID zero, fixed permissions, and timestamp zero.
+`manifest.json` pins the upstream source archive/revision, exact patch, per-platform native build provenance, npm bridge tarball SHA-256 and SHA-512 integrity, and unpacked bridge/library checksums. Build provenance includes compiler and recipe inputs, workflow source/run, and the unique patched source identity. Every output contains `FORSKA_DUCKDB_PROVENANCE.json`, the Node binding MIT license, and the engine's pinned MIT license. Package archives contain only the selected bridge, patched library, metadata, licenses, and provenance. Tar entries have sorted names, UID/GID zero, fixed permissions, and timestamp zero.
 
 Build with Bun 1.3.13 from the checksum-verified input mirrors retained with the release:
 
@@ -22,13 +22,13 @@ Rebuild offline from already verified input files:
 bun scripts/buildDuckdbDistribution.ts --input-dir=/tmp/duckdb-inputs --output-dir=/tmp/duckdb-rebuilt --offline
 ```
 
-`--platform=darwin-arm64` selects one platform for a focused rebuild. `--upstream` explicitly downloads original official artifacts instead of release mirrors; this requires authenticated GitHub CLI access, and upstream Actions artifacts eventually expire. No fallback changes the source implicitly. The builder validates every input before unpacking and refuses different bytes at an existing output path. It compares outputs to committed release hashes and emits `SHA256SUMS`. It neither publishes nor replaces release assets. Original input archives are mirrored byte-for-byte as release assets so the distribution remains reproducible after upstream CI expires.
+`--platform=darwin-arm64` selects one platform for a focused package rebuild. `--upstream` uses each input's explicitly declared original URL instead of its release mirror; the corrected native libraries still come from the immutable Forska release, not an unpatched official preview. Native compilation and its six-platform verification are documented separately in [NATIVE_BUILD.md](NATIVE_BUILD.md). No fallback changes the source implicitly. The builder validates every input before unpacking and refuses different bytes at an existing output path. It compares outputs to committed release hashes and emits `SHA256SUMS`. It neither publishes nor replaces release assets. Original bridge, native, and source input archives are retained as release assets, together with exact patch/recipe inputs, so package reconstruction does not depend on temporary Actions artifacts. Native compiler/toolchain provenance is recorded; byte-identical native output across different toolchains is not assumed.
 
-The user-facing tarballs belong in the versioned [Forska release](https://github.com/fc-io/forska.ai/releases/tag/duckdb-v2.0.0-alpha40881-forska.1). Never replace bytes under a published version; use a new distribution version, update provenance and dependency integrity, and rerun the upgrade gates in `TESTS.md`.
+The user-facing tarballs belong in the versioned [Forska release](https://github.com/fc-io/forska.ai/releases/tag/duckdb-v2.0.0-alpha40881-forska.2). Never replace bytes under a published version; use a new distribution version, update provenance and dependency integrity, and rerun the upgrade gates in `TESTS.md`.
 
 ## Engine and data compatibility
 
-This is an upstream alpha engine, not an official stable npm release. Shared connection setup applies two pinned compatibility settings:
+This is a narrowly patched upstream alpha engine, not an official stable npm release. Shared connection setup applies two pinned compatibility settings:
 
 - `legacy_disable_null_type=true`: the released Node bridge cannot decode the new untyped NULL vectors.
 - `disabled_optimizers=cte_inlining`: CTE inlining can raise native `Vector::Reference` errors in real LLM/human status projections and review-page queries. Only this pass is disabled; statistics propagation, scan-level pruning, the remaining optimizers, and `delim_join_as_cte` retain their defaults. Disabling `delim_join_as_cte` alone does not fix both native CTE failures.
@@ -145,7 +145,7 @@ The six platforms are macOS ARM64/x64, Linux glibc ARM64/x64, and Windows ARM64/
 ## Quality gates
 
 ```sh
-bun test scripts/buildDuckdbDistribution.test.ts
+bun test scripts/buildDuckdbDistribution.test.ts scripts/buildDuckdbDistribution
 bunx eslint scripts/buildDuckdbDistribution.ts scripts/buildDuckdbDistribution scripts/buildDuckdbDistribution.test.ts
 ```
 

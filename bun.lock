@@ -67,12 +67,12 @@
     },
   },
   "overrides": {
-    "@duckdb/node-bindings-darwin-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.1.tgz",
-    "@duckdb/node-bindings-darwin-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.1.tgz",
-    "@duckdb/node-bindings-linux-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.1.tgz",
-    "@duckdb/node-bindings-linux-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.1.tgz",
-    "@duckdb/node-bindings-win32-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.1.tgz",
-    "@duckdb/node-bindings-win32-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.1.tgz",
+    "@duckdb/node-bindings-darwin-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.2.tgz",
+    "@duckdb/node-bindings-darwin-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.2.tgz",
+    "@duckdb/node-bindings-linux-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.2.tgz",
+    "@duckdb/node-bindings-linux-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.2.tgz",
+    "@duckdb/node-bindings-win32-arm64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.2.tgz",
+    "@duckdb/node-bindings-win32-x64": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.2.tgz",
   },
   "packages": {
     "@ai-sdk/gateway": ["@ai-sdk/gateway@3.0.66", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@ai-sdk/provider-utils": "4.0.19", "@vercel/oidc": "3.1.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-SIQ0YY0iMuv+07HLsZ+bB990zUJ6S4ujORAh+Jv1V2KGNn73qQKnGO0JBk+w+Res8YqOFSycwDoWcFlQrVxS4A=="],
@@ -137,17 +137,17 @@
 
     "@duckdb/node-bindings": ["@duckdb/node-bindings@1.5.1-r.1", "", { "optionalDependencies": { "@duckdb/node-bindings-darwin-arm64": "1.5.1-r.1", "@duckdb/node-bindings-darwin-x64": "1.5.1-r.1", "@duckdb/node-bindings-linux-arm64": "1.5.1-r.1", "@duckdb/node-bindings-linux-x64": "1.5.1-r.1", "@duckdb/node-bindings-win32-arm64": "1.5.1-r.1", "@duckdb/node-bindings-win32-x64": "1.5.1-r.1" } }, "sha512-3vmIlY/ACTLutlMup4F+D2Gzo+kiUoMaIL4TvM4x34cMqnKfsZ+4lMjqfSKYmdcgNGXYXwPwIYaJlvMRhU3Tbg=="],
 
-    "@duckdb/node-bindings-darwin-arm64": ["@duckdb/node-bindings-darwin-arm64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.1.tgz", {}, "sha512-K79XNnMpOqxkV0sZo+hQk7Ic4lGyVdc4PRbHBFg+f1YPXh0j3Ypl0KGqyAtiPNujaORdGAQzoz2ek0X0mFmENw=="],
+    "@duckdb/node-bindings-darwin-arm64": ["@duckdb/node-bindings-darwin-arm64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.2.tgz", {}, "sha512-L0CITmewoY6/xi8LCglMxcD0rcq0beze7WHBrnTTKrq97NaQEIpRp9KrSyqaqA4dEeEnDhBbAUoNUyG9a++19A=="],
 
-    "@duckdb/node-bindings-darwin-x64": ["@duckdb/node-bindings-darwin-x64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.1.tgz", {}, "sha512-teKglypzEgAo1UP/xmCrIUbio/qinMkn1tDJinyMKrxwWyF/jRq9Ig/vNNAMTdTPtH2VzgQgTr2jLRE6MhzRwA=="],
+    "@duckdb/node-bindings-darwin-x64": ["@duckdb/node-bindings-darwin-x64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.2.tgz", {}, "sha512-88NhbT+ufyqDwNAz9XlMen8A71p5JTveuAJVf7+A4Yrps2qLzqKltjuZfjRbQ9U3COGPg8JKlSor3zuxgjAcew=="],
 
-    "@duckdb/node-bindings-linux-arm64": ["@duckdb/node-bindings-linux-arm64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.1.tgz", {}, "sha512-lgHBHEiZEmMBoCDT0XZQwCz7f/nF3tKF2BI5kouifLSyErVQJ1E4uwsO2AeFBkvXp+rC6gQeS9t1pbIp5j/qWA=="],
+    "@duckdb/node-bindings-linux-arm64": ["@duckdb/node-bindings-linux-arm64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.2.tgz", {}, "sha512-IZuT0t9Cy0fQa4JysAUdMIJo+QbIKKPtjiWYNmlCQpzaXuq8aesFXR7jxOk2iEDjc6EbWtwCfYQzwFe6tAz0dg=="],
 
-    "@duckdb/node-bindings-linux-x64": ["@duckdb/node-bindings-linux-x64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.1.tgz", {}, "sha512-B4qZxSqbajdzg7m0SVPqy7Fv/avPKbPnlcTgFDsH2KQO7dG4scuBbLOsh78S1wvA//MyAx/slZtn0XFQLAMIOA=="],
+    "@duckdb/node-bindings-linux-x64": ["@duckdb/node-bindings-linux-x64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.2.tgz", {}, "sha512-ZsUEhI8fycKY7vhluTtoSEw8MegYexsYleoz1yeLQFrA/kwKullr4sjSoqx6FVacWDTiJKpl9hxdN0X/7vWRKA=="],
 
-    "@duckdb/node-bindings-win32-arm64": ["@duckdb/node-bindings-win32-arm64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.1.tgz", {}, "sha512-sNiUuwG+ENnDkxlXpmrS7i+mR8c/qCJyZ0bchgtPr1Bb7r/bokdP72sH5i6ulhGRaUkB2lszkIHM4M84ymbKqg=="],
+    "@duckdb/node-bindings-win32-arm64": ["@duckdb/node-bindings-win32-arm64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.2.tgz", {}, "sha512-5r7RDhbeDD9v4lxT4RQKbzCNyHNaD5V99rNJ9MkRZD6kfge6Oom+BsceArw1u6+E6xg7zulNuzthT2H8LobduA=="],
 
-    "@duckdb/node-bindings-win32-x64": ["@duckdb/node-bindings-win32-x64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.1.tgz", {}, "sha512-StVabJysZq/6mv59S+ayZcOaRrYB3Kgp5tCHFLMLhYnhyxngMiFWkZUwKCoCpE0stlDHHi8KPXqX/N4Pul9DxQ=="],
+    "@duckdb/node-bindings-win32-x64": ["@duckdb/node-bindings-win32-x64@https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.2.tgz", {}, "sha512-sJ9yxuAe3fk7+TPxkBGbE7HfHl4goxa+/UxK/fAoXyDk0dVQ5RBzlfUrxjO8yLOcdw2jniz1s5BiupeeXZ69Kg=="],
 
     "@elysiajs/cors": ["@elysiajs/cors@1.4.1", "", { "peerDependencies": { "elysia": ">= 1.4.0" } }, "sha512-lQfad+F3r4mNwsxRKbXyJB8Jg43oAOXjRwn7sKUL6bcOW3KjUqUimTS+woNpO97efpzjtDE0tEjGk9DTw8lqTQ=="],
 

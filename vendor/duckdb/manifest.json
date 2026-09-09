@@ -1,18 +1,30 @@
 {
   "schemaVersion": 1,
-  "distributionVersion": "2.0.0-alpha40881.forska.1",
+  "distributionVersion": "2.0.0-alpha40881.forska.2",
   "engine": {
     "version": "v2.0.0-alpha40881",
-    "sourceId": "816a3eb2d5",
+    "sourceId": "1a89b7dcc8",
     "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
     "repository": "duckdb/duckdb",
-    "workflowRunId": 34220083513
+    "nativeBuild": {
+      "sourceArchive": {
+        "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+        "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+        "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+      },
+      "patches": [
+        {
+          "filename": "vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch",
+          "sha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb"
+        }
+      ]
+    }
   },
   "nodeBindingsVersion": "1.5.1-r.1",
   "release": {
-    "tag": "duckdb-v2.0.0-alpha40881-forska.1",
+    "tag": "duckdb-v2.0.0-alpha40881-forska.2",
     "inputAssetMirrors": true,
-    "baseUrl": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.1/"
+    "baseUrl": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/"
   },
   "nativeLicense": {
     "filename": "DUCKDB_LICENSE",
@@ -24,18 +36,17 @@
       "platform": "darwin",
       "arch": "arm64",
       "packageName": "@duckdb/node-bindings-darwin-arm64",
-      "filename": "duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.1.tgz",
-      "sha256": "16b90da3a195a3c07ff8672b633ace0396ebc6bd6abbc2cb32f8f65ef121c008",
-      "integrity": "sha512-K79XNnMpOqxkV0sZo+hQk7Ic4lGyVdc4PRbHBFg+f1YPXh0j3Ypl0KGqyAtiPNujaORdGAQzoz2ek0X0mFmENw==",
+      "filename": "duckdb-node-bindings-darwin-arm64-2.0.0-alpha40881.forska.2.tgz",
+      "sha256": "69b4bb5421163774b53aaee6cb027979843c27b37729a8d52bb9018e092e09a1",
+      "integrity": "sha512-L0CITmewoY6/xi8LCglMxcD0rcq0beze7WHBrnTTKrq97NaQEIpRp9KrSyqaqA4dEeEnDhBbAUoNUyG9a++19A==",
       "artifact": {
-        "id": 10055768523,
-        "filename": "duckdb-shared-libs-osx-universal.tar.gz",
-        "sha256": "56be40b79a60539682d9c03448d91db0628c2cbdaea6e5ca4452d9eead31a614",
-        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10055768523/zip"
+        "filename": "duckdb-patched-libs-darwin-arm64-2.0.0-alpha40881.forska.2.tar.gz",
+        "sha256": "06ebd14271f56d210f23ff7fd27e85b48f0619f23cf3ebd370814c6641603611",
+        "url": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-patched-libs-darwin-arm64-2.0.0-alpha40881.forska.2.tar.gz"
       },
       "native": {
         "filename": "libduckdb.dylib",
-        "sha256": "d152c8c81c4ba98d4ac6f48ec1fa846bd42adc7f6b57cf98d3f365cbecee6f77"
+        "sha256": "19f66d9a2593d8f53ac0b401bad3a60cb99fc869dc09670038762eaca9a66fbe"
       },
       "bridge": {
         "filename": "node-bindings-darwin-arm64-1.5.1-r.1.tgz",
@@ -44,24 +55,131 @@
         "sha256": "f2a4e50cef115ac01bbd5a42ae78754f5a4925695b7b3bd7a1580a2ac248b81d",
         "binarySha256": "fef7e895d87a8a234465c0abff97b19b9df8c86b19e9dc8b99c0f147bb807f8e",
         "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      },
+      "nativeBuild": {
+        "schemaVersion": 1,
+        "distributionVersion": "2.0.0-alpha40881.forska.2",
+        "engineVersion": "v2.0.0-alpha40881",
+        "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+        "sourceId": "1a89b7dcc8",
+        "sourceArchive": {
+          "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+          "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+          "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+        },
+        "patches": [
+          {
+            "filename": "vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch",
+            "sha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb"
+          }
+        ],
+        "extensionConfig": ".github/config/bundled_extensions.cmake",
+        "buildArguments": [
+          "-S",
+          "/Users/runner/work/_temp/native-work/source",
+          "-B",
+          "/Users/runner/work/_temp/native-work/build",
+          "-G",
+          "Ninja",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_PROJECT_INCLUDE=/Users/runner/work/forska.ai/forska.ai/vendor/duckdb/native-build.cmake",
+          "-DBUILD_UNITTESTS=ON",
+          "-DENABLE_UNITTEST_CPP_TESTS=ON",
+          "-DBUILD_SHELL=OFF",
+          "-DDISABLE_UNITY=ON",
+          "-DENABLE_EXTENSION_AUTOLOADING=ON",
+          "-DENABLE_EXTENSION_AUTOINSTALL=ON",
+          "-DDUCKDB_EXTENSION_CONFIGS=/Users/runner/work/_temp/native-work/source/.github/config/bundled_extensions.cmake",
+          "-DDUCKDB_EXPLICIT_VERSION=v2.0.0-alpha40881",
+          "-DGIT_COMMIT_HASH=1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb",
+          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+          "-DCMAKE_OSX_ARCHITECTURES=arm64",
+          "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"
+        ],
+        "compiler": {
+          "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+          "CMAKE_CXX_COMPILER_ID": "AppleClang",
+          "CMAKE_CXX_COMPILER_VERSION": "15.0.0.15000309"
+        },
+        "recipe": {
+          "inputs": [
+            {
+              "filename": ".github/workflows/duckdb-native-build.yml",
+              "sha256": "23f57957930a7d6c65b45ea17b9c36884448f457baf736ac1849194baeff5e75"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb.ts",
+              "sha256": "2693014402f2a51d438bd8f6b274e04725c80cea90ab30dd9c850ac59b1850db"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/assertNativeTestReport.ts",
+              "sha256": "03faf75dd2e0f7f95ce9b38e1ae49f89a76508b71d5056f96429cf25c8c2315b"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeBuildArguments.ts",
+              "sha256": "ab64341ed634626761cdc2f3e1567da2630d2060adeee3b4fff6b77a33aeee55"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeExtractionCommand.ts",
+              "sha256": "af1f9bf0f901a527cd6835688030123dc4e19bb0cb71cc1696d18105fc145779"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeRecipeProvenance.ts",
+              "sha256": "b099fa28b6991f3f5cf16670e14ee22ec5dfc1f319f88da54c3af2815df25b81"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/prepareNativeSource.ts",
+              "sha256": "a67a32d1006d13bd2c0a91123f146ef4d080fa97012e0bbf4ee7ea67f0716b07"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/readNativeCompiler.ts",
+              "sha256": "14c72d409a803bb2f2794bbad2737ec901b35ec671ac3fb663881cc1a146de1c"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/runNativeCommand.ts",
+              "sha256": "e1a0daf379ea3d232ec80fa09be84074cd5a4d01a658bec1772a7fdd7d3df5f3"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.cmake",
+              "sha256": "9a0dbf8e12097572e3816030dc87928b7395f7009b9f9a3e5ca8bb1fa9904469"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.json",
+              "sha256": "4848ba5db3bc89cabfadf9cab1f2a1a976338f5d77b840de29e3d915eff1ce72"
+            }
+          ],
+          "sha256": "b6e81b2d69d628747d8647d896c18deca272f9d7b1c544df2b7c1019b44a4084"
+        },
+        "platform": "darwin",
+        "arch": "arm64",
+        "library": {
+          "filename": "libduckdb.dylib",
+          "sha256": "19f66d9a2593d8f53ac0b401bad3a60cb99fc869dc09670038762eaca9a66fbe"
+        },
+        "workflow": {
+          "repository": "fc-io/forska.ai",
+          "runId": "34318986159",
+          "runAttempt": "1",
+          "commit": "8614fff38bfbbc179ce5b0967b1e5b2a01ad4b7f"
+        }
       }
     },
     {
       "platform": "darwin",
       "arch": "x64",
       "packageName": "@duckdb/node-bindings-darwin-x64",
-      "filename": "duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.1.tgz",
-      "sha256": "f1145b77315913027f493a660dac68b87691627ac927c6331984dc43dd6ee131",
-      "integrity": "sha512-teKglypzEgAo1UP/xmCrIUbio/qinMkn1tDJinyMKrxwWyF/jRq9Ig/vNNAMTdTPtH2VzgQgTr2jLRE6MhzRwA==",
+      "filename": "duckdb-node-bindings-darwin-x64-2.0.0-alpha40881.forska.2.tgz",
+      "sha256": "92566d5b7f2ccfee7c163839d5002b2808a32089c56cf1ef27e63d783dfb8aa1",
+      "integrity": "sha512-88NhbT+ufyqDwNAz9XlMen8A71p5JTveuAJVf7+A4Yrps2qLzqKltjuZfjRbQ9U3COGPg8JKlSor3zuxgjAcew==",
       "artifact": {
-        "id": 10055768523,
-        "filename": "duckdb-shared-libs-osx-universal.tar.gz",
-        "sha256": "56be40b79a60539682d9c03448d91db0628c2cbdaea6e5ca4452d9eead31a614",
-        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10055768523/zip"
+        "filename": "duckdb-patched-libs-darwin-x64-2.0.0-alpha40881.forska.2.tar.gz",
+        "sha256": "378fc0b0b00959187146bd7c7e99bdf7ff3154ec4afd902a080df0dfe8a4c5e5",
+        "url": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-patched-libs-darwin-x64-2.0.0-alpha40881.forska.2.tar.gz"
       },
       "native": {
         "filename": "libduckdb.dylib",
-        "sha256": "d152c8c81c4ba98d4ac6f48ec1fa846bd42adc7f6b57cf98d3f365cbecee6f77"
+        "sha256": "ecab6db13ff27ccf53188996af17a5d5c836ca78aaabbf9c1fed2773b0133105"
       },
       "bridge": {
         "filename": "node-bindings-darwin-x64-1.5.1-r.1.tgz",
@@ -70,24 +188,131 @@
         "sha256": "7ebfd428db651005ffa1f9bfd2cd58560204da3300a961b7a638901da4af638f",
         "binarySha256": "d9fbcb0972241d7fc0784cac3a4de9d9142964fba5cdba3ceaa45eafbea39e65",
         "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      },
+      "nativeBuild": {
+        "schemaVersion": 1,
+        "distributionVersion": "2.0.0-alpha40881.forska.2",
+        "engineVersion": "v2.0.0-alpha40881",
+        "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+        "sourceId": "1a89b7dcc8",
+        "sourceArchive": {
+          "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+          "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+          "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+        },
+        "patches": [
+          {
+            "filename": "vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch",
+            "sha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb"
+          }
+        ],
+        "extensionConfig": ".github/config/bundled_extensions.cmake",
+        "buildArguments": [
+          "-S",
+          "/Users/runner/work/_temp/native-work/source",
+          "-B",
+          "/Users/runner/work/_temp/native-work/build",
+          "-G",
+          "Ninja",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_PROJECT_INCLUDE=/Users/runner/work/forska.ai/forska.ai/vendor/duckdb/native-build.cmake",
+          "-DBUILD_UNITTESTS=ON",
+          "-DENABLE_UNITTEST_CPP_TESTS=ON",
+          "-DBUILD_SHELL=OFF",
+          "-DDISABLE_UNITY=ON",
+          "-DENABLE_EXTENSION_AUTOLOADING=ON",
+          "-DENABLE_EXTENSION_AUTOINSTALL=ON",
+          "-DDUCKDB_EXTENSION_CONFIGS=/Users/runner/work/_temp/native-work/source/.github/config/bundled_extensions.cmake",
+          "-DDUCKDB_EXPLICIT_VERSION=v2.0.0-alpha40881",
+          "-DGIT_COMMIT_HASH=1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb",
+          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+          "-DCMAKE_OSX_ARCHITECTURES=x86_64",
+          "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"
+        ],
+        "compiler": {
+          "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+          "CMAKE_CXX_COMPILER_ID": "AppleClang",
+          "CMAKE_CXX_COMPILER_VERSION": "17.0.0.17000013"
+        },
+        "recipe": {
+          "inputs": [
+            {
+              "filename": ".github/workflows/duckdb-native-build.yml",
+              "sha256": "23f57957930a7d6c65b45ea17b9c36884448f457baf736ac1849194baeff5e75"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb.ts",
+              "sha256": "2693014402f2a51d438bd8f6b274e04725c80cea90ab30dd9c850ac59b1850db"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/assertNativeTestReport.ts",
+              "sha256": "03faf75dd2e0f7f95ce9b38e1ae49f89a76508b71d5056f96429cf25c8c2315b"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeBuildArguments.ts",
+              "sha256": "ab64341ed634626761cdc2f3e1567da2630d2060adeee3b4fff6b77a33aeee55"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeExtractionCommand.ts",
+              "sha256": "af1f9bf0f901a527cd6835688030123dc4e19bb0cb71cc1696d18105fc145779"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeRecipeProvenance.ts",
+              "sha256": "b099fa28b6991f3f5cf16670e14ee22ec5dfc1f319f88da54c3af2815df25b81"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/prepareNativeSource.ts",
+              "sha256": "a67a32d1006d13bd2c0a91123f146ef4d080fa97012e0bbf4ee7ea67f0716b07"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/readNativeCompiler.ts",
+              "sha256": "14c72d409a803bb2f2794bbad2737ec901b35ec671ac3fb663881cc1a146de1c"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/runNativeCommand.ts",
+              "sha256": "e1a0daf379ea3d232ec80fa09be84074cd5a4d01a658bec1772a7fdd7d3df5f3"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.cmake",
+              "sha256": "9a0dbf8e12097572e3816030dc87928b7395f7009b9f9a3e5ca8bb1fa9904469"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.json",
+              "sha256": "4848ba5db3bc89cabfadf9cab1f2a1a976338f5d77b840de29e3d915eff1ce72"
+            }
+          ],
+          "sha256": "b6e81b2d69d628747d8647d896c18deca272f9d7b1c544df2b7c1019b44a4084"
+        },
+        "platform": "darwin",
+        "arch": "x64",
+        "library": {
+          "filename": "libduckdb.dylib",
+          "sha256": "ecab6db13ff27ccf53188996af17a5d5c836ca78aaabbf9c1fed2773b0133105"
+        },
+        "workflow": {
+          "repository": "fc-io/forska.ai",
+          "runId": "34318986159",
+          "runAttempt": "1",
+          "commit": "8614fff38bfbbc179ce5b0967b1e5b2a01ad4b7f"
+        }
       }
     },
     {
       "platform": "linux",
       "arch": "arm64",
       "packageName": "@duckdb/node-bindings-linux-arm64",
-      "filename": "duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.1.tgz",
-      "sha256": "e8bde3ac8bba38629340f38363d4330b22f354ac60fdc3e311844dd8e018c04d",
-      "integrity": "sha512-lgHBHEiZEmMBoCDT0XZQwCz7f/nF3tKF2BI5kouifLSyErVQJ1E4uwsO2AeFBkvXp+rC6gQeS9t1pbIp5j/qWA==",
+      "filename": "duckdb-node-bindings-linux-arm64-2.0.0-alpha40881.forska.2.tgz",
+      "sha256": "0a35cb6d9bda3c3ff4fe0b1db187476f0e7699195813c91bf547a8d5e29ecf2d",
+      "integrity": "sha512-IZuT0t9Cy0fQa4JysAUdMIJo+QbIKKPtjiWYNmlCQpzaXuq8aesFXR7jxOk2iEDjc6EbWtwCfYQzwFe6tAz0dg==",
       "artifact": {
-        "id": 10056798239,
-        "filename": "duckdb-shared-libs-linux-arm64.tar.gz",
-        "sha256": "d133035fda338172e1a61c4e4858c3425a667b79c40ee3f596874e95daf2ff6f",
-        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10056798239/zip"
+        "filename": "duckdb-patched-libs-linux-arm64-2.0.0-alpha40881.forska.2.tar.gz",
+        "sha256": "9678572d65a981e97e7ebd6d1cbf1ef009e66d37d9bdfbc40af80930c8b4e2b0",
+        "url": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-patched-libs-linux-arm64-2.0.0-alpha40881.forska.2.tar.gz"
       },
       "native": {
         "filename": "libduckdb.so",
-        "sha256": "27bbf49329a6ecbe576809408a3a024f5192aa83eb005ac8a0bbf7922067b199"
+        "sha256": "33bfc10d959159701be31b54558fc147428a98d906346610f9920f045ad8dea7"
       },
       "bridge": {
         "filename": "node-bindings-linux-arm64-1.5.1-r.1.tgz",
@@ -96,24 +321,130 @@
         "sha256": "cb653871c5e3369ad58d6c33d84c075d600c361ae4c69259e6c4ce3383e96dce",
         "binarySha256": "37e9c96367ef01994757d7e012e2d33ba7b758012ba6724a19598adf49737eda",
         "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      },
+      "nativeBuild": {
+        "schemaVersion": 1,
+        "distributionVersion": "2.0.0-alpha40881.forska.2",
+        "engineVersion": "v2.0.0-alpha40881",
+        "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+        "sourceId": "1a89b7dcc8",
+        "sourceArchive": {
+          "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+          "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+          "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+        },
+        "patches": [
+          {
+            "filename": "vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch",
+            "sha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb"
+          }
+        ],
+        "extensionConfig": ".github/config/bundled_extensions.cmake",
+        "buildArguments": [
+          "-S",
+          "/home/runner/work/_temp/native-work/source",
+          "-B",
+          "/home/runner/work/_temp/native-work/build",
+          "-G",
+          "Ninja",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_PROJECT_INCLUDE=/__w/forska.ai/forska.ai/vendor/duckdb/native-build.cmake",
+          "-DBUILD_UNITTESTS=ON",
+          "-DENABLE_UNITTEST_CPP_TESTS=ON",
+          "-DBUILD_SHELL=OFF",
+          "-DDISABLE_UNITY=ON",
+          "-DENABLE_EXTENSION_AUTOLOADING=ON",
+          "-DENABLE_EXTENSION_AUTOINSTALL=ON",
+          "-DDUCKDB_EXTENSION_CONFIGS=/home/runner/work/_temp/native-work/source/.github/config/bundled_extensions.cmake",
+          "-DDUCKDB_EXPLICIT_VERSION=v2.0.0-alpha40881",
+          "-DGIT_COMMIT_HASH=1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb",
+          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+          "-DSTATIC_LIBCPP=ON"
+        ],
+        "compiler": {
+          "CMAKE_CXX_COMPILER": "/opt/rh/gcc-toolset-14/root/usr/bin/c++",
+          "CMAKE_CXX_COMPILER_ID": "GNU",
+          "CMAKE_CXX_COMPILER_VERSION": "14.2.1"
+        },
+        "recipe": {
+          "inputs": [
+            {
+              "filename": ".github/workflows/duckdb-native-build.yml",
+              "sha256": "23f57957930a7d6c65b45ea17b9c36884448f457baf736ac1849194baeff5e75"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb.ts",
+              "sha256": "2693014402f2a51d438bd8f6b274e04725c80cea90ab30dd9c850ac59b1850db"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/assertNativeTestReport.ts",
+              "sha256": "03faf75dd2e0f7f95ce9b38e1ae49f89a76508b71d5056f96429cf25c8c2315b"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeBuildArguments.ts",
+              "sha256": "ab64341ed634626761cdc2f3e1567da2630d2060adeee3b4fff6b77a33aeee55"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeExtractionCommand.ts",
+              "sha256": "af1f9bf0f901a527cd6835688030123dc4e19bb0cb71cc1696d18105fc145779"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeRecipeProvenance.ts",
+              "sha256": "b099fa28b6991f3f5cf16670e14ee22ec5dfc1f319f88da54c3af2815df25b81"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/prepareNativeSource.ts",
+              "sha256": "a67a32d1006d13bd2c0a91123f146ef4d080fa97012e0bbf4ee7ea67f0716b07"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/readNativeCompiler.ts",
+              "sha256": "14c72d409a803bb2f2794bbad2737ec901b35ec671ac3fb663881cc1a146de1c"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/runNativeCommand.ts",
+              "sha256": "e1a0daf379ea3d232ec80fa09be84074cd5a4d01a658bec1772a7fdd7d3df5f3"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.cmake",
+              "sha256": "9a0dbf8e12097572e3816030dc87928b7395f7009b9f9a3e5ca8bb1fa9904469"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.json",
+              "sha256": "4848ba5db3bc89cabfadf9cab1f2a1a976338f5d77b840de29e3d915eff1ce72"
+            }
+          ],
+          "sha256": "b6e81b2d69d628747d8647d896c18deca272f9d7b1c544df2b7c1019b44a4084"
+        },
+        "platform": "linux",
+        "arch": "arm64",
+        "library": {
+          "filename": "libduckdb.so",
+          "sha256": "33bfc10d959159701be31b54558fc147428a98d906346610f9920f045ad8dea7"
+        },
+        "workflow": {
+          "repository": "fc-io/forska.ai",
+          "runId": "34318986159",
+          "runAttempt": "1",
+          "commit": "8614fff38bfbbc179ce5b0967b1e5b2a01ad4b7f"
+        }
       }
     },
     {
       "platform": "linux",
       "arch": "x64",
       "packageName": "@duckdb/node-bindings-linux-x64",
-      "filename": "duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.1.tgz",
-      "sha256": "cb34fa659da22fbbd3aaa17e197544fe1d5ba0f675290cca80ddaab4d076c4ba",
-      "integrity": "sha512-B4qZxSqbajdzg7m0SVPqy7Fv/avPKbPnlcTgFDsH2KQO7dG4scuBbLOsh78S1wvA//MyAx/slZtn0XFQLAMIOA==",
+      "filename": "duckdb-node-bindings-linux-x64-2.0.0-alpha40881.forska.2.tgz",
+      "sha256": "972b5455adcad854d16ad1ecd4fb6c51d7de51e8fbb9105db76d6d40a6108815",
+      "integrity": "sha512-ZsUEhI8fycKY7vhluTtoSEw8MegYexsYleoz1yeLQFrA/kwKullr4sjSoqx6FVacWDTiJKpl9hxdN0X/7vWRKA==",
       "artifact": {
-        "id": 10057134271,
-        "filename": "duckdb-shared-libs-linux-amd64.tar.gz",
-        "sha256": "76d74cb2133dac6037616da3cb6691a350891d546675b8b52a3678739afd7a6b",
-        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10057134271/zip"
+        "filename": "duckdb-patched-libs-linux-x64-2.0.0-alpha40881.forska.2.tar.gz",
+        "sha256": "2057b08fb0c3dbf4113d162feaf9fd5a699f58a59441aa98239e09160ec9c208",
+        "url": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-patched-libs-linux-x64-2.0.0-alpha40881.forska.2.tar.gz"
       },
       "native": {
         "filename": "libduckdb.so",
-        "sha256": "29b17b4801f77af11ea8e27d5b2d9c7791aaeb80406afdba8e43cfb32651ee0e"
+        "sha256": "ee37ee530d15e4226c2babeb486fbb442757f200772d0e8567a2b61066ee9352"
       },
       "bridge": {
         "filename": "node-bindings-linux-x64-1.5.1-r.1.tgz",
@@ -122,24 +453,130 @@
         "sha256": "72e177c5000451538b71d6df7730a89e1358a095eaf0a712bfb0dd471d974b02",
         "binarySha256": "23d3df6df054e29143bd876bdb7bfd4ddc767708f3220604bdd71220cfbc62a5",
         "licenseSha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb"
+      },
+      "nativeBuild": {
+        "schemaVersion": 1,
+        "distributionVersion": "2.0.0-alpha40881.forska.2",
+        "engineVersion": "v2.0.0-alpha40881",
+        "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+        "sourceId": "1a89b7dcc8",
+        "sourceArchive": {
+          "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+          "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+          "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+        },
+        "patches": [
+          {
+            "filename": "vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch",
+            "sha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb"
+          }
+        ],
+        "extensionConfig": ".github/config/bundled_extensions.cmake",
+        "buildArguments": [
+          "-S",
+          "/home/runner/work/_temp/native-work/source",
+          "-B",
+          "/home/runner/work/_temp/native-work/build",
+          "-G",
+          "Ninja",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_PROJECT_INCLUDE=/__w/forska.ai/forska.ai/vendor/duckdb/native-build.cmake",
+          "-DBUILD_UNITTESTS=ON",
+          "-DENABLE_UNITTEST_CPP_TESTS=ON",
+          "-DBUILD_SHELL=OFF",
+          "-DDISABLE_UNITY=ON",
+          "-DENABLE_EXTENSION_AUTOLOADING=ON",
+          "-DENABLE_EXTENSION_AUTOINSTALL=ON",
+          "-DDUCKDB_EXTENSION_CONFIGS=/home/runner/work/_temp/native-work/source/.github/config/bundled_extensions.cmake",
+          "-DDUCKDB_EXPLICIT_VERSION=v2.0.0-alpha40881",
+          "-DGIT_COMMIT_HASH=1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb",
+          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+          "-DSTATIC_LIBCPP=ON"
+        ],
+        "compiler": {
+          "CMAKE_CXX_COMPILER": "/opt/rh/gcc-toolset-14/root/usr/bin/c++",
+          "CMAKE_CXX_COMPILER_ID": "GNU",
+          "CMAKE_CXX_COMPILER_VERSION": "14.2.1"
+        },
+        "recipe": {
+          "inputs": [
+            {
+              "filename": ".github/workflows/duckdb-native-build.yml",
+              "sha256": "23f57957930a7d6c65b45ea17b9c36884448f457baf736ac1849194baeff5e75"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb.ts",
+              "sha256": "2693014402f2a51d438bd8f6b274e04725c80cea90ab30dd9c850ac59b1850db"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/assertNativeTestReport.ts",
+              "sha256": "03faf75dd2e0f7f95ce9b38e1ae49f89a76508b71d5056f96429cf25c8c2315b"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeBuildArguments.ts",
+              "sha256": "ab64341ed634626761cdc2f3e1567da2630d2060adeee3b4fff6b77a33aeee55"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeExtractionCommand.ts",
+              "sha256": "af1f9bf0f901a527cd6835688030123dc4e19bb0cb71cc1696d18105fc145779"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/getNativeRecipeProvenance.ts",
+              "sha256": "b099fa28b6991f3f5cf16670e14ee22ec5dfc1f319f88da54c3af2815df25b81"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/prepareNativeSource.ts",
+              "sha256": "a67a32d1006d13bd2c0a91123f146ef4d080fa97012e0bbf4ee7ea67f0716b07"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/readNativeCompiler.ts",
+              "sha256": "14c72d409a803bb2f2794bbad2737ec901b35ec671ac3fb663881cc1a146de1c"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb/runNativeCommand.ts",
+              "sha256": "e1a0daf379ea3d232ec80fa09be84074cd5a4d01a658bec1772a7fdd7d3df5f3"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.cmake",
+              "sha256": "9a0dbf8e12097572e3816030dc87928b7395f7009b9f9a3e5ca8bb1fa9904469"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.json",
+              "sha256": "4848ba5db3bc89cabfadf9cab1f2a1a976338f5d77b840de29e3d915eff1ce72"
+            }
+          ],
+          "sha256": "b6e81b2d69d628747d8647d896c18deca272f9d7b1c544df2b7c1019b44a4084"
+        },
+        "platform": "linux",
+        "arch": "x64",
+        "library": {
+          "filename": "libduckdb.so",
+          "sha256": "ee37ee530d15e4226c2babeb486fbb442757f200772d0e8567a2b61066ee9352"
+        },
+        "workflow": {
+          "repository": "fc-io/forska.ai",
+          "runId": "34318986159",
+          "runAttempt": "1",
+          "commit": "8614fff38bfbbc179ce5b0967b1e5b2a01ad4b7f"
+        }
       }
     },
     {
       "platform": "win32",
       "arch": "arm64",
       "packageName": "@duckdb/node-bindings-win32-arm64",
-      "filename": "duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.1.tgz",
-      "sha256": "01e8b6eed6b353a42929094a15dd1a70ce1fedb91e265fa465c7a25e4bd1d238",
-      "integrity": "sha512-sNiUuwG+ENnDkxlXpmrS7i+mR8c/qCJyZ0bchgtPr1Bb7r/bokdP72sH5i6ulhGRaUkB2lszkIHM4M84ymbKqg==",
+      "filename": "duckdb-node-bindings-win32-arm64-2.0.0-alpha40881.forska.2.tgz",
+      "sha256": "0bd577499aba77f883d299c5cd0c34288f43200519dd85c388a41d95affddb37",
+      "integrity": "sha512-5r7RDhbeDD9v4lxT4RQKbzCNyHNaD5V99rNJ9MkRZD6kfge6Oom+BsceArw1u6+E6xg7zulNuzthT2H8LobduA==",
       "artifact": {
-        "id": 10057092411,
-        "filename": "duckdb-shared-libs-windows-arm64.tar.gz",
-        "sha256": "d8a1d0cb6b287582a9e0d3b6f475e29b46b553f4770afe44f79441d56575d03c",
-        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10057092411/zip"
+        "filename": "duckdb-patched-libs-win32-arm64-2.0.0-alpha40881.forska.2.tar.gz",
+        "sha256": "b4db329f9701d48d9b9cb540a7b6f7d1091850f0999de5fde9dcbefb3109b528",
+        "url": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-patched-libs-win32-arm64-2.0.0-alpha40881.forska.2.tar.gz"
       },
       "native": {
         "filename": "duckdb.dll",
-        "sha256": "b874f33686c2d842e80e177500465ecad4022f3a76d68e4dfcc521114bb4b405"
+        "sha256": "0c784bd9f2d9c7c4b1da4110205cc37f272e9f3b680a39568aa42374e0e7cbaf"
       },
       "bridge": {
         "filename": "node-bindings-win32-arm64-1.5.1-r.1.tgz",
@@ -148,24 +585,131 @@
         "sha256": "e7a1b36352136a77adbb5bd8a23ea77abc501f28eefe8074f31c64790eff4912",
         "binarySha256": "95db4d85ab8a7342e16f4561287502745bd5af377ca77d7422204433052a9043",
         "licenseSha256": "4000856a8f007e53fc53150533d644bcaefc64b7461e43c14ccb9d3d66a59cd2"
+      },
+      "nativeBuild": {
+        "schemaVersion": 1,
+        "distributionVersion": "2.0.0-alpha40881.forska.2",
+        "engineVersion": "v2.0.0-alpha40881",
+        "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+        "sourceId": "1a89b7dcc8",
+        "sourceArchive": {
+          "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+          "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+          "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+        },
+        "patches": [
+          {
+            "filename": "vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch",
+            "sha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb"
+          }
+        ],
+        "extensionConfig": ".github/config/bundled_extensions.cmake",
+        "buildArguments": [
+          "-S",
+          "C:\\a\\_temp\\native-work\\source",
+          "-B",
+          "C:\\a\\_temp\\native-work\\build",
+          "-G",
+          "Ninja",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_PROJECT_INCLUDE=C:\\a\\forska.ai\\forska.ai\\vendor\\duckdb\\native-build.cmake",
+          "-DBUILD_UNITTESTS=ON",
+          "-DENABLE_UNITTEST_CPP_TESTS=ON",
+          "-DBUILD_SHELL=OFF",
+          "-DDISABLE_UNITY=ON",
+          "-DENABLE_EXTENSION_AUTOLOADING=ON",
+          "-DENABLE_EXTENSION_AUTOINSTALL=ON",
+          "-DDUCKDB_EXTENSION_CONFIGS=C:\\a\\_temp\\native-work\\source\\.github\\config\\bundled_extensions.cmake",
+          "-DDUCKDB_EXPLICIT_VERSION=v2.0.0-alpha40881",
+          "-DGIT_COMMIT_HASH=1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb",
+          "-DCMAKE_C_COMPILER=clang-cl",
+          "-DCMAKE_CXX_COMPILER=clang-cl",
+          "-DCMAKE_C_COMPILER_TARGET=arm64-pc-windows-msvc",
+          "-DCMAKE_CXX_COMPILER_TARGET=arm64-pc-windows-msvc"
+        ],
+        "compiler": {
+          "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/ARM64/bin/clang-cl.exe",
+          "CMAKE_CXX_COMPILER_ID": "Clang",
+          "CMAKE_CXX_COMPILER_VERSION": "19.1.5"
+        },
+        "recipe": {
+          "inputs": [
+            {
+              "filename": ".github/workflows/duckdb-native-build.yml",
+              "sha256": "23f57957930a7d6c65b45ea17b9c36884448f457baf736ac1849194baeff5e75"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb.ts",
+              "sha256": "2693014402f2a51d438bd8f6b274e04725c80cea90ab30dd9c850ac59b1850db"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\assertNativeTestReport.ts",
+              "sha256": "03faf75dd2e0f7f95ce9b38e1ae49f89a76508b71d5056f96429cf25c8c2315b"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\getNativeBuildArguments.ts",
+              "sha256": "ab64341ed634626761cdc2f3e1567da2630d2060adeee3b4fff6b77a33aeee55"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\getNativeExtractionCommand.ts",
+              "sha256": "af1f9bf0f901a527cd6835688030123dc4e19bb0cb71cc1696d18105fc145779"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\getNativeRecipeProvenance.ts",
+              "sha256": "b099fa28b6991f3f5cf16670e14ee22ec5dfc1f319f88da54c3af2815df25b81"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\prepareNativeSource.ts",
+              "sha256": "a67a32d1006d13bd2c0a91123f146ef4d080fa97012e0bbf4ee7ea67f0716b07"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\readNativeCompiler.ts",
+              "sha256": "14c72d409a803bb2f2794bbad2737ec901b35ec671ac3fb663881cc1a146de1c"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\runNativeCommand.ts",
+              "sha256": "e1a0daf379ea3d232ec80fa09be84074cd5a4d01a658bec1772a7fdd7d3df5f3"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.cmake",
+              "sha256": "9a0dbf8e12097572e3816030dc87928b7395f7009b9f9a3e5ca8bb1fa9904469"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.json",
+              "sha256": "4848ba5db3bc89cabfadf9cab1f2a1a976338f5d77b840de29e3d915eff1ce72"
+            }
+          ],
+          "sha256": "12d5826aae382af1a09ef57ea3281dbcdb1f75abecef9620bd546c375c7e2217"
+        },
+        "platform": "win32",
+        "arch": "arm64",
+        "library": {
+          "filename": "duckdb.dll",
+          "sha256": "0c784bd9f2d9c7c4b1da4110205cc37f272e9f3b680a39568aa42374e0e7cbaf"
+        },
+        "workflow": {
+          "repository": "fc-io/forska.ai",
+          "runId": "34318986159",
+          "runAttempt": "1",
+          "commit": "8614fff38bfbbc179ce5b0967b1e5b2a01ad4b7f"
+        }
       }
     },
     {
       "platform": "win32",
       "arch": "x64",
       "packageName": "@duckdb/node-bindings-win32-x64",
-      "filename": "duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.1.tgz",
-      "sha256": "c5a24febb71784e331dc5bef337bc48fc6702e9371546192368d18cb1bff8748",
-      "integrity": "sha512-StVabJysZq/6mv59S+ayZcOaRrYB3Kgp5tCHFLMLhYnhyxngMiFWkZUwKCoCpE0stlDHHi8KPXqX/N4Pul9DxQ==",
+      "filename": "duckdb-node-bindings-win32-x64-2.0.0-alpha40881.forska.2.tgz",
+      "sha256": "144f1848db426c78892f5007ac6b06d1c0cf2ddd9aaccae2e989e9d8eccc813c",
+      "integrity": "sha512-sJ9yxuAe3fk7+TPxkBGbE7HfHl4goxa+/UxK/fAoXyDk0dVQ5RBzlfUrxjO8yLOcdw2jniz1s5BiupeeXZ69Kg==",
       "artifact": {
-        "id": 10056934811,
-        "filename": "duckdb-shared-libs-windows-amd64.tar.gz",
-        "sha256": "41ae948f23b1f94adf62ef209339e72e077bb60834507e29b2e63db5e42c33aa",
-        "url": "https://api.github.com/repos/duckdb/duckdb/actions/artifacts/10056934811/zip"
+        "filename": "duckdb-patched-libs-win32-x64-2.0.0-alpha40881.forska.2.tar.gz",
+        "sha256": "f83cabf0d95ad718584ebd153deace90c88c5d78979dec698071aa6288f1a4f8",
+        "url": "https://github.com/fc-io/forska.ai/releases/download/duckdb-v2.0.0-alpha40881-forska.2/duckdb-patched-libs-win32-x64-2.0.0-alpha40881.forska.2.tar.gz"
       },
       "native": {
         "filename": "duckdb.dll",
-        "sha256": "d09ed5b20e9097d73ef04f6adc97ac1d1100d83684d20f3e2866b49697ce7401"
+        "sha256": "53e0aa5219833b8de10a9bcba12f1b25cc851d5232e5bafdf03b420d5bab2ad3"
       },
       "bridge": {
         "filename": "node-bindings-win32-x64-1.5.1-r.1.tgz",
@@ -174,6 +718,114 @@
         "sha256": "490c823b67eb61344185fa59f0a839fbbfd871ae5eb09163de665e467e8e7db6",
         "binarySha256": "fb2875850017ea89df29814cd5e73d01501822fe643a5b9f7c559772fd66c47b",
         "licenseSha256": "4000856a8f007e53fc53150533d644bcaefc64b7461e43c14ccb9d3d66a59cd2"
+      },
+      "nativeBuild": {
+        "schemaVersion": 1,
+        "distributionVersion": "2.0.0-alpha40881.forska.2",
+        "engineVersion": "v2.0.0-alpha40881",
+        "sourceRevision": "816a3eb2d512ce359efb40d9319f6db59788422a",
+        "sourceId": "1a89b7dcc8",
+        "sourceArchive": {
+          "filename": "duckdb-816a3eb2d512ce359efb40d9319f6db59788422a.tar.gz",
+          "url": "https://codeload.github.com/duckdb/duckdb/tar.gz/816a3eb2d512ce359efb40d9319f6db59788422a",
+          "sha256": "f51e86ff501a0559d2b4cf36f0472acb82efea06270d523190ec74258302b5dd"
+        },
+        "patches": [
+          {
+            "filename": "vendor/duckdb/patches/0001-preserve-truncated-string-max-bounds.patch",
+            "sha256": "1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb"
+          }
+        ],
+        "extensionConfig": ".github/config/bundled_extensions.cmake",
+        "buildArguments": [
+          "-S",
+          "D:\\a\\_temp\\native-work\\source",
+          "-B",
+          "D:\\a\\_temp\\native-work\\build",
+          "-G",
+          "Ninja",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_PROJECT_INCLUDE=D:\\a\\forska.ai\\forska.ai\\vendor\\duckdb\\native-build.cmake",
+          "-DBUILD_UNITTESTS=ON",
+          "-DENABLE_UNITTEST_CPP_TESTS=ON",
+          "-DBUILD_SHELL=OFF",
+          "-DDISABLE_UNITY=ON",
+          "-DENABLE_EXTENSION_AUTOLOADING=ON",
+          "-DENABLE_EXTENSION_AUTOINSTALL=ON",
+          "-DDUCKDB_EXTENSION_CONFIGS=D:\\a\\_temp\\native-work\\source\\.github\\config\\bundled_extensions.cmake",
+          "-DDUCKDB_EXPLICIT_VERSION=v2.0.0-alpha40881",
+          "-DGIT_COMMIT_HASH=1a89b7dcc8d45db3c814b868adab64dbd700ebf0d6f8cfd035bce8eed00d2acb",
+          "-DCMAKE_C_COMPILER=clang-cl",
+          "-DCMAKE_CXX_COMPILER=clang-cl",
+          "-DCMAKE_C_COMPILER_TARGET=x86_64-pc-windows-msvc",
+          "-DCMAKE_CXX_COMPILER_TARGET=x86_64-pc-windows-msvc"
+        ],
+        "compiler": {
+          "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang-cl.exe",
+          "CMAKE_CXX_COMPILER_ID": "Clang",
+          "CMAKE_CXX_COMPILER_VERSION": "20.1.8"
+        },
+        "recipe": {
+          "inputs": [
+            {
+              "filename": ".github/workflows/duckdb-native-build.yml",
+              "sha256": "23f57957930a7d6c65b45ea17b9c36884448f457baf736ac1849194baeff5e75"
+            },
+            {
+              "filename": "scripts/buildPatchedDuckdb.ts",
+              "sha256": "2693014402f2a51d438bd8f6b274e04725c80cea90ab30dd9c850ac59b1850db"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\assertNativeTestReport.ts",
+              "sha256": "03faf75dd2e0f7f95ce9b38e1ae49f89a76508b71d5056f96429cf25c8c2315b"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\getNativeBuildArguments.ts",
+              "sha256": "ab64341ed634626761cdc2f3e1567da2630d2060adeee3b4fff6b77a33aeee55"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\getNativeExtractionCommand.ts",
+              "sha256": "af1f9bf0f901a527cd6835688030123dc4e19bb0cb71cc1696d18105fc145779"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\getNativeRecipeProvenance.ts",
+              "sha256": "b099fa28b6991f3f5cf16670e14ee22ec5dfc1f319f88da54c3af2815df25b81"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\prepareNativeSource.ts",
+              "sha256": "a67a32d1006d13bd2c0a91123f146ef4d080fa97012e0bbf4ee7ea67f0716b07"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\readNativeCompiler.ts",
+              "sha256": "14c72d409a803bb2f2794bbad2737ec901b35ec671ac3fb663881cc1a146de1c"
+            },
+            {
+              "filename": "scripts\\buildPatchedDuckdb\\runNativeCommand.ts",
+              "sha256": "e1a0daf379ea3d232ec80fa09be84074cd5a4d01a658bec1772a7fdd7d3df5f3"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.cmake",
+              "sha256": "9a0dbf8e12097572e3816030dc87928b7395f7009b9f9a3e5ca8bb1fa9904469"
+            },
+            {
+              "filename": "vendor/duckdb/native-build.json",
+              "sha256": "4848ba5db3bc89cabfadf9cab1f2a1a976338f5d77b840de29e3d915eff1ce72"
+            }
+          ],
+          "sha256": "12d5826aae382af1a09ef57ea3281dbcdb1f75abecef9620bd546c375c7e2217"
+        },
+        "platform": "win32",
+        "arch": "x64",
+        "library": {
+          "filename": "duckdb.dll",
+          "sha256": "53e0aa5219833b8de10a9bcba12f1b25cc851d5232e5bafdf03b420d5bab2ad3"
+        },
+        "workflow": {
+          "repository": "fc-io/forska.ai",
+          "runId": "34318986159",
+          "runAttempt": "1",
+          "commit": "8614fff38bfbbc179ce5b0967b1e5b2a01ad4b7f"
+        }
       }
     }
   ]

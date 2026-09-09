@@ -1,7 +1,7 @@
 # Historical DuckDB checkpoint memory backport
 
 **Superseded:** normal installs, containers, and desktop now use the pinned
-official 2.0 alpha described in [the distribution guide](../../vendor/duckdb/README.md).
+Forska-patched 2.0 alpha described in [the distribution guide](../../vendor/duckdb/README.md).
 The old C++ build and patch files were removed in that cutover. This document
 records the earlier diagnosis, reviewed backport, and evidence; its build
 commands and container-only scope are historical, not current instructions.
@@ -104,6 +104,10 @@ evaluating removal of this backport.
 When an official stable DuckDB/Node binding release contains both upstream fixes, replace the custom build with that pinned official package and remove the patch/build override in the same change. First rerun the synthetic regression, upstream transaction/rollback cases, and current-DB progress gate at the same memory limits. Do not keep patched and unpatched container engine paths as permanent alternatives.
 
 The removal criterion was subsequently widened by an explicit decision to adopt
-the tested official 2.0 alpha. That cutover removes the custom build rather than
-keeping both engines as interchangeable runtime alternatives. Legacy-WAL
-migration remains an explicit operator concern, not an automatic deletion.
+the 2.0 alpha. Subsequent live correctness tests found an unrelated truncated
+string-bound bug in that official alpha. The final shared distribution therefore
+uses the same upstream base with one narrow native correction, built centrally
+for all six platforms; see [the native build recipe](../../vendor/duckdb/NATIVE_BUILD.md).
+The former container-only 1.5.5 engine is not retained as an interchangeable
+application runtime. Legacy-WAL migration remains an explicit operator concern,
+not an automatic deletion.
