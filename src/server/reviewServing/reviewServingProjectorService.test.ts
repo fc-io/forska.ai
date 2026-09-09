@@ -576,6 +576,56 @@ test('wake does not claim work while queue pressure or active imports exceed con
   expect(claimedComponents).toEqual([])
 })
 
+test('wake does not claim work when its admission barrier remains blocked after foreground work drains', async () => {
+  const {claimedComponents, dependencies} = createDependencyHarness({
+    posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
+  })
+
+  dependencies.getQueueState = async () => {
+    return {blocked: true, foregroundDuckdbQueueDepth: 0}
+  }
+  dependencies.runners = {
+    posting: async () => {
+      throw new Error('The projector must not run after admission is canceled or another barrier becomes active')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['posting'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('blocked')
+  expect(claimedComponents).toEqual([])
+})
+
+test('wake releases its claim when admission is canceled before projector writes', async () => {
+  const {completedClaimIds, dependencies, releasedClaimIds} = createDependencyHarness({
+    posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
+  })
+  let admissionChecks = 0
+
+  dependencies.getQueueState = async () => {
+    admissionChecks += 1
+
+    return {blocked: admissionChecks >= 3, foregroundDuckdbQueueDepth: 0}
+  }
+  dependencies.runners = {
+    posting: async () => {
+      throw new Error('The projector must not run after admission is canceled')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['posting'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(releasedClaimIds).toEqual(['posting-1'])
+  expect(completedClaimIds).toEqual([])
+})
+
 test('wake stops claiming later dirty-work batches when foreground DuckDB work queues mid-wake', async () => {
   const {claimedComponents, dependencies} = createDependencyHarness({
     humanStatus: [getClaim({component: 'humanStatus', dirtyWorkId: 'human-1'})],

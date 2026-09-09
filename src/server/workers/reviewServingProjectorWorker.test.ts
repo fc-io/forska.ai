@@ -435,6 +435,132 @@ test('worker yields before draining rebuild chunks while foreground DuckDB work 
   expect(harness.workloadContexts).toEqual([])
 })
 
+test('worker continues the same wake after a short foreground burst drains', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const waiting = Promise.withResolvers<undefined>()
+  const drained = Promise.withResolvers<boolean>()
+  let queueDepth = 1
+  const waits: number[] = []
+
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return queueDepth
+  }
+  harness.dependencies.waitForForegroundQueue = async ({timeoutMs}) => {
+    waits.push(timeoutMs)
+    waiting.resolve(undefined)
+    return drained.promise
+  }
+
+  const run = runReviewServingProjectorWorkerOnce({maxWakeMs: 200, workerId: 'worker-1'}, harness.dependencies)
+  await waiting.promise
+  expect(harness.runChunkInputs).toEqual([])
+  queueDepth = 0
+  drained.resolve(true)
+
+  const result = await run
+
+  expect(waits).toEqual([200])
+  expect(result.projector.status).toBe('completed')
+  expect(harness.runChunkInputs).toHaveLength(1)
+  expect(harness.wakeInputs).toHaveLength(1)
+})
+
+test('worker admits projector work after a post-rebuild foreground burst within the remaining wake budget', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const chunkService = harness.dependencies.rebuildChunkService
+
+  if (chunkService === undefined) {
+    throw new Error('Missing test chunk service')
+  }
+
+  let nowMs = 1_000
+  let queueDepth = 0
+  const waits: number[] = []
+  const originalRun = chunkService.runClaimedChunk
+
+  harness.dependencies.nowMs = () => {
+    return nowMs
+  }
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return queueDepth
+  }
+  chunkService.runClaimedChunk = async (input) => {
+    const result = await originalRun(input)
+    nowMs = 1_120
+    queueDepth = 1
+    return result
+  }
+  harness.dependencies.waitForForegroundQueue = async ({timeoutMs}) => {
+    waits.push(timeoutMs)
+    queueDepth = 0
+    return true
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({maxWakeMs: 200, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(waits).toEqual([80])
+  expect(result.projector.status).toBe('completed')
+  expect(harness.wakeInputs).toHaveLength(1)
+  expect(harness.wakeInputs[0]).toMatchObject({maxWakeMs: 80})
+})
+
+for (const barrier of ['exclusive', 'transfer', 'aborted'] as const) {
+  test(`worker rechecks ${barrier} after its foreground admission wait`, async () => {
+    const harness = createWorkerHarness({wakeStatus: 'completed'})
+    const controller = new AbortController()
+    let queueDepth = 1
+    let activeBarrier = false
+
+    harness.dependencies.getForegroundQueueDepth = () => {
+      return queueDepth
+    }
+    harness.dependencies.hasActiveDuckdbExclusiveWork = () => {
+      return activeBarrier && barrier === 'exclusive'
+    }
+    harness.dependencies.hasActiveProjectTransferSession = async () => {
+      return activeBarrier && barrier === 'transfer'
+    }
+    harness.dependencies.waitForForegroundQueue = async ({signal, timeoutMs}) => {
+      expect(timeoutMs).toBe(200)
+      expect(signal).toBe(controller.signal)
+      queueDepth = 0
+      activeBarrier = true
+      if (barrier === 'aborted') controller.abort()
+      return true
+    }
+
+    const result = await runReviewServingProjectorWorkerOnce(
+      {maxWakeMs: 200, signal: controller.signal, workerId: 'worker-1'},
+      harness.dependencies,
+    )
+
+    expect(result.projector.status).toBe('blocked')
+    expect(harness.getNextChunkInputs).toEqual([])
+    expect(harness.runChunkInputs).toEqual([])
+    expect(harness.wakeInputs).toEqual([])
+  })
+}
+
+test('worker leaves sustained foreground pressure blocked when its wake budget expires', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const waits: number[] = []
+
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return 1
+  }
+  harness.dependencies.waitForForegroundQueue = async ({timeoutMs}) => {
+    waits.push(timeoutMs)
+    return false
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({maxWakeMs: 200, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(waits).toEqual([200])
+  expect(result.projector.status).toBe('blocked')
+  expect(harness.runChunkInputs).toEqual([])
+  expect(harness.wakeInputs).toEqual([])
+})
+
 test('worker skips background review work while project transfer background work is active', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
 

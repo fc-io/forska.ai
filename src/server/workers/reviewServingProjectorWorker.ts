@@ -127,6 +127,7 @@ import {
   getDuckdbAppendRuntimeMetrics,
   getDuckdbQueueRuntimeMetricsSnapshot,
   recoverDuckdbServiceAfterFatalError,
+  waitForDuckdbForegroundQueue,
 } from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
@@ -215,6 +216,7 @@ type ReviewServingProjectorWorkerDependencies = {
   hasActiveDuckdbExclusiveWork?: () => boolean
   getAppendQueueDepth?: () => number
   getForegroundQueueDepth?: () => number
+  waitForForegroundQueue?: typeof waitForDuckdbForegroundQueue
   intakeImportDeltas?: typeof intakeReviewImportDeltasToDirtyWork
   intakeReviewChangeDeltas?: typeof intakeReviewChangeDeltasToDirtyWork
   nowMs?: () => number
@@ -291,13 +293,13 @@ type ReviewServingProjectorWorkerCycleOptions = {
   rebuildChunkBatchSoftRssBytes?: number
   rebuildChunkBatchSize?: number
   rebuildProjectId?: string | null
+  signal?: AbortSignal
   workerId?: string
 }
 
 type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycleOptions & {
   errorBackoffMs?: number
   pollIntervalMs?: number
-  signal?: AbortSignal
 }
 
 type ReviewServingProjectorWorkerRunResult =
@@ -5233,6 +5235,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   getForegroundQueueDepth: () => {
     return getDuckdbQueueRuntimeMetricsSnapshot().main.queueDepth
   },
+  waitForForegroundQueue: waitForDuckdbForegroundQueue,
   hasActiveProjectTransferBackgroundActivity,
   hasActiveDuckdbExclusiveWork,
   hasActiveProjectTransferSession: async () => {
@@ -6566,6 +6569,41 @@ const hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker = (
   dependencies: ReviewServingProjectorWorkerDependencies,
 ) => {
   return dependencies.hasActiveDuckdbExclusiveWork?.() ?? false
+}
+
+const shouldYieldReviewServingProjectorAdmission = async (
+  dependencies: ReviewServingProjectorWorkerDependencies,
+  options: ReviewServingProjectorWorkerCycleOptions,
+  deadlineMs: number,
+) => {
+  if (
+    options.signal?.aborted
+    || hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
+    || (dependencies.hasActiveProjectTransferBackgroundActivity?.() ?? false)
+  ) {
+    return true
+  }
+
+  if (!hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)) {
+    return false
+  }
+
+  if (dependencies.waitForForegroundQueue === undefined || (dependencies.getAppendQueueDepth?.() ?? 0) > 0) {
+    return true
+  }
+
+  const drained = await dependencies.waitForForegroundQueue({
+    signal: options.signal,
+    timeoutMs: Math.max(0, deadlineMs - getWorkerNowMs(dependencies, options)),
+  })
+
+  return (
+    !drained
+    || options.signal?.aborted === true
+    || hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
+    || (await hasActiveProjectTransferForReviewServingProjectorWorker(dependencies))
+    || hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
+  )
 }
 
 const getForegroundRebuildDrainStartedAtMs = (input: {
@@ -9225,11 +9263,18 @@ export const runReviewServingProjectorWorkerCycle = async (
 ): Promise<ReviewServingProjectorWorkerCycleResult> => {
   const workerId = options.workerId ?? getReviewServingProjectorWorkerId()
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
+  const admissionDeadlineMs =
+    getWorkerNowMs(dependencies, options)
+    + getPositiveInteger(options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs)
+
+  const activeExclusiveWork = hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
+  const activeProjectTransfer =
+    !activeExclusiveWork && (await hasActiveProjectTransferForReviewServingProjectorWorker(dependencies))
 
   if (
-    hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
-    || (await hasActiveProjectTransferForReviewServingProjectorWorker(dependencies))
-    || hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
+    activeExclusiveWork
+    || activeProjectTransfer
+    || (await shouldYieldReviewServingProjectorAdmission(dependencies, options, admissionDeadlineMs))
   ) {
     const chunk = getIdleReviewServingProjectorWorkerCycleChunkResult()
     const cleanup = {
@@ -9291,7 +9336,11 @@ export const runReviewServingProjectorWorkerCycle = async (
       : chunkBatch
   const chunk = finalizedChunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
-  const shouldYieldToForegroundDuckdbWork = hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
+  const shouldYieldToForegroundDuckdbWork = await shouldYieldReviewServingProjectorAdmission(
+    dependencies,
+    options,
+    admissionDeadlineMs,
+  )
   const shouldRunOnlyRebuildChunk =
     terminalFailedChunk !== null
     || chunk.status === 'failed'
@@ -9309,7 +9358,10 @@ export const runReviewServingProjectorWorkerCycle = async (
       })
   const projectorServiceDependencies = {
     getQueueState: async () => {
-      return {foregroundDuckdbQueueDepth: dependencies.getForegroundQueueDepth?.() ?? 0}
+      const blocked = await shouldYieldReviewServingProjectorAdmission(dependencies, options, admissionDeadlineMs)
+      const foregroundDuckdbQueueDepth = dependencies.getForegroundQueueDepth?.() ?? 0
+
+      return {blocked, foregroundDuckdbQueueDepth}
     },
     runners: getLoggedReviewServingProjectorRunners(database),
     ...(dependencies.projectorServiceDependencies ?? {}),
@@ -9317,13 +9369,19 @@ export const runReviewServingProjectorWorkerCycle = async (
   const projector = shouldRunOnlyRebuildChunk
     ? getBlockedReviewServingProjectorWakeResult()
     : await runReviewServingProjectorWorkerCyclePhase('wakeProjectors', () => {
-        return dependencies.wakeProjectors(getWakeInput({dependencies, options, wakeId}), {
-          ...projectorServiceDependencies,
-          database,
-          nowMs: () => {
-            return getWorkerNowMs(dependencies, options)
+        return dependencies.wakeProjectors(
+          {
+            ...getWakeInput({dependencies, options, wakeId}),
+            maxWakeMs: Math.max(0, admissionDeadlineMs - getWorkerNowMs(dependencies, options)),
           },
-        })
+          {
+            ...projectorServiceDependencies,
+            database,
+            nowMs: () => {
+              return getWorkerNowMs(dependencies, options)
+            },
+          },
+        )
       })
   if (!shouldRunOnlyRebuildChunk) {
     await runReviewServingProjectorWorkerCyclePhase('completeJudgmentJobVisibility', () => {

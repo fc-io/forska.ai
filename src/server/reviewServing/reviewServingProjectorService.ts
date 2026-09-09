@@ -55,6 +55,7 @@ export type ReviewServingProjectorIdentityResolver = (input: {
 
 export type ReviewServingProjectorQueueState = {
   activeImportCount?: number
+  blocked?: boolean
   foregroundDuckdbQueueDepth?: number
   pendingDirtyWorkCount?: number
 }
@@ -412,7 +413,7 @@ const shouldBlockWake = async (
   const queuePressureBlocked =
     input.maxPendingDirtyWorkCount !== undefined && pendingDirtyWorkCount > input.maxPendingDirtyWorkCount
 
-  return activeImportBlocked || foregroundDuckdbQueueBlocked || queuePressureBlocked
+  return queueState?.blocked === true || activeImportBlocked || foregroundDuckdbQueueBlocked || queuePressureBlocked
 }
 
 export const wakeReviewServingProjectorService = async (
