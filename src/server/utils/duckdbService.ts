@@ -297,6 +297,7 @@ type DuckdbStartupIndexedTableRepairSpec = {
   repairStrategy?: 'copy' | 'dedupe-latest' | 'empty-derived'
   schemaRequirements?: DuckdbStartupSchemaRequirement[]
   schemaName: string
+  skipStartupPreflightUntilMigration?: string
   skipGenericDeleteInsertProbe?: boolean
   tableName: string
 }
@@ -617,6 +618,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         tableName: 'judgment_job',
       },
     ],
+    skipStartupPreflightUntilMigration: '0229_rebuildJudgmentWorkflowMutableTablesWithoutIndexes.sql',
     tableName: 'judgment_job',
   },
   {
@@ -757,6 +759,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       },
     ],
     schemaName: 'app',
+    skipStartupPreflightUntilMigration: '0229_rebuildJudgmentWorkflowMutableTablesWithoutIndexes.sql',
     tableName: 'comparison_project_serving_generation',
   },
   {
@@ -1509,6 +1512,8 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'facet_value',
       'summary_definition_version',
     ],
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
     schemaName: 'mart',
     tableName: 'review_filter_facet_serving_v4',
   },
@@ -3401,6 +3406,35 @@ const getDuckdbStartupPreflightScript = () => {
       return true
     }
 
+    const isMigrationApplied = async (migrationName) => {
+      if (typeof migrationName !== 'string' || migrationName.length === 0) {
+        return true
+      }
+
+      if (!(await tableExists('main', 'app_schema_migration'))) {
+        return false
+      }
+
+      const rows = await getRows(
+        "SELECT COUNT(*) AS migrationCount FROM app_schema_migration " +
+          "WHERE name = " + getSqlLiteral(migrationName),
+      )
+      return Number(rows[0]?.migrationCount ?? 0) > 0
+    }
+
+    const shouldSkipSpecForPendingMigration = async (spec) => {
+      const migrationName =
+        typeof spec.skipStartupPreflightUntilMigration === 'string'
+          ? spec.skipStartupPreflightUntilMigration
+          : null
+
+      if (migrationName === null) {
+        return false
+      }
+
+      return !(await isMigrationApplied(migrationName))
+    }
+
     const getPrimaryKeyColumns = async (schemaName, tableName) => {
       const rows = await getRows(
         "SELECT constraint_column_names AS primaryKeyColumns FROM duckdb_constraints() " +
@@ -3494,9 +3528,17 @@ const getDuckdbStartupPreflightScript = () => {
       connection = await instance.connect()
       await connection.run('SELECT 1')
 
-      const inlinePrimaryKeyRepairSpecs = []
+      const activeTableRepairSpecs = []
 
       for (const spec of tableRepairSpecs) {
+        if (!(await shouldSkipSpecForPendingMigration(spec))) {
+          activeTableRepairSpecs.push(spec)
+        }
+      }
+
+      const inlinePrimaryKeyRepairSpecs = []
+
+      for (const spec of activeTableRepairSpecs) {
         if (
           await tableExists(spec.schemaName, spec.tableName)
           && await schemaRequirementsSatisfied(spec.schemaRequirements)
@@ -3511,7 +3553,7 @@ const getDuckdbStartupPreflightScript = () => {
         throw new Error('startup repair required before mutating inline primary key tables')
       }
 
-      for (const spec of tableRepairSpecs) {
+      for (const spec of activeTableRepairSpecs) {
         if (await tableExists(spec.schemaName, spec.tableName)) {
           if (await schemaRequirementsSatisfied(spec.schemaRequirements)) {
             markActiveRepairSpec(spec, 'obsolete-repaired-pk-index-drop')

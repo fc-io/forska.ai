@@ -22,6 +22,12 @@ import {
   topologyProjectorQuietWindowMs,
   topologyReadinessRegressionGraceMs,
 } from './judgmentWorkflowTopology.ts'
+import {assertNoUnexpectedDuckdbRecovery} from './judgmentWorkflowTopology/assertNoUnexpectedDuckdbRecovery.ts'
+import {
+  cleanupTopologyArtifacts,
+  recordTopologyFailure,
+  topologyFailureArtifactsDirectory,
+} from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
 
 const topologyRoots: string[] = []
 
@@ -182,4 +188,32 @@ test('topology removes its disposable root when the production stack cannot be s
   expect(startJudgmentWorkflowTopology({cwd: join(topology.root, 'missing-cwd'), topology})).rejects.toThrow()
   expect(existsSync(topology.root)).toBe(false)
   expect(existsSync(topology.serverStackLockPath)).toBe(false)
+})
+
+test('topology failure artifact cleanup preserves only recorded opt-in failures', () => {
+  const successful = createJudgmentWorkflowTopology({preserveFailureArtifacts: true})
+  expect(successful.root).toContain(topologyFailureArtifactsDirectory)
+  cleanupTopologyArtifacts(successful)
+  expect(existsSync(successful.root)).toBe(false)
+
+  const failed = createJudgmentWorkflowTopology({preserveFailureArtifacts: true})
+  topologyRoots.push(failed.root)
+  recordTopologyFailure(failed, 'unit-test')
+  cleanupTopologyArtifacts(failed)
+  expect(existsSync(failed.root)).toBe(true)
+  expect(existsSync(join(failed.root, 'failure.jsonl'))).toBe(true)
+})
+
+test('topology shutdown assertion fails when DuckDB recovery evidence appears', () => {
+  const topology = createJudgmentWorkflowTopology()
+  topologyRoots.push(topology.root)
+
+  writeFileSync(
+    join(topology.root, 'logs', 'maintenance.jsonl'),
+    `${JSON.stringify({event: 'duckdb.startup.indexed-table-repair.probed'})}\n`,
+  )
+
+  expect(() => {
+    assertNoUnexpectedDuckdbRecovery(topology)
+  }).toThrow('Production topology observed unexpected DuckDB recovery')
 })

@@ -5210,6 +5210,8 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_count_serving_v4'
     })
     expect(countServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(countServingProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(countServingProbe?.recreateSecondaryIndexes).toBe(false)
     expect(countServingProbe?.repairPrimaryKeyColumns).toEqual([
       'project_id',
       'review_config_hash',
@@ -5239,6 +5241,8 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_facet_serving_v4'
     })
     expect(facetServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(facetServingProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(facetServingProbe?.recreateSecondaryIndexes).toBe(false)
     expect(facetServingProbe?.repairPrimaryKeyColumns).toEqual([
       'project_id',
       'review_config_hash',
