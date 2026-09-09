@@ -8,6 +8,23 @@ import specification from '../vendor/duckdb/native-build.json'
 import {hashDistributionInput} from './buildDuckdbDistribution/hashDistributionInput'
 import {assertNativeTestReport} from './buildPatchedDuckdb/assertNativeTestReport'
 import {getNativeBuildArguments} from './buildPatchedDuckdb/getNativeBuildArguments'
+import {getNativeExtractionCommand} from './buildPatchedDuckdb/getNativeExtractionCommand'
+
+test('Windows source extraction uses native bsdtar instead of interpreting drive letters as remote tar hosts', () => {
+  const args = getNativeExtractionCommand('D:\\inputs\\source.tar.gz', 'D:\\source', 'win32', 'C:\\Windows')
+  expect(args).toEqual([
+    'C:\\Windows\\System32\\tar.exe',
+    '-xzf',
+    'D:\\inputs\\source.tar.gz',
+    '--strip-components=1',
+    '-C',
+    'D:\\source',
+  ])
+  expect(getNativeExtractionCommand('/inputs/source.tar.gz', '/source', 'linux')[0]).toBe('tar')
+  expect(() => {
+    return getNativeExtractionCommand('source.tar.gz', 'source', 'win32')
+  }).toThrow('native system root')
+})
 
 test('native build pins the source and patch independently from the active installed distribution', () => {
   expect(hashDistributionInput(readFileSync(specification.patches[0] ?? ''))).toBe(specification.patchSha256)

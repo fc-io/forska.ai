@@ -165,10 +165,14 @@ diff --git a/test/sql/storage/truncated_string_max_update.test b/test/sql/storag
 new file mode 100644
 --- /dev/null
 +++ b/test/sql/storage/truncated_string_max_update.test
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,88 @@
 +# name: test/sql/storage/truncated_string_max_update.test
 +# description: Updating legacy truncated string statistics must not prune unchanged rows
 +# group: [storage]
++
++# The test runner normally checkpoints every write; retain updates for the WAL replay assertions.
++statement ok
++SET checkpoint_threshold = '1TB';
 +
 +statement ok
 +ATTACH '{TEST_DIR}/truncated_string_max_update.db' AS legacy (STORAGE_VERSION 'v1.5.0', ROW_GROUP_SIZE 2048);

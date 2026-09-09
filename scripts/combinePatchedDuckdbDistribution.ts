@@ -10,7 +10,8 @@ import specification from '../vendor/duckdb/native-build.json'
 import {buildPlatformPackage} from './buildDuckdbDistribution/buildPlatformPackage'
 import type {DistributionManifest, DistributionPlatform} from './buildDuckdbDistribution/distributionManifest'
 import {copyVerifiedReleaseInput} from './combinePatchedDuckdbDistribution/copyVerifiedReleaseInput'
-import {readNativeBuild} from './stagePatchedDuckdbDistribution/readNativeBuild'
+import {retainNativeBuildInputs} from './combinePatchedDuckdbDistribution/retainNativeBuildInputs'
+import {type NativeBuild, readNativeBuild} from './stagePatchedDuckdbDistribution/readNativeBuild'
 
 const {values} = parseArgs({options: {'input-dir': {type: 'string'}, 'output-dir': {type: 'string'}}, strict: true})
 assert.ok(
@@ -24,6 +25,7 @@ const paths = await Array.fromAsync(new Glob('**/candidate/manifest.json').scan(
 assert.equal(paths.length, activeManifest.platforms.length, 'All six separately verified native artifacts are required')
 const manifests: DistributionManifest[] = []
 const platforms: DistributionPlatform[] = []
+const nativeBuilds: NativeBuild[] = []
 for (const manifestPath of paths) {
   const candidate = dirname(join(input, manifestPath))
   const manifest = (await file(join(candidate, 'manifest.json')).json()) as DistributionManifest
@@ -32,6 +34,7 @@ for (const manifestPath of paths) {
   const platform = manifest.platforms[0]
   assert.ok(platform)
   const build = await readNativeBuild(join(candidate, '../native-output'))
+  nativeBuilds.push(build)
   assert.deepEqual(platform.nativeBuild, build)
   const verified = (await file(join(candidate, 'verification.json')).json()) as Record<string, unknown>
   assert.equal(verified.passed, true)
@@ -103,6 +106,7 @@ const distribution = {
     return a.packageName.localeCompare(b.packageName, 'en')
   }),
 }
+const buildInputs = await retainNativeBuildInputs(nativeBuilds, resolve(import.meta.dir, '..'), output)
 await writeFile(join(output, 'manifest.json'), `${JSON.stringify(distribution, null, 2)}\n`, {flag: 'wx'})
 const packageHashes = platforms
   .map((platform) => {
@@ -110,7 +114,9 @@ const packageHashes = platforms
   })
   .sort()
   .join('\n')
-await writeFile(join(output, 'SHA256SUMS'), `${packageHashes}\n`, {flag: 'wx'})
+await writeFile(join(output, 'SHA256SUMS'), `${packageHashes}\n${buildInputs.sha256}  ${buildInputs.filename}\n`, {
+  flag: 'wx',
+})
 console.log(
   JSON.stringify({distributionVersion: distribution.distributionVersion, platforms: platforms.length, output}),
 )

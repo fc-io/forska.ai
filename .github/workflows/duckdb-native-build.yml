@@ -70,7 +70,8 @@ jobs:
           bun-version: 1.3.13
       - name: Confirm native architecture
         run: bun -e "if (process.platform !== '${{ matrix.platform }}' || process.arch !== '${{ matrix.arch }}') throw new Error('Runner architecture mismatch')"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: compiler-cache
         if: matrix.cache != ''
         with:
           path: .native-ccache
@@ -99,6 +100,11 @@ jobs:
             ${{ runner.temp }}/candidate-verification/evidence
           if-no-files-found: error
           retention-days: 30
+      - uses: actions/cache/save@v4
+        if: always() && matrix.cache != '' && steps.compiler-cache.outputs.cache-hit != 'true' && hashFiles('.native-ccache/**') != ''
+        with:
+          path: .native-ccache
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         if: matrix.platform == 'linux' && matrix.arch == 'x64'
         with:
