@@ -1305,9 +1305,9 @@ export const failReviewServingDirtyWorkClaims = async (
   return {failedCount: uniqueDirtyWorkIds.length}
 }
 
-export const completeReviewServingDirtyWorkClaims = async (
+const completeReviewServingDirtyWorkClaimsInTransaction = async (
   claims: readonly ReviewServingDirtyWorkClaim[],
-  database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
+  database: ReviewServingDirtyWorkTransaction,
 ) => {
   const uniqueClaims = [
     ...new Map(
@@ -1331,16 +1331,32 @@ export const completeReviewServingDirtyWorkClaims = async (
       SET status = 'completed', lifecycle_reason = 'projected', updated_at = current_timestamp
       WHERE ${getDirtyWorkUpdatePredicate(uniqueClaims)}
         AND status = 'running'
+        AND (${uniqueClaims
+          .map((claim) => {
+            return `(dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)}
+              AND latest_source_high_water_mark = ${getSqlLiteral(claim.latestSourceHighWaterMark)})`
+          })
+          .join(' OR ')})
     `)
-    await maintainReviewServingDirtyWorkClaimStates(
-      uniqueClaims.map((claim) => {
-        return {...claim, status: 'completed' as const}
-      }),
-      database,
-    )
+    const currentRows = await database.queryJson<DirtyWorkRow>(`
+      ${getDirtyWorkSelect()}
+      WHERE ${getDirtyWorkUpdatePredicate(uniqueClaims)}
+    `)
+    await maintainReviewServingDirtyWorkClaimStates(currentRows.map(getDirtyWorkRecordFromRow), database)
   }
 
   return {completedCount: uniqueClaims.length}
+}
+
+export const completeReviewServingDirtyWorkClaims = async (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  database: ReviewServingDirtyWorkTransaction | ReviewServingDirtyWorkDatabase = getAppDatabaseService(),
+) => {
+  return 'transaction' in database
+    ? database.transaction(async (tx) => {
+        return completeReviewServingDirtyWorkClaimsInTransaction(claims, tx)
+      })
+    : completeReviewServingDirtyWorkClaimsInTransaction(claims, database)
 }
 
 export const completeReviewServingDirtyWorkCoveredByRebuild = async (

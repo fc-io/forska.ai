@@ -33,7 +33,10 @@ export const verifyDuckdbWal = async (packageRoot: string, phase: string, direct
         "SELECT current_setting('disabled_optimizers') AS disabled_optimizers, current_setting('legacy_disable_null_type') AS legacy_disable_null_type",
       )
     ).getRowObjectsJS()[0]
-    assert.deepEqual(settings, {disabled_optimizers: 'cte_inlining', legacy_disable_null_type: true})
+    assert.equal(settings?.legacy_disable_null_type, true)
+    const disabledOptimizers = settings?.disabled_optimizers
+    assert.ok(typeof disabledOptimizers === 'string')
+    assert.deepEqual(disabledOptimizers.split(',').sort(), ['cte_inlining', 'statistics_propagation'])
     const nulls = (
       await connection.runAndReadAll("SELECT NULL AS scalar_null, [NULL] AS list_null, {'value': NULL} AS struct_null")
     ).getRowObjectsJS()

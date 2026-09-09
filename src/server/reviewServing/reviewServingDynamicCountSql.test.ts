@@ -1,6 +1,7 @@
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {getReviewServingDynamicFilteredCountSql} from './reviewServingDynamicCountSql.ts'
 import {projectReviewServingHumanStatusRanges} from './reviewServingHumanStatusProjector.ts'
 import {
@@ -182,7 +183,7 @@ test('dynamic filtered counts keep serving/state path when posting-only fast pat
 })
 
 test('dynamic filtered counts match legacy group-by semantics for multi-group posting intersections in DuckDB', async () => {
-  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
 
   try {
@@ -320,7 +321,7 @@ test('dynamic filtered counts match legacy group-by semantics for multi-group po
 })
 
 test('dynamic filtered counts execute canonical prompt-answer fallback with mixed posting groups in DuckDB', async () => {
-  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
 
   try {
@@ -451,7 +452,7 @@ test('dynamic filtered counts execute canonical prompt-answer fallback with mixe
 })
 
 test('dynamic filtered counts match legacy semantics when anchor groups tie', async () => {
-  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
 
   try {
@@ -641,7 +642,7 @@ test('dynamic filtered counts use base-scoped fast path for list-mode-state filt
 })
 
 test('dynamic state-only counts ignore orphan list-mode-state rows without base rows', async () => {
-  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
 
   try {
@@ -706,7 +707,7 @@ test('dynamic state-only counts ignore orphan list-mode-state rows without base 
 })
 
 test('imported summary-human status rebuild materializes tab-count state from source truth', async () => {
-  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
   const projectId = 'imported-summary-project-1'
   const reviewConfigHash = 'review-config-imported-summary-1'
@@ -1071,7 +1072,7 @@ test('dynamic filtered counts restrict broad token-prefix search to unassessed q
 })
 
 test('dynamic filtered counts preserve all-prefix candidate search semantics without expanding broad title rows', async () => {
-  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
 
   try {

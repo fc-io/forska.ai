@@ -1,5 +1,7 @@
 import {existsSync} from 'node:fs'
-import {join, resolve} from 'node:path'
+import {basename, join, resolve} from 'node:path'
+
+import {createScriptTestDirectory} from './testUtils/createScriptTestDirectory.ts'
 
 type PlaywrightArgs = {env: Record<string, string | undefined>; passthroughArgs: string[]}
 
@@ -84,17 +86,28 @@ const getNodeExecutable = () => {
 const runPlaywright = () => {
   const playwrightCliPath = resolve(import.meta.dir, '../node_modules/@playwright/test/cli.js')
   const {env, passthroughArgs} = parseRunPlaywrightArgs(process.argv.slice(2))
-  const playwright = globalThis.Bun.spawnSync([getNodeExecutable(), playwrightCliPath, 'test', ...passthroughArgs], {
-    cwd: process.cwd(),
-    env: {...process.env, ...env},
-    stderr: 'inherit',
-    stdin: 'inherit',
-    stdout: 'inherit',
-  })
+  const buildDirectory = createScriptTestDirectory('playwright-build')
 
-  process.exit(playwright.exitCode ?? 1)
+  try {
+    const playwright = globalThis.Bun.spawnSync([getNodeExecutable(), playwrightCliPath, 'test', ...passthroughArgs], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...env,
+        FORSKA_PLAYWRIGHT_BUILD_DIR: buildDirectory.path,
+        FORSKA_PLAYWRIGHT_OUTPUT_DIR: resolve('test-results', basename(buildDirectory.path)),
+      },
+      stderr: 'inherit',
+      stdin: 'inherit',
+      stdout: 'inherit',
+    })
+
+    return playwright.exitCode ?? 1
+  } finally {
+    buildDirectory.cleanup()
+  }
 }
 
 if (import.meta.main) {
-  runPlaywright()
+  process.exit(runPlaywright())
 }

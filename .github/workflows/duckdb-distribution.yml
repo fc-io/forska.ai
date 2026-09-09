@@ -60,6 +60,8 @@ jobs:
         run: bun scripts/verifyDuckdbDistribution.ts
       - name: Runtime compatibility and legacy WAL handling
         run: bun test src/server/utils/duckdbEngineCompatibility.test.ts --timeout 120000
+      - name: String predicates after mixed-version WAL replay and checkpoint
+        run: bun test src/server/utils/duckdbEngineCompatibility.statistics.test.ts --timeout 120000
       - name: WAL preservation after fatal-query recovery
         run: bun test src/server/utils/duckdbWalRecoverySafety.test.ts --timeout 120000
       - name: Native instance initialization and offline full-schema WAL replay

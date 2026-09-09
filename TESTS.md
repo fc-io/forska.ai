@@ -5,6 +5,15 @@ Run tests through `bun run ...` from the repo root.
 This file is for correctness, smoke, and regression tests. Benchmark and
 performance-measurement commands live in [PERF.md](PERF.md).
 
+## Dirty-work completion race regression
+
+Run `bun test src/server/reviewServing/reviewServingDirtyWorkService.test.ts src/server/reviewServing/reviewServingProjectorService.test.ts src/server/reviewServing/reviewServingProjectorWriter.test.ts`.
+Real DuckDB cases verify that completing an older projection claim preserves a
+newer pending or running claim and its watermark, and that claim-index failures
+roll back acknowledgements, source watermarks, and the base state atomically.
+The writer contract also requires acknowledgements to stay in its existing
+transaction, while standalone completion calls create their own transaction.
+
 ## DuckDB upgrades: checkpoint-memory regression gate
 
 Normal installation, container images, and desktop builds use the pinned official
@@ -26,11 +35,22 @@ For every engine, binding, or native-package update:
 - Run `bun test src/server/utils/duckdbEngineCompatibility.test.ts --timeout 120000`
   for all managed reader/writer NULL paths, ordinary 1.5.1 WAL migration, and
   incompatible-WAL non-deletion checks. This gate runs on each native CI target.
-  The pinned alpha explicitly disables only `cte_inlining` after two portable
+  The pinned alpha explicitly disables `cte_inlining` after two portable
   native Vector::Reference regressions. Remove that setting only after both
   unconfigured fixtures pass on the proposed official engine, then rerun the
   workflow, browser, and live-progress gates; do not silently broaden disabled
   optimizers to make a failing fixture pass.
+- Run `bun test src/server/utils/duckdbEngineCompatibility.statistics.test.ts --timeout 120000`
+  for exact retained/inserted/deleted IDs, range predicates and joins after a
+  1.5.1 checkpoint plus committed alpha WAL. The alpha can merge 8-byte legacy
+  string statistics with 12-byte statistics into incorrect bounds and eliminate
+  real rows. Only `statistics_propagation` is additionally disabled; scan-level
+  pruning and every other optimizer remain enabled. Native, managed, ephemeral,
+  ownerless, checkpoint and fresh-reopen paths must all return the exact rows.
+  The copied desktop/container verifier runs this same fixture. Remove this
+  setting only when the replacement engine passes the raw-alpha negative control
+  as a positive test, all reader and checkpoint cases, and real workload progress
+  at unchanged caps; record any performance effect of this optimizer change.
 - Run `bun test src/server/utils/duckdbWalRecoverySafety.test.ts --timeout 120000`
   to verify fatal-query recovery leaves real committed WAL bytes untouched when
   reopen fails with engine, extension, memory, or native-process errors, and that
@@ -101,6 +121,7 @@ bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test
 bun test src/server/services/structuredFileImportService.test.ts
 bun test src/server/services/structuredFileImportService.integration.test.ts
 bun test scripts/testUtils/createScriptTestDirectory.test.ts scripts/judgmentWorkflowRealCodex/realCodexTopologyAdapter/getProviderConnections.test.ts scripts/judgmentWorkflowRealCodex/realCodexTopologyAdapter/getSnapshotInputEvidence.test.ts
+bun test scripts/buildPlaywrightApp.test.ts
 ```
 
 These protect cold readiness without opening DuckDB, background queue draining
@@ -111,7 +132,9 @@ canonical persistence without DOI/PMID/arXiv IDs, stable source identity and
 idempotent reimports, duplicate handling, and actual accepted counts.
 Script fixtures own
 unique temporary database/spill roots; cleanup must preserve sibling suites
-and their live runtime directories. The full Bun inventory includes these
+and their live runtime directories. Browser runners also own distinct built-app
+and Playwright artifact directories; concurrent builds must preserve their
+different API origins and never replace the checkout's `dist` output. The full Bun inventory includes these
 regressions. Rerun the real-Codex smoke below for its complete HTTP/inference
 contract, and the current-DB smoke for runtime lifecycle changes.
 

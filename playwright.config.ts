@@ -25,6 +25,7 @@ const apiServerCommand = 'bun scripts/startPlaywrightApiServer.ts'
 
 const smokeEnv = {
   API_SERVER_PORT: String(apiServerPort),
+  APP_SERVER_DIST_DIR: String(process.env.FORSKA_PLAYWRIGHT_BUILD_DIR ?? ''),
   APP_SERVER_PORT: String(appServerPort),
   DUCKDB_PATH: duckdbPath,
   FORSKA_DISABLE_SERVER_MUTATIONS: networkSmokeDbMode === 'current' ? 'true' : 'false',
@@ -40,6 +41,7 @@ const smokeEnv = {
 
 export default defineConfig({
   testDir: './tests/e2e',
+  outputDir: process.env.FORSKA_PLAYWRIGHT_OUTPUT_DIR,
   timeout: 60_000,
   workers: 1,
   use: {baseURL: `http://127.0.0.1:${appServerPort}`, screenshot: 'only-on-failure', trace: 'retain-on-failure'},

@@ -1,6 +1,7 @@
 import {rmSync} from 'node:fs'
 import {resolve} from 'node:path'
 
+import {buildPlaywrightApp} from './buildPlaywrightApp.ts'
 import {assertSafePlaywrightRemovalPath} from './playwrightPathSafety.ts'
 
 const parentPid = process.ppid
@@ -51,12 +52,7 @@ if (process.env.FORSKA_PLAYWRIGHT_RESET_DUCKDB === 'true') {
 removePlaywrightPath(duckdbTempDirectory)
 removePlaywrightPath(logDirectory)
 
-const build = globalThis.Bun.spawnSync(['bun', 'run', 'build'], {
-  cwd: process.cwd(),
-  env: process.env,
-  stderr: 'inherit',
-  stdout: 'inherit',
-})
+const build = buildPlaywrightApp()
 
 if (!build.success) {
   process.exit(build.exitCode ?? 1)

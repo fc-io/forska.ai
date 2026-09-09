@@ -5,6 +5,7 @@ import {join, resolve} from 'node:path'
 import {listen, sleep, spawn, type Subprocess} from 'bun'
 
 import {duckdbOwnerPrivateApiPrefix} from '../src/server/routes/apiRouteClassification.ts'
+import {buildPlaywrightApp} from './buildPlaywrightApp.ts'
 import {
   createJudgmentWorkflowTopology,
   startJudgmentWorkflowTopology,
@@ -156,15 +157,12 @@ const main = async () => {
     const buildEnv = {
       ...process.env,
       API_SERVER_PORT: String(topology.apiPort),
+      APP_SERVER_DIST_DIR: join(topology.root, 'browser-dist'),
       APP_SERVER_PORT: String(appPort),
       VITE_PORT: String(appPort),
       VITE_SERVER_API: appOrigin,
     }
-    const build = globalThis.Bun.spawnSync(['bun', 'run', 'build'], {
-      env: buildEnv,
-      stderr: 'inherit',
-      stdout: 'inherit',
-    })
+    const build = buildPlaywrightApp({envValues: buildEnv})
 
     if (!build.success) {
       throw new Error(`Browser fixture app build failed with code ${build.exitCode}`)
@@ -193,6 +191,7 @@ const main = async () => {
           FORSKA_JUDGMENT_BROWSER_PROJECT_NAME: 'Topology project A',
           FORSKA_JUDGMENT_BROWSER_PROMPT_ID: seeded.data.fixture.promptIds[0] ?? '',
           FORSKA_JUDGMENT_BROWSER_SEED_TOKEN: token,
+          FORSKA_PLAYWRIGHT_OUTPUT_DIR: resolve('test-results', fixtureId),
         },
         stdin: 'inherit',
         stderr: 'inherit',
