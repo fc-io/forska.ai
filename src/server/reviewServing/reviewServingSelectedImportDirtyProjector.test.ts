@@ -23,6 +23,10 @@ const createSelectedImportDirtyDatabase = (input?: {
         return [] as T[]
       }
 
+      if (statement.includes('FROM app.review_serving_dirty_work')) {
+        return [] as T[]
+      }
+
       if (statement.includes('COUNT(DISTINCT patch_watermark)')) {
         return [input?.budgetRow ?? {dirtyRows: 0, dirtyWatermarks: 0}] as T[]
       }
@@ -37,7 +41,7 @@ const createSelectedImportDirtyDatabase = (input?: {
       statements.push(statement)
     },
     transaction: async (operation) => {
-      return operation(database)
+      return operation({queryJson: database.queryJson, run: database.run})
     },
   }
 
@@ -63,7 +67,7 @@ const createDuckdbSelectedImportDirtyDatabase = async (): Promise<{
       await connection.run('BEGIN')
 
       try {
-        const result = await operation(database)
+        const result = await operation({queryJson: database.queryJson, run: database.run})
         await connection.run('COMMIT')
 
         return result
@@ -690,7 +694,7 @@ test('selected-import dirty staged publish executes in DuckDB and compatibility 
         await database.run('BEGIN')
 
         try {
-          const result = await operation(projectorDatabase)
+          const result = await operation({queryJson: projectorDatabase.queryJson, run: projectorDatabase.run})
           await database.run('COMMIT')
 
           return result

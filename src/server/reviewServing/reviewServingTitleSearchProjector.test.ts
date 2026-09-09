@@ -18,13 +18,17 @@ const createTitleSearchDatabase = (input?: {rows?: readonly Record<string, unkno
         return [] as T[]
       }
 
+      if (statement.includes('FROM app.review_serving_dirty_work')) {
+        return [] as T[]
+      }
+
       return (input?.rows ?? []) as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
     },
     transaction: async (operation) => {
-      return operation(database)
+      return operation({queryJson: database.queryJson, run: database.run})
     },
   }
 
