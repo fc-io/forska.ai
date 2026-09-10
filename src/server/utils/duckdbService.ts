@@ -1188,6 +1188,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       },
     ],
     tableName: 'review_rebuild_chunk_manifest',
+    skipStartupPreflightUntilMigration: '0231_rebuildReviewRebuildChunkManifestWithoutIndexes.sql',
   },
   {
     duplicateKeySelectSql: `

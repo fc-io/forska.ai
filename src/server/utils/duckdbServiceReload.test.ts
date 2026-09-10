@@ -1677,9 +1677,9 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
     activeRepairSpecPath,
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
-      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_request'}],
       schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
+      tableName: 'review_rebuild_request',
     }),
   )
 
@@ -1863,9 +1863,9 @@ test('duckdb service checkpoints pending WAL before marker-only indexed-table re
     activeRepairSpecPath,
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
-      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_request'}],
       schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
+      tableName: 'review_rebuild_request',
     }),
   )
 
@@ -2368,9 +2368,9 @@ test('duckdb service startup indexed-table repair preserves unrelated app tables
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
-      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_request'}],
       schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
+      tableName: 'review_rebuild_request',
     }),
   )
 
@@ -2403,6 +2403,12 @@ test('duckdb service startup indexed-table repair preserves unrelated app tables
         const connection = await instance.connect()
         await connection.run(\`
           CREATE SCHEMA app;
+          CREATE TABLE app_schema_migration(
+            name VARCHAR PRIMARY KEY,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO app_schema_migration(name)
+          VALUES ('0231_rebuildReviewRebuildChunkManifestWithoutIndexes.sql');
           CREATE TABLE app.project(id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL);
           CREATE TABLE app.article(id VARCHAR PRIMARY KEY, title VARCHAR NOT NULL);
           CREATE TABLE app.judgment(id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, article_id VARCHAR NOT NULL);
@@ -2440,32 +2446,26 @@ test('duckdb service startup indexed-table repair preserves unrelated app tables
             1,
             TIMESTAMPTZ '2026-08-05T00:00:00Z',
             TIMESTAMPTZ '2026-08-05T00:00:00Z'
+          ), (
+            'request-1',
+            'failed',
+            'blocked',
+            0,
+            TIMESTAMPTZ '2026-08-04T00:00:00Z',
+            TIMESTAMPTZ '2026-08-04T00:00:00Z'
           );
-          INSERT INTO app.review_rebuild_chunk_manifest VALUES
-            (
-              'chunk-1',
-              'request-1',
-              'pending',
-              'admitted',
-              NULL,
-              NULL,
-              TIMESTAMPTZ '2026-08-05T00:00:00Z',
-              NULL,
-              NULL,
-              TIMESTAMPTZ '2026-08-05T00:00:00Z'
-            ),
-            (
-              'chunk-1',
-              'request-1',
-              'completed',
-              'admitted',
-              NULL,
-              NULL,
-              TIMESTAMPTZ '2026-08-05T01:00:00Z',
-              TIMESTAMPTZ '2026-08-05T01:00:00Z',
-              TIMESTAMPTZ '2026-08-05T00:30:00Z',
-              TIMESTAMPTZ '2026-08-05T00:00:00Z'
-            );
+          INSERT INTO app.review_rebuild_chunk_manifest VALUES (
+            'chunk-1',
+            'request-1',
+            'completed',
+            'admitted',
+            NULL,
+            NULL,
+            TIMESTAMPTZ '2026-08-05T01:00:00Z',
+            TIMESTAMPTZ '2026-08-05T01:00:00Z',
+            TIMESTAMPTZ '2026-08-05T00:30:00Z',
+            TIMESTAMPTZ '2026-08-05T00:00:00Z'
+          );
           CHECKPOINT;
         \`)
         connection.closeSync()
@@ -2477,6 +2477,8 @@ test('duckdb service startup indexed-table repair preserves unrelated app tables
             (SELECT COUNT(*)::INTEGER FROM app.project) AS projectCount,
             (SELECT COUNT(*)::INTEGER FROM app.article) AS articleCount,
             (SELECT COUNT(*)::INTEGER FROM app.judgment) AS judgmentCount,
+            (SELECT COUNT(*)::INTEGER FROM app.review_rebuild_request) AS requestCount,
+            (SELECT status FROM app.review_rebuild_request WHERE request_id = 'request-1') AS requestStatus,
             (SELECT COUNT(*)::INTEGER FROM app.review_rebuild_chunk_manifest) AS chunkCount,
             (SELECT status FROM app.review_rebuild_chunk_manifest WHERE chunk_id = 'chunk-1') AS chunkStatus
         \`)
@@ -2516,11 +2518,21 @@ test('duckdb service startup indexed-table repair preserves unrelated app tables
         chunkStatus: string
         judgmentCount: number
         projectCount: number
+        requestCount: number
+        requestStatus: string
       }>
     }>(result.stdout.toString())
 
     expect(parsed.rows).toEqual([
-      {articleCount: 3, chunkCount: 1, chunkStatus: 'completed', judgmentCount: 4, projectCount: 2},
+      {
+        articleCount: 3,
+        chunkCount: 1,
+        chunkStatus: 'completed',
+        judgmentCount: 4,
+        projectCount: 2,
+        requestCount: 1,
+        requestStatus: 'admitted',
+      },
     ])
   } finally {
     removePathIfExists(dataRoot)
@@ -2877,9 +2889,9 @@ test('duckdb service blocks marker-only indexed-table repair while preserving pe
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
-      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_request'}],
       schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
+      tableName: 'review_rebuild_request',
     }),
   )
 
@@ -3043,32 +3055,38 @@ test('duckdb service blocks marker-only indexed-table repair while preserving pe
   }
 })
 
-test('duckdb service defers 0230 repair marker to migration when WAL checkpoint fails', () => {
-  const dataRoot = join(tmpdir(), `f1-duckdb-service-conflict-resolution-marker-defer-${Date.now()}`)
-  const duckdbPath = join(dataRoot, 'test.duckdb')
-  const recoveryDirectory = `${duckdbPath}.startup-recovery`
-  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
-  const resultPath = join(dataRoot, 'result.json')
+const migrationGatedRepairMarkerCases = [
+  {name: '0230 conflict-resolution', slug: 'conflict-resolution', tableName: 'comparison_project_conflict_resolution'},
+  {name: '0231 chunk-manifest', slug: 'chunk-manifest', tableName: 'review_rebuild_chunk_manifest'},
+]
 
-  mkdirSync(recoveryDirectory, {recursive: true})
-  writeFileSync(duckdbPath, 'database-evidence')
-  writeFileSync(`${duckdbPath}.wal`, 'wal-evidence')
-  writeFileSync(
-    activeRepairSpecPath,
-    JSON.stringify({
-      phase: 'runtime-fatal-index-delete',
-      reason: 'index-delete',
-      repairSpecs: [{schemaName: 'app', tableName: 'comparison_project_conflict_resolution'}],
-      schemaName: 'app',
-      tableName: 'comparison_project_conflict_resolution',
-    }),
-  )
+for (const markerCase of migrationGatedRepairMarkerCases) {
+  test(`duckdb service defers ${markerCase.name} repair marker to migration when WAL checkpoint fails`, () => {
+    const dataRoot = join(tmpdir(), `f1-duckdb-service-${markerCase.slug}-marker-defer-${Date.now()}`)
+    const duckdbPath = join(dataRoot, 'test.duckdb')
+    const recoveryDirectory = `${duckdbPath}.startup-recovery`
+    const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+    const resultPath = join(dataRoot, 'result.json')
 
-  const result = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
+    mkdirSync(recoveryDirectory, {recursive: true})
+    writeFileSync(duckdbPath, 'database-evidence')
+    writeFileSync(`${duckdbPath}.wal`, 'wal-evidence')
+    writeFileSync(
+      activeRepairSpecPath,
+      JSON.stringify({
+        phase: 'runtime-fatal-index-delete',
+        reason: 'index-delete',
+        repairSpecs: [{schemaName: 'app', tableName: markerCase.tableName}],
+        schemaName: 'app',
+        tableName: markerCase.tableName,
+      }),
+    )
+
+    const result = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
         const {Buffer} = await import('node:buffer')
         const {existsSync, readdirSync, readFileSync, writeFileSync} = await import('node:fs')
         const {mock} = await import('bun:test')
@@ -3173,7 +3191,7 @@ test('duckdb service defers 0230 repair marker to migration when WAL checkpoint 
           return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
         })
 
-        const duckdbService = await import('./src/server/utils/duckdbService.ts?conflict-resolution-marker-defer-test=' + Date.now())
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?${markerCase.slug}-marker-defer-test=' + Date.now())
         let errorMessage = null
         let rows = []
 
@@ -3205,58 +3223,60 @@ test('duckdb service defers 0230 repair marker to migration when WAL checkpoint 
         console.log(result)
         await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
       `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        API_SERVER_PORT: '3999',
-        DUCKDB_MEMORY_LIMIT: '20GB',
-        DUCKDB_PATH: duckdbPath,
-        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
-        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
-        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-        SERVER_ROLE: 'maintenance-worker',
-        SERVER_DUCKDB_OWNER_URL: '',
-        VITE_PORT: '3000',
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          API_SERVER_PORT: '3999',
+          DUCKDB_MEMORY_LIMIT: '20GB',
+          DUCKDB_PATH: duckdbPath,
+          DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+          RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+          RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+          SERVER_ROLE: 'maintenance-worker',
+          SERVER_DUCKDB_OWNER_URL: '',
+          VITE_PORT: '3000',
+        },
+        stderr: 'pipe',
+        stdout: 'pipe',
       },
-      stderr: 'pipe',
-      stdout: 'pipe',
-    },
-  )
+    )
 
-  try {
-    if (result.exitCode !== 0) {
-      throw new Error(
-        result.stderr.toString()
-          || result.stdout.toString()
-          || 'DuckDB conflict-resolution marker deferral subprocess failed',
-      )
-    }
-
-    const output = result.stdout.toString().trim() === '' ? readFileSync(resultPath, 'utf8') : result.stdout.toString()
-    const parsed = parseJsonSubprocessStdout<
-      DuckdbReloadSubprocessResult & {
-        nestedPreflightCount: number
-        nestedRepairChildCount: number
-        nestedRepairLockProbeCount: number
-        rows: Array<{value: number}>
+    try {
+      if (result.exitCode !== 0) {
+        throw new Error(
+          result.stderr.toString()
+            || result.stdout.toString()
+            || 'DuckDB migration-gated marker deferral subprocess failed',
+        )
       }
-    >(output)
 
-    expect(parsed.errorMessage).toBeNull()
-    expect(parsed.rows).toEqual([{value: 1}])
-    expect(parsed.checkpointCount).toBe(1)
-    expect(parsed.nestedPreflightCount).toBe(1)
-    expect(parsed.nestedRepairChildCount).toBe(0)
-    expect(parsed.nestedRepairLockProbeCount).toBe(0)
-    expect(parsed.repairManifest).toBeNull()
-    expect(parsed.activeMarkerExists).toBe(true)
-    expect(parsed.walExists).toBe(true)
-  } finally {
-    removePathIfExists(dataRoot)
-  }
-})
+      const output =
+        result.stdout.toString().trim() === '' ? readFileSync(resultPath, 'utf8') : result.stdout.toString()
+      const parsed = parseJsonSubprocessStdout<
+        DuckdbReloadSubprocessResult & {
+          nestedPreflightCount: number
+          nestedRepairChildCount: number
+          nestedRepairLockProbeCount: number
+          rows: Array<{value: number}>
+        }
+      >(output)
+
+      expect(parsed.errorMessage).toBeNull()
+      expect(parsed.rows).toEqual([{value: 1}])
+      expect(parsed.checkpointCount).toBe(1)
+      expect(parsed.nestedPreflightCount).toBe(1)
+      expect(parsed.nestedRepairChildCount).toBe(0)
+      expect(parsed.nestedRepairLockProbeCount).toBe(0)
+      expect(parsed.repairManifest).toBeNull()
+      expect(parsed.activeMarkerExists).toBe(true)
+      expect(parsed.walExists).toBe(true)
+    } finally {
+      removePathIfExists(dataRoot)
+    }
+  })
+}
 
 test('duckdb service blocks marker-only indexed-table repair when checkpoint leaves WAL evidence', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-wal-after-checkpoint-${Date.now()}`)
@@ -3273,9 +3293,9 @@ test('duckdb service blocks marker-only indexed-table repair when checkpoint lea
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
-      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_request'}],
       schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
+      tableName: 'review_rebuild_request',
     }),
   )
 
@@ -3453,9 +3473,9 @@ test('duckdb service blocks marker-only indexed-table repair when the lock probe
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
-      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_request'}],
       schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
+      tableName: 'review_rebuild_request',
     }),
   )
 
@@ -5919,6 +5939,9 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     expect(chunkManifestProbe?.repairStrategy).toBe('dedupe-latest')
     expect(chunkManifestProbe?.repairDedupeOrderSql).toContain("status = 'completed'")
     expect(chunkManifestProbe?.repairDedupeOrderSql).toContain("admission_state = 'admitted'")
+    expect(chunkManifestProbe?.skipStartupPreflightUntilMigration).toBe(
+      '0231_rebuildReviewRebuildChunkManifestWithoutIndexes.sql',
+    )
     expect(chunkManifestProbe?.mutationProbeSql).toContain("chunk.status IN ('pending', 'failed', 'running')")
     expect(chunkManifestProbe?.mutationProbeSql).toContain('LIMIT 64')
     expect(chunkManifestProbe?.mutationProbeSql).toContain("WHEN 'llmStatus' THEN 4")
