@@ -27,6 +27,20 @@ cd forska.ai
 bun install
 ```
 
+For the current stable release branch, clone or switch to `release/amber-mesa`:
+
+```bash
+git clone --branch release/amber-mesa https://github.com/fc-io/forska.ai.git
+```
+
+From an existing checkout:
+
+```bash
+git fetch origin
+git switch release/amber-mesa
+bun install
+```
+
 Start the local API/server stack and web app together:
 
 ```bash
