@@ -495,3 +495,128 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
   expect(result.runtimeMatchCalls).toBe(0)
   expect(result.runtimeSummaryCalls).toBe(0)
 })
+
+test('owner-backed missing runtime logs through a stable rate-limit key', async () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const readyPromptsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts')
+        const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const rateLimitedLoggerModulePath = getModulePath('./src/server/utils/rateLimitedLogger.ts')
+        const calls = []
+        const loggerOptions = []
+        const jobInfo = {
+          maxInflightRequests: 4,
+          modelBaseUrl: null,
+          modelId: 'model-sglang-missing-runtime',
+          modelMetadataJson: {provider: 'sglang'},
+          modelName: 'deepseek-ai/DeepSeek-V4-Flash-0731',
+          modelProvider: 'sglang',
+          modelSecretRef: null,
+          modelVersion: null,
+          projectId: 'project-sglang-missing-runtime',
+          providerFamily: 'sglang',
+          providerConfigJson: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
+          providerId: 'connection-sglang-missing-runtime',
+          providerKey: 'connection-sglang-missing-runtime',
+          providerLimit: 4,
+          providerLimitVersion: 'version-sglang-missing-runtime',
+          providerName: 'SGLang',
+          providerUsesFamilyDefault: false,
+          resolvedDefaultCapacity: 4,
+          resolvedRuntime: null,
+          runtimeMatchReason: 'runtime-provider-missing',
+          runtimeMatchStatus: 'unreachable',
+          runtimeResolutionMode: 'auto-detect',
+          useAbstract: true,
+          useFulltext: true,
+          useFulltextNoImages: false,
+          useTitle: true,
+        }
+
+        void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+          return {
+            claimOwnerJudgmentJobPrompts: async () => [],
+            getOwnerBackedJudgmentJobInfo: async () => jobInfo,
+            recordAcceptedJudgeWorkerClaims: async () => undefined,
+            shouldUseJudgeWorkerOwnerHandoff: () => true,
+          }
+        })
+        void mock.module(rateLimitedLoggerModulePath, () => {
+          return {
+            createRateLimitedLogger: (options) => {
+              loggerOptions.push(options)
+              return {
+                error: (...args) => {
+                  calls.push(args)
+                },
+                force: () => undefined,
+                log: () => undefined,
+                reset: () => undefined,
+                resetAll: () => undefined,
+                warn: () => undefined,
+              }
+            },
+          }
+        })
+
+        const {getReadyPromptRuntime} = await import(readyPromptsModulePath + '?missing-owner-runtime=' + Date.now())
+        const first = await getReadyPromptRuntime('job-missing-runtime')
+        const second = await getReadyPromptRuntime('job-missing-runtime')
+
+        console.log(JSON.stringify({calls, first, loggerOptions, second}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, SERVER_ROLE: 'judge-worker'}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed missing runtime test failed')
+  }
+
+  const result = JSON.parse(runScript.stdout.toString()) as {
+    calls: Array<
+      [
+        string,
+        string,
+        {
+          jobId: string
+          modelName: string
+          modelProvider: string
+          runtimeMatchReason: string
+          runtimeResolutionMode: string
+          runtimeStatus: string
+        },
+      ]
+    >
+    first: null
+    loggerOptions: Array<{sink: string; windowMs: number}>
+    second: null
+  }
+
+  expect(result.first).toBeNull()
+  expect(result.second).toBeNull()
+  expect(result.loggerOptions).toContainEqual({sink: 'both', windowMs: 30_000})
+  expect(result.calls).toHaveLength(2)
+  expect(result.calls[0]?.[0]).toBe(result.calls[1]?.[0])
+  expect(result.calls[0]?.[0]).toBe(
+    'judgments.readyPrompts.ownerRuntimeMissing:job-missing-runtime:sglang:deepseek-ai/DeepSeek-V4-Flash-0731:auto-detect:unreachable:runtime-provider-missing',
+  )
+  expect(result.calls[0]?.[1]).toBe('Prompt missing required owner-provided model runtime:')
+  expect(result.calls[0]?.[2]).toMatchObject({
+    jobId: 'job-missing-runtime',
+    modelName: 'deepseek-ai/DeepSeek-V4-Flash-0731',
+    modelProvider: 'sglang',
+    runtimeMatchReason: 'runtime-provider-missing',
+    runtimeResolutionMode: 'auto-detect',
+    runtimeStatus: 'unreachable',
+  })
+})

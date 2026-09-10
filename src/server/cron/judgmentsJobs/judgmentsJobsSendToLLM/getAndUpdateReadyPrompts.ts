@@ -4,6 +4,7 @@ import {getProviderConnectionConfigFromJson} from '../../../providers/providerDb
 import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
+import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {
   claimOwnerJudgmentJobPrompts,
   getOwnerBackedJudgmentJobInfo,
@@ -88,6 +89,20 @@ const getCodexPromptRuntime = (): PromptRuntime => {
   return {modelBaseUrl: getCodexPlaceholderBaseUrl(), modelProvider: 'codex', modelWorkerUrls: []}
 }
 
+const ownerBackedRuntimeLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+
+const getOwnerRuntimeMissingLogKey = (jobId: string, jobInfo: OwnerBackedJudgmentJobInfo): string => {
+  return [
+    'judgments.readyPrompts.ownerRuntimeMissing',
+    jobId,
+    normalizeProvider(jobInfo.modelProvider),
+    jobInfo.modelName,
+    jobInfo.runtimeResolutionMode,
+    jobInfo.runtimeMatchStatus,
+    jobInfo.runtimeMatchReason,
+  ].join(':')
+}
+
 const getOwnerBackedPromptRuntime = (jobId: string, jobInfo: OwnerBackedJudgmentJobInfo): PromptRuntime | null => {
   if (jobInfo.resolvedRuntime) {
     return {
@@ -97,14 +112,18 @@ const getOwnerBackedPromptRuntime = (jobId: string, jobInfo: OwnerBackedJudgment
     }
   }
 
-  console.error('Prompt missing required owner-provided model runtime:', {
-    jobId,
-    modelName: jobInfo.modelName,
-    modelProvider: jobInfo.modelProvider,
-    runtimeMatchReason: jobInfo.runtimeMatchReason,
-    runtimeResolutionMode: jobInfo.runtimeResolutionMode,
-    runtimeStatus: jobInfo.runtimeMatchStatus,
-  })
+  ownerBackedRuntimeLogger.error(
+    getOwnerRuntimeMissingLogKey(jobId, jobInfo),
+    'Prompt missing required owner-provided model runtime:',
+    {
+      jobId,
+      modelName: jobInfo.modelName,
+      modelProvider: jobInfo.modelProvider,
+      runtimeMatchReason: jobInfo.runtimeMatchReason,
+      runtimeResolutionMode: jobInfo.runtimeResolutionMode,
+      runtimeStatus: jobInfo.runtimeMatchStatus,
+    },
+  )
 
   return null
 }
