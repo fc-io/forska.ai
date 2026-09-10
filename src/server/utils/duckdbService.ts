@@ -5142,6 +5142,19 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
     const markerOnlyRepair = error instanceof Error && error.repairMarkerOnly === true
 
+    if (
+      markerOnlyRepair
+      && hadWalBeforePreflight
+      && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
+      && !checkpointedWalReplay
+    ) {
+      checkpointedWalReplay = true
+      const checkpointed = await checkpointDuckdbStartupWalReplay(runtimeConfig)
+      if (checkpointed) {
+        continue
+      }
+    }
+
     if (!markerOnlyRepair && hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
       if (!isDuckdbWalReplayRecoveryError(error)) {
         throw new Error(

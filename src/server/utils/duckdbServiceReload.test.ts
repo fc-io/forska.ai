@@ -1842,6 +1842,215 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
   }
 })
 
+test('duckdb service checkpoints pending WAL before marker-only indexed-table repair', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-marker-repair-after-wal-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = duckdbPath + '.startup-recovery'
+  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+  const walPath = `${duckdbPath}.wal`
+
+  mkdirSync(recoveryDirectory, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(walPath, 'committed-wal')
+  writeFileSync(
+    activeRepairSpecPath,
+    JSON.stringify({
+      phase: 'runtime-fatal-index-delete',
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    }),
+  )
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readdirSync, unlinkSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const recoveryDirectory = ${JSON.stringify(recoveryDirectory)}
+        const walPath = ${JSON.stringify(walPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
+
+        let checkpointCount = 0
+        let createCount = 0
+        let preflightCount = 0
+        const preflightSpecsHistory = []
+        let repairCount = 0
+        let repairLockProbeCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD === 'true') {
+            checkpointCount += 1
+            if (existsSync(walPath)) {
+              unlinkSync(walPath)
+            }
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD === 'true') {
+            repairLockProbeCount += 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD === 'true') {
+            repairCount += 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD === 'true') {
+            preflightCount += 1
+            preflightSpecsHistory.push(JSON.parse(String(command[5] ?? '[]')))
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?marker-repair-after-wal-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        console.log(JSON.stringify({
+          activeMarkerExists: existsSync(activeRepairSpecPath),
+          checkpointCount,
+          createCount,
+          preflightCount,
+          preflightSpecsHistory,
+          recoveryFiles: readdirSync(recoveryDirectory),
+          repairCount,
+          repairLockProbeCount,
+          rows,
+          walExists: existsSync(walPath),
+        }))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB marker-only repair after WAL failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.preflightCount).toBe(0)
+    expect(parsed.preflightSpecsHistory).toEqual([])
+    expect(parsed.checkpointCount).toBe(1)
+    expect(parsed.activeMarkerExists).toBe(false)
+    expect(parsed.repairCount).toBe(1)
+    expect(parsed.repairLockProbeCount).toBe(1)
+    expect(parsed.createCount).toBe(1)
+    expect(parsed.walExists).toBe(false)
+    expect(parsed.rows).toEqual([{value: 1}])
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.pre-repair.duckdb')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.recovery.json')
+      }),
+    ).toHaveLength(1)
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service checkpoints replayed WAL before indexed-table startup preflight', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-checkpoint-preflight-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
@@ -2355,6 +2564,8 @@ test('duckdb service startup repair rebuilds comparison serving generation as st
           threads: '1',
         })
         const connection = await instance.connect()
+        await connection.run('CREATE TABLE app_schema_migration(name VARCHAR PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT current_timestamp)')
+        await connection.run("INSERT INTO app_schema_migration(name) VALUES ('0229_rebuildJudgmentWorkflowMutableTablesWithoutIndexes.sql')")
         await connection.run('CREATE SCHEMA app')
         await connection.run('CREATE SCHEMA mart')
         await connection.run(
@@ -2676,12 +2887,23 @@ test('duckdb service blocks marker-only indexed-table repair while preserving pe
         ${directDuckdbStartupChildProcessMockSource}
 
         const originalSpawnSync = globalThis.Bun.spawnSync
+        let checkpointCount = 0
         let nestedRepairChildCount = 0
         let nestedRepairLockProbeCount = 0
 
         globalThis.Bun.spawnSync = ((command, options) => {
           if (!String(command[0]).includes('bun') || command[1] !== '-e') {
             return originalSpawnSync(command, options)
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD === 'true') {
+            checkpointCount += 1
+            return {
+              exitCode: 1,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from('forced checkpoint failure'),
+            }
           }
 
           if (options?.env?.FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD === 'true') {
@@ -2741,6 +2963,7 @@ test('duckdb service blocks marker-only indexed-table repair while preserving pe
             : null
 
         const result = JSON.stringify({
+          checkpointCount,
           errorMessage,
           nestedRepairChildCount,
           nestedRepairLockProbeCount,
@@ -2784,6 +3007,7 @@ test('duckdb service blocks marker-only indexed-table repair while preserving pe
     const output = result.stdout.toString().trim() === '' ? readFileSync(resultPath, 'utf8') : result.stdout.toString()
     const parsed = parseJsonSubprocessStdout<
       DuckdbReloadSubprocessResult & {
+        checkpointCount: number
         nestedRepairChildCount: number
         nestedRepairLockProbeCount: number
         repairWalBackupContent: string | null
@@ -2798,6 +3022,188 @@ test('duckdb service blocks marker-only indexed-table repair while preserving pe
     expect(parsed.repairManifest?.preservedWalPath).toContain('.pre-repair.wal')
     expect(parsed.repairBackupContent).toBe('database-evidence')
     expect(parsed.repairWalBackupContent).toBe('wal-evidence')
+    expect(parsed.checkpointCount).toBe(1)
+    expect(parsed.nestedRepairChildCount).toBe(0)
+    expect(parsed.nestedRepairLockProbeCount).toBe(0)
+    expect(parsed.walExists).toBe(true)
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service blocks marker-only indexed-table repair when checkpoint leaves WAL evidence', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-wal-after-checkpoint-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = `${duckdbPath}.startup-recovery`
+  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+  const resultPath = join(dataRoot, 'result.json')
+
+  mkdirSync(recoveryDirectory, {recursive: true})
+  writeFileSync(duckdbPath, 'database-evidence')
+  writeFileSync(`${duckdbPath}.wal`, 'wal-evidence-after-checkpoint')
+  writeFileSync(
+    activeRepairSpecPath,
+    JSON.stringify({
+      phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
+      repairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    }),
+  )
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readdirSync, readFileSync, writeFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const recoveryDirectory = ${JSON.stringify(recoveryDirectory)}
+        const resultPath = ${JSON.stringify(resultPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
+
+        const originalSpawnSync = globalThis.Bun.spawnSync
+        let checkpointCount = 0
+        let nestedRepairChildCount = 0
+        let nestedRepairLockProbeCount = 0
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD === 'true') {
+            checkpointCount += 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD === 'true') {
+            nestedRepairLockProbeCount += 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (String(command[5] ?? '').startsWith('[')) {
+            nestedRepairChildCount += 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          return originalSpawnSync(command, options)
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?index-repair-wal-after-checkpoint=' + Date.now())
+        let errorMessage = null
+
+        try {
+          await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        } catch (error) {
+          errorMessage = error instanceof Error ? error.message : String(error)
+        }
+
+        const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
+        const repairManifestFile = recoveryFiles.find((fileName) => fileName.endsWith('.recovery.json'))
+        const repairManifest =
+          repairManifestFile === undefined
+            ? null
+            : JSON.parse(readFileSync(recoveryDirectory + '/' + repairManifestFile, 'utf8'))
+        const repairBackupContent =
+          typeof repairManifest?.preservedDatabasePath === 'string'
+            ? readFileSync(repairManifest.preservedDatabasePath, 'utf8')
+            : null
+        const repairWalBackupContent =
+          typeof repairManifest?.preservedWalPath === 'string'
+            ? readFileSync(repairManifest.preservedWalPath, 'utf8')
+            : null
+
+        const result = JSON.stringify({
+          checkpointCount,
+          errorMessage,
+          nestedRepairChildCount,
+          nestedRepairLockProbeCount,
+          repairBackupContent,
+          repairManifest,
+          repairWalBackupContent,
+          recoveryFiles,
+          walExists: existsSync(duckdbPath + '.wal'),
+        })
+        writeFileSync(resultPath, result)
+        console.log(result)
+        await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL-after-checkpoint repair subprocess failed',
+      )
+    }
+
+    const output = result.stdout.toString().trim() === '' ? readFileSync(resultPath, 'utf8') : result.stdout.toString()
+    const parsed = parseJsonSubprocessStdout<
+      DuckdbReloadSubprocessResult & {
+        checkpointCount: number
+        nestedRepairChildCount: number
+        nestedRepairLockProbeCount: number
+        repairWalBackupContent: string | null
+      }
+    >(output)
+
+    expect(parsed.errorMessage).toContain('DuckDB startup indexed-table repair blocked')
+    expect(parsed.errorMessage).toContain('startup indexed-table repair blocked because')
+    expect(parsed.repairManifest?.recovery).toBe('indexed-table-rebuild-blocked-pending-wal')
+    expect(parsed.repairManifest?.repairError).toContain('startup indexed-table repair blocked because')
+    expect(parsed.repairManifest?.preservedDatabasePath).toContain('.pre-repair.duckdb')
+    expect(parsed.repairManifest?.preservedWalPath).toContain('.pre-repair.wal')
+    expect(parsed.repairBackupContent).toBe('database-evidence')
+    expect(parsed.repairWalBackupContent).toBe('wal-evidence-after-checkpoint')
+    expect(parsed.checkpointCount).toBe(1)
     expect(parsed.nestedRepairChildCount).toBe(0)
     expect(parsed.nestedRepairLockProbeCount).toBe(0)
     expect(parsed.walExists).toBe(true)
