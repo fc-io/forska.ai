@@ -3660,6 +3660,14 @@ const shouldRetryDuckdbStartupPreflightForActiveRepairMarker = (marker: DuckdbSt
   return phase === 'custom-mutation-probe' || phase === 'generic-delete-insert-probe'
 }
 
+const shouldRecheckDuckdbStartupRepairMarkerForPendingMigration = (
+  repairSpecs: DuckdbStartupIndexedTableRepairSpec[],
+) => {
+  return repairSpecs.some((spec) => {
+    return typeof spec.skipStartupPreflightUntilMigration === 'string'
+  })
+}
+
 const shouldRunProactiveDuckdbStartupPreflight = (runtimeConfig: DuckdbRuntimeConfig) => {
   const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(runtimeConfig.memoryLimit)
 
@@ -4382,8 +4390,14 @@ const getDuckdbStartupPreflightError = (
   mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
   const activeRepairMarker = getDuckdbStartupPreflightRepairMarker(activeRepairSpecPath)
   const activeRepairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
+  const shouldRecheckPendingMigrationRepairMarker =
+    activeRepairSpecs.length > 0 && shouldRecheckDuckdbStartupRepairMarkerForPendingMigration(activeRepairSpecs)
 
-  if (activeRepairSpecs.length > 0 && !shouldRetryDuckdbStartupPreflightForActiveRepairMarker(activeRepairMarker)) {
+  if (
+    activeRepairSpecs.length > 0
+    && !shouldRetryDuckdbStartupPreflightForActiveRepairMarker(activeRepairMarker)
+    && !shouldRecheckPendingMigrationRepairMarker
+  ) {
     const error = new Error(
       `DuckDB startup indexed-table repair marker requested repair for ${runtimeConfig.databasePath}`,
     ) as DuckdbStartupPreflightError
@@ -4395,9 +4409,11 @@ const getDuckdbStartupPreflightError = (
   }
 
   const targetedPreflightSpecs = activeRepairSpecs.length > 0 ? activeRepairSpecs : pendingPostRepairPreflightSpecs
-  const preflightRepairSpecs = hadWalBeforePreflight
-    ? []
-    : getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, targetedPreflightSpecs)
+  const preflightRepairSpecs = shouldRecheckPendingMigrationRepairMarker
+    ? activeRepairSpecs
+    : hadWalBeforePreflight
+      ? []
+      : getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, targetedPreflightSpecs)
 
   if (preflightRepairSpecs.length === 0 && !hadWalBeforePreflight) {
     writeRuntimeOperatorLogEvent({
@@ -4437,6 +4453,20 @@ const getDuckdbStartupPreflightError = (
 
   if (result.exitCode === 0) {
     clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
+    if (shouldRecheckPendingMigrationRepairMarker) {
+      writeRuntimeOperatorLogEvent({
+        attrs: {
+          databasePath: runtimeConfig.databasePath,
+          repairMarker: activeRepairMarker,
+          repairedTables: activeRepairSpecs.map((spec) => {
+            return `${spec.schemaName}.${spec.tableName}`
+          }),
+        },
+        event: 'duckdb.startup.repair-marker-cleared-for-pending-migration',
+        message: '[duckdb] cleared startup repair marker after migration-gated preflight passed',
+        severity: 'INFO',
+      })
+    }
     return null
   }
 
@@ -4459,6 +4489,11 @@ const getDuckdbStartupPreflightError = (
   if (repairSpecs.length > 0) {
     error.repairMarkerPath = activeRepairSpecPath
     error.repairSpecs = repairSpecs
+  }
+  if (shouldRecheckPendingMigrationRepairMarker && activeRepairMarker?.phase === 'runtime-fatal-index-delete') {
+    error.repairMarker = activeRepairMarker
+    error.repairMarkerOnly = true
+    error.repairSpecs = activeRepairSpecs
   }
 
   return error

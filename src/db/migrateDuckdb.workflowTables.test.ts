@@ -1,4 +1,4 @@
-import {existsSync, mkdtempSync, readdirSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join, resolve} from 'node:path'
 
@@ -292,6 +292,40 @@ const seedOldWorkflowDatabase = async (databasePath: string) => {
   })
 }
 
+const appendPendingWorkflowWal = async (databasePath: string) => {
+  await withNativeDatabase(databasePath, async (database) => {
+    await database.run(`
+      PRAGMA disable_checkpoint_on_shutdown;
+      INSERT INTO app.judgment_job (
+        id, project_id, status, "error", storage_state, quarantine_reason,
+        last_import_exit_code, import_failure_count, send_to_llm_batch_size,
+        send_to_llm_interval, cursor_last_article_id, created_at, updated_at
+      )
+      VALUES (
+        'job-pending-wal', 'project-wal', 'ready', '{"kind":"pending-wal"}'::JSON,
+        'active', NULL, NULL, 0, 5, 15, 'article-wal',
+        TIMESTAMPTZ '2026-09-02T10:00:00Z',
+        TIMESTAMPTZ '2026-09-02T10:05:00Z'
+      );
+    `)
+  })
+}
+
+const writeWorkflowStartupRepairMarker = (databasePath: string) => {
+  const recoveryDirectory = `${databasePath}.startup-recovery`
+  mkdirSync(recoveryDirectory, {recursive: true})
+  writeFileSync(
+    join(recoveryDirectory, 'startup-preflight-active-table.json'),
+    JSON.stringify({
+      phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
+      repairSpecs: [{schemaName: 'app', tableName: 'judgment_job'}],
+      schemaName: 'app',
+      tableName: 'judgment_job',
+    }),
+  )
+}
+
 const runManagedMigration = async (databasePath: string) => {
   const {apiPort, vitePort} = await getManagedMigrationPorts()
   const result = globalThis.Bun.spawnSync(
@@ -375,6 +409,53 @@ test('DuckDB migrations rebuild judgment workflow mutable tables before startup 
 
     await runManagedMigration(databasePath)
     expect(await withNativeDatabase(databasePath, getWorkflowSnapshot)).toEqual(migrated)
+    expectNoRecoveryArtifacts(databasePath)
+  } finally {
+    rmSync(root, {recursive: true, force: true})
+  }
+}, 120_000)
+
+test('DuckDB migrations replay pending WAL before workflow indexed-table startup repair', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'forska-workflow-inline-pk-wal-upgrade-'))
+  const databasePath = join(root, 'workflow.duckdb')
+
+  try {
+    await seedOldWorkflowDatabase(databasePath)
+    await appendPendingWorkflowWal(databasePath)
+    expect(statSync(`${databasePath}.wal`).size).toBeGreaterThan(0)
+
+    await runManagedMigration(databasePath)
+
+    const migrated = await withNativeDatabase(databasePath, getWorkflowSnapshot)
+    expectWorkflowTablesAreIndexFree(migrated)
+    expect(migrated.judgmentJobs).toContainEqual(
+      expect.objectContaining({id: 'job-pending-wal', projectId: 'project-wal', status: 'ready'}),
+    )
+    expect(migrated.migrations).toEqual([{name: targetMigrationFile}])
+    expectNoRecoveryArtifacts(databasePath)
+  } finally {
+    rmSync(root, {recursive: true, force: true})
+  }
+}, 120_000)
+
+test('DuckDB migrations ignore stale workflow indexed-table repair marker when cleanup migration is pending', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'forska-workflow-inline-pk-marker-wal-upgrade-'))
+  const databasePath = join(root, 'workflow.duckdb')
+
+  try {
+    await seedOldWorkflowDatabase(databasePath)
+    await appendPendingWorkflowWal(databasePath)
+    writeWorkflowStartupRepairMarker(databasePath)
+    expect(statSync(`${databasePath}.wal`).size).toBeGreaterThan(0)
+
+    await runManagedMigration(databasePath)
+
+    const migrated = await withNativeDatabase(databasePath, getWorkflowSnapshot)
+    expectWorkflowTablesAreIndexFree(migrated)
+    expect(migrated.judgmentJobs).toContainEqual(
+      expect.objectContaining({id: 'job-pending-wal', projectId: 'project-wal', status: 'ready'}),
+    )
+    expect(migrated.migrations).toEqual([{name: targetMigrationFile}])
     expectNoRecoveryArtifacts(databasePath)
   } finally {
     rmSync(root, {recursive: true, force: true})
