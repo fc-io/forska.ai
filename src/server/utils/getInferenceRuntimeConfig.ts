@@ -15,6 +15,7 @@ const inferenceRuntimeShape = arktype({
   gpuNnodes: 'number | string.integer.parse',
   gpuShape: 'string | null | undefined',
   gpuTotalGpus: 'number | string.integer.parse',
+  jobId: 'string | null | undefined',
   judgeChunkMaxParallel: 'number | string.integer.parse',
   judgeFirstRequestLogFull: arktype('"true" | "false" | boolean').pipe((value) => {
     return typeof value === 'string' ? value.toLowerCase() === 'true' : value
@@ -29,6 +30,7 @@ const inferenceRuntimeShape = arktype({
   sglangApiMaxBurstRequests: 'number | string.integer.parse',
   sglangApiMaxInflightRequests: 'number | string.integer.parse',
   sglangMaxRunningRequests: 'number | string.integer.parse',
+  sourceCluster: 'string | null | undefined',
   sshJumpHost: 'string | null | undefined',
   tpSize: 'number | string.integer.parse',
 })
@@ -121,6 +123,7 @@ export const getInferenceRuntimeConfig = ({
       fallback: String(Number(gpuNnodes) * Number(gpuGpusPerNode) || 0),
       keys: ['FORSKA_RUNTIME_GPU_TOTAL_GPUS', 'GPU_TOTAL_GPUS'],
     }),
+    jobId: getFirstConfiguredValue({envValues: mergedEnvValues, fallback: '', keys: ['FORSKA_RUNTIME_JOB_ID']}),
     judgeChunkMaxParallel: getFirstConfiguredValue({
       envValues: mergedEnvValues,
       fallback: '0',
@@ -181,6 +184,11 @@ export const getInferenceRuntimeConfig = ({
       fallback: '0',
       keys: ['FORSKA_RUNTIME_SGLANG_MAX_RUNNING_REQUESTS', 'SGLANG_MAX_RUNNING_REQUESTS'],
     }),
+    sourceCluster: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '',
+      keys: ['FORSKA_RUNTIME_SOURCE_CLUSTER'],
+    }),
     sshJumpHost: getFirstConfiguredValue({
       envValues: mergedEnvValues,
       fallback: '',
@@ -205,6 +213,7 @@ export const getInferenceRuntimeConfig = ({
     gpuNnodes: parsed.gpuNnodes,
     gpuShape: getTrimmedValue(parsed.gpuShape),
     gpuTotalGpus: parsed.gpuTotalGpus,
+    jobId: getTrimmedValue(parsed.jobId),
     judgeChunkMaxParallel: parsed.judgeChunkMaxParallel,
     judgeFirstRequestLogFull: parsed.judgeFirstRequestLogFull,
     judgeFirstRequestPreviewChars: parsed.judgeFirstRequestPreviewChars,
@@ -217,6 +226,7 @@ export const getInferenceRuntimeConfig = ({
     sglangApiMaxBurstRequests: parsed.sglangApiMaxBurstRequests,
     sglangApiMaxInflightRequests: parsed.sglangApiMaxInflightRequests,
     sglangMaxRunningRequests: parsed.sglangMaxRunningRequests,
+    sourceCluster: getTrimmedValue(parsed.sourceCluster),
     sshJumpHost: getTrimmedValue(parsed.sshJumpHost),
     tpSize: parsed.tpSize,
   }

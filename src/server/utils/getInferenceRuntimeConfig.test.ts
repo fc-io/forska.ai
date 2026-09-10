@@ -41,6 +41,7 @@ test('getInferenceRuntimeConfig applies runtime defaults when launcher runtime r
   expect(runtimeConfig.ppSize).toBe(0)
   expect(runtimeConfig.dpSize).toBe(0)
   expect(runtimeConfig.gpuShape).toBe('not set')
+  expect(runtimeConfig.jobId).toBeNull()
   expect(runtimeConfig.sglangMaxRunningRequests).toBe(0)
   expect(runtimeConfig.sglangApiMaxInflightRequests).toBe(0)
   expect(runtimeConfig.sglangApiMaxBurstRequests).toBe(0)
@@ -53,6 +54,7 @@ test('getInferenceRuntimeConfig applies runtime defaults when launcher runtime r
   expect(runtimeConfig.remoteWorkerUrls).toEqual([])
   expect(runtimeConfig.displayWorkerUrls).toEqual([])
   expect(runtimeConfig.providerKind).toBeNull()
+  expect(runtimeConfig.sourceCluster).toBeNull()
   expect(runtimeConfig.sshJumpHost).toBeNull()
 })
 
@@ -65,9 +67,11 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
       FORSKA_RUNTIME_ACTIVE_MODEL_NAMES: 'Qwen/Qwen3.5-122B-A10B',
       FORSKA_RUNTIME_GPU_GPUS_PER_NODE: '4',
       FORSKA_RUNTIME_GPU_NNODES: '2',
+      FORSKA_RUNTIME_JOB_ID: '54321',
       FORSKA_RUNTIME_LOCAL_WORKER_URLS: 'http://localhost:30001',
       FORSKA_RUNTIME_PROVIDER_KIND: 'sglang',
       FORSKA_RUNTIME_REMOTE_WORKER_URLS: 'http://10.0.0.1:30000, http://10.0.0.2:30000',
+      FORSKA_RUNTIME_SOURCE_CLUSTER: 'arr',
       FORSKA_RUNTIME_SGLANG_API_MAX_BURST_REQUESTS: '64',
       FORSKA_RUNTIME_SGLANG_API_MAX_INFLIGHT_REQUESTS: '48',
       FORSKA_RUNTIME_SGLANG_MAX_RUNNING_REQUESTS: '32',
@@ -87,9 +91,11 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
   expect(runtimeConfig.sglangMaxRunningRequests).toBe(32)
   expect(runtimeConfig.sglangApiMaxInflightRequests).toBe(48)
   expect(runtimeConfig.sglangApiMaxBurstRequests).toBe(64)
+  expect(runtimeConfig.jobId).toBe('54321')
   expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.0.0.1:30000', 'http://10.0.0.2:30000'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001', 'http://10.0.0.2:30000'])
   expect(runtimeConfig.providerKind).toBe('sglang')
+  expect(runtimeConfig.sourceCluster).toBe('arr')
   expect(runtimeConfig.sshJumpHost).toBe('remote-jump')
   expect(runtimeConfig.judgeFirstRequestLogFull).toBe(true)
 })
@@ -137,7 +143,9 @@ test('getInferenceRuntimeConfig prefers an active launcher runtime record over e
   expect(runtimeConfig.providerKind).toBe('sglang')
   expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.0.0.1:30000', 'http://10.0.0.2:30000'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001', 'http://10.0.0.2:30000'])
+  expect(runtimeConfig.jobId).toBe('12345')
   expect(runtimeConfig.sshJumpHost).toBe('remote-jump')
+  expect(runtimeConfig.sourceCluster).toBe('remote')
 })
 
 test('getInferenceRuntimeConfig ignores stopped and stale launcher runtime records', () => {
@@ -157,4 +165,6 @@ test('getInferenceRuntimeConfig ignores stopped and stale launcher runtime recor
 
   expect(runtimeConfig.activeModelNames).toEqual(['env/model'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:35555'])
+  expect(runtimeConfig.jobId).toBeNull()
+  expect(runtimeConfig.sourceCluster).toBeNull()
 })

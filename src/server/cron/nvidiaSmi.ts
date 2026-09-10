@@ -5,7 +5,7 @@ import {Elysia} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
+import {type InferenceRuntimeConfig, inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 
 type NvidiaSmiSample = {
@@ -120,8 +120,64 @@ const extractHostFromUrl = (url: string): string | null => {
   return match?.[1] ?? null
 }
 
-const getSSHJumpHost = (): string | null => {
-  return inferenceRuntimeConfig.sshJumpHost
+const shellQuote = (value: string): string => {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+export const getNvidiaSmiCommandForWorker = ({
+  nvidiaSmiArgs,
+  remoteWorkerUrl,
+  runtimeConfig = inferenceRuntimeConfig,
+}: {
+  nvidiaSmiArgs: string[]
+  remoteWorkerUrl: string
+  runtimeConfig?: Pick<InferenceRuntimeConfig, 'jobId' | 'sourceCluster' | 'sshJumpHost'>
+}): {args: string[]; command: string} | null => {
+  const host = extractHostFromUrl(remoteWorkerUrl)
+  if (!host) {
+    return null
+  }
+
+  const jumpHost = runtimeConfig.sshJumpHost
+  if (jumpHost && runtimeConfig.sourceCluster === 'arr' && runtimeConfig.jobId) {
+    const remoteCmd = [
+      'srun',
+      `--jobid=${runtimeConfig.jobId}`,
+      '--overlap',
+      '-N1',
+      '-n1',
+      '-w',
+      host,
+      'nvidia-smi',
+      ...nvidiaSmiArgs,
+    ]
+      .map(shellQuote)
+      .join(' ')
+
+    return {args: ['-o', 'ConnectTimeout=10', jumpHost, remoteCmd], command: 'ssh'}
+  }
+
+  if (jumpHost) {
+    const remoteCmd = [
+      'ssh',
+      '-o',
+      'StrictHostKeyChecking=no',
+      '-o',
+      'ConnectTimeout=10',
+      host,
+      'nvidia-smi',
+      ...nvidiaSmiArgs,
+    ]
+      .map(shellQuote)
+      .join(' ')
+
+    return {args: ['-o', 'ConnectTimeout=10', jumpHost, remoteCmd], command: 'ssh'}
+  }
+
+  return {
+    args: ['-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10', host, 'nvidia-smi', ...nvidiaSmiArgs],
+    command: 'ssh',
+  }
 }
 
 const pollNvidiaSmiForWorker = async (
@@ -140,25 +196,13 @@ const pollNvidiaSmiForWorker = async (
     '--format=csv,noheader,nounits',
   ]
 
-  const jumpHost = getSSHJumpHost()
-  let result: {stdout: string; stderr: string; code: number | null}
-
-  if (jumpHost) {
-    // Nested SSH: ssh jumpHost "ssh targetHost nvidia-smi ..."
-    const remoteCmd = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${host} nvidia-smi ${nvidiaSmiArgs.join(' ')}`
-    result = await spawnCommand('ssh', ['-o', 'ConnectTimeout=10', jumpHost, remoteCmd])
-  } else {
-    // Direct SSH to the worker host
-    result = await spawnCommand('ssh', [
-      '-o',
-      'StrictHostKeyChecking=no',
-      '-o',
-      'ConnectTimeout=10',
-      host,
-      'nvidia-smi',
-      ...nvidiaSmiArgs,
-    ])
+  const command = getNvidiaSmiCommandForWorker({nvidiaSmiArgs, remoteWorkerUrl})
+  if (!command) {
+    console.error(`[nvidia-smi] Could not extract host from URL: ${remoteWorkerUrl}`)
+    return []
   }
+
+  const result = await spawnCommand(command.command, command.args)
 
   if (result.code !== 0) {
     // Suppress common non-error cases
