@@ -1,6 +1,7 @@
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'fs'
 import {dirname, join} from 'path'
 
+import {normalizeDuckdbMemoryLimit} from './duckdbMemoryLimit.ts'
 import {getConfiguredDuckdbPath, getDuckdbPath} from './getDuckdbPath.ts'
 
 export type LocalAppSettings = {
@@ -56,7 +57,7 @@ const getMaintenanceWorkerDuckdbMemoryLimit = (record: Record<string, unknown> |
   const currentValue = getOptionalString(record, 'maintenanceWorkerDuckdbMemoryLimit')
   const legacyValue = getOptionalString(record, legacyMaintenanceWorkerDuckdbMemoryLimitKey)
 
-  return getNullableTrimmedValue(currentValue === null ? legacyValue : currentValue)
+  return normalizeDuckdbMemoryLimit(currentValue === null ? legacyValue : currentValue)
 }
 
 const shouldRewriteLocalAppSettings = (record: Record<string, unknown> | null): boolean => {
@@ -119,7 +120,7 @@ export const updateLocalAppSettings = ({
 }): LocalAppSettings => {
   const filePath = getLocalAppSettingsPath()
   const nextValue = {
-    maintenanceWorkerDuckdbMemoryLimit: getNullableTrimmedValue(maintenanceWorkerDuckdbMemoryLimit),
+    maintenanceWorkerDuckdbMemoryLimit: normalizeDuckdbMemoryLimit(maintenanceWorkerDuckdbMemoryLimit),
     codexBin: getNullableTrimmedValue(codexBin),
     duckdbBin: getNullableTrimmedValue(duckdbBin),
   } satisfies LocalAppSettings

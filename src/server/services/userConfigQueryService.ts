@@ -2,6 +2,7 @@ import type {UserRecord} from '../../db/schemaTypes.ts'
 import {legacyLocalUserId, localUserDefaults} from '../../utils/localUser.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
 import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
+import {normalizeDuckdbMemoryLimit} from '../utils/duckdbMemoryLimit.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getSqlLiteral} from './appQueryHelpers.ts'
 
@@ -78,7 +79,7 @@ const getNonEmptyUserName = (value: string | null | undefined) => {
 
 const getUserConfigValue = (row: UserConfigRow): UserRecord => {
   return {
-    maintenanceWorkerDuckdbMemoryLimit: getNullableTrimmedValue(row.maintenanceWorkerDuckdbMemoryLimit),
+    maintenanceWorkerDuckdbMemoryLimit: normalizeDuckdbMemoryLimit(row.maintenanceWorkerDuckdbMemoryLimit),
     id: row.id,
     name: row.name,
     email: row.email,
@@ -222,7 +223,7 @@ const updateUserConfigRow = async ({
     UPDATE app.user_config
     SET name = ${getSqlLiteral(getValueOrFallback(name, current.name))},
         email = ${getSqlLiteral(getValueOrFallback(email, current.email))},
-        maintenance_worker_duckdb_memory_limit = ${getSqlLiteral(getNullableTrimmedValue(maintenanceWorkerDuckdbMemoryLimit))},
+        maintenance_worker_duckdb_memory_limit = ${getSqlLiteral(normalizeDuckdbMemoryLimit(maintenanceWorkerDuckdbMemoryLimit))},
         full_text_conversion_model_id = ${getSqlLiteral(validatedFullTextConversionModelId)},
         project_mart_large_rebuild_batch_size = NULL,
         project_mart_large_rebuild_max_cycles_per_wake = NULL,

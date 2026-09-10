@@ -4,7 +4,7 @@ import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
-import {readLocalAppSettings} from './localAppSettings.ts'
+import {readLocalAppSettings, updateLocalAppSettings} from './localAppSettings.ts'
 
 const withDuckdbPath = <T>(duckdbPath: string, fn: () => T): T => {
   const previousDuckdbPath = process.env.DUCKDB_PATH
@@ -26,7 +26,7 @@ test('local app settings rewrite legacy maintenance-worker memory key', () => {
     settingsPath,
     `${JSON.stringify(
       {
-        backgroundWriterDuckdbMemoryLimit: ' 12GB ',
+        backgroundWriterDuckdbMemoryLimit: ' 12 ',
         codexBin: ' /opt/codex ',
         duckdbBin: ' /opt/duckdb ',
         projectMartLargeRebuildBatchSize: 256,
@@ -58,6 +58,24 @@ test('local app settings rewrite legacy maintenance-worker memory key', () => {
     expect('projectMartLargeRebuildMaxWakeMs' in stored).toBe(false)
     expect('projectMartLargeRebuildPollIntervalMs' in stored).toBe(false)
     expect('projectMartLargeRebuildTuningMode' in stored).toBe(false)
+  } finally {
+    rmSync(tempDir, {force: true, recursive: true})
+  }
+})
+
+test('local app settings writes unitless maintenance-worker memory as GB', () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'forska-local-app-settings-'))
+  const duckdbPath = join(tempDir, 'forska.duckdb')
+  const settingsPath = join(tempDir, 'forska.settings.json')
+
+  try {
+    const settings = withDuckdbPath(duckdbPath, () => {
+      return updateLocalAppSettings({maintenanceWorkerDuckdbMemoryLimit: '16', codexBin: null, duckdbBin: null})
+    })
+    const stored = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>
+
+    expect(settings.maintenanceWorkerDuckdbMemoryLimit).toBe('16GB')
+    expect(stored.maintenanceWorkerDuckdbMemoryLimit).toBe('16GB')
   } finally {
     rmSync(tempDir, {force: true, recursive: true})
   }

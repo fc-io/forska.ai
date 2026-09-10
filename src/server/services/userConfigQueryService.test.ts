@@ -214,6 +214,46 @@ test('user config creates a local row when only PDF import reviewers exist', asy
   ])
 })
 
+test('user config update normalizes unitless maintenance-worker DuckDB memory as GB', async () => {
+  if (!database || !userConfigQueryService) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await seedUserConfig(null)
+
+  const updated = await userConfigQueryService.updateUserConfig({
+    maintenanceWorkerDuckdbMemoryLimit: '16',
+    email: localUserDefaults.email,
+    fullTextConversionModelId: null,
+    name: localUserDefaults.name,
+    unpaywallEmail: null,
+  })
+  const [stored] = await database.queryJson<{memoryLimit: string | null}>(
+    `SELECT maintenance_worker_duckdb_memory_limit AS memoryLimit FROM app.user_config WHERE id = '${updated.id}'`,
+  )
+
+  expect(updated.maintenanceWorkerDuckdbMemoryLimit).toBe('16GB')
+  expect(stored?.memoryLimit).toBe('16GB')
+})
+
+test('user config update preserves explicit maintenance-worker DuckDB memory units', async () => {
+  if (!database || !userConfigQueryService) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await seedUserConfig(null)
+
+  const updated = await userConfigQueryService.updateUserConfig({
+    maintenanceWorkerDuckdbMemoryLimit: '6400MiB',
+    email: localUserDefaults.email,
+    fullTextConversionModelId: null,
+    name: localUserDefaults.name,
+    unpaywallEmail: null,
+  })
+
+  expect(updated.maintenanceWorkerDuckdbMemoryLimit).toBe('6400MiB')
+})
+
 test('user config update rejects archived or config-disabled conversion models', async () => {
   if (!database || !userConfigQueryService) {
     throw new Error('Test dependencies not initialized')

@@ -95,9 +95,18 @@ test('background server stack honors an explicit maintenance-worker DuckDB memor
   })
 })
 
+test('background server stack treats unitless maintenance-worker DuckDB memory overrides as GB', () => {
+  expect(
+    getBackgroundServerStackConfig(
+      {API_SERVER_PORT: '4100', BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT: '16', DUCKDB_MEMORY_LIMIT: '20GB'},
+      defaultLocalAppSettings,
+    ),
+  ).toMatchObject({maintenanceDuckdbMemoryLimit: '16GB'})
+})
+
 test('background server stack falls back to the base duckdb memory limit when provided', () => {
   expect(
-    getBackgroundServerStackConfig({API_SERVER_PORT: '4100', DUCKDB_MEMORY_LIMIT: '2GB'}, defaultLocalAppSettings),
+    getBackgroundServerStackConfig({API_SERVER_PORT: '4100', DUCKDB_MEMORY_LIMIT: '2'}, defaultLocalAppSettings),
   ).toEqual({
     apiPort: 4100,
     judgePort: 4102,
@@ -111,7 +120,7 @@ test('background server stack honors machine-local maintenance-worker DuckDB mem
   expect(
     getBackgroundServerStackConfig(
       {API_SERVER_PORT: '4100'},
-      {maintenanceWorkerDuckdbMemoryLimit: '12GB', codexBin: null, duckdbBin: null},
+      {maintenanceWorkerDuckdbMemoryLimit: '12', codexBin: null, duckdbBin: null},
     ),
   ).toEqual({
     apiPort: 4100,
@@ -196,7 +205,7 @@ test('background server stack passes machine-local maintenance-worker DuckDB mem
   expect(
     getBackgroundServerEnv({
       baseEnv: {API_SERVER_PORT: '3301', BACKGROUND_MAINTENANCE_PORT: '3302'},
-      localAppSettings: {...defaultLocalAppSettings, maintenanceWorkerDuckdbMemoryLimit: '18GB'},
+      localAppSettings: {...defaultLocalAppSettings, maintenanceWorkerDuckdbMemoryLimit: '18'},
       role: 'maintenance-worker',
     }),
   ).toMatchObject({
@@ -219,7 +228,7 @@ test('background server stack async config reads maintenance-worker DuckDB memor
       maintenance_worker_duckdb_memory_limit VARCHAR
     );
     INSERT INTO app.user_config (id, maintenance_worker_duckdb_memory_limit)
-    VALUES ('local-user', '14GB');
+    VALUES ('local-user', '14');
   `)
   connection.closeSync()
   duckdbInstance.closeSync()

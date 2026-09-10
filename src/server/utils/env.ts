@@ -6,6 +6,7 @@ import {dirname, resolve} from 'path'
 
 import {DEFAULT_API_SERVER_PORT, DEFAULT_VITE_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
+import {normalizeDuckdbMemoryLimit} from './duckdbMemoryLimit.ts'
 import {getDuckdbPath} from './getDuckdbPath.ts'
 import {getRuntimeLogConfig} from './runtimeLogger.ts'
 
@@ -103,6 +104,8 @@ export const loadEnv = ({
       ? getDefaultMaintenanceDuckdbMemoryLimit()
       : '20GB'
   }
+  ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT =
+    normalizeDuckdbMemoryLimit(String(merged.DUCKDB_MEMORY_LIMIT ?? '')) ?? '20GB'
   if (merged.DUCKDB_APPEND_LANE_COUNT == null || String(merged.DUCKDB_APPEND_LANE_COUNT).trim() === '') {
     ;(merged as Record<string, string>).DUCKDB_APPEND_LANE_COUNT = '2'
   }

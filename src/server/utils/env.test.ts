@@ -42,6 +42,12 @@ test('preserves explicit DuckDB append transaction opt-in', () => {
   expect(resolvedEnv.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED).toBe(true)
 })
 
+test('normalizes unitless DuckDB memory limit env values as GB', () => {
+  const resolvedEnv = loadEnv({envValues: {DUCKDB_MEMORY_LIMIT: '16'}})
+
+  expect(resolvedEnv.DUCKDB_MEMORY_LIMIT).toBe('16GB')
+})
+
 test('bounds default review serving rebuild chunk batch RSS cap from system memory', () => {
   const gibibyte = 1024 ** 3
 

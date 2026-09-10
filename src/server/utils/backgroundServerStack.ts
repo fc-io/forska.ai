@@ -3,6 +3,7 @@ import {existsSync} from 'node:fs'
 import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
 import {runEphemeralReadOnlyDuckdbFileJsonQuery} from './duckdbEphemeralReadOnly.ts'
 import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
+import {normalizeDuckdbMemoryLimit} from './duckdbMemoryLimit.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
@@ -28,6 +29,10 @@ const getTrimmedValue = (value: string | null | undefined) => {
   return normalized === '' ? null : normalized
 }
 
+const getDuckdbMemoryLimitValue = (value: string | null | undefined) => {
+  return normalizeDuckdbMemoryLimit(value)
+}
+
 const getResolvedBackgroundBaseEnv = (
   baseEnv: Record<string, string | undefined> | undefined,
 ): Record<string, string | undefined> => {
@@ -50,9 +55,9 @@ export const getBackgroundServerStackConfig = (
   const maintenancePort = getIntegerPort(envValues.BACKGROUND_MAINTENANCE_PORT, apiPort + 1)
   const judgePort = getIntegerPort(envValues.BACKGROUND_JUDGE_PORT, maintenancePort + 1)
   const maintenanceDuckdbMemoryLimit =
-    getTrimmedValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
-    ?? getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT)
-    ?? getTrimmedValue(localAppSettings.maintenanceWorkerDuckdbMemoryLimit)
+    getDuckdbMemoryLimitValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
+    ?? getDuckdbMemoryLimitValue(envValues.DUCKDB_MEMORY_LIMIT)
+    ?? getDuckdbMemoryLimitValue(localAppSettings.maintenanceWorkerDuckdbMemoryLimit)
     ?? getDefaultBackgroundMaintenanceDuckdbMemoryLimit()
 
   return {
@@ -106,10 +111,10 @@ export const getBackgroundServerStackConfigAsync = async (
   const judgePort = getIntegerPort(envValues.BACKGROUND_JUDGE_PORT, maintenancePort + 1)
   const storedMaintenanceDuckdbMemoryLimit = await getStoredBackgroundMaintenanceDuckdbMemoryLimitFromDb(envValues)
   const maintenanceDuckdbMemoryLimit =
-    getTrimmedValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
-    ?? getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT)
-    ?? storedMaintenanceDuckdbMemoryLimit
-    ?? getTrimmedValue(localAppSettings.maintenanceWorkerDuckdbMemoryLimit)
+    getDuckdbMemoryLimitValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
+    ?? getDuckdbMemoryLimitValue(envValues.DUCKDB_MEMORY_LIMIT)
+    ?? getDuckdbMemoryLimitValue(storedMaintenanceDuckdbMemoryLimit)
+    ?? getDuckdbMemoryLimitValue(localAppSettings.maintenanceWorkerDuckdbMemoryLimit)
     ?? getDefaultBackgroundMaintenanceDuckdbMemoryLimit()
 
   return {

@@ -11,8 +11,18 @@ const duckdbMemoryLimitUnitToBytes = {
   tib: 1024 ** 4,
 } as const
 
-export const parseDuckdbMemoryLimitToMiB = (value: string | null | undefined) => {
+export const normalizeDuckdbMemoryLimit = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
+
+  if (normalized.length === 0) {
+    return null
+  }
+
+  return /^\d+(?:\.\d+)?$/u.test(normalized) ? `${normalized}GB` : normalized
+}
+
+export const parseDuckdbMemoryLimitToMiB = (value: string | null | undefined) => {
+  const normalized = normalizeDuckdbMemoryLimit(value) ?? ''
   const match = /^(\d+(?:\.\d+)?)\s*(gb|gib|kb|kib|mb|mib|tb|tib)$/i.exec(normalized)
 
   if (!match) {

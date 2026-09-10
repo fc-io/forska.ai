@@ -403,12 +403,12 @@ const Settings = () => {
                         setMaintenanceWorkerDuckdbMemoryLimit(event.currentTarget.value)
                       }}
                       class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
-                      placeholder="20GB"
+                      placeholder="16GB or 16"
                     />
                     <p class="mt-2 text-xs text-gray-500">
                       Optional machine-local override for the maintenance DuckDB memory cap. Leave empty to use the
-                      automatic memory limit from your host RAM. DuckDB memory-limit changes require a server restart to
-                      take effect.
+                      automatic memory limit from your host RAM. Bare numbers are treated as GB. DuckDB memory-limit
+                      changes require a server restart to take effect.
                     </p>
                   </div>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
