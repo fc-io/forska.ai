@@ -86,12 +86,13 @@ For every engine, binding, or native-package update:
   fresh database, all historical migrations, title-posting projector writes, and
   idempotent migration reruns preserving data and applied timestamps. This catches
   alpha SQL changes that a small hand-built table or an already-migrated DB misses.
-- Run `bun test src/db/migrateDuckdb.workflowTables.test.ts --timeout 120000` for
-  old and fresh judgment-workflow databases. Existing databases with inline
-  `app.judgment_job` or `app.comparison_project_serving_generation` primary keys
-  must cross the migration boundary without triggering startup indexed-table
-  recovery, and the final tables must retain rows/defaults while having no
-  primary keys or maintenance indexes.
+- Run `bun test src/db/migrateDuckdb.workflowTables.test.ts src/db/migrateDuckdb.conflictResolutionTables.test.ts --timeout 120000`
+  for old and fresh judgment-workflow databases plus comparison conflict-resolution
+  upgrade paths. Existing databases with inline `app.judgment_job`,
+  `app.comparison_project_serving_generation`, or indexed
+  `app.comparison_project_conflict_resolution` tables must cross the migration
+  boundary without triggering startup indexed-table recovery, and the final tables
+  must retain rows/defaults while having no primary keys or mutable lookup indexes.
 - Keep `bun scripts/duckdbCheckpointMemoryRegression.ts` as the standalone
   memory gate. Require exact rows, ID sum, and WAL-marker preservation after a
   fresh-process reopen. Do not increase the cap or change the fixture to pass.

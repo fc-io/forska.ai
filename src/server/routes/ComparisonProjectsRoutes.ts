@@ -2083,6 +2083,17 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   }
 
   const reviewer = params.reviewer ?? (await getOrCreateComparisonProjectConflictResolutionReviewer(params.tx))
+  const targetArticleIds = getUniqueStringValues(
+    params.candidates.map((candidate) => {
+      return candidate.targetArticleId
+    }),
+  )
+
+  await params.tx.run(`
+    DELETE FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND article_id IN (${getQuotedStringList(targetArticleIds).join(', ')})
+  `)
 
   await params.tx.run(`
     INSERT INTO ${comparisonProjectConflictResolutionTable} (
@@ -2105,11 +2116,6 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
         )`
       })
       .join(',\n')}
-    ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET
-      prompt_id = excluded.prompt_id,
-      answer_value = excluded.answer_value,
-      reviewer_user_id = excluded.reviewer_user_id,
-      updated_at = now()
   `)
 
   return params.candidates.length

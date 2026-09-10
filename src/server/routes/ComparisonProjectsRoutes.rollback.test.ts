@@ -637,6 +637,21 @@ const getMockConflictResolutionExistingTargetResolutionRows = (
     })
 }
 
+const getMockConflictResolutionTargetArticleIds = (
+  statement: string,
+  state: Pick<MockDatabaseState, 'conflictResolutionRows'>,
+) => {
+  return new Set(
+    state.conflictResolutionRows
+      .filter((row) => {
+        return statement.includes(`'${row.articleId}'`)
+      })
+      .map((row) => {
+        return row.articleId
+      }),
+  )
+}
+
 const getSqlNullableStringLiteralValue = (value: string | undefined) => {
   return value && value !== 'NULL' ? value.slice(1, -1).replaceAll("''", "'") : null
 }
@@ -2530,7 +2545,16 @@ const registerModuleMocks = () => {
                 }
 
                 if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
-                  pendingConflictResolutionRows.splice(0, pendingConflictResolutionRows.length)
+                  const deletedArticleIds = getMockConflictResolutionTargetArticleIds(statement, {
+                    conflictResolutionRows: pendingConflictResolutionRows,
+                  })
+                  pendingConflictResolutionRows.splice(
+                    0,
+                    pendingConflictResolutionRows.length,
+                    ...pendingConflictResolutionRows.filter((row) => {
+                      return !deletedArticleIds.has(row.articleId)
+                    }),
+                  )
                   return
                 }
 

@@ -766,6 +766,74 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT comparison_project_id, article_id
+        FROM app.comparison_project_conflict_resolution
+        GROUP BY comparison_project_id, article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_comparison_project_conflict_resolution;
+      CREATE TEMP TABLE startup_probe_comparison_project_conflict_resolution AS
+      SELECT
+        comparison_project_id,
+        article_id,
+        updated_at
+      FROM app.comparison_project_conflict_resolution
+      ORDER BY updated_at DESC, created_at DESC, comparison_project_id ASC, article_id ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.comparison_project_conflict_resolution
+      SET updated_at = current_timestamp
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_comparison_project_conflict_resolution probe
+        WHERE probe.comparison_project_id = app.comparison_project_conflict_resolution.comparison_project_id
+          AND probe.article_id = app.comparison_project_conflict_resolution.article_id
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.comparison_project_conflict_resolution
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_comparison_project_conflict_resolution probe
+        WHERE probe.comparison_project_id = app.comparison_project_conflict_resolution.comparison_project_id
+          AND probe.article_id = app.comparison_project_conflict_resolution.article_id
+        LIMIT 1
+      )
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_comparison_project_conflict_resolution probe
+        WHERE probe.comparison_project_id = app.comparison_project_conflict_resolution.comparison_project_id
+          AND probe.article_id = app.comparison_project_conflict_resolution.article_id
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_comparison_project_conflict_resolution;
+    `,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairDedupeOrderSql: `
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      id DESC
+    `,
+    repairPrimaryKeyColumns: ['comparison_project_id', 'article_id'],
+    repairStrategy: 'dedupe-latest',
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: ['id', 'comparison_project_id', 'article_id', 'updated_at', 'created_at'],
+        schemaName: 'app',
+        tableName: 'comparison_project_conflict_resolution',
+      },
+    ],
+    skipStartupPreflightUntilMigration: '0230_rebuildComparisonConflictResolutionWithoutIndexes.sql',
+    tableName: 'comparison_project_conflict_resolution',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT dirty_ack_id
         FROM app.review_serving_dirty_work_ack
         GROUP BY dirty_ack_id

@@ -17,6 +17,10 @@ export const verifyPersistedConflictReplacement = (input: {
     resolve(import.meta.dir, '../../../db/duckdbMigrations/0080_dropComparisonProjectChildParentForeignKeys.sql'),
     'utf8',
   )
+  const noIndexMigration = readFileSync(
+    resolve(import.meta.dir, '../../../db/duckdbMigrations/0230_rebuildComparisonConflictResolutionWithoutIndexes.sql'),
+    'utf8',
+  )
   const tableSql = migration.match(/CREATE TABLE app\.comparison_project_conflict_resolution \([\s\S]*?\n\);/)?.[0]
   expect(tableSql).toBeDefined()
   const initializerPath = resolve(import.meta.dir, '../../utils/createDuckdbInstance.ts')
@@ -42,6 +46,7 @@ export const verifyPersistedConflictReplacement = (input: {
       duplicateError: string
       rows: {article_id: string; answer_value: string | null; prompt_id: string | null}[]
       constraints: {constraint_type: string}[]
+      indexes: {index_name: string}[]
     }
   }
   try {
@@ -50,6 +55,8 @@ export const verifyPersistedConflictReplacement = (input: {
       await connection.run(${JSON.stringify(tableSql)})
       await connection.run("ALTER TABLE app.comparison_project_conflict_resolution ADD COLUMN reviewer_user_id VARCHAR; CREATE INDEX idx_app_comparison_project_conflict_resolution_lookup ON app.comparison_project_conflict_resolution(comparison_project_id, article_id)")
       await connection.run("INSERT INTO app.comparison_project_conflict_resolution(id, comparison_project_id, article_id, answer_value) VALUES ('old-one','comparison-project-1','article-1','maybe'),('other-two','comparison-project-1','article-2','no'); CHECKPOINT")
+      await connection.run(${JSON.stringify(noIndexMigration)})
+      await connection.run('CHECKPOINT')
       console.log('{}')
     `)
     const mutation = run(`
@@ -60,22 +67,21 @@ export const verifyPersistedConflictReplacement = (input: {
       await connection.run('BEGIN')
       await connection.run(${JSON.stringify(input.deleteStatement)})
       await connection.run('ROLLBACK')
-      let duplicateError = null
-      try {await connection.run(${JSON.stringify(input.insertStatement)})} catch(error) {duplicateError = String(error)}
       await connection.run('CHECKPOINT')
-      console.log(JSON.stringify({deleted, duplicateError}))
+      console.log(JSON.stringify({deleted}))
     `)
     expect(mutation.deleted).toEqual([{articleId: 'article-1'}])
-    expect(mutation.duplicateError).toContain('Duplicate key')
     const result = run(`
       const rows = (await connection.runAndReadAll('SELECT article_id, answer_value, prompt_id FROM app.comparison_project_conflict_resolution ORDER BY article_id')).getRowObjectsJson()
       const constraints = (await connection.runAndReadAll("SELECT constraint_type FROM duckdb_constraints() WHERE schema_name='app' AND table_name='comparison_project_conflict_resolution' AND constraint_type IN ('PRIMARY KEY','UNIQUE') ORDER BY constraint_type")).getRowObjectsJson()
-      console.log(JSON.stringify({rows, constraints}))
+      const indexes = (await connection.runAndReadAll("SELECT index_name FROM duckdb_indexes() WHERE schema_name='app' AND table_name='comparison_project_conflict_resolution' ORDER BY index_name")).getRowObjectsJson()
+      console.log(JSON.stringify({rows, constraints, indexes}))
     `)
     expect(result.rows).toHaveLength(2)
     expect(result.rows[0]?.answer_value ?? result.rows[0]?.prompt_id).toBe(input.expectedValue)
     expect(result.rows[1]).toEqual({article_id: 'article-2', answer_value: 'no', prompt_id: null})
-    expect(result.constraints).toEqual([{constraint_type: 'PRIMARY KEY'}, {constraint_type: 'UNIQUE'}])
+    expect(result.constraints).toEqual([])
+    expect(result.indexes).toEqual([])
   } finally {
     rmSync(root, {recursive: true, force: true})
   }
