@@ -2799,6 +2799,7 @@ const isDuckdbUniqueIndexDuplicateError = (error: unknown) => {
 const getDuckdbRepairSpecForRecentMutatingTarget = () => {
   return (
     getDuckdbStartupRepairSpecForTableName(duckdbFailedMutatingStatementTargetTable)
+    ?? getDuckdbRepairSpecForActiveWorkloadContext()
     ?? getDuckdbStartupRepairSpecForTableName(duckdbServiceState.controlTransactionIndexedMutationTarget)
     ?? duckdbServiceState.controlTransactionIndexedMutationTargets
       .map(getDuckdbStartupRepairSpecForTableName)
@@ -2808,6 +2809,20 @@ const getDuckdbRepairSpecForRecentMutatingTarget = () => {
     ?? getDuckdbStartupRepairSpecForTableName(duckdbLastMutatingStatementTargetTable)
     ?? null
   )
+}
+
+const getDuckdbRepairSpecForActiveWorkloadContext = () => {
+  const routeOrJobKey = duckdbWorkloadDiagnosticStorage.getStore()?.context?.routeOrJobKey
+
+  if (typeof routeOrJobKey !== 'string') {
+    return null
+  }
+
+  if (routeOrJobKey.startsWith('maintenance.comparisonProjectConflictResolution.')) {
+    return getDuckdbStartupRepairSpecForTableName('app.comparison_project_conflict_resolution') ?? null
+  }
+
+  return null
 }
 
 const isDuckdbIndexedTableRepairableRuntimeError = (error: unknown) => {
@@ -2951,7 +2966,7 @@ const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
         duckdbFailedMutatingStatementTargetTable,
         duckdbServiceState.controlTransactionIndexedMutationTarget,
         duckdbServiceState.controlTransactionIndexedMutationTargets,
-        duckdbLastMutatingStatementTargetTable,
+        getDuckdbRepairSpecForActiveWorkloadContext()?.tableName ?? duckdbLastMutatingStatementTargetTable,
       )
     : [getDuckdbRepairSpecForRecentMutatingTarget()].filter(
         (repairSpec): repairSpec is DuckdbStartupIndexedTableRepairSpec => {
@@ -2971,6 +2986,13 @@ const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
       reason: isIndexDeleteFailure ? 'index-delete' : 'unique-index-duplicate',
+      diagnostic: {
+        activeWorkloadRouteOrJobKey: duckdbWorkloadDiagnosticStorage.getStore()?.context?.routeOrJobKey ?? null,
+        failedMutatingTargetTable: duckdbFailedMutatingStatementTargetTable,
+        lastMutatingTargetTable: duckdbLastMutatingStatementTargetTable,
+        transactionIndexedMutationTarget: duckdbServiceState.controlTransactionIndexedMutationTarget,
+        transactionIndexedMutationTargets: duckdbServiceState.controlTransactionIndexedMutationTargets,
+      },
       repairSpecs: repairSpecs.map((repairSpec) => {
         return {schemaName: repairSpec.schemaName, tableName: repairSpec.tableName}
       }),
@@ -2987,6 +3009,13 @@ const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
       repairedTables: repairSpecs.map((repairSpec) => {
         return `${repairSpec.schemaName}.${repairSpec.tableName}`
       }),
+      repairTargetDiagnostic: {
+        activeWorkloadRouteOrJobKey: duckdbWorkloadDiagnosticStorage.getStore()?.context?.routeOrJobKey ?? null,
+        failedMutatingTargetTable: duckdbFailedMutatingStatementTargetTable,
+        lastMutatingTargetTable: duckdbLastMutatingStatementTargetTable,
+        transactionIndexedMutationTarget: duckdbServiceState.controlTransactionIndexedMutationTarget,
+        transactionIndexedMutationTargets: duckdbServiceState.controlTransactionIndexedMutationTargets,
+      },
     },
     event: 'duckdb.recovery.indexed-table-repair-marker',
     message: '[duckdb] marked indexed table repair for next startup after indexed-table runtime error',
@@ -3286,11 +3315,16 @@ const hasNonEmptyDuckdbWal = (databasePath: string) => {
   return walStat?.isFile() === true && walStat.size > 0
 }
 
-const hasDuckdbWal = (databasePath: string) => {
+const getDuckdbWalFileStatSnapshot = (databasePath: string) => {
   const walPath = `${databasePath}.wal`
   const walStat = statSync(walPath, {throwIfNoEntry: false})
+  const exists = walStat?.isFile() === true
 
-  return walStat?.isFile() === true
+  return {exists, modifiedAtMs: exists ? walStat.mtimeMs : null, path: walPath, sizeBytes: exists ? walStat.size : null}
+}
+
+const hasDuckdbWal = (databasePath: string) => {
+  return getDuckdbWalFileStatSnapshot(databasePath).exists
 }
 
 const isDuckdbWalReplayFailure = (error: unknown) => {
@@ -3734,6 +3768,22 @@ const shouldRecheckDuckdbStartupRepairMarkerForPendingMigration = (
   return repairSpecs.some((spec) => {
     return typeof spec.skipStartupPreflightUntilMigration === 'string'
   })
+}
+
+const shouldDeferDuckdbStartupRepairToPendingMigration = (error: unknown) => {
+  if (!(error instanceof Error) || (error as DuckdbStartupPreflightError).repairMarkerOnly !== true) {
+    return false
+  }
+
+  const repairSpecs = (error as DuckdbStartupPreflightError).repairSpecs
+
+  return (
+    Array.isArray(repairSpecs)
+    && repairSpecs.length > 0
+    && repairSpecs.every((spec) => {
+      return typeof spec.skipStartupPreflightUntilMigration === 'string'
+    })
+  )
 }
 
 const shouldRunProactiveDuckdbStartupPreflight = (runtimeConfig: DuckdbRuntimeConfig) => {
@@ -4561,6 +4611,7 @@ const getDuckdbStartupPreflightError = (
   if (shouldRecheckPendingMigrationRepairMarker && activeRepairMarker?.phase === 'runtime-fatal-index-delete') {
     error.repairMarker = activeRepairMarker
     error.repairMarkerOnly = true
+    error.repairMarkerPath = activeRepairSpecPath
     error.repairSpecs = activeRepairSpecs
   }
 
@@ -4800,6 +4851,12 @@ const repairDuckdbStartupIndexedTables = async (
         message: '[duckdb] blocked startup indexed-table repair after lock probe hit WAL replay',
         severity: 'ERROR',
         terminalArgs: [
+          `repair_tables=${repairSpecs
+            .map((spec) => {
+              return `${spec.schemaName}.${spec.tableName}`
+            })
+            .join(',')}`,
+          `marker_phase=${typeof repairMarker?.phase === 'string' ? repairMarker.phase : 'none'}`,
           `database_backup=${preservedDatabasePath ?? 'none'}`,
           `wal_backup=${preservedWalPath ?? 'none'}`,
           `manifest=${manifestPath}`,
@@ -4866,6 +4923,12 @@ const repairDuckdbStartupIndexedTables = async (
       message: '[duckdb] blocked startup indexed-table repair while WAL evidence is still pending',
       severity: 'ERROR',
       terminalArgs: [
+        `repair_tables=${repairSpecs
+          .map((spec) => {
+            return `${spec.schemaName}.${spec.tableName}`
+          })
+          .join(',')}`,
+        `marker_phase=${typeof repairMarker?.phase === 'string' ? repairMarker.phase : 'none'}`,
         `database_backup=${preservedDatabasePath ?? 'none'}`,
         `wal_backup=${preservedWalPath ?? 'none'}`,
         `manifest=${manifestPath}`,
@@ -4970,6 +5033,12 @@ const repairDuckdbStartupIndexedTables = async (
         message: '[duckdb] blocked startup indexed-table repair while WAL evidence is still pending',
         severity: 'ERROR',
         terminalArgs: [
+          `repair_tables=${repairSpecs
+            .map((spec) => {
+              return `${spec.schemaName}.${spec.tableName}`
+            })
+            .join(',')}`,
+          `marker_phase=${typeof repairMarker?.phase === 'string' ? repairMarker.phase : 'none'}`,
           `database_backup=${preservedDatabasePath ?? 'none'}`,
           `wal_backup=${preservedWalPath ?? 'none'}`,
           `manifest=${manifestPath}`,
@@ -5037,6 +5106,12 @@ const repairDuckdbStartupIndexedTables = async (
         message: '[duckdb] blocked startup indexed-table repair after lock probe hit WAL replay',
         severity: 'ERROR',
         terminalArgs: [
+          `repair_tables=${repairSpecs
+            .map((spec) => {
+              return `${spec.schemaName}.${spec.tableName}`
+            })
+            .join(',')}`,
+          `marker_phase=${typeof repairMarker?.phase === 'string' ? repairMarker.phase : 'none'}`,
           `database_backup=${preservedDatabasePath ?? 'none'}`,
           `wal_backup=${preservedWalPath ?? 'none'}`,
           `manifest=${manifestPath}`,
@@ -5221,6 +5296,39 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
       if (checkpointed) {
         continue
       }
+    }
+
+    if (
+      markerOnlyRepair
+      && hadWalBeforePreflight
+      && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
+      && shouldDeferDuckdbStartupRepairToPendingMigration(error)
+    ) {
+      const startupPreflightError = error
+      if (
+        typeof startupPreflightError.repairMarkerPath === 'string'
+        && startupPreflightError.repairMarker !== null
+        && typeof startupPreflightError.repairMarker === 'object'
+      ) {
+        writeFileSync(startupPreflightError.repairMarkerPath, JSON.stringify(startupPreflightError.repairMarker))
+      }
+      writeRuntimeOperatorLogEvent({
+        attrs: {
+          databasePath: runtimeConfig.databasePath,
+          repairMarker: error instanceof Error ? error.repairMarker : null,
+          repairedTables:
+            error instanceof Error && Array.isArray(error.repairSpecs)
+              ? error.repairSpecs.map((spec) => {
+                  return `${spec.schemaName}.${spec.tableName}`
+                })
+              : [],
+          wal: getDuckdbWalFileStatSnapshot(runtimeConfig.databasePath),
+        },
+        event: 'duckdb.startup.repair-marker-deferred-for-pending-migration-wal',
+        message: '[duckdb] deferred migration-gated indexed-table repair while WAL remains for normal startup',
+        severity: 'WARN',
+      })
+      return
     }
 
     if (!markerOnlyRepair && hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
@@ -6441,7 +6549,9 @@ const writeDuckdbStatementDiagnostic = ({
   const diagnosticContext = duckdbWorkloadDiagnosticStorage.getStore()
 
   if (phase === 'start') {
-    duckdbFailedMutatingStatementTargetTable = null
+    if (getDuckdbMutatingStatementTarget(statement) !== null) {
+      duckdbFailedMutatingStatementTargetTable = null
+    }
     recordDuckdbMutatingStatementTarget(duckdbConnection, statement)
 
     if (diagnosticContext?.activeMainWorkId !== undefined) {
@@ -6454,7 +6564,11 @@ const writeDuckdbStatementDiagnostic = ({
   }
 
   if (phase === 'error') {
-    duckdbFailedMutatingStatementTargetTable = getDuckdbMutatingStatementTarget(statement)
+    const failedMutatingTarget = getDuckdbMutatingStatementTarget(statement)
+
+    if (failedMutatingTarget !== null) {
+      duckdbFailedMutatingStatementTargetTable = failedMutatingTarget
+    }
   }
 
   if (diagnosticContext === undefined) {
