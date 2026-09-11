@@ -5,6 +5,11 @@ import {
   recordCronRuntimeClassState,
   resetCronRuntimeStateForTests,
 } from './cronRuntimeState.ts'
+import {
+  beginJudgmentsCleanupStaleCronRun,
+  finishJudgmentsCleanupStaleCronRun,
+  updateJudgmentsCleanupStaleCronStep,
+} from './judgmentsJobsCronState.ts'
 
 test('cron runtime diagnostics keep operational judgment crons active under a low-memory maintenance owner', () => {
   resetCronRuntimeStateForTests()
@@ -67,4 +72,26 @@ test('reported cron class state can add live tick metadata', () => {
     lastTickAt: '2026-09-11T05:00:00.000Z',
     source: 'reported',
   })
+})
+
+test('cron runtime diagnostics expose cleanup-stale activity without route-time scans', () => {
+  resetCronRuntimeStateForTests()
+  const runId = beginJudgmentsCleanupStaleCronRun({budgetMs: 1_000, nowMs: 20_000})
+
+  expect(runId).not.toBeNull()
+  updateJudgmentsCleanupStaleCronStep({nowMs: 20_100, runId: runId ?? '', step: 'prune-provider-telemetry-history'})
+
+  const diagnostics = buildCronRuntimeDiagnostics({
+    duckdbMemoryLimit: '6400MiB',
+    mutationWorkEnabled: true,
+    serverRole: 'maintenance-worker',
+  })
+
+  expect(diagnostics.cleanupStaleActivity).toMatchObject({
+    budgetMs: 1_000,
+    currentStep: 'prune-provider-telemetry-history',
+    isCleanupStaleRunning: true,
+    runId,
+  })
+  finishJudgmentsCleanupStaleCronRun({exhaustedBudget: false, partialReason: null, runId: runId ?? ''})
 })

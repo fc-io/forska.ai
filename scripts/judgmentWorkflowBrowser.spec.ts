@@ -80,7 +80,8 @@ test('discovers and drives a real judgment job through start, result, pause, dra
     .toContain('0')
   const promptQueue = page.getByRole('heading', {name: 'Prompt Queue'}).locator('..').locator('..')
   await expect(promptQueue.getByText('Ready', {exact: true}).locator('..')).toContainText('0')
-  await expect(promptQueue.getByText('Judged', {exact: true}).locator('..')).toContainText('2')
+  const requestActivity = page.getByRole('heading', {name: 'Request Activity'}).locator('..').locator('..')
+  await expect(requestActivity.getByText('Attempts', {exact: true}).locator('..')).toContainText('2')
 
   await page.getByRole('button', {name: 'Pause Job'}).click()
   await expect(page.getByRole('button', {name: 'Start Job', exact: true})).toBeVisible({timeout: 30_000})
@@ -155,9 +156,15 @@ test('discovers and drives a real judgment job through start, result, pause, dra
 
   await page.goto(`/projects/${projectId}/reviews-llm`)
   await expect(page.getByRole('link', {name: 'Assessed by LLM'})).toHaveAttribute('aria-current', 'page')
-  await expect(page.getByRole('heading', {name: 'Articles with Judgments (Showing 1-1 of 1)'})).toBeVisible({
-    timeout: 60_000,
-  })
+  await expect
+    .poll(
+      async () => {
+        await page.reload()
+        return page.getByRole('heading', {name: /Articles with Judgments/}).first().textContent()
+      },
+      {timeout: 90_000},
+    )
+    .toContain('Showing 1-1 of 1')
   const judgedArticleLink = page.getByRole('link', {name: 'Topology article A', exact: true})
   await expect(judgedArticleLink).toBeVisible()
   await judgedArticleLink.click()

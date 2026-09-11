@@ -56,6 +56,7 @@ import {
   type RunningJudgmentJob,
 } from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {getProviderBucketSnapshot, type ProviderBucketSnapshot} from '../cron/judgmentsJobs/providerAdmissionLease.ts'
+import type {JudgmentsCleanupStaleCronActivity} from '../cron/judgmentsJobsCronState.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../providers/providerRuntimeMatchResolver.ts'
@@ -202,6 +203,8 @@ type FailedRequestSummary = {
 }
 type AnthropicRefusalSummary = Pick<FailedRequestSummary, 'anthropicRefusalArticles' | 'anthropicRefusals'>
 type JudgmentJobBlockedReason =
+  | 'cleanup_stale_running'
+  | 'cleanup_stale_stale'
   | 'endpoint_circuit_breaker'
   | 'endpoint_cooldown'
   | 'endpoint_misconfigured'
@@ -320,6 +323,8 @@ type JudgmentJobHealthProgress = {
 type JudgmentJobControlPlaneCronState = CronRuntimeTickState & {active: boolean; inactiveReason: string | null}
 type JudgmentJobControlPlaneDiagnostics = {
   addToQueueCron: JudgmentJobControlPlaneCronState
+  cleanupStaleActivity: JudgmentsCleanupStaleCronActivity
+  cleanupStaleCron: JudgmentJobControlPlaneCronState
   duckdbMemoryLimit: string | null
   duckdbMemoryLimitMiB: number | null
   heavyMaintenanceCrons: CronRuntimeClassState
@@ -2232,11 +2237,13 @@ const getProgressState = ({
 }
 
 const getProgressBlockedReason = ({
+  cleanupStaleActivity,
   endpointBlockedReason,
   isStaleImport,
   progressState,
   repairRequired,
 }: {
+  cleanupStaleActivity: JudgmentsCleanupStaleCronActivity
   endpointBlockedReason: JudgmentJobBlockedReason
   isStaleImport: boolean
   progressState: JudgmentJobProgressState
@@ -2248,11 +2255,15 @@ const getProgressBlockedReason = ({
       ? 'waiting_for_owner_ack'
       : progressState === 'cooldown' && endpointBlockedReason
         ? endpointBlockedReason
-        : progressState === 'blocked_import' && isStaleImport
-          ? 'stale_import'
-          : progressState === 'blocked_import'
-            ? 'waiting_for_judge_worker'
-            : null
+        : progressState === 'blocked_import' && cleanupStaleActivity.stale
+          ? 'cleanup_stale_stale'
+          : progressState === 'blocked_import' && cleanupStaleActivity.overBudget
+            ? 'cleanup_stale_running'
+            : progressState === 'blocked_import' && isStaleImport
+              ? 'stale_import'
+              : progressState === 'blocked_import'
+                ? 'waiting_for_judge_worker'
+                : null
 }
 
 const getJudgmentJobControlPlaneCronState = ({
@@ -2273,6 +2284,11 @@ const getJudgmentJobControlPlaneDiagnostics = (): JudgmentJobControlPlaneDiagnos
     addToQueueCron: getJudgmentJobControlPlaneCronState({
       classState: operationalClassState,
       tickState: cronRuntime.crons[cronRuntimeTickNames.addToQueue],
+    }),
+    cleanupStaleActivity: cronRuntime.cleanupStaleActivity,
+    cleanupStaleCron: getJudgmentJobControlPlaneCronState({
+      classState: operationalClassState,
+      tickState: cronRuntime.crons[cronRuntimeTickNames.cleanupStale],
     }),
     duckdbMemoryLimit: cronRuntime.duckdbMemoryLimit,
     duckdbMemoryLimitMiB: cronRuntime.duckdbMemoryLimitMiB,
@@ -2331,6 +2347,7 @@ const getJudgmentJobHealthProgress = ({
   const activePromptCount = sqliteHealth.promptCounts.claimed + sqliteHealth.promptCounts.running
   const endpointBlockedReason = getEndpointBlockedReason(endpointHealth)
   const repairRequired = isRepairRequiredAction(recommendedNextAction)
+  const cleanupStaleActivity = getCronRuntimeDiagnostics().cleanupStaleActivity
   const progressState = getProgressState({
     activeImportWorkCount: activeImportLeases.length,
     endpointBlockedReason,
@@ -2344,6 +2361,7 @@ const getJudgmentJobHealthProgress = ({
     repairRequired,
   })
   const blockedReason = getProgressBlockedReason({
+    cleanupStaleActivity,
     endpointBlockedReason,
     isStaleImport: isStaleImportJob(job),
     progressState,

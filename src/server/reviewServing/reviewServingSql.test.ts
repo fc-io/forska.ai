@@ -2037,7 +2037,11 @@ test('judgment job serving queue SQL keeps current config and stable keyset sema
   )
 
   expect(serviceText).toContain('getCurrentReviewServingReviewConfigHash')
-  expect(serviceText).toContain('AND review_config_hash = ${getSqlLiteral(currentReviewConfigHash)}')
+  expect(serviceText).toContain(
+    'getDispatchReadyServingScope(projectId, routeOrJobKey, currentReviewConfigHash, database)',
+  )
+  expect(serviceText).toContain('const reviewConfigHashPredicate =')
+  expect(serviceText).toContain('AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}')
   expect(serviceText).toContain('INNER JOIN app.project_prompt current_prompt')
   expect(serviceText).toContain('AND current_prompt.enabled = TRUE')
   expect(serviceText).toContain('AND NOT current_prompt.archived')

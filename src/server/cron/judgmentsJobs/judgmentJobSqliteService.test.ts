@@ -7,6 +7,7 @@ import {afterAll, beforeAll, expect, setDefaultTimeout, spyOn, test} from 'bun:t
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import type {JudgmentJobLeaseMetadata} from './judgmentJobLease.ts'
 import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+import {getRequestAttemptLifecycleState, parseRequestAttempts} from './judgmentRequestAttemptManifest.ts'
 
 setDefaultTimeout(120_000)
 
@@ -39,6 +40,39 @@ const getQueueCountMap = (rows: QueueCountRow[]) => {
       return [row.status, row.count]
     }),
   )
+}
+
+const createSqliteJobFixture = async (prefix: string) => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const connectionId = `${prefix}-connection-${suffix}`
+  const modelId = `${prefix}-model-${suffix}`
+  const projectId = `${prefix}-project-${suffix}`
+  const jobId = `${prefix}-job-${suffix}`
+  const service = sqliteService()
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${prefix} fixture', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await service.initializeJob(jobId)
+
+  return {connectionId, jobId, modelId, projectId, service}
 }
 
 const waitForPaths = async (paths: string[], timeoutMs: number): Promise<void> => {
@@ -2566,6 +2600,81 @@ test('claims, reaps, releases, and completes outbox batches', async () => {
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 })
 
+test('reapStaleOutboxClaims respects a per-job row cap', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('reap-cap')
+  const prompts = [1, 2, 3].map((index) => {
+    return {articleId: `reap-cap-article-${index}`, promptId: `reap-cap-prompt-${index}`}
+  })
+
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+
+  const claimedPrompts = await service.claimReadyPrompts(jobId, 'server-a', prompts.length)
+
+  expect(claimedPrompts).toHaveLength(prompts.length)
+
+  await Promise.all(
+    claimedPrompts.map((claimedPrompt, index) => {
+      const prompt = prompts[index]
+
+      return service.recordJudgmentSuccess(jobId, {
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: ['yes'],
+        articleId: claimedPrompt.articleId,
+        chunkingStrategy: null,
+        confidenceOriginal: 50,
+        createdAt: new Date(),
+        explanation: 'because',
+        isAnswered: true,
+        judgmentId: `reap-cap-judgment-${Date.now()}-${index}`,
+        modelId,
+        projectId,
+        promptId: prompt.promptId,
+        queuePromptId: claimedPrompt.recordId,
+        quotes: ['quote'],
+        rawResponseJson: {answer: 'yes'},
+        snapshotProjectId: projectId,
+        snapshotProjectModelName: 'Qwen 35B',
+        updatedAt: new Date(),
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      })
+    }),
+  )
+
+  const claim = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: prompts.length,
+  })
+
+  expect(claim?.rows).toHaveLength(prompts.length)
+  expect(await service.reapStaleOutboxClaims({jobId, maxRows: 1, staleBefore: new Date(Date.now() + 1000)})).toBe(1)
+
+  const inspectionDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    const counts = inspectionDatabase
+      .query(
+        `
+          SELECT
+            SUM(CASE WHEN export_claim_id IS NULL THEN 1 ELSE 0 END) AS releasedRows,
+            SUM(CASE WHEN export_claim_id IS NOT NULL THEN 1 ELSE 0 END) AS claimedRows
+          FROM judgment_outbox
+          WHERE exported_at IS NULL
+        `,
+      )
+      .get() as {claimedRows: number; releasedRows: number}
+
+    expect(Number(counts.releasedRows)).toBe(1)
+    expect(Number(counts.claimedRows)).toBe(2)
+  } finally {
+    inspectionDatabase.close()
+  }
+})
+
 test('reapStaleOutboxClaims skips jobs with an active competing lease', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
@@ -2617,6 +2726,162 @@ test('reapStaleOutboxClaims skips jobs with an active competing lease', async ()
   )
 
   expect(await service.reapStaleOutboxClaims({jobId, staleBefore: new Date(Date.now() + 1000)})).toBe(0)
+})
+
+test('requeueAbandonedSentPrompts respects a per-job row cap', async () => {
+  const {jobId, service} = await createSqliteJobFixture('requeue-cap')
+  const prompts = [1, 2, 3].map((index) => {
+    return {articleId: `requeue-cap-article-${index}`, promptId: `requeue-cap-prompt-${index}`}
+  })
+
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+  expect(await service.claimReadyPrompts(jobId, 'old-server', prompts.length)).toHaveLength(prompts.length)
+
+  const staleSentAt = new Date(Date.now() - 45_000).toISOString()
+  const staleDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    staleDatabase
+      .query(
+        `
+          UPDATE queue_prompt
+          SET sent_at = ?,
+              updated_at = ?
+          WHERE status = 'claimed'
+        `,
+      )
+      .run(staleSentAt, staleSentAt)
+    staleDatabase
+      .query(
+        `
+          UPDATE judge_worker_heartbeat
+          SET heartbeat_at = ?,
+              updated_at = ?
+          WHERE server_id = 'old-server'
+        `,
+      )
+      .run(staleSentAt, staleSentAt)
+  } finally {
+    staleDatabase.close(false)
+  }
+
+  expect(
+    await service.requeueAbandonedSentPrompts({
+      jobId,
+      maxRows: 1,
+      serverJobId: 'new-server',
+      staleBefore: new Date(Date.now() + 1000),
+    }),
+  ).toBe(1)
+
+  const inspectionDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    const counts = getQueueCountMap(
+      inspectionDatabase
+        .query(
+          `
+            SELECT status, COUNT(*) AS count
+            FROM queue_prompt
+            GROUP BY status
+            ORDER BY status
+          `,
+        )
+        .all() as QueueCountRow[],
+    )
+
+    expect(counts.ready).toBe(1)
+    expect(counts.claimed).toBe(2)
+  } finally {
+    inspectionDatabase.close()
+  }
+})
+
+test('repairUnavailableRequestAttemptDiagnostics respects a per-job row cap', async () => {
+  const {jobId, service} = await createSqliteJobFixture('unavailable-cap')
+  const prompts = [1, 2].map((index) => {
+    return {articleId: `unavailable-cap-article-${index}`, promptId: `unavailable-cap-prompt-${index}`}
+  })
+
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const setupDatabase = new Database(sqlitePath)
+
+  try {
+    const rows = setupDatabase
+      .query(`SELECT id FROM queue_prompt ORDER BY ready_insert_seq ASC, id ASC`)
+      .all() as Array<{id: string}>
+
+    for (const [index, row] of rows.entries()) {
+      setupDatabase
+        .query(
+          `
+            UPDATE queue_prompt
+            SET status = 'judged',
+                terminal_kind = 'closed',
+                skip_reason = 'requestFailure',
+                judged_at = ?,
+                request_attempt_manifest_json = ?,
+                request_attempt_manifest_version = 1,
+                updated_at = ?
+            WHERE id = ?
+          `,
+        )
+        .run(
+          '2026-04-01T00:00:00.000Z',
+          JSON.stringify([
+            {
+              closeoutKind: 'live_request',
+              createdAt: '2026-04-01T00:00:00.000Z',
+              jobId,
+              lifecycleState: 'workerUnavailable',
+              outcome: 'unknown',
+              providerKey: 'provider:openai:default',
+              queueRecordId: row.id,
+              requestAttemptId: `attempt-worker-unavailable-${index}`,
+              stateStartedAt: '2026-04-01T00:00:01.000Z',
+              updatedAt: '2026-04-01T00:00:01.000Z',
+            },
+          ]),
+          '2026-04-01T00:00:01.000Z',
+          row.id,
+        )
+    }
+  } finally {
+    setupDatabase.close()
+  }
+
+  expect(
+    await service.repairUnavailableRequestAttemptDiagnostics({
+      jobId,
+      maxRows: 1,
+      serverJobId: 'server-b',
+      staleBefore: new Date('2026-04-02T00:00:00.000Z'),
+    }),
+  ).toBe(1)
+
+  const inspectionDatabase = new Database(sqlitePath)
+
+  try {
+    const rows = inspectionDatabase
+      .query(
+        `
+          SELECT request_attempt_manifest_json AS requestAttemptManifestJson
+          FROM queue_prompt
+          ORDER BY ready_insert_seq ASC, id ASC
+        `,
+      )
+      .all() as Array<{requestAttemptManifestJson: string}>
+    const lifecycleStates = rows.map((row) => {
+      const [attempt] = parseRequestAttempts(row.requestAttemptManifestJson)
+      return attempt ? getRequestAttemptLifecycleState(attempt) : null
+    })
+
+    expect([...lifecycleStates].sort()).toEqual(['closedRequest', 'workerUnavailable'])
+  } finally {
+    inspectionDatabase.close()
+  }
 })
 
 test('computes a per-job SQLite health snapshot', async () => {

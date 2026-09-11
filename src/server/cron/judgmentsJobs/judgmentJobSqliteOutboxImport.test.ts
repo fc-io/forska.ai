@@ -794,10 +794,7 @@ test('background import fast flushes draining jobs before active jobs', () => {
 
   expect(result.activeImportJobIds).toEqual([])
   expect(result.flushJobIds).toEqual(['draining-job'])
-  expect(result.pruneCalls).toEqual([
-    {jobId: 'draining-job', maxRows: 1000, serverJobId: 'test-server'},
-    {jobId: 'draining-job', maxRows: 1000, serverJobId: 'test-server'},
-  ])
+  expect(result.pruneCalls).toEqual([{jobId: 'draining-job', maxRows: 1000, serverJobId: 'test-server'}])
   expect(result.finalizedJobIds).toEqual(['draining-job'])
   expect(result.checkpointJobIds).toEqual(['draining-job'])
   expect(result.healthSnapshotJobIds).toEqual(['draining-job'])

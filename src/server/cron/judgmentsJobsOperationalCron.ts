@@ -11,7 +11,12 @@ import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.t
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsSampleProviderTelemetry} from './judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts'
-import {JUDGMENTS_IMPORT_STALE_AFTER_MS, getJudgmentsImportCronActivity} from './judgmentsJobsCronState.ts'
+import {
+  getJudgmentsCleanupStaleCronActivity,
+  getJudgmentsImportCronActivity,
+  JUDGMENTS_CLEANUP_STALE_MARKER_STALE_AFTER_MS,
+  JUDGMENTS_IMPORT_STALE_AFTER_MS,
+} from './judgmentsJobsCronState.ts'
 import {judgmentsJobsImportCron} from './judgmentsJobsImportCron.ts'
 
 const serverJobId = getDefaultJudgmentServerJobId()
@@ -174,9 +179,47 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
   const cronName = cronRuntimeTickNames.cleanupStale
 
   if (!shouldRunOperationalJudgmentCron(cronName)) return
+  const cleanupActivity = getJudgmentsCleanupStaleCronActivity()
+
+  if (!cleanupActivity.shouldStartAnotherCleanupRun) {
+    if (cleanupActivity.overBudget || cleanupActivity.stale) {
+      cronLogger.warn('cron:cleanup-stale:active-over-budget', '[cron] cleanup-stale still active', {
+        budgetMs: cleanupActivity.budgetMs,
+        currentStep: cleanupActivity.currentStep,
+        overBudget: cleanupActivity.overBudget,
+        runId: cleanupActivity.runId,
+        runningForMs: cleanupActivity.runningForMs,
+        serverJobId,
+        stale: cleanupActivity.stale,
+        staleAfterMs: JUDGMENTS_CLEANUP_STALE_MARKER_STALE_AFTER_MS,
+      })
+    }
+
+    recordCronRuntimeTick(cronName, 'skipped')
+    return
+  }
+
   recordCronRuntimeTick(cronName, 'started')
   try {
-    await judgmentsJobsCleanupStale()
+    const result = await judgmentsJobsCleanupStale()
+
+    if (result.partialReason === 'cleanup-stale-already-running') {
+      recordCronRuntimeTick(cronName, 'skipped')
+      return
+    }
+
+    if (result.exhaustedBudget) {
+      cronLogger.warn('cron:cleanup-stale:partial', '[cron] cleanup-stale yielded with partial progress', {
+        partialReason: result.partialReason,
+        runId: result.runId,
+        serverJobId,
+        steps: result.steps.map((step) => {
+          return {name: step.name, skippedReason: step.skippedReason, status: step.status}
+        }),
+        totals: result.totals,
+      })
+    }
+
     recordCronRuntimeTick(cronName, 'success')
   } catch (err) {
     recordJudgmentCronError(cronName, '[cron] cleanupStaleQueueCron error:', err)

@@ -258,9 +258,11 @@ afterEach(async () => {
   const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
   const {resetJudgmentJobStorageTransferRuntimeForTests} =
     await import('../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts')
+  const {resetCronRuntimeStateForTests} = await import('../cron/cronRuntimeState.ts')
   const {resetDuckdbOwnerConnectionsForTests} = await import('../utils/duckdbOwnerConnections.ts')
 
   await getJudgmentJobSqliteService().closeAll()
+  resetCronRuntimeStateForTests()
   resetJudgmentEndpointAvailabilityForTests()
   resetJudgmentJobStorageTransferRuntimeForTests()
   await resetDuckdbOwnerConnectionsForTests()
@@ -3882,6 +3884,68 @@ test('judgment job health routes distinguish active and blocked import ownership
     expect(blockedSummary?.blockedReason).toBe('waiting_for_judge_worker')
     expect(blockedSummary?.workIdentity).toEqual(blockedBody.workIdentity)
   })
+})
+
+test('job health keeps normal cleanup-stale activity out of blocked-import reason', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {beginJudgmentsCleanupStaleCronRun, finishJudgmentsCleanupStaleCronRun} =
+    await import('../cron/judgmentsJobsCronState.ts')
+  const {getJudgmentJobSqliteHealthProjectionService} =
+    await import('../services/judgmentJobSqliteHealthProjectionService.ts')
+  const {withCurrentServerRoleOverride} = await import('../utils/serverRuntimeRole.ts')
+  const now = Date.now()
+  const projectId = `health-cleanup-running-project-${now}`
+  const modelId = `health-cleanup-running-model-${now}`
+  const connectionId = `health-cleanup-running-connection-${now}`
+  const jobId = `health-cleanup-running-job-${now}`
+  const runId = beginJudgmentsCleanupStaleCronRun({budgetMs: 30_000, nowMs: now})
+
+  if (!runId) {
+    throw new Error('Expected cleanup-stale run id')
+  }
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+    health: {
+      claimedOutboxCount: 0,
+      hasOutboxRows: true,
+      hasPendingCompletionAck: false,
+      hasQueueRows: false,
+      lastAckSeq: null,
+      oldestUnackedCompletionAgeMs: null,
+      oldestUnexportedAgeMs: 1_000,
+      orphanedJudgedRowCount: 0,
+      outboxRowCount: 2,
+      pendingCompletionAckCount: 0,
+      promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
+      retainedRowCount: 2,
+      sqliteFileBytes: 4096,
+      walBytes: 0,
+    },
+    jobId,
+    projectedBy: 'test-judge-worker',
+    projectionSource: 'test',
+  })
+
+  try {
+    await withCurrentServerRoleOverride('maintenance-worker', async () => {
+      const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+      const body = (await response.json()) as {blockedReason: string | null; progressState: string}
+
+      expect(response.status).toBe(200)
+      expect(body.progressState).toBe('blocked_import')
+      expect(body.blockedReason).toBe('waiting_for_judge_worker')
+    })
+  } finally {
+    finishJudgmentsCleanupStaleCronRun({exhaustedBudget: false, partialReason: null, runId})
+  }
 })
 
 test('job detail exposes storage policy for safe live repair and offline-only recovery', async () => {

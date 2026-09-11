@@ -820,3 +820,42 @@ test('current owner reconciliation closes exact request leases without closing p
   expect(proofResult).toMatchObject({suspectFreshProofLeaseCount: 1})
   expect(remainingRows).toEqual([{leaseIdentity: freshLeaseIdentity, leaseKind: 'request'}])
 })
+
+test('current owner reconciliation limits expired lease deletes when requested', async () => {
+  if (!queryDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const providerKey = 'provider-reconcile-expire-limit'
+  const acquiredAt = new Date('2026-05-04T09:59:00.000Z')
+  const expiresAt = new Date('2026-05-04T10:00:00.000Z')
+  const heartbeatAt = new Date('2026-05-04T09:59:30.000Z')
+  const nowMs = new Date('2026-05-04T10:02:00.000Z').getTime()
+
+  for (const requestAttemptId of [
+    'request-attempt-reconcile-expire-limit-a',
+    'request-attempt-reconcile-expire-limit-b',
+    'request-attempt-reconcile-expire-limit-c',
+  ]) {
+    await insertLease({
+      acquiredAt,
+      expiresAt,
+      heartbeatAt,
+      holderToken: `holder-${requestAttemptId}`,
+      leaseIdentity: getProviderAdmissionRequestLeaseIdentity(requestAttemptId),
+      leaseKind: 'request',
+      providerKey,
+      requestAttemptId,
+    })
+  }
+
+  const result = await reconcileProviderAdmissionLeasesOnCurrentOwner({maxExpiredLeaseDeletes: 2, nowMs})
+  const [row] = await queryDatabase<{leaseCount: number}>(`
+    SELECT COUNT(*) AS leaseCount
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+  `)
+
+  expect(result.expiredLeaseCount).toBe(2)
+  expect(Number(row?.leaseCount)).toBe(1)
+})
