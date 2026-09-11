@@ -4,6 +4,7 @@ import {join} from 'node:path'
 
 import {Effect} from 'effect'
 
+import {type CronRuntimeDiagnostics, getCronRuntimeDiagnostics} from '../cron/cronRuntimeState.ts'
 import {
   type DuckdbOwnerLeaseHistoryEntry,
   type DuckdbOwnerLeaseMetadata,
@@ -145,6 +146,7 @@ export type RuntimeCapabilityRegistryOverview = {
 }
 
 export type DuckdbOwnerConnectionsOverview = {
+  cronRuntime: CronRuntimeDiagnostics
   followers: DuckdbOwnerConnectionRecord[]
   history: DuckdbOwnerLeaseHistoryEntry[]
   registry: RuntimeCapabilityRegistryOverview
@@ -1134,6 +1136,7 @@ export const getDuckdbOwnerConnectionsOverview = async (
   })
 
   return {
+    cronRuntime: getCronRuntimeDiagnostics(),
     followers,
     history,
     registry: getRuntimeCapabilityRegistryOverview(allRecords),

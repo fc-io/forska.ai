@@ -283,6 +283,7 @@ const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
 const duckdbStartupPreflightLockRetryDelaysMs = [100, 250, 500, 1000]
 const duckdbStartupIndexedTableRepairLockRetryDelaysMs = [100, 250, 500, 1000]
+const duckdbStartupPreflightLowMemorySkipLogKeys = new Set<string>()
 type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
   lowMemoryStartupPreflight?: boolean
@@ -3793,6 +3794,27 @@ const shouldRunProactiveDuckdbStartupPreflight = (runtimeConfig: DuckdbRuntimeCo
   return memoryLimitMiB === null || memoryLimitMiB >= duckdbProactiveStartupPreflightMinMemoryMiB
 }
 
+const logDuckdbStartupPreflightLowMemorySkip = (runtimeConfig: DuckdbRuntimeConfig) => {
+  const attrs = {
+    databasePath: runtimeConfig.databasePath,
+    memoryLimit: runtimeConfig.memoryLimit,
+    minimumMemoryMiB: duckdbProactiveStartupPreflightMinMemoryMiB,
+  }
+  const logKey = JSON.stringify(attrs)
+
+  if (duckdbStartupPreflightLowMemorySkipLogKeys.has(logKey)) {
+    return
+  }
+
+  duckdbStartupPreflightLowMemorySkipLogKeys.add(logKey)
+  writeRuntimeOperatorLogEvent({
+    attrs,
+    event: 'duckdb.startup.preflight-skip-low-memory',
+    message: '[duckdb] skipped proactive startup mutation preflight under low-memory runtime',
+    severity: 'INFO',
+  })
+}
+
 const getDuckdbStartupPreflightSpecsForRuntime = (
   runtimeConfig: DuckdbRuntimeConfig,
   activeRepairSpecs: DuckdbStartupIndexedTableRepairSpec[],
@@ -4535,16 +4557,7 @@ const getDuckdbStartupPreflightError = (
       : getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, targetedPreflightSpecs)
 
   if (preflightRepairSpecs.length === 0 && !hadWalBeforePreflight) {
-    writeRuntimeOperatorLogEvent({
-      attrs: {
-        databasePath: runtimeConfig.databasePath,
-        memoryLimit: runtimeConfig.memoryLimit,
-        minimumMemoryMiB: duckdbProactiveStartupPreflightMinMemoryMiB,
-      },
-      event: 'duckdb.startup.preflight-skip-low-memory',
-      message: '[duckdb] skipped proactive startup mutation preflight under low-memory runtime',
-      severity: 'INFO',
-    })
+    logDuckdbStartupPreflightLowMemorySkip(runtimeConfig)
     return null
   }
 

@@ -168,18 +168,40 @@ test('serverMain lazy-loads cron routes so disabled low-memory crons cannot star
   expect(serverMainText).not.toContain('import {fullTextJobsCron}')
   expect(serverMainText).not.toContain('import {judgmentsJobsJudgingCron')
   expect(serverMainText).not.toContain('import {nvidiaSmiCron}')
-  expect(serverMainText).toContain("await import('./cron/judgmentsJobs.ts')")
+  expect(serverMainText).toContain("await import('./cron/judgmentsJobsOperationalCron.ts')")
   expect(serverMainText).toContain("await import('./cron/judgmentsJobsImportCron.ts')")
   expect(serverMainText).toContain("await import('./cron/judgmentsJobsJudgingCron.ts')")
 })
 
-test('serverMain low-memory cron deferral follows maintenance-capable roles and normalized env', () => {
+test('serverMain low-memory cron deferral splits operational judgment and heavy maintenance crons', () => {
   const serverMainText = readFileSync(serverMainPath, 'utf8')
+  const heavyRoutesText = serverMainText.slice(
+    serverMainText.indexOf('const heavyMaintenanceCronRoutes = shouldMountHeavyMaintenanceCrons'),
+    serverMainText.indexOf('const operationalJudgmentCronRoutes = shouldMountOperationalJudgmentCrons'),
+  )
+  const operationalRoutesText = serverMainText.slice(
+    serverMainText.indexOf('const operationalJudgmentCronRoutes = shouldMountOperationalJudgmentCrons'),
+    serverMainText.indexOf('const judgmentImportCronRoutes ='),
+  )
 
-  expect(serverMainText).toContain('const lowMemoryMaintenanceDuckdbLimitMiB = 8192')
+  expect(serverMainText).toContain('lowMemoryMaintenanceDuckdbLimitMiB')
   expect(serverMainText).toContain('parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)')
-  expect(serverMainText).toContain('shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())')
-  expect(serverMainText).toContain('shouldMountJudgingCrons && !shouldMountMaintenanceCrons')
+  expect(serverMainText).toContain('shouldMountOperationalJudgmentCrons')
+  expect(serverMainText).toContain('shouldMountHeavyMaintenanceCrons')
+  expect(serverMainText).toContain('shouldDeferHeavyMaintenanceCronsForLowMemoryOwner')
+  expect(serverMainText).toContain('shouldMountImportOnlyJudgmentCrons')
+  expect(serverMainText).not.toContain('const shouldMountMaintenanceCrons =')
+  expect(serverMainText).not.toContain('shouldMountJudgingCrons && !shouldMountMaintenanceCrons')
+
+  expect(heavyRoutesText).toContain("await import('./cron/fullTextJobs.ts')")
+  expect(heavyRoutesText).toContain("await import('./cron/fullTextConversionJobs.ts')")
+  expect(heavyRoutesText).toContain("await import('./cron/nvidiaSmi.ts')")
+  expect(heavyRoutesText).not.toContain('judgmentsJobsOperationalCron')
+
+  expect(operationalRoutesText).toContain("await import('./cron/judgmentsJobsOperationalCron.ts')")
+  expect(operationalRoutesText).not.toContain('fullTextJobs')
+  expect(operationalRoutesText).not.toContain('fullTextConversionJobs')
+  expect(operationalRoutesText).not.toContain('nvidiaSmi')
 })
 
 test('api proxy onRequest intercepts owner-dependent routes before product handlers execute', async () => {

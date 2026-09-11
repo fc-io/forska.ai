@@ -43,7 +43,39 @@ export type DuckdbOwnerWarningRow = {
   severity: 'warning' | 'error'
 }
 
+export type DuckdbOwnerCronRuntimeClassState = {
+  active: boolean
+  lastSuccessAt: Date | null
+  lastTickAt: Date | null
+  reason: string | null
+  source: string
+}
+
+export type DuckdbOwnerCronRuntimeTickState = {
+  lastFailureAt: Date | null
+  lastFailureMessage: string | null
+  lastSkippedAt: Date | null
+  lastSuccessAt: Date | null
+  lastTickAt: Date | null
+  running: boolean
+}
+
+export type DuckdbOwnerCronRuntimeOverview = {
+  crons: Record<string, DuckdbOwnerCronRuntimeTickState>
+  duckdbMemoryLimit: string | null
+  duckdbMemoryLimitMiB: number | null
+  heavyMaintenanceCrons: DuckdbOwnerCronRuntimeClassState
+  importOnlyCrons: DuckdbOwnerCronRuntimeClassState
+  judgingCrons: DuckdbOwnerCronRuntimeClassState
+  lowMemoryOwner: boolean
+  lowMemoryThresholdMiB: number | null
+  mutationWorkEnabled: boolean
+  operationalJudgmentCrons: DuckdbOwnerCronRuntimeClassState
+  serverRole: string
+}
+
 export type DuckdbOwnerConnectionsOverview = {
+  cronRuntime: DuckdbOwnerCronRuntimeOverview | null
   followers: DuckdbOwnerConnectionRow[]
   history: DuckdbOwnerTakeoverHistoryRow[]
   warnings: DuckdbOwnerWarningRow[]
@@ -109,11 +141,80 @@ const normalizeDuckdbOwnerWarningRow = (row: Record<string, unknown>): DuckdbOwn
   }
 }
 
+const normalizeDuckdbOwnerNumber = (value: unknown): number | null => {
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
+
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const normalizeDuckdbOwnerCronRuntimeClassState = (value: unknown): DuckdbOwnerCronRuntimeClassState => {
+  const row = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+
+  return {
+    active: row.active === true,
+    lastSuccessAt: normalizeDuckdbOwnerConnectionDate(row.lastSuccessAt),
+    lastTickAt: normalizeDuckdbOwnerConnectionDate(row.lastTickAt),
+    reason: typeof row.reason === 'string' ? row.reason : null,
+    source: typeof row.source === 'string' ? row.source : 'derived',
+  }
+}
+
+const normalizeDuckdbOwnerCronRuntimeTickState = (value: unknown): DuckdbOwnerCronRuntimeTickState => {
+  const row = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+
+  return {
+    lastFailureAt: normalizeDuckdbOwnerConnectionDate(row.lastFailureAt),
+    lastFailureMessage: typeof row.lastFailureMessage === 'string' ? row.lastFailureMessage : null,
+    lastSkippedAt: normalizeDuckdbOwnerConnectionDate(row.lastSkippedAt),
+    lastSuccessAt: normalizeDuckdbOwnerConnectionDate(row.lastSuccessAt),
+    lastTickAt: normalizeDuckdbOwnerConnectionDate(row.lastTickAt),
+    running: row.running === true,
+  }
+}
+
+const normalizeDuckdbOwnerCronRuntimeTicks = (value: unknown): Record<string, DuckdbOwnerCronRuntimeTickState> => {
+  if (!value || typeof value !== 'object') {
+    return {}
+  }
+
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, DuckdbOwnerCronRuntimeTickState>>(
+    (ticks, [name, state]) => {
+      ticks[name] = normalizeDuckdbOwnerCronRuntimeTickState(state)
+      return ticks
+    },
+    {},
+  )
+}
+
+const normalizeDuckdbOwnerCronRuntimeOverview = (value: unknown): DuckdbOwnerCronRuntimeOverview | null => {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const row = value as Record<string, unknown>
+
+  return {
+    crons: normalizeDuckdbOwnerCronRuntimeTicks(row.crons),
+    duckdbMemoryLimit: typeof row.duckdbMemoryLimit === 'string' ? row.duckdbMemoryLimit : null,
+    duckdbMemoryLimitMiB: normalizeDuckdbOwnerNumber(row.duckdbMemoryLimitMiB),
+    heavyMaintenanceCrons: normalizeDuckdbOwnerCronRuntimeClassState(row.heavyMaintenanceCrons),
+    importOnlyCrons: normalizeDuckdbOwnerCronRuntimeClassState(row.importOnlyCrons),
+    judgingCrons: normalizeDuckdbOwnerCronRuntimeClassState(row.judgingCrons),
+    lowMemoryOwner: row.lowMemoryOwner === true,
+    lowMemoryThresholdMiB: normalizeDuckdbOwnerNumber(row.lowMemoryThresholdMiB),
+    mutationWorkEnabled: row.mutationWorkEnabled === true,
+    operationalJudgmentCrons: normalizeDuckdbOwnerCronRuntimeClassState(row.operationalJudgmentCrons),
+    serverRole: typeof row.serverRole === 'string' ? row.serverRole : '',
+  }
+}
+
 export const fetchDuckdbOwnerConnections = async (): Promise<DuckdbOwnerConnectionsOverview> => {
   const response = await apiClient.api.duckdb_owner_connections.get()
   const responseData = response.data as
     | {
         data?: {
+          cronRuntime?: Record<string, unknown>
           followers?: Record<string, unknown>[]
           history?: Record<string, unknown>[]
           owner?: Record<string, unknown>
@@ -131,6 +232,7 @@ export const fetchDuckdbOwnerConnections = async (): Promise<DuckdbOwnerConnecti
   const history = Array.isArray(data?.history) ? data.history.map(normalizeDuckdbOwnerTakeoverHistoryRow) : []
   const warnings = Array.isArray(data?.warnings) ? data.warnings.map(normalizeDuckdbOwnerWarningRow) : []
   const owner = data?.owner ? normalizeDuckdbOwnerConnectionRow(data.owner) : null
+  const cronRuntime = normalizeDuckdbOwnerCronRuntimeOverview(data?.cronRuntime)
 
-  return {followers, history, owner, warnings}
+  return {cronRuntime, followers, history, owner, warnings}
 }

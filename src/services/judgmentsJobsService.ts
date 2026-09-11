@@ -169,8 +169,44 @@ export type JudgmentJobTelemetrySource = {
   telemetryUnavailable: boolean
   unavailableWorkerCount: number
 }
+export type JudgmentJobControlPlaneCronState = {
+  active: boolean
+  inactiveReason: string | null
+  lastFailureAt: string | null
+  lastFailureMessage: string | null
+  lastSkippedAt: string | null
+  lastSuccessAt: string | null
+  lastTickAt: string | null
+  running: boolean
+}
+export type JudgmentJobControlPlaneDiagnostics = {
+  addToQueueCron: JudgmentJobControlPlaneCronState
+  duckdbMemoryLimit: string | null
+  duckdbMemoryLimitMiB: number | null
+  heavyMaintenanceCrons: {
+    active: boolean
+    lastSuccessAt: string | null
+    lastTickAt: string | null
+    reason: string | null
+    source: string
+  }
+  importJudgmentsCron: JudgmentJobControlPlaneCronState
+  llmStatusCron: JudgmentJobControlPlaneCronState
+  lowMemoryOwner: boolean
+  lowMemoryThresholdMiB: number
+  operationalJudgmentCrons: {
+    active: boolean
+    lastSuccessAt: string | null
+    lastTickAt: string | null
+    reason: string | null
+    source: string
+  }
+  sampleProviderTelemetryCron: JudgmentJobControlPlaneCronState
+  serverRole: string
+}
 export type JudgmentJobRequestStats = {
   attempts: number
+  controlPlane?: JudgmentJobControlPlaneDiagnostics
   dispatch?: {
     jobActivePrompts: number
     jobQueuedPrompts: number

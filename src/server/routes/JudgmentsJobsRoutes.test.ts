@@ -123,6 +123,21 @@ type TelemetryHistoryRouteBody = {
   rangeStart: string
 }
 
+const withDuckdbMemoryLimitOverride = async <T>(memoryLimit: string, work: () => Promise<T>): Promise<T> => {
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+  process.env.DUCKDB_MEMORY_LIMIT = memoryLimit
+
+  try {
+    return await work()
+  } finally {
+    if (previousDuckdbMemoryLimit === undefined) {
+      delete process.env.DUCKDB_MEMORY_LIMIT
+    } else {
+      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
+    }
+  }
+}
+
 const registerModuleMocks = () => {
   void mock.module(providerRuntimeModelGuardModulePath, () => {
     return {
@@ -2429,6 +2444,7 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
     throw new Error('Test app not initialized')
   }
 
+  const testApp = app
   const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
   const sqliteService = getJudgmentJobSqliteService()
   const projectId = `sqlite-stats-project-${Date.now()}`
@@ -2518,11 +2534,19 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
     )
   `)
 
-  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const response = await withDuckdbMemoryLimitOverride('10GB', () => {
+    return testApp.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  })
   const body = (await response.json()) as {
     promptStats: {claimed: number; judged: number; ready: number; running: number; skipped: number}
     requestStats: {
       attempts: number
+      controlPlane: {
+        addToQueueCron: {active: boolean; inactiveReason: string | null}
+        heavyMaintenanceCrons: {active: boolean; reason: string | null}
+        lowMemoryOwner: boolean
+        operationalJudgmentCrons: {active: boolean; reason: string | null}
+      }
       dispatch: {
         jobActivePrompts: number
         jobQueuedPrompts: number
@@ -2588,6 +2612,12 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
     providerLimit: 1,
     providerRequestFillPct: 0,
     targetRequestLiveCalls: 1,
+  })
+  expect(body.requestStats.controlPlane).toMatchObject({
+    addToQueueCron: {active: true, inactiveReason: null},
+    heavyMaintenanceCrons: {active: true, reason: null},
+    lowMemoryOwner: false,
+    operationalJudgmentCrons: {active: true, reason: null},
   })
   expect(body.storageHealth.outboxRowCount).toBe(1)
   expect(body.storageHealth.retainedRowCount).toBe(5)
@@ -3279,6 +3309,7 @@ test('judgment job health route returns healthy job details', async () => {
     throw new Error('Test app not initialized')
   }
 
+  const testApp = app
   const projectId = `health-healthy-project-${Date.now()}`
   const modelId = `health-healthy-model-${Date.now()}`
   const connectionId = `health-healthy-connection-${Date.now()}`
@@ -3292,8 +3323,19 @@ test('judgment job health route returns healthy job details', async () => {
   `)
   await getJudgmentJobSqliteService().initializeJob(jobId)
 
-  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const response = await withDuckdbMemoryLimitOverride('6400MiB', () => {
+    return testApp.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  })
   const body = (await response.json()) as {
+    controlPlane: {
+      addToQueueCron: {active: boolean; inactiveReason: string | null}
+      duckdbMemoryLimit: string | null
+      duckdbMemoryLimitMiB: number | null
+      heavyMaintenanceCrons: {active: boolean; reason: string | null}
+      lowMemoryOwner: boolean
+      lowMemoryThresholdMiB: number
+      operationalJudgmentCrons: {active: boolean; reason: string | null}
+    }
     jobId: string
     storageState: string
     recommendedNextAction: string
@@ -3314,6 +3356,15 @@ test('judgment job health route returns healthy job details', async () => {
   expect(body.liveSqlite.outboxRowCount).toBe(0)
   expect(body.liveSqlite.promptCounts).toEqual({claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0})
   expect(body.liveSqlite.sqliteFileBytes).not.toBeNull()
+  expect(body.controlPlane).toMatchObject({
+    addToQueueCron: {active: true, inactiveReason: null},
+    duckdbMemoryLimit: '6400MiB',
+    duckdbMemoryLimitMiB: 6400,
+    heavyMaintenanceCrons: {active: false, reason: 'deferred-low-memory-owner'},
+    lowMemoryOwner: true,
+    lowMemoryThresholdMiB: 8192,
+    operationalJudgmentCrons: {active: true, reason: null},
+  })
 })
 
 test('judgment job health route returns missing job details', async () => {

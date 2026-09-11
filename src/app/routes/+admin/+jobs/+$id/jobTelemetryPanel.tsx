@@ -23,6 +23,7 @@ type TelemetryDetailRowProps = ParentProps<{class?: string; label: string; machi
 type TelemetrySectionProps = ParentProps<{description?: string; title: string}>
 type JobTelemetryPanelProps = {requestStats?: Partial<JudgmentJobRequestStats>}
 type EndpointDiagnostics = JudgmentJobProviderTelemetry['endpointDiagnostics'][number]
+type ControlPlaneCronState = NonNullable<JudgmentJobRequestStats['controlPlane']>['addToQueueCron']
 
 const getMetricToneClass = (tone: TelemetryTone | undefined): string => {
   switch (tone) {
@@ -111,6 +112,44 @@ const getLeaseObservedMismatchMessage = (provider: JudgmentJobProviderTelemetry)
         observedLiveRequests,
       )} live requests, but the admission lease snapshot reports 0. Treat the lease snapshot as stale or incomplete until the next refresh catches up.`
     : null
+}
+
+const formatTelemetryTimestamp = (value: string | null | undefined): string => {
+  if (!value) {
+    return 'N/A'
+  }
+
+  const timestamp = new Date(value)
+
+  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString()
+}
+
+const getControlPlaneCronStatusText = (cronState: ControlPlaneCronState): string => {
+  return cronState.active
+    ? cronState.running
+      ? 'Running'
+      : 'Active'
+    : `Inactive: ${cronState.inactiveReason ?? 'unknown'}`
+}
+
+const getControlPlaneCronDetailText = (cronState: ControlPlaneCronState): string => {
+  if (cronState.lastFailureMessage) {
+    return `Last failure: ${cronState.lastFailureMessage}`
+  }
+
+  if (cronState.lastSuccessAt) {
+    return `Last success: ${formatTelemetryTimestamp(cronState.lastSuccessAt)}`
+  }
+
+  if (cronState.lastTickAt) {
+    return `Last tick: ${formatTelemetryTimestamp(cronState.lastTickAt)}`
+  }
+
+  if (cronState.lastSkippedAt) {
+    return `Last skipped: ${formatTelemetryTimestamp(cronState.lastSkippedAt)}`
+  }
+
+  return 'No recorded tick yet'
 }
 
 export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element => {
@@ -308,6 +347,54 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                 </div>
               </TelemetrySection>
             </div>
+
+            <Show when={requestStats()?.controlPlane}>
+              {(controlPlane) => {
+                return (
+                  <div class="mt-5">
+                    <TelemetrySection
+                      description={`Role ${controlPlane().serverRole}, DuckDB cap ${controlPlane().duckdbMemoryLimit ?? 'not set'}, low-memory owner ${formatTelemetryBoolean(controlPlane().lowMemoryOwner)}.`}
+                      title="Operational Control Plane"
+                    >
+                      <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                        <TelemetryMetric
+                          description={getControlPlaneCronDetailText(controlPlane().addToQueueCron)}
+                          tone={controlPlane().addToQueueCron.active ? 'green' : 'amber'}
+                          label="Queue Refill Cron"
+                        >
+                          {getControlPlaneCronStatusText(controlPlane().addToQueueCron)}
+                        </TelemetryMetric>
+                        <TelemetryMetric
+                          description={getControlPlaneCronDetailText(controlPlane().importJudgmentsCron)}
+                          tone={controlPlane().importJudgmentsCron.active ? 'green' : 'amber'}
+                          label="Import Cron"
+                        >
+                          {getControlPlaneCronStatusText(controlPlane().importJudgmentsCron)}
+                        </TelemetryMetric>
+                        <TelemetryMetric
+                          description={getControlPlaneCronDetailText(controlPlane().sampleProviderTelemetryCron)}
+                          tone={controlPlane().sampleProviderTelemetryCron.active ? 'green' : 'amber'}
+                          label="Provider Telemetry Cron"
+                        >
+                          {getControlPlaneCronStatusText(controlPlane().sampleProviderTelemetryCron)}
+                        </TelemetryMetric>
+                        <TelemetryMetric
+                          description={
+                            controlPlane().heavyMaintenanceCrons.active
+                              ? 'Full maintenance cron class is active.'
+                              : `Deferred: ${controlPlane().heavyMaintenanceCrons.reason ?? 'unknown'}`
+                          }
+                          tone={controlPlane().heavyMaintenanceCrons.active ? 'green' : 'amber'}
+                          label="Heavy Maintenance"
+                        >
+                          {controlPlane().heavyMaintenanceCrons.active ? 'Active' : 'Deferred'}
+                        </TelemetryMetric>
+                      </div>
+                    </TelemetrySection>
+                  </div>
+                )
+              }}
+            </Show>
 
             <div class="mt-5 grid gap-4 xl:grid-cols-2">
               <TelemetrySection

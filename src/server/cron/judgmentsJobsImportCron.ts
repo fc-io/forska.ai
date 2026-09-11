@@ -5,6 +5,7 @@ import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTra
 import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
+import {cronRuntimeTickNames, recordCronRuntimeTick} from './cronRuntimeState.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {judgmentsJobsCronState} from './judgmentsJobsCronState.ts'
@@ -25,14 +26,30 @@ const logImportCronError = (label: string, error: unknown) => {
 }
 
 export const importJudgmentsCron = async (): Promise<void> => {
-  if (!shouldCurrentServerRunMaintenanceLoops() || judgmentsJobsCronState.isImportingJudgments) return
-  if (hasActiveDuckdbExclusiveWork() || hasActiveProjectTransferBackgroundActivity()) return
+  const cronName = cronRuntimeTickNames.importJudgments
+
+  if (!shouldCurrentServerRunMaintenanceLoops() || judgmentsJobsCronState.isImportingJudgments) {
+    recordCronRuntimeTick(cronName, 'skipped')
+    return
+  }
+
+  if (hasActiveDuckdbExclusiveWork() || hasActiveProjectTransferBackgroundActivity()) {
+    recordCronRuntimeTick(cronName, 'skipped')
+    return
+  }
 
   judgmentsJobsCronState.isImportingJudgments = true
+  recordCronRuntimeTick(cronName, 'started')
 
   try {
     await runJudgmentJobSqliteBackgroundImport({claimedBy: serverJobId})
+    recordCronRuntimeTick(cronName, 'success')
   } catch (err) {
+    recordCronRuntimeTick(
+      cronName,
+      isDuckdbExclusiveWorkAdmissionError(err) || isExpectedDuckdbOwnerRoleLossError(err) ? 'skipped' : 'failure',
+      err,
+    )
     logImportCronError('[cron] importJudgmentsCron error:', err)
   } finally {
     judgmentsJobsCronState.isImportingJudgments = false
@@ -41,7 +58,7 @@ export const importJudgmentsCron = async (): Promise<void> => {
 
 export const judgmentsJobsImportCron = new Elysia().use(
   cron({
-    name: 'judgments-jobs-import-judgments',
+    name: cronRuntimeTickNames.importJudgments,
     pattern: IMPORT_JUDGMENTS_INTERVAL,
     startAt: new Date(Date.now() + START_DELAY_MS),
     run: importJudgmentsCron,

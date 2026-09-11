@@ -1,6 +1,6 @@
 import {Elysia} from 'elysia'
 
-import {judgmentsJobsMaintenanceCron} from './judgmentsJobs.ts'
 import {judgmentsJobsJudgingCron} from './judgmentsJobsJudgingCron.ts'
+import {judgmentsJobsOperationalCron} from './judgmentsJobsOperationalCron.ts'
 
-export const judgmentsJobsCron = new Elysia().use(judgmentsJobsMaintenanceCron).use(judgmentsJobsJudgingCron)
+export const judgmentsJobsCron = new Elysia().use(judgmentsJobsOperationalCron).use(judgmentsJobsJudgingCron)

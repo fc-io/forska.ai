@@ -1088,8 +1088,10 @@ test('duckdb service skips proactive startup mutation preflight on low-memory wo
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-skip-preflight-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
-        console.log(JSON.stringify({createCount, preflightCount, preflightSpecs, rows}))
-        await duckdbService.closeDuckdbService()
+        await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
+        const rowsAfterRecycle = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        console.log(JSON.stringify({createCount, preflightCount, preflightSpecs, rows, rowsAfterRecycle}))
+        await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
       `,
     ],
     {
@@ -1110,21 +1112,29 @@ test('duckdb service skips proactive startup mutation preflight on low-memory wo
   )
 
   try {
+    const stdout = result.stdout.toString()
     if (result.exitCode !== 0) {
-      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB low-memory preflight skip failed')
+      throw new Error(result.stderr.toString() || stdout || 'DuckDB low-memory preflight skip failed')
     }
 
-    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+    const lowMemorySkipLogCount = stdout.split('\n').filter((line) => {
+      return line.includes('[duckdb] skipped proactive startup mutation preflight under low-memory runtime')
+    }).length
+
+    const parsed = JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as {
       createCount: number
       preflightCount: number
       preflightSpecs: Array<{schemaName: string; tableName: string}>
       rows: Array<{value: number}>
+      rowsAfterRecycle: Array<{value: number}>
     }
 
     expect(parsed.preflightCount).toBe(0)
     expect(parsed.preflightSpecs).toEqual([])
-    expect(parsed.createCount).toBe(1)
+    expect(parsed.createCount).toBe(2)
     expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.rowsAfterRecycle).toEqual([{value: 1}])
+    expect(lowMemorySkipLogCount).toBe(1)
   } finally {
     removePathIfExists(dataRoot)
   }

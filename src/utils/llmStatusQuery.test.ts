@@ -4,7 +4,10 @@ import type {LlmStatusRow} from './llmStatusQuery.ts'
 
 const apiClientModulePath = new URL('../services/apiClient.ts', import.meta.url).href
 
-let llmStatusResponse: {error?: unknown; data?: {data?: Record<string, unknown>[]}} = {data: {data: []}}
+let llmStatusResponse: {
+  error?: unknown
+  data?: {data?: Record<string, unknown>[]; metadata?: Record<string, unknown>}
+} = {data: {data: []}}
 
 void mock.module(apiClientModulePath, () => {
   return {
@@ -82,12 +85,42 @@ test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () =
           maxInFlight: '400',
         },
       ],
+      metadata: {
+        cron: {
+          duckdbMemoryLimit: '6400MiB',
+          duckdbMemoryLimitMiB: 6400,
+          heavyMaintenanceCrons: {
+            active: false,
+            lastSuccessAt: null,
+            lastTickAt: null,
+            reason: 'deferred-low-memory-owner',
+            source: 'derived',
+          },
+          lowMemoryOwner: true,
+          lowMemoryThresholdMiB: 8192,
+          operationalJudgmentCrons: {
+            active: true,
+            lastSuccessAt: '2026-03-25T09:07:05.000Z',
+            lastTickAt: '2026-03-25T09:07:00.000Z',
+            reason: null,
+            source: 'reported',
+          },
+          serverRole: 'maintenance-worker',
+        },
+        generatedAt: '2026-03-25T09:08:00.000Z',
+        isStale: true,
+        latestIngestedAgeMs: 60000,
+        latestIngestedAt: '2026-03-25T09:07:00.073Z',
+        staleAfterMs: 180000,
+        staleMessage: 'Latest SGLang status row was ingested at 2026-03-25T09:07:00.073Z.',
+        staleReason: 'latest-row-stale',
+        tableExists: true,
+      },
     },
   }
 
-  const {
-    rows: [row],
-  } = await fetchLlmStatus()
+  const response = await fetchLlmStatus()
+  const [row] = response.rows
 
   expect(row).toMatchObject({
     numQueueReqs: 185,
@@ -95,6 +128,19 @@ test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () =
     numGrammarQueueReqs: 0,
     inFlight: 389,
     maxInFlight: 400,
+  })
+  expect(response.metadata).toMatchObject({
+    isStale: true,
+    latestIngestedAgeMs: 60000,
+    staleReason: 'latest-row-stale',
+    tableExists: true,
+  })
+  expect(response.metadata?.latestIngestedAt?.toISOString()).toBe('2026-03-25T09:07:00.073Z')
+  expect(response.metadata?.cron?.operationalJudgmentCrons).toMatchObject({
+    active: true,
+    lastSuccessAt: new Date('2026-03-25T09:07:05.000Z'),
+    lastTickAt: new Date('2026-03-25T09:07:00.000Z'),
+    source: 'reported',
   })
 })
 
@@ -121,6 +167,7 @@ test('getLlmMetricsSummary keeps waiting and running counts numeric when runtime
       }),
     ],
     hasMetricsCompatibleJob: true,
+    metadata: null,
   })
 
   expect(summary?.waiting).toBe(185)
