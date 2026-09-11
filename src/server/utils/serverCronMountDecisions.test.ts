@@ -44,11 +44,11 @@ test('dev-single avoids duplicate import-only mounting when operational and judg
   })
 })
 
-test('judge workers keep judging and import-only cron mounting without operational maintenance crons', () => {
+test('judge workers mount judging crons without owner-only import crons', () => {
   expect(getDecisions({duckdbMemoryLimit: '6400MiB', serverRole: 'judge-worker'})).toEqual({
     shouldDeferHeavyMaintenanceCronsForLowMemoryOwner: false,
     shouldMountHeavyMaintenanceCrons: false,
-    shouldMountImportOnlyJudgmentCrons: true,
+    shouldMountImportOnlyJudgmentCrons: false,
     shouldMountJudgingCrons: true,
     shouldMountOperationalJudgmentCrons: false,
   })

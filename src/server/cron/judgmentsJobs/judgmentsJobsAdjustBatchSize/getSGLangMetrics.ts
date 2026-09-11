@@ -1,3 +1,7 @@
+import {withAbortSignalTimeout} from '../../../../utils/withAbortSignalTimeout.ts'
+
+const sglangMetricsFetchTimeoutMs = 10_000
+
 const parse = (line: string) => {
   if (!line || line.startsWith('#')) return undefined
 
@@ -40,7 +44,9 @@ const buildMetricsUrl = (endpoint: string): string => {
 
 const fetchMetrics = async (endpoint: string) => {
   const url = buildMetricsUrl(endpoint)
-  const res = await fetch(url).catch(() => {
+  const res = await withAbortSignalTimeout(sglangMetricsFetchTimeoutMs, async (signal) => {
+    return fetch(url, {signal})
+  }).catch(() => {
     return undefined
   })
 

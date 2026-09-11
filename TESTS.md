@@ -220,6 +220,25 @@ bun run test:judgment-workflow:topology
 bun run test:judgment-workflow:browser
 ```
 
+For low-memory maintenance cron split changes, also run the focused split and
+diagnostic gates before the broad workflow commands:
+
+```bash
+bun test src/server/utils/serverCronMountDecisions.test.ts src/server/cron/cronRuntimeState.test.ts src/server/cron/judgmentsJobs.test.ts src/server/routes/duckdbRouteGuardrails.test.ts
+bun test src/server/routes/LlmStatusRoutes.test.ts src/utils/llmStatusQuery.test.ts src/server/utils/duckdbOwnerConnections.test.ts src/server/routes/DuckdbOwnerConnectionsRoutes.test.ts
+bun test src/server/routes/JudgmentsJobsRoutes.test.ts src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.test.ts
+```
+
+- The split gates prove a `6400MiB` maintenance owner keeps operational
+  judgment crons active while heavy maintenance crons stay deferred.
+- The diagnostic gates prove `/api/duckdb_owner_connections`, `/api/llmstatus`,
+  and judgment-job health/detail routes expose owner/control-plane cron state
+  instead of silently showing stale or process-local data.
+- The live current-DB gate must capture low-memory evidence: start with the
+  intended maintenance DuckDB cap, verify owner/API readiness, verify fresh
+  LLM-status/provider telemetry or an explicit inactive/deferred reason, and
+  confirm queue refill or a truthful no-eligible-work/progress signal.
+
 - `test:judgment-workflow` is the fast focused route, queue, dispatch, SQLite,
   import, repair, health, and read-model regression gate.
 - `test:judgment-workflow:e2e` is the deterministic component lifecycle. It

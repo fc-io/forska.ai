@@ -2278,7 +2278,7 @@ const getJudgmentJobControlPlaneDiagnostics = (): JudgmentJobControlPlaneDiagnos
     duckdbMemoryLimitMiB: cronRuntime.duckdbMemoryLimitMiB,
     heavyMaintenanceCrons: cronRuntime.heavyMaintenanceCrons,
     importJudgmentsCron: getJudgmentJobControlPlaneCronState({
-      classState: operationalClassState.active ? operationalClassState : cronRuntime.importOnlyCrons,
+      classState: operationalClassState,
       tickState: cronRuntime.crons[cronRuntimeTickNames.importJudgments],
     }),
     llmStatusCron: getJudgmentJobControlPlaneCronState({
