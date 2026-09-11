@@ -1,15 +1,23 @@
+import {mkdtempSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
+import {buildCronRuntimeDiagnostics} from '../cron/cronRuntimeState.ts'
 import {
   assertDuckdbOwnerConnectionHeartbeatCompatible,
   getDuckdbOwnerConnectionHeartbeatPayload,
+  getDuckdbOwnerConnectionsOverview,
   getRuntimeCapabilityRegistryOverview,
   recordDuckdbOwnerConnectionProxy,
+  resetDuckdbOwnerConnectionsForTests,
   upsertDuckdbOwnerConnectionHeartbeat,
 } from './duckdbOwnerConnections.ts'
 import {getRuntimeCutoverVersion} from './runtimeCutover.ts'
 import {createRuntimeLogRecord} from './runtimeLogger.ts'
 import {initializeRuntimeProcessIdentity, resetRuntimeProcessIdentityForTests} from './runtimeProcessIdentity.ts'
+import {withCurrentServerRoleOverride} from './serverRuntimeRole.ts'
 
 const testStorageOptions = {databasePath: ':memory:'}
 
@@ -160,6 +168,74 @@ test('summarizes registered runtime capabilities from fresh heartbeats', async (
     freshConsumerCount: 1,
     registeredConsumerCount: 1,
   })
+})
+
+test('overview reports owner cron runtime instead of the local api process snapshot', async () => {
+  const testDirectory = mkdtempSync(join(tmpdir(), 'f1-owner-cron-runtime-'))
+  const storageOptions = {databasePath: join(testDirectory, 'forska.duckdb')}
+  const startedAt = new Date().toISOString()
+
+  try {
+    await resetDuckdbOwnerConnectionsForTests(storageOptions)
+    await upsertDuckdbOwnerConnectionHeartbeat(
+      {
+        apiServerPort: 4010,
+        cronRuntime: buildCronRuntimeDiagnostics({
+          duckdbMemoryLimit: null,
+          mutationWorkEnabled: true,
+          serverRole: 'api',
+        }),
+        hostname: 'test-host',
+        instanceId: `api-server:test-host:4010:12345:${startedAt}`,
+        listenPort: 4010,
+        pid: 12345,
+        processStartedAt: startedAt,
+        runtimeProfile: 'primary',
+        serverRole: 'api',
+        service: 'api-server',
+        startedAt,
+        duckdbOwnerUrl: 'http://127.0.0.1:4011',
+      },
+      storageOptions,
+    )
+    await upsertDuckdbOwnerConnectionHeartbeat(
+      {
+        apiServerPort: 4011,
+        cronRuntime: buildCronRuntimeDiagnostics({
+          duckdbMemoryLimit: '6400MiB',
+          mutationWorkEnabled: true,
+          serverRole: 'maintenance-worker',
+        }),
+        hostname: 'test-host',
+        instanceId: `maintenance-worker-server:test-host:4011:12346:${startedAt}`,
+        listenPort: 4011,
+        memoryLimit: '6400MiB',
+        pid: 12346,
+        processStartedAt: startedAt,
+        runtimeProfile: 'primary',
+        serverRole: 'maintenance-worker',
+        service: 'maintenance-worker-server',
+        startedAt,
+        duckdbOwnerUrl: 'http://127.0.0.1:4011',
+      },
+      storageOptions,
+    )
+
+    await withCurrentServerRoleOverride('api', async () => {
+      const overview = await getDuckdbOwnerConnectionsOverview(storageOptions)
+
+      expect(overview.owner?.apiServerPort).toBe(4011)
+      expect(overview.cronRuntime).toMatchObject({
+        heavyMaintenanceCrons: {active: false, reason: 'deferred-low-memory-owner'},
+        lowMemoryOwner: true,
+        operationalJudgmentCrons: {active: true, reason: null},
+        serverRole: 'maintenance-worker',
+      })
+    })
+  } finally {
+    await resetDuckdbOwnerConnectionsForTests(storageOptions)
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
 })
 
 test('registry overview ignores persisted mutation-worker capabilities while mutations are disabled', async () => {

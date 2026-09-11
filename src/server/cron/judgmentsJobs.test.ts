@@ -706,6 +706,154 @@ test('llm status cron is owned by maintenance worker instead of judge worker', (
   expect(result.checkCalls).toEqual(['called'])
 })
 
+test('llm status cron prevents overlapping runs and recovers after completion', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const getRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const sampleTelemetryModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')
+        const sendToLlmModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const checkCalls = []
+        const checkDone = []
+        let resolveCheck = () => {}
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              constructor() {
+                this.uses = []
+              }
+
+              use(plugin) {
+                this.uses.push(plugin)
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              return {config, name: config.name}
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-llm-status-overlap'}
+        })
+        void mock.module(backgroundImportModulePath, () => {
+          return {runJudgmentJobSqliteBackgroundImport: async () => ({})}
+        })
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            getJudgmentJobSqliteService: () => {
+              return {publishHealthProjections: async () => {}, syncOwnedLeases: async () => {}}
+            },
+          }
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {judgmentsJobsAddToQueue: async () => {}}
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {
+            judgmentsJobsCheckLLMStatus: async () => {
+              checkCalls.push('called')
+              await new Promise((resolve) => {
+                resolveCheck = resolve
+              })
+              checkDone.push('done')
+            },
+          }
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {judgmentsJobsCleanupStale: async () => {}}
+        })
+        void mock.module(getRunningJobsModulePath, () => {
+          return {judgmentsJobsGetRunningJobs: async () => []}
+        })
+        void mock.module(sampleTelemetryModulePath, () => {
+          return {judgmentsJobsSampleProviderTelemetry: async () => ({})}
+        })
+        void mock.module(sendToLlmModulePath, () => {
+          return {judgmentsJobsSendToLLM: async () => {}}
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            getCurrentServerRole: () => 'maintenance-worker',
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunJudgingLoops: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => {},
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        const cronModule = await import(judgmentsJobsModulePath + '?llm-status-overlap=' + Date.now())
+        const checkCron = cronModule.judgmentsJobsMaintenanceCron.uses.find((plugin) => {
+          return plugin.name === 'judgments-jobs-check-llm-status'
+        })
+
+        if (!checkCron) {
+          throw new Error('Expected llm status cron on maintenance worker')
+        }
+
+        const firstRun = checkCron.config.run()
+        await Promise.resolve()
+        const secondRun = checkCron.config.run()
+        await Promise.resolve()
+        resolveCheck()
+        await Promise.all([firstRun, secondRun])
+
+        const thirdRun = checkCron.config.run()
+        await Promise.resolve()
+        resolveCheck()
+        await thirdRun
+
+        console.log(JSON.stringify({checkCalls, checkDone}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'LLM status overlap test failed')
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {checkCalls: string[]; checkDone: string[]}
+
+  expect(result.checkCalls).toEqual(['called', 'called'])
+  expect(result.checkDone).toEqual(['done', 'done'])
+})
+
 test('provider telemetry sampler cron is owned by maintenance worker and role gated', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

@@ -48,7 +48,7 @@ export const getServerCronMountDecisions = ({
     && shouldDeferHeavyMaintenanceCronsForLowMemoryOwner({duckdbMemoryLimit, serverRole})
   const shouldMountHeavyMaintenanceCrons = shouldMountMaintenanceRoleCrons && !shouldDeferHeavyMaintenanceCrons
   const shouldMountJudgingCrons = shouldRunMutatingServerWork && shouldServerRoleMountJudgingCrons(serverRole)
-  const shouldMountImportOnlyJudgmentCrons = shouldMountJudgingCrons && !shouldMountOperationalJudgmentCrons
+  const shouldMountImportOnlyJudgmentCrons = false
 
   return {
     shouldDeferHeavyMaintenanceCronsForLowMemoryOwner: shouldDeferHeavyMaintenanceCrons,

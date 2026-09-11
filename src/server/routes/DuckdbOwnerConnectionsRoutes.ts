@@ -51,6 +51,7 @@ const duckdbOwnerConnectionTakeover = t.Object({
 const duckdbOwnerConnectionHeartbeatBody = t.Object({
   apiServerPort: t.Number(),
   capabilities: t.Optional(t.Array(duckdbOwnerConnectionCapability)),
+  cronRuntime: t.Optional(t.Any()),
   hostname: t.String(),
   instanceId: t.Optional(t.String()),
   listenPort: t.Optional(t.Number()),

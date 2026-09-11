@@ -35,13 +35,13 @@ test('cron runtime diagnostics expose full maintenance crons above the low-memor
   expect(diagnostics.heavyMaintenanceCrons).toMatchObject({active: true, reason: null})
 })
 
-test('cron runtime diagnostics keep import-only crons separate from operational judgment crons', () => {
+test('cron runtime diagnostics keep owner-only import under operational judgment crons', () => {
   resetCronRuntimeStateForTests()
 
   expect(
     buildCronRuntimeDiagnostics({duckdbMemoryLimit: '6400MiB', mutationWorkEnabled: true, serverRole: 'judge-worker'})
       .importOnlyCrons,
-  ).toMatchObject({active: true, reason: null})
+  ).toMatchObject({active: false, reason: 'role-not-maintenance-capable'})
   expect(
     buildCronRuntimeDiagnostics({duckdbMemoryLimit: '6400MiB', mutationWorkEnabled: true, serverRole: 'dev-single'})
       .importOnlyCrons,

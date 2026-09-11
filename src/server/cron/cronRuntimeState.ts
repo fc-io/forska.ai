@@ -195,7 +195,7 @@ export const buildCronRuntimeDiagnostics = ({
   const operationalActive = mutationWorkEnabled && maintenanceCapable
   const judgingActive = mutationWorkEnabled && judgingCapable
   const heavyMaintenanceActive = operationalActive && !lowMemoryOwner
-  const importOnlyActive = judgingActive && !operationalActive
+  const importOnlyActive = false
   const reports = cronRuntimeState.classReports
 
   return {
@@ -212,11 +212,15 @@ export const buildCronRuntimeDiagnostics = ({
     importOnlyCrons: importOnlyActive
       ? getActiveClassState(reports.importOnlyCrons)
       : getInactiveClassState(
-          !mutationWorkEnabled
-            ? 'mutation-work-disabled'
-            : !judgingCapable
-              ? 'role-not-judging-capable'
-              : 'covered-by-operational-judgment-crons',
+          operationalActive
+            ? 'covered-by-operational-judgment-crons'
+            : !mutationWorkEnabled
+              ? 'mutation-work-disabled'
+              : !maintenanceCapable
+                ? 'role-not-maintenance-capable'
+                : !judgingCapable
+                  ? 'role-not-judging-capable'
+                  : 'covered-by-operational-judgment-crons',
           reports.importOnlyCrons,
         ),
     judgingCrons: judgingActive

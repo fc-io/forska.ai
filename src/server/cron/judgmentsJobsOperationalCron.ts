@@ -59,6 +59,8 @@ const ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS = 30_000
 
 let isAddingToQueue = false
 let addToQueueStartedAtMs: number | null = null
+let isCheckingLlmStatus = false
+let llmStatusCheckerStartedAtMs: number | null = null
 let isSamplingProviderTelemetry = false
 let providerTelemetrySamplerStartedAtMs: number | null = null
 
@@ -102,12 +104,28 @@ const checkLLMStatusCron = async (): Promise<void> => {
   const cronName = cronRuntimeTickNames.checkLlmStatus
 
   if (!shouldRunOperationalJudgmentCron(cronName)) return
+
+  if (isCheckingLlmStatus) {
+    const runningForMs = llmStatusCheckerStartedAtMs ? Date.now() - llmStatusCheckerStartedAtMs : null
+    cronLogger.warn('cron:check-llm-status:already-running', '[cron] llm status checker still running', {
+      runningForMs,
+      serverJobId,
+    })
+    recordCronRuntimeTick(cronName, 'skipped')
+    return
+  }
+
+  isCheckingLlmStatus = true
+  llmStatusCheckerStartedAtMs = Date.now()
   recordCronRuntimeTick(cronName, 'started')
   try {
     await judgmentsJobsCheckLLMStatus()
     recordCronRuntimeTick(cronName, 'success')
   } catch (err) {
     recordJudgmentCronError(cronName, '[cron] checkLLMStatusCron error:', err)
+  } finally {
+    isCheckingLlmStatus = false
+    llmStatusCheckerStartedAtMs = null
   }
 }
 

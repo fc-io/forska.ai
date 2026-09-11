@@ -96,6 +96,7 @@ export type WorkerRegistryTakeoverOverview = {
 type DuckdbOwnerConnectionIdentity = {
   apiServerPort: number
   capabilities: ServerRoleCapability[]
+  cronRuntime: CronRuntimeDiagnostics | null
   hostname: string
   instanceId: string
   listenPort: number
@@ -146,7 +147,7 @@ export type RuntimeCapabilityRegistryOverview = {
 }
 
 export type DuckdbOwnerConnectionsOverview = {
-  cronRuntime: CronRuntimeDiagnostics
+  cronRuntime: CronRuntimeDiagnostics | null
   followers: DuckdbOwnerConnectionRecord[]
   history: DuckdbOwnerLeaseHistoryEntry[]
   registry: RuntimeCapabilityRegistryOverview
@@ -158,6 +159,7 @@ export type DuckdbOwnerConnectionsOverview = {
 export type DuckdbOwnerConnectionHeartbeatInput = {
   apiServerPort: number
   capabilities?: ServerRoleCapability[]
+  cronRuntime?: CronRuntimeDiagnostics | null
   hostname: string
   instanceId?: string
   listenPort?: number
@@ -301,6 +303,7 @@ const getCurrentDuckdbOwnerConnectionIdentity = (): DuckdbOwnerConnectionIdentit
   return {
     apiServerPort: env.API_SERVER_PORT,
     capabilities,
+    cronRuntime: getCronRuntimeDiagnostics(),
     hostname: runtimeIdentity.hostname,
     instanceId: runtimeIdentity.instanceId,
     listenPort: runtimeIdentity.listenPort,
@@ -572,6 +575,10 @@ const getCapabilitiesFromValue = (value: unknown, serverRole: ServerRole) => {
     : getServerRoleCapabilities(serverRole)
 }
 
+const getCronRuntimeDiagnosticsFromValue = (value: unknown): CronRuntimeDiagnostics | null => {
+  return value && typeof value === 'object' ? (value as CronRuntimeDiagnostics) : null
+}
+
 const getThroughputProfileName = (value: unknown): WorkerRegistryThroughputProfile['profile'] | null => {
   return value === 'maintenance' || value === 'maintenance-paused-low-memory' || value === 'non-maintenance'
     ? value
@@ -647,6 +654,7 @@ const getNormalizedDuckdbOwnerConnectionIdentity = (
   return {
     apiServerPort: input.apiServerPort,
     capabilities,
+    cronRuntime: input.cronRuntime ?? null,
     hostname: input.hostname,
     instanceId,
     listenPort,
@@ -711,6 +719,7 @@ const getUpdatedDuckdbOwnerConnectionRecord = (
     connectionId,
     apiServerPort: normalizedInput.apiServerPort,
     capabilities: normalizedInput.capabilities,
+    cronRuntime: normalizedInput.cronRuntime ?? previous?.cronRuntime ?? null,
     firstSeenAt: previous?.firstSeenAt ?? nowIso,
     hostname: normalizedInput.hostname,
     instanceId: normalizedInput.instanceId,
@@ -819,6 +828,7 @@ const normalizeStoredDuckdbOwnerConnectionRecord = (value: unknown): DuckdbOwner
   const input = {
     apiServerPort: getNumberValue(record.apiServerPort),
     capabilities: getCapabilitiesFromValue(record.capabilities, serverRole),
+    cronRuntime: getCronRuntimeDiagnosticsFromValue(record.cronRuntime),
     hostname: getStringValue(record.hostname),
     instanceId: getStringValue(record.instanceId, getStringValue(record.connectionId)),
     listenPort: getNumberValue(record.listenPort, getNumberValue(record.apiServerPort)),
@@ -1134,9 +1144,10 @@ export const getDuckdbOwnerConnectionsOverview = async (
   const followers = allRecords.filter((record) => {
     return owner === null || record.connectionId !== owner.connectionId
   })
+  const cronRuntime = owner?.cronRuntime ?? (currentOwner !== null ? getCronRuntimeDiagnostics() : null)
 
   return {
-    cronRuntime: getCronRuntimeDiagnostics(),
+    cronRuntime,
     followers,
     history,
     registry: getRuntimeCapabilityRegistryOverview(allRecords),
