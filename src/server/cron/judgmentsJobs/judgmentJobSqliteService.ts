@@ -1669,7 +1669,7 @@ const getPendingCompletionAckState = ({
   visibilityAckSeq: number | null
 }) => {
   const isWaitingOnVisibilityAck =
-    visibilityAckSeq == null || (projectDirtyToken !== null && visibilityAckSeq < projectDirtyToken)
+    projectDirtyToken !== null && (visibilityAckSeq == null || visibilityAckSeq < projectDirtyToken)
 
   if (!isWaitingOnVisibilityAck) {
     return {hasPendingCompletionAck: false, oldestUnackedCompletionAgeMs: null, pendingCompletionAckCount: 0}
@@ -3161,11 +3161,11 @@ const pruneVisibilityAckedRetentionForJob = async ({
         const visibilityAckSeq = getStoredScanState(database, jobId).lastProjectRefreshAckSeq
         const projectDirtyToken = projectRefreshState?.dirtyToken ?? null
 
-        if (visibilityAckSeq == null || maxRows <= 0) {
+        if (maxRows <= 0) {
           return emptyRetentionPruneResult()
         }
 
-        if (projectDirtyToken != null && visibilityAckSeq < projectDirtyToken) {
+        if (projectDirtyToken != null && (visibilityAckSeq == null || visibilityAckSeq < projectDirtyToken)) {
           return emptyRetentionPruneResult()
         }
 
@@ -5861,12 +5861,15 @@ const sqliteService = {
     })
   },
   setLastProjectRefreshAckSeq: async (jobId: string, lastProjectRefreshAckSeq: number | null) => {
+    let changed = false
     const result = await withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
-      const nextAckSeq = getForwardOnlyAckSeq(
-        getStoredScanState(database, jobId).lastProjectRefreshAckSeq,
-        lastProjectRefreshAckSeq,
-      )
+      const currentAckSeq = getStoredScanState(database, jobId).lastProjectRefreshAckSeq
+      const nextAckSeq = getForwardOnlyAckSeq(currentAckSeq, lastProjectRefreshAckSeq)
+
+      if (nextAckSeq === currentAckSeq) {
+        return
+      }
 
       database
         .query(
@@ -5878,9 +5881,12 @@ const sqliteService = {
       `,
         )
         .run(nextAckSeq, now, jobId)
+      changed = true
     })
 
-    await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+    if (changed) {
+      await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+    }
 
     return result
   },

@@ -3,16 +3,23 @@ import {Elysia} from 'elysia'
 
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 import {cronRuntimeTickNames, recordCronRuntimeTick} from './cronRuntimeState.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
-import {judgmentsJobsCronState} from './judgmentsJobsCronState.ts'
+import {
+  JUDGMENTS_IMPORT_STALE_AFTER_MS,
+  beginJudgmentsImportCronRun,
+  finishJudgmentsImportCronRun,
+  getJudgmentsImportCronActivity,
+} from './judgmentsJobsCronState.ts'
 
 const IMPORT_JUDGMENTS_INTERVAL = '*/1 * * * * *'
 const START_DELAY_MS = 1000
 const serverJobId = getDefaultJudgmentServerJobId()
+const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const logImportCronError = (label: string, error: unknown) => {
   if (!isDuckdbExclusiveWorkAdmissionError(error) && !isExpectedDuckdbOwnerRoleLossError(error)) {
@@ -28,9 +35,24 @@ const logImportCronError = (label: string, error: unknown) => {
 export const importJudgmentsCron = async (): Promise<void> => {
   const cronName = cronRuntimeTickNames.importJudgments
 
-  if (!shouldCurrentServerRunMaintenanceLoops() || judgmentsJobsCronState.isImportingJudgments) {
+  if (!shouldCurrentServerRunMaintenanceLoops()) {
     recordCronRuntimeTick(cronName, 'skipped')
     return
+  }
+
+  const importActivity = getJudgmentsImportCronActivity()
+  if (importActivity.shouldBlockOtherJudgmentWork) {
+    recordCronRuntimeTick(cronName, 'skipped')
+    return
+  }
+
+  if (importActivity.stale) {
+    cronLogger.warn('cron:import-judgments:stale-latch', '[cron] stale importJudgments latch ignored', {
+      runningForMs: importActivity.runningForMs,
+      serverJobId,
+      staleAfterMs: JUDGMENTS_IMPORT_STALE_AFTER_MS,
+      staleRunId: importActivity.runId,
+    })
   }
 
   if (hasActiveDuckdbExclusiveWork() || hasActiveProjectTransferBackgroundActivity()) {
@@ -38,7 +60,7 @@ export const importJudgmentsCron = async (): Promise<void> => {
     return
   }
 
-  judgmentsJobsCronState.isImportingJudgments = true
+  const importRunId = beginJudgmentsImportCronRun()
   recordCronRuntimeTick(cronName, 'started')
 
   try {
@@ -52,7 +74,7 @@ export const importJudgmentsCron = async (): Promise<void> => {
     )
     logImportCronError('[cron] importJudgmentsCron error:', err)
   } finally {
-    judgmentsJobsCronState.isImportingJudgments = false
+    finishJudgmentsImportCronRun(importRunId)
   }
 }
 

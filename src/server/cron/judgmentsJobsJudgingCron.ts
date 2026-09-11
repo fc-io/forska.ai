@@ -12,7 +12,7 @@ import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerId
 import {getJudgmentJobSqliteService} from './judgmentsJobs/judgmentJobSqliteService.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
-import {judgmentsJobsCronState} from './judgmentsJobsCronState.ts'
+import {getJudgmentsImportCronActivity} from './judgmentsJobsCronState.ts'
 
 const serverJobId = getDefaultJudgmentServerJobId()
 
@@ -48,7 +48,7 @@ const shouldUseLowMemoryJudgmentsCronMode = () => {
 
 const sendToLLM = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
-  if (judgmentsJobsCronState.isImportingJudgments) return
+  if (getJudgmentsImportCronActivity().shouldBlockOtherJudgmentWork) return
   if (isSendingToLLM) return
 
   isSendingToLLM = true

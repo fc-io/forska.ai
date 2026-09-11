@@ -2,9 +2,26 @@ import {expect, mock, test} from 'bun:test'
 
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 
+type JudgmentJobQueueServiceScopeRow = {
+  componentStateJson: string
+  projectId: string
+  reviewConfigHash: string
+  selectedImportSnapshotId: string | null
+  snapshotId: string
+  snapshotStatus: 'active' | 'candidate'
+}
+
+type CandidateReadinessRow = {
+  incompleteComponentCount: number
+  readyComponentCount: number
+  selectedImportCompletedCount: number
+}
+
 type FakeReadOnlyDatabase = {
+  candidateReadinessRows: CandidateReadinessRow[]
   close: () => Promise<void>
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  snapshotRows: ReturnType<typeof getScopeRow>[]
   statements: string[]
   validate: () => Promise<void>
 }
@@ -13,8 +30,9 @@ type JudgmentJobQueueServiceModule = typeof import('./reviewServingJudgmentJobQu
 const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url).href
 const reviewServingReviewConfigModulePath = new URL('./reviewServingReviewConfig.ts', import.meta.url).href
 const serviceModulePath = new URL('./reviewServingJudgmentJobQueueService.ts', import.meta.url).href
+let currentReviewConfigHash = 'config-1'
 
-const getScopeRow = () => {
+const getScopeRow = (overrides: Partial<JudgmentJobQueueServiceScopeRow> = {}) => {
   return {
     componentStateJson: JSON.stringify({
       optional: [],
@@ -24,6 +42,8 @@ const getScopeRow = () => {
     reviewConfigHash: 'config-1',
     selectedImportSnapshotId: 'selected-import-snapshot-1',
     snapshotId: 'snapshot-1',
+    snapshotStatus: 'active' as const,
+    ...overrides,
   }
 }
 
@@ -38,12 +58,25 @@ const getArticleRow = () => {
 
 const createFakeReadOnlyDatabase = () => {
   const database: FakeReadOnlyDatabase = {
+    candidateReadinessRows: [{incompleteComponentCount: 0, readyComponentCount: 6, selectedImportCompletedCount: 1}],
     close: async () => {},
     queryJson: async <T>(statement: string): Promise<T[]> => {
       database.statements.push(statement)
 
       if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
-        return [getScopeRow()] as T[]
+        const reviewConfigHashMatch = statement.match(/review_config_hash = '([^']+)'/u)?.[1] ?? null
+
+        return (
+          reviewConfigHashMatch === null
+            ? database.snapshotRows
+            : database.snapshotRows.filter((row) => {
+                return row.reviewConfigHash === reviewConfigHashMatch
+              })
+        ) as T[]
+      }
+
+      if (statement.includes('WITH required_component') && statement.includes('app.review_rebuild_chunk_manifest')) {
+        return database.candidateReadinessRows as T[]
       }
 
       if (statement.includes('SELECT COUNT(DISTINCT queue.article_id) AS count')) {
@@ -62,6 +95,7 @@ const createFakeReadOnlyDatabase = () => {
 
       return [] as T[]
     },
+    snapshotRows: [getScopeRow()],
     statements: [],
     validate: async () => {},
   }
@@ -86,13 +120,22 @@ void mock.module(appReadOnlyDatabaseServiceModulePath, () => {
 void mock.module(reviewServingReviewConfigModulePath, () => {
   return {
     getCurrentReviewServingReviewConfigHash: async () => {
-      return 'config-1'
+      return currentReviewConfigHash
     },
   }
 })
 
 const resetDatabases = () => {
+  currentReviewConfigHash = 'config-1'
+  apiDatabase.candidateReadinessRows = [
+    {incompleteComponentCount: 0, readyComponentCount: 6, selectedImportCompletedCount: 1},
+  ]
+  apiDatabase.snapshotRows = [getScopeRow()]
   apiDatabase.statements = []
+  judgeWorkerDatabase.candidateReadinessRows = [
+    {incompleteComponentCount: 0, readyComponentCount: 6, selectedImportCompletedCount: 1},
+  ]
+  judgeWorkerDatabase.snapshotRows = [getScopeRow()]
   judgeWorkerDatabase.statements = []
 }
 
@@ -194,6 +237,82 @@ test('judgment job count scope without import routes uses curated project articl
   expectArticleRankQueueRead(countStatement ?? '')
   expect(countStatement ?? '').toContain('FROM app.project_article project_article_scope')
   expect(countStatement ?? '').not.toContain('FROM app.article_import_route article_route_scope')
+})
+
+test('judgment job refill uses dispatch-ready candidate snapshot before full snapshot promotion', async () => {
+  resetDatabases()
+  judgeWorkerDatabase.snapshotRows = [getScopeRow({snapshotId: 'candidate-snapshot-1', snapshotStatus: 'candidate'})]
+
+  const result = await service.getJudgmentJobUnassessedPairsFromServing({
+    cursor: null,
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    projectId: 'project-1',
+  })
+  const snapshotStatement = judgeWorkerDatabase.statements.find((statement) => {
+    return statement.includes('FROM app.review_serving_snapshot_manifest')
+  })
+  const readinessStatement = judgeWorkerDatabase.statements.find((statement) => {
+    return statement.includes('app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
+  expect(snapshotStatement ?? '').toContain("snapshot_status IN ('active', 'candidate')")
+  expect(readinessStatement ?? '').toContain("('projectScope')")
+  expect(readinessStatement ?? '').toContain("('selectedImport')")
+  expect(readinessStatement ?? '').toContain("('display')")
+  expect(readinessStatement ?? '').toContain("('llmStatus')")
+  expect(readinessStatement ?? '').toContain("('queue')")
+  expect(readinessStatement ?? '').toContain("('judgmentInputContent')")
+  expect(readinessStatement ?? '').not.toContain("('summary')")
+})
+
+test('judgment job refill falls back to dispatch-ready previous review config snapshot', async () => {
+  resetDatabases()
+  currentReviewConfigHash = 'config-2'
+  judgeWorkerDatabase.snapshotRows = [
+    getScopeRow({reviewConfigHash: 'config-1', snapshotId: 'candidate-snapshot-1', snapshotStatus: 'candidate'}),
+  ]
+
+  const result = await service.getJudgmentJobUnassessedPairsFromServing({
+    cursor: null,
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    projectId: 'project-1',
+  })
+  const scopeStatements = judgeWorkerDatabase.statements.filter((statement) => {
+    return statement.includes('FROM app.review_serving_snapshot_manifest')
+  })
+  const refillStatement = judgeWorkerDatabase.statements.find((statement) => {
+    return statement.includes('queue.prompt_id AS promptId')
+  })
+
+  expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
+  expect(scopeStatements).toHaveLength(2)
+  expect(scopeStatements[0] ?? '').toContain("review_config_hash = 'config-2'")
+  expect(scopeStatements[1] ?? '').not.toContain('review_config_hash =')
+  expect(refillStatement ?? '').toContain("'config-1' AS review_config_hash")
+})
+
+test('judgment job refill ignores incomplete candidate snapshot', async () => {
+  resetDatabases()
+  judgeWorkerDatabase.snapshotRows = [getScopeRow({snapshotId: 'candidate-snapshot-1', snapshotStatus: 'candidate'})]
+  judgeWorkerDatabase.candidateReadinessRows = [
+    {incompleteComponentCount: 1, readyComponentCount: 5, selectedImportCompletedCount: 1},
+  ]
+
+  const result = await service.getJudgmentJobUnassessedPairsFromServing({
+    cursor: null,
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    projectId: 'project-1',
+  })
+  const refillStatement = judgeWorkerDatabase.statements.find((statement) => {
+    return statement.includes('queue.prompt_id AS promptId')
+  })
+
+  expect(result.promptEntries).toEqual([])
+  expect(refillStatement).toBeUndefined()
 })
 
 test('judgment job refill scope rechecks current project dates routes and curated articles', async () => {

@@ -241,7 +241,11 @@ const runImportableJudgmentJob = async ({claimedBy, job}: {claimedBy: string; jo
 const hasActiveJobImportWork = async (jobId: string) => {
   const healthSnapshot = await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
 
-  return healthSnapshot === null || healthSnapshot.hasOutboxRows || healthSnapshot.claimedOutboxCount > 0
+  return (
+    healthSnapshot === null
+    || healthSnapshot.claimedOutboxCount > 0
+    || typeof healthSnapshot.oldestUnexportedAgeMs === 'number'
+  )
 }
 
 const recordImportStart = async (jobId: string) => {
@@ -400,5 +404,9 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
 
   await sqliteService.syncOwnedLeases([])
 
-  return runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs: await getImportableJudgmentJobs()})
+  const summary = await runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs: await getImportableJudgmentJobs()})
+
+  await (sqliteService as {reconcileProjectRefreshAcks?: () => Promise<number>}).reconcileProjectRefreshAcks?.()
+
+  return summary
 }

@@ -11,7 +11,7 @@ import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.t
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsSampleProviderTelemetry} from './judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts'
-import {judgmentsJobsCronState} from './judgmentsJobsCronState.ts'
+import {JUDGMENTS_IMPORT_STALE_AFTER_MS, getJudgmentsImportCronActivity} from './judgmentsJobsCronState.ts'
 import {judgmentsJobsImportCron} from './judgmentsJobsImportCron.ts'
 
 const serverJobId = getDefaultJudgmentServerJobId()
@@ -68,9 +68,19 @@ const runAddToQueue = async (): Promise<void> => {
   const cronName = cronRuntimeTickNames.addToQueue
 
   if (!shouldRunOperationalJudgmentCron(cronName)) return
-  if (judgmentsJobsCronState.isImportingJudgments) {
+  const importActivity = getJudgmentsImportCronActivity()
+  if (importActivity.shouldBlockOtherJudgmentWork) {
     recordCronRuntimeTick(cronName, 'skipped')
     return
+  }
+
+  if (importActivity.stale) {
+    cronLogger.warn('cron:add-to-queue:stale-import-latch', '[cron] stale importJudgments latch ignored', {
+      runningForMs: importActivity.runningForMs,
+      serverJobId,
+      staleAfterMs: JUDGMENTS_IMPORT_STALE_AFTER_MS,
+      staleRunId: importActivity.runId,
+    })
   }
 
   if (isAddingToQueue) {

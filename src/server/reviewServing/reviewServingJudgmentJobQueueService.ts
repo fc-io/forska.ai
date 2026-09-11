@@ -34,6 +34,12 @@ type JudgmentJobServingScope = {projectId: string; reviewConfigHash: string; sna
 type JudgmentJobServingScopeRow = JudgmentJobServingScope & {
   componentStateJson: unknown
   selectedImportSnapshotId: string | null
+  snapshotStatus: 'active' | 'candidate'
+}
+type JudgmentJobServingScopeComponentReadinessRow = {
+  incompleteComponentCount: number
+  readyComponentCount: number
+  selectedImportCompletedCount: number
 }
 type JudgmentJobServingActiveScope = JudgmentJobServingScope & {
   projectScopeIdentity: string
@@ -126,6 +132,146 @@ const getSnapshotProjectScopeIdentity = (componentStateJson: unknown) => {
   return typeof projectionIdentity === 'string' && projectionIdentity.trim().length > 0 ? projectionIdentity : null
 }
 
+const candidateDispatchReadyComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'llmStatus',
+  'queue',
+  'judgmentInputContent',
+] as const
+
+const getCandidateDispatchReadyComponentsValuesSql = () => {
+  return candidateDispatchReadyComponents
+    .map((component) => {
+      return `(${getSqlLiteral(component)})`
+    })
+    .join(', ')
+}
+
+const isCandidateServingScopeReadyForDispatch = async (
+  scope: JudgmentJobServingActiveScope,
+  routeOrJobKey: string,
+  database: AppReadOnlyDatabaseService,
+): Promise<boolean> => {
+  const [row] = await database.queryJson<JudgmentJobServingScopeComponentReadinessRow>(
+    `
+    WITH required_component(component) AS (
+      SELECT * FROM (VALUES ${getCandidateDispatchReadyComponentsValuesSql()})
+    ), component_status AS (
+      SELECT
+        required_component.component,
+        CAST(COUNT(chunk.chunk_id) AS INTEGER) AS total_count,
+        CAST(COUNT(*) FILTER (WHERE chunk.status <> 'completed') AS INTEGER) AS incomplete_count
+      FROM required_component
+      LEFT JOIN app.review_rebuild_chunk_manifest chunk
+        ON chunk.project_id = ${getSqlLiteral(scope.projectId)}
+        AND (chunk.snapshot_id || '') = (${getSqlLiteral(scope.snapshotId)} || '')
+        AND chunk.projection_component = required_component.component
+      GROUP BY required_component.component
+    )
+    SELECT
+      CAST(COUNT(*) FILTER (WHERE total_count > 0 AND incomplete_count = 0) AS INTEGER) AS readyComponentCount,
+      CAST(COUNT(*) FILTER (WHERE total_count = 0 OR incomplete_count > 0) AS INTEGER) AS incompleteComponentCount,
+      CAST((
+        SELECT COUNT(*)
+        FROM app.review_selected_import_snapshot selected_import
+        WHERE selected_import.project_id = ${getSqlLiteral(scope.projectId)}
+          AND (selected_import.selected_import_snapshot_id || '') = (${getSqlLiteral(scope.selectedImportSnapshotId)} || '')
+          AND selected_import.status = 'completed'
+      ) AS INTEGER) AS selectedImportCompletedCount
+    FROM component_status
+  `,
+    getJudgmentJobQueueWorkloadContext(routeOrJobKey, scope.projectId, 1),
+  )
+
+  return (
+    Number(row?.readyComponentCount ?? 0) === candidateDispatchReadyComponents.length
+    && Number(row?.incompleteComponentCount ?? candidateDispatchReadyComponents.length) === 0
+    && Number(row?.selectedImportCompletedCount ?? 0) > 0
+  )
+}
+
+const getUsableServingScope = (scope: JudgmentJobServingScopeRow): JudgmentJobServingActiveScope | null => {
+  const projectScopeIdentity = getSnapshotProjectScopeIdentity(scope.componentStateJson)
+
+  return scope.selectedImportSnapshotId === null || projectScopeIdentity === null
+    ? null
+    : {
+        projectId: scope.projectId,
+        projectScopeIdentity,
+        reviewConfigHash: scope.reviewConfigHash,
+        selectedImportSnapshotId: scope.selectedImportSnapshotId,
+        snapshotId: scope.snapshotId,
+      }
+}
+
+const getFirstDispatchReadyServingScope = async (
+  scopes: readonly JudgmentJobServingScopeRow[],
+  routeOrJobKey: string,
+  database: AppReadOnlyDatabaseService,
+): Promise<JudgmentJobServingActiveScope | null> => {
+  const [scope, ...rest] = scopes
+
+  if (scope === undefined) {
+    return null
+  }
+
+  const usableScope = getUsableServingScope(scope)
+
+  if (usableScope === null) {
+    return getFirstDispatchReadyServingScope(rest, routeOrJobKey, database)
+  }
+
+  if (scope.snapshotStatus === 'active') {
+    return usableScope
+  }
+
+  return (await isCandidateServingScopeReadyForDispatch(usableScope, routeOrJobKey, database))
+    ? usableScope
+    : getFirstDispatchReadyServingScope(rest, routeOrJobKey, database)
+}
+
+const getServingScopeRows = (
+  input: {projectId: string; reviewConfigHash: string | null; routeOrJobKey: string},
+  database: AppReadOnlyDatabaseService,
+) => {
+  const reviewConfigHashPredicate =
+    input.reviewConfigHash === null ? '' : `AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}`
+
+  return database.queryJson<JudgmentJobServingScopeRow>(
+    `
+    SELECT
+      project_id AS projectId,
+      review_config_hash AS reviewConfigHash,
+      snapshot_id AS snapshotId,
+      selected_import_snapshot_id AS selectedImportSnapshotId,
+      component_state_json AS componentStateJson,
+      snapshot_status AS snapshotStatus
+    FROM app.review_serving_snapshot_manifest
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      ${reviewConfigHashPredicate}
+      AND snapshot_status IN ('active', 'candidate')
+    ORDER BY CASE WHEN snapshot_status = 'active' THEN 0 ELSE 1 END, activated_at DESC NULLS LAST, updated_at DESC, snapshot_id DESC
+    LIMIT 4
+  `,
+    getJudgmentJobQueueWorkloadContext(input.routeOrJobKey, input.projectId, 4),
+  )
+}
+
+const getDispatchReadyServingScope = async (
+  projectId: string,
+  routeOrJobKey: string,
+  reviewConfigHash: string | null,
+  database: AppReadOnlyDatabaseService,
+): Promise<JudgmentJobServingActiveScope | null> => {
+  return getFirstDispatchReadyServingScope(
+    await getServingScopeRows({projectId, reviewConfigHash, routeOrJobKey}, database),
+    routeOrJobKey,
+    database,
+  )
+}
+
 const getActiveServingScope = async (
   projectId: string,
   routeOrJobKey: string,
@@ -137,37 +283,9 @@ const getActiveServingScope = async (
     return null
   }
 
-  const [scope] = await database.queryJson<JudgmentJobServingScopeRow>(
-    `
-    SELECT
-      project_id AS projectId,
-      review_config_hash AS reviewConfigHash,
-      snapshot_id AS snapshotId,
-      selected_import_snapshot_id AS selectedImportSnapshotId,
-      component_state_json AS componentStateJson
-    FROM app.review_serving_snapshot_manifest
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND review_config_hash = ${getSqlLiteral(currentReviewConfigHash)}
-      AND snapshot_status = 'active'
-    ORDER BY activated_at DESC NULLS LAST, updated_at DESC, snapshot_id DESC
-    LIMIT 1
-  `,
-    getJudgmentJobQueueWorkloadContext(routeOrJobKey, projectId, 1),
-  )
+  const currentScope = await getDispatchReadyServingScope(projectId, routeOrJobKey, currentReviewConfigHash, database)
 
-  const projectScopeIdentity = getSnapshotProjectScopeIdentity(scope?.componentStateJson ?? null)
-
-  if (scope === undefined || scope.selectedImportSnapshotId === null || projectScopeIdentity === null) {
-    return null
-  }
-
-  return {
-    projectId: scope.projectId,
-    projectScopeIdentity,
-    reviewConfigHash: scope.reviewConfigHash,
-    selectedImportSnapshotId: scope.selectedImportSnapshotId,
-    snapshotId: scope.snapshotId,
-  }
+  return currentScope ?? getDispatchReadyServingScope(projectId, routeOrJobKey, null, database)
 }
 
 const getCursorPredicate = (cursor: UnassessedPairsCursor | null, promptIdExpression = 'queue.prompt_id') => {
