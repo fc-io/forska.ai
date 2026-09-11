@@ -637,19 +637,38 @@ const getMockConflictResolutionExistingTargetResolutionRows = (
     })
 }
 
-const getMockConflictResolutionTargetArticleIds = (
+const getMockConflictResolutionTargetRows = (
   statement: string,
   state: Pick<MockDatabaseState, 'conflictResolutionRows'>,
 ) => {
-  return new Set(
-    state.conflictResolutionRows
-      .filter((row) => {
-        return statement.includes(`'${row.articleId}'`)
-      })
-      .map((row) => {
-        return row.articleId
-      }),
-  )
+  const targetDeleteStatement =
+    statement.match(/DELETE\s+FROM\s+app\.comparison_project_conflict_resolution[\s\S]*?(?:RETURNING|$)/i)?.[0]
+    ?? statement
+  const comparisonProjectId =
+    targetDeleteStatement.match(/comparison_project_id\s*=\s*'((?:''|[^'])*)'/)?.[1]?.replaceAll("''", "'") ?? null
+  const articleIds = new Set<string>()
+
+  for (const equalityMatch of targetDeleteStatement.matchAll(/article_id\s*=\s*'((?:''|[^'])*)'/g)) {
+    articleIds.add((equalityMatch[1] ?? '').replaceAll("''", "'"))
+  }
+
+  for (const inMatch of targetDeleteStatement.matchAll(/article_id\s+IN\s*\(([^)]*)\)/g)) {
+    for (const literalMatch of (inMatch[1] ?? '').matchAll(/'((?:''|[^'])*)'/g)) {
+      articleIds.add((literalMatch[1] ?? '').replaceAll("''", "'"))
+    }
+  }
+
+  if (comparisonProjectId === null && articleIds.size === 0) {
+    return []
+  }
+
+  return state.conflictResolutionRows.filter((row) => {
+    const rowComparisonProjectId = row.comparisonProjectId ?? 'comparison-project-1'
+    return (
+      (comparisonProjectId === null || rowComparisonProjectId === comparisonProjectId)
+      && (articleIds.size === 0 || articleIds.has(row.articleId))
+    )
+  })
 }
 
 const getSqlNullableStringLiteralValue = (value: string | undefined) => {
@@ -2425,24 +2444,19 @@ const registerModuleMocks = () => {
                 }
 
                 if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
-                  const deletedRows = pendingConflictResolutionRows
-                    .filter((row) => {
-                      return statement.includes(`'${row.articleId}'`)
-                    })
-                    .map((row) => {
-                      return {articleId: row.articleId}
-                    })
-                  const deletedArticleIds = new Set(
-                    deletedRows.map((row) => {
-                      return row.articleId
-                    }),
-                  )
+                  const deletedTargetRows = getMockConflictResolutionTargetRows(statement, {
+                    conflictResolutionRows: pendingConflictResolutionRows,
+                  })
+                  const deletedRows = deletedTargetRows.map((row) => {
+                    return {articleId: row.articleId}
+                  })
+                  const deletedTargetRowSet = new Set(deletedTargetRows)
 
                   pendingConflictResolutionRows.splice(
                     0,
                     pendingConflictResolutionRows.length,
                     ...pendingConflictResolutionRows.filter((row) => {
-                      return !deletedArticleIds.has(row.articleId)
+                      return !deletedTargetRowSet.has(row)
                     }),
                   )
 
@@ -2545,14 +2559,15 @@ const registerModuleMocks = () => {
                 }
 
                 if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
-                  const deletedArticleIds = getMockConflictResolutionTargetArticleIds(statement, {
+                  const deletedTargetRows = getMockConflictResolutionTargetRows(statement, {
                     conflictResolutionRows: pendingConflictResolutionRows,
                   })
+                  const deletedTargetRowSet = new Set(deletedTargetRows)
                   pendingConflictResolutionRows.splice(
                     0,
                     pendingConflictResolutionRows.length,
                     ...pendingConflictResolutionRows.filter((row) => {
-                      return !deletedArticleIds.has(row.articleId)
+                      return !deletedTargetRowSet.has(row)
                     }),
                   )
                   return
