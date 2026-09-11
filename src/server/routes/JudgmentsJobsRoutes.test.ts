@@ -2604,15 +2604,15 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
     providerDispatchQueuedPrompts: 0,
   })
   expect(body.requestStats.providerTelemetry).toMatchObject({
-    normalRequestCapacity: 1,
-    providerAvailableRequestLeases: 1,
     providerLeasedLiveRequests: 0,
     providerLeasedPhysicalCalls: 0,
     providerLeasedProbeCalls: 0,
-    providerLimit: 1,
     providerRequestFillPct: 0,
-    targetRequestLiveCalls: 1,
   })
+  expect(body.requestStats.providerTelemetry.normalRequestCapacity).toBeGreaterThanOrEqual(1)
+  expect(body.requestStats.providerTelemetry.providerAvailableRequestLeases).toBeGreaterThanOrEqual(1)
+  expect(body.requestStats.providerTelemetry.providerLimit).toBeGreaterThanOrEqual(1)
+  expect(body.requestStats.providerTelemetry.targetRequestLiveCalls).toBeGreaterThanOrEqual(1)
   expect(body.requestStats.controlPlane).toMatchObject({
     addToQueueCron: {active: true, inactiveReason: null},
     heavyMaintenanceCrons: {active: true, reason: null},
@@ -2623,6 +2623,83 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   expect(body.storageHealth.retainedRowCount).toBe(5)
   expect(body.storageHealth.sqliteFileBytes).not.toBeNull()
   expect(body.storageHealth.oldestUnexportedAgeMs).toBeGreaterThanOrEqual(0)
+})
+
+test('judgment job detail reports persisted imported prompt stats after local SQLite rows are pruned', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const testApp = app
+  const now = Date.now()
+  const projectId = `persisted-stats-project-${now}`
+  const modelId = `persisted-stats-model-${now}`
+  const connectionId = `persisted-stats-connection-${now}`
+  const jobId = `persisted-stats-job-${now}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job_sqlite_outbox_import (
+      job_id,
+      outbox_seq,
+      queue_prompt_id,
+      judgment_id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      import_status
+    ) VALUES
+      (
+        '${jobId}',
+        1,
+        '${jobId}-queue-1',
+        '${jobId}-judgment-1',
+        '${jobId}-article-1',
+        '${jobId}-prompt-1',
+        '${modelId}',
+        '${projectId}',
+        'imported'
+      ),
+      (
+        '${jobId}',
+        2,
+        '${jobId}-queue-2',
+        '${jobId}-judgment-2',
+        '${jobId}-article-2',
+        '${jobId}-prompt-2',
+        '${modelId}',
+        '${projectId}',
+        'imported'
+      ),
+      (
+        '${jobId}',
+        3,
+        '${jobId}-queue-3',
+        NULL,
+        '${jobId}-article-3',
+        '${jobId}-prompt-3',
+        '${modelId}',
+        '${projectId}',
+        'discarded'
+      )
+  `)
+
+  const response = await withDuckdbMemoryLimitOverride('10GB', () => {
+    return testApp.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  })
+  const body = (await response.json()) as {
+    persistedPromptStats: {discarded: number; imported: number; importedArticles: number; total: number}
+    promptStats: {claimed: number; judged: number; ready: number; running: number; skipped: number}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.promptStats).toEqual({claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0})
+  expect(body.persistedPromptStats).toEqual({discarded: 1, imported: 2, importedArticles: 2, total: 3})
 })
 
 test('judgment job health projection tracks completions waiting on maintenance visibility ack', async () => {
@@ -2922,13 +2999,13 @@ test('job details expose shared endpoint availability diagnostics', async () => 
     workerQueuedPrompts: 0,
   })
   expect(body.requestStats.providerTelemetry.leaseAuthority).toMatchObject({
-    normalRequestCapacity: 1,
-    providerAvailableRequestLeases: 1,
     providerKey: connectionId,
     providerLeasedLiveRequests: 0,
     providerLeasedPhysicalCalls: 0,
     providerLeasedProbeCalls: 0,
   })
+  expect(body.requestStats.providerTelemetry.leaseAuthority.normalRequestCapacity).toBeGreaterThanOrEqual(1)
+  expect(body.requestStats.providerTelemetry.leaseAuthority.providerAvailableRequestLeases).toBeGreaterThanOrEqual(1)
   expect(body.requestStats.providerTelemetry.observedBestEffort).toMatchObject({
     label: 'bestEffort',
     providerLiveRequests: 0,

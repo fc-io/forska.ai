@@ -97,11 +97,12 @@ type RequestAttemptRuntimeTelemetry = {
   stateStartedAt: string
   updatedAt: string
 }
+type RequestWorkReservation = {reservedAtMs: number; units: number}
 type JobRequestState = {
   inFlight: number
   pendingRequestAttemptIds: Set<string>
   requestAttempts: Map<string, RequestAttemptRuntimeTelemetry>
-  requestWorkReservations: Map<string, number>
+  requestWorkReservations: Map<string, RequestWorkReservation>
 }
 type ProviderRequestState = {inFlight: number}
 type SlotAcquisitionAttempt = {slot: RequestSlot; type: 'slot'} | {type: 'blocked'} | {type: 'waiting'}
@@ -137,6 +138,7 @@ const localEndpointProbePermits = new Set<string>()
 
 let codexInFlight = 0
 const providerAdmissionLeaseRetryDelayMs = 250
+const requestWorkReservationStaleMs = 120_000
 
 const normalizeProvider = (value: string | null | undefined): string => {
   return getNormalizedProviderKeyProvider(value)
@@ -227,7 +229,7 @@ const getEmptyJobRequestState = (): JobRequestState => {
     inFlight: 0,
     pendingRequestAttemptIds: new Set<string>(),
     requestAttempts: new Map<string, RequestAttemptRuntimeTelemetry>(),
-    requestWorkReservations: new Map<string, number>(),
+    requestWorkReservations: new Map<string, RequestWorkReservation>(),
   }
 }
 
@@ -252,9 +254,19 @@ const getRequestWorkUnits = (value: number | null | undefined): number => {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : 1
 }
 
+const pruneStaleRequestWorkReservations = (state: JobRequestState, now = Date.now()): void => {
+  Array.from(state.requestWorkReservations.entries()).forEach(([reservationKey, reservation]) => {
+    if (now - reservation.reservedAtMs >= requestWorkReservationStaleMs) {
+      state.requestWorkReservations.delete(reservationKey)
+    }
+  })
+}
+
 const getReservedRequestWorkUnits = (state: JobRequestState): number => {
-  return Array.from(state.requestWorkReservations.values()).reduce((sum, units) => {
-    return sum + units
+  pruneStaleRequestWorkReservations(state)
+
+  return Array.from(state.requestWorkReservations.values()).reduce((sum, reservation) => {
+    return sum + reservation.units
   }, 0)
 }
 
@@ -270,7 +282,10 @@ export const reserveJudgmentPromptRequestWork = ({
   const state = getJobRequestState(judgmentsJobId)
   const reservationKey = getRequestWorkReservationKey(queueRecordId)
 
-  state.requestWorkReservations.set(reservationKey, getRequestWorkUnits(requestWorkUnits))
+  state.requestWorkReservations.set(reservationKey, {
+    reservedAtMs: Date.now(),
+    units: getRequestWorkUnits(requestWorkUnits),
+  })
 
   return () => {
     state.requestWorkReservations.delete(reservationKey)
@@ -290,7 +305,10 @@ export const updateJudgmentPromptRequestWork = ({
   const state = getJobRequestState(judgmentsJobId)
   const reservationKey = getRequestWorkReservationKey(queueRecordId)
 
-  state.requestWorkReservations.set(reservationKey, getRequestWorkUnits(requestWorkUnits))
+  state.requestWorkReservations.set(reservationKey, {
+    reservedAtMs: Date.now(),
+    units: getRequestWorkUnits(requestWorkUnits),
+  })
 }
 
 const upsertRequestAttemptTelemetry = ({

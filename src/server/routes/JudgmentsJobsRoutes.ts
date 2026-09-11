@@ -200,6 +200,7 @@ type FailedRequestSummary = {
   anthropicRefusals: number
   persistedFailedRequests: number
 }
+type PersistedJudgmentJobPromptStats = {discarded: number; imported: number; importedArticles: number; total: number}
 type AnthropicRefusalSummary = Pick<FailedRequestSummary, 'anthropicRefusalArticles' | 'anthropicRefusals'>
 type JudgmentJobBlockedReason =
   | 'endpoint_circuit_breaker'
@@ -2642,6 +2643,31 @@ const getFailedRequestSummaryFromDatabase = async ({
   return {...anthropicRefusalSummary, persistedFailedRequests}
 }
 
+const getPersistedJudgmentJobPromptStatsFromDatabase = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+}): Promise<PersistedJudgmentJobPromptStats> => {
+  const [row] = await db.queryJson<{
+    discarded: number | string | null
+    imported: number | string | null
+    importedArticles: number | string | null
+  }>(`
+    SELECT
+      SUM(CASE WHEN import_status = 'imported' THEN 1 ELSE 0 END) AS imported,
+      COUNT(DISTINCT CASE WHEN import_status = 'imported' THEN article_id ELSE NULL END) AS importedArticles,
+      SUM(CASE WHEN import_status = 'discarded' THEN 1 ELSE 0 END) AS discarded
+    FROM app.judgment_job_sqlite_outbox_import
+    WHERE job_id = ${getSqlLiteral(jobId)}
+  `)
+  const discarded = Number(row?.discarded ?? 0)
+  const imported = Number(row?.imported ?? 0)
+
+  return {discarded, imported, importedArticles: Number(row?.importedArticles ?? 0), total: imported + discarded}
+}
+
 const resetJudgmentJobLocalSqliteState = async ({jobId, storageState}: {jobId: string; storageState: string}) => {
   const sqliteService = getJudgmentJobSqliteService()
 
@@ -2947,6 +2973,7 @@ export const judgmentsJobsRoutes = new Elysia()
               modelProvider: providerConnection?.providerKind ?? null,
             })
           })
+          const persistedPromptStatsPromise = getPersistedJudgmentJobPromptStatsFromDatabase({db, jobId: job.id})
 
           const judgingRuntimePromise = getJudgingRuntime()
           const [
@@ -2954,6 +2981,7 @@ export const judgmentsJobsRoutes = new Elysia()
             leaseMetadata,
             totalTokenUsage,
             failedRequestSummary,
+            persistedPromptStats,
             judgingRuntime,
             providerConnection,
           ] = await Promise.all([
@@ -2974,6 +3002,7 @@ export const judgmentsJobsRoutes = new Elysia()
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
         `),
             failedRequestSummaryPromise,
+            persistedPromptStatsPromise,
             judgingRuntimePromise,
             providerConnectionPromise,
           ])
@@ -3021,6 +3050,7 @@ export const judgmentsJobsRoutes = new Elysia()
           return {
             ...job,
             leaseMetadata,
+            persistedPromptStats,
             promptStats,
             storagePolicy,
             storageHealth,

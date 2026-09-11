@@ -3,6 +3,7 @@ import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
 import type {ProviderKeyInput} from './providerKey.ts'
 
 const COOLDOWN_MS = 30_000
+const PROBE_STALE_MS = 120_000
 
 const endpointAvailabilityLogger = createRateLimitedLogger({windowMs: 30_000})
 
@@ -21,6 +22,7 @@ type JudgmentEndpointAvailabilityState = {
   lastFailureKind: JudgmentEndpointFailureKind | null
   lastFailureMessage: string | null
   probePromise: Promise<void> | null
+  probeStartedAtMs: number | null
   resolveProbe: (() => void) | null
   status: JudgmentEndpointAvailabilityStatus
 }
@@ -65,6 +67,7 @@ const createHealthyState = (): JudgmentEndpointAvailabilityState => {
     lastFailureKind: null,
     lastFailureMessage: null,
     probePromise: null,
+    probeStartedAtMs: null,
     resolveProbe: null,
     status: 'healthy',
   }
@@ -115,6 +118,8 @@ const getOrCreateEndpointAvailabilityState = ({
       })?.[1] ?? null)
   const state = existing ?? existingForBaseUrlOnly ?? createHealthyState()
 
+  recoverStaleProbeState({endpointAvailabilityKey: key.endpointAvailabilityKey, state})
+
   if (!existing && !existingForBaseUrlOnly) {
     endpointAvailabilityStates.set(key.endpointAvailabilityKey, state)
   }
@@ -146,7 +151,34 @@ const getEndpointAvailabilitySnapshot = ({
 const finishProbe = (state: JudgmentEndpointAvailabilityState): void => {
   state.resolveProbe?.()
   state.probePromise = null
+  state.probeStartedAtMs = null
   state.resolveProbe = null
+}
+
+const recoverStaleProbeState = ({
+  endpointAvailabilityKey,
+  state,
+}: {
+  endpointAvailabilityKey: string
+  state: JudgmentEndpointAvailabilityState
+}): void => {
+  const probeStartedAtMs = state.probeStartedAtMs
+
+  if (state.status !== 'probing' || probeStartedAtMs == null || Date.now() - probeStartedAtMs < PROBE_STALE_MS) {
+    return undefined
+  }
+
+  finishProbe(state)
+  state.cooldownExpiresAt = new Date(0)
+  state.lastFailureKind = 'endpoint_unavailable'
+  state.lastFailureMessage =
+    'Endpoint availability probe did not finish before the stale probe timeout; retrying probe.'
+  state.status = 'cooldown'
+
+  endpointAvailabilityLogger.warn(
+    `endpoint-availability:stale-probe:${endpointAvailabilityKey}`,
+    'Endpoint availability probe became stale; allowing another recovery probe',
+  )
 }
 
 const setGatedState = ({
@@ -358,6 +390,7 @@ export const claimJudgmentEndpointAvailability = ({
   })
   state.resolveProbe = resolveProbe
   state.cooldownExpiresAt = null
+  state.probeStartedAtMs = now
   state.status = 'probing'
 
   endpointAvailabilityLogger.log(

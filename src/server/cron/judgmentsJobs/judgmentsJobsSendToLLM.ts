@@ -654,8 +654,11 @@ export const getDispatchAvailability = ({
   const hasMisconfigured = endpointStates.some((state) => {
     return state.status === 'misconfigured'
   })
+  const hasProbing = endpointStates.some((state) => {
+    return state.status === 'probing'
+  })
 
-  return {dispatchMode: 'skip', status: hasMisconfigured ? 'misconfigured' : 'cooldown'}
+  return {dispatchMode: 'skip', status: hasMisconfigured ? 'misconfigured' : hasProbing ? 'probing' : 'cooldown'}
 }
 
 const logDispatchSkip = ({

@@ -1,7 +1,10 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
 import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
-import {resetJudgmentEndpointAvailabilityForTests} from './judgmentEndpointAvailability.ts'
+import {
+  claimJudgmentEndpointAvailability,
+  resetJudgmentEndpointAvailabilityForTests,
+} from './judgmentEndpointAvailability.ts'
 import {
   getCapacityBuckets,
   getDispatchAvailability,
@@ -650,6 +653,32 @@ test('does not warn when prompt claim fetches fewer rows than requested', () => 
   expect(shouldWarnPromptClaimCountMismatch({fetched: 0, requested: 5})).toBe(false)
   expect(shouldWarnPromptClaimCountMismatch({fetched: 5, requested: 5})).toBe(false)
   expect(shouldWarnPromptClaimCountMismatch({fetched: 6, requested: 5})).toBe(true)
+})
+
+test('dispatch availability reports in-progress probes instead of another cooldown', () => {
+  const providerConnectionId = 'connection-probing'
+  const runtime = {modelBaseUrl: 'http://probing-availability.test/v1', modelProvider: 'openai', modelWorkerUrls: []}
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: runtime.modelBaseUrl, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+  recordConnectionFailure({effectiveBaseURL: runtime.modelBaseUrl, failure, providerConnectionId})
+  now += 30_001
+
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: runtime.modelBaseUrl,
+      modelProvider: runtime.modelProvider,
+      providerConnectionId,
+    }),
+  ).toBe(true)
+
+  expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({dispatchMode: 'skip', status: 'probing'})
 })
 
 test('dispatch availability skips 404 misroutes during cooldown, probes once after expiry, and skips misconfigured endpoints', () => {

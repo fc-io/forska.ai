@@ -218,6 +218,7 @@ type JobData = {
   useFulltext?: boolean
   useFulltextNoImages?: boolean
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
+  persistedPromptStats?: {discarded?: number; imported?: number; importedArticles?: number; total?: number}
   promptStats?: Partial<JudgmentJobPromptStats>
   requestStats?: Partial<JudgmentJobRequestStats>
   storageHealth?: {
@@ -967,7 +968,7 @@ const AdminJudgmentJobDetail = () => {
                       description="Prompt queue state for this job's project, model, and content settings."
                       title="Prompt Queue"
                     >
-                      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                         <DenseMetric description="Prompts queued for judgment." label="Ready">
                           {formatMetricCount(data()?.promptStats?.ready)}
                         </DenseMetric>
@@ -983,6 +984,15 @@ const AdminJudgmentJobDetail = () => {
                         </DenseMetric>
                         <DenseMetric description="Prompts with judgments completed." label="Judged" tone="emerald">
                           {formatMetricCount(data()?.promptStats?.judged)}
+                        </DenseMetric>
+                        <DenseMetric
+                          description={`Imported into DuckDB; ${formatMetricCount(
+                            data()?.persistedPromptStats?.importedArticles,
+                          )} distinct articles.`}
+                          label="Persisted Judgments"
+                          tone="emerald"
+                        >
+                          {formatMetricCount(data()?.persistedPromptStats?.imported)}
                         </DenseMetric>
                         <DenseMetric description="Skipped prompt rows." label="Skipped" tone="amber">
                           {formatMetricCount(data()?.promptStats?.skipped)}
