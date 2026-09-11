@@ -59,12 +59,22 @@ const AdminLlm = () => {
     return getLatestLlmStatusRowsByInstance(rows())
   }
 
+  const metadata = () => {
+    return statusQuery.data?.metadata ?? null
+  }
+
   const formatTs = (value: Date | null | undefined) => {
     return !value ? '—' : isValid(value) ? format(value, 'yyyy-MM-dd HH:mm:ss') : '—'
   }
 
   const formatNumber = (value: number | null | undefined, fractionDigits = 2) => {
     return value === null || value === undefined ? '—' : value.toFixed(fractionDigits)
+  }
+
+  const staleNotice = () => {
+    const statusMetadata = metadata()
+
+    return statusMetadata?.isStale ? (statusMetadata.staleMessage ?? 'LLM status ingestion is stale.') : null
   }
 
   return (
@@ -91,6 +101,23 @@ const AdminLlm = () => {
       </Show>
 
       <Show when={!statusQuery.isLoading && !statusQuery.isError}>
+        <Show when={staleNotice()}>
+          {(notice) => {
+            return (
+              <div class="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
+                <div class="text-sm font-semibold">LLM status stale</div>
+                <div class="mt-1 text-sm">{notice()}</div>
+                <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-amber-700">
+                  <span>Latest: {formatTs(metadata()?.latestIngestedAt)}</span>
+                  <span>
+                    Operational cron: {metadata()?.cron?.operationalJudgmentCrons.active ? 'active' : 'inactive'}
+                  </span>
+                  <span>Ingestion tick: {formatTs(metadata()?.cron?.llmStatusIngestionCron?.lastTickAt)}</span>
+                </div>
+              </div>
+            )
+          }}
+        </Show>
         <Show when={latestRows().length > 0}>
           <div class="bg-white rounded-lg shadow mb-6">
             <div class="px-4 py-3 border-b border-gray-200">

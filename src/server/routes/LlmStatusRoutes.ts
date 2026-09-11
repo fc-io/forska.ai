@@ -1,6 +1,13 @@
 import {Elysia} from 'elysia'
 
+import {
+  type CronRuntimeClassState,
+  cronRuntimeTickNames,
+  type CronRuntimeTickState,
+  getCronRuntimeDiagnostics,
+} from '../cron/cronRuntimeState.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getDateValue} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -17,6 +24,7 @@ const llmStatusRowsWorkloadContext: DuckdbWorkloadContext = {
   maxResultRows: llmStatusRowsLimit,
 }
 const llmStatusForegroundBudgetMs = 2500
+const llmStatusStaleAfterMs = 3 * 60 * 1000
 
 type LlmStatusRow = {
   ts: string
@@ -40,7 +48,41 @@ type LlmStatusRow = {
   maxInFlight: number | null
 }
 
-type LlmStatusResponseBody = {data: LlmStatusRow[]; hasMetricsCompatibleJob: boolean}
+type LlmStatusStaleReason =
+  | 'ingestion-cron-deferred'
+  | 'ingestion-cron-inactive'
+  | 'latest-row-stale'
+  | 'llm-status-table-missing'
+  | 'no-ingested-rows'
+
+type LlmStatusCronMetadata = {
+  duckdbMemoryLimit: string | null
+  duckdbMemoryLimitMiB: number | null
+  heavyMaintenanceCrons: CronRuntimeClassState
+  llmStatusIngestionCron: CronRuntimeTickState
+  lowMemoryOwner: boolean
+  lowMemoryThresholdMiB: number
+  operationalJudgmentCrons: CronRuntimeClassState
+  serverRole: string
+}
+
+type LlmStatusResponseMetadata = {
+  cron: LlmStatusCronMetadata
+  generatedAt: string
+  isStale: boolean
+  latestIngestedAgeMs: number | null
+  latestIngestedAt: string | null
+  staleAfterMs: number
+  staleMessage: string | null
+  staleReason: LlmStatusStaleReason | null
+  tableExists: boolean | null
+}
+
+type LlmStatusResponseBody = {
+  data: LlmStatusRow[]
+  hasMetricsCompatibleJob: boolean
+  metadata: LlmStatusResponseMetadata
+}
 
 let cachedLlmStatus: LlmStatusResponseBody | null = null
 let pendingLlmStatusRefresh: Promise<LlmStatusResponseBody> | null = null
@@ -61,6 +103,153 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 
   return result
+}
+
+const getLatestIngestedAt = (rows: LlmStatusRow[]) => {
+  const latestTimestampMs = rows.reduce<number | null>((latest, row) => {
+    const timestamp = getDateValue(row.ts)?.getTime() ?? null
+
+    return timestamp === null ? latest : Math.max(latest ?? timestamp, timestamp)
+  }, null)
+
+  return latestTimestampMs === null ? null : new Date(latestTimestampMs)
+}
+
+const getLlmStatusCronMetadata = (): LlmStatusCronMetadata => {
+  const cronRuntime = getCronRuntimeDiagnostics()
+
+  return {
+    duckdbMemoryLimit: cronRuntime.duckdbMemoryLimit,
+    duckdbMemoryLimitMiB: cronRuntime.duckdbMemoryLimitMiB,
+    heavyMaintenanceCrons: cronRuntime.heavyMaintenanceCrons,
+    llmStatusIngestionCron: cronRuntime.crons[cronRuntimeTickNames.checkLlmStatus],
+    lowMemoryOwner: cronRuntime.lowMemoryOwner,
+    lowMemoryThresholdMiB: cronRuntime.lowMemoryThresholdMiB,
+    operationalJudgmentCrons: cronRuntime.operationalJudgmentCrons,
+    serverRole: cronRuntime.serverRole,
+  }
+}
+
+const getInactiveIngestionReason = (operationalJudgmentCrons: CronRuntimeClassState): LlmStatusStaleReason | null => {
+  if (operationalJudgmentCrons.active) {
+    return null
+  }
+
+  return operationalJudgmentCrons.reason === 'deferred-low-memory-owner'
+    ? 'ingestion-cron-deferred'
+    : 'ingestion-cron-inactive'
+}
+
+const getLlmStatusStaleReason = ({
+  cron,
+  hasMetricsCompatibleJob,
+  latestIngestedAgeMs,
+  latestIngestedAt,
+  tableExists,
+}: {
+  cron: LlmStatusCronMetadata
+  hasMetricsCompatibleJob: boolean
+  latestIngestedAgeMs: number | null
+  latestIngestedAt: Date | null
+  tableExists: boolean | null
+}): LlmStatusStaleReason | null => {
+  const shouldExplainIngestionState = hasMetricsCompatibleJob || latestIngestedAt !== null
+  const inactiveReason = shouldExplainIngestionState ? getInactiveIngestionReason(cron.operationalJudgmentCrons) : null
+
+  if (inactiveReason !== null) {
+    return inactiveReason
+  }
+
+  if (hasMetricsCompatibleJob && tableExists === false) {
+    return 'llm-status-table-missing'
+  }
+
+  if (hasMetricsCompatibleJob && latestIngestedAt === null) {
+    return 'no-ingested-rows'
+  }
+
+  return latestIngestedAgeMs !== null && latestIngestedAgeMs > llmStatusStaleAfterMs ? 'latest-row-stale' : null
+}
+
+const getLlmStatusStaleMessage = ({
+  cron,
+  latestIngestedAt,
+  staleReason,
+}: {
+  cron: LlmStatusCronMetadata
+  latestIngestedAt: Date | null
+  staleReason: LlmStatusStaleReason | null
+}) => {
+  if (staleReason === null) {
+    return null
+  }
+
+  if (staleReason === 'ingestion-cron-deferred') {
+    return `Ingestion cron deferred: ${cron.operationalJudgmentCrons.reason ?? 'unknown reason'}.`
+  }
+
+  if (staleReason === 'ingestion-cron-inactive') {
+    return `Ingestion cron inactive: ${cron.operationalJudgmentCrons.reason ?? 'unknown reason'}.`
+  }
+
+  if (staleReason === 'llm-status-table-missing') {
+    return 'Metrics-compatible job is running, but app.llm_status is unavailable.'
+  }
+
+  if (staleReason === 'no-ingested-rows') {
+    return 'Metrics-compatible job is running, but no SGLang status rows have been ingested.'
+  }
+
+  return latestIngestedAt === null
+    ? 'Latest SGLang status row is stale.'
+    : `Latest SGLang status row was ingested at ${latestIngestedAt.toISOString()}.`
+}
+
+const buildLlmStatusResponse = ({
+  data,
+  hasMetricsCompatibleJob,
+  tableExists,
+}: {
+  data: LlmStatusRow[]
+  hasMetricsCompatibleJob: boolean
+  tableExists: boolean | null
+}): LlmStatusResponseBody => {
+  const generatedAt = new Date()
+  const latestIngestedAt = getLatestIngestedAt(data)
+  const latestIngestedAgeMs =
+    latestIngestedAt === null ? null : Math.max(0, generatedAt.getTime() - latestIngestedAt.getTime())
+  const cron = getLlmStatusCronMetadata()
+  const staleReason = getLlmStatusStaleReason({
+    cron,
+    hasMetricsCompatibleJob,
+    latestIngestedAgeMs,
+    latestIngestedAt,
+    tableExists,
+  })
+
+  return {
+    data,
+    hasMetricsCompatibleJob,
+    metadata: {
+      cron,
+      generatedAt: generatedAt.toISOString(),
+      isStale: staleReason !== null,
+      latestIngestedAgeMs,
+      latestIngestedAt: latestIngestedAt?.toISOString() ?? null,
+      staleAfterMs: llmStatusStaleAfterMs,
+      staleMessage: getLlmStatusStaleMessage({cron, latestIngestedAt, staleReason}),
+      staleReason,
+      tableExists,
+    },
+  }
+}
+
+const refreshLlmStatusMetadata = (status: LlmStatusResponseBody) => {
+  return buildLlmStatusResponse({
+    data: status.data,
+    hasMetricsCompatibleJob: status.hasMetricsCompatibleJob,
+    tableExists: status.metadata.tableExists,
+  })
 }
 
 const hasMetricsCompatibleRunningJob = async (): Promise<boolean> => {
@@ -98,7 +287,7 @@ const readLlmStatus = async (): Promise<LlmStatusResponseBody> => {
   )
 
   if (!tableRow) {
-    return {data: [], hasMetricsCompatibleJob: hasCompatibleJob}
+    return buildLlmStatusResponse({data: [], hasMetricsCompatibleJob: hasCompatibleJob, tableExists: false})
   }
 
   const data = await getAppDatabaseService().queryJson<LlmStatusRow>(
@@ -131,7 +320,7 @@ const readLlmStatus = async (): Promise<LlmStatusResponseBody> => {
     llmStatusRowsWorkloadContext,
   )
 
-  return {data, hasMetricsCompatibleJob: hasCompatibleJob}
+  return buildLlmStatusResponse({data, hasMetricsCompatibleJob: hasCompatibleJob, tableExists: true})
 }
 
 const refreshLlmStatus = async () => {
@@ -155,10 +344,10 @@ export const __resetLlmStatusCacheForTests = () => {
 export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/llmstatus', async () => {
   if (cachedLlmStatus !== null) {
     void refreshLlmStatus().catch(() => {})
-    return cachedLlmStatus
+    return refreshLlmStatusMetadata(cachedLlmStatus)
   }
 
   const status = await withTimeout(refreshLlmStatus(), llmStatusForegroundBudgetMs)
 
-  return status ?? {data: [], hasMetricsCompatibleJob: false}
+  return status ?? buildLlmStatusResponse({data: [], hasMetricsCompatibleJob: false, tableExists: null})
 })

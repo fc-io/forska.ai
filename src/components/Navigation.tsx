@@ -77,7 +77,7 @@ export const Navigation = () => {
     }
   })
 
-  const defaultLlmStatusResponse: LlmStatusResponse = {rows: [], hasMetricsCompatibleJob: false}
+  const defaultLlmStatusResponse: LlmStatusResponse = {rows: [], hasMetricsCompatibleJob: false, metadata: null}
 
   const llmMetrics = () => {
     return getLlmMetricsSummary(llmMetricsQuery.data ?? defaultLlmStatusResponse)

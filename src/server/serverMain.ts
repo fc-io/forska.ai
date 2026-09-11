@@ -30,12 +30,9 @@ import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalId
 import {validateOwnerlessRouteBackends} from './utils/ownerlessReadableBackends.ts'
 import {getRuntimeBuildInfo} from './utils/runtimeBuildInfo.ts'
 import {writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
+import {getServerCronMountDecisions, lowMemoryMaintenanceDuckdbLimitMiB} from './utils/serverCronMountDecisions.ts'
 import {shouldDisableServerMutationWork} from './utils/serverMutationMode.ts'
-import {
-  shouldServerRoleMountJudgingCrons,
-  shouldServerRoleMountMaintenanceCrons,
-  shouldServerRoleRunCodexStartup,
-} from './utils/serverRole.ts'
+import {shouldServerRoleRunCodexStartup} from './utils/serverRole.ts'
 import {
   canCurrentServerOwnDuckdb,
   getCurrentServerRole,
@@ -180,17 +177,7 @@ const startProjectTransferTtlRecoveryScheduler = () => {
 }
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
-const lowMemoryMaintenanceDuckdbLimitMiB = 8192
 const runtimeBuildInfo = getRuntimeBuildInfo()
-const shouldDeferMaintenanceCronsForLowMemoryOwner = () => {
-  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
-
-  return (
-    shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
-    && duckdbLimitMiB !== null
-    && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
-  )
-}
 const desktopAllowedOrigins = process.env.FORSKA_DESKTOP_MODE === 'true' ? ['null', 'views://mainview'] : []
 const allowedOrigins = [
   `http://localhost:${env.VITE_PORT}`,
@@ -265,22 +252,29 @@ if (shouldRunMutatingServerWork && getCurrentServerRole() !== 'judge-worker' && 
   }
 }
 
-const shouldMountMaintenanceCrons =
-  shouldRunMutatingServerWork
-  && shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
-  && !shouldDeferMaintenanceCronsForLowMemoryOwner()
-const shouldMountJudgingCrons = shouldRunMutatingServerWork && shouldServerRoleMountJudgingCrons(getCurrentServerRole())
-const maintenanceCronRoutes = shouldMountMaintenanceCrons
+const {
+  shouldDeferHeavyMaintenanceCronsForLowMemoryOwner,
+  shouldMountHeavyMaintenanceCrons,
+  shouldMountImportOnlyJudgmentCrons,
+  shouldMountJudgingCrons,
+  shouldMountOperationalJudgmentCrons,
+} = getServerCronMountDecisions({
+  duckdbMemoryLimit: env.DUCKDB_MEMORY_LIMIT,
+  serverRole: getCurrentServerRole(),
+  shouldRunMutatingServerWork,
+})
+const heavyMaintenanceCronRoutes = shouldMountHeavyMaintenanceCrons
   ? new Elysia()
       .use((await import('./cron/fullTextJobs.ts')).fullTextJobsCron)
       .use((await import('./cron/fullTextConversionJobs.ts')).fullTextConversionJobsCron)
       .use((await import('./cron/nvidiaSmi.ts')).nvidiaSmiCron)
-      .use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsMaintenanceCron)
   : new Elysia()
-const judgmentImportCronRoutes =
-  shouldMountJudgingCrons && !shouldMountMaintenanceCrons
-    ? new Elysia().use((await import('./cron/judgmentsJobsImportCron.ts')).judgmentsJobsImportCron)
-    : new Elysia()
+const operationalJudgmentCronRoutes = shouldMountOperationalJudgmentCrons
+  ? new Elysia().use((await import('./cron/judgmentsJobsOperationalCron.ts')).judgmentsJobsOperationalCron)
+  : new Elysia()
+const judgmentImportCronRoutes = shouldMountImportOnlyJudgmentCrons
+  ? new Elysia().use((await import('./cron/judgmentsJobsImportCron.ts')).judgmentsJobsImportCron)
+  : new Elysia()
 const judgmentCronRoutes = shouldMountJudgingCrons
   ? new Elysia().use((await import('./cron/judgmentsJobsJudgingCron.ts')).judgmentsJobsJudgingCron)
   : new Elysia()
@@ -310,7 +304,8 @@ export const app = new Elysia()
   .use(reviewServingStatusRoutes)
   .use(duckdbOwnerConnectionsRoutes)
   .use(judgmentDispatchTelemetryRoutes)
-  .use(maintenanceCronRoutes)
+  .use(heavyMaintenanceCronRoutes)
+  .use(operationalJudgmentCronRoutes)
   .use(judgmentImportCronRoutes)
   .use(judgmentCronRoutes)
   .use(publicProductApiRoutes)
@@ -353,6 +348,12 @@ writeRuntimeOperatorLogEvent({
     duckdbMemoryLimitMiB: parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT),
     duckdbOwner: canCurrentServerOwnDuckdb(),
     role: getCurrentServerRole(),
+    shouldDeferHeavyMaintenanceCronsForLowMemoryOwner,
+    shouldMountHeavyMaintenanceCrons,
+    shouldMountImportOnlyJudgmentCrons,
+    shouldMountJudgingCrons,
+    shouldMountOperationalJudgmentCrons,
+    lowMemoryMaintenanceDuckdbLimitMiB,
   },
   event: 'server.startup.role-summary',
   message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_owner=${canCurrentServerOwnDuckdb()} duckdb_memory_limit=${env.DUCKDB_MEMORY_LIMIT} commit=${runtimeBuildInfo.shortCommitSha}`,

@@ -1,5 +1,11 @@
 import {Elysia, t} from 'elysia'
 
+import {
+  type CronRuntimeClassState,
+  cronRuntimeTickNames,
+  type CronRuntimeTickState,
+  getCronRuntimeDiagnostics,
+} from '../cron/cronRuntimeState.ts'
 import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {
   isJudgeWorkerPausedAfterArmedTestClaim,
@@ -310,6 +316,20 @@ type JudgmentJobHealthProgress = {
     workIdentity: JudgmentJobWorkIdentity
   }
   workIdentity: JudgmentJobWorkIdentity
+}
+type JudgmentJobControlPlaneCronState = CronRuntimeTickState & {active: boolean; inactiveReason: string | null}
+type JudgmentJobControlPlaneDiagnostics = {
+  addToQueueCron: JudgmentJobControlPlaneCronState
+  duckdbMemoryLimit: string | null
+  duckdbMemoryLimitMiB: number | null
+  heavyMaintenanceCrons: CronRuntimeClassState
+  importJudgmentsCron: JudgmentJobControlPlaneCronState
+  llmStatusCron: JudgmentJobControlPlaneCronState
+  lowMemoryOwner: boolean
+  lowMemoryThresholdMiB: number
+  operationalJudgmentCrons: CronRuntimeClassState
+  sampleProviderTelemetryCron: JudgmentJobControlPlaneCronState
+  serverRole: string
 }
 type JudgmentCompletionIdentity = {
   articleId: string
@@ -2235,6 +2255,47 @@ const getProgressBlockedReason = ({
             : null
 }
 
+const getJudgmentJobControlPlaneCronState = ({
+  classState,
+  tickState,
+}: {
+  classState: CronRuntimeClassState
+  tickState: CronRuntimeTickState
+}): JudgmentJobControlPlaneCronState => {
+  return {...tickState, active: classState.active, inactiveReason: classState.active ? null : classState.reason}
+}
+
+const getJudgmentJobControlPlaneDiagnostics = (): JudgmentJobControlPlaneDiagnostics => {
+  const cronRuntime = getCronRuntimeDiagnostics()
+  const operationalClassState = cronRuntime.operationalJudgmentCrons
+
+  return {
+    addToQueueCron: getJudgmentJobControlPlaneCronState({
+      classState: operationalClassState,
+      tickState: cronRuntime.crons[cronRuntimeTickNames.addToQueue],
+    }),
+    duckdbMemoryLimit: cronRuntime.duckdbMemoryLimit,
+    duckdbMemoryLimitMiB: cronRuntime.duckdbMemoryLimitMiB,
+    heavyMaintenanceCrons: cronRuntime.heavyMaintenanceCrons,
+    importJudgmentsCron: getJudgmentJobControlPlaneCronState({
+      classState: operationalClassState.active ? operationalClassState : cronRuntime.importOnlyCrons,
+      tickState: cronRuntime.crons[cronRuntimeTickNames.importJudgments],
+    }),
+    llmStatusCron: getJudgmentJobControlPlaneCronState({
+      classState: operationalClassState,
+      tickState: cronRuntime.crons[cronRuntimeTickNames.checkLlmStatus],
+    }),
+    lowMemoryOwner: cronRuntime.lowMemoryOwner,
+    lowMemoryThresholdMiB: cronRuntime.lowMemoryThresholdMiB,
+    operationalJudgmentCrons: operationalClassState,
+    sampleProviderTelemetryCron: getJudgmentJobControlPlaneCronState({
+      classState: operationalClassState,
+      tickState: cronRuntime.crons[cronRuntimeTickNames.sampleProviderTelemetry],
+    }),
+    serverRole: cronRuntime.serverRole,
+  }
+}
+
 const getJudgmentJobHealthProgress = ({
   endpointHealth,
   importConsumer,
@@ -2730,6 +2791,7 @@ export const judgmentsJobsRoutes = new Elysia()
           ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recommendedNextAction = getRecommendedHealthAction({job, sqliteHealth})
+          const controlPlane = getJudgmentJobControlPlaneDiagnostics()
           const progress = getJudgmentJobHealthProgress({
             endpointHealth,
             importConsumer,
@@ -2749,6 +2811,7 @@ export const judgmentsJobsRoutes = new Elysia()
             recommendedNextAction,
             endpointAvailability: endpointHealth.diagnostics,
             providerDiagnostics: endpointHealth.providerDiagnostics,
+            controlPlane,
             importMetadata: {
               importFailureCount: job.importFailureCount,
               lastImportCompletedAt: job.lastImportCompletedAt,
@@ -2916,6 +2979,7 @@ export const judgmentsJobsRoutes = new Elysia()
           ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
+          const controlPlane = getJudgmentJobControlPlaneDiagnostics()
           const providerTelemetry = await getJudgmentProviderTelemetrySnapshot({
             job: {
               id: job.id,
@@ -2967,6 +3031,7 @@ export const judgmentsJobsRoutes = new Elysia()
               totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
             },
             requestStats: {
+              controlPlane,
               dispatch: {
                 jobActivePrompts: dispatchStats.jobActivePrompts,
                 jobQueuedPrompts: dispatchStats.jobQueuedPrompts,
@@ -3266,6 +3331,7 @@ export const judgmentsJobsRoutes = new Elysia()
           }),
         )
         const progressStates = getProgressStateCounts(jobsWithHealth)
+        const controlPlane = getJudgmentJobControlPlaneDiagnostics()
         const jobsSummary = jobsWithHealth.map(
           ({action, endpointAvailability, job, providerDiagnostics, sqliteHealth, ...progress}) => {
             const normalizedJob = {
@@ -3315,6 +3381,7 @@ export const judgmentsJobsRoutes = new Elysia()
               return isStaleImportJob(job)
             }).length,
             importConsumer,
+            controlPlane,
             jobs: jobsSummary,
             progressStates,
             repairRequired: progressStates.repairRequired,

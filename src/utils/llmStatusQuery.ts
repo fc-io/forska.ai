@@ -31,6 +31,53 @@ export type LlmMetricsSummary = {
   hasMetricsCompatibleJob: boolean
 }
 
+export type LlmStatusStaleReason =
+  | 'ingestion-cron-deferred'
+  | 'ingestion-cron-inactive'
+  | 'latest-row-stale'
+  | 'llm-status-table-missing'
+  | 'no-ingested-rows'
+
+export type LlmStatusCronClassState = {
+  active: boolean
+  lastSuccessAt: Date | null
+  lastTickAt: Date | null
+  reason: string | null
+  source: string
+}
+
+export type LlmStatusCronTickState = {
+  lastFailureAt: Date | null
+  lastFailureMessage: string | null
+  lastSkippedAt: Date | null
+  lastSuccessAt: Date | null
+  lastTickAt: Date | null
+  running: boolean
+}
+
+export type LlmStatusCronMetadata = {
+  duckdbMemoryLimit: string | null
+  duckdbMemoryLimitMiB: number | null
+  heavyMaintenanceCrons: LlmStatusCronClassState
+  llmStatusIngestionCron: LlmStatusCronTickState | null
+  lowMemoryOwner: boolean
+  lowMemoryThresholdMiB: number | null
+  operationalJudgmentCrons: LlmStatusCronClassState
+  serverRole: string
+}
+
+export type LlmStatusMetadata = {
+  cron: LlmStatusCronMetadata | null
+  generatedAt: Date | null
+  isStale: boolean
+  latestIngestedAgeMs: number | null
+  latestIngestedAt: Date | null
+  staleAfterMs: number | null
+  staleMessage: string | null
+  staleReason: LlmStatusStaleReason | null
+  tableExists: boolean | null
+}
+
 export const llmStatusQueryKey = ['llmstatus', 'latest50'] as const
 
 const normalizeLlmStatusTimestamp = (value: unknown): Date | null => {
@@ -62,7 +109,97 @@ const normalizeLlmStatusNumber = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-export type LlmStatusResponse = {rows: LlmStatusRow[]; hasMetricsCompatibleJob: boolean}
+const normalizeLlmStatusString = (value: unknown) => {
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+const normalizeLlmStatusBoolean = (value: unknown) => {
+  return typeof value === 'boolean' ? value : null
+}
+
+const normalizeLlmStatusCronClassState = (value: unknown): LlmStatusCronClassState => {
+  const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+
+  return {
+    active: record.active === true,
+    lastSuccessAt: normalizeLlmStatusTimestamp(record.lastSuccessAt),
+    lastTickAt: normalizeLlmStatusTimestamp(record.lastTickAt),
+    reason: normalizeLlmStatusString(record.reason),
+    source: normalizeLlmStatusString(record.source) ?? 'derived',
+  }
+}
+
+const normalizeLlmStatusCronTickState = (value: unknown): LlmStatusCronTickState | null => {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+
+  return {
+    lastFailureAt: normalizeLlmStatusTimestamp(record.lastFailureAt),
+    lastFailureMessage: normalizeLlmStatusString(record.lastFailureMessage),
+    lastSkippedAt: normalizeLlmStatusTimestamp(record.lastSkippedAt),
+    lastSuccessAt: normalizeLlmStatusTimestamp(record.lastSuccessAt),
+    lastTickAt: normalizeLlmStatusTimestamp(record.lastTickAt),
+    running: record.running === true,
+  }
+}
+
+const normalizeLlmStatusCronMetadata = (value: unknown): LlmStatusCronMetadata | null => {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+
+  return {
+    duckdbMemoryLimit: normalizeLlmStatusString(record.duckdbMemoryLimit),
+    duckdbMemoryLimitMiB: normalizeLlmStatusNumber(record.duckdbMemoryLimitMiB),
+    heavyMaintenanceCrons: normalizeLlmStatusCronClassState(record.heavyMaintenanceCrons),
+    llmStatusIngestionCron: normalizeLlmStatusCronTickState(record.llmStatusIngestionCron),
+    lowMemoryOwner: record.lowMemoryOwner === true,
+    lowMemoryThresholdMiB: normalizeLlmStatusNumber(record.lowMemoryThresholdMiB),
+    operationalJudgmentCrons: normalizeLlmStatusCronClassState(record.operationalJudgmentCrons),
+    serverRole: normalizeLlmStatusString(record.serverRole) ?? '',
+  }
+}
+
+const normalizeLlmStatusStaleReason = (value: unknown): LlmStatusStaleReason | null => {
+  return value === 'ingestion-cron-deferred'
+    || value === 'ingestion-cron-inactive'
+    || value === 'latest-row-stale'
+    || value === 'llm-status-table-missing'
+    || value === 'no-ingested-rows'
+    ? value
+    : null
+}
+
+const normalizeLlmStatusMetadata = (value: unknown): LlmStatusMetadata | null => {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+
+  return {
+    cron: normalizeLlmStatusCronMetadata(record.cron),
+    generatedAt: normalizeLlmStatusTimestamp(record.generatedAt),
+    isStale: record.isStale === true,
+    latestIngestedAgeMs: normalizeLlmStatusNumber(record.latestIngestedAgeMs),
+    latestIngestedAt: normalizeLlmStatusTimestamp(record.latestIngestedAt),
+    staleAfterMs: normalizeLlmStatusNumber(record.staleAfterMs),
+    staleMessage: normalizeLlmStatusString(record.staleMessage),
+    staleReason: normalizeLlmStatusStaleReason(record.staleReason),
+    tableExists: normalizeLlmStatusBoolean(record.tableExists),
+  }
+}
+
+export type LlmStatusResponse = {
+  rows: LlmStatusRow[]
+  hasMetricsCompatibleJob: boolean
+  metadata: LlmStatusMetadata | null
+}
 
 export const fetchLlmStatus = async (): Promise<LlmStatusResponse> => {
   const response = await apiClient.api.llmstatus.get()
@@ -74,6 +211,7 @@ export const fetchLlmStatus = async (): Promise<LlmStatusResponse> => {
   const entries = response.data?.data ?? []
   const hasMetricsCompatibleJob =
     (response.data as Record<string, unknown> | undefined)?.hasMetricsCompatibleJob === true
+  const metadata = normalizeLlmStatusMetadata((response.data as Record<string, unknown> | undefined)?.metadata)
 
   const rows = entries.map((row: Record<string, unknown>) => {
     return {
@@ -99,7 +237,7 @@ export const fetchLlmStatus = async (): Promise<LlmStatusResponse> => {
     }
   })
 
-  return {rows, hasMetricsCompatibleJob}
+  return {rows, hasMetricsCompatibleJob, metadata}
 }
 
 export const getLatestLlmStatusRowsByInstance = (rows: LlmStatusRow[]) => {

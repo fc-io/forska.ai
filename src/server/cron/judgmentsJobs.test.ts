@@ -24,8 +24,20 @@ const getLastJsonLine = (value: string) => {
 
 test('maintenance judgment cron module does not import judging cron module', () => {
   const source = readFileSync('src/server/cron/judgmentsJobs.ts', 'utf8')
+  const operationalSource = readFileSync('src/server/cron/judgmentsJobsOperationalCron.ts', 'utf8')
 
   expect(source).not.toContain('judgmentsJobsJudgingCron')
+  expect(operationalSource).not.toContain('judgmentsJobsJudgingCron')
+})
+
+test('operational judgment cron module mounts the import-only cron source without heavy maintenance dependencies', () => {
+  const source = readFileSync('src/server/cron/judgmentsJobsOperationalCron.ts', 'utf8')
+
+  expect(source).toContain("import {judgmentsJobsImportCron} from './judgmentsJobsImportCron.ts'")
+  expect(source).toContain('.use(judgmentsJobsImportCron)')
+  expect(source).not.toContain('fullTextJobsCron')
+  expect(source).not.toContain('fullTextConversionJobsCron')
+  expect(source).not.toContain('nvidiaSmiCron')
 })
 
 test('import-only judgment cron module does not import maintenance cron dependencies', () => {
@@ -98,7 +110,10 @@ test('judgment maintenance crons pause while DuckDB exclusive work is active', (
           return {judgmentsJobsSampleProviderTelemetry: async () => calls.push('sample-telemetry')}
         })
         void mock.module(importCronModulePath, () => {
-          return {importJudgmentsCron: async () => calls.push('import')}
+          return {
+            importJudgmentsCron: async () => calls.push('import'),
+            judgmentsJobsImportCron: {},
+          }
         })
         void mock.module(exclusiveWorkModulePath, () => {
           return {
@@ -108,12 +123,19 @@ test('judgment maintenance crons pause while DuckDB exclusive work is active', (
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
+            getCurrentServerRole: () => 'maintenance-worker',
             isExpectedDuckdbOwnerRoleLossError: () => false,
             shouldCurrentServerRunMaintenanceLoops: () => true,
           }
         })
         void mock.module(runtimeLoggerModulePath, () => {
           return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
             getRuntimeLogProfile: () => 'local',
             isRuntimeJsonlSinkInstalled: () => false,
             writeRuntimeFailureLogEvent: () => calls.push('failure-log'),
@@ -236,6 +258,7 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
+            getCurrentServerRole: () => 'maintenance-worker',
             isExpectedDuckdbOwnerRoleLossError: () => false,
             shouldCurrentServerRunJudgingLoops: () => true,
             shouldCurrentServerRunMaintenanceLoops: () => true,
@@ -243,6 +266,12 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
         })
         void mock.module(runtimeLoggerModulePath, () => {
           return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
             getRuntimeLogProfile: () => 'local',
             isRuntimeJsonlSinkInstalled: () => false,
             writeRuntimeFailureLogEvent: () => {},
@@ -326,12 +355,21 @@ test('judgment import cron skips while project transfer background work is activ
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
+            getCurrentServerRole: () => 'maintenance-worker',
             isExpectedDuckdbOwnerRoleLossError: () => false,
             shouldCurrentServerRunMaintenanceLoops: () => true,
           }
         })
         void mock.module(runtimeLoggerModulePath, () => {
-          return {writeRuntimeFailureLogEvent: () => {}}
+          return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
+            writeRuntimeFailureLogEvent: () => {},
+          }
         })
 
         await import(judgmentsJobsModulePath + '?transfer-active=' + Date.now())
@@ -452,6 +490,7 @@ test('add-to-queue overlap warning waits for sustained running time', () => {
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
+            getCurrentServerRole: () => 'maintenance-worker',
             isExpectedDuckdbOwnerRoleLossError: () => false,
             shouldCurrentServerRunJudgingLoops: () => false,
             shouldCurrentServerRunMaintenanceLoops: () => true,
@@ -459,6 +498,12 @@ test('add-to-queue overlap warning waits for sustained running time', () => {
         })
         void mock.module(runtimeLoggerModulePath, () => {
           return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
             getRuntimeLogProfile: () => 'local',
             isRuntimeJsonlSinkInstalled: () => false,
             writeRuntimeFailureLogEvent: () => {},
@@ -596,6 +641,7 @@ test('llm status cron is owned by maintenance worker instead of judge worker', (
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
+            getCurrentServerRole: () => 'maintenance-worker',
             isExpectedDuckdbOwnerRoleLossError: () => false,
             shouldCurrentServerRunJudgingLoops: () => shouldRunJudging,
             shouldCurrentServerRunMaintenanceLoops: () => shouldRunMaintenance,
@@ -603,6 +649,12 @@ test('llm status cron is owned by maintenance worker instead of judge worker', (
         })
         void mock.module(runtimeLoggerModulePath, () => {
           return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
             getRuntimeLogProfile: () => 'local',
             isRuntimeJsonlSinkInstalled: () => false,
             writeRuntimeFailureLogEvent: () => {},
@@ -740,6 +792,7 @@ test('provider telemetry sampler cron is owned by maintenance worker and role ga
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
+            getCurrentServerRole: () => 'maintenance-worker',
             isExpectedDuckdbOwnerRoleLossError: () => false,
             shouldCurrentServerRunJudgingLoops: () => false,
             shouldCurrentServerRunMaintenanceLoops: () => shouldRunMaintenance,
@@ -747,6 +800,12 @@ test('provider telemetry sampler cron is owned by maintenance worker and role ga
         })
         void mock.module(runtimeLoggerModulePath, () => {
           return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
             getRuntimeLogProfile: () => 'local',
             isRuntimeJsonlSinkInstalled: () => false,
             writeRuntimeFailureLogEvent: () => {},
@@ -894,6 +953,7 @@ test('provider telemetry sampler cron prevents overlapping runs', () => {
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
+            getCurrentServerRole: () => 'maintenance-worker',
             isExpectedDuckdbOwnerRoleLossError: () => false,
             shouldCurrentServerRunJudgingLoops: () => false,
             shouldCurrentServerRunMaintenanceLoops: () => true,
@@ -901,6 +961,12 @@ test('provider telemetry sampler cron prevents overlapping runs', () => {
         })
         void mock.module(runtimeLoggerModulePath, () => {
           return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
             getRuntimeLogProfile: () => 'local',
             isRuntimeJsonlSinkInstalled: () => false,
             writeRuntimeFailureLogEvent: () => {},
@@ -1057,7 +1123,10 @@ test('provider telemetry sampler discovers running jobs without runtime match an
           }
         })
         void mock.module(runtimeRoleModulePath, () => {
-          return {shouldCurrentServerRunMaintenanceLoops: () => true}
+          return {
+            getCurrentServerRole: () => 'maintenance-worker',
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
         })
 
         const {judgmentsJobsSampleProviderTelemetry} = await import(
