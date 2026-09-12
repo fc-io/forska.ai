@@ -460,28 +460,28 @@ const rebuildChunkPrerequisitesByComponent = {
   display: ['projectScope', 'selectedImport'],
   humanStatus: ['projectScope', 'display'],
   judgmentInputContent: ['projectScope'],
-  llmStatus: ['projectScope', 'display', 'judgmentInputContent'],
+  llmStatus: ['projectScope', 'display'],
   payload: ['projectScope'],
-  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
+  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'payload'],
   projectScope: [],
   queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
   search: ['projectScope', 'selectedImport'],
   selectedImport: ['projectScope'],
-  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
+  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload'],
 } as const satisfies Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
 const rebuildChunkCriticalLaneComponents = [
   'projectScope',
   'selectedImport',
   'display',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
-  'summary',
+  'payload',
   'posting',
+  'summary',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const rebuildChunkSecondaryLaneComponents = [
-  'payload',
+  'judgmentInputContent',
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const rebuildChunkWorkloadClasses = {bulk: 'bulk', critical: 'critical'} as const satisfies Record<
@@ -492,13 +492,13 @@ const rebuildChunkClaimPriorityOrder = [
   'projectScope',
   'selectedImport',
   'display',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
-  'summary',
-  'posting',
   'payload',
+  'posting',
+  'summary',
+  'judgmentInputContent',
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const stalledForegroundRebuildRequestPriority = 10_000

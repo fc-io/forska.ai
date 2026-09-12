@@ -9,7 +9,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {deriveStrictSummaryAnswer, getNormalizedSummaryAnswer} from '../utils/judgmentAnswers.ts'
-import type {NamedReviewFastCountKey} from './reviewServingContracts.ts'
+import type {NamedReviewFastCountKey, ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   getReviewServingDynamicFilteredCountSql,
   type ReviewServingDynamicCountPostingFilterGroup,
@@ -119,8 +119,8 @@ type HumanReviewArticlesResponse = {
   limit: number
   nextCursor?: string | null
   page: number
-  totalCount: number
-  totalPages: number
+  totalCount: number | null
+  totalPages: number | null
 }
 type UnassessedReviewArticlesResponse = {
   data: unknown[]
@@ -128,8 +128,8 @@ type UnassessedReviewArticlesResponse = {
   limit: number
   nextCursor?: string | null
   page: number
-  totalCount: number
-  totalPages: number
+  totalCount: number | null
+  totalPages: number | null
 }
 type ReviewServingRowsPageInput = {
   dependencies?: ReviewServingRouteDependencies
@@ -149,6 +149,7 @@ const maxJudgmentHydrationRows = 10_000
 const defaultJudgmentHydrationPromptCount = 128
 const queueReadyFilterKey = 'queue:ready'
 const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
+const reviewServingCountIndexingError = 'Review count is still indexing'
 const routeReadMaxAttempts = 4
 const routeReadRetryDelaysMs = [100, 250, 500] as const
 type ReviewServingRouteReadContext = Parameters<ReviewServingReaderDatabase['queryJson']>[1]
@@ -454,6 +455,41 @@ const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, c
   })?.projectionIdentity
 }
 
+const hasManifestComponentState = (manifest: ReviewServingSnapshotManifest, component: string) => {
+  return getManifestComponentIdentity(manifest, component) !== undefined
+}
+
+const getFilteredCountIndexingReason = (
+  params: ArticlesReviewsBothParams | ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  mode: ReviewServingReviewMode,
+) => {
+  if (getPromptAnswerPostingFilterGroups(params, mode).length > 0 && !hasManifestComponentState(manifest, 'posting')) {
+    return 'prompt-answer count filters require posting buckets that are still indexing'
+  }
+
+  if (getSearchTokenPrefixes(params.search).length > 0 && !hasManifestComponentState(manifest, 'search')) {
+    return 'search-scoped counts require the search index that is still indexing'
+  }
+
+  return null
+}
+
+const getCountIndexingError = (reason: string) => {
+  return new Error(`${reviewServingCountIndexingError}: ${reason}`)
+}
+
+const isCountIndexingError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.message.startsWith(reviewServingCountIndexingError)
+    || error.message.includes('missingRequiredComponentState')
+  )
+}
+
 const sleep = (delayMs: number) => {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs)
@@ -503,20 +539,33 @@ const getFilteredCountValue = async (
   mode: ReviewServingReviewMode,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<number> => {
+  const indexingReason = getFilteredCountIndexingReason(params, manifest, mode)
+
+  if (indexingReason !== null) {
+    throw getCountIndexingError(indexingReason)
+  }
+
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingFilteredCountDatabase)
   const filters = getRouteFilters(params, mode)
   const promptAnswerPostingFilterGroups = getPromptAnswerPostingFilterGroups(params, mode)
   const searchTokenPrefixes = filters.searchTokenPrefix ? getSearchTokenPrefixes(params.search) : []
+  const identityComponents: ReviewServingProjectionComponent[] =
+    mode === 'both'
+      ? ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus']
+      : mode === 'human'
+        ? ['display', 'projectScope', 'selectedImport', 'humanStatus']
+        : ['display', 'projectScope', 'selectedImport', 'queue']
+
+  if (promptAnswerPostingFilterGroups.length > 0) {
+    identityComponents.push('posting')
+  }
+
+  if (searchTokenPrefixes.length > 0) {
+    identityComponents.push('search')
+  }
 
   return getReviewServingFilteredCountValue({
-    ...getReviewServingFilteredCountComponentIdentities(
-      manifest,
-      mode === 'both'
-        ? ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'posting', 'search']
-        : mode === 'human'
-          ? ['display', 'projectScope', 'selectedImport', 'humanStatus', 'posting', 'search']
-          : ['display', 'projectScope', 'selectedImport', 'queue', 'posting', 'search'],
-    ),
+    ...getReviewServingFilteredCountComponentIdentities(manifest, identityComponents),
     computeCount: async () => {
       const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
         return group.filterValues
@@ -607,6 +656,23 @@ const getUnassessedQueueCountValue = async (
   )
 
   return Number(row?.totalCount ?? 0)
+}
+
+const getOptionalCountValue = async (
+  params: ArticlesReviewsBothParams | ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  mode: ReviewServingReviewMode,
+  dependencies?: ReviewServingRouteDependencies,
+) => {
+  try {
+    return await getCountValue(params, manifest, mode, dependencies)
+  } catch (error) {
+    if (isCountIndexingError(error)) {
+      return null
+    }
+
+    throw error
+  }
 }
 
 const getArticleId = (row: ReviewServingArticleRow) => {
@@ -899,7 +965,7 @@ export const getHumanReviewArticlesFromServing = async (
     detailReadiness === 'ready'
       ? readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', enabledPromptCount, routeDependencies)
       : Promise.resolve([]),
-    getCountValue(effectiveParams, manifest, 'human', routeDependencies),
+    getOptionalCountValue(effectiveParams, manifest, 'human', routeDependencies),
   ])
   const judgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
   const data = pageRows.map((row) => {
@@ -927,7 +993,7 @@ export const getHumanReviewArticlesFromServing = async (
     totalCount,
     page,
     limit,
-    totalPages: Math.ceil(totalCount / limit),
+    totalPages: totalCount === null ? null : Math.ceil(totalCount / limit),
     nextCursor: pageResult.nextCursor,
   }
 }
@@ -971,7 +1037,7 @@ export const getBothReviewArticlesFromServing = async (
     detailReadiness === 'ready'
       ? readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', enabledPromptCount, routeDependencies)
       : Promise.resolve([]),
-    getCountValue(effectiveParams, manifest, 'both', routeDependencies),
+    getOptionalCountValue(effectiveParams, manifest, 'both', routeDependencies),
   ])
   const llmJudgmentsByArticleId = getLlmJudgmentsByArticleId(llmRows)
   const humanJudgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
@@ -999,7 +1065,7 @@ export const getBothReviewArticlesFromServing = async (
     totalCount,
     page,
     limit,
-    totalPages: Math.ceil(totalCount / limit),
+    totalPages: totalCount === null ? null : Math.ceil(totalCount / limit),
     nextCursor: pageResult.nextCursor,
   }
 }
@@ -1030,10 +1096,17 @@ export const getUnassessedReviewArticlesFromServing = async (
     },
   })
   const pageRows = pageResult.rows
-  const totalCount = await getCountValue(effectiveParams, manifest, 'unassessed', routeDependencies)
+  const totalCount = await getOptionalCountValue(effectiveParams, manifest, 'unassessed', routeDependencies)
   const data = pageRows.map((row) => {
     return {...getArticleResponseBase(row), judgments: [], judgedPromptIds: [], isFullyJudged: false}
   })
 
-  return {data, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit), nextCursor: pageResult.nextCursor}
+  return {
+    data,
+    totalCount,
+    page,
+    limit,
+    totalPages: totalCount === null ? null : Math.ceil(totalCount / limit),
+    nextCursor: pageResult.nextCursor,
+  }
 }

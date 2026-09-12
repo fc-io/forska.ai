@@ -140,10 +140,10 @@ const fakeRebuildComponents = [
   'llmStatus',
   'humanStatus',
   'queue',
+  'payload',
   'posting',
   'summary',
   'judgmentInputContent',
-  'payload',
   'search',
 ] as const
 
@@ -732,7 +732,7 @@ test('V4 bootstrap candidate makes enrichment components optional for default re
   expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
+  expect(optionalComponents).toEqual(['payload', 'posting', 'summary', 'judgmentInputContent', 'search'])
 })
 
 test('V4 bootstrap request transaction carries workload context for all published manifests', async () => {
@@ -892,7 +892,7 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
   expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
+  expect(optionalComponents).toEqual(['payload', 'posting', 'summary', 'judgmentInputContent', 'search'])
 })
 
 test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {

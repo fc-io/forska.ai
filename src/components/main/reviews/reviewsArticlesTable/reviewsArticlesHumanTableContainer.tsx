@@ -172,9 +172,16 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                     {response().humanJudgmentMode === 'summary'
                       ? 'Articles with Overall Human Answers ('
                       : 'Articles with Human Judgments ('}
-                    {response().totalCount > 0
-                      ? `Showing 1-${Math.min(articles().length, response().totalCount)} of ${response().totalCount}`
-                      : '0'}
+                    {response().totalCount === null ? (
+                      <span class="inline-flex items-center gap-2">
+                        <span class="text-gray-600">{`Showing 1-${articles().length} of`}</span>
+                        <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                      </span>
+                    ) : response().totalCount > 0 ? (
+                      `Showing 1-${Math.min(articles().length, response().totalCount)} of ${response().totalCount}`
+                    ) : (
+                      '0'
+                    )}
                     )
                   </h3>
                   <p class="text-sm text-gray-600">

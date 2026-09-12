@@ -140,10 +140,10 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
 
   // Helper to get count values from either the count query or fall back to data response
   const totalCount = () => {
-    return countQuery.isSuccess ? (countQuery.data?.totalCount ?? 0) : null
+    return countQuery.isSuccess && !countQuery.data?.error ? (countQuery.data?.totalCount ?? 0) : null
   }
   const totalPages = () => {
-    return countQuery.isSuccess ? (countQuery.data?.totalPages ?? 0) : null
+    return countQuery.isSuccess && !countQuery.data?.error ? (countQuery.data?.totalPages ?? 0) : null
   }
   const useCursorPagination = true
   const hasPromptFilters = createMemo(() => {
