@@ -12,12 +12,10 @@ import type {ReviewServingManifestRepositoryDatabase} from './reviewServingManif
 import {readReviewServingRows, type ReviewServingReaderDatabase} from './reviewServingReader.ts'
 
 const llmRowComponents: readonly ReviewServingProjectionComponent[] = [
-  'display',
   'projectScope',
   'selectedImport',
+  'display',
   'llmStatus',
-  'posting',
-  'summary',
 ]
 const hydratedListComponents: readonly ReviewServingProjectionComponent[] = [
   'display',
@@ -213,7 +211,7 @@ test('readReviewServingRows metadata-only probes preserve accepted diagnostics w
   const reader = createReaderDatabase()
   const manifestDatabase = createManifestDatabase({
     active: getSnapshotRow({
-      components: ['projectScope', 'posting', 'queue', 'summary'],
+      components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'],
       snapshotId: 'active-warning-snapshot',
       status: 'active',
     }),
@@ -341,6 +339,71 @@ test('readReviewServingRows rejects missing required component state before Duck
   expect(result).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
   expect(result.diagnostics.missingRequiredComponents).toContain('llmStatus')
   expect(reader.statements).toHaveLength(0)
+})
+
+test('readReviewServingRows accepts row-only readiness while keeping count filter search and detail gates explicit', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const dependencies = {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase}
+  const rows = await readReviewServingRows(readyRequest, dependencies)
+  const count = await readReviewServingRows(
+    {
+      ...readyRequest,
+      contractKey: 'review.llm.count',
+      countFilterKey: 'all',
+      countState: {
+        availability: 'ready' as const,
+        filterKey: 'all',
+        key: 'review.list.total' as const,
+        snapshotId: 'active-snapshot',
+        value: 1,
+      },
+      limit: 1,
+      namedCountKey: 'review.list.total' as const,
+    },
+    dependencies,
+  )
+  const filteredRows = await readReviewServingRows(
+    {...readyRequest, filters: {importRoute: 'import-route-1'}},
+    dependencies,
+  )
+  const searchedRows = await readReviewServingRows(
+    {
+      ...readyRequest,
+      searchMode: 'tokenPrefix',
+      searchState: {availability: 'ready' as const, snapshotId: 'active-snapshot'},
+      searchTokenPrefix: 'hea',
+    },
+    dependencies,
+  )
+  const detail = await readReviewServingRows(
+    {...readyRequest, articleId: 'article-1', contractKey: 'review.detail.judgments'},
+    dependencies,
+  )
+
+  expect(rows.status).toBe('accepted')
+  expect(rows.status === 'accepted' ? rows.diagnostics.manifest.rowReadiness : null).toBe('ready')
+  expect(rows.status === 'accepted' ? rows.diagnostics.manifest.countReadiness : null).toBe('ready')
+  expect(rows.status === 'accepted' ? rows.diagnostics.manifest.filterReadiness : null).toBe('indexing')
+  expect(rows.status === 'accepted' ? rows.diagnostics.manifest.searchReadiness : null).toBe('unavailable')
+  expect(rows.status === 'accepted' ? rows.sql : '').not.toContain('review_article_filter_posting_serving_v4')
+  expect(count).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
+  expect(count.diagnostics.missingRequiredComponents).toEqual(['posting', 'summary'])
+  expect(filteredRows).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
+  expect(filteredRows.diagnostics.missingRequiredComponents).toEqual(['posting'])
+  expect(searchedRows).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
+  expect(searchedRows.diagnostics.missingRequiredComponents).toEqual(['search'])
+  expect(detail).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
+  expect(detail.diagnostics.missingRequiredComponents).toContain('payload')
+  expect(reader.statements).toHaveLength(1)
 })
 
 test('readReviewServingRows validates cursors and filter signatures before DuckDB execution', async () => {

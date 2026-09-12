@@ -19,8 +19,11 @@ const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): Revie
     articleRefreshesPerMinute: null,
     blockedReason: null,
     coverage: {
+      countReadyArticleCount: null,
       detailReadyArticleCount: null,
+      filterReadyArticleCount: null,
       reviewPageReadyArticleCount: 0,
+      rowReadyArticleCount: null,
       searchReadyArticleCount: null,
       totalArticleCount: 1,
     },
@@ -55,6 +58,7 @@ const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): Revie
     recoveryMode: 'none',
     requiredConsumerRole: 'maintenance-worker',
     retryAfterAt: null,
+    search: {availability: 'indexing', optionalComponent: true, snapshotId: null},
     serving: {diagnostics: {}, manifest: {}, readable: true, usable: true},
     status: 'refreshing',
     ...overrides,
@@ -86,14 +90,17 @@ test('review indexing progress copy is reserved for active progress', () => {
   expect(copy.title).toBe('Review indexing in progress for project project-1')
 })
 
-test('ready review pages describe processing as background work', () => {
+test('row-ready review indexing describes processing as background work', () => {
   const copy = getReviewIndexingStateCopy({
     indexing: getIndexing({
       activeWorkCount: 1,
       coverage: {
-        detailReadyArticleCount: 100,
+        countReadyArticleCount: 100,
+        detailReadyArticleCount: null,
+        filterReadyArticleCount: null,
         reviewPageReadyArticleCount: 100,
-        searchReadyArticleCount: 42,
+        rowReadyArticleCount: 100,
+        searchReadyArticleCount: null,
         totalArticleCount: 100,
       },
       progressState: 'processing',
@@ -104,8 +111,32 @@ test('ready review pages describe processing as background work', () => {
 
   expect(copy.title).toBe('Background review indexing in progress')
   expect(copy.description).toBe(
-    'Review pages and details are ready. Search indexing is still catching up in the background.',
+    'Review rows are ready. Filters, details and search are still catching up in the background.',
   )
+  expect(copy.description).not.toContain('partial or empty')
+})
+
+test('ready review enrichment describes search processing as background work', () => {
+  const copy = getReviewIndexingStateCopy({
+    indexing: getIndexing({
+      activeWorkCount: 1,
+      coverage: {
+        countReadyArticleCount: 100,
+        detailReadyArticleCount: 100,
+        filterReadyArticleCount: 100,
+        reviewPageReadyArticleCount: 100,
+        rowReadyArticleCount: 100,
+        searchReadyArticleCount: 42,
+        totalArticleCount: 100,
+      },
+      progressState: 'processing',
+    }),
+    projectId: 'project-1',
+    surface: 'banner',
+  })
+
+  expect(copy.title).toBe('Background review indexing in progress')
+  expect(copy.description).toBe('Review rows are ready. Search is still catching up in the background.')
   expect(copy.description).not.toContain('partial or empty')
 })
 
@@ -113,8 +144,11 @@ test('fully ready review surfaces describe queued work as background maintenance
   const copy = getReviewIndexingStateCopy({
     indexing: getIndexing({
       coverage: {
+        countReadyArticleCount: 100,
         detailReadyArticleCount: 100,
+        filterReadyArticleCount: 100,
         reviewPageReadyArticleCount: 100,
+        rowReadyArticleCount: 100,
         searchReadyArticleCount: 100,
         totalArticleCount: 100,
       },
@@ -128,7 +162,7 @@ test('fully ready review surfaces describe queued work as background maintenance
 
   expect(copy.title).toBe('Background review maintenance queued')
   expect(copy.description).toBe(
-    'Review pages, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
+    'Review rows, counts, filters, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
   )
   expect(copy.title).not.toContain('Review indexing queued')
 })

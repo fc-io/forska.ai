@@ -2,7 +2,11 @@ import {expect, test} from 'bun:test'
 import {Effect} from 'effect'
 
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {buildReviewDirtyProjectionIdentity} from './reviewProjectionIdentity.ts'
 import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
+import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {getReviewServingProjectionComponentIdentityKey} from './reviewServingProjectorDomain.ts'
+import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedImportProjector.ts'
 import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
 
 type FakeStats = {
@@ -71,14 +75,16 @@ type FakeProjectionManifestRow = {
   projectionIdentity: string
   promptConfigHash: string | null
   reviewConfigHash: string | null
-  status: 'candidate'
+  status: 'active' | 'candidate'
 }
 
 type FakeDirtyWatermark = {latestSourceHighWaterMark: number; sourcePartition: string}
 
 type FakeRequestDatabaseOptions = {
+  completedBootstrapComponents?: readonly ReviewServingProjectionComponent[]
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
   legacyRequiredEnrichmentCandidate?: boolean
+  staleBootstrapComponents?: readonly ReviewServingProjectionComponent[]
 }
 
 const getSqlStrings = (statement: string) => {
@@ -141,6 +147,92 @@ const fakeRebuildComponents = [
   'search',
 ] as const
 
+const getFakeBootstrapProjectionIdentity = (component: ReviewServingProjectionComponent) => {
+  return buildReviewDirtyProjectionIdentity({projectId: 'project-v4', projectionComponent: component})
+}
+
+const getFakeBootstrapProjectionManifestId = (component: ReviewServingProjectionComponent) => {
+  return getReviewServingProjectionComponentIdentityKey({
+    projectId: 'project-v4',
+    projectionComponent: component,
+    projectionIdentity: getFakeBootstrapProjectionIdentity(component),
+  })
+}
+
+const getFakeSelectedImportSnapshotId = (sourceDeltaHighWater: number) => {
+  return getReviewServingSelectedImportSnapshotId({
+    projectId: 'project-v4',
+    projectScopeIdentity: getFakeBootstrapProjectionIdentity('projectScope'),
+    sourceDeltaHighWater,
+  })
+}
+
+const getFakeBootstrapSourceWatermarks = (options: FakeRequestDatabaseOptions) => {
+  return (options.dirtyWatermarks ?? []).reduce<Record<string, number>>((watermarks, watermark) => {
+    const sourceKey = watermark.sourcePartition.split(':')[0] ?? watermark.sourcePartition
+
+    return {...watermarks, [sourceKey]: Math.max(watermarks[sourceKey] ?? 0, watermark.latestSourceHighWaterMark)}
+  }, {})
+}
+
+const getFakeReusableProjectionManifest = (
+  component: ReviewServingProjectionComponent,
+  sourceWatermarks: Record<string, number>,
+  options: FakeRequestDatabaseOptions,
+) => {
+  const staleComponentSet = new Set(options.staleBootstrapComponents ?? [])
+  const inputWatermarks = staleComponentSet.has(component)
+    ? Object.fromEntries(
+        Object.entries(sourceWatermarks).map(([sourceKey, sourceWatermark]) => {
+          return [sourceKey, Math.max(0, sourceWatermark - 1)]
+        }),
+      )
+    : sourceWatermarks
+
+  return {
+    baseGeneration: 0,
+    definitionVersion: `${component}:dirty-claim-seed-v1`,
+    inputDigest: `${component}-completed-bootstrap`,
+    inputWatermark: Math.max(0, ...Object.values(inputWatermarks)),
+    inputWatermarksJson: JSON.stringify(inputWatermarks),
+    invalidationReason: `${component}.completed`,
+    manifestId: getFakeBootstrapProjectionManifestId(component),
+    patchRangeEnd: Math.max(0, ...Object.values(inputWatermarks)),
+    patchRangeStart: 0,
+    patchWatermark: Math.max(0, ...Object.values(inputWatermarks)),
+    projectId: 'project-v4',
+    projectionComponent: component,
+    projectionIdentity: getFakeBootstrapProjectionIdentity(component),
+    promptConfigHash: null,
+    reviewConfigHash: null,
+    status: 'candidate',
+  } satisfies FakeProjectionManifestRow
+}
+
+const getFakeReusableBootstrapComponentStateJson = (
+  sourceWatermarks: Record<string, number>,
+  options: FakeRequestDatabaseOptions,
+) => {
+  const staleComponentSet = new Set(options.staleBootstrapComponents ?? [])
+  const getPatchWatermark = (component: ReviewServingProjectionComponent) => {
+    const sourceWatermark = Math.max(0, ...Object.values(sourceWatermarks))
+
+    return staleComponentSet.has(component) ? Math.max(0, sourceWatermark - 1) : sourceWatermark
+  }
+
+  return {
+    optional: [],
+    required: fakeRebuildComponents.map((component) => {
+      return {
+        baseGeneration: 0,
+        component,
+        patchWatermark: getPatchWatermark(component),
+        projectionIdentity: getFakeBootstrapProjectionIdentity(component),
+      }
+    }),
+  }
+}
+
 const getFakeArticleRanges = (chunkCount: number, stats: FakeStats) => {
   return Array.from({length: chunkCount}, (_, index) => {
     return {
@@ -157,6 +249,8 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   const effectiveStats = {...stats, activeSnapshotCount: Math.min(stats.activeSnapshotCount, stats.snapshotCount)}
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
+  const reusableBootstrapSourceWatermarks = getFakeBootstrapSourceWatermarks(options)
+  const reusableBootstrapComponentSet = new Set(options.completedBootstrapComponents ?? [])
   const statements: string[] = []
   const transactionStatements: string[][] = []
   const transactionWorkloadContexts: Array<DuckdbWorkloadContext | undefined> = []
@@ -166,6 +260,12 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return {baseGeneration: 2, component, patchWatermark: 10, projectionIdentity: `${component}:identity-1`}
     }),
   }
+
+  reusableBootstrapComponentSet.forEach((component) => {
+    const manifest = getFakeReusableProjectionManifest(component, reusableBootstrapSourceWatermarks, options)
+
+    projectionManifests.set(manifest.manifestId, manifest)
+  })
 
   const run = async (statement: string) => {
     statements.push(statement)
@@ -232,6 +332,10 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     const status = (strings[6] ?? 'admitted') as FakeRequestRow['status']
     const admissionState = (strings[7] ?? 'admitted') as FakeRequestRow['admissionState']
     const overBudgetReason = status === 'blocked_over_budget' ? (strings[10] ?? 'over budget') : null
+    const diagnosticsJson =
+      strings.find((value) => {
+        return value.startsWith('{"budget"')
+      }) ?? '{}'
     const priority = Number(statement.match(/,\s*(\d+),\s*'(admitted|blocked_over_budget)'/u)?.[1] ?? 100)
 
     requests.set(requestId, {
@@ -239,7 +343,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       admittedAt: status === 'admitted' ? '2026-06-20T10:04:00.000Z' : null,
       completedAt: null,
       createdAt: '2026-06-20T10:04:00.000Z',
-      diagnosticsJson: strings[11] ?? '{}',
+      diagnosticsJson,
       failedAt: null,
       identityJson: strings[5] ?? '{}',
       lastError: null,
@@ -286,6 +390,42 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
 
     if (statement.includes('legacyRequiredEnrichmentCount')) {
       return [{legacyRequiredEnrichmentCount: options.legacyRequiredEnrichmentCandidate === true ? 1 : 0}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && statement.includes('totalChunkCount')) {
+      const component = getSqlStrings(statement).at(-2) as ReviewServingProjectionComponent | undefined
+      const completed = component !== undefined && reusableBootstrapComponentSet.has(component) ? 2 : 0
+
+      return [{completedChunkCount: completed, incompleteChunkCount: 0, totalChunkCount: completed}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest') && statement.includes('snapshot_id =')) {
+      const strings = getSqlStrings(statement)
+      const projectId = strings[0] ?? 'project-v4'
+      const snapshotId = strings[1] ?? 'snapshot:reusable-bootstrap'
+      const selectedImportSnapshotId = getFakeSelectedImportSnapshotId(
+        reusableBootstrapSourceWatermarks.importRunArticle ?? 0,
+      )
+
+      return reusableBootstrapComponentSet.size === 0
+        ? ([] as T[])
+        : ([
+            {
+              componentStateJson: getFakeReusableBootstrapComponentStateJson(reusableBootstrapSourceWatermarks, options),
+              composedIdentityJson: {},
+              lastError: null,
+              lastKnownGoodSnapshotId: null,
+              optionalComponentsJson: [],
+              projectId,
+              requiredComponentsJson: fakeRebuildComponents,
+              reviewConfigHash: null,
+              selectedImportSnapshotId,
+              snapshotId,
+              snapshotStatus: 'candidate',
+              sourceWatermarksJson: reusableBootstrapSourceWatermarks,
+              validationResultJson: null,
+            },
+          ] as T[])
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -474,6 +614,101 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain('freshReviewServingSnapshot')
 })
 
+test('V4 bootstrap rebuild reuses unchanged same-snapshot component manifests', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {
+      ...baseStats,
+      activeSnapshotCount: 0,
+      snapshotCount: 1,
+    },
+    {
+      completedBootstrapComponents: ['display', 'summary'],
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 10, sourcePartition: 'reviewChange:project-v4'},
+        {latestSourceHighWaterMark: 4, sourcePartition: 'importRunArticle:project-v4'},
+        {latestSourceHighWaterMark: 7, sourcePartition: 'projectScope:project-v4'},
+      ],
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+  const displayChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes("'display'")
+  })
+  const summaryChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes("'summary'")
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInserts).toHaveLength(fakeRebuildComponents.length - 2)
+  expect(displayChunkInserts).toHaveLength(0)
+  expect(summaryChunkInserts).toHaveLength(0)
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        rebuiltChunkCount: fakeRebuildComponents.length - 2,
+        reusedChunkCount: 4,
+        reusedComponents: ['display', 'summary'],
+        reuseMode: 'sameSnapshotComponentGeneration',
+      },
+    },
+  })
+  expect(statements.join('\n')).toContain('FROM app.review_rebuild_chunk_manifest')
+  expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+})
+
+test('V4 bootstrap rebuild creates fresh chunks for incompatible component manifests', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {
+      ...baseStats,
+      activeSnapshotCount: 0,
+      snapshotCount: 1,
+    },
+    {
+      completedBootstrapComponents: ['display', 'summary'],
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 10, sourcePartition: 'reviewChange:project-v4'},
+        {latestSourceHighWaterMark: 4, sourcePartition: 'importRunArticle:project-v4'},
+        {latestSourceHighWaterMark: 7, sourcePartition: 'projectScope:project-v4'},
+      ],
+      staleBootstrapComponents: ['display'],
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+  const displayChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes("'display'")
+  })
+  const summaryChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes("'summary'")
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInserts).toHaveLength(fakeRebuildComponents.length - 1)
+  expect(displayChunkInserts).toHaveLength(1)
+  expect(summaryChunkInserts).toHaveLength(0)
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        rebuiltChunkCount: fakeRebuildComponents.length - 1,
+        reusedChunkCount: 2,
+        reusedComponents: ['summary'],
+        reuseMode: 'sameSnapshotComponentGeneration',
+      },
+    },
+  })
+})
+
 test('V4 bootstrap candidate makes enrichment components optional for default readiness', async () => {
   const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
 
@@ -493,10 +728,11 @@ test('V4 bootstrap candidate makes enrichment components optional for default re
     return entry.includes('payload')
   })
 
-  expect(requiredComponents).toContain('summary')
+  expect(requiredComponents).not.toContain('posting')
+  expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['judgmentInputContent', 'payload', 'search'])
+  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
 })
 
 test('V4 bootstrap request transaction carries workload context for all published manifests', async () => {
@@ -652,9 +888,11 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
 
   expect(reseededRequest.requestId).toBe(firstRequest.requestId)
   expect(snapshotInserts).toHaveLength(2)
+  expect(requiredComponents).not.toContain('posting')
+  expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['judgmentInputContent', 'payload', 'search'])
+  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
 })
 
 test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {

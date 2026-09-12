@@ -136,6 +136,34 @@ test('normal foreground row contracts require ready snapshots and serving tables
   expect(bothRows?.maxPageSize).toBe(501)
 })
 
+test('default tab row contracts require row inputs without summary or posting', () => {
+  const rowContracts = [
+    getReviewServingReadContract('review.llm.rows'),
+    getReviewServingReadContract('review.human.rows'),
+    getReviewServingReadContract('review.both.rows'),
+    getReviewServingReadContract('review.unassessed.rows'),
+    getReviewServingReadContract('review.llm.rowsByArticleSet'),
+    getReviewServingReadContract('review.human.rowsByArticleSet'),
+    getReviewServingReadContract('review.both.rowsByArticleSet'),
+    getReviewServingReadContract('review.unassessed.rowsByArticleSet'),
+  ]
+
+  expect(
+    rowContracts.map((contract) => {
+      return [contract?.key, contract?.requiredComponents, contract?.namedFastCounts]
+    }),
+  ).toEqual([
+    ['review.llm.rows', ['projectScope', 'selectedImport', 'display', 'llmStatus'], []],
+    ['review.human.rows', ['projectScope', 'selectedImport', 'display', 'humanStatus'], []],
+    ['review.both.rows', ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'], []],
+    ['review.unassessed.rows', ['projectScope', 'selectedImport', 'display', 'llmStatus', 'queue'], []],
+    ['review.llm.rowsByArticleSet', ['projectScope', 'selectedImport', 'display', 'llmStatus'], []],
+    ['review.human.rowsByArticleSet', ['projectScope', 'selectedImport', 'display', 'humanStatus'], []],
+    ['review.both.rowsByArticleSet', ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'], []],
+    ['review.unassessed.rowsByArticleSet', ['projectScope', 'selectedImport', 'display', 'llmStatus', 'queue'], []],
+  ])
+})
+
 test('direct ordered row contracts advertise only migrated route filters', () => {
   const orderedRowContracts = reviewServingReadContractList.filter((contract) => {
     return (
@@ -376,15 +404,10 @@ test('prompt preview contract orders article serving rows without judgment detai
 test('unassessed row contract requires only base list-mode dependencies', () => {
   const unassessedRows = getReviewServingReadContract('review.unassessed.rows')
 
-  expect(unassessedRows?.requiredComponents).toEqual([
-    'display',
-    'projectScope',
-    'selectedImport',
-    'llmStatus',
-    'queue',
-    'summary',
-  ])
+  expect(unassessedRows?.requiredComponents).toEqual(['projectScope', 'selectedImport', 'display', 'llmStatus', 'queue'])
   expect(unassessedRows?.requiredComponents).not.toContain('judgmentInputContent')
+  expect(unassessedRows?.requiredComponents).not.toContain('posting')
+  expect(unassessedRows?.requiredComponents).not.toContain('summary')
   expect(unassessedRows?.requiredComponents).not.toContain('payload')
 })
 
@@ -753,7 +776,16 @@ test('snapshot contracts align cursor fields with sort keys and required counts'
 
   expect(health?.cursorFields).toEqual(['updated_at', 'snapshot_id'])
   expect(warning?.cursorFields).toEqual(['updated_at', 'snapshot_id'])
-  expect(warning?.requiredComponents).toContain('queue')
+  expect(warning?.requiredComponents).toEqual([
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+  ])
+  expect(warning?.requiredComponents).not.toContain('posting')
+  expect(warning?.requiredComponents).not.toContain('summary')
   expect(warning?.optionalComponents).not.toContain('queue')
 })
 
