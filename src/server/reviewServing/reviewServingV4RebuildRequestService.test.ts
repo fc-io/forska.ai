@@ -80,10 +80,35 @@ type FakeProjectionManifestRow = {
 
 type FakeDirtyWatermark = {latestSourceHighWaterMark: number; sourcePartition: string}
 
+type FakeDirtyWorkRow = {
+  articleId: string | null
+  createdAt: string
+  dirtyKind: string
+  dirtyRangeEnd: string | null
+  dirtyRangeStart: string | null
+  dirtyWorkId: string
+  firstSourceHighWaterMark: number
+  latestDeltaId: string | null
+  latestSourceHighWaterMark: number
+  lifecycleReason: string | null
+  projectId: string
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+  projectionKey: string
+  scopeId: string
+  scopeKind: string
+  sourcePartition: string
+  status: 'pending' | 'running' | 'completed'
+  storageRowId: number
+  updatedAt: string
+}
+
 type FakeRequestDatabaseOptions = {
   completedBootstrapComponents?: readonly ReviewServingProjectionComponent[]
+  coveredDirtyWorkRows?: readonly FakeDirtyWorkRow[]
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
   legacyRequiredEnrichmentCandidate?: boolean
+  reusableBootstrapSourceSnapshotId?: string
   staleBootstrapComponents?: readonly ReviewServingProjectionComponent[]
 }
 
@@ -260,6 +285,23 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return {baseGeneration: 2, component, patchWatermark: 10, projectionIdentity: `${component}:identity-1`}
     }),
   }
+  const getReusableBootstrapSnapshotRow = (snapshotId: string, status: 'active' | 'candidate' | 'retired' = 'candidate') => {
+    return {
+      componentStateJson: getFakeReusableBootstrapComponentStateJson(reusableBootstrapSourceWatermarks, options),
+      composedIdentityJson: {},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponentsJson: [],
+      projectId: 'project-v4',
+      requiredComponentsJson: fakeRebuildComponents,
+      reviewConfigHash: null,
+      selectedImportSnapshotId: getFakeSelectedImportSnapshotId(reusableBootstrapSourceWatermarks.importRunArticle ?? 0),
+      snapshotId,
+      snapshotStatus: status,
+      sourceWatermarksJson: reusableBootstrapSourceWatermarks,
+      validationResultJson: null,
+    }
+  }
 
   reusableBootstrapComponentSet.forEach((component) => {
     const manifest = getFakeReusableProjectionManifest(component, reusableBootstrapSourceWatermarks, options)
@@ -378,10 +420,29 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return [effectiveStats] as T[]
     }
 
+    if (statement.includes('FROM app.review_selected_import_snapshot')) {
+      return [{status: 'completed'}] as T[]
+    }
+
     if (statement.includes('FROM app.project_article')) {
       return [
         {chunkEndKey: 'article-z', chunkStartKey: 'article-a', scopedArticleCount: effectiveStats.scopedArticleCount},
       ] as T[]
+    }
+
+    if (
+      statement.includes('FROM app.review_serving_dirty_work dirty_work')
+      && statement.includes('INNER JOIN covered_claim_state')
+    ) {
+      return (options.coveredDirtyWorkRows ?? []) as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_dirty_work_claim_state')) {
+      return [] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_dirty_work_ack_id_lookup')) {
+      return [] as T[]
     }
 
     if (statement.includes('FROM app.review_serving_dirty_work')) {
@@ -403,29 +464,21 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       const strings = getSqlStrings(statement)
       const projectId = strings[0] ?? 'project-v4'
       const snapshotId = strings[1] ?? 'snapshot:reusable-bootstrap'
-      const selectedImportSnapshotId = getFakeSelectedImportSnapshotId(
-        reusableBootstrapSourceWatermarks.importRunArticle ?? 0,
-      )
+      const exactSnapshotEnabled = options.reusableBootstrapSourceSnapshotId === undefined
+      const sourceSnapshotEnabled = options.reusableBootstrapSourceSnapshotId === snapshotId
 
-      return reusableBootstrapComponentSet.size === 0
+      return reusableBootstrapComponentSet.size === 0 || (!exactSnapshotEnabled && !sourceSnapshotEnabled)
         ? ([] as T[])
-        : ([
-            {
-              componentStateJson: getFakeReusableBootstrapComponentStateJson(reusableBootstrapSourceWatermarks, options),
-              composedIdentityJson: {},
-              lastError: null,
-              lastKnownGoodSnapshotId: null,
-              optionalComponentsJson: [],
-              projectId,
-              requiredComponentsJson: fakeRebuildComponents,
-              reviewConfigHash: null,
-              selectedImportSnapshotId,
-              snapshotId,
-              snapshotStatus: 'candidate',
-              sourceWatermarksJson: reusableBootstrapSourceWatermarks,
-              validationResultJson: null,
-            },
-          ] as T[])
+        : ([{...getReusableBootstrapSnapshotRow(snapshotId), projectId}] as T[])
+    }
+
+    if (
+      statement.includes('FROM app.review_serving_snapshot_manifest')
+      && statement.includes("snapshot_status IN ('active', 'retired')")
+    ) {
+      return reusableBootstrapComponentSet.size === 0 || options.reusableBootstrapSourceSnapshotId === undefined
+        ? ([] as T[])
+        : ([getReusableBootstrapSnapshotRow(options.reusableBootstrapSourceSnapshotId, 'active')] as T[])
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -652,9 +705,12 @@ test('V4 bootstrap rebuild reuses unchanged same-snapshot component manifests', 
     diagnostics: {
       componentReuse: {
         rebuiltChunkCount: fakeRebuildComponents.length - 2,
+        clonedComponents: [],
+        crossSnapshotComponents: [],
         reusedChunkCount: 4,
         reusedComponents: ['display', 'summary'],
-        reuseMode: 'sameSnapshotComponentGeneration',
+        reuseMode: 'componentGeneration',
+        sameSnapshotComponents: ['display', 'summary'],
       },
     },
   })
@@ -701,10 +757,128 @@ test('V4 bootstrap rebuild creates fresh chunks for incompatible component manif
     diagnostics: {
       componentReuse: {
         rebuiltChunkCount: fakeRebuildComponents.length - 1,
+        clonedComponents: [],
+        crossSnapshotComponents: [],
         reusedChunkCount: 2,
         reusedComponents: ['summary'],
-        reuseMode: 'sameSnapshotComponentGeneration',
+        reuseMode: 'componentGeneration',
+        sameSnapshotComponents: ['summary'],
       },
+    },
+  })
+})
+
+test('V4 bootstrap rebuild clones isolated unchanged component rows from an active source snapshot', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {
+      ...baseStats,
+      activeSnapshotCount: 0,
+      snapshotCount: 1,
+    },
+    {
+      completedBootstrapComponents: ['projectScope', 'selectedImport', 'payload', 'queue', 'summary', 'search'],
+      reusableBootstrapSourceSnapshotId: 'snapshot:active-reusable',
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const joined = statements.join('\n')
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInserts).toHaveLength(fakeRebuildComponents.length - 6)
+  expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME')
+  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 BY NAME')
+  expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4 BY NAME')
+  expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4 BY NAME')
+  expect(joined).toContain("SELECT * REPLACE (")
+  expect(joined).toContain("snapshot_id = 'snapshot:active-reusable'")
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        clonedComponents: ['queue', 'payload', 'summary', 'search'],
+        crossSnapshotComponents: ['projectScope', 'selectedImport', 'queue', 'payload', 'summary', 'search'],
+        rebuiltChunkCount: fakeRebuildComponents.length - 6,
+        reusedComponents: ['projectScope', 'selectedImport', 'queue', 'payload', 'summary', 'search'],
+        reuseMode: 'componentGeneration',
+        sameSnapshotComponents: [],
+      },
+    },
+  })
+})
+
+test('V4 bootstrap rebuild promotes all-reused candidates and completes covered dirty work', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {
+      ...baseStats,
+      activeSnapshotCount: 0,
+      snapshotCount: 1,
+    },
+    {
+      completedBootstrapComponents: fakeRebuildComponents,
+      coveredDirtyWorkRows: [
+        {
+          articleId: null,
+          createdAt: '2026-06-20T10:00:00.000Z',
+          dirtyKind: 'source-watermark',
+          dirtyRangeEnd: null,
+          dirtyRangeStart: null,
+          dirtyWorkId: 'dirty-covered-summary-1',
+          firstSourceHighWaterMark: 1,
+          latestDeltaId: null,
+          latestSourceHighWaterMark: 10,
+          lifecycleReason: null,
+          projectId: 'project-v4',
+          projectionComponent: 'summary',
+          projectionIdentity: getFakeBootstrapProjectionIdentity('summary'),
+          projectionKey: JSON.stringify({
+            projectionComponent: 'summary',
+            projectionIdentity: getFakeBootstrapProjectionIdentity('summary'),
+          }),
+          scopeId: 'project-v4',
+          scopeKind: 'project',
+          sourcePartition: 'reviewChange',
+          status: 'pending',
+          storageRowId: 42,
+          updatedAt: '2026-06-20T10:00:00.000Z',
+        },
+      ],
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 10, sourcePartition: 'reviewChange:project-v4'},
+        {latestSourceHighWaterMark: 4, sourcePartition: 'importRunArticle:project-v4'},
+        {latestSourceHighWaterMark: 7, sourcePartition: 'projectScope:project-v4'},
+      ],
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('completed')
+  expect(joined).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(joined).toContain("snapshot_status = 'active'")
+  expect(joined).toContain('validation_result_json =')
+  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain('FROM app.review_serving_dirty_work_claim_state')
+  expect(joined).toContain("lifecycle_reason = 'covered_by_rebuild'")
+  expect(joined).toContain('UPDATE app.review_serving_project_dirty_source_watermark')
+  expect(request.diagnosticsJson).toMatchObject({
+    componentReuse: {
+      rebuiltChunkCount: 0,
+      reusedComponents: [...fakeRebuildComponents],
+      reuseMode: 'componentGeneration',
+      sameSnapshotComponents: [...fakeRebuildComponents],
+    },
+    promotion: {
+      dirtyWorkCompletion: {completedCount: 1},
+      promoted: true,
     },
   })
 })

@@ -260,6 +260,35 @@ test('LLM default list remains foreground-readable while search and payload enri
   expect(sql).not.toContain('model_id AS modelId')
 })
 
+test('LLM list keeps rows readable with nullable totals while count indexing catches up', async () => {
+  const reader = createReaderDatabase(1, 1)
+  const countStatements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (statement.includes(' AS totalCount')) {
+        countStatements.push(statement)
+        throw new Error('Review count is still indexing: summary count pending')
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+  }
+
+  const result = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database,
+      manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
+    },
+  )
+
+  expect(result.data).toHaveLength(1)
+  expect(result.totalCount).toBe(null)
+  expect(result.totalPages).toBe(null)
+  expect(countStatements).toHaveLength(1)
+})
+
 test('LLM review route chunks judgment hydration above the reader article-set cap', async () => {
   const reader = createReaderDatabase(250, 250, 100)
 

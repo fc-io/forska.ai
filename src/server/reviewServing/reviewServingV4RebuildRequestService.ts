@@ -25,7 +25,7 @@ import {
 } from './reviewServingContracts.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
-  getActiveReviewServingSnapshotManifest,
+  getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingProjectionIdentityManifest,
@@ -44,10 +44,8 @@ import {
 } from './reviewServingRebuildRequestRepository.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedImportProjector.ts'
-import {
-  composeReviewServingCandidateSnapshotManifest,
-  validateReviewServingCandidateSnapshotManifest,
-} from './reviewServingSnapshotPromotionService.ts'
+import {activateReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
+import {composeReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
 
 export const defaultReviewServingV4RebuildComponents = [
   ...countReadyReviewServingComponents,
@@ -189,6 +187,7 @@ type PreparedReviewServingV4Bootstrap = {
   reviewConfigHash: string | null
   reuseDiagnostics: ReviewServingV4BootstrapReuseDiagnostics
   reusedComponents: readonly ReviewServingProjectionComponent[]
+  reusedComponentSources: readonly ReviewServingV4BootstrapComponentReuseCandidate[]
   selectedImportSnapshotId: string
   snapshotId: string
   sourceWatermarks: Record<string, number>
@@ -203,14 +202,18 @@ type ReviewServingV4BootstrapComponentChunkStats = {
 type ReviewServingV4BootstrapComponentReuseCandidate = {
   chunkCount: number
   component: ReviewServingProjectionComponent
+  sourceSnapshotId: string
 }
 
 type ReviewServingV4BootstrapReuseDiagnostics = {
   rebuiltChunkCount: number
   rebuiltComponents: readonly ReviewServingProjectionComponent[]
-  reuseMode: 'sameSnapshotComponentGeneration'
+  clonedComponents: readonly ReviewServingProjectionComponent[]
+  crossSnapshotComponents: readonly ReviewServingProjectionComponent[]
+  reuseMode: 'componentGeneration'
   reusedChunkCount: number
   reusedComponents: readonly ReviewServingProjectionComponent[]
+  sameSnapshotComponents: readonly ReviewServingProjectionComponent[]
 }
 
 const listModeFanOut = reviewServingListModes.length
@@ -229,6 +232,17 @@ const bootstrapOptionalComponents = [
 const fullProjectBootstrapComponents = [] as const satisfies readonly ReviewServingProjectionComponent[]
 const reusableBootstrapSnapshotStatuses = new Set(['active', 'candidate'] as const)
 const reusableBootstrapManifestStatuses = new Set(['active', 'candidate'] as const)
+const reusableBootstrapSourceSnapshotStatuses = new Set(['active', 'retired'] as const)
+const crossSnapshotMetadataOnlyBootstrapReuseComponents = new Set<ReviewServingProjectionComponent>([
+  'projectScope',
+  'selectedImport',
+])
+const crossSnapshotCloneableBootstrapReuseComponents = new Set<ReviewServingProjectionComponent>([
+  'payload',
+  'queue',
+  'search',
+  'summary',
+])
 const selectedImportScopedBootstrapReuseComponents = new Set<ReviewServingProjectionComponent>([
   'display',
   'humanStatus',
@@ -615,16 +629,35 @@ const isReviewServingV4BootstrapReusableSnapshot = (
     projectId: string
     reviewConfigHash: string | null
     selectedImportSnapshotId: string
-    snapshotId: string
+    snapshotId?: string
   },
 ) => {
   return (
     snapshot !== null
     && snapshot.projectId === input.projectId
-    && snapshot.snapshotId === input.snapshotId
+    && (input.snapshotId === undefined || snapshot.snapshotId === input.snapshotId)
     && snapshot.reviewConfigHash === input.reviewConfigHash
     && reusableBootstrapSnapshotStatuses.has(snapshot.status as 'active' | 'candidate')
     && snapshot.selectedImportSnapshotId === input.selectedImportSnapshotId
+  )
+}
+
+const isReviewServingV4BootstrapReusableSourceSnapshot = (
+  snapshot: ReviewServingSnapshotManifest | null,
+  input: {projectId: string; reviewConfigHash: string | null},
+) => {
+  return (
+    snapshot !== null
+    && snapshot.projectId === input.projectId
+    && snapshot.reviewConfigHash === input.reviewConfigHash
+    && reusableBootstrapSourceSnapshotStatuses.has(snapshot.status as 'active' | 'retired')
+  )
+}
+
+const canReuseReviewServingV4BootstrapComponentAcrossSnapshots = (component: ReviewServingProjectionComponent) => {
+  return (
+    crossSnapshotMetadataOnlyBootstrapReuseComponents.has(component)
+    || crossSnapshotCloneableBootstrapReuseComponents.has(component)
   )
 }
 
@@ -697,11 +730,20 @@ const getReviewServingV4BootstrapReusableComponent = async (
     projectId: string
     reviewConfigHash: string | null
     snapshot: ReviewServingSnapshotManifest
-    snapshotId: string
     sourceWatermarks: Record<string, number>
+    targetSnapshotId: string
   },
   database: ReviewServingChunkManifestRepositoryTransaction,
 ): Promise<ReviewServingV4BootstrapComponentReuseCandidate | null> => {
+  const sourceSnapshotId = input.snapshot.snapshotId
+
+  if (
+    sourceSnapshotId !== input.targetSnapshotId
+    && !canReuseReviewServingV4BootstrapComponentAcrossSnapshots(input.component)
+  ) {
+    return null
+  }
+
   const state = getReviewServingV4BootstrapSnapshotComponentState(input.snapshot, input)
   const manifest =
     state === null
@@ -723,7 +765,7 @@ const getReviewServingV4BootstrapReusableComponent = async (
             component: input.component,
             projectId: input.projectId,
             projectionIdentity: state.projectionIdentity,
-            snapshotId: input.snapshotId,
+            snapshotId: sourceSnapshotId,
           },
           database,
         )
@@ -741,7 +783,9 @@ const getReviewServingV4BootstrapReusableComponent = async (
     && chunkStats !== null
     && isReviewServingV4BootstrapReusableChunkStats(chunkStats)
 
-  return reusable && chunkStats !== null ? {chunkCount: chunkStats.completedChunkCount, component: input.component} : null
+  return reusable && chunkStats !== null
+    ? {chunkCount: chunkStats.completedChunkCount, component: input.component, sourceSnapshotId}
+    : null
 }
 
 const getReviewServingV4BootstrapReusableComponents = async (
@@ -755,36 +799,130 @@ const getReviewServingV4BootstrapReusableComponents = async (
   },
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const snapshot = await getReviewServingSnapshotManifest(
+  const targetSnapshot = await getReviewServingSnapshotManifest(
     {projectId: input.projectId, snapshotId: input.snapshotId},
     database,
   )
-  const reusableSnapshot = isReviewServingV4BootstrapReusableSnapshot(snapshot, input) ? snapshot : null
+  const activeOrLastKnownGoodSnapshot = await getActiveOrLastKnownGoodReviewServingSnapshotManifest(
+    {projectId: input.projectId, reviewConfigHash: input.reviewConfigHash},
+    database,
+  )
+  const reusableSnapshots = [
+    isReviewServingV4BootstrapReusableSnapshot(targetSnapshot, {
+      ...input,
+      snapshotId: input.snapshotId,
+    })
+      ? targetSnapshot
+      : null,
+    isReviewServingV4BootstrapReusableSourceSnapshot(activeOrLastKnownGoodSnapshot, input)
+    && activeOrLastKnownGoodSnapshot?.snapshotId !== input.snapshotId
+      ? activeOrLastKnownGoodSnapshot
+      : null,
+  ].filter((snapshot): snapshot is ReviewServingSnapshotManifest => {
+    return snapshot !== null
+  })
+  const reusableByComponent = new Map<ReviewServingProjectionComponent, ReviewServingV4BootstrapComponentReuseCandidate>()
 
-  return reusableSnapshot === null
-    ? []
-    : input.components.reduce<Promise<ReviewServingV4BootstrapComponentReuseCandidate[]>>(async (previous, component) => {
-        const reusableComponents = await previous
-        const requiresSelectedImportCompatibility = selectedImportScopedBootstrapReuseComponents.has(component)
+  for (const reusableSnapshot of reusableSnapshots) {
+    for (const component of input.components) {
+      if (reusableByComponent.has(component)) {
+        continue
+      }
 
-        if (requiresSelectedImportCompatibility && reusableSnapshot.selectedImportSnapshotId !== input.selectedImportSnapshotId) {
-          return reusableComponents
-        }
+      const requiresSelectedImportCompatibility = selectedImportScopedBootstrapReuseComponents.has(component)
 
-        const reusableComponent = await getReviewServingV4BootstrapReusableComponent(
-          {
-            component,
-            projectId: input.projectId,
-            reviewConfigHash: input.reviewConfigHash,
-            snapshot: reusableSnapshot,
-            snapshotId: input.snapshotId,
-            sourceWatermarks: input.sourceWatermarks,
-          },
-          database,
-        )
+      if (
+        requiresSelectedImportCompatibility
+        && reusableSnapshot.selectedImportSnapshotId !== input.selectedImportSnapshotId
+      ) {
+        continue
+      }
 
-        return reusableComponent === null ? reusableComponents : [...reusableComponents, reusableComponent]
-      }, Promise.resolve([]))
+      const reusableComponent = await getReviewServingV4BootstrapReusableComponent(
+        {
+          component,
+          projectId: input.projectId,
+          reviewConfigHash: input.reviewConfigHash,
+          snapshot: reusableSnapshot,
+          sourceWatermarks: input.sourceWatermarks,
+          targetSnapshotId: input.snapshotId,
+        },
+        database,
+      )
+
+      if (reusableComponent !== null) {
+        reusableByComponent.set(component, reusableComponent)
+      }
+    }
+  }
+
+  return [...reusableByComponent.values()]
+}
+
+const reviewServingV4BootstrapCloneTablesByComponent = {
+  payload: ['mart.review_article_judgment_detail_serving_v4'],
+  queue: ['mart.review_unassessed_queue_article_rank_serving_v4', 'mart.review_unassessed_queue_serving_v4'],
+  search: ['mart.review_title_search_serving_v4'],
+  summary: [
+    'mart.review_article_count_serving_v4',
+    'mart.review_filter_facet_serving_v4',
+    'mart.review_filter_option_serving_v4',
+  ],
+} as const satisfies Partial<Record<ReviewServingProjectionComponent, readonly string[]>>
+
+const cloneReviewServingV4BootstrapComponentRows = async (
+  input: {
+    component: ReviewServingProjectionComponent
+    projectId: string
+    sourceSnapshotId: string
+    targetSnapshotId: string
+  },
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const tables = reviewServingV4BootstrapCloneTablesByComponent[input.component] ?? []
+
+  await tables.reduce<Promise<void>>(async (previous, table) => {
+    await previous
+    await database.run(`
+      DELETE FROM ${table}
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND snapshot_id = ${getSqlLiteral(input.targetSnapshotId)}
+    `)
+    await database.run(`
+      INSERT INTO ${table} BY NAME
+      SELECT * REPLACE (${getSqlLiteral(input.targetSnapshotId)} AS snapshot_id)
+      FROM ${table}
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND snapshot_id = ${getSqlLiteral(input.sourceSnapshotId)}
+    `)
+  }, Promise.resolve())
+}
+
+const cloneReviewServingV4BootstrapReusedRows = async (
+  input: {
+    projectId: string
+    reusedComponents: readonly ReviewServingV4BootstrapComponentReuseCandidate[]
+    targetSnapshotId: string
+  },
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  await input.reusedComponents.reduce<Promise<void>>(async (previous, component) => {
+    await previous
+
+    if (component.sourceSnapshotId === input.targetSnapshotId) {
+      return
+    }
+
+    await cloneReviewServingV4BootstrapComponentRows(
+      {
+        component: component.component,
+        projectId: input.projectId,
+        sourceSnapshotId: component.sourceSnapshotId,
+        targetSnapshotId: input.targetSnapshotId,
+      },
+      database,
+    )
+  }, Promise.resolve())
 }
 
 const getReviewServingV4BootstrapArticleRanges = async (
@@ -1081,6 +1219,17 @@ const prepareReviewServingV4Bootstrap = async (input: {
   const reusedComponentNames = reusableComponents.map((component) => {
     return component.component
   })
+  const sameSnapshotComponents = reusableComponents.flatMap((component) => {
+    return component.sourceSnapshotId === snapshotId ? [component.component] : []
+  })
+  const clonedComponents = reusableComponents.flatMap((component) => {
+    return component.sourceSnapshotId !== snapshotId && crossSnapshotCloneableBootstrapReuseComponents.has(component.component)
+      ? [component.component]
+      : []
+  })
+  const crossSnapshotComponents = reusableComponents.flatMap((component) => {
+    return component.sourceSnapshotId === snapshotId ? [] : [component.component]
+  })
 
   return {
     chunks,
@@ -1094,13 +1243,17 @@ const prepareReviewServingV4Bootstrap = async (input: {
     reuseDiagnostics: {
       rebuiltChunkCount: chunks.length,
       rebuiltComponents,
-      reuseMode: 'sameSnapshotComponentGeneration',
+      clonedComponents,
+      crossSnapshotComponents,
+      reuseMode: 'componentGeneration',
       reusedChunkCount: reusableComponents.reduce((total, component) => {
         return total + component.chunkCount
       }, 0),
       reusedComponents: reusedComponentNames,
+      sameSnapshotComponents,
     },
     reusedComponents: reusedComponentNames,
+    reusedComponentSources: reusableComponents,
     selectedImportSnapshotId,
     snapshotId,
     sourceWatermarks: input.sourceWatermarks,
@@ -1121,6 +1274,12 @@ const seedReviewServingV4Bootstrap = async (
     },
     database,
   )
+  await runReviewServingV4RebuildStatsPhase('cloneReusedBootstrapRows', () => {
+    return cloneReviewServingV4BootstrapReusedRows(
+      {projectId: input.projectId, reusedComponents: input.reusedComponentSources, targetSnapshotId: input.snapshotId},
+      database,
+    )
+  })
 
   const componentIdentities = Object.fromEntries(
     input.components.map((component) => {
@@ -1164,58 +1323,13 @@ const promoteSeededReviewServingV4BootstrapCandidate = async (
   input: {projectId: string; snapshotId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const candidate = await getReviewServingSnapshotManifest(input, database)
+  const promotion = await activateReviewServingProjectorSnapshot(input, database)
 
-  if (candidate === null || candidate.status !== 'candidate') {
-    throw new Error(`cannot promote reused review-serving bootstrap snapshot ${input.snapshotId}: candidate is missing`)
+  if (!promotion.promoted) {
+    throw new Error(`cannot promote reused review-serving bootstrap snapshot ${input.snapshotId}: ${promotion.error}`)
   }
 
-  const validation = await validateReviewServingCandidateSnapshotManifest(candidate, database)
-
-  if (!validation.ok) {
-    throw new Error(`cannot promote reused review-serving bootstrap snapshot ${input.snapshotId}: ${validation.error}`)
-  }
-
-  const active = await getActiveReviewServingSnapshotManifest(
-    {projectId: input.projectId, reviewConfigHash: candidate.reviewConfigHash},
-    database,
-  )
-  const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
-
-  await database.run(`
-    UPDATE app.review_serving_snapshot_manifest
-    SET
-      validation_result_json = ${getReviewServingJsonLiteral(validation.validationResult)},
-      updated_at = current_timestamp
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND snapshot_status = 'candidate'
-  `)
-  await database.run(`
-    UPDATE app.review_serving_snapshot_manifest
-    SET
-      snapshot_status = 'retired',
-      updated_at = current_timestamp
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(candidate.reviewConfigHash)}
-      AND snapshot_status = 'active'
-      AND snapshot_id <> ${getSqlLiteral(input.snapshotId)}
-  `)
-  await database.run(`
-    UPDATE app.review_serving_snapshot_manifest
-    SET
-      snapshot_status = 'active',
-      last_known_good_snapshot_id = ${getSqlLiteral(lastKnownGoodSnapshotId)},
-      activated_at = current_timestamp,
-      failed_at = NULL,
-      last_error = NULL,
-      updated_at = current_timestamp
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND snapshot_status = 'candidate'
-  `)
-
-  return {promoted: true, snapshotId: input.snapshotId}
+  return promotion
 }
 
 const getReviewServingV4RebuildEstimate = (
