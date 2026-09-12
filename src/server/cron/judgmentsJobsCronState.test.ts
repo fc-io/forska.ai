@@ -1,10 +1,10 @@
 import {expect, test} from 'bun:test'
 
 import {
-  JUDGMENTS_IMPORT_STALE_AFTER_MS,
   beginJudgmentsImportCronRun,
   finishJudgmentsImportCronRun,
   getJudgmentsImportCronActivity,
+  JUDGMENTS_IMPORT_STALE_AFTER_MS,
 } from './judgmentsJobsCronState.ts'
 
 test('judgments import cron latch is stale-aware and run-token guarded', () => {

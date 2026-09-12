@@ -252,7 +252,9 @@ test('LLM default list remains foreground-readable while search and payload enri
   expect(result.detailReadiness).toBe('indexing')
   expect(result.data[0]?.detailReadiness).toBe('indexing')
   expect(result.totalCount).toBe(1)
+  expect(sql).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).not.toContain('FROM mart.review_article_count_serving_v4')
   expect(sql).not.toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).not.toContain('mart.review_title_search_serving_v4')
   expect(sql).not.toContain('search_identity')
@@ -287,6 +289,33 @@ test('LLM list keeps rows readable with nullable totals while count indexing cat
   expect(result.totalCount).toBe(null)
   expect(result.totalPages).toBe(null)
   expect(countStatements).toHaveLength(1)
+})
+
+test('LLM count reports indexing before using cache identities when required state is unavailable', async () => {
+  const reader = createReaderDatabase()
+
+  await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active', ['display', 'projectScope', 'selectedImport']),
+    },
+  ).then(
+    () => {
+      throw new Error('Expected LLM count indexing rejection')
+    },
+    (error) => {
+      expect(error).toEqual(
+        expect.objectContaining({
+          message: 'Review count is still indexing: LLM count requires llmStatus components that are still indexing',
+        }),
+      )
+    },
+  )
+
+  expect(reader.statements.join('\n')).not.toContain('FROM mart.review_filtered_count_serving_v4')
+  expect(reader.statements.join('\n')).not.toContain(' AS totalCount')
 })
 
 test('LLM review route chunks judgment hydration above the reader article-set cap', async () => {
@@ -704,7 +733,7 @@ test('LLM review route diagnostics surface candidate and missing snapshot states
   expect(candidate.diagnostics.rejectionReason).toBe('manifestStatusRejected')
   expect(missing.status).toBe('rejected')
   expect(missing.diagnostics.manifest).toMatchObject({freshness: 'unavailable', snapshotId: null, status: 'missing'})
-  expect(missing.diagnostics.rejectionReason).toBe('servingIdentityMissing')
+  expect(missing.diagnostics.rejectionReason).toBe('manifestStatusRejected')
 })
 
 test('migrated LLM review routes do not import OLAP fallback wrappers', async () => {

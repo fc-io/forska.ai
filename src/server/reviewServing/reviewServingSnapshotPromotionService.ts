@@ -1,7 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
-import {type ReviewServingDirtyWorkCoverage} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingComponentRequirements,
   type ReviewServingCountAvailability,
@@ -11,6 +10,7 @@ import {
   type ReviewServingSearchAvailability,
   type ReviewServingSnapshotComponentStates,
 } from './reviewServingContracts.ts'
+import {type ReviewServingDirtyWorkCoverage} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingProjectionIdentityManifest,
   type ReviewServingManifestRepositoryTransaction,

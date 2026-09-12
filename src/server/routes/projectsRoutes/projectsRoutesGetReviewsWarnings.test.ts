@@ -1983,11 +1983,7 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
   })
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
   expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.search).toEqual({
-    availability: 'indexing',
-    optionalComponent: true,
-    snapshotId,
-  })
+  expect(body.data.indexing.search).toEqual({availability: 'indexing', optionalComponent: true, snapshotId})
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('refreshing')
 })

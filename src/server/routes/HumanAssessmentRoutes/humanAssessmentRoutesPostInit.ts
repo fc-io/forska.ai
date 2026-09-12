@@ -40,9 +40,16 @@ const summaryModeBlockedMessage = 'Summary-mode projects do not support prompt-b
 const getNextHumanAssessmentArticleFromServing = async (projectId: string) => {
   const database = getAppDatabaseService() as ReviewServingManifestRepositoryDatabase & ReviewServingReaderDatabase
   const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
-  const activeManifest = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, database)
+  const activeManifest = await getActiveReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId, reviewConfigHash},
+    database,
+  )
   const manifest =
-    activeManifest ?? (await getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
+    activeManifest
+    ?? (await getLastKnownGoodReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId, reviewConfigHash},
+      database,
+    ))
 
   if (!manifest) {
     return null

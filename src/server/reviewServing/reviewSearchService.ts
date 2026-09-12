@@ -171,7 +171,7 @@ const getManifest = async (
   manifestDatabase: ReviewServingManifestRepositoryDatabase,
 ) => {
   return getReviewServingSnapshotManifest(
-    {projectId: request.projectId, snapshotId: request.snapshotId},
+    {componentStateMode: 'available', projectId: request.projectId, snapshotId: request.snapshotId},
     manifestDatabase,
   )
 }

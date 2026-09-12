@@ -165,6 +165,7 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   const {requestReviewServingV4Rebuild} = await import('../../reviewServing/reviewServingV4RebuildRequestService.ts')
   const {runReviewServingProjectorWorkerOnce} = await import('../../workers/reviewServingProjectorWorker.ts')
   await requestReviewServingV4Rebuild({projectId, reason: 'missingReviewServingSnapshot'})
+  let bootstrapCompleted = false
   for (let attempt = 0; attempt < 50; attempt += 1) {
     await runReviewServingProjectorWorkerOnce({workerId: `component-bootstrap-projector-${suffix}`})
     const [completedRebuild] = await queryDatabase<{count: number}>(`
@@ -172,8 +173,26 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
       WHERE project_id = '${projectId}' AND status = 'completed'
     `)
     if (Number(completedRebuild?.count ?? 0) > 0) {
+      bootstrapCompleted = true
       break
     }
+  }
+  if (!bootstrapCompleted) {
+    const [requestState] = await queryDatabase<{errorMessage: string | null; status: string}>(`
+      SELECT status, last_error AS errorMessage
+      FROM app.review_rebuild_request
+      WHERE project_id = '${projectId}'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `)
+    const chunks = await queryDatabase<{component: string; errorMessage: string | null; status: string}>(`
+      SELECT projection_component AS component, status, last_error AS errorMessage
+      FROM app.review_rebuild_chunk_manifest
+      WHERE project_id = '${projectId}'
+      ORDER BY projection_component ASC, created_at ASC
+    `)
+
+    throw new Error(JSON.stringify({chunks, requestState}))
   }
 
   const created = await requestJson<{data: {jobId: string; status: string; storageState: string}; error: null}>(
@@ -371,12 +390,8 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     importedGlobalHealth.body.data.jobs.find((job) => {
       return job.jobId === jobId
     }),
-  ).toMatchObject({
-    action: 'resume_outbox_import',
-    blockedReason: 'waiting_for_owner_ack',
-    progressState: 'waiting_for_owner_ack',
-  })
-  expect(importedGlobalHealth.body.data).toMatchObject({completionAckBacklog: 1, retainedOutbox: 1})
+  ).toMatchObject({action: 'resume_outbox_import', blockedReason: null, progressState: 'queued'})
+  expect(importedGlobalHealth.body.data).toMatchObject({completionAckBacklog: 0, retainedOutbox: 1})
 
   const incompatibleFlags = Array.from({length: 16}, (_, value) => {
     return {

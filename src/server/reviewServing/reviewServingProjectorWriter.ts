@@ -12,8 +12,8 @@ import {
 } from './reviewServingDeltaReconciliation.ts'
 import {
   completeReviewServingDirtyWorkClaims,
-  completeReviewServingDirtyWorkCoveredByRebuild,
   type CompleteReviewServingDirtyWorkCoverageResult,
+  completeReviewServingDirtyWorkCoveredByRebuild,
   type ReviewServingDirtyWorkClaim,
   type ReviewServingDirtyWorkInput,
   upsertReviewServingDirtyWork,
@@ -643,11 +643,28 @@ export const activateReviewServingProjectorSnapshot = async (
   database: ReviewServingProjectorWriterTransaction,
 ): Promise<ActivateReviewServingProjectorSnapshotResult> => {
   const candidate = await getReviewServingSnapshotManifest(
-    {projectId: input.projectId, snapshotId: input.snapshotId},
+    {componentStateMode: 'available', projectId: input.projectId, snapshotId: input.snapshotId},
     database,
   )
 
-  if (candidate === null || candidate.status !== 'candidate') {
+  if (candidate === null) {
+    return {error: 'candidate snapshot manifest is missing', promoted: false, snapshotId: input.snapshotId}
+  }
+
+  if (input.reviewConfigHash !== undefined && candidate.reviewConfigHash !== (input.reviewConfigHash ?? null)) {
+    return {error: 'candidate snapshot manifest review config mismatch', promoted: false, snapshotId: input.snapshotId}
+  }
+
+  if (candidate.status === 'active') {
+    const dirtyWorkCompletion = await completeReviewServingDirtyWorkCoveredByRebuild(
+      await getPromotedReviewServingSnapshotDirtyWorkCoverages(candidate, database),
+      database,
+    )
+
+    return {dirtyWorkCompletion, promoted: true, snapshotId: input.snapshotId}
+  }
+
+  if (candidate.status !== 'candidate') {
     return {error: 'candidate snapshot manifest is missing', promoted: false, snapshotId: input.snapshotId}
   }
 
@@ -665,7 +682,7 @@ export const activateReviewServingProjectorSnapshot = async (
       WHERE project_id = ${getSqlLiteral(input.projectId)}
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
         AND snapshot_status = 'candidate'
-    `)
+  `)
 
   const candidateReviewConfigHash = candidate.reviewConfigHash
   const active = await getActiveReviewServingSnapshotManifest(

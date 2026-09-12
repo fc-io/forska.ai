@@ -3,6 +3,7 @@ import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
+  isReviewServingProjectionComponent,
   type ReviewServingComponentRequirements,
   type ReviewServingProjectionComponent,
   type ReviewServingSnapshotComponentStates,
@@ -28,6 +29,7 @@ export type ReviewServingManifestRepositoryTransaction = {
 export type ReviewServingManifestReaderDatabase = Pick<ReviewServingManifestRepositoryDatabase, 'queryJson'>
 
 export type ReviewServingProjectionManifestStatus = ReviewServingSnapshotStatus
+export type ReviewServingSnapshotComponentStateMode = 'available' | 'raw'
 
 export type ReviewServingProjectionIdentityManifest = ReviewServingProjectionComponentIdentity & {
   baseGeneration: number
@@ -123,6 +125,29 @@ type SnapshotManifestRow = {
   sourceWatermarksJson: unknown
   validationResultJson: unknown
 }
+type SnapshotComponentChunkAvailabilityRow = {
+  completedChunkCount: number | string
+  component: string | null
+  maxChunkUpdatedAt: string | null
+  outputBaseGeneration: number | string | null
+  projectionIdentity: string | null
+  requestCreatedAt: string | null
+  requestId: string | null
+  requestStatus: string | null
+  requestUpdatedAt: string | null
+  totalChunkCount: number | string
+}
+type SnapshotComponentProjectionStatusRow = {
+  baseGeneration: number | string | null
+  component: string | null
+  projectionIdentity: string | null
+  projectionStatus: string | null
+}
+
+type SnapshotManifestReadOptions = {
+  componentStateMode?: ReviewServingSnapshotComponentStateMode
+  workloadContext?: DuckdbWorkloadContext
+}
 
 const getReviewServingJsonLiteral = (value: ReviewServingIdentityValue) => {
   return `${getSqlLiteral(getStableReviewServingJson(value))}::JSON`
@@ -213,6 +238,269 @@ const getSnapshotManifestFromRow = (row: SnapshotManifestRow): ReviewServingSnap
     status: row.snapshotStatus,
     validationResult: getJsonValue(row.validationResultJson) as ReviewServingIdentityValue | null,
   }
+}
+
+const getNonNegativeFiniteInteger = (value: unknown) => {
+  const numberValue = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+
+  return Number.isFinite(numberValue) && numberValue >= 0 ? Math.trunc(numberValue) : null
+}
+
+const getSnapshotComponentAvailabilityKey = (input: {
+  baseGeneration: number
+  component: ReviewServingProjectionComponent
+  projectionIdentity: string
+}) => {
+  return `${input.component}\0${input.projectionIdentity}\0${input.baseGeneration}`
+}
+
+const getSnapshotManifestComponentStates = (manifest: ReviewServingSnapshotManifest) => {
+  return [...manifest.componentState.required, ...manifest.componentState.optional]
+}
+
+const isProjectionStatusTrustedWithoutChunks = (manifest: ReviewServingSnapshotManifest, status: string | null) => {
+  return manifest.status !== 'candidate' || status === 'active'
+}
+
+const snapshotManifestAvailabilityResultRowLimit = 64
+
+const getSnapshotManifestAvailabilityWorkloadContext = (
+  manifest: ReviewServingSnapshotManifest,
+  workloadContext: DuckdbWorkloadContext | undefined,
+): DuckdbWorkloadContext => {
+  return {
+    allowsTempSpill: false,
+    fallbackIntent: workloadContext?.fallbackIntent ?? 'serveStale',
+    maxResultRows: snapshotManifestAvailabilityResultRowLimit,
+    projectId: manifest.projectId,
+    routeOrJobKey: `${workloadContext?.routeOrJobKey ?? 'reviewServing.snapshotManifest'}.componentAvailability`,
+    searchMode: workloadContext?.searchMode,
+    timeoutMs: Math.min(workloadContext?.timeoutMs ?? 5_000, 5_000),
+    workloadClass: workloadContext?.workloadClass ?? 'reviewServingManifest',
+  }
+}
+
+const getSnapshotComponentStateValuesSql = (
+  states: readonly (
+    | ReviewServingSnapshotManifest['componentState']['required'][number]
+    | ReviewServingSnapshotManifest['componentState']['optional'][number]
+  )[],
+) => {
+  return states
+    .map((state) => {
+      return `(${getSqlLiteral(state.component)}, ${getSqlLiteral(state.projectionIdentity)}, ${getSqlLiteral(
+        getNonNegativeFiniteInteger(state.baseGeneration) ?? -1,
+      )})`
+    })
+    .join(', ')
+}
+
+const getAvailableSnapshotManifest = async (
+  manifest: ReviewServingSnapshotManifest,
+  database: ReviewServingManifestReaderDatabase,
+  workloadContext?: DuckdbWorkloadContext,
+): Promise<ReviewServingSnapshotManifest> => {
+  const componentStates = getSnapshotManifestComponentStates(manifest)
+  const validComponentStates = componentStates.filter((state) => {
+    return getNonNegativeFiniteInteger(state.baseGeneration) !== null
+  })
+
+  if (componentStates.length === 0) {
+    return manifest
+  }
+
+  if (validComponentStates.length === 0) {
+    return {...manifest, componentState: {optional: [], required: []}}
+  }
+
+  const stateValuesSql = getSnapshotComponentStateValuesSql(validComponentStates)
+  const availabilityWorkloadContext = getSnapshotManifestAvailabilityWorkloadContext(manifest, workloadContext)
+  const projectionStatusRows = await database.queryJson<SnapshotComponentProjectionStatusRow>(
+    `
+    WITH requested_component(component, projectionIdentity, baseGeneration) AS (
+      SELECT * FROM (VALUES ${stateValuesSql})
+    )
+    SELECT
+      projection.projection_component AS component,
+      projection.projection_identity AS projectionIdentity,
+      projection.base_generation AS baseGeneration,
+      projection.status AS projectionStatus
+    FROM requested_component requested
+    INNER JOIN app.review_projection_identity_manifest projection
+      ON projection.project_id IS NOT DISTINCT FROM ${getSqlLiteral(manifest.projectId)}
+      AND projection.projection_component = requested.component
+      AND projection.projection_identity = requested.projectionIdentity
+      AND projection.base_generation = requested.baseGeneration
+  `,
+    availabilityWorkloadContext,
+  )
+  const rows = await database.queryJson<SnapshotComponentChunkAvailabilityRow>(
+    `
+    WITH requested_component(component, projectionIdentity, baseGeneration) AS (
+      SELECT * FROM (VALUES ${stateValuesSql})
+    ), chunk_group AS (
+      SELECT
+        chunk.projection_component AS component,
+        chunk.projection_identity AS projectionIdentity,
+        chunk.output_base_generation AS outputBaseGeneration,
+        chunk.request_id AS requestId,
+        request.status AS requestStatus,
+        request.created_at AS requestCreatedAt,
+        request.updated_at AS requestUpdatedAt,
+        MAX(chunk.updated_at) AS maxChunkUpdatedAt,
+        CAST(COUNT(*) AS INTEGER) AS totalChunkCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedChunkCount
+      FROM requested_component requested
+      INNER JOIN app.review_rebuild_chunk_manifest chunk
+        ON chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(manifest.projectId)}
+        AND chunk.snapshot_id IS NOT DISTINCT FROM ${getSqlLiteral(manifest.snapshotId)}
+        AND chunk.projection_component = requested.component
+        AND chunk.projection_identity = requested.projectionIdentity
+        AND chunk.output_base_generation = requested.baseGeneration
+      INNER JOIN app.review_projection_identity_manifest projection
+        ON projection.project_id IS NOT DISTINCT FROM chunk.project_id
+        AND projection.projection_component = chunk.projection_component
+        AND projection.projection_identity = chunk.projection_identity
+        AND projection.base_generation = chunk.output_base_generation
+      LEFT JOIN app.review_rebuild_request request
+        ON chunk.request_id IS NOT NULL
+        AND (request.request_id || '') = chunk.request_id
+      WHERE chunk.request_id IS NULL
+        OR request.status <> 'cancelled'
+      GROUP BY
+        chunk.projection_component,
+        chunk.projection_identity,
+        chunk.output_base_generation,
+        chunk.request_id,
+        request.status,
+        request.created_at,
+        request.updated_at
+    ), ranked_chunk_group AS (
+      SELECT
+        chunk_group.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY component, projectionIdentity, outputBaseGeneration
+          ORDER BY
+            requestCreatedAt DESC NULLS LAST,
+            requestUpdatedAt DESC NULLS LAST,
+            maxChunkUpdatedAt DESC NULLS LAST,
+            CASE
+              WHEN requestStatus IN ('admitted', 'running') THEN 3
+              WHEN requestStatus = 'completed' THEN 2
+              WHEN requestStatus IS NULL THEN 1
+              ELSE 0
+            END DESC,
+            requestId DESC NULLS LAST
+        ) AS availabilityRank
+      FROM chunk_group
+    )
+    SELECT
+      component,
+      projectionIdentity,
+      outputBaseGeneration,
+      requestId,
+      requestStatus,
+      requestCreatedAt,
+      requestUpdatedAt,
+      maxChunkUpdatedAt,
+      totalChunkCount,
+      completedChunkCount
+    FROM ranked_chunk_group
+    WHERE availabilityRank = 1
+  `,
+    availabilityWorkloadContext,
+  )
+
+  const projectionStatusByKey = new Map<string, string | null>()
+  const chunkAvailabilityByKey = new Map<string, SnapshotComponentChunkAvailabilityRow>()
+
+  projectionStatusRows.forEach((row) => {
+    const component = row.component
+    const baseGeneration = getNonNegativeFiniteInteger(row.baseGeneration)
+
+    if (
+      !component
+      || !isReviewServingProjectionComponent(component)
+      || baseGeneration === null
+      || !row.projectionIdentity
+    ) {
+      return
+    }
+
+    projectionStatusByKey.set(
+      getSnapshotComponentAvailabilityKey({baseGeneration, component, projectionIdentity: row.projectionIdentity}),
+      row.projectionStatus,
+    )
+  })
+
+  rows.forEach((row) => {
+    const component = row.component
+    const outputBaseGeneration = getNonNegativeFiniteInteger(row.outputBaseGeneration)
+
+    if (
+      !component
+      || !isReviewServingProjectionComponent(component)
+      || outputBaseGeneration === null
+      || !row.projectionIdentity
+    ) {
+      return
+    }
+
+    const key = getSnapshotComponentAvailabilityKey({
+      baseGeneration: outputBaseGeneration,
+      component,
+      projectionIdentity: row.projectionIdentity,
+    })
+    chunkAvailabilityByKey.set(key, row)
+  })
+
+  const isStateAvailable = (
+    state:
+      | ReviewServingSnapshotManifest['componentState']['required'][number]
+      | ReviewServingSnapshotManifest['componentState']['optional'][number],
+  ) => {
+    const baseGeneration = getNonNegativeFiniteInteger(state.baseGeneration)
+
+    if (baseGeneration === null) {
+      return false
+    }
+
+    const key = getSnapshotComponentAvailabilityKey({
+      baseGeneration,
+      component: state.component,
+      projectionIdentity: state.projectionIdentity,
+    })
+    const chunkAvailability = chunkAvailabilityByKey.get(key)
+
+    if (chunkAvailability === undefined) {
+      return isProjectionStatusTrustedWithoutChunks(manifest, projectionStatusByKey.get(key) ?? null)
+    }
+
+    const totalChunkCount = getNonNegativeFiniteInteger(chunkAvailability.totalChunkCount)
+    const completedChunkCount = getNonNegativeFiniteInteger(chunkAvailability.completedChunkCount)
+
+    return totalChunkCount !== null && totalChunkCount > 0 && totalChunkCount === completedChunkCount
+  }
+
+  return {
+    ...manifest,
+    componentState: {
+      optional: manifest.componentState.optional.filter(isStateAvailable),
+      required: manifest.componentState.required.filter(isStateAvailable),
+    },
+  }
+}
+
+const getSnapshotManifestForMode = async (
+  row: SnapshotManifestRow,
+  database: ReviewServingManifestReaderDatabase,
+  options: SnapshotManifestReadOptions = {},
+) => {
+  const manifest = getSnapshotManifestFromRow(row)
+
+  return options.componentStateMode === 'available'
+    ? getAvailableSnapshotManifest(manifest, database, options.workloadContext)
+    : manifest
 }
 
 const getSnapshotManifestSelect = () => {
@@ -389,7 +677,12 @@ export const markCandidateReviewServingSnapshotManifestFailed = async (
 }
 
 export const getActiveReviewServingSnapshotManifest = async (
-  input: {projectId: string; reviewConfigHash?: string | null; workloadContext?: DuckdbWorkloadContext},
+  input: {
+    componentStateMode?: ReviewServingSnapshotComponentStateMode
+    projectId: string
+    reviewConfigHash?: string | null
+    workloadContext?: DuckdbWorkloadContext
+  },
   database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
   const rows = await database.queryJson<SnapshotManifestRow>(
@@ -404,11 +697,16 @@ export const getActiveReviewServingSnapshotManifest = async (
     input.workloadContext,
   )
 
-  return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
+  return rows[0] === undefined ? null : getSnapshotManifestForMode(rows[0], database, input)
 }
 
 export const getActiveOrLastKnownGoodReviewServingSnapshotManifest = async (
-  input: {projectId: string; reviewConfigHash?: string | null; workloadContext?: DuckdbWorkloadContext},
+  input: {
+    componentStateMode?: ReviewServingSnapshotComponentStateMode
+    projectId: string
+    reviewConfigHash?: string | null
+    workloadContext?: DuckdbWorkloadContext
+  },
   database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
   const rows = await database.queryJson<SnapshotManifestRow>(
@@ -426,11 +724,16 @@ export const getActiveOrLastKnownGoodReviewServingSnapshotManifest = async (
     input.workloadContext,
   )
 
-  return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
+  return rows[0] === undefined ? null : getSnapshotManifestForMode(rows[0], database, input)
 }
 
 export const getReviewServingSnapshotManifest = async (
-  input: {projectId: string; snapshotId: string; workloadContext?: DuckdbWorkloadContext},
+  input: {
+    componentStateMode?: ReviewServingSnapshotComponentStateMode
+    projectId: string
+    snapshotId: string
+    workloadContext?: DuckdbWorkloadContext
+  },
   database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
   const rows = await database.queryJson<SnapshotManifestRow>(
@@ -443,14 +746,19 @@ export const getReviewServingSnapshotManifest = async (
     input.workloadContext,
   )
 
-  return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
+  return rows[0] === undefined ? null : getSnapshotManifestForMode(rows[0], database, input)
 }
 
 export const getLastKnownGoodReviewServingSnapshotManifest = async (
-  input: {projectId: string; reviewConfigHash?: string | null; workloadContext?: DuckdbWorkloadContext},
+  input: {
+    componentStateMode?: ReviewServingSnapshotComponentStateMode
+    projectId: string
+    reviewConfigHash?: string | null
+    workloadContext?: DuckdbWorkloadContext
+  },
   database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
-  const active = await getActiveReviewServingSnapshotManifest(input, database)
+  const active = await getActiveReviewServingSnapshotManifest({...input, componentStateMode: 'raw'}, database)
   const snapshotId = active?.lastKnownGoodSnapshotId ?? active?.snapshotId ?? null
   const rows =
     snapshotId === null
@@ -475,7 +783,7 @@ export const getLastKnownGoodReviewServingSnapshotManifest = async (
           input.workloadContext,
         )
 
-  return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
+  return rows[0] === undefined ? null : getSnapshotManifestForMode(rows[0], database, input)
 }
 
 export const retireObsoleteReviewServingSnapshotManifests = async (

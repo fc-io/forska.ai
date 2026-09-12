@@ -104,6 +104,7 @@ type FakeDirtyWorkRow = {
 }
 
 type FakeRequestDatabaseOptions = {
+  activeBootstrapComponentsWithoutChunks?: readonly ReviewServingProjectionComponent[]
   completedBootstrapComponents?: readonly ReviewServingProjectionComponent[]
   coveredDirtyWorkRows?: readonly FakeDirtyWorkRow[]
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
@@ -128,6 +129,22 @@ const getJsonArraysFromSql = (statement: string) => {
       const parsed: unknown = JSON.parse(value)
 
       return Array.isArray(parsed) ? [parsed] : []
+    } catch (_error) {
+      return []
+    }
+  })
+}
+
+const getJsonObjectsFromSql = (statement: string) => {
+  return getSqlStrings(statement).flatMap((value) => {
+    if (!value.startsWith('{')) {
+      return []
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(value)
+
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? [parsed] : []
     } catch (_error) {
       return []
     }
@@ -165,10 +182,10 @@ const fakeRebuildComponents = [
   'llmStatus',
   'humanStatus',
   'queue',
-  'payload',
   'posting',
   'summary',
   'judgmentInputContent',
+  'payload',
   'search',
 ] as const
 
@@ -230,7 +247,7 @@ const getFakeReusableProjectionManifest = (
     projectionIdentity: getFakeBootstrapProjectionIdentity(component),
     promptConfigHash: null,
     reviewConfigHash: null,
-    status: 'candidate',
+    status: new Set(options.activeBootstrapComponentsWithoutChunks ?? []).has(component) ? 'active' : 'candidate',
   } satisfies FakeProjectionManifestRow
 }
 
@@ -275,7 +292,12 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
   const reusableBootstrapSourceWatermarks = getFakeBootstrapSourceWatermarks(options)
-  const reusableBootstrapComponentSet = new Set(options.completedBootstrapComponents ?? [])
+  const completedBootstrapComponentSet = new Set(options.completedBootstrapComponents ?? [])
+  const activeNoChunkBootstrapComponentSet = new Set(options.activeBootstrapComponentsWithoutChunks ?? [])
+  const reusableBootstrapComponentSet = new Set([
+    ...completedBootstrapComponentSet,
+    ...activeNoChunkBootstrapComponentSet,
+  ])
   const statements: string[] = []
   const transactionStatements: string[][] = []
   const transactionWorkloadContexts: Array<DuckdbWorkloadContext | undefined> = []
@@ -285,7 +307,10 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return {baseGeneration: 2, component, patchWatermark: 10, projectionIdentity: `${component}:identity-1`}
     }),
   }
-  const getReusableBootstrapSnapshotRow = (snapshotId: string, status: 'active' | 'candidate' | 'retired' = 'candidate') => {
+  const getReusableBootstrapSnapshotRow = (
+    snapshotId: string,
+    status: 'active' | 'candidate' | 'retired' = 'candidate',
+  ) => {
     return {
       componentStateJson: getFakeReusableBootstrapComponentStateJson(reusableBootstrapSourceWatermarks, options),
       composedIdentityJson: {},
@@ -295,7 +320,9 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       projectId: 'project-v4',
       requiredComponentsJson: fakeRebuildComponents,
       reviewConfigHash: null,
-      selectedImportSnapshotId: getFakeSelectedImportSnapshotId(reusableBootstrapSourceWatermarks.importRunArticle ?? 0),
+      selectedImportSnapshotId: getFakeSelectedImportSnapshotId(
+        reusableBootstrapSourceWatermarks.importRunArticle ?? 0,
+      ),
       snapshotId,
       snapshotStatus: status,
       sourceWatermarksJson: reusableBootstrapSourceWatermarks,
@@ -453,9 +480,29 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return [{legacyRequiredEnrichmentCount: options.legacyRequiredEnrichmentCandidate === true ? 1 : 0}] as T[]
     }
 
-    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && statement.includes('totalChunkCount')) {
+    if (
+      statement.includes('app.review_rebuild_chunk_manifest')
+      && statement.includes('chunk.projection_component AS component')
+    ) {
+      return [...completedBootstrapComponentSet].map((component) => {
+        return {
+          completedChunkCount: 2,
+          component,
+          maxChunkUpdatedAt: '2026-06-20T10:03:30.000Z',
+          outputBaseGeneration: 0,
+          projectionIdentity: getFakeBootstrapProjectionIdentity(component),
+          requestCreatedAt: '2026-06-20T10:03:00.000Z',
+          requestId: 'rebuild:completed-bootstrap',
+          requestStatus: 'completed',
+          requestUpdatedAt: '2026-06-20T10:03:45.000Z',
+          totalChunkCount: 2,
+        }
+      }) as T[]
+    }
+
+    if (statement.includes('app.review_rebuild_chunk_manifest') && statement.includes('totalChunkCount')) {
       const component = getSqlStrings(statement).at(-2) as ReviewServingProjectionComponent | undefined
-      const completed = component !== undefined && reusableBootstrapComponentSet.has(component) ? 2 : 0
+      const completed = component !== undefined && completedBootstrapComponentSet.has(component) ? 2 : 0
 
       return [{completedChunkCount: completed, incompleteChunkCount: 0, totalChunkCount: completed}] as T[]
     }
@@ -485,7 +532,18 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return [{componentStateJson}] as T[]
     }
 
-    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+    if (statement.includes('app.review_projection_identity_manifest')) {
+      if (statement.includes('status AS projectionStatus')) {
+        return [...reusableBootstrapComponentSet].map((component) => {
+          return {
+            baseGeneration: 0,
+            component,
+            projectionIdentity: getFakeBootstrapProjectionIdentity(component),
+            projectionStatus: activeNoChunkBootstrapComponentSet.has(component) ? 'active' : 'candidate',
+          }
+        }) as T[]
+      }
+
       if (statement.includes('WHERE manifest_id =')) {
         const manifestId = getSqlStrings(statement)[0] ?? ''
         const manifest = projectionManifests.get(manifestId)
@@ -669,11 +727,7 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
 
 test('V4 bootstrap rebuild reuses unchanged same-snapshot component manifests', async () => {
   const {database, statements} = createFakeRequestDatabase(
-    {
-      ...baseStats,
-      activeSnapshotCount: 0,
-      snapshotCount: 1,
-    },
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
     {
       completedBootstrapComponents: ['display', 'summary'],
       dirtyWatermarks: [
@@ -718,13 +772,55 @@ test('V4 bootstrap rebuild reuses unchanged same-snapshot component manifests', 
   expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
+test('V4 bootstrap rebuild reuses same-snapshot active components without target chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
+    {
+      activeBootstrapComponentsWithoutChunks: ['display'],
+      completedBootstrapComponents: ['summary'],
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 10, sourcePartition: 'reviewChange:project-v4'},
+        {latestSourceHighWaterMark: 4, sourcePartition: 'importRunArticle:project-v4'},
+        {latestSourceHighWaterMark: 7, sourcePartition: 'projectScope:project-v4'},
+      ],
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+  const displayChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes("'display'")
+  })
+  const summaryChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes("'summary'")
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInserts).toHaveLength(fakeRebuildComponents.length - 2)
+  expect(displayChunkInserts).toHaveLength(0)
+  expect(summaryChunkInserts).toHaveLength(0)
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        rebuiltChunkCount: fakeRebuildComponents.length - 2,
+        clonedComponents: [],
+        crossSnapshotComponents: [],
+        reusedChunkCount: 2,
+        reusedComponents: ['display', 'summary'],
+        reuseMode: 'componentGeneration',
+        sameSnapshotComponents: ['display', 'summary'],
+      },
+    },
+  })
+})
+
 test('V4 bootstrap rebuild creates fresh chunks for incompatible component manifests', async () => {
   const {database, statements} = createFakeRequestDatabase(
-    {
-      ...baseStats,
-      activeSnapshotCount: 0,
-      snapshotCount: 1,
-    },
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
     {
       completedBootstrapComponents: ['display', 'summary'],
       dirtyWatermarks: [
@@ -770,11 +866,7 @@ test('V4 bootstrap rebuild creates fresh chunks for incompatible component manif
 
 test('V4 bootstrap rebuild clones isolated unchanged component rows from an active source snapshot', async () => {
   const {database, statements} = createFakeRequestDatabase(
-    {
-      ...baseStats,
-      activeSnapshotCount: 0,
-      snapshotCount: 1,
-    },
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
     {
       completedBootstrapComponents: ['projectScope', 'selectedImport', 'payload', 'queue', 'summary', 'search'],
       reusableBootstrapSourceSnapshotId: 'snapshot:active-reusable',
@@ -795,16 +887,16 @@ test('V4 bootstrap rebuild clones isolated unchanged component rows from an acti
   expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 BY NAME')
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4 BY NAME')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4 BY NAME')
-  expect(joined).toContain("SELECT * REPLACE (")
+  expect(joined).toContain('SELECT * REPLACE (')
   expect(joined).toContain("snapshot_id = 'snapshot:active-reusable'")
   expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
   expect(request.diagnosticsJson).toMatchObject({
     diagnostics: {
       componentReuse: {
-        clonedComponents: ['queue', 'payload', 'summary', 'search'],
-        crossSnapshotComponents: ['projectScope', 'selectedImport', 'queue', 'payload', 'summary', 'search'],
+        clonedComponents: ['queue', 'summary', 'payload', 'search'],
+        crossSnapshotComponents: ['projectScope', 'selectedImport', 'queue', 'summary', 'payload', 'search'],
         rebuiltChunkCount: fakeRebuildComponents.length - 6,
-        reusedComponents: ['projectScope', 'selectedImport', 'queue', 'payload', 'summary', 'search'],
+        reusedComponents: ['projectScope', 'selectedImport', 'queue', 'summary', 'payload', 'search'],
         reuseMode: 'componentGeneration',
         sameSnapshotComponents: [],
       },
@@ -814,11 +906,7 @@ test('V4 bootstrap rebuild clones isolated unchanged component rows from an acti
 
 test('V4 bootstrap rebuild promotes all-reused candidates and completes covered dirty work', async () => {
   const {database, statements} = createFakeRequestDatabase(
-    {
-      ...baseStats,
-      activeSnapshotCount: 0,
-      snapshotCount: 1,
-    },
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
     {
       completedBootstrapComponents: fakeRebuildComponents,
       coveredDirtyWorkRows: [
@@ -876,10 +964,7 @@ test('V4 bootstrap rebuild promotes all-reused candidates and completes covered 
       reuseMode: 'componentGeneration',
       sameSnapshotComponents: [...fakeRebuildComponents],
     },
-    promotion: {
-      dirtyWorkCompletion: {completedCount: 1},
-      promoted: true,
-    },
+    promotion: {dirtyWorkCompletion: {completedCount: 1}, promoted: true},
   })
 })
 
@@ -901,12 +986,25 @@ test('V4 bootstrap candidate makes enrichment components optional for default re
   const optionalComponents = jsonArrays.find((entry) => {
     return entry.includes('payload')
   })
+  const componentState = getJsonObjectsFromSql(snapshotInsert).find((entry) => {
+    return 'optional' in entry && 'required' in entry
+  }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
 
   expect(requiredComponents).not.toContain('posting')
   expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['payload', 'posting', 'summary', 'judgmentInputContent', 'search'])
+  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
+  expect(
+    componentState?.required?.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'])
+  expect(
+    componentState?.optional?.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
 })
 
 test('V4 bootstrap request transaction carries workload context for all published manifests', async () => {
@@ -1066,7 +1164,7 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
   expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['payload', 'posting', 'summary', 'judgmentInputContent', 'search'])
+  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
 })
 
 test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {

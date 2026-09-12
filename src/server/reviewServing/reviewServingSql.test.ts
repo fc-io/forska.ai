@@ -39,6 +39,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
   join(reviewServingSourceRoot, 'judgmentJobReviewServingVisibilityService.ts'),
   join(reviewServingSourceRoot, 'reviewServingLazyPromptAnswerPostingSql.ts'),
+  join(reviewServingSourceRoot, 'reviewServingManifestRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorDomain.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
@@ -61,6 +62,7 @@ const reviewServingBoundedForegroundAggregationFiles = [
   'reviewServingFilteredCountService.ts',
   'reviewServingHumanAssessmentCompletedCount.ts',
   'reviewServingLazyPromptAnswerPostingSql.ts',
+  'reviewServingManifestRepository.ts',
   'reviewServingSql.ts',
 ] as const
 const workspaceRoot = process.cwd()
@@ -2037,7 +2039,10 @@ test('judgment job serving queue SQL keeps current config and stable keyset sema
   )
 
   expect(serviceText).toContain('getCurrentReviewServingReviewConfigHash')
-  expect(serviceText).toContain('AND review_config_hash = ${getSqlLiteral(currentReviewConfigHash)}')
+  expect(serviceText).toContain(
+    'getDispatchReadyServingScope(projectId, routeOrJobKey, currentReviewConfigHash, database)',
+  )
+  expect(serviceText).toContain('AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}')
   expect(serviceText).toContain('INNER JOIN app.project_prompt current_prompt')
   expect(serviceText).toContain('AND current_prompt.enabled = TRUE')
   expect(serviceText).toContain('AND NOT current_prompt.archived')

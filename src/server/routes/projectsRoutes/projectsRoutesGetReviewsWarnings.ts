@@ -543,6 +543,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     })
     const {enabledPromptCount, hasAnyArticlesInScope, totalArticleCount} = await getReviewWarningsScopeState(projectId)
     const coverageManifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest({
+      componentStateMode: 'available',
       projectId,
       reviewConfigHash,
       workloadContext: getReviewWarningsWorkloadContext(projectId, 'coverageManifest'),

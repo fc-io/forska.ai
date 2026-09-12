@@ -27,8 +27,14 @@ export const getHumanAssessmentOverviewProjectCountFromServing = async (
   const database = getAppDatabaseService() as ReviewServingManifestRepositoryDatabase & ReviewServingReaderDatabase
   const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
   const manifest =
-    (await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
-    ?? (await getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
+    (await getActiveReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId, reviewConfigHash},
+      database,
+    ))
+    ?? (await getLastKnownGoodReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId, reviewConfigHash},
+      database,
+    ))
 
   if (!manifest) {
     return 0
@@ -100,6 +106,7 @@ export const getHumanAssessmentOverviewProjectsFromServing = async (
           ? null
           : await getActiveOrLastKnownGoodReviewServingSnapshotManifest(
               {
+                componentStateMode: 'available',
                 projectId: project.id,
                 reviewConfigHash,
                 workloadContext: getHumanAssessmentWorkloadContext({operation: 'overview.manifest'}),

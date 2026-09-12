@@ -7,11 +7,11 @@ import type {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
+import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   getReviewServingDynamicFilteredCountSql,
   type ReviewServingDynamicCountPostingFilterGroup,
 } from './reviewServingDynamicCountSql.ts'
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   getReviewServingFilteredCountComponentIdentities,
   getReviewServingFilteredCountSignature,
@@ -87,13 +87,6 @@ type ReviewServingJudgmentRow = {
   quotes?: unknown
 }
 
-type ReviewServingCountRow = {
-  availability?: string
-  count_value?: number | null
-  countValue?: number | null
-  stale_reason?: string | null
-}
-
 type ReviewServingLlmReviewRouteDependencies = {
   currentReviewConfigHash?: string | null
   database?: ReviewServingReaderDatabase
@@ -106,8 +99,6 @@ const defaultReviewLimit = 100
 const maxJudgmentHydrationArticleIds = 100
 const maxJudgmentHydrationRows = 10_000
 const defaultJudgmentHydrationPromptCount = 128
-const dynamicFilterKey = 'filter:dynamic'
-const listAllFilterKey = 'list:all'
 const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
 const reviewServingCountIndexingError = 'Review count is still indexing'
 
@@ -141,13 +132,38 @@ const hasManifestComponentState = (manifest: ReviewServingSnapshotManifest, comp
   return getManifestComponentIdentity(manifest, component) !== undefined
 }
 
+const llmCountRequiredComponents = [
+  'display',
+  'projectScope',
+  'selectedImport',
+  'llmStatus',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+const getMissingManifestComponents = (
+  manifest: ReviewServingSnapshotManifest,
+  components: readonly ReviewServingProjectionComponent[],
+) => {
+  return components.filter((component) => {
+    return !hasManifestComponentState(manifest, component)
+  })
+}
+
 const getManifest = async (projectId: string, dependencies?: ReviewServingLlmReviewRouteDependencies) => {
   const manifestDatabase =
     dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
   const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
-  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
+  const active = await getActiveReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId, reviewConfigHash},
+    manifestDatabase,
+  )
 
-  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
+  return (
+    active
+    ?? getLastKnownGoodReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId, reviewConfigHash},
+      manifestDatabase,
+    )
+  )
 }
 
 const getLimit = (value: number | string) => {
@@ -217,14 +233,6 @@ const getParamsWithEffectiveDateFilters = async (
   return {...params, from: dates.from, to: dates.to}
 }
 
-const hasDynamicFilters = (params: ArticlesReviewsParams) => {
-  return Object.keys(getRouteFilters(params)).length > 0
-}
-
-const getCountFilterKey = (params: ArticlesReviewsParams) => {
-  return hasDynamicFilters(params) ? dynamicFilterKey : listAllFilterKey
-}
-
 const getReaderDependencies = (dependencies?: ReviewServingLlmReviewRouteDependencies) => {
   return {
     ...(dependencies?.database ? {database: dependencies.database} : {}),
@@ -259,13 +267,6 @@ const getBaseReaderRequest = (
     searchTokenPrefixes: getSearchTokenPrefixes(params.search),
     snapshotId: manifest.snapshotId,
   }
-}
-
-const getCountState = (params: ArticlesReviewsParams, manifest: ReviewServingSnapshotManifest) => {
-  const filterKey = getCountFilterKey(params)
-  const key = hasDynamicFilters(params) ? ('review.list.filteredTotal' as const) : ('review.list.total' as const)
-
-  return {availability: 'ready' as const, filterKey, key, snapshotId: manifest.snapshotId, value: 0}
 }
 
 const getExclusiveDateToFilter = (value: unknown) => {
@@ -320,7 +321,16 @@ const getStatusPostingFilterGroups = (filters: ReturnType<typeof getRouteFilters
 }
 
 const getFilteredCountIndexingReason = (params: ArticlesReviewsParams, manifest: ReviewServingSnapshotManifest) => {
-  if (getPromptAnswerPostingFilterGroups(params.prompts).length > 0 && !hasManifestComponentState(manifest, 'posting')) {
+  const missingRequiredComponents = getMissingManifestComponents(manifest, llmCountRequiredComponents)
+
+  if (missingRequiredComponents.length > 0) {
+    return `LLM count requires ${missingRequiredComponents.join(', ')} components that are still indexing`
+  }
+
+  if (
+    getPromptAnswerPostingFilterGroups(params.prompts).length > 0
+    && !hasManifestComponentState(manifest, 'posting')
+  ) {
     return 'prompt-answer count filters require posting buckets that are still indexing'
   }
 
@@ -341,8 +351,7 @@ const isCountIndexingError = (error: unknown) => {
   }
 
   return (
-    error.message.startsWith(reviewServingCountIndexingError)
-    || error.message.includes('missingRequiredComponentState')
+    error.message.startsWith(reviewServingCountIndexingError) || error.message.includes('missingRequiredComponentState')
   )
 }
 
@@ -351,39 +360,7 @@ const getCountValue = async (
   manifest: ReviewServingSnapshotManifest,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<number> => {
-  if (hasDynamicFilters(params)) {
-    return getFilteredCountValue(params, manifest, dependencies)
-  }
-
-  const limit = 1
-  const filterKey = getCountFilterKey(params)
-  const namedCountKey = hasDynamicFilters(params) ? 'review.list.filteredTotal' : 'review.list.total'
-  const result = await readReviewServingRows<ReviewServingCountRow>(
-    {
-      ...getBaseReaderRequest(params, manifest, limit),
-      contractKey: 'review.llm.count',
-      countFilterKey: filterKey,
-      countState: getCountState(params, manifest),
-      limit,
-      namedCountKey,
-      searchMode: 'none',
-      searchState: null,
-      searchTokenPrefix: null,
-    },
-    getReaderDependencies(dependencies),
-  )
-
-  if (result.status === 'rejected') {
-    throw new Error(`reviewServingReader rejected LLM review count: ${result.reason}`)
-  }
-
-  const countRow = result.rows[0]
-
-  if (countRow?.availability === 'unavailable') {
-    throw new Error(countRow.stale_reason ?? 'Review count is unavailable for the requested filter scope')
-  }
-
-  return Number(countRow?.count_value ?? countRow?.countValue ?? 0)
+  return getFilteredCountValue(params, manifest, dependencies)
 }
 
 const getFilteredCountValue = async (
@@ -401,7 +378,7 @@ const getFilteredCountValue = async (
   const filters = getRouteFilters(params)
   const promptAnswerPostingFilterGroups = getPromptAnswerPostingFilterGroups(params.prompts)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
-  const identityComponents: ReviewServingProjectionComponent[] = ['display', 'projectScope', 'selectedImport', 'llmStatus']
+  const identityComponents: ReviewServingProjectionComponent[] = [...llmCountRequiredComponents]
 
   if (promptAnswerPostingFilterGroups.length > 0) {
     identityComponents.push('posting')

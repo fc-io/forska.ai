@@ -10,10 +10,10 @@ import {cronRuntimeTickNames, recordCronRuntimeTick} from './cronRuntimeState.ts
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {
-  JUDGMENTS_IMPORT_STALE_AFTER_MS,
   beginJudgmentsImportCronRun,
   finishJudgmentsImportCronRun,
   getJudgmentsImportCronActivity,
+  JUDGMENTS_IMPORT_STALE_AFTER_MS,
 } from './judgmentsJobsCronState.ts'
 
 const IMPORT_JUDGMENTS_INTERVAL = '*/1 * * * * *'

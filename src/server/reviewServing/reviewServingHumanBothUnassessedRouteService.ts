@@ -276,9 +276,18 @@ const getManifest = async (projectId: string, dependencies?: ReviewServingRouteD
   const manifestDatabase =
     dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
   const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
-  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
+  const active = await getActiveReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId, reviewConfigHash},
+    manifestDatabase,
+  )
 
-  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
+  return (
+    active
+    ?? getLastKnownGoodReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId, reviewConfigHash},
+      manifestDatabase,
+    )
+  )
 }
 
 const getReaderDependencies = (dependencies?: ReviewServingRouteDependencies) => {
@@ -459,11 +468,32 @@ const hasManifestComponentState = (manifest: ReviewServingSnapshotManifest, comp
   return getManifestComponentIdentity(manifest, component) !== undefined
 }
 
+const countRequiredComponentsByMode = {
+  both: ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
+  human: ['display', 'projectScope', 'selectedImport', 'humanStatus'],
+  unassessed: ['display', 'projectScope', 'selectedImport', 'llmStatus', 'queue'],
+} as const satisfies Record<ReviewServingReviewMode, readonly ReviewServingProjectionComponent[]>
+
+const getMissingManifestComponents = (
+  manifest: ReviewServingSnapshotManifest,
+  components: readonly ReviewServingProjectionComponent[],
+) => {
+  return components.filter((component) => {
+    return !hasManifestComponentState(manifest, component)
+  })
+}
+
 const getFilteredCountIndexingReason = (
   params: ArticlesReviewsBothParams | ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
   mode: ReviewServingReviewMode,
 ) => {
+  const missingRequiredComponents = getMissingManifestComponents(manifest, countRequiredComponentsByMode[mode])
+
+  if (missingRequiredComponents.length > 0) {
+    return `${mode} count requires ${missingRequiredComponents.join(', ')} components that are still indexing`
+  }
+
   if (getPromptAnswerPostingFilterGroups(params, mode).length > 0 && !hasManifestComponentState(manifest, 'posting')) {
     return 'prompt-answer count filters require posting buckets that are still indexing'
   }
@@ -485,8 +515,7 @@ const isCountIndexingError = (error: unknown) => {
   }
 
   return (
-    error.message.startsWith(reviewServingCountIndexingError)
-    || error.message.includes('missingRequiredComponentState')
+    error.message.startsWith(reviewServingCountIndexingError) || error.message.includes('missingRequiredComponentState')
   )
 }
 
@@ -549,12 +578,7 @@ const getFilteredCountValue = async (
   const filters = getRouteFilters(params, mode)
   const promptAnswerPostingFilterGroups = getPromptAnswerPostingFilterGroups(params, mode)
   const searchTokenPrefixes = filters.searchTokenPrefix ? getSearchTokenPrefixes(params.search) : []
-  const identityComponents: ReviewServingProjectionComponent[] =
-    mode === 'both'
-      ? ['display', 'projectScope', 'selectedImport', 'llmStatus', 'humanStatus']
-      : mode === 'human'
-        ? ['display', 'projectScope', 'selectedImport', 'humanStatus']
-        : ['display', 'projectScope', 'selectedImport', 'queue']
+  const identityComponents: ReviewServingProjectionComponent[] = [...countRequiredComponentsByMode[mode]]
 
   if (promptAnswerPostingFilterGroups.length > 0) {
     identityComponents.push('posting')
