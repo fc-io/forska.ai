@@ -447,6 +447,67 @@ test('keeps exhausted SQLite cooldown active when mart visibility is stale', asy
   expect(setScanStateCalls).toEqual([])
 })
 
+test('retries exhausted SQLite scans without a visibility token', async () => {
+  const getPromptsCalls = {count: 0}
+  const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async () => {
+      return 1
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {
+        cursor: null,
+        exhaustedAt: new Date(),
+        lastProjectRefreshAckSeq: null,
+        scanEpoch: 3,
+        wrapVisibilityAckSeq: null,
+      }
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async (jobId: string, state: Record<string, unknown>) => {
+      setScanStateCalls.push({jobId, state})
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async () => {
+      return {nextCursor: null, promptEntries: [{articleId: 'article-1', promptId: 'prompt-1'}]}
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?unproven-cooldown=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(setScanStateCalls[0]).toEqual({
+    jobId: 'job-1',
+    state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: null},
+  })
+})
+
 test('restarts exhausted SQLite scans after cooldown and clears stale wrap visibility', async () => {
   const getPromptsCalls = {count: 0}
   const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
@@ -888,6 +949,60 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
   expect(setScanStateCalls[1]?.state.wrapVisibilityAckSeq).toBe(12)
   expect(setScanStateCalls[1]?.state.cursor).toBeNull()
   expect(setScanStateCalls[1]?.state.exhaustedAt).toBeInstanceOf(Date)
+})
+
+test('does not mark empty SQLite scans exhausted without a visibility token', async () => {
+  const getPromptsCalls = {count: 0}
+  const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async () => {
+      return 0
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async (jobId: string, state: Record<string, unknown>) => {
+      setScanStateCalls.push({jobId, state})
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async () => {
+      return {nextCursor: null, promptEntries: []}
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?unproven-empty=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(setScanStateCalls).toEqual([
+    {jobId: 'job-1', state: {cursor: null, exhaustedAt: null, wrapVisibilityAckSeq: null}},
+  ])
 })
 
 test('round-trips priority-aware SQLite cursors through prompt fetching and scan state', async () => {

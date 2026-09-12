@@ -514,8 +514,10 @@ const getInsertedReadyCount = async ({
   return insertedCount
 }
 
-const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
-  return exhaustedAt ? Date.now() - exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs : false
+const hasSqliteExhaustedCooldown = (scanState: {exhaustedAt: Date | null; wrapVisibilityAckSeq: number | null}) => {
+  return scanState.exhaustedAt && scanState.wrapVisibilityAckSeq !== null
+    ? Date.now() - scanState.exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs
+    : false
 }
 
 const getProjectMartVisibilityState = async (jobId: string): Promise<ProjectMartVisibilityState | null> => {
@@ -604,7 +606,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
   const scanState = await sqliteService.getScanState(job.id)
 
-  if (hasSqliteExhaustedCooldown(scanState.exhaustedAt)) {
+  if (hasSqliteExhaustedCooldown(scanState)) {
     return
   }
 
@@ -663,16 +665,15 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       readyCount: await sqliteService.getReadyCount(job.id),
       sqliteService,
     })
+    const wrapVisibilityAckSeq = promptData.nextCursor
+      ? null
+      : getWrapVisibilityToken({
+          lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
+          projectDirtyToken: await getProjectDirtyToken(job.id),
+        })
     const nextScanState = promptData.nextCursor
       ? {cursor: promptData.nextCursor, exhaustedAt: null, wrapVisibilityAckSeq: null}
-      : {
-          cursor: null,
-          exhaustedAt: new Date(),
-          wrapVisibilityAckSeq: getWrapVisibilityToken({
-            lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
-            projectDirtyToken: await getProjectDirtyToken(job.id),
-          }),
-        }
+      : {cursor: null, exhaustedAt: wrapVisibilityAckSeq === null ? null : new Date(), wrapVisibilityAckSeq}
 
     await sqliteService.setScanState(job.id, nextScanState)
 
