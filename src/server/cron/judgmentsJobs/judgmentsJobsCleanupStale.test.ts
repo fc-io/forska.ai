@@ -1667,6 +1667,136 @@ test('cleanupStale auto resumes recoverable OOM quarantine after project mart is
   ])
 })
 
+test('cleanupStale pages OOM quarantine recovery candidates before expensive readiness filters', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-oom-page-connection-${timestamp}`
+  const modelId = `cleanup-stale-oom-page-model-${timestamp}`
+  const projectId = `cleanup-stale-oom-page-project-${timestamp}`
+  const targetJobId = `cleanup-stale-oom-page-job-target-${timestamp}`
+  const blockerJobIds = Array.from({length: 4}, (_, index) => {
+    return `cleanup-stale-oom-page-job-blocker-${index}-${timestamp}`
+  })
+  const oomMessage = 'Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)'
+  const oldestQuarantineAt = new Date('2001-01-01T00:00:00.000Z')
+  const getOrderedQuarantineAt = (index: number) => {
+    return new Date(oldestQuarantineAt.getTime() + index * 60_000)
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale OOM paged recovery test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, last_completed_dirty_token, refresh_status)
+    VALUES ('${projectId}', 7, 7, 'idle')
+  `)
+
+  for (const [index, jobId] of blockerJobIds.entries()) {
+    const quarantinedAt = getOrderedQuarantineAt(index)
+
+    await runDatabase(`
+      INSERT INTO app.judgment_job (
+        id,
+        project_id,
+        status,
+        storage_state,
+        quarantined_at,
+        quarantine_reason,
+        updated_at
+      ) VALUES (
+        '${jobId}',
+        '${projectId}',
+        'failed',
+        'quarantined',
+        ${getTimestampLiteral(quarantinedAt)},
+        'manual quarantine',
+        ${getTimestampLiteral(quarantinedAt)}
+      )
+    `)
+  }
+
+  const targetQuarantinedAt = getOrderedQuarantineAt(blockerJobIds.length)
+
+  await runDatabase(`
+    INSERT INTO app.judgment_job (
+      id,
+      project_id,
+      status,
+      storage_state,
+      quarantined_at,
+      quarantine_reason,
+      last_import_error_at,
+      last_import_error,
+      import_failure_count,
+      updated_at
+    ) VALUES (
+      '${targetJobId}',
+      '${projectId}',
+      'failed',
+      'quarantined',
+      ${getTimestampLiteral(targetQuarantinedAt)},
+      ${getSqlLiteral(oomMessage)},
+      ${getTimestampLiteral(targetQuarantinedAt)},
+      ${getSqlLiteral(oomMessage)},
+      3,
+      ${getTimestampLiteral(targetQuarantinedAt)}
+    )
+  `)
+
+  await service.initializeJob(targetJobId)
+  await service.releaseOwnedLease(targetJobId)
+
+  await judgmentsJobsCleanupStale({maxRepairActions: 1})
+
+  const [afterFirstTick] = await queryDatabase<{status: string; storageState: string}>(`
+    SELECT status, storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${targetJobId}'
+  `)
+
+  expect(afterFirstTick).toEqual({status: 'failed', storageState: 'quarantined'})
+
+  await judgmentsJobsCleanupStale({maxRepairActions: 1})
+
+  const [afterSecondTick] = await queryDatabase<{
+    importFailureCount: number | string
+    lastImportError: string | null
+    quarantineReason: string | null
+    status: string
+    storageState: string
+  }>(`
+    SELECT
+      import_failure_count AS importFailureCount,
+      last_import_error AS lastImportError,
+      quarantine_reason AS quarantineReason,
+      status,
+      storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${targetJobId}'
+  `)
+
+  expect(afterSecondTick).toEqual({
+    importFailureCount: 0,
+    lastImportError: null,
+    quarantineReason: null,
+    status: 'running',
+    storageState: 'active',
+  })
+})
+
 test('cleanupStale does not auto resume recoverable OOM quarantine after explicit pause', async () => {
   if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

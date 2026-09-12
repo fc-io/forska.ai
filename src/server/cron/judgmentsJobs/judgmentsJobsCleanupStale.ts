@@ -1,4 +1,4 @@
-import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {
   judgmentProviderTelemetryHistoryPruneBatchSize,
@@ -29,6 +29,8 @@ import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
 type RecoverableOomQuarantinedJobRow = {id: string}
+type RecoverableOomQuarantinedJobPrefixRow = {id: string; quarantinedAt: unknown; updatedAt: unknown}
+type RecoverableOomQuarantinedCursor = {id: string; quarantinedAt: Date; updatedAt: Date}
 type CleanupCandidateSelection = {jobIds: string[]; limited: boolean}
 type CleanupLocalSqliteJobSelection = CleanupCandidateSelection & {totalJobIds: number}
 
@@ -119,9 +121,12 @@ const cleanupStaleDefaultMaxSqliteRetentionBatches = 5
 const cleanupStaleDefaultMaxSqliteRetentionRows = 5_000
 const cleanupStaleLocalCandidateScanWindowMultiplier = 4
 const cleanupStaleMissingLocalCandidateScanWindowMultiplier = 4
+const cleanupStaleRecoverableOomCandidateScanWindowMultiplier = 4
+const cleanupStaleNullQuarantinedAtCursorDate = new Date('9999-12-31T23:59:59.999Z')
 
 let cleanupStaleLocalCandidateCursor = 0
 let cleanupStaleMissingLocalDrainingCursorId: string | null = null
+let cleanupStaleRecoverableOomQuarantinedCursor: RecoverableOomQuarantinedCursor | null = null
 let cleanupStaleRetentionCursorJobId: string | null = null
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
@@ -738,6 +743,81 @@ const getMissingLocalSqliteDrainingJobIds = async (maxJobIds: number): Promise<C
   return {...bounded, limited: bounded.limited || rows.length >= scanLimit}
 }
 
+const getRecoverableOomQuarantinedCursorDate = (value: unknown, fallback: Date): Date => {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value
+  }
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    const date = new Date(value)
+
+    if (Number.isFinite(date.getTime())) {
+      return date
+    }
+  }
+
+  return fallback
+}
+
+const getRecoverableOomQuarantinedCursorFromRow = (
+  row: RecoverableOomQuarantinedJobPrefixRow,
+): RecoverableOomQuarantinedCursor => {
+  return {
+    id: row.id,
+    quarantinedAt: getRecoverableOomQuarantinedCursorDate(row.quarantinedAt, cleanupStaleNullQuarantinedAtCursorDate),
+    updatedAt: getRecoverableOomQuarantinedCursorDate(row.updatedAt, new Date(0)),
+  }
+}
+
+const getRecoverableOomQuarantinedCursorClause = (): string => {
+  if (!cleanupStaleRecoverableOomQuarantinedCursor) {
+    return ''
+  }
+
+  const cursor = cleanupStaleRecoverableOomQuarantinedCursor
+  const quarantinedAtExpression = `COALESCE(jj.quarantined_at, ${getTimestampLiteral(
+    cleanupStaleNullQuarantinedAtCursorDate,
+  )})`
+  const cursorQuarantinedAt = getTimestampLiteral(cursor.quarantinedAt)
+  const cursorUpdatedAt = getTimestampLiteral(cursor.updatedAt)
+
+  return `
+    AND (
+      ${quarantinedAtExpression} > ${cursorQuarantinedAt}
+      OR (
+        ${quarantinedAtExpression} = ${cursorQuarantinedAt}
+        AND jj.updated_at > ${cursorUpdatedAt}
+      )
+      OR (
+        ${quarantinedAtExpression} = ${cursorQuarantinedAt}
+        AND jj.updated_at = ${cursorUpdatedAt}
+        AND jj.id > ${getSqlLiteral(cursor.id)}
+      )
+    )
+  `
+}
+
+const getRecoverableOomQuarantinedPrefixRows = async (
+  scanLimit: number,
+): Promise<RecoverableOomQuarantinedJobPrefixRow[]> => {
+  return getJudgeWorkerReadOnlyAppDatabaseService().queryJson<RecoverableOomQuarantinedJobPrefixRow>(`
+    SELECT
+      jj.id AS id,
+      jj.quarantined_at AS quarantinedAt,
+      jj.updated_at AS updatedAt
+    FROM app.judgment_job jj
+    WHERE jj.storage_state = ${getSqlLiteral('quarantined')}
+      AND jj.status = ${getSqlLiteral('failed')}
+      AND jj.pause_requested_at IS NULL
+      ${getRecoverableOomQuarantinedCursorClause()}
+    ORDER BY
+      COALESCE(jj.quarantined_at, ${getTimestampLiteral(cleanupStaleNullQuarantinedAtCursorDate)}) ASC,
+      jj.updated_at ASC,
+      jj.id ASC
+    LIMIT ${scanLimit}
+  `)
+}
+
 const getRecoverableOomQuarantinedJobIds = async (maxJobIds: number): Promise<CleanupCandidateSelection> => {
   const normalizedMaxJobIds = getPositiveIntegerOption(maxJobIds, recoverableOomQuarantineRecoveryBatchSize)
 
@@ -745,12 +825,36 @@ const getRecoverableOomQuarantinedJobIds = async (maxJobIds: number): Promise<Cl
     return {jobIds: [], limited: false}
   }
 
+  const scanLimit = Math.max(
+    normalizedMaxJobIds + 1,
+    normalizedMaxJobIds * cleanupStaleRecoverableOomCandidateScanWindowMultiplier,
+  )
+  let prefixRows = await getRecoverableOomQuarantinedPrefixRows(scanLimit)
+
+  if (prefixRows.length === 0 && cleanupStaleRecoverableOomQuarantinedCursor) {
+    cleanupStaleRecoverableOomQuarantinedCursor = null
+    prefixRows = await getRecoverableOomQuarantinedPrefixRows(scanLimit)
+  }
+
+  if (prefixRows.length === 0) {
+    return {jobIds: [], limited: false}
+  }
+
+  cleanupStaleRecoverableOomQuarantinedCursor = getRecoverableOomQuarantinedCursorFromRow(
+    prefixRows[prefixRows.length - 1] as RecoverableOomQuarantinedJobPrefixRow,
+  )
+
   const jobIds = (
     await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<RecoverableOomQuarantinedJobRow>(`
       SELECT jj.id AS id
       FROM app.judgment_job jj
       INNER JOIN app.project_mart_refresh_state refresh_state ON refresh_state.project_id = jj.project_id
-      WHERE jj.storage_state = ${getSqlLiteral('quarantined')}
+      WHERE jj.id IN (${getQuotedStringList(
+        prefixRows.map((row) => {
+          return row.id
+        }),
+      ).join(', ')})
+        AND jj.storage_state = ${getSqlLiteral('quarantined')}
         AND jj.status = ${getSqlLiteral('failed')}
         AND jj.pause_requested_at IS NULL
         AND (
@@ -775,14 +879,19 @@ const getRecoverableOomQuarantinedJobIds = async (maxJobIds: number): Promise<Cl
             AND quarantine.dirty_token <= refresh_state.dirty_token
             AND quarantine.resolved_at IS NULL
         )
-      ORDER BY jj.quarantined_at ASC NULLS LAST, jj.updated_at ASC, jj.id ASC
+      ORDER BY
+        COALESCE(jj.quarantined_at, ${getTimestampLiteral(cleanupStaleNullQuarantinedAtCursorDate)}) ASC,
+        jj.updated_at ASC,
+        jj.id ASC
       LIMIT ${normalizedMaxJobIds + 1}
     `)
   ).map((row) => {
     return row.id
   })
 
-  return getBoundedSelection(jobIds, normalizedMaxJobIds)
+  const bounded = getBoundedSelection(jobIds, normalizedMaxJobIds)
+
+  return {...bounded, limited: bounded.limited || prefixRows.length >= scanLimit}
 }
 
 const getDrainedSqliteCleanupJobIds = async (maxJobIds: number): Promise<CleanupCandidateSelection> => {

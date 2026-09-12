@@ -1384,6 +1384,84 @@ const getUniqueRequestAttemptCloseoutProofs = (
   )
 }
 
+type TerminalRequestAttemptCloseoutProofRow = {requestAttemptsJson: string | null}
+
+const terminalRequestAttemptCloseoutProofSourceCount = 3
+
+const getTerminalRequestAttemptCloseoutProofLimitSql = (normalizedMaxRows: number | null): string => {
+  return normalizedMaxRows === null ? '' : `LIMIT ${normalizedMaxRows}`
+}
+
+const getTerminalRequestAttemptCloseoutProofSourceMaxRows = (normalizedMaxRows: number | null): number | null => {
+  return normalizedMaxRows === null
+    ? null
+    : Math.max(1, Math.ceil(normalizedMaxRows / terminalRequestAttemptCloseoutProofSourceCount))
+}
+
+const getDurableTerminalQueuePromptProofRowsFromDatabase = (
+  database: Database,
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  return database
+    .query(
+      `
+        SELECT request_attempt_manifest_json AS requestAttemptsJson
+        FROM queue_prompt
+        WHERE request_attempt_manifest_json IS NOT NULL
+        ORDER BY ready_insert_seq ASC, id ASC
+        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
+      `,
+    )
+    .all() as TerminalRequestAttemptCloseoutProofRow[]
+}
+
+const getDurableTerminalOutboxProofRowsFromDatabase = (
+  database: Database,
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  return database
+    .query(
+      `
+        SELECT request_attempts_json AS requestAttemptsJson
+        FROM judgment_outbox
+        WHERE request_attempts_json IS NOT NULL
+        ORDER BY outbox_seq ASC
+        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
+      `,
+    )
+    .all() as TerminalRequestAttemptCloseoutProofRow[]
+}
+
+const getDurableTerminalCompletionAckProofRowsFromDatabase = (
+  database: Database,
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  return database
+    .query(
+      `
+        SELECT request_attempts_json AS requestAttemptsJson
+        FROM completion_ack
+        WHERE request_attempts_json IS NOT NULL
+        ORDER BY completed_at ASC, claim_id ASC
+        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
+      `,
+    )
+    .all() as TerminalRequestAttemptCloseoutProofRow[]
+}
+
+const getDurableTerminalRequestAttemptCloseoutProofRowsFromDatabase = (
+  database: Database,
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  const normalizedSourceMaxRows = getTerminalRequestAttemptCloseoutProofSourceMaxRows(normalizedMaxRows)
+
+  return [
+    ...getDurableTerminalQueuePromptProofRowsFromDatabase(database, normalizedSourceMaxRows),
+    ...getDurableTerminalOutboxProofRowsFromDatabase(database, normalizedSourceMaxRows),
+    ...getDurableTerminalCompletionAckProofRowsFromDatabase(database, normalizedSourceMaxRows),
+  ]
+}
+
 const getDurableTerminalRequestAttemptCloseoutProofsFromDatabase = (
   database: Database,
   maxRows?: number,
@@ -1394,27 +1472,7 @@ const getDurableTerminalRequestAttemptCloseoutProofsFromDatabase = (
     return []
   }
 
-  const rows = database
-    .query(
-      `
-        SELECT requestAttemptsJson
-        FROM (
-          SELECT request_attempt_manifest_json AS requestAttemptsJson
-          FROM queue_prompt
-          WHERE request_attempt_manifest_json IS NOT NULL
-          UNION ALL
-          SELECT request_attempts_json AS requestAttemptsJson
-          FROM judgment_outbox
-          WHERE request_attempts_json IS NOT NULL
-          UNION ALL
-          SELECT request_attempts_json AS requestAttemptsJson
-          FROM completion_ack
-          WHERE request_attempts_json IS NOT NULL
-        )
-        ${normalizedMaxRows === null ? '' : `LIMIT ${normalizedMaxRows}`}
-      `,
-    )
-    .all() as Array<{requestAttemptsJson: string | null}>
+  const rows = getDurableTerminalRequestAttemptCloseoutProofRowsFromDatabase(database, normalizedMaxRows)
 
   return getUniqueRequestAttemptCloseoutProofs(
     rows.flatMap((row) => {

@@ -2884,6 +2884,208 @@ test('repairUnavailableRequestAttemptDiagnostics respects a per-job row cap', as
   }
 })
 
+test('durable terminal closeout proof scans give each SQLite source a bounded window', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('closeout-proof-source-window')
+  const prompts = Array.from({length: 12}, (_, index) => {
+    return {
+      articleId: `closeout-proof-source-window-article-${index}`,
+      promptId: `closeout-proof-source-window-prompt-${index}`,
+    }
+  })
+
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const setupDatabase = new Database(sqlitePath)
+  const outboxRequestAttemptId = `request-attempt-outbox-${Date.now()}`
+  const ackRequestAttemptId = `request-attempt-ack-${Date.now()}`
+  const outboxProviderKey = 'provider:sqlite-closeout-proof-source-window:outbox'
+  const ackProviderKey = 'provider:sqlite-closeout-proof-source-window:ack'
+
+  try {
+    const rows = setupDatabase
+      .query(
+        `
+          SELECT
+            id,
+            article_id AS articleId,
+            prompt_id AS promptId
+          FROM queue_prompt
+          ORDER BY ready_insert_seq ASC, id ASC
+        `,
+      )
+      .all() as Array<{articleId: string; id: string; promptId: string}>
+    const updateQueueManifest = setupDatabase.query(
+      `
+        UPDATE queue_prompt
+        SET request_attempt_manifest_json = ?,
+            request_attempt_manifest_version = 1,
+            updated_at = ?
+        WHERE id = ?
+      `,
+    )
+    rows.reduce((count, row) => {
+      updateQueueManifest.run(
+        JSON.stringify([
+          {
+            closeoutKind: 'live_request',
+            createdAt: '2026-05-04T10:00:00.000Z',
+            lifecycleState: 'liveRequest',
+            outcome: 'unknown',
+            providerKey: 'provider:sqlite-closeout-proof-source-window:queue',
+            requestAttemptId: `request-attempt-queue-${count}`,
+            startedAt: '2026-05-04T10:00:00.000Z',
+            updatedAt: '2026-05-04T10:00:00.000Z',
+          },
+        ]),
+        '2026-05-04T10:00:00.000Z',
+        row.id,
+      )
+
+      return count + 1
+    }, 0)
+
+    const [outboxRow, ackRow] = rows
+
+    if (!outboxRow || !ackRow) {
+      throw new Error('Expected queue prompts for closeout proof source window test')
+    }
+
+    setupDatabase
+      .query(
+        `
+          INSERT INTO judgment_outbox (
+            job_id,
+            queue_prompt_id,
+            judgment_id,
+            claim_id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            snapshot_project_model_name,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            chunking_strategy,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original,
+            explanation,
+            quotes_json,
+            raw_response_json,
+            request_attempts_json,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        jobId,
+        outboxRow.id,
+        `judgment-outbox-${Date.now()}`,
+        'claim-outbox-source-window',
+        outboxRow.articleId,
+        outboxRow.promptId,
+        modelId,
+        projectId,
+        projectId,
+        'Qwen 35B',
+        1,
+        1,
+        0,
+        0,
+        null,
+        1,
+        'yes',
+        JSON.stringify(['yes']),
+        50,
+        'because',
+        JSON.stringify(['quote']),
+        JSON.stringify({answer: 'yes'}),
+        JSON.stringify([
+          {
+            closeoutKind: 'judgment_outbox',
+            createdAt: '2026-05-04T10:00:01.000Z',
+            durableCloseoutRef: {
+              id: 'judgment-outbox-source-window',
+              jobId,
+              kind: 'judgment_outbox',
+              queueRecordId: outboxRow.id,
+            },
+            finishedAt: '2026-05-04T10:00:02.000Z',
+            outcome: 'success',
+            providerKey: outboxProviderKey,
+            requestAttemptId: outboxRequestAttemptId,
+            startedAt: '2026-05-04T10:00:01.000Z',
+            updatedAt: '2026-05-04T10:00:02.000Z',
+          },
+        ]),
+        '2026-05-04T10:00:02.000Z',
+        '2026-05-04T10:00:02.000Z',
+      )
+    setupDatabase
+      .query(
+        `
+          INSERT INTO completion_ack (
+            claim_id,
+            job_id,
+            queue_prompt_id,
+            status,
+            token_use_id,
+            request_attempts_json,
+            completed_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        'claim-ack-source-window',
+        jobId,
+        ackRow.id,
+        'judged',
+        'token-use-ack-source-window',
+        JSON.stringify([
+          {
+            closeoutKind: 'completion_ack',
+            createdAt: '2026-05-04T10:00:03.000Z',
+            durableCloseoutRef: {
+              claimId: 'claim-ack-source-window',
+              id: 'token-use-ack-source-window',
+              jobId,
+              kind: 'completion_ack',
+              queueRecordId: ackRow.id,
+            },
+            finishedAt: '2026-05-04T10:00:04.000Z',
+            outcome: 'success',
+            providerKey: ackProviderKey,
+            requestAttemptId: ackRequestAttemptId,
+            startedAt: '2026-05-04T10:00:03.000Z',
+            updatedAt: '2026-05-04T10:00:04.000Z',
+          },
+        ]),
+        '2026-05-04T10:00:04.000Z',
+        '2026-05-04T10:00:04.000Z',
+      )
+  } finally {
+    setupDatabase.close()
+  }
+
+  const firstRead = await service.getDurableTerminalRequestAttemptCloseoutProofs(jobId, 1)
+  const secondRead = await service.getDurableTerminalRequestAttemptCloseoutProofs(jobId, 1)
+  const proofKeys = new Set(
+    [...firstRead, ...secondRead].map((proof) => {
+      return `${proof.providerKey}:${proof.requestAttemptId}`
+    }),
+  )
+
+  expect(proofKeys.has(`${outboxProviderKey}:${outboxRequestAttemptId}`)).toBe(true)
+  expect(proofKeys.has(`${ackProviderKey}:${ackRequestAttemptId}`)).toBe(true)
+})
+
 test('computes a per-job SQLite health snapshot', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

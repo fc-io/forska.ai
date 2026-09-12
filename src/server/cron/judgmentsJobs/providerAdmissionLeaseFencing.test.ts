@@ -859,3 +859,74 @@ test('current owner reconciliation limits expired lease deletes when requested',
   expect(result.expiredLeaseCount).toBe(2)
   expect(Number(row?.leaseCount)).toBe(1)
 })
+
+test('current owner reconciliation rotates capped provider key selection across ticks', async () => {
+  if (!queryDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const acquiredAt = new Date('2026-05-04T09:58:00.000Z')
+  const expiresAt = new Date('2026-05-04T09:59:00.000Z')
+  const heartbeatAt = new Date('2026-05-04T09:58:30.000Z')
+  const nowMs = new Date('2026-05-04T10:02:00.000Z').getTime()
+  const providerLeaseCounts = [
+    {count: 3, providerKey: 'provider-reconcile-rotation-a'},
+    {count: 3, providerKey: 'provider-reconcile-rotation-b'},
+    {count: 1, providerKey: 'provider-reconcile-rotation-c'},
+    {count: 1, providerKey: 'provider-reconcile-rotation-d'},
+  ]
+
+  for (const {count, providerKey} of providerLeaseCounts) {
+    for (const index of Array.from({length: count}, (_, currentIndex) => {
+      return currentIndex
+    })) {
+      const requestAttemptId = `request-attempt-reconcile-rotation-${providerKey}-${index}`
+      await insertLease({
+        acquiredAt,
+        expiresAt,
+        heartbeatAt,
+        holderToken: `holder-${requestAttemptId}`,
+        leaseIdentity: getProviderAdmissionRequestLeaseIdentity(requestAttemptId),
+        leaseKind: 'request',
+        providerKey,
+        requestAttemptId,
+      })
+    }
+  }
+
+  const firstResult = await reconcileProviderAdmissionLeasesOnCurrentOwner({
+    maxExpiredLeaseDeletes: 1,
+    maxProviderKeys: 2,
+    nowMs,
+  })
+  const secondResult = await reconcileProviderAdmissionLeasesOnCurrentOwner({
+    maxExpiredLeaseDeletes: 1,
+    maxProviderKeys: 2,
+    nowMs,
+  })
+  const rows = await queryDatabase<{leaseCount: number; providerKey: string}>(`
+    SELECT provider_key AS providerKey, COUNT(*) AS leaseCount
+    FROM app.provider_admission_lease
+    WHERE provider_key IN (
+      ${providerLeaseCounts
+        .map(({providerKey}) => {
+          return getSqlLiteral(providerKey)
+        })
+        .join(', ')}
+    )
+    GROUP BY provider_key
+    ORDER BY provider_key ASC
+  `)
+  const countByProviderKey = Object.fromEntries(
+    rows.map((row) => {
+      return [row.providerKey, Number(row.leaseCount)]
+    }),
+  )
+
+  expect(firstResult.expiredLeaseCount).toBe(2)
+  expect(secondResult.expiredLeaseCount).toBe(2)
+  expect(countByProviderKey['provider-reconcile-rotation-a']).toBe(2)
+  expect(countByProviderKey['provider-reconcile-rotation-b']).toBe(2)
+  expect(countByProviderKey['provider-reconcile-rotation-c'] ?? 0).toBe(0)
+  expect(countByProviderKey['provider-reconcile-rotation-d'] ?? 0).toBe(0)
+})

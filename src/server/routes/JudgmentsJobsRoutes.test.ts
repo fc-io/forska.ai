@@ -3948,6 +3948,94 @@ test('job health keeps normal cleanup-stale activity out of blocked-import reaso
   }
 })
 
+test('job health distinguishes cleanup-stale backlog, budget, and stuck blocked-import reasons', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {beginJudgmentsCleanupStaleCronRun, finishJudgmentsCleanupStaleCronRun, markJudgmentsCleanupStaleCronPartial} =
+    await import('../cron/judgmentsJobsCronState.ts')
+  const {getJudgmentJobSqliteHealthProjectionService} =
+    await import('../services/judgmentJobSqliteHealthProjectionService.ts')
+  const {withCurrentServerRoleOverride} = await import('../utils/serverRuntimeRole.ts')
+  const now = Date.now()
+  const projectId = `health-cleanup-partial-project-${now}`
+  const modelId = `health-cleanup-partial-model-${now}`
+  const connectionId = `health-cleanup-partial-connection-${now}`
+  const jobId = `health-cleanup-partial-job-${now}`
+  const getHealthReason = async () => {
+    const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+    const body = (await response.json()) as {blockedReason: string | null; progressState: string}
+
+    expect(response.status).toBe(200)
+    expect(body.progressState).toBe('blocked_import')
+    return body.blockedReason
+  }
+  const finishPartialCleanupRun = ({
+    exhaustedBudget,
+    partialReason,
+  }: {
+    exhaustedBudget: boolean
+    partialReason: string
+  }) => {
+    const runId = beginJudgmentsCleanupStaleCronRun({budgetMs: 30_000, nowMs: Date.now()})
+
+    if (!runId) {
+      throw new Error('Expected cleanup-stale run id')
+    }
+
+    markJudgmentsCleanupStaleCronPartial({exhaustedBudget, reason: partialReason, runId})
+    finishJudgmentsCleanupStaleCronRun({exhaustedBudget, partialReason, runId})
+  }
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+    health: {
+      claimedOutboxCount: 0,
+      hasOutboxRows: true,
+      hasPendingCompletionAck: false,
+      hasQueueRows: false,
+      lastAckSeq: null,
+      oldestUnackedCompletionAgeMs: null,
+      oldestUnexportedAgeMs: 1_000,
+      orphanedJudgedRowCount: 0,
+      outboxRowCount: 2,
+      pendingCompletionAckCount: 0,
+      promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
+      retainedRowCount: 2,
+      sqliteFileBytes: 4096,
+      walBytes: 0,
+    },
+    jobId,
+    projectedBy: 'test-judge-worker',
+    projectionSource: 'test',
+  })
+
+  await withCurrentServerRoleOverride('maintenance-worker', async () => {
+    finishPartialCleanupRun({exhaustedBudget: true, partialReason: 'candidate-job-budget-exhausted'})
+    expect(await getHealthReason()).toBe('cleanup_stale_backlog')
+
+    finishPartialCleanupRun({exhaustedBudget: true, partialReason: 'wall-clock-budget-exhausted'})
+    expect(await getHealthReason()).toBe('cleanup_stale_budget_exhausted')
+
+    const staleRunId = beginJudgmentsCleanupStaleCronRun({budgetMs: 1_000, nowMs: Date.now() - 70_000})
+
+    if (!staleRunId) {
+      throw new Error('Expected stale cleanup-stale run id')
+    }
+
+    try {
+      expect(await getHealthReason()).toBe('cleanup_stale_stuck_or_over_budget')
+    } finally {
+      finishJudgmentsCleanupStaleCronRun({exhaustedBudget: false, partialReason: null, runId: staleRunId})
+    }
+  })
+})
+
 test('job detail exposes storage policy for safe live repair and offline-only recovery', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

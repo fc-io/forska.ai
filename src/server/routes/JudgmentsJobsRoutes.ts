@@ -203,8 +203,9 @@ type FailedRequestSummary = {
 }
 type AnthropicRefusalSummary = Pick<FailedRequestSummary, 'anthropicRefusalArticles' | 'anthropicRefusals'>
 type JudgmentJobBlockedReason =
-  | 'cleanup_stale_running'
-  | 'cleanup_stale_stale'
+  | 'cleanup_stale_backlog'
+  | 'cleanup_stale_budget_exhausted'
+  | 'cleanup_stale_stuck_or_over_budget'
   | 'endpoint_circuit_breaker'
   | 'endpoint_cooldown'
   | 'endpoint_misconfigured'
@@ -2236,6 +2237,40 @@ const getProgressState = ({
                   : 'idle'
 }
 
+const cleanupStaleBacklogPartialReasons = new Set([
+  'candidate-job-budget-exhausted',
+  'provider-admission-reconciliation-budget-exhausted',
+  'provider-telemetry-prune-row-budget-exhausted',
+])
+const cleanupStaleBudgetExhaustedReasons = new Set([
+  'duckdb-step-budget-exhausted',
+  'repair-action-budget-exhausted',
+  'sqlite-job-action-budget-exhausted',
+  'sqlite-retention-batch-budget-exhausted',
+  'sqlite-retention-row-budget-exhausted',
+  'sqlite-row-budget-exhausted',
+  'wall-clock-budget-exhausted',
+])
+
+const getCleanupStaleBlockedReason = (
+  cleanupStaleActivity: JudgmentsCleanupStaleCronActivity,
+): JudgmentJobBlockedReason => {
+  const lastPartialReason = cleanupStaleActivity.lastPartialReason ?? ''
+  const lastPartialWasBacklog = cleanupStaleBacklogPartialReasons.has(lastPartialReason)
+  const lastPartialWasBudgetExhausted =
+    cleanupStaleActivity.exhaustedBudget || cleanupStaleBudgetExhaustedReasons.has(lastPartialReason)
+
+  return cleanupStaleActivity.stale || cleanupStaleActivity.overBudget
+    ? 'cleanup_stale_stuck_or_over_budget'
+    : lastPartialWasBacklog
+      ? 'cleanup_stale_backlog'
+      : lastPartialWasBudgetExhausted
+        ? 'cleanup_stale_budget_exhausted'
+        : cleanupStaleActivity.lastPartial
+          ? 'cleanup_stale_backlog'
+          : null
+}
+
 const getProgressBlockedReason = ({
   cleanupStaleActivity,
   endpointBlockedReason,
@@ -2249,21 +2284,21 @@ const getProgressBlockedReason = ({
   progressState: JudgmentJobProgressState
   repairRequired: boolean
 }): JudgmentJobBlockedReason => {
+  const cleanupStaleBlockedReason = getCleanupStaleBlockedReason(cleanupStaleActivity)
+
   return repairRequired
     ? 'storage_repair_required'
     : progressState === 'waiting_for_owner_ack'
       ? 'waiting_for_owner_ack'
       : progressState === 'cooldown' && endpointBlockedReason
         ? endpointBlockedReason
-        : progressState === 'blocked_import' && cleanupStaleActivity.stale
-          ? 'cleanup_stale_stale'
-          : progressState === 'blocked_import' && cleanupStaleActivity.overBudget
-            ? 'cleanup_stale_running'
-            : progressState === 'blocked_import' && isStaleImport
-              ? 'stale_import'
-              : progressState === 'blocked_import'
-                ? 'waiting_for_judge_worker'
-                : null
+        : progressState === 'blocked_import' && cleanupStaleBlockedReason
+          ? cleanupStaleBlockedReason
+          : progressState === 'blocked_import' && isStaleImport
+            ? 'stale_import'
+            : progressState === 'blocked_import'
+              ? 'waiting_for_judge_worker'
+              : null
 }
 
 const getJudgmentJobControlPlaneCronState = ({
