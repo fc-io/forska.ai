@@ -129,15 +129,15 @@ const fakeCriticalComponents = [
   'projectScope',
   'selectedImport',
   'display',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
-  'summary',
+  'payload',
   'posting',
+  'summary',
 ] as const satisfies readonly FakeChunkRow['projectionComponent'][]
 const fakeSecondaryComponents = [
-  'payload',
+  'judgmentInputContent',
   'search',
 ] as const satisfies readonly FakeChunkRow['projectionComponent'][]
 
@@ -145,14 +145,14 @@ const fakeComponentPrerequisites = {
   display: ['projectScope', 'selectedImport'],
   humanStatus: ['projectScope', 'display'],
   judgmentInputContent: ['projectScope'],
-  llmStatus: ['projectScope', 'display', 'judgmentInputContent'],
+  llmStatus: ['projectScope', 'display'],
   payload: ['projectScope'],
-  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
+  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'payload'],
   projectScope: [],
   queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
   search: ['projectScope', 'selectedImport'],
   selectedImport: ['projectScope'],
-  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
+  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload'],
 } as const satisfies Record<FakeChunkRow['projectionComponent'], readonly FakeChunkRow['projectionComponent'][]>
 
 const getFakeDefaultWorkloadClass = (row: FakeChunkRow) => {
@@ -188,13 +188,13 @@ const getFakeClaimPriority = (row: FakeChunkRow) => {
     'projectScope',
     'selectedImport',
     'display',
-    'judgmentInputContent',
     'llmStatus',
     'humanStatus',
     'queue',
-    'summary',
-    'posting',
     'payload',
+    'posting',
+    'summary',
+    'judgmentInputContent',
     'search',
   ]
 
@@ -686,6 +686,11 @@ test('rebuild chunk workload classes mark durable critical and bulk lanes', asyn
       {...baseChunkIdentity, projectionComponent: 'summary', projectionIdentity: 'summary:project-1'},
       {...baseChunkIdentity, projectionComponent: 'posting', projectionIdentity: 'posting:project-1'},
       {...baseChunkIdentity, projectionComponent: 'payload', projectionIdentity: 'payload:project-1'},
+      {
+        ...baseChunkIdentity,
+        projectionComponent: 'judgmentInputContent',
+        projectionIdentity: 'judgmentInputContent:project-1',
+      },
     ],
     database,
   )
@@ -693,7 +698,8 @@ test('rebuild chunk workload classes mark durable critical and bulk lanes', asyn
 
   expect(getReviewServingRebuildChunkWorkloadClass('summary')).toBe('critical')
   expect(getReviewServingRebuildChunkWorkloadClass('posting')).toBe('critical')
-  expect(getReviewServingRebuildChunkWorkloadClass('payload')).toBe('bulk')
+  expect(getReviewServingRebuildChunkWorkloadClass('payload')).toBe('critical')
+  expect(getReviewServingRebuildChunkWorkloadClass('judgmentInputContent')).toBe('bulk')
   expect(joined).toContain("'critical'")
   expect(joined).toContain("'bulk'")
   expect(joined).toContain('workload_class')
@@ -929,7 +935,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     /candidate\.projection_component = 'search'[\s\S]*prerequisite\.projection_component IN \('projectScope', 'selectedImport'\)/,
   )
   expect(statements.join('\n')).toContain(
-    "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue')",
+    "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload')",
   )
   expect(statements.join('\n')).toContain("prerequisite.status <> 'completed'")
   expect(statements.join('\n')).not.toContain("prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')")
@@ -1177,7 +1183,7 @@ test('next claimable chunk discovery lets posting run before unrelated queue sea
   expect(next).toMatchObject({inputDigest: 'digest-posting', projectionComponent: 'posting'})
 })
 
-test('next claimable chunk discovery prioritizes default-readable posting before optional payload and search', async () => {
+test('next claimable chunk discovery prioritizes payload before posting and optional search', async () => {
   const completedComponents = [
     'projectScope',
     'selectedImport',
@@ -1232,14 +1238,14 @@ test('next claimable chunk discovery prioritizes default-readable posting before
   )
   const joined = statements.join('\n')
 
-  expect(next).toMatchObject({inputDigest: 'digest-posting-readiness', projectionComponent: 'posting'})
-  expect(joined).toMatch(/WHEN 'summary' THEN 7[\s\S]*WHEN 'posting' THEN 8[\s\S]*WHEN 'payload' THEN 9/)
-  expect(joined).toMatch(/WHEN 'posting' THEN 8[\s\S]*WHEN 'search' THEN 10/)
+  expect(next).toMatchObject({inputDigest: 'digest-older-payload', projectionComponent: 'payload'})
+  expect(joined).toMatch(/WHEN 'payload' THEN 6[\s\S]*WHEN 'posting' THEN 7[\s\S]*WHEN 'summary' THEN 8/)
+  expect(joined).toMatch(/WHEN 'posting' THEN 7[\s\S]*WHEN 'search' THEN 10/)
   expect(joined).toContain("candidate.projection_component = 'posting'")
-  expect(joined).toContain("candidate.projection_component IN ('payload', 'search')")
+  expect(joined).toContain("candidate.projection_component IN ('judgmentInputContent', 'search')")
 })
 
-test('next claimable chunk discovery prioritizes summary before posting once queue is ready', async () => {
+test('next claimable chunk discovery prioritizes posting before summary once payload is ready', async () => {
   const completedComponents = [
     'projectScope',
     'selectedImport',
@@ -1248,6 +1254,7 @@ test('next claimable chunk discovery prioritizes summary before posting once que
     'llmStatus',
     'humanStatus',
     'queue',
+    'payload',
   ] as const
   const completed = completedComponents.map((projectionComponent) => {
     return {
@@ -1282,7 +1289,7 @@ test('next claimable chunk discovery prioritizes summary before posting once que
     database,
   )
 
-  expect(next).toMatchObject({inputDigest: 'digest-summary', projectionComponent: 'summary'})
+  expect(next).toMatchObject({inputDigest: 'digest-old-posting', projectionComponent: 'posting'})
 })
 
 test('next claimable chunk discovery applies request priority before component order', async () => {

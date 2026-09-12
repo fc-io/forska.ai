@@ -11,6 +11,7 @@ import {
   getReviewServingDynamicFilteredCountSql,
   type ReviewServingDynamicCountPostingFilterGroup,
 } from './reviewServingDynamicCountSql.ts'
+import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   getReviewServingFilteredCountComponentIdentities,
   getReviewServingFilteredCountSignature,
@@ -108,6 +109,7 @@ const defaultJudgmentHydrationPromptCount = 128
 const dynamicFilterKey = 'filter:dynamic'
 const listAllFilterKey = 'list:all'
 const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
+const reviewServingCountIndexingError = 'Review count is still indexing'
 
 const getDateValue = (value: unknown) => {
   if (value instanceof Date) {
@@ -133,6 +135,10 @@ const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, c
   return [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
     return entry.component === component
   })?.projectionIdentity
+}
+
+const hasManifestComponentState = (manifest: ReviewServingSnapshotManifest, component: string) => {
+  return getManifestComponentIdentity(manifest, component) !== undefined
 }
 
 const getManifest = async (projectId: string, dependencies?: ReviewServingLlmReviewRouteDependencies) => {
@@ -313,6 +319,33 @@ const getStatusPostingFilterGroups = (filters: ReturnType<typeof getRouteFilters
   return llmStatusValue ? [{filterKind: 'llmStatus', filterValues: [llmStatusValue]}] : []
 }
 
+const getFilteredCountIndexingReason = (params: ArticlesReviewsParams, manifest: ReviewServingSnapshotManifest) => {
+  if (getPromptAnswerPostingFilterGroups(params.prompts).length > 0 && !hasManifestComponentState(manifest, 'posting')) {
+    return 'prompt-answer count filters require posting buckets that are still indexing'
+  }
+
+  if (getSearchTokenPrefixes(params.search).length > 0 && !hasManifestComponentState(manifest, 'search')) {
+    return 'search-scoped counts require the search index that is still indexing'
+  }
+
+  return null
+}
+
+const getCountIndexingError = (reason: string) => {
+  return new Error(`${reviewServingCountIndexingError}: ${reason}`)
+}
+
+const isCountIndexingError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.message.startsWith(reviewServingCountIndexingError)
+    || error.message.includes('missingRequiredComponentState')
+  )
+}
+
 const getCountValue = async (
   params: ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -358,20 +391,28 @@ const getFilteredCountValue = async (
   manifest: ReviewServingSnapshotManifest,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<number> => {
+  const indexingReason = getFilteredCountIndexingReason(params, manifest)
+
+  if (indexingReason !== null) {
+    throw getCountIndexingError(indexingReason)
+  }
+
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingFilteredCountDatabase)
   const filters = getRouteFilters(params)
   const promptAnswerPostingFilterGroups = getPromptAnswerPostingFilterGroups(params.prompts)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
+  const identityComponents: ReviewServingProjectionComponent[] = ['display', 'projectScope', 'selectedImport', 'llmStatus']
+
+  if (promptAnswerPostingFilterGroups.length > 0) {
+    identityComponents.push('posting')
+  }
+
+  if (searchTokenPrefixes.length > 0) {
+    identityComponents.push('search')
+  }
 
   return getReviewServingFilteredCountValue({
-    ...getReviewServingFilteredCountComponentIdentities(manifest, [
-      'display',
-      'projectScope',
-      'selectedImport',
-      'llmStatus',
-      'posting',
-      'search',
-    ]),
+    ...getReviewServingFilteredCountComponentIdentities(manifest, identityComponents),
     computeCount: async () => {
       const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
         return group.filterValues
@@ -427,6 +468,22 @@ const getFilteredCountValue = async (
     reviewConfigHash: manifest.reviewConfigHash,
     snapshotId: manifest.snapshotId,
   })
+}
+
+const getOptionalCountValue = async (
+  params: ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  dependencies?: ReviewServingLlmReviewRouteDependencies,
+) => {
+  try {
+    return await getCountValue(params, manifest, dependencies)
+  } catch (error) {
+    if (isCountIndexingError(error)) {
+      return null
+    }
+
+    throw error
+  }
 }
 
 const getArticleId = (row: ReviewServingArticleRow) => {
@@ -652,7 +709,7 @@ export const getLlmReviewArticlesFromServing = async (
     detailReadiness === 'ready'
       ? readJudgments(effectiveParams, manifest, pageRows, enabledPromptCount, dependencies)
       : Promise.resolve([]),
-    getCountValue(effectiveParams, manifest, {...dependencies, database}),
+    getOptionalCountValue(effectiveParams, manifest, {...dependencies, database}),
   ])
   const lastRow = pageRows[pageRows.length - 1]
   const hasNextPage = rowsResult.rows.length > limit
@@ -663,7 +720,7 @@ export const getLlmReviewArticlesFromServing = async (
     totalCount,
     page,
     limit,
-    totalPages: Math.ceil(totalCount / limit),
+    totalPages: totalCount === null ? null : Math.ceil(totalCount / limit),
     nextCursor: hasNextPage && lastRow ? rowsResult.getCursorForRow(lastRow as Record<string, unknown>) : null,
   }
 }

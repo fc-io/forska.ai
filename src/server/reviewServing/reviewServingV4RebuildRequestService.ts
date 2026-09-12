@@ -25,6 +25,7 @@ import {
 } from './reviewServingContracts.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
+  getActiveReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingProjectionIdentityManifest,
@@ -43,14 +44,17 @@ import {
 } from './reviewServingRebuildRequestRepository.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedImportProjector.ts'
-import {composeReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
+import {
+  composeReviewServingCandidateSnapshotManifest,
+  validateReviewServingCandidateSnapshotManifest,
+} from './reviewServingSnapshotPromotionService.ts'
 
 export const defaultReviewServingV4RebuildComponents = [
   ...countReadyReviewServingComponents,
+  ...detailReadyReviewServingComponents,
   'posting',
   'summary',
   'judgmentInputContent',
-  ...detailReadyReviewServingComponents,
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
@@ -216,10 +220,10 @@ const selectedImportPostingFilterFanOut = 4
 const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
 const syntheticHumanStatusPromptCount = 1
 const bootstrapOptionalComponents = [
+  ...detailReadyReviewServingComponents,
   'posting',
   'summary',
   'judgmentInputContent',
-  ...detailReadyReviewServingComponents,
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const fullProjectBootstrapComponents = [] as const satisfies readonly ReviewServingProjectionComponent[]
@@ -473,6 +477,10 @@ const getReviewServingV4BootstrapHash = (label: string, value: ReviewServingIden
   return createHash('sha256')
     .update(`${label}:${getStableReviewServingJson(value)}`)
     .digest('hex')
+}
+
+const getReviewServingJsonLiteral = (value: ReviewServingIdentityValue) => {
+  return `${getSqlLiteral(getStableReviewServingJson(value))}::JSON`
 }
 
 const getReviewServingV4BootstrapSnapshotId = (input: {
@@ -1152,6 +1160,64 @@ const seedReviewServingV4Bootstrap = async (
   })
 }
 
+const promoteSeededReviewServingV4BootstrapCandidate = async (
+  input: {projectId: string; snapshotId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const candidate = await getReviewServingSnapshotManifest(input, database)
+
+  if (candidate === null || candidate.status !== 'candidate') {
+    throw new Error(`cannot promote reused review-serving bootstrap snapshot ${input.snapshotId}: candidate is missing`)
+  }
+
+  const validation = await validateReviewServingCandidateSnapshotManifest(candidate, database)
+
+  if (!validation.ok) {
+    throw new Error(`cannot promote reused review-serving bootstrap snapshot ${input.snapshotId}: ${validation.error}`)
+  }
+
+  const active = await getActiveReviewServingSnapshotManifest(
+    {projectId: input.projectId, reviewConfigHash: candidate.reviewConfigHash},
+    database,
+  )
+  const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
+
+  await database.run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET
+      validation_result_json = ${getReviewServingJsonLiteral(validation.validationResult)},
+      updated_at = current_timestamp
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND snapshot_status = 'candidate'
+  `)
+  await database.run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET
+      snapshot_status = 'retired',
+      updated_at = current_timestamp
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(candidate.reviewConfigHash)}
+      AND snapshot_status = 'active'
+      AND snapshot_id <> ${getSqlLiteral(input.snapshotId)}
+  `)
+  await database.run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET
+      snapshot_status = 'active',
+      last_known_good_snapshot_id = ${getSqlLiteral(lastKnownGoodSnapshotId)},
+      activated_at = current_timestamp,
+      failed_at = NULL,
+      last_error = NULL,
+      updated_at = current_timestamp
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND snapshot_status = 'candidate'
+  `)
+
+  return {promoted: true, snapshotId: input.snapshotId}
+}
+
 const getReviewServingV4RebuildEstimate = (
   stats: ReviewServingV4RebuildStatsRow,
   components: readonly ReviewServingProjectionComponent[],
@@ -1708,9 +1774,16 @@ export const requestReviewServingV4RebuildEffect = (
     }
 
     if (bootstrap !== null && requestOverBudgetReason === null && bootstrap.chunks.length === 0) {
+      const promotion = await runReviewServingV4RebuildStatsPhase('promoteReusedBootstrap', () => {
+        return promoteSeededReviewServingV4BootstrapCandidate(
+          {projectId: bootstrap.projectId, snapshotId: bootstrap.snapshotId},
+          database,
+        )
+      })
+
       return getNoopReviewServingV4RebuildRequest({
         components,
-        diagnostics: {componentReuse: bootstrap.reuseDiagnostics},
+        diagnostics: {componentReuse: bootstrap.reuseDiagnostics, promotion},
         projectId: input.projectId,
         priority: input.priority,
         reason: input.reason,
