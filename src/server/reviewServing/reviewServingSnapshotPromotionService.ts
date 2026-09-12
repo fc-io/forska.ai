@@ -1,6 +1,7 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {type ReviewServingDirtyWorkCoverage} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingComponentRequirements,
   type ReviewServingCountAvailability,
@@ -490,6 +491,47 @@ export const validateReviewServingCandidateSnapshotManifest = async (
   return report.error === null
     ? {candidate, ok: true, validationResult}
     : {candidate, error: report.error, ok: false, validationResult}
+}
+
+export const getPromotedReviewServingSnapshotDirtyWorkCoverages = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+): Promise<ReviewServingDirtyWorkCoverage[]> => {
+  const componentStates = [...candidate.componentState.required, ...candidate.componentState.optional]
+
+  return componentStates.reduce<Promise<ReviewServingDirtyWorkCoverage[]>>(async (previous, state) => {
+    const accumulated = await previous
+    const manifest = await getReviewServingProjectionIdentityManifest(
+      {
+        projectId: candidate.projectId,
+        projectionComponent: state.component,
+        projectionIdentity: state.projectionIdentity,
+      },
+      database,
+    )
+
+    if (manifest === null) {
+      return accumulated
+    }
+
+    const manifestCoverages = Object.entries(manifest.inputWatermarks).flatMap(
+      ([sourcePartition, completedSourceHighWaterMark]) => {
+        return Number.isFinite(completedSourceHighWaterMark)
+          ? [
+              {
+                completedSourceHighWaterMark,
+                projectId: candidate.projectId,
+                projectionComponent: state.component,
+                projectionIdentity: state.projectionIdentity,
+                sourcePartition,
+              },
+            ]
+          : []
+      },
+    )
+
+    return [...accumulated, ...manifestCoverages]
+  }, Promise.resolve([]))
 }
 
 export const getReviewServingOptionalComponentAvailability = (input: {
