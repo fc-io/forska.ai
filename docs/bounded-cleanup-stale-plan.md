@@ -4,6 +4,11 @@ Date: 2026-09-11
 
 Context commit when written: `e9303bf3` (`fix judgment job refill stalls`)
 
+Updated after reviewing additional 2026-09-11 work:
+
+- `e9d40d0f` (`fix SGLang judgment job recovery metrics`)
+- local request-attempt closeout recovery work in progress
+
 ## Goal
 
 Make `judgments-jobs-cleanup-stale` cooperative. It should clean old judgment
@@ -37,6 +42,39 @@ slow, but the count endpoint itself was not the primary blocker:
 
 That points to a broader scheduler/control-plane issue: cleanup can run long
 enough that operational judgment work does not get a fair turn.
+
+## Commit Impact Review
+
+Today's relevant work does not change the plan direction, but it adds
+implementation constraints.
+
+`e9303bf3` already changed the import latch from a simple boolean into a
+stale-aware activity record. After `JUDGMENTS_IMPORT_STALE_AFTER_MS`, operational
+work can ignore a stuck import latch instead of letting one stale import run
+block `add-to-queue` and judging indefinitely. Bounded cleanup should follow the
+same principle:
+
+- cleanup run state should have a run id, start time, running duration, stale or
+  over-budget flag, and budget-exhausted result;
+- a stale cleanup run marker must not permanently block queue refill, import,
+  provider telemetry, LLM status, or judging;
+- stale cleanup state should be loud in diagnostics, but it should not be
+  reported as a provider failure or generic `stale_import` without cleanup
+  context;
+- tests should preserve the `e9303bf3` invariant that stale import/refill
+  latches do not stop operational work forever.
+
+`e9d40d0f` improves SGLang/provider recovery metrics and adds persisted prompt
+stats to the job route. That makes diagnosis better, but it also means cleanup
+diagnostics should avoid adding new heavy route-time scans. Prefer exposing
+cleanup state already tracked by the cron/owner rather than computing broad
+backlog counts on every admin route read.
+
+The current request-attempt closeout recovery work in progress adds another
+mutable DuckDB table in the same family of indexed-table hazards. It does not
+change `cleanup-stale` directly, but it reinforces the DuckDB-side cleanup rule:
+closeout reconciliation and provider-admission cleanup must be bounded before
+query execution and should avoid broad scans or large `RETURNING` rowsets.
 
 ## Current Code Shape
 
@@ -103,6 +141,12 @@ or total DuckDB work.
 
    A large cleanup backlog should degrade cleanup freshness, not stop prompt
    admission or import.
+
+7. Stale cleanup activity is a diagnosis, not a global lock.
+
+   If cleanup exceeds its budget or leaves a stale running marker, the owner
+   should surface that state and allow safe operational crons to continue. Do not
+   replace the old stale import blocker with a new stale cleanup blocker.
 
 ## Proposed Runtime Contract
 
@@ -171,7 +215,38 @@ type CleanupStaleResult = {
 The cron can still record normal success when cleanup yields cleanly. A partial
 result is not an error.
 
-### 3. Remove Unbounded Retention Loops
+### 3. Track Cleanup Run Activity Explicitly
+
+Mirror the stale-aware import latch pattern from `judgmentsJobsCronState.ts`.
+Cleanup should record enough state for the owner and admin diagnostics to tell
+these apart:
+
+- no cleanup currently active;
+- cleanup active and within budget;
+- cleanup yielded after exhausting this tick's budget;
+- cleanup run marker is stale or over budget;
+- cleanup failed with a real error.
+
+Suggested state:
+
+```ts
+type CleanupStaleCronActivity = {
+  budgetMs: number
+  currentStep: string | null
+  exhaustedBudget: boolean
+  runId: string | null
+  runningForMs: number | null
+  shouldStartAnotherCleanupRun: boolean
+  stale: boolean
+  startedAtMs: number | null
+}
+```
+
+This state should be independent from the import latch. A stale cleanup marker
+may prevent a duplicate cleanup run, but it must not by itself block import,
+`add-to-queue`, provider telemetry, LLM status, or judging.
+
+### 4. Remove Unbounded Retention Loops
 
 Replace `pruneVisibilityAckedRetentionUntilStable` with a bounded loop:
 
@@ -183,7 +258,7 @@ Replace `pruneVisibilityAckedRetentionUntilStable` with a bounded loop:
 The existing `pruneVisibilityAckedRetention({maxRows})` helper is a good base,
 but the top-level caller must stop after a fixed number of batches.
 
-### 4. Bound Recursive Job Walks
+### 5. Bound Recursive Job Walks
 
 Several helpers recurse through job IDs:
 
@@ -203,7 +278,7 @@ Recommended approach:
 - carry remaining work to the next tick naturally through the underlying state;
 - add explicit counters for "candidate jobs seen" and "candidate jobs handled."
 
-### 5. Bound DuckDB-Side Cleanup Steps
+### 6. Bound DuckDB-Side Cleanup Steps
 
 DuckDB steps need special care because the expensive work can happen before any
 JavaScript timeout check can run.
@@ -220,6 +295,8 @@ Audit these steps first:
 - `finalizeDrainingJobs`
 - `reconcileProviderAdmissionLeasesForDurableCloseout`
 - `deleteDrainedJobs`
+- any request-attempt closeout backfill or closeout reconciliation that becomes
+  part of cleanup after the `0232` request-attempt closeout recovery work
 
 For each DuckDB query:
 
@@ -231,7 +308,7 @@ For each DuckDB query:
 - if a query can scan a large compressed string table, add a narrower predicate,
   a cursor, or a separate materialized cleanup candidate list before shipping.
 
-### 6. Add Cleanup Runtime Diagnostics
+### 7. Add Cleanup Runtime Diagnostics
 
 Expose diagnostics through existing cron runtime state and job health payloads:
 
@@ -253,7 +330,10 @@ The admin job health page should distinguish:
 
 This prevents a generic `blocked_import/stale_import` from being the only clue.
 
-### 7. Add a Watchdog for Over-Budget Cleanup
+Route and admin diagnostics should reuse this tracked cleanup state. Avoid
+adding broad per-request route queries only to compute cleanup backlog numbers.
+
+### 8. Add a Watchdog for Over-Budget Cleanup
 
 If `cleanup-stale` is still marked running far past the intended budget:
 
@@ -277,6 +357,7 @@ operator action unless there is a separate, proven safe owner-restart path.
   - cleanup with a large retention backlog yields after configured batches;
   - a second tick continues cleanup;
   - partial cleanup still records cron success, not failure;
+  - over-budget cleanup activity is reported as stale/partial cleanup state;
   - active jobs still permit queue refill/import ticks after cleanup yields.
 
 ### Slice B: Bound Job-List Repairs
@@ -309,6 +390,8 @@ operator action unless there is a separate, proven safe owner-restart path.
 - Tests:
   - health payload distinguishes stale import caused by cleanup backlog from
     provider/runtime failures;
+  - SGLang endpoint recovery/probing metrics remain provider diagnostics, not
+    cleanup diagnostics;
   - owner diagnostics show active/partial cleanup state.
 
 ## Verification Plan
@@ -317,6 +400,7 @@ Focused tests:
 
 - `bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts --timeout 120000`
 - `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts --timeout 120000`
+- `bun test src/server/cron/judgmentsJobsCronState.test.ts src/server/cron/judgmentsJobs.test.ts --timeout 120000`
 - any affected route/diagnostic tests for job health and owner connections.
 
 Static checks:
@@ -332,9 +416,11 @@ Live gate before merge:
 4. Confirm `cleanup-stale` reports partial progress and yields.
 5. Confirm `add-to-queue`, import, provider telemetry, and LLM status continue
    to tick while cleanup backlog remains.
-6. Confirm a real current-DB judgment job moves from ready/import-blocked state
+6. Confirm stale cleanup state does not regress the stale-aware import latch
+   behavior introduced in `e9303bf3`.
+7. Confirm a real current-DB judgment job moves from ready/import-blocked state
    to active/running or otherwise reports a truthful non-cleanup blocker.
-7. Confirm the unassessed-count route remains responsive under cleanup load.
+8. Confirm the unassessed-count route remains responsive under cleanup load.
 
 Do not accept readiness-only evidence. The live gate must show real progress or
 a truthful, correctly attributed blocker.

@@ -234,6 +234,9 @@ bun test src/server/routes/JudgmentsJobsRoutes.test.ts src/server/cron/judgments
 - The diagnostic gates prove `/api/duckdb_owner_connections`, `/api/llmstatus`,
   and judgment-job health/detail routes expose owner/control-plane cron state
   instead of silently showing stale or process-local data.
+- For completion replay or request-attempt closeout projection changes, include
+  `bun test src/server/services/requestAttemptCloseoutService.test.ts src/server/utils/duckdbServiceReload.test.ts`
+  to prove the no-index projection write path and startup repair marker mapping.
 - The live current-DB gate must capture low-memory evidence: start with the
   intended maintenance DuckDB cap, verify owner/API readiness, verify fresh
   LLM-status/provider telemetry or an explicit inactive/deferred reason, and
@@ -289,7 +292,7 @@ Job API field sources are intentionally separate:
 | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Detail `status`, `storageState`, import timestamps/errors, quarantine fields, model/content configuration | DuckDB `app.judgment_job`, project/model records, and persisted import metadata                                                        |
 | Detail `promptStats`, `storageHealth`, queue/claim/running/outbox/retention counters                      | Per-job SQLite, published through the fresh SQLite health projection when the API process is not the SQLite owner                      |
-| Detail request/provider telemetry and token totals                                                        | Live request/dispatch telemetry plus persisted `app.token_use`/provider telemetry                                                      |
+| Detail request/provider telemetry, completion closeouts, and token totals                                 | Live request/dispatch telemetry plus persisted `app.token_use`, `app.request_attempt_closeout`, and provider telemetry                 |
 | Health `liveSqlite`, `runningWork`, and `importWork`                                                      | The same SQLite health snapshot combined with owner-backed import work leases                                                          |
 | Health `storagePolicy`, `recommendedNextAction`, `progressState`, and blocked/recovery fields             | Derived from `storageState`, SQLite health, import availability/leases, endpoint diagnostics, and persisted import/quarantine metadata |
 | Review-serving freshness and visible result                                                               | DuckDB dirty/materialization state and V4 serving tables; canonical `app.judgment` durability precedes serving visibility              |
