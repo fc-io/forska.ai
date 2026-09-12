@@ -6,6 +6,7 @@ import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
+  getReviewServingSnapshotManifest,
   markCandidateReviewServingSnapshotManifestFailed,
   retireObsoleteReviewServingSnapshotManifests,
   type ReviewServingManifestRepositoryDatabase,
@@ -21,6 +22,18 @@ type FakeSnapshotRow = Omit<ReviewServingSnapshotManifest, 'status'> & {
   activatedAt: string | null
   status: ReviewServingSnapshotManifest['status']
   updatedAt: string
+}
+type FakeChunkAvailabilityRow = {
+  completedChunkCount: number
+  component: string
+  maxChunkUpdatedAt?: string | null
+  outputBaseGeneration: number
+  projectionIdentity: string
+  requestCreatedAt?: string | null
+  requestId?: string | null
+  requestStatus?: string | null
+  requestUpdatedAt?: string | null
+  totalChunkCount: number
 }
 
 const componentState = {
@@ -153,7 +166,7 @@ const getNotEqualLiteral = (statement: string, columnName: string) => {
 
 const createFakeManifestDatabase = (
   initialSnapshots: FakeSnapshotRow[] = [],
-  options: {selectedImportSnapshotStatus?: string} = {},
+  options: {chunkAvailabilityRows?: FakeChunkAvailabilityRow[]; selectedImportSnapshotStatus?: string} = {},
 ) => {
   const projections = new Map<string, FakeProjectionRow>()
   const projectionPhysicalRows = new Map<string, number>()
@@ -322,7 +335,22 @@ const createFakeManifestDatabase = (
       return [{status: options.selectedImportSnapshotStatus ?? 'completed'}] as T[]
     }
 
-    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+    if (statement.includes('app.review_rebuild_chunk_manifest')) {
+      return (options.chunkAvailabilityRows ?? []) as T[]
+    }
+
+    if (statement.includes('app.review_projection_identity_manifest')) {
+      if (statement.includes('status AS projectionStatus')) {
+        return [...projections.values()].map((projection) => {
+          return {
+            baseGeneration: projection.baseGeneration,
+            component: projection.projectionComponent,
+            projectionIdentity: projection.projectionIdentity,
+            projectionStatus: projection.status,
+          }
+        }) as T[]
+      }
+
       const manifestId = getWhereLiteral(statement, 'manifest_id') ?? ''
       const projection = projections.get(manifestId)
       return (
@@ -716,6 +744,176 @@ test('active-or-last-known-good manifest selection returns the latest retired sn
   expect(statements).toHaveLength(1)
 })
 
+test('available manifest state hides incomplete chunk-backed components without mutating raw builder state', async () => {
+  const snapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    componentState: {
+      optional: [
+        {
+          baseGeneration: '1',
+          component: 'search',
+          patchWatermark: '3',
+          projectionIdentity: 'search:identity-1',
+          requirement: 'optional',
+        },
+      ],
+      required: componentState.required,
+    },
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: ['search'],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const {database} = createFakeManifestDatabase([snapshot], {
+    chunkAvailabilityRows: [
+      {
+        completedChunkCount: 2,
+        component: 'display',
+        outputBaseGeneration: 1,
+        projectionIdentity: 'display:identity-1',
+        totalChunkCount: 2,
+      },
+      {
+        completedChunkCount: 1,
+        component: 'search',
+        outputBaseGeneration: 1,
+        projectionIdentity: 'search:identity-1',
+        totalChunkCount: 2,
+      },
+    ],
+  })
+
+  const raw = await getReviewServingSnapshotManifest(
+    {componentStateMode: 'raw', projectId: 'project-1', snapshotId: 'snapshot-active'},
+    database,
+  )
+  const available = await getReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId: 'project-1', snapshotId: 'snapshot-active'},
+    database,
+  )
+
+  expect(
+    raw?.componentState.optional.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['search'])
+  expect(
+    available?.componentState.required.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['display'])
+  expect(available?.componentState.optional).toEqual([])
+})
+
+test('available manifest state follows the newest effective chunk request for duplicate chunk rows', async () => {
+  const snapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const {database} = createFakeManifestDatabase([snapshot], {
+    chunkAvailabilityRows: [
+      {
+        completedChunkCount: 1,
+        component: 'display',
+        maxChunkUpdatedAt: '2026-06-16T10:01:00.000Z',
+        outputBaseGeneration: 1,
+        projectionIdentity: 'display:identity-1',
+        requestCreatedAt: '2026-06-16T10:01:00.000Z',
+        requestId: 'request-stale-running',
+        requestStatus: 'running',
+        requestUpdatedAt: '2026-06-16T10:01:00.000Z',
+        totalChunkCount: 2,
+      },
+      {
+        completedChunkCount: 2,
+        component: 'display',
+        maxChunkUpdatedAt: '2026-06-16T10:05:00.000Z',
+        outputBaseGeneration: 1,
+        projectionIdentity: 'display:identity-1',
+        requestCreatedAt: '2026-06-16T10:05:00.000Z',
+        requestId: 'request-current-completed',
+        requestStatus: 'completed',
+        requestUpdatedAt: '2026-06-16T10:05:00.000Z',
+        totalChunkCount: 2,
+      },
+    ],
+  })
+
+  const available = await getReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId: 'project-1', snapshotId: 'snapshot-active'},
+    database,
+  )
+
+  expect(
+    available?.componentState.required.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['display'])
+})
+
+test('available manifest state hides candidate rebuilt components without completed chunks', async () => {
+  const candidateSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: null,
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-candidate',
+    status: 'candidate',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const {database} = createFakeManifestDatabase([candidateSnapshot])
+  const projection = {
+    baseGeneration: 1,
+    definitionVersion: 'display-v1',
+    inputDigest: 'display-digest-1',
+    inputWatermark: 10,
+    inputWatermarks: {reviewChange: 10},
+    patchWatermark: 3,
+    projectId: 'project-1',
+    projectionComponent: 'display',
+    projectionIdentity: 'display:identity-1',
+    reviewConfigHash: 'review-config-1',
+    status: 'candidate',
+  } as const
+
+  await upsertReviewServingProjectionIdentityManifest(projection, database)
+
+  const rebuiltWithoutChunks = await getReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId: 'project-1', snapshotId: 'snapshot-candidate'},
+    database,
+  )
+
+  await upsertReviewServingProjectionIdentityManifest({...projection, status: 'active'}, database)
+
+  const reusedActiveProjection = await getReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId: 'project-1', snapshotId: 'snapshot-candidate'},
+    database,
+  )
+
+  expect(rebuiltWithoutChunks?.componentState.required).toEqual([])
+  expect(
+    reusedActiveProjection?.componentState.required.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['display'])
+})
+
 test('promotion reports invalid candidates without mutating snapshot manifests', async () => {
   const activeSnapshot: FakeSnapshotRow = {
     ...baseSnapshotInput,
@@ -769,7 +967,22 @@ test('promotion retires previous active and preserves it as last-known-good', as
     updatedAt: '2026-06-16T10:00:00.000Z',
     validationResult: null,
   }
-  const {database, statements} = createFakeManifestDatabase([activeSnapshot])
+  const {database, statements} = createFakeManifestDatabase([activeSnapshot], {
+    chunkAvailabilityRows: [
+      {
+        completedChunkCount: 2,
+        component: 'display',
+        maxChunkUpdatedAt: '2026-06-16T10:05:00.000Z',
+        outputBaseGeneration: 1,
+        projectionIdentity: 'display:identity-1',
+        requestCreatedAt: '2026-06-16T10:05:00.000Z',
+        requestId: 'request-current-completed',
+        requestStatus: 'completed',
+        requestUpdatedAt: '2026-06-16T10:05:00.000Z',
+        totalChunkCount: 2,
+      },
+    ],
+  })
 
   await createCandidateReviewServingSnapshotManifest(
     {...baseSnapshotInput, lastKnownGoodSnapshotId: 'snapshot-active', snapshotId: 'snapshot-next'},

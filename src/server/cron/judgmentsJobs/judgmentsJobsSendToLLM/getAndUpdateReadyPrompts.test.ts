@@ -579,7 +579,9 @@ test('owner-backed missing runtime logs through a stable rate-limit key', async 
   )
 
   if (runScript.exitCode !== 0) {
-    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed missing runtime test failed')
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed missing runtime test failed',
+    )
   }
 
   const result = JSON.parse(runScript.stdout.toString()) as {

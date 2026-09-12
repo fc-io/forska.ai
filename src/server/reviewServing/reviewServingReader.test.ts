@@ -250,7 +250,7 @@ test('readReviewServingRows rejects unsupported contracts before DuckDB executio
   expect(reader.statements).toHaveLength(0)
 })
 
-test('readReviewServingRows rejects missing project and missing snapshot identity before DuckDB execution', async () => {
+test('readReviewServingRows rejects missing project and unavailable snapshot before DuckDB execution', async () => {
   const reader = createReaderDatabase()
   const emptyManifestDatabase = createManifestDatabase({})
   const missingProject = await readReviewServingRows(
@@ -263,7 +263,7 @@ test('readReviewServingRows rejects missing project and missing snapshot identit
   )
 
   expect(missingProject).toMatchObject({reason: 'servingIdentityMissing', status: 'rejected'})
-  expect(missingSnapshot).toMatchObject({reason: 'servingIdentityMissing', status: 'rejected'})
+  expect(missingSnapshot).toMatchObject({reason: 'manifestStatusRejected', status: 'rejected'})
   expect(missingSnapshot.diagnostics.manifest).toMatchObject({snapshotId: null, status: 'missing'})
   expect(reader.statements).toHaveLength(0)
 })

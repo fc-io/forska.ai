@@ -404,7 +404,13 @@ test('prompt preview contract orders article serving rows without judgment detai
 test('unassessed row contract requires only base list-mode dependencies', () => {
   const unassessedRows = getReviewServingReadContract('review.unassessed.rows')
 
-  expect(unassessedRows?.requiredComponents).toEqual(['projectScope', 'selectedImport', 'display', 'llmStatus', 'queue'])
+  expect(unassessedRows?.requiredComponents).toEqual([
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'queue',
+  ])
   expect(unassessedRows?.requiredComponents).not.toContain('judgmentInputContent')
   expect(unassessedRows?.requiredComponents).not.toContain('posting')
   expect(unassessedRows?.requiredComponents).not.toContain('summary')

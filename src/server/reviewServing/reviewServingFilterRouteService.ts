@@ -146,9 +146,18 @@ const getManifest = async (projectId: string, dependencies?: ReviewServingFilter
   const manifestDatabase =
     dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
   const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
-  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
+  const active = await getActiveReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId, reviewConfigHash},
+    manifestDatabase,
+  )
 
-  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
+  return (
+    active
+    ?? getLastKnownGoodReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId, reviewConfigHash},
+      manifestDatabase,
+    )
+  )
 }
 
 const getReaderDependencies = (dependencies?: ReviewServingFilterRouteDependencies) => {

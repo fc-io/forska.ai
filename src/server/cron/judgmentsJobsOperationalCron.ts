@@ -11,7 +11,7 @@ import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.t
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsSampleProviderTelemetry} from './judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts'
-import {JUDGMENTS_IMPORT_STALE_AFTER_MS, getJudgmentsImportCronActivity} from './judgmentsJobsCronState.ts'
+import {getJudgmentsImportCronActivity, JUDGMENTS_IMPORT_STALE_AFTER_MS} from './judgmentsJobsCronState.ts'
 import {judgmentsJobsImportCron} from './judgmentsJobsImportCron.ts'
 
 const serverJobId = getDefaultJudgmentServerJobId()

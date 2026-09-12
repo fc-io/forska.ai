@@ -107,7 +107,9 @@ const getReadyRowsProcessingLabel = (indexing: ReviewsIndexing) => {
 const getReadyRowsQueuedLabel = (indexing: ReviewsIndexing) => {
   const missingTierNames = getMissingReadyRowTierNames(indexing)
 
-  return missingTierNames.length === 0 ? 'background maintenance queued' : `${getJoinedTierNames(missingTierNames)} queued`
+  return missingTierNames.length === 0
+    ? 'background maintenance queued'
+    : `${getJoinedTierNames(missingTierNames)} queued`
 }
 
 export const getProjectRefreshLabel = (indexing: ReviewsIndexing) => {

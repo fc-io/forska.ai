@@ -60,7 +60,38 @@ const createWriterDatabase = () => {
         return [{status: 'completed'}] as T[]
       }
 
-      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      if (
+        statement.includes('app.review_rebuild_chunk_manifest')
+        && statement.includes('chunk.projection_component AS component')
+      ) {
+        return [
+          {
+            completedChunkCount: 1,
+            component: 'display',
+            maxChunkUpdatedAt: '2026-06-16T10:01:00.000Z',
+            outputBaseGeneration: 1,
+            projectionIdentity: 'display:identity-1',
+            requestCreatedAt: '2026-06-16T10:00:00.000Z',
+            requestId: 'rebuild:display-1',
+            requestStatus: 'completed',
+            requestUpdatedAt: '2026-06-16T10:01:00.000Z',
+            totalChunkCount: 1,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('app.review_projection_identity_manifest')) {
+        if (statement.includes('status AS projectionStatus')) {
+          return [
+            {
+              baseGeneration: 1,
+              component: 'display',
+              projectionIdentity: 'display:identity-1',
+              projectionStatus: 'candidate',
+            },
+          ] as T[]
+        }
+
         return [
           {
             baseGeneration: 1,

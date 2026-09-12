@@ -5136,6 +5136,26 @@ test('worker refreshes request candidate snapshot state before promotion', async
       ] as T[]
     }
 
+    if (
+      statement.includes('CAST(COUNT(*) AS INTEGER) AS totalChunkCount')
+      && statement.includes('app.review_rebuild_chunk_manifest chunk')
+    ) {
+      return [
+        {
+          completedChunkCount: 1,
+          component: 'projectScope',
+          maxChunkUpdatedAt: '2026-06-16T10:00:00.000Z',
+          outputBaseGeneration: 0,
+          projectionIdentity: 'projectScope:identity-1',
+          requestCreatedAt: '2026-06-16T09:59:00.000Z',
+          requestId: 'rebuild-refresh-candidate',
+          requestStatus: 'running',
+          requestUpdatedAt: '2026-06-16T10:00:00.000Z',
+          totalChunkCount: 1,
+        },
+      ] as T[]
+    }
+
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
       return [
         {

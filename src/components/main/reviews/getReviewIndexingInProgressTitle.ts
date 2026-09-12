@@ -184,10 +184,7 @@ const getQueuedReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIn
   }
 
   if (hasReadyReviewRows(params.indexing)) {
-    return {
-      description: getReadyRowsBackgroundDescription(params.indexing),
-      title: 'Background review indexing queued',
-    }
+    return {description: getReadyRowsBackgroundDescription(params.indexing), title: 'Background review indexing queued'}
   }
 
   return {description: getReviewIndexingQueuedBody(), title: getReviewIndexingQueuedTitle(params.projectId)}

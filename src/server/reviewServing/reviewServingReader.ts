@@ -155,8 +155,10 @@ const maxArticleSetHydrationPayloadBytes = 2_000_000
 const reviewServingArticleBaseTable = 'mart.review_article_serving_base_v4'
 const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewServingPostingArticleSortAlias = 'serving_order'
-const manifestSearchReadinessComponents = ['projectScope', 'search'] as const satisfies
-  readonly ReviewServingProjectionComponent[]
+const manifestSearchReadinessComponents = [
+  'projectScope',
+  'search',
+] as const satisfies readonly ReviewServingProjectionComponent[]
 const postingBackedRowFilterKeys = ['importRoute', 'promptAnswer'] as const satisfies readonly ReviewServingFilterKey[]
 
 const getReaderDatabase = () => {
@@ -1021,6 +1023,7 @@ const getSnapshotManifest = async (
   if (hasText(request.snapshotId)) {
     return getReviewServingSnapshotManifest(
       {
+        componentStateMode: 'available',
         projectId: request.projectId as string,
         snapshotId: request.snapshotId as string,
         workloadContext: request.routeDiagnosticWorkloadContext,
@@ -1031,6 +1034,7 @@ const getSnapshotManifest = async (
 
   return getActiveOrLastKnownGoodReviewServingSnapshotManifest(
     {
+      componentStateMode: 'available',
       projectId: request.projectId as string,
       reviewConfigHash: request.reviewConfigHash,
       workloadContext: request.routeDiagnosticWorkloadContext,
@@ -1230,7 +1234,35 @@ export const readReviewServingRows = async <T>(
     })
   }
 
-  if (!hasText(request.projectId) || !manifest?.snapshotId) {
+  if (!hasText(request.projectId)) {
+    return rejectReaderRequest({
+      admission: null,
+      contract,
+      diagnostics,
+      filterSignature,
+      manifest,
+      reason: 'servingIdentityMissing',
+    })
+  }
+
+  const snapshotFreshness = getManifestFreshness(manifest)
+
+  if (
+    contract.freshnessBehavior === 'requireReadySnapshot'
+    && snapshotFreshness !== 'ready'
+    && !(snapshotFreshness === 'stale' && request.allowStale === true)
+  ) {
+    return rejectReaderRequest({
+      admission: null,
+      contract,
+      diagnostics,
+      filterSignature,
+      manifest,
+      reason: 'manifestStatusRejected',
+    })
+  }
+
+  if (!manifest?.snapshotId) {
     return rejectReaderRequest({
       admission: null,
       contract,
@@ -1306,7 +1338,7 @@ export const readReviewServingRows = async <T>(
     requiresTempSpill: request.requiresTempSpill,
     searchMode: request.searchMode,
     searchState: request.searchState,
-    snapshotFreshness: getManifestFreshness(manifest),
+    snapshotFreshness,
     snapshotId: manifest.snapshotId,
     workloadClass: contract.workloadClass,
   })

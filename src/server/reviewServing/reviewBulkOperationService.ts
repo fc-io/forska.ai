@@ -123,7 +123,10 @@ export const isActiveReviewServingSnapshotDetailReady = async (
   input: {projectId: string; reviewConfigHash?: string | null},
   manifestDatabase: ReviewServingManifestRepositoryDatabase = getAppDatabaseService(),
 ) => {
-  const manifest = await getActiveReviewServingSnapshotManifest(input, manifestDatabase)
+  const manifest = await getActiveReviewServingSnapshotManifest(
+    {...input, componentStateMode: 'available'},
+    manifestDatabase,
+  )
 
   return manifest?.status === 'active' && isReviewServingSnapshotDetailReady(manifest)
 }
@@ -177,7 +180,7 @@ const getManifest = async (
   return request.snapshot.type === 'latest'
     ? null
     : getReviewServingSnapshotManifest(
-        {projectId: request.projectId, snapshotId: request.snapshot.snapshotId},
+        {componentStateMode: 'available', projectId: request.projectId, snapshotId: request.snapshot.snapshotId},
         manifestDatabase,
       )
 }
@@ -188,7 +191,10 @@ const getLatestRequiredManifest = async (
   reviewConfigHash: string | null,
 ) => {
   return request.snapshot.type === 'latest' && !Array.isArray(request.criteria.articleIds)
-    ? getActiveReviewServingSnapshotManifest({projectId: request.projectId, reviewConfigHash}, manifestDatabase)
+    ? getActiveReviewServingSnapshotManifest(
+        {componentStateMode: 'available', projectId: request.projectId, reviewConfigHash},
+        manifestDatabase,
+      )
     : null
 }
 
