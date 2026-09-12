@@ -557,6 +557,178 @@ test('add-to-queue overlap warning waits for sustained running time', () => {
   expect(result.warnings[0]?.[1]).toContain('"runningForMs":30000')
 })
 
+test('add-to-queue cron starts a fresh run when a prior run is stale', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const getRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const sampleTelemetryModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')
+        const sendToLlmModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const warnings = []
+        const resolvers = []
+        let addCalls = 0
+        let now = 1000
+
+        Date.now = () => now
+        console.warn = (...args) => {
+          warnings.push(args.map((arg) => String(arg)))
+        }
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              constructor() {
+                this.uses = []
+              }
+
+              use(plugin) {
+                this.uses.push(plugin)
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              return {config, name: config.name}
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-add-stale'}
+        })
+        void mock.module(backgroundImportModulePath, () => {
+          return {runJudgmentJobSqliteBackgroundImport: async () => ({})}
+        })
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            getJudgmentJobSqliteService: () => {
+              return {publishHealthProjections: async () => {}, syncOwnedLeases: async () => {}}
+            },
+          }
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {
+            judgmentsJobsAddToQueue: async () => {
+              addCalls += 1
+              await new Promise((resolve) => {
+                resolvers.push(resolve)
+              })
+            },
+          }
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {judgmentsJobsCheckLLMStatus: async () => {}}
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {judgmentsJobsCleanupStale: async () => {}}
+        })
+        void mock.module(getRunningJobsModulePath, () => {
+          return {judgmentsJobsGetRunningJobs: async () => []}
+        })
+        void mock.module(sampleTelemetryModulePath, () => {
+          return {judgmentsJobsSampleProviderTelemetry: async () => ({})}
+        })
+        void mock.module(sendToLlmModulePath, () => {
+          return {judgmentsJobsSendToLLM: async () => {}}
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            getCurrentServerRole: () => 'maintenance-worker',
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunJudgingLoops: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => {},
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        const cronModule = await import(judgmentsJobsModulePath + '?add-stale-run=' + Date.now())
+        const addCron = cronModule.judgmentsJobsMaintenanceCron.uses.find((plugin) => {
+          return plugin.name === 'judgments-jobs-add-to-queue'
+        })
+
+        if (!addCron) {
+          throw new Error('Expected add-to-queue cron on maintenance worker')
+        }
+
+        const firstRun = addCron.config.run()
+        now = 31000
+        await addCron.config.run()
+        now = 121000
+        const secondRun = addCron.config.run()
+        await Promise.resolve()
+        const callsAfterStaleStart = addCalls
+        resolvers[0]()
+        await firstRun
+        now = 122000
+        await addCron.config.run()
+        const callsAfterStaleFinish = addCalls
+        resolvers[1]()
+        await secondRun
+
+        console.log(JSON.stringify({callsAfterStaleFinish, callsAfterStaleStart, warnings}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Add-to-queue stale latch test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    callsAfterStaleFinish: number
+    callsAfterStaleStart: number
+    warnings: string[][]
+  }
+
+  expect(result.callsAfterStaleStart).toBe(2)
+  expect(result.callsAfterStaleFinish).toBe(2)
+  expect(
+    result.warnings.some((warning) => {
+      return warning[0] === '[cron] stale add-to-queue latch ignored'
+    }),
+  ).toBe(true)
+  expect(
+    result.warnings.some((warning) => {
+      return warning[0] === '[cron] add-to-queue still running'
+    }),
+  ).toBe(true)
+})
+
 test('llm status cron is owned by maintenance worker instead of judge worker', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

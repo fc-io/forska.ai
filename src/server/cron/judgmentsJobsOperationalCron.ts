@@ -56,13 +56,53 @@ const CHECK_LLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
 const ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS = 30_000
+const ADD_TO_QUEUE_STALE_AFTER_MS = JUDGMENTS_IMPORT_STALE_AFTER_MS
 
 let isAddingToQueue = false
 let addToQueueStartedAtMs: number | null = null
+let addToQueueRunId: string | null = null
+let nextAddToQueueRunSequence = 0
 let isCheckingLlmStatus = false
 let llmStatusCheckerStartedAtMs: number | null = null
 let isSamplingProviderTelemetry = false
 let providerTelemetrySamplerStartedAtMs: number | null = null
+
+const beginAddToQueueRun = (nowMs = Date.now()): string => {
+  nextAddToQueueRunSequence += 1
+  const runId = `${nowMs}:${nextAddToQueueRunSequence}`
+
+  isAddingToQueue = true
+  addToQueueStartedAtMs = nowMs
+  addToQueueRunId = runId
+
+  return runId
+}
+
+const finishAddToQueueRun = (runId: string): boolean => {
+  if (addToQueueRunId !== runId) {
+    return false
+  }
+
+  isAddingToQueue = false
+  addToQueueStartedAtMs = null
+  addToQueueRunId = null
+
+  return true
+}
+
+const getAddToQueueActivity = (nowMs = Date.now()) => {
+  const runningForMs = addToQueueStartedAtMs === null ? null : Math.max(0, nowMs - addToQueueStartedAtMs)
+  const stale = runningForMs !== null && runningForMs >= ADD_TO_QUEUE_STALE_AFTER_MS
+
+  return {
+    isAddingToQueue,
+    runId: addToQueueRunId,
+    runningForMs,
+    shouldBlockNewRun: isAddingToQueue && !stale,
+    stale: isAddingToQueue && stale,
+    startedAtMs: addToQueueStartedAtMs,
+  }
+}
 
 const runAddToQueue = async (): Promise<void> => {
   const cronName = cronRuntimeTickNames.addToQueue
@@ -83,12 +123,15 @@ const runAddToQueue = async (): Promise<void> => {
     })
   }
 
-  if (isAddingToQueue) {
-    const runningForMs = addToQueueStartedAtMs ? Date.now() - addToQueueStartedAtMs : null
-    if (runningForMs !== null && runningForMs >= ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS) {
+  const addToQueueActivity = getAddToQueueActivity()
+  if (addToQueueActivity.shouldBlockNewRun) {
+    if (
+      addToQueueActivity.runningForMs !== null
+      && addToQueueActivity.runningForMs >= ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS
+    ) {
       cronLogger.warn('cron:add-to-queue:already-running', '[cron] add-to-queue still running', {
         serverJobId,
-        runningForMs,
+        runningForMs: addToQueueActivity.runningForMs,
         warnAfterMs: ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS,
       })
     }
@@ -96,8 +139,16 @@ const runAddToQueue = async (): Promise<void> => {
     return
   }
 
-  isAddingToQueue = true
-  addToQueueStartedAtMs = Date.now()
+  if (addToQueueActivity.stale) {
+    cronLogger.warn('cron:add-to-queue:stale-latch', '[cron] stale add-to-queue latch ignored', {
+      runningForMs: addToQueueActivity.runningForMs,
+      serverJobId,
+      staleAfterMs: ADD_TO_QUEUE_STALE_AFTER_MS,
+      staleRunId: addToQueueActivity.runId,
+    })
+  }
+
+  const runId = beginAddToQueueRun()
   recordCronRuntimeTick(cronName, 'started')
   try {
     await judgmentsJobsAddToQueue(serverJobId)
@@ -105,8 +156,7 @@ const runAddToQueue = async (): Promise<void> => {
   } catch (err) {
     recordJudgmentCronError(cronName, '[cron] runAddToQueue error:', err)
   } finally {
-    isAddingToQueue = false
-    addToQueueStartedAtMs = null
+    finishAddToQueueRun(runId)
   }
 }
 
