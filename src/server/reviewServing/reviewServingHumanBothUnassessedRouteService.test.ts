@@ -36,8 +36,6 @@ const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
   'selectedImport',
   'llmStatus',
   'humanStatus',
-  'posting',
-  'summary',
   'queue',
 ]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']

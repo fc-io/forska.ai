@@ -478,7 +478,11 @@ const rebuildChunkCriticalLaneComponents = [
   'humanStatus',
   'queue',
   'summary',
+  'posting',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+const rebuildChunkSecondaryLaneComponents = [
   'payload',
+  'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const rebuildChunkWorkloadClasses = {bulk: 'bulk', critical: 'critical'} as const satisfies Record<
   ReviewServingRebuildChunkWorkloadClass,
@@ -493,9 +497,9 @@ const rebuildChunkClaimPriorityOrder = [
   'humanStatus',
   'queue',
   'summary',
+  'posting',
   'payload',
   'search',
-  'posting',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const stalledForegroundRebuildRequestPriority = 10_000
 
@@ -507,15 +511,27 @@ export const getReviewServingRebuildChunkWorkloadClass = (
     : rebuildChunkWorkloadClasses.bulk
 }
 
-const getRebuildChunkEffectiveWorkloadClassSql = (tableAlias: string) => {
-  return `COALESCE(
-    ${tableAlias}.workload_class,
+const getRebuildChunkDefaultWorkloadClassSql = (tableAlias: string) => {
+  return `
     CASE
       WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkCriticalLaneComponents)}
       THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
       ELSE ${getSqlLiteral(rebuildChunkWorkloadClasses.bulk)}
     END
-  )`
+  `
+}
+
+const getRebuildChunkEffectiveWorkloadClassSql = (tableAlias: string) => {
+  return `CASE
+    WHEN ${tableAlias}.projection_component = ${getSqlLiteral('posting')}
+    THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
+    WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkSecondaryLaneComponents)}
+    THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.bulk)}
+    ELSE COALESCE(
+      ${tableAlias}.workload_class,
+      ${getRebuildChunkDefaultWorkloadClassSql(tableAlias)}
+    )
+  END`
 }
 
 const getRebuildChunkClaimLaneSql = (tableAlias: string) => {

@@ -28,8 +28,7 @@ const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
   'projectScope',
   'selectedImport',
   'llmStatus',
-  'posting',
-  'summary',
+  'humanStatus',
   'queue',
 ]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
@@ -627,10 +626,14 @@ test('LLM review route diagnostics surface failed snapshot errors for articlesre
 
   expect(result.status).toBe('rejected')
   expect(result.diagnostics.manifest).toEqual({
+    countReadiness: 'unavailable',
     detailReadiness: 'unavailable',
+    filterReadiness: 'unavailable',
     freshness: 'unavailable',
     lastError: 'projection failed',
     projectId: 'project-1',
+    rowReadiness: 'unavailable',
+    searchReadiness: 'unavailable',
     snapshotId: 'failed-snapshot',
     status: 'failed',
   })

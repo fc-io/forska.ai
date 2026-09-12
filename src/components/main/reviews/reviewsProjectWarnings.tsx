@@ -47,12 +47,19 @@ const getReadySurfaceMaintenanceSegments = (params: {indexing: ReviewsWarningsDa
 
 const hasReadyReviewSurfaces = (indexing: ReviewsWarningsData['indexing']) => {
   const totalArticleCount = indexing.coverage.totalArticleCount
+  const searchReadyArticleCount = indexing.coverage.searchReadyArticleCount
+  const hasSearchReady =
+    searchReadyArticleCount === null
+      ? indexing.search.availability === 'unavailable'
+      : searchReadyArticleCount === totalArticleCount
+
   return (
     totalArticleCount > 0
-    && indexing.coverage.reviewPageReadyArticleCount === totalArticleCount
+    && indexing.coverage.rowReadyArticleCount === totalArticleCount
+    && indexing.coverage.countReadyArticleCount === totalArticleCount
+    && indexing.coverage.filterReadyArticleCount === totalArticleCount
     && indexing.coverage.detailReadyArticleCount === totalArticleCount
-    && (indexing.coverage.searchReadyArticleCount === null
-      || indexing.coverage.searchReadyArticleCount === totalArticleCount)
+    && hasSearchReady
   )
 }
 

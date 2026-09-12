@@ -46,11 +46,12 @@ type ContractInput = Omit<
   'allowsTempSpill' | 'maxEstimatedResultBytes' | 'maxResultRows' | 'timeoutMs'
 > & {allowsTempSpill?: boolean; maxEstimatedResultBytes?: number; maxResultRows?: number; timeoutMs?: number}
 
-const baseComponents = ['display', 'projectScope', 'selectedImport'] as const
-const llmComponents = [...baseComponents, 'llmStatus', 'posting', 'summary'] as const
-const humanComponents = [...baseComponents, 'humanStatus', 'posting', 'summary'] as const
-const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting', 'summary'] as const
-const queueComponents = [...baseComponents, 'llmStatus', 'queue', 'summary'] as const
+const rowBaseComponents = ['projectScope', 'selectedImport', 'display'] as const
+const llmRowComponents = [...rowBaseComponents, 'llmStatus'] as const
+const humanRowComponents = [...rowBaseComponents, 'humanStatus'] as const
+const bothRowComponents = [...rowBaseComponents, 'llmStatus', 'humanStatus'] as const
+const unassessedRowComponents = [...rowBaseComponents, 'llmStatus', 'queue'] as const
+const warningRowComponents = [...rowBaseComponents, 'llmStatus', 'humanStatus', 'queue'] as const
 const articleDateRangeFilters = ['articleCreatedAtFrom', 'articleCreatedAtTo'] as const
 const defaultRowFilters = [
   'duplicateFlag',
@@ -198,17 +199,17 @@ export const reviewServingReadContractList = [
     allowedFilters: [...defaultRowFilters, 'conflictFlag', 'llmHasJudgment', 'llmStatus', 'promptAnswer'],
     key: 'review.llm.rows',
     listMode: 'llm',
-    namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
+    namedFastCounts: [],
     optionalComponents: ['search'],
-    requiredComponents: llmComponents,
+    requiredComponents: llmRowComponents,
     searchMode: 'tokenPrefix',
   }),
   rowByArticleSetContract({
     allowedFilters: [...defaultRowFilters, 'articleId', 'conflictFlag', 'llmHasJudgment', 'llmStatus', 'promptAnswer'],
     key: 'review.llm.rowsByArticleSet',
     listMode: 'llm',
-    namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
-    requiredComponents: llmComponents,
+    namedFastCounts: [],
+    requiredComponents: llmRowComponents,
   }),
   defineContract({
     allowedFilters: [...defaultCountFilters, 'llmHasJudgment', 'llmStatus', 'promptAnswer', 'searchTokenPrefix'],
@@ -231,17 +232,17 @@ export const reviewServingReadContractList = [
     allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'promptAnswer'],
     key: 'review.human.rows',
     listMode: 'human',
-    namedFastCounts: [...defaultReviewCounts, 'review.human.reviewedByPrompt'],
+    namedFastCounts: [],
     optionalComponents: ['search'],
-    requiredComponents: humanComponents,
+    requiredComponents: humanRowComponents,
     searchMode: 'tokenPrefix',
   }),
   rowByArticleSetContract({
     allowedFilters: [...defaultRowFilters, 'articleId', 'conflictFlag', 'humanStatus', 'promptAnswer'],
     key: 'review.human.rowsByArticleSet',
     listMode: 'human',
-    namedFastCounts: [...defaultReviewCounts, 'review.human.reviewedByPrompt'],
-    requiredComponents: humanComponents,
+    namedFastCounts: [],
+    requiredComponents: humanRowComponents,
   }),
   defineContract({
     allowedFilters: [...defaultCountFilters, 'humanStatus', 'promptAnswer', 'searchTokenPrefix'],
@@ -264,17 +265,17 @@ export const reviewServingReadContractList = [
     allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
     key: 'review.both.rows',
     listMode: 'both',
-    namedFastCounts: [...defaultReviewCounts, 'review.both.conflictByPrompt'],
+    namedFastCounts: [],
     optionalComponents: ['search'],
-    requiredComponents: bothComponents,
+    requiredComponents: bothRowComponents,
     searchMode: 'tokenPrefix',
   }),
   rowByArticleSetContract({
     allowedFilters: [...defaultRowFilters, 'articleId', 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
     key: 'review.both.rowsByArticleSet',
     listMode: 'both',
-    namedFastCounts: [...defaultReviewCounts, 'review.both.conflictByPrompt'],
-    requiredComponents: bothComponents,
+    namedFastCounts: [],
+    requiredComponents: bothRowComponents,
   }),
   defineContract({
     allowedFilters: [...defaultCountFilters, 'humanStatus', 'llmStatus', 'promptAnswer', 'searchTokenPrefix'],
@@ -298,9 +299,9 @@ export const reviewServingReadContractList = [
     cursorFields: unassessedRowCursorFields,
     key: 'review.unassessed.rows',
     listMode: 'unassessed',
-    namedFastCounts: ['review.queue.unassessedReady', 'review.llm.unassessedByPrompt'],
+    namedFastCounts: [],
     optionalComponents: ['search'],
-    requiredComponents: queueComponents,
+    requiredComponents: unassessedRowComponents,
     searchMode: 'tokenPrefix',
     sort: unassessedRowSort,
   }),
@@ -309,8 +310,8 @@ export const reviewServingReadContractList = [
     cursorFields: unassessedRowCursorFields,
     key: 'review.unassessed.rowsByArticleSet',
     listMode: 'unassessed',
-    namedFastCounts: ['review.queue.unassessedReady', 'review.llm.unassessedByPrompt'],
-    requiredComponents: queueComponents,
+    namedFastCounts: [],
+    requiredComponents: unassessedRowComponents,
     sort: unassessedRowSort,
   }),
   defineContract({
@@ -642,10 +643,10 @@ export const reviewServingReadContractList = [
     key: 'review.warning.snapshot',
     listMode: null,
     maxPageSize: 8,
-    namedFastCounts: ['review.list.total', 'review.queue.unassessedReady'],
+    namedFastCounts: [],
     optionalComponents: ['search'],
     physicalAccessStrategy: 'keyedLookup',
-    requiredComponents: ['projectScope', 'posting', 'queue', 'summary'],
+    requiredComponents: warningRowComponents,
     searchMode: 'none',
     servingTable: reviewSnapshotManifestTable,
     sort: {direction: 'desc', fields: ['updated_at', 'snapshot_id']},

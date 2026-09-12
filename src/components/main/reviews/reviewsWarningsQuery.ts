@@ -16,8 +16,11 @@ export type ReviewsWarningsData = {
       | null
     cleanup?: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
     coverage: {
+      countReadyArticleCount: number | null
       detailReadyArticleCount: number | null
+      filterReadyArticleCount: number | null
       reviewPageReadyArticleCount: number
+      rowReadyArticleCount: number | null
       searchReadyArticleCount: number | null
       totalArticleCount: number
     }
@@ -58,6 +61,11 @@ export type ReviewsWarningsData = {
     recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
     requiredConsumerRole: 'maintenance-worker'
     retryAfterAt: string | null
+    search: {
+      availability: 'ready' | 'indexing' | 'unavailable' | 'async'
+      optionalComponent: boolean
+      snapshotId: string | null
+    }
     serving: {
       diagnostics: {
         dirtyWork?: {failedCount?: number; pendingCount?: number; runningCount?: number}
