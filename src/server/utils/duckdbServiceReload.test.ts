@@ -75,6 +75,7 @@ type StartupRepairSpecJson = {
   schemaName: string
   schemaRequirements?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
   skipGenericDeleteInsertProbe?: boolean
+  skipStartupPreflightUntilMigration?: string
   tableName: string
 }
 
@@ -3957,6 +3958,161 @@ test('duckdb service marks judgment job after fatal index-delete import status u
   }
 })
 
+test('duckdb service marks request attempt closeout after fatal indexed completion closeout write', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-request-attempt-closeout-fatal-index-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+        ${directDuckdbStartupChildProcessMockSource}
+
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {
+              throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. Original error: "Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 1 rows. Chunk: Chunk - [11 Columns] - FLAT VARCHAR: 1 = [ judgment-completion-token-use:claim-1] - CONSTANT TIMESTAMP WITH TIME ZONE: 1 = [ NULL] - FLAT VARCHAR: 1 = [ attempt-1] - FLAT VARCHAR: 1 = [ provider-key-1]"')
+            }
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?request-attempt-closeout-fatal-index-marker-test=' + Date.now())
+        try {
+          await duckdbService.runDuckdbStatement(\`
+            INSERT INTO app.request_attempt_closeout (
+              token_use_id,
+              token_use_created_at,
+              request_attempt_id,
+              provider_key,
+              closeout_kind,
+              durable_closeout_kind,
+              durable_closeout_id,
+              durable_closeout_ref_json,
+              closed_at
+            ) VALUES (
+              'judgment-completion-token-use:claim-1',
+              current_timestamp,
+              'attempt-1',
+              'provider-key-1',
+              'token_use',
+              'token_use',
+              NULL,
+              '{}',
+              current_timestamp
+            )
+          \`)
+        } catch {}
+
+        const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+        console.log(JSON.stringify({marker}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString()
+          || result.stdout.toString()
+          || 'DuckDB request-attempt closeout fatal index marker subprocess failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.marker).toMatchObject({
+      diagnostic: {
+        failedMutatingTargetTable: 'app.request_attempt_closeout',
+        lastMutatingTargetTable: 'app.request_attempt_closeout',
+      },
+      phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
+      repairSpecs: [{schemaName: 'app', tableName: 'request_attempt_closeout'}],
+      schemaName: 'app',
+      tableName: 'request_attempt_closeout',
+    })
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service keeps the repairable indexed target when a transaction fails on commit', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-commit-fatal-index-marker-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
@@ -5927,6 +6083,31 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
       ],
       schemaName: 'app',
       tableName: 'judgment_job',
+    })
+    const requestAttemptCloseoutProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'request_attempt_closeout'
+    })
+    expect(requestAttemptCloseoutProbe?.repairPrimaryKeyColumns).toEqual(['request_attempt_id', 'provider_key'])
+    expect(requestAttemptCloseoutProbe?.repairStrategy).toBe('dedupe-latest')
+    expect(requestAttemptCloseoutProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(requestAttemptCloseoutProbe?.recreateSecondaryIndexes).toBe(false)
+    expect(requestAttemptCloseoutProbe?.skipStartupPreflightUntilMigration).toBe(
+      '0232_rebuildRequestAttemptCloseoutWithoutIndexes.sql',
+    )
+    expect(requestAttemptCloseoutProbe?.repairDedupeOrderSql).toContain('closed_at ASC')
+    expect(requestAttemptCloseoutProbe?.mutationProbeSql).toContain('startup_probe_request_attempt_closeout')
+    expect(requestAttemptCloseoutProbe?.mutationProbeSql).toContain('UPDATE app.request_attempt_closeout')
+    expect(requestAttemptCloseoutProbe?.schemaRequirements).toContainEqual({
+      columnNames: [
+        'token_use_id',
+        'token_use_created_at',
+        'request_attempt_id',
+        'provider_key',
+        'closed_at',
+        'updated_at',
+      ],
+      schemaName: 'app',
+      tableName: 'request_attempt_closeout',
     })
     const rebuildRequestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_request'
