@@ -25,6 +25,15 @@ const envShape = arktype({
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
+  RUN_SERVER_JUDGMENT_OPERATIONAL_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
+    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
+  }),
+  RUN_SERVER_JUDGMENT_CLEANUP_STALE_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
+    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
+  }),
+  RUN_SERVER_JUDGMENT_LLM_STATUS_CRON: arktype('"true" | "false" | boolean').pipe((v) => {
+    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
+  }),
   FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
@@ -131,6 +140,24 @@ export const loadEnv = ({
   // Default to false when not provided (prevents accidental background conversion)
   if (merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON == null || merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON === '') {
     ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_CONVERSION_CRON = 'false'
+  }
+  if (
+    merged.RUN_SERVER_JUDGMENT_OPERATIONAL_CRON == null
+    || String(merged.RUN_SERVER_JUDGMENT_OPERATIONAL_CRON).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).RUN_SERVER_JUDGMENT_OPERATIONAL_CRON = 'true'
+  }
+  if (
+    merged.RUN_SERVER_JUDGMENT_CLEANUP_STALE_CRON == null
+    || String(merged.RUN_SERVER_JUDGMENT_CLEANUP_STALE_CRON).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).RUN_SERVER_JUDGMENT_CLEANUP_STALE_CRON = 'true'
+  }
+  if (
+    merged.RUN_SERVER_JUDGMENT_LLM_STATUS_CRON == null
+    || String(merged.RUN_SERVER_JUDGMENT_LLM_STATUS_CRON).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).RUN_SERVER_JUDGMENT_LLM_STATUS_CRON = 'true'
   }
   if (merged.FULL_TEXT_CONVERSION_BATCH_SIZE == null || String(merged.FULL_TEXT_CONVERSION_BATCH_SIZE).trim() === '') {
     ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_BATCH_SIZE = '5'

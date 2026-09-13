@@ -50,6 +50,7 @@ const recentReviewServingProgressWindowMs = 120_000
 const reviewServingProgressClockSkewToleranceMs = 10_000
 const foregroundReviewServingRepairPriority = 1_000
 const stalledForegroundReviewServingRepairPriority = 10_000
+const filterEnrichmentReviewServingRepairPriority = 500
 const getReviewWarningsWorkloadContext = (projectId: string, operation: string): DuckdbWorkloadContext => {
   return {
     fallbackIntent: 'serveStale',
@@ -638,6 +639,23 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         ? foregroundReviewServingRepairPriority
         : stalledForegroundReviewServingRepairPriority
       await requestReviewServingV4Rebuild({priority, projectId, reason: 'missingReviewServingSnapshot'}).catch(() => {
+        return undefined
+      })
+    }
+
+    const shouldRequestFilterEnrichment =
+      !isServerMutationWorkDisabled
+      && !reviewServingProjectorPaused
+      && hasReadableReviewServingRows
+      && coverage.filterReadyArticleCount === null
+
+    if (shouldRequestFilterEnrichment) {
+      await requestReviewServingV4Rebuild({
+        components: filterReadyReviewServingComponents,
+        priority: filterEnrichmentReviewServingRepairPriority,
+        projectId,
+        reason: 'filterReadinessEnrichment',
+      }).catch(() => {
         return undefined
       })
     }

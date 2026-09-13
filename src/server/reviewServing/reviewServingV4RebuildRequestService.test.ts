@@ -4,7 +4,7 @@ import {Effect} from 'effect'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {buildReviewDirtyProjectionIdentity} from './reviewProjectionIdentity.ts'
 import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {filterReadyReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {getReviewServingProjectionComponentIdentityKey} from './reviewServingProjectorDomain.ts'
 import {
   getReviewServingReviewConfigHash,
@@ -154,6 +154,10 @@ const getJsonObjectsFromSql = (statement: string) => {
       return []
     }
   })
+}
+
+const getSnapshotIdFromSnapshotInsert = (statement: string) => {
+  return getSqlStrings(statement)[1] ?? null
 }
 
 const getReviewConfigHashFromFakeRequest = (request: FakeRequestRow) => {
@@ -1071,11 +1075,14 @@ test('V4 bootstrap rebuild promotes all-reused candidates and completes covered 
   })
 })
 
-test('V4 bootstrap candidate makes enrichment components optional for default readiness', async () => {
+test('V4 foreground bootstrap candidate builds page-first components before enrichment', async () => {
   const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
 
   await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
   )
 
   const snapshotInsert =
@@ -1086,18 +1093,19 @@ test('V4 bootstrap candidate makes enrichment components optional for default re
   const requiredComponents = jsonArrays.find((entry) => {
     return entry.includes('projectScope') && entry.includes('selectedImport')
   })
-  const optionalComponents = jsonArrays.find((entry) => {
-    return entry.includes('payload')
-  })
   const componentState = getJsonObjectsFromSql(snapshotInsert).find((entry) => {
     return 'optional' in entry && 'required' in entry
   }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
+  const chunkInsertSql = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+    .join('\n')
 
   expect(requiredComponents).not.toContain('posting')
   expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
   expect(
     componentState?.required?.map((state) => {
       return state.component
@@ -1107,7 +1115,95 @@ test('V4 bootstrap candidate makes enrichment components optional for default re
     componentState?.optional?.map((state) => {
       return state.component
     }),
-  ).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
+  ).toEqual([])
+  expect(chunkInsertSql).not.toContain("'posting'")
+  expect(chunkInsertSql).not.toContain("'summary'")
+  expect(chunkInsertSql).not.toContain("'judgmentInputContent'")
+  expect(chunkInsertSql).not.toContain("'payload'")
+  expect(chunkInsertSql).not.toContain("'search'")
+})
+
+test('V4 filter enrichment bootstraps filter-ready components without payload or search', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, activeSnapshotCount: 1, snapshotCount: 1})
+
+  await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {
+        components: filterReadyReviewServingComponents,
+        priority: 500,
+        projectId: 'project-v4',
+        reason: 'filterReadinessEnrichment',
+      },
+      database,
+    ),
+  )
+
+  const snapshotInsert =
+    statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    }) ?? ''
+  const componentState = getJsonObjectsFromSql(snapshotInsert).find((entry) => {
+    return 'optional' in entry && 'required' in entry
+  }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
+  const chunkInsertSql = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+    .join('\n')
+
+  expect(
+    componentState?.required?.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'])
+  expect(
+    componentState?.optional?.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['posting', 'summary'])
+  expect(chunkInsertSql).toContain("'posting'")
+  expect(chunkInsertSql).toContain("'summary'")
+  expect(chunkInsertSql).not.toContain("'payload'")
+  expect(chunkInsertSql).not.toContain("'search'")
+  expect(chunkInsertSql).not.toContain("'judgmentInputContent'")
+})
+
+test('V4 filter enrichment does not reuse the row-first bootstrap snapshot id', async () => {
+  const rowFirstDatabase = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+  const filterEnrichmentDatabase = createFakeRequestDatabase({...baseStats, activeSnapshotCount: 1, snapshotCount: 1})
+
+  await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      rowFirstDatabase.database,
+    ),
+  )
+  await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {
+        components: filterReadyReviewServingComponents,
+        priority: 500,
+        projectId: 'project-v4',
+        reason: 'filterReadinessEnrichment',
+      },
+      filterEnrichmentDatabase.database,
+    ),
+  )
+
+  const rowFirstSnapshotInsert =
+    rowFirstDatabase.statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    }) ?? ''
+  const filterEnrichmentSnapshotInsert =
+    filterEnrichmentDatabase.statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    }) ?? ''
+
+  expect(getSnapshotIdFromSnapshotInsert(rowFirstSnapshotInsert)).not.toBeNull()
+  expect(getSnapshotIdFromSnapshotInsert(filterEnrichmentSnapshotInsert)).not.toBeNull()
+  expect(getSnapshotIdFromSnapshotInsert(filterEnrichmentSnapshotInsert)).not.toBe(
+    getSnapshotIdFromSnapshotInsert(rowFirstSnapshotInsert),
+  )
 })
 
 test('V4 bootstrap request transaction carries workload context for all published manifests', async () => {
@@ -1257,9 +1353,9 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
   const requiredComponents = jsonArrays.find((entry) => {
     return entry.includes('projectScope') && entry.includes('selectedImport')
   })
-  const optionalComponents = jsonArrays.find((entry) => {
-    return entry.includes('payload')
-  })
+  const componentState = getJsonObjectsFromSql(reseededSnapshotInsert).find((entry) => {
+    return 'optional' in entry && 'required' in entry
+  }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
 
   expect(reseededRequest.requestId).toBe(firstRequest.requestId)
   expect(snapshotInserts).toHaveLength(2)
@@ -1267,7 +1363,11 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
   expect(requiredComponents).not.toContain('summary')
   expect(requiredComponents).not.toContain('judgmentInputContent')
   expect(requiredComponents).not.toContain('payload')
-  expect(optionalComponents).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
+  expect(
+    componentState?.optional?.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
 })
 
 test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {

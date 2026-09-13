@@ -177,6 +177,10 @@ const getComponentIdentity = (manifest: ReviewServingSnapshotManifest, component
   return state?.projectionIdentity ?? ''
 }
 
+const hasComponentState = (manifest: ReviewServingSnapshotManifest, component: string) => {
+  return getComponentIdentity(manifest, component) !== ''
+}
+
 const getRouteFilters = (params: ReviewServingFilterRouteParams): ReviewServingReaderFilterInput => {
   const searchTokenPrefix = getSearchTokenPrefix(params.search)
 
@@ -718,7 +722,7 @@ const readMaterializedPromptAnswerPostingRows = async (input: {
   const database = input.dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const filterValues = [...new Set(getPromptAnswerPostingProbeValues(input))]
 
-  if (filterValues.length === 0) {
+  if (filterValues.length === 0 || !hasComponentState(input.manifest, 'posting')) {
     return []
   }
 
@@ -809,7 +813,7 @@ export const getReviewFiltersFromServing = async (input: {
       promptRows: input.promptRows,
     }),
     searchScope: {
-      availability: 'ready',
+      availability: optionResult.searchIdentity ? 'ready' : 'unavailable',
       mode: searchText ? 'tokenPrefix' : 'none',
       searchIdentity: optionResult.searchIdentity,
       text: searchText,
