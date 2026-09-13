@@ -13,6 +13,7 @@ import {
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const isolatedImportFailureThreshold = 3
 const drainingRetentionPruneChunkSize = 1_000
+const maxDrainingRetentionPruneBatchesPerImportTick = 1
 const maxImportableJudgmentJobsPerScan = 100
 const maxTrackedJudgmentJobIdsPerLookup = 100
 let trackedImportableJudgmentJobScanOffset = 0
@@ -179,29 +180,35 @@ const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPr
   }
 }
 
-const pruneDrainingRetentionUntilStable = async ({
+const pruneDrainingRetentionForImportTick = async ({
   claimedBy,
   jobId,
-  total = getEmptyRetentionPruneResult(),
 }: {
   claimedBy: string
   jobId: string
-  total?: RetentionPruneResult
 }): Promise<RetentionPruneResult> => {
-  const current = await getJudgmentJobSqliteService().pruneVisibilityAckedRetention({
-    jobId,
-    maxRows: drainingRetentionPruneChunkSize,
-    serverJobId: claimedBy,
-  })
+  let total = getEmptyRetentionPruneResult()
 
-  return current.outboxRowsDeleted === 0 && current.queuePromptRowsDeleted === 0
-    ? total
-    : pruneDrainingRetentionUntilStable({claimedBy, jobId, total: addRetentionPruneResults(total, current)})
+  for (let batchIndex = 0; batchIndex < maxDrainingRetentionPruneBatchesPerImportTick; batchIndex += 1) {
+    const current = await getJudgmentJobSqliteService().pruneVisibilityAckedRetention({
+      jobId,
+      maxRows: drainingRetentionPruneChunkSize,
+      serverJobId: claimedBy,
+    })
+
+    total = addRetentionPruneResults(total, current)
+
+    if (current.outboxRowsDeleted === 0 && current.queuePromptRowsDeleted === 0) {
+      break
+    }
+  }
+
+  return total
 }
 
 const finishDrainingJobCleanup = async ({claimedBy, jobId}: {claimedBy: string; jobId: string}) => {
   const sqliteService = getJudgmentJobSqliteService()
-  const pruned = await pruneDrainingRetentionUntilStable({claimedBy, jobId})
+  const pruned = await pruneDrainingRetentionForImportTick({claimedBy, jobId})
   const finalized = (await sqliteService.finalizeDrainingJobs({jobId, serverJobId: claimedBy})).includes(jobId)
   const checkpointed = await sqliteService.checkpointWal({jobId, serverJobId: claimedBy})
 

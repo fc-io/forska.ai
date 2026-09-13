@@ -13,6 +13,8 @@ import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
 import {
   claimJudgmentEndpointAvailability,
   getJudgmentEndpointAvailability,
+  getJudgmentEndpointAvailabilityDiagnostics,
+  judgmentEndpointProbeStaleThresholdMs,
   resetJudgmentEndpointAvailabilityForTests,
 } from './judgmentEndpointAvailability.ts'
 
@@ -377,6 +379,16 @@ test('allows a single half-open probe and resets state after a successful probe'
 
   expect(probingState.status).toBe('probing')
   expect(probingState.probePromise).toBeInstanceOf(Promise)
+  expect(probingState.probeStartedAt?.getTime()).toBe(now)
+  expect(getJudgmentEndpointAvailabilityDiagnostics(probingState)).toMatchObject({
+    probeAgeMs: 0,
+    probeInProgress: true,
+    probeStale: false,
+    probeStaleAfterAt: new Date(now + judgmentEndpointProbeStaleThresholdMs).toISOString(),
+    probeStaleThresholdMs: judgmentEndpointProbeStaleThresholdMs,
+    probeStartedAt: new Date(now).toISOString(),
+    status: 'probing',
+  })
   expect(
     claimJudgmentEndpointAvailability({
       effectiveBaseURL: context.effectiveBaseURL,
@@ -393,6 +405,78 @@ test('allows a single half-open probe and resets state after a successful probe'
     lastFailureKind: null,
     lastFailureMessage: null,
     probePromise: null,
+    probeStartedAt: null,
     status: 'healthy',
   })
+})
+
+test('expires stale half-open probes into a retryable cooldown and resolves probe waiters', async () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const failure = classifyConnectionFailure({context, error: {status: 503}})
+
+  recordConnectionFailure({effectiveBaseURL: context.effectiveBaseURL, failure, providerConnectionId: 'connection-a'})
+
+  now += 30_001
+
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: context.effectiveBaseURL,
+      providerConnectionId: 'connection-a',
+    }),
+  ).toBe(true)
+
+  const probingState = getJudgmentEndpointAvailability({
+    effectiveBaseURL: context.effectiveBaseURL,
+    providerConnectionId: 'connection-a',
+  })
+  const probeStartedAt = probingState.probeStartedAt?.getTime() ?? 0
+  let probeResolved = false
+
+  void probingState.probePromise?.then(
+    () => {
+      probeResolved = true
+    },
+    () => {
+      return undefined
+    },
+  )
+
+  now = probeStartedAt + judgmentEndpointProbeStaleThresholdMs
+
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: context.effectiveBaseURL,
+      providerConnectionId: 'connection-a',
+    }),
+  ).toBe(false)
+  expect(probeResolved).toBe(false)
+
+  now += 1
+
+  const expiredState = getJudgmentEndpointAvailability({
+    effectiveBaseURL: context.effectiveBaseURL,
+    providerConnectionId: 'connection-a',
+  })
+
+  expect(expiredState).toMatchObject({
+    cooldownExpiresAt: new Date(probeStartedAt + judgmentEndpointProbeStaleThresholdMs),
+    lastFailureKind: 'endpoint_unavailable',
+    probePromise: null,
+    probeStartedAt: null,
+    status: 'cooldown',
+  })
+
+  await Promise.resolve()
+
+  expect(probeResolved).toBe(true)
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: context.effectiveBaseURL,
+      providerConnectionId: 'connection-a',
+    }),
+  ).toBe(true)
 })

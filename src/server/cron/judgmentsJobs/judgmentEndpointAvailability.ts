@@ -3,6 +3,7 @@ import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
 import type {ProviderKeyInput} from './providerKey.ts'
 
 const COOLDOWN_MS = 30_000
+export const judgmentEndpointProbeStaleThresholdMs = 120_000
 
 const endpointAvailabilityLogger = createRateLimitedLogger({windowMs: 30_000})
 
@@ -21,6 +22,7 @@ type JudgmentEndpointAvailabilityState = {
   lastFailureKind: JudgmentEndpointFailureKind | null
   lastFailureMessage: string | null
   probePromise: Promise<void> | null
+  probeStartedAt: Date | null
   resolveProbe: (() => void) | null
   status: JudgmentEndpointAvailabilityStatus
 }
@@ -31,6 +33,7 @@ export type JudgmentEndpointAvailability = {
   lastFailureKind: JudgmentEndpointFailureKind | null
   lastFailureMessage: string | null
   probePromise: Promise<void> | null
+  probeStartedAt: Date | null
   status: JudgmentEndpointAvailabilityStatus
 }
 
@@ -40,7 +43,12 @@ export type JudgmentEndpointAvailabilityDiagnostics = {
   lastFailureMessage: string | null
   localProbeLiveCount: number
   observedAggregateProbeLiveCount: number | null
+  probeAgeMs: number | null
   probeInProgress: boolean
+  probeStale: boolean
+  probeStaleAfterAt: string | null
+  probeStaleThresholdMs: number
+  probeStartedAt: string | null
   status: JudgmentEndpointAvailabilityStatus
 }
 
@@ -65,6 +73,7 @@ const createHealthyState = (): JudgmentEndpointAvailabilityState => {
     lastFailureKind: null,
     lastFailureMessage: null,
     probePromise: null,
+    probeStartedAt: null,
     resolveProbe: null,
     status: 'healthy',
   }
@@ -139,6 +148,7 @@ const getEndpointAvailabilitySnapshot = ({
     lastFailureKind: state.lastFailureKind,
     lastFailureMessage: state.lastFailureMessage,
     probePromise: state.probePromise,
+    probeStartedAt: state.probeStartedAt,
     status: state.status,
   }
 }
@@ -146,7 +156,51 @@ const getEndpointAvailabilitySnapshot = ({
 const finishProbe = (state: JudgmentEndpointAvailabilityState): void => {
   state.resolveProbe?.()
   state.probePromise = null
+  state.probeStartedAt = null
   state.resolveProbe = null
+}
+
+const getProbeStaleAfterAt = (probeStartedAt: Date | null): Date | null => {
+  return probeStartedAt ? new Date(probeStartedAt.getTime() + judgmentEndpointProbeStaleThresholdMs) : null
+}
+
+const getProbeAgeMs = (probeStartedAt: Date | null, now = Date.now()): number | null => {
+  return probeStartedAt ? Math.max(0, now - probeStartedAt.getTime()) : null
+}
+
+const isStaleProbe = (state: JudgmentEndpointAvailabilityState, now = Date.now()): boolean => {
+  const probeAgeMs = getProbeAgeMs(state.probeStartedAt, now)
+
+  return state.status === 'probing' && (probeAgeMs === null || probeAgeMs > judgmentEndpointProbeStaleThresholdMs)
+}
+
+const expireStaleProbe = ({
+  effectiveBaseURL,
+  endpointAvailabilityKey,
+  state,
+}: {
+  effectiveBaseURL: string
+  endpointAvailabilityKey: string
+  state: JudgmentEndpointAvailabilityState
+}): void => {
+  if (!isStaleProbe(state)) {
+    return undefined
+  }
+
+  const staleAfterAt = getProbeStaleAfterAt(state.probeStartedAt) ?? new Date()
+
+  finishProbe(state)
+  state.cooldownExpiresAt = staleAfterAt
+  state.lastFailureKind = state.lastFailureKind ?? 'network_unavailable'
+  state.lastFailureMessage =
+    state.lastFailureMessage
+    ?? `Endpoint availability probe exceeded ${judgmentEndpointProbeStaleThresholdMs}ms for ${effectiveBaseURL}`
+  state.status = 'cooldown'
+
+  endpointAvailabilityLogger.warn(
+    `endpoint-availability:stale-probe:${endpointAvailabilityKey}`,
+    `Endpoint availability probe expired for ${effectiveBaseURL}`,
+  )
 }
 
 const setGatedState = ({
@@ -216,18 +270,18 @@ export const getJudgmentEndpointAvailability = ({
     providerKey,
     useOwnerBackedSyntheticProviderId,
   })
-
-  return getEndpointAvailabilitySnapshot({
-    endpointAvailabilityKey: key.endpointAvailabilityKey,
-    state: getOrCreateEndpointAvailabilityState({
-      effectiveBaseURL,
-      modelId,
-      modelProvider,
-      providerConnectionId,
-      providerKey,
-      useOwnerBackedSyntheticProviderId,
-    }),
+  const state = getOrCreateEndpointAvailabilityState({
+    effectiveBaseURL,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
   })
+
+  expireStaleProbe({effectiveBaseURL, endpointAvailabilityKey: key.endpointAvailabilityKey, state})
+
+  return getEndpointAvailabilitySnapshot({endpointAvailabilityKey: key.endpointAvailabilityKey, state})
 }
 
 export const getJudgmentEndpointAvailabilityDiagnostics = (
@@ -236,6 +290,10 @@ export const getJudgmentEndpointAvailabilityDiagnostics = (
   const cooldownRemainingMs = availability.cooldownExpiresAt
     ? Math.max(0, availability.cooldownExpiresAt.getTime() - Date.now())
     : null
+  const probeAgeMs = getProbeAgeMs(availability.probeStartedAt)
+  const probeStaleAfterAt = getProbeStaleAfterAt(availability.probeStartedAt)
+  const probeStale =
+    availability.status === 'probing' && (probeAgeMs === null || probeAgeMs > judgmentEndpointProbeStaleThresholdMs)
 
   return {
     cooldownRemainingMs,
@@ -244,7 +302,12 @@ export const getJudgmentEndpointAvailabilityDiagnostics = (
     localProbeLiveCount: localProbeLiveCountsByEndpointKey.get(availability.endpointAvailabilityKey) ?? 0,
     observedAggregateProbeLiveCount:
       observedAggregateProbeLiveCountsByEndpointKey.get(availability.endpointAvailabilityKey) ?? null,
+    probeAgeMs,
     probeInProgress: availability.status === 'probing' || availability.probePromise !== null,
+    probeStale,
+    probeStaleAfterAt: probeStaleAfterAt?.toISOString() ?? null,
+    probeStaleThresholdMs: judgmentEndpointProbeStaleThresholdMs,
+    probeStartedAt: availability.probeStartedAt?.toISOString() ?? null,
     status: availability.status,
   }
 }
@@ -329,6 +392,7 @@ export const claimJudgmentEndpointAvailability = ({
     providerKey,
     useOwnerBackedSyntheticProviderId,
   })
+  expireStaleProbe({effectiveBaseURL, endpointAvailabilityKey: key.endpointAvailabilityKey, state})
   const now = Date.now()
   const cooldownExpiresAt = state.cooldownExpiresAt?.getTime() ?? null
   const cooldownActive = cooldownExpiresAt != null && cooldownExpiresAt > now
@@ -358,6 +422,7 @@ export const claimJudgmentEndpointAvailability = ({
   })
   state.resolveProbe = resolveProbe
   state.cooldownExpiresAt = null
+  state.probeStartedAt = new Date(now)
   state.status = 'probing'
 
   endpointAvailabilityLogger.log(
