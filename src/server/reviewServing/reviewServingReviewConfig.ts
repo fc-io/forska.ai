@@ -1,11 +1,14 @@
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   buildPromptConfigHash,
   buildReviewConfigHash,
   type ReviewServingIdentityValue,
 } from './reviewProjectionIdentity.ts'
 
-export type ReviewServingReviewConfigDatabase = {queryJson: <T>(statement: string) => Promise<T[]>}
+export type ReviewServingReviewConfigDatabase = {
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+}
 
 export type ReviewServingProjectPromptConfigRow = {
   answerSchemaHash: string | null
@@ -34,8 +37,10 @@ export type ReviewServingProjectReviewSettingsRow = {
 export const getReviewServingProjectPromptConfigRows = async (
   projectId: string,
   database: ReviewServingReviewConfigDatabase,
+  workloadContext?: DuckdbWorkloadContext,
 ) => {
-  return database.queryJson<ReviewServingProjectPromptConfigRow>(`
+  return database.queryJson<ReviewServingProjectPromptConfigRow>(
+    `
     SELECT
       prompt.id AS promptId,
       project_prompt.prompt_order AS promptOrder,
@@ -51,14 +56,18 @@ export const getReviewServingProjectPromptConfigRows = async (
       AND NOT project_prompt.archived
       AND COALESCE(prompt.archived, FALSE) = FALSE
     ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 export const getReviewServingProjectReviewSettings = async (
   projectId: string,
   database: ReviewServingReviewConfigDatabase,
+  workloadContext?: DuckdbWorkloadContext,
 ) => {
-  const rows = await database.queryJson<ReviewServingProjectReviewSettingsRow>(`
+  const rows = await database.queryJson<ReviewServingProjectReviewSettingsRow>(
+    `
     SELECT
       COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
       project.model_id AS modelId,
@@ -79,7 +88,9 @@ export const getReviewServingProjectReviewSettings = async (
       ON provider_connection.id = model.provider_connection_id
     WHERE project.id = ${getSqlLiteral(projectId)}
     LIMIT 1
-  `)
+  `,
+    workloadContext,
+  )
 
   return rows[0] ?? null
 }
@@ -131,14 +142,15 @@ export const getReviewServingReviewConfigHash = (
 export const getCurrentReviewServingReviewConfigHash = async (
   projectId: string,
   database: ReviewServingReviewConfigDatabase,
+  workloadContext?: DuckdbWorkloadContext,
 ) => {
-  const projectSettings = await getReviewServingProjectReviewSettings(projectId, database)
+  const projectSettings = await getReviewServingProjectReviewSettings(projectId, database, workloadContext)
 
   if (projectSettings === null) {
     return null
   }
 
-  const promptConfigRows = await getReviewServingProjectPromptConfigRows(projectId, database)
+  const promptConfigRows = await getReviewServingProjectPromptConfigRows(projectId, database, workloadContext)
 
   return getReviewServingReviewConfigHash({...projectSettings, promptConfigRows})
 }

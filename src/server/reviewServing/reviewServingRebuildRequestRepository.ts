@@ -1414,14 +1414,33 @@ export const releaseFailedRequestlessReviewServingRebuildChunks = async (
 }
 
 export const getActiveReviewServingRebuildRequestForProject = async (
-  input: {projectId: string; reason?: string},
+  input: {projectId: string; reason?: string; reviewConfigHash?: string | null},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
 ) => {
   const reasonFilter = input.reason === undefined ? '' : `\n      AND reason = ${getSqlLiteral(input.reason)}`
+  const reviewConfigHashFilter =
+    input.reviewConfigHash === undefined
+      ? ''
+      : `\n      AND (
+        json_extract_string(identity_json, '$.reviewConfigHash') IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash)}
+        OR (
+          json_extract_string(identity_json, '$.reviewConfigHash') IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_chunk_manifest chunk
+            INNER JOIN app.review_serving_snapshot_manifest snapshot
+              ON snapshot.project_id IS NOT DISTINCT FROM chunk.project_id
+             AND snapshot.snapshot_id = chunk.snapshot_id
+            WHERE chunk.request_id = app.review_rebuild_request.request_id
+              AND snapshot.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash)}
+          )
+        )
+      )`
   const [row] = await database.queryJson<ReviewServingRebuildRequestRow>(`
     ${getRequestSelectSql()}
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       ${reasonFilter}
+      ${reviewConfigHashFilter}
       AND status = 'admitted'
       AND admission_state = 'admitted'
       AND EXISTS (

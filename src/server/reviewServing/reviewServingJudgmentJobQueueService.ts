@@ -277,7 +277,11 @@ const getActiveServingScope = async (
   routeOrJobKey: string,
   database: AppReadOnlyDatabaseService,
 ): Promise<JudgmentJobServingActiveScope | null> => {
-  const currentReviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, database)
+  const currentReviewConfigHash = await getCurrentReviewServingReviewConfigHash(
+    projectId,
+    database,
+    getJudgmentJobQueueWorkloadContext(routeOrJobKey, projectId, 10_000),
+  )
 
   if (currentReviewConfigHash === null) {
     return null

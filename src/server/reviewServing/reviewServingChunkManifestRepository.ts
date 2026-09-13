@@ -13,8 +13,8 @@ import {
 import {promoteReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
 
 export type ReviewServingChunkManifestRepositoryTransaction = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
 }
 
 export type ReviewServingChunkManifestRepositoryDatabase = ReviewServingChunkManifestRepositoryTransaction & {

@@ -595,6 +595,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
+    const hasCurrentConfigSnapshot =
+      servingDiagnostics.snapshot.activeCount > 0 || servingDiagnostics.snapshot.candidateCount > 0
+    const shouldSeedCurrentConfigMissingSnapshot = shouldPrioritizeMissingSnapshotRepair && !hasCurrentConfigSnapshot
     const shouldAttemptCandidatePromotion =
       !isServerMutationWorkDisabled
       && !reviewServingProjectorPaused
@@ -625,8 +628,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       && shouldPrioritizeMissingSnapshotRepair
       && (pendingCandidateSnapshotActivationCount === 0
         || hasStalePendingCandidateActivationWork
-        || hasLegacyRequiredBootstrapEnrichmentCandidate)
-      && (!hasRecentProgress || hasLegacyRequiredBootstrapEnrichmentCandidate)
+        || hasLegacyRequiredBootstrapEnrichmentCandidate
+        || shouldSeedCurrentConfigMissingSnapshot)
+      && (!hasRecentProgress || hasLegacyRequiredBootstrapEnrichmentCandidate || shouldSeedCurrentConfigMissingSnapshot)
       && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork)
 
     if (shouldRequestForegroundRepair) {

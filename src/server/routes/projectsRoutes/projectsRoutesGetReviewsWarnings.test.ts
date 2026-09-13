@@ -339,6 +339,7 @@ const insertReviewRebuildChunk = async (input: {
   projectId: string
   requestId?: string | null
   retryAfter?: string | null
+  snapshotId?: string | null
   status: ReviewRebuildChunkStatus
   updatedAt: string
 }) => {
@@ -353,6 +354,7 @@ const insertReviewRebuildChunk = async (input: {
       chunk_id,
       request_id,
       project_id,
+      snapshot_id,
       projection_component,
       projection_identity,
       input_digest,
@@ -372,6 +374,7 @@ const insertReviewRebuildChunk = async (input: {
       '${input.chunkId}',
       ${input.requestId === undefined || input.requestId === null ? 'NULL' : `'${input.requestId}'`},
       '${input.projectId}',
+      ${input.snapshotId === undefined || input.snapshotId === null ? 'NULL' : `'${input.snapshotId}'`},
       '${component}',
       '${component}:identity-1',
       '${component}-digest-v1',
@@ -2201,10 +2204,18 @@ test('reviews warnings do not enqueue foreground V4 repair while the projector i
 test('reviews warnings leave recently progressing foreground V4 repair priority untouched', async () => {
   const projectId = 'project-missing-serving-recent-v4-progress-warning'
   const requestId = 'request-missing-serving-recent-v4-progress-warning'
+  const snapshotId = 'snapshot-missing-serving-recent-v4-progress-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
   const recentTimestamp = new Date().toISOString()
 
   await insertProjectFixture(projectId)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+    status: 'candidate',
+  })
   await insertReviewRebuildRequest({
     createdAt: oldTimestamp,
     priority: 1_000,
@@ -2221,6 +2232,7 @@ test('reviews warnings leave recently progressing foreground V4 repair priority 
     createdAt: oldTimestamp,
     projectId,
     requestId,
+    snapshotId,
     status: 'completed',
     updatedAt: recentTimestamp,
   })
@@ -2230,6 +2242,7 @@ test('reviews warnings leave recently progressing foreground V4 repair priority 
     createdAt: oldTimestamp,
     projectId,
     requestId,
+    snapshotId,
     status: 'pending',
     updatedAt: oldTimestamp,
   })
@@ -2242,19 +2255,96 @@ test('reviews warnings leave recently progressing foreground V4 repair priority 
   const after = await getReviewRebuildRequestMetadata(requestId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
   expect(body.data.indexing.progressState).toBe('processing')
   expect(body.data.indexing.lastProgressedAt).not.toBeNull()
   expect(after.priority).toBe(before.priority)
   expect(after.updatedAt).toBe(before.updatedAt)
 })
 
+test('reviews warnings seed foreground repair when recent progress belongs to another review config', async () => {
+  const projectId = 'project-missing-serving-other-config-progress-warning'
+  const oldRequestId = 'request-missing-serving-other-config-progress-warning'
+  const oldSnapshotId = 'snapshot-missing-serving-other-config-progress-warning'
+  const oldTimestamp = '2026-04-02T12:00:00.000Z'
+  const recentTimestamp = new Date().toISOString()
+
+  await insertProjectFixture(projectId)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    reviewConfigHash: 'review:previous-config',
+    snapshotId: oldSnapshotId,
+    status: 'candidate',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: oldTimestamp,
+    priority: 1_000,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId: oldRequestId,
+    requestedComponents: ['search'],
+    status: 'admitted',
+    updatedAt: oldTimestamp,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-missing-serving-other-config-progress-completed-warning',
+    component: 'search',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId: oldRequestId,
+    snapshotId: oldSnapshotId,
+    status: 'completed',
+    updatedAt: recentTimestamp,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-missing-serving-other-config-progress-pending-warning',
+    component: 'search',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId: oldRequestId,
+    snapshotId: oldSnapshotId,
+    status: 'pending',
+    updatedAt: oldTimestamp,
+  })
+
+  const beforeCount = await getReviewRebuildRequestCount(projectId)
+  const {body, response} = await postWarningsRequest(projectId)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+  const afterCount = await getReviewRebuildRequestCount(projectId)
+  const {response: secondResponse} = await postWarningsRequest(projectId)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+  const afterSecondCount = await getReviewRebuildRequestCount(projectId)
+
+  expect(response.status).toBe(200)
+  expect(secondResponse.status).toBe(200)
+  expect(body.data.indexing.lastProgressedAt).not.toBeNull()
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.serving.diagnostics.snapshot).toMatchObject({activeCount: 0, candidateCount: 0})
+  expect(beforeCount).toBe(1)
+  expect(afterCount).toBe(beforeCount + 1)
+  expect(afterSecondCount).toBe(afterCount)
+})
+
 test('reviews warnings boost stale foreground V4 repairs that already have progressable chunks', async () => {
   const projectId = 'project-missing-serving-stale-foreground-warning'
   const requestId = 'request-missing-serving-stale-foreground-warning'
+  const snapshotId = 'snapshot-missing-serving-stale-foreground-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
 
   await insertProjectFixture(projectId)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+    status: 'candidate',
+  })
   await insertReviewRebuildRequest({
     createdAt: oldTimestamp,
     priority: 1_000,
@@ -2271,6 +2361,7 @@ test('reviews warnings boost stale foreground V4 repairs that already have progr
     createdAt: oldTimestamp,
     projectId,
     requestId,
+    snapshotId,
     status: 'pending',
     updatedAt: oldTimestamp,
   })
@@ -2283,7 +2374,7 @@ test('reviews warnings boost stale foreground V4 repairs that already have progr
   const after = await getReviewRebuildRequestMetadata(requestId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('refreshing')
