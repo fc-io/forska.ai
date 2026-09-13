@@ -2293,16 +2293,20 @@ test('reviews warnings boost stale foreground V4 repairs that already have progr
   expect(after.updatedAt).not.toBe(before.updatedAt)
 })
 
-test('reviews warnings boost foreground V4 repairs with recent progress for legacy required-enrichment candidates', async () => {
+test('reviews warnings repair invalid legacy required-enrichment candidates despite recent progress', async () => {
   const projectId = 'project-missing-serving-stale-candidate-foreground-warning'
   const requestId = 'request-missing-serving-stale-candidate-foreground-warning'
   const selectedImportSnapshotId = 'selected-import-stale-candidate-foreground-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
   const recentTimestamp = new Date().toISOString()
   const requiredComponents = ['projectScope', 'posting', 'queue', 'summary', 'judgmentInputContent'] as const
-  const requiredState = requiredComponents.map((component) => {
-    return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
-  })
+  const requiredState = requiredComponents
+    .filter((component) => {
+      return component !== 'posting'
+    })
+    .map((component) => {
+      return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
+    })
 
   await insertProjectFixture(projectId)
   await insertReviewRebuildRequest({

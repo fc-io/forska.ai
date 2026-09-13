@@ -595,8 +595,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
-    const hasPendingCandidateSnapshotActivationWork =
-      pendingCandidateSnapshotActivationCount > 0 && hasPendingReviewServingWork
     const shouldAttemptCandidatePromotion =
       !isServerMutationWorkDisabled
       && !reviewServingProjectorPaused
@@ -614,7 +612,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         })
       }
     }
-    const hasLegacyRequiredBootstrapEnrichmentCandidate = hasPendingCandidateSnapshotActivationWork
+    const hasLegacyRequiredBootstrapEnrichmentCandidate = shouldPrioritizeMissingSnapshotRepair
       ? await getHasLegacyRequiredBootstrapEnrichmentCandidate({projectId, reviewConfigHash})
       : false
     const hasStalePendingCandidateActivationWork =

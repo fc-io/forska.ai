@@ -2,7 +2,11 @@ import {resolve} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
-import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes, loadEnv} from './env.ts'
+import {
+  getDefaultReviewServingRebuildChunkBatchMaxRssBytes,
+  getDefaultReviewServingRebuildChunkBatchSize,
+  loadEnv,
+} from './env.ts'
 
 test('uses local dev port defaults without env files', () => {
   const resolvedEnv = loadEnv({envValues: {}})
@@ -34,6 +38,19 @@ test('preserves explicit review serving rebuild chunk batch overrides', () => {
 
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).toBe(0)
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(1)
+})
+
+test('scales default review serving rebuild chunk batch size with DuckDB memory headroom', () => {
+  expect(getDefaultReviewServingRebuildChunkBatchSize('6400MiB')).toBe(2)
+  expect(getDefaultReviewServingRebuildChunkBatchSize('8GB')).toBe(2)
+  expect(getDefaultReviewServingRebuildChunkBatchSize('10GB')).toBe(2)
+  expect(getDefaultReviewServingRebuildChunkBatchSize('16GB')).toBe(4)
+
+  const resolvedEnv = loadEnv({
+    envValues: {DUCKDB_MEMORY_LIMIT: '16GB', FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: ''},
+  })
+
+  expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(4)
 })
 
 test('preserves explicit DuckDB append transaction opt-in', () => {
