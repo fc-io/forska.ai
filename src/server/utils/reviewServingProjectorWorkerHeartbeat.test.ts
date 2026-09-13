@@ -228,6 +228,79 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
   ])
 })
 
+test('review serving projector worker heartbeat scales default batch size above low-memory DuckDB profile', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              events.push({
+                rebuildChunkBatchMaxRssBytes: options.rebuildChunkBatchMaxRssBytes,
+                rebuildChunkBatchSize: options.rebuildChunkBatchSize,
+              })
+            },
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?elevated=' + Date.now())
+        startReviewServingProjectorWorkerHeartbeat({pollIntervalMs: 1})()
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        DUCKDB_MEMORY_LIMIT: '16GB',
+        FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '',
+        FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: '',
+      },
+    },
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat elevated batching test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<{rebuildChunkBatchMaxRssBytes: number; rebuildChunkBatchSize: number}>
+  }
+
+  expect(result.events).toEqual([
+    {rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(), rebuildChunkBatchSize: 4},
+  ])
+})
+
 test('review serving projector worker heartbeat does not start a loop while DuckDB exclusive work is active', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

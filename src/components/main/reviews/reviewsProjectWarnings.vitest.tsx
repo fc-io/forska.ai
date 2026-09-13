@@ -416,7 +416,8 @@ test('labels fully ready queued work as background maintenance with concrete rem
     )
     expect(container.textContent).toContain('Background work: background maintenance queued')
     expect(container.textContent).toContain('Search: 18,784 / 18,784 articles ready')
-    expect(container.textContent).toContain('Background work: 6 rebuild chunks and 87,544 incremental row updates')
+    expect(container.textContent).not.toContain('rebuild chunk')
+    expect(container.textContent).not.toContain('incremental row update')
     expect(container.textContent).not.toContain('Review indexing queued for project')
     expect(container.textContent).not.toContain('Indexing status: queued for the maintenance worker')
     expect(container.textContent).not.toContain('87,550 review-serving tasks remaining')
@@ -464,8 +465,9 @@ test('renders user-facing counts and progress timestamps for review indexing wor
     expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
     expect(container.textContent).not.toContain('Large rebuild')
     expect(container.textContent).toContain(
-      'Background work: 1 review-serving task remaining and 2 article judgment refreshes remaining',
+      'Background work: Preparing review list and counts for 1 article and 2 article judgment refreshes remaining',
     )
+    expect(container.textContent).not.toContain('review-serving task')
     expect(container.textContent).not.toContain('project refresh')
   } finally {
     dispose()

@@ -6,7 +6,7 @@ import {dirname, resolve} from 'path'
 
 import {DEFAULT_API_SERVER_PORT, DEFAULT_VITE_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
-import {normalizeDuckdbMemoryLimit} from './duckdbMemoryLimit.ts'
+import {normalizeDuckdbMemoryLimit, parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {getDuckdbPath} from './getDuckdbPath.ts'
 import {getRuntimeLogConfig} from './runtimeLogger.ts'
 
@@ -45,6 +45,8 @@ const envShape = arktype({
 
 const gibibyte = 1024 ** 3
 const defaultReviewServingRebuildChunkBatchSize = 2
+const elevatedMemoryReviewServingRebuildChunkBatchSize = 4
+const elevatedMemoryReviewServingRebuildChunkBatchSizeThresholdMiB = 12288
 const minimumReviewServingRebuildChunkBatchMaxRssBytes = 4 * gibibyte
 const maximumReviewServingRebuildChunkBatchMaxRssBytes = 12 * gibibyte
 
@@ -55,6 +57,14 @@ export const getDefaultReviewServingRebuildChunkBatchMaxRssBytes = (totalMemoryB
     minimumReviewServingRebuildChunkBatchMaxRssBytes,
     Math.min(maximumReviewServingRebuildChunkBatchMaxRssBytes, memoryBasedCapBytes),
   )
+}
+
+export const getDefaultReviewServingRebuildChunkBatchSize = (duckdbMemoryLimit: string | null | undefined) => {
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(duckdbMemoryLimit)
+
+  return duckdbLimitMiB !== null && duckdbLimitMiB > elevatedMemoryReviewServingRebuildChunkBatchSizeThresholdMiB
+    ? elevatedMemoryReviewServingRebuildChunkBatchSize
+    : defaultReviewServingRebuildChunkBatchSize
 }
 
 const readFromFileVar = (envValues: Record<string, string | undefined>, key: string): string | undefined => {
@@ -162,7 +172,7 @@ export const loadEnv = ({
     || String(merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).trim() === ''
   ) {
     ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE = String(
-      defaultReviewServingRebuildChunkBatchSize,
+      getDefaultReviewServingRebuildChunkBatchSize(String(merged.DUCKDB_MEMORY_LIMIT ?? '')),
     )
   }
   if (

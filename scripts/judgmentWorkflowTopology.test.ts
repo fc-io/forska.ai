@@ -14,6 +14,7 @@ import {
 import {resolveJudgeWorkerJournalIdentity} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 import {
   createJudgmentWorkflowTopology,
+  isRuntimeMonitorTargetHealthy,
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
   isTopologyJobCleanupComplete,
@@ -28,6 +29,7 @@ import {
   recordTopologyFailure,
   topologyFailureArtifactsDirectory,
 } from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
+import {runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 
 const topologyRoots: string[] = []
 
@@ -135,6 +137,56 @@ test('topology projector evidence polls leave serialized main-queue work a quiet
 
 test('topology readiness monitor requires sustained regression before failing', () => {
   expect(topologyReadinessRegressionGraceMs).toBeGreaterThanOrEqual(2_000)
+})
+
+test('topology readiness monitor checks API process state without owner proxy readiness', async () => {
+  const previousFetch = globalThis.fetch
+  let requestedUrl = ''
+
+  try {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requestedUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url
+
+      return Response.json({data: {ready: false, role: 'api'}})
+    }) as unknown as typeof fetch
+
+    expect(await isRuntimeMonitorTargetHealthy({port: 1234, role: 'api'})).toBe(true)
+    expect(requestedUrl).toEndWith(runtimeStatePath)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('topology readiness monitor checks maintenance process state without DuckDB-owner readiness', async () => {
+  const previousFetch = globalThis.fetch
+  let requestedUrl = ''
+
+  try {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requestedUrl = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url
+
+      return Response.json({data: {ready: false, role: 'maintenance-worker'}})
+    }) as unknown as typeof fetch
+
+    expect(await isRuntimeMonitorTargetHealthy({port: 1234, role: 'maintenance-worker'})).toBe(true)
+    expect(requestedUrl).toEndWith(runtimeStatePath)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('topology readiness monitor rejects wrong runtime roles', async () => {
+  const previousFetch = globalThis.fetch
+
+  try {
+    globalThis.fetch = (async () => {
+      return Response.json({data: {role: 'api'}})
+    }) as unknown as typeof fetch
+
+    expect(await isRuntimeMonitorTargetHealthy({port: 1234, role: 'maintenance-worker'})).toBe(false)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
 })
 
 test('topology cleanup completion requires central drain state and absent local artifacts', () => {
