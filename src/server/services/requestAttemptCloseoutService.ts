@@ -209,18 +209,69 @@ const getRequestAttemptCloseoutWriteRows = (
   })
 }
 
-const requestAttemptCloseoutIncomingIsEarlierSql = `
-  EXCLUDED.closed_at < closed_at
-  OR (
-    EXCLUDED.closed_at = closed_at
-    AND EXCLUDED.token_use_created_at < token_use_created_at
-  )
-  OR (
-    EXCLUDED.closed_at = closed_at
-    AND EXCLUDED.token_use_created_at = token_use_created_at
-    AND EXCLUDED.token_use_id < token_use_id
-  )
-`
+const requestAttemptCloseoutInsertColumnNames = [
+  'token_use_id',
+  'token_use_created_at',
+  'request_attempt_id',
+  'provider_key',
+  'closeout_kind',
+  'durable_closeout_kind',
+  'durable_closeout_id',
+  'durable_closeout_ref_json',
+  'closed_at',
+] as const
+
+const getRequestAttemptCloseoutInsertColumnsSql = (tableAlias?: string): string => {
+  const prefix = tableAlias ? `${tableAlias}.` : ''
+
+  return requestAttemptCloseoutInsertColumnNames
+    .map((columnName) => {
+      return `${prefix}${columnName}`
+    })
+    .join(', ')
+}
+
+const getRequestAttemptCloseoutIncomingIsEarlierSql = ({
+  existingAlias,
+  incomingAlias,
+}: {
+  existingAlias: string
+  incomingAlias: string
+}): string => {
+  return `
+    ${incomingAlias}.closed_at < ${existingAlias}.closed_at
+    OR (
+      ${incomingAlias}.closed_at = ${existingAlias}.closed_at
+      AND ${incomingAlias}.token_use_created_at < ${existingAlias}.token_use_created_at
+    )
+    OR (
+      ${incomingAlias}.closed_at = ${existingAlias}.closed_at
+      AND ${incomingAlias}.token_use_created_at = ${existingAlias}.token_use_created_at
+      AND ${incomingAlias}.token_use_id < ${existingAlias}.token_use_id
+    )
+  `
+}
+
+const getRequestAttemptCloseoutExistingIsEarlierOrEqualSql = ({
+  existingAlias,
+  incomingAlias,
+}: {
+  existingAlias: string
+  incomingAlias: string
+}): string => {
+  return `
+    ${existingAlias}.closed_at < ${incomingAlias}.closed_at
+    OR (
+      ${existingAlias}.closed_at = ${incomingAlias}.closed_at
+      AND ${existingAlias}.token_use_created_at < ${incomingAlias}.token_use_created_at
+    )
+    OR (
+      ${existingAlias}.closed_at = ${incomingAlias}.closed_at
+      AND ${existingAlias}.token_use_created_at = ${incomingAlias}.token_use_created_at
+      AND ${existingAlias}.token_use_id <= ${incomingAlias}.token_use_id
+    )
+  `
+}
 
 const getRequestAttemptCloseoutValuesSql = (row: RequestAttemptCloseoutWriteRow): string => {
   return `(
@@ -236,34 +287,18 @@ const getRequestAttemptCloseoutValuesSql = (row: RequestAttemptCloseoutWriteRow)
   )`
 }
 
-const getRequestAttemptCloseoutCaseSql = (column: string): string => {
-  return `CASE WHEN ${requestAttemptCloseoutIncomingIsEarlierSql} THEN EXCLUDED.${column} ELSE ${column} END`
+const requestAttemptCloseoutInsertColumnsSql = getRequestAttemptCloseoutInsertColumnsSql()
+
+const getCreateRequestAttemptCloseoutInputTableSql = (inputTableName: string): string => {
+  return `
+    CREATE TEMP TABLE ${inputTableName} AS
+    SELECT ${requestAttemptCloseoutInsertColumnsSql}
+    FROM app.request_attempt_closeout
+    WHERE FALSE
+  `
 }
 
-const requestAttemptCloseoutInsertColumnsSql = `
-  token_use_id,
-  token_use_created_at,
-  request_attempt_id,
-  provider_key,
-  closeout_kind,
-  durable_closeout_kind,
-  durable_closeout_id,
-  durable_closeout_ref_json,
-  closed_at
-`
-
-const requestAttemptCloseoutUpdateAssignmentsSql = `
-  token_use_id = ${getRequestAttemptCloseoutCaseSql('token_use_id')},
-  token_use_created_at = ${getRequestAttemptCloseoutCaseSql('token_use_created_at')},
-  closeout_kind = ${getRequestAttemptCloseoutCaseSql('closeout_kind')},
-  durable_closeout_kind = ${getRequestAttemptCloseoutCaseSql('durable_closeout_kind')},
-  durable_closeout_id = ${getRequestAttemptCloseoutCaseSql('durable_closeout_id')},
-  durable_closeout_ref_json = ${getRequestAttemptCloseoutCaseSql('durable_closeout_ref_json')},
-  closed_at = ${getRequestAttemptCloseoutCaseSql('closed_at')},
-  updated_at = now()
-`
-
-const getUpsertRequestAttemptCloseoutRowsSql = ({
+const getInsertRequestAttemptCloseoutRowsSql = ({
   rows,
   targetTableName,
 }: {
@@ -273,20 +308,45 @@ const getUpsertRequestAttemptCloseoutRowsSql = ({
   return `
     INSERT INTO ${targetTableName} (${requestAttemptCloseoutInsertColumnsSql})
     VALUES ${rows.map(getRequestAttemptCloseoutValuesSql).join(', ')}
-    ON CONFLICT(request_attempt_id, provider_key) DO UPDATE SET
-      ${requestAttemptCloseoutUpdateAssignmentsSql}
   `
 }
 
-const getUpsertRequestAttemptCloseoutStagingSql = (stagingTableName: string): string => {
+const getApplyRequestAttemptCloseoutRowsSql = ({
+  sourceTableName,
+  targetTableName,
+}: {
+  sourceTableName: string
+  targetTableName: string
+}): string => {
   return `
-    INSERT INTO app.request_attempt_closeout (${requestAttemptCloseoutInsertColumnsSql})
-    SELECT ${requestAttemptCloseoutInsertColumnsSql}
-    FROM ${stagingTableName}
-    ORDER BY closed_at, token_use_created_at, token_use_id
-    ON CONFLICT(request_attempt_id, provider_key) DO UPDATE SET
-      ${requestAttemptCloseoutUpdateAssignmentsSql}
+    DELETE FROM ${targetTableName} AS existing
+    WHERE EXISTS (
+      SELECT 1
+      FROM ${sourceTableName} AS incoming
+      WHERE incoming.request_attempt_id = existing.request_attempt_id
+        AND incoming.provider_key = existing.provider_key
+        AND (${getRequestAttemptCloseoutIncomingIsEarlierSql({existingAlias: 'existing', incomingAlias: 'incoming'})})
+    );
+
+    INSERT INTO ${targetTableName} (${requestAttemptCloseoutInsertColumnsSql})
+    SELECT ${getRequestAttemptCloseoutInsertColumnsSql('incoming')}
+    FROM ${sourceTableName} AS incoming
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${targetTableName} AS existing
+      WHERE existing.request_attempt_id = incoming.request_attempt_id
+        AND existing.provider_key = incoming.provider_key
+        AND (${getRequestAttemptCloseoutExistingIsEarlierOrEqualSql({existingAlias: 'existing', incomingAlias: 'incoming'})})
+    )
+    ORDER BY incoming.closed_at, incoming.token_use_created_at, incoming.token_use_id
   `
+}
+
+const getApplyRequestAttemptCloseoutStagingSql = (stagingTableName: string): string => {
+  return getApplyRequestAttemptCloseoutRowsSql({
+    sourceTableName: stagingTableName,
+    targetTableName: 'app.request_attempt_closeout',
+  })
 }
 
 const getCreateRequestAttemptCloseoutStagingTableSql = (stagingTableName: string): string => {
@@ -303,7 +363,11 @@ const getCreateRequestAttemptCloseoutStagingTableSql = (stagingTableName: string
       closed_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      PRIMARY KEY (request_attempt_id, provider_key)
+      CHECK (length(trim(token_use_id)) > 0),
+      CHECK (length(trim(request_attempt_id)) > 0),
+      CHECK (length(trim(provider_key)) > 0),
+      CHECK (length(trim(closeout_kind)) > 0),
+      CHECK (length(trim(durable_closeout_kind)) > 0)
     )
   `
 }
@@ -582,7 +646,7 @@ const rebuildRequestAttemptCloseoutsOnline = async (
     const projected = await getRequestAttemptCloseoutRowCount(runner, stagingTableName)
     const stats = getRequestAttemptCloseoutRebuildStats(accumulator)
     await runner.run(
-      getUpsertRequestAttemptCloseoutStagingSql(stagingTableName),
+      getApplyRequestAttemptCloseoutStagingSql(stagingTableName),
       requestAttemptCloseoutOnlineRebuildWorkloadContext,
     )
 
@@ -785,10 +849,25 @@ const upsertRequestAttemptCloseoutRowsIntoTable = async ({
   const earliestRows = getEarliestRequestAttemptCloseoutRows(rows)
 
   if (earliestRows.length > 0) {
+    const inputTableName = getRequestAttemptCloseoutStagingTableName()
+
     await runner.run(
-      getUpsertRequestAttemptCloseoutRowsSql({rows: earliestRows, targetTableName}),
+      getCreateRequestAttemptCloseoutInputTableSql(inputTableName),
       requestAttemptCloseoutBackfillWorkloadContext,
     )
+
+    try {
+      await runner.run(
+        getInsertRequestAttemptCloseoutRowsSql({rows: earliestRows, targetTableName: inputTableName}),
+        requestAttemptCloseoutBackfillWorkloadContext,
+      )
+      await runner.run(
+        getApplyRequestAttemptCloseoutRowsSql({sourceTableName: inputTableName, targetTableName}),
+        requestAttemptCloseoutBackfillWorkloadContext,
+      )
+    } finally {
+      await runner.run(`DROP TABLE IF EXISTS ${inputTableName}`, requestAttemptCloseoutBackfillWorkloadContext)
+    }
   }
 
   return {attempted: rows.length, projected: earliestRows.length}

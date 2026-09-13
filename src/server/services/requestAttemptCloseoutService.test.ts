@@ -219,9 +219,74 @@ test('request attempt closeout projection is idempotent and preserves earliest s
     expect(result.conflictRow?.tokenUseId).toBe('token-use-conflict-earliest')
     expect(Number(result.conflictRow?.closedAtMs)).toBe(new Date('2026-05-03T12:00:05.000Z').getTime())
     expect(result.conflictSourceRef).toEqual({id: 'source-ref-earliest', jobId: 'job-conflict', kind: 'token_use'})
-    expect(new Date(result.conflictRow?.updatedAt ?? 0).getTime()).toBeGreaterThan(
-      new Date(result.conflictRowAfterEarly?.updatedAt ?? 0).getTime(),
-    )
+    expect(result.conflictRow?.updatedAt).toBe(result.conflictRowAfterEarly?.updatedAt)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('request attempt closeout migration removes indexes from mutable projection table', () => {
+  const duckdbPath = join(tmpdir(), `f1-request-attempt-closeout-noindex-migration-${Date.now()}.duckdb`)
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        const rows = await db.queryJson(\`
+          SELECT
+            (
+              SELECT COUNT(*)
+              FROM duckdb_constraints()
+              WHERE schema_name = 'app'
+                AND table_name = 'request_attempt_closeout'
+                AND constraint_type = 'PRIMARY KEY'
+            ) AS primaryKeyCount,
+            (
+              SELECT COUNT(*)
+              FROM duckdb_indexes()
+              WHERE schema_name = 'app'
+                AND table_name = 'request_attempt_closeout'
+            ) AS indexCount
+        \`)
+        console.log(JSON.stringify(rows[0]))
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString()
+          || runResult.stdout.toString()
+          || 'request attempt closeout no-index migration test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      indexCount: number | string
+      primaryKeyCount: number | string
+    }
+
+    expect(Number(result.primaryKeyCount)).toBe(0)
+    expect(Number(result.indexCount)).toBe(0)
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)

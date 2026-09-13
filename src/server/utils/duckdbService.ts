@@ -626,6 +626,88 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT request_attempt_id, provider_key
+        FROM app.request_attempt_closeout
+        GROUP BY request_attempt_id, provider_key
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_request_attempt_closeout;
+      CREATE TEMP TABLE startup_probe_request_attempt_closeout AS
+      SELECT
+        request_attempt_id,
+        provider_key,
+        updated_at
+      FROM app.request_attempt_closeout
+      ORDER BY updated_at DESC NULLS LAST, request_attempt_id ASC, provider_key ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.request_attempt_closeout
+      SET updated_at = current_timestamp
+      WHERE request_attempt_id = (
+        SELECT request_attempt_id
+        FROM startup_probe_request_attempt_closeout
+        LIMIT 1
+      )
+        AND provider_key = (
+          SELECT provider_key
+          FROM startup_probe_request_attempt_closeout
+          LIMIT 1
+        );
+      COMMIT;
+      BEGIN;
+      UPDATE app.request_attempt_closeout
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_request_attempt_closeout
+        LIMIT 1
+      )
+      WHERE request_attempt_id = (
+        SELECT request_attempt_id
+        FROM startup_probe_request_attempt_closeout
+        LIMIT 1
+      )
+        AND provider_key = (
+          SELECT provider_key
+          FROM startup_probe_request_attempt_closeout
+          LIMIT 1
+        );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_request_attempt_closeout;
+    `,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairDedupeOrderSql: `
+      closed_at ASC,
+      token_use_created_at ASC,
+      token_use_id ASC,
+      updated_at DESC NULLS LAST
+    `,
+    repairPrimaryKeyColumns: ['request_attempt_id', 'provider_key'],
+    repairStrategy: 'dedupe-latest',
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: [
+          'token_use_id',
+          'token_use_created_at',
+          'request_attempt_id',
+          'provider_key',
+          'closed_at',
+          'updated_at',
+        ],
+        schemaName: 'app',
+        tableName: 'request_attempt_closeout',
+      },
+    ],
+    skipStartupPreflightUntilMigration: '0232_rebuildRequestAttemptCloseoutWithoutIndexes.sql',
+    tableName: 'request_attempt_closeout',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT comparison_project_id
         FROM app.comparison_project_serving_generation
         GROUP BY comparison_project_id
@@ -3044,6 +3126,14 @@ const getDuckdbStartupRepairSpecForSnapshotManifestIndexError = (message: string
   return getDuckdbStartupRepairSpecForTableName('app.review_serving_snapshot_manifest')
 }
 
+const getDuckdbStartupRepairSpecForRequestAttemptCloseoutIndexError = (message: string) => {
+  if (!message.includes('Chunk - [11 Columns]') || !message.includes('judgment-completion-token-use:')) {
+    return undefined
+  }
+
+  return getDuckdbStartupRepairSpecForTableName('app.request_attempt_closeout')
+}
+
 const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
   error: Error,
   failedMutatingTargetTable: string | null,
@@ -3072,6 +3162,12 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
 
   if (snapshotManifestSpec !== undefined) {
     return [snapshotManifestSpec]
+  }
+
+  const requestAttemptCloseoutSpec = getDuckdbStartupRepairSpecForRequestAttemptCloseoutIndexError(message)
+
+  if (requestAttemptCloseoutSpec !== undefined) {
+    return [requestAttemptCloseoutSpec]
   }
 
   const fallbackSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {

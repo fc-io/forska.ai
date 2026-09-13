@@ -340,6 +340,49 @@ test('uses one Codex app-server endpoint identity that may skip HTTP probing', (
   })
 })
 
+test('expires stale endpoint availability probes so recovered providers can be retried', () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const providerConnectionId = 'connection-stale-probe'
+  const failure = classifyConnectionFailure({context, error: {status: 503}})
+
+  recordConnectionFailure({effectiveBaseURL: context.effectiveBaseURL, failure, providerConnectionId})
+  now += 30_001
+
+  expect(claimJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId})).toBe(
+    true,
+  )
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId}).status,
+  ).toBe('probing')
+
+  now += 119_999
+
+  expect(claimJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId})).toBe(
+    false,
+  )
+
+  now += 1
+
+  const staleProbeAvailability = getJudgmentEndpointAvailability({
+    effectiveBaseURL: context.effectiveBaseURL,
+    providerConnectionId,
+  })
+
+  expect(staleProbeAvailability.status).toBe('cooldown')
+  expect(staleProbeAvailability.cooldownExpiresAt?.getTime()).toBe(0)
+
+  expect(claimJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId})).toBe(
+    true,
+  )
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId}).status,
+  ).toBe('probing')
+})
+
 test('allows a single half-open probe and resets state after a successful probe', () => {
   let now = 1_000
   Date.now = () => {

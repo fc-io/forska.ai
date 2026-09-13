@@ -464,6 +464,45 @@ afterEach(async () => {
 
 const realDateNow = Date.now
 
+test('drops stale request-work reservations from backlog metrics', async () => {
+  const {getJudgmentRequestStats, reserveJudgmentPromptRequestWork, updateJudgmentPromptRequestWork} =
+    await loadRuntime()
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const release = reserveJudgmentPromptRequestWork({
+    judgmentsJobId: 'job-stale-request-work',
+    queueRecordId: 'record-a',
+    requestWorkUnits: 3,
+  })
+
+  expect(getJudgmentRequestStats('job-stale-request-work').requestWorkBacklog).toBe(3)
+
+  now += 119_999
+
+  expect(getJudgmentRequestStats('job-stale-request-work').requestWorkBacklog).toBe(3)
+
+  updateJudgmentPromptRequestWork({
+    judgmentsJobId: 'job-stale-request-work',
+    queueRecordId: 'record-a',
+    requestWorkUnits: 5,
+  })
+
+  expect(getJudgmentRequestStats('job-stale-request-work').requestWorkBacklog).toBe(5)
+
+  now += 119_999
+
+  expect(getJudgmentRequestStats('job-stale-request-work').requestWorkBacklog).toBe(5)
+
+  now += 1
+
+  expect(getJudgmentRequestStats('job-stale-request-work').requestWorkBacklog).toBe(0)
+
+  release()
+})
+
 test('fallback requests enforce provider caps and release after failure', async () => {
   const {getJudgmentProviderRequestStats, withJudgmentRequest} = await loadRuntime()
   const firstRelease = createSignal()
