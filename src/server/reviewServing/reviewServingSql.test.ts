@@ -39,6 +39,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
   join(reviewServingSourceRoot, 'judgmentJobReviewServingVisibilityService.ts'),
   join(reviewServingSourceRoot, 'reviewServingLazyPromptAnswerPostingSql.ts'),
+  join(reviewServingSourceRoot, 'reviewServingManifestRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorDomain.ts'),
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
@@ -61,6 +62,7 @@ const reviewServingBoundedForegroundAggregationFiles = [
   'reviewServingFilteredCountService.ts',
   'reviewServingHumanAssessmentCompletedCount.ts',
   'reviewServingLazyPromptAnswerPostingSql.ts',
+  'reviewServingManifestRepository.ts',
   'reviewServingSql.ts',
 ] as const
 const workspaceRoot = process.cwd()

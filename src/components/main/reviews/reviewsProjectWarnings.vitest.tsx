@@ -44,8 +44,11 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       articleRefreshesPerMinute: null,
       blockedReason: null,
       coverage: {
+        countReadyArticleCount: null,
         detailReadyArticleCount: null,
+        filterReadyArticleCount: null,
         reviewPageReadyArticleCount: 0,
+        rowReadyArticleCount: null,
         searchReadyArticleCount: null,
         totalArticleCount: 1,
       },
@@ -80,6 +83,7 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       recoveryMode: 'none',
       requiredConsumerRole: 'maintenance-worker',
       retryAfterAt: null,
+      search: {availability: 'indexing', optionalComponent: true, snapshotId: null},
       serving: {diagnostics: {}, manifest: {}, readable: true, usable: true},
       status: 'refreshing',
       ...indexing,
@@ -260,7 +264,7 @@ test('renders unmeasured review indexing rates without implying zero throughput'
   )
 
   try {
-    expect(container.textContent).toContain('Review page: 0 / 1 article ready')
+    expect(container.textContent).toContain('Rows: indexing 1 article')
     expect(container.textContent).not.toContain('0/min')
   } finally {
     dispose()
@@ -272,8 +276,11 @@ test('renders article coverage instead of rebuild chunk diagnostics', async () =
     getWarningsData({
       activeWorkCount: 2,
       coverage: {
+        countReadyArticleCount: 72,
         detailReadyArticleCount: 47,
+        filterReadyArticleCount: 38,
         reviewPageReadyArticleCount: 92,
+        rowReadyArticleCount: 92,
         searchReadyArticleCount: 24,
         totalArticleCount: 100,
       },
@@ -297,7 +304,9 @@ test('renders article coverage instead of rebuild chunk diagnostics', async () =
   )
 
   try {
-    expect(container.textContent).toContain('Review page: 92 / 100 articles ready')
+    expect(container.textContent).toContain('Rows: 92 / 100 articles ready')
+    expect(container.textContent).toContain('Counts: 72 / 100 articles ready')
+    expect(container.textContent).toContain('Filters: 38 / 100 articles ready')
     expect(container.textContent).toContain('Details: 47 / 100 articles ready')
     expect(container.textContent).toContain('Search: 24 / 100 articles ready')
     expect(container.textContent).not.toContain('rebuild chunk')
@@ -308,13 +317,51 @@ test('renders article coverage instead of rebuild chunk diagnostics', async () =
   }
 })
 
+test('labels row-ready indexing as background enrichment work', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      activeWorkCount: 1,
+      coverage: {
+        countReadyArticleCount: 100,
+        detailReadyArticleCount: null,
+        filterReadyArticleCount: null,
+        reviewPageReadyArticleCount: 100,
+        rowReadyArticleCount: 100,
+        searchReadyArticleCount: null,
+        totalArticleCount: 100,
+      },
+      progressState: 'processing',
+      search: {availability: 'indexing', optionalComponent: true, snapshotId: 'snapshot-row-ready'},
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Background review indexing in progress')
+    expect(container.textContent).toContain(
+      'Review rows are ready. Filters, details and search are still catching up in the background.',
+    )
+    expect(container.textContent).toContain('Rows: 100 / 100 articles ready')
+    expect(container.textContent).toContain('Counts: 100 / 100 articles ready')
+    expect(container.textContent).toContain('Filters: indexing 100 articles')
+    expect(container.textContent).toContain('Details: indexing 100 articles')
+    expect(container.textContent).toContain('Search: indexing 100 articles')
+    expect(container.textContent).not.toContain('may look partial or empty')
+    expect(container.textContent).not.toContain('Rows: 0 / 100 articles ready')
+  } finally {
+    dispose()
+  }
+})
+
 test('labels ready review page processing as background work', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({
       activeWorkCount: 1,
       coverage: {
+        countReadyArticleCount: 100,
         detailReadyArticleCount: 100,
+        filterReadyArticleCount: 100,
         reviewPageReadyArticleCount: 100,
+        rowReadyArticleCount: 100,
         searchReadyArticleCount: 42,
         totalArticleCount: 100,
       },
@@ -324,10 +371,8 @@ test('labels ready review page processing as background work', async () => {
 
   try {
     expect(container.textContent).toContain('Background review indexing in progress')
-    expect(container.textContent).toContain(
-      'Review pages and details are ready. Search indexing is still catching up in the background.',
-    )
-    expect(container.textContent).toContain('Background work: updating search and enrichment in the background')
+    expect(container.textContent).toContain('Review rows are ready. Search is still catching up in the background.')
+    expect(container.textContent).toContain('Background work: updating search in the background')
     expect(container.textContent).not.toContain('Review lists may look partial or empty')
     expect(container.textContent).not.toContain('Status: maintenance worker is updating the review index')
   } finally {
@@ -339,8 +384,11 @@ test('labels fully ready queued work as background maintenance with concrete rem
   const {container, dispose} = await renderWarnings(
     getWarningsData({
       coverage: {
+        countReadyArticleCount: 18784,
         detailReadyArticleCount: 18784,
+        filterReadyArticleCount: 18784,
         reviewPageReadyArticleCount: 18784,
+        rowReadyArticleCount: 18784,
         searchReadyArticleCount: 18784,
         totalArticleCount: 18784,
       },
@@ -364,11 +412,12 @@ test('labels fully ready queued work as background maintenance with concrete rem
   try {
     expect(container.textContent).toContain('Background review maintenance queued')
     expect(container.textContent).toContain(
-      'Review pages, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
+      'Review rows, counts, filters, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
     )
     expect(container.textContent).toContain('Background work: background maintenance queued')
     expect(container.textContent).toContain('Search: 18,784 / 18,784 articles ready')
-    expect(container.textContent).toContain('Background work: 6 rebuild chunks and 87,544 incremental row updates')
+    expect(container.textContent).not.toContain('rebuild chunk')
+    expect(container.textContent).not.toContain('incremental row update')
     expect(container.textContent).not.toContain('Review indexing queued for project')
     expect(container.textContent).not.toContain('Indexing status: queued for the maintenance worker')
     expect(container.textContent).not.toContain('87,550 review-serving tasks remaining')
@@ -408,7 +457,7 @@ test('renders user-facing counts and progress timestamps for review indexing wor
   )
 
   try {
-    expect(container.textContent).toContain('Review page: 0 / 1 article ready')
+    expect(container.textContent).toContain('Rows: indexing 1 article')
     expect(container.textContent).toContain('last progress')
     expect(container.textContent).not.toContain('Dirty materialization')
     expect(container.textContent).not.toContain('Quarantine')
@@ -416,8 +465,9 @@ test('renders user-facing counts and progress timestamps for review indexing wor
     expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
     expect(container.textContent).not.toContain('Large rebuild')
     expect(container.textContent).toContain(
-      'Background work: 1 review-serving task remaining and 2 article judgment refreshes remaining',
+      'Background work: Preparing review list and counts for 1 article and 2 article judgment refreshes remaining',
     )
+    expect(container.textContent).not.toContain('review-serving task')
     expect(container.textContent).not.toContain('project refresh')
   } finally {
     dispose()

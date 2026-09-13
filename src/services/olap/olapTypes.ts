@@ -156,10 +156,10 @@ export type ArticlesReviewsBothResponse = {
   data: ArticleReviewsBothResult[]
   detailReadiness?: ReviewDetailReadiness
   error?: string
-  totalCount: number
+  totalCount: number | null
   page: number
   limit: number
-  totalPages: number
+  totalPages: number | null
   nextCursor?: string | null
 }
 

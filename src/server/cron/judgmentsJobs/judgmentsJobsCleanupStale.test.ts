@@ -120,6 +120,18 @@ test('startup rollout cleanup preserves local completion evidence before discard
       ('${readyPromptId}', 'Startup rollout ready prompt', '${readyPromptId}-hash')
   `)
   await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('${jobId}-project-article-judged', '${projectId}', '${judgedArticleId}'),
+      ('${jobId}-project-article-ready', '${projectId}', '${readyArticleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES
+      ('${jobId}-project-prompt-judged', '${projectId}', '${judgedPromptId}', 1, TRUE),
+      ('${jobId}-project-prompt-ready', '${projectId}', '${readyPromptId}', 2, TRUE)
+  `)
+  await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status, storage_state)
     VALUES ('${jobId}', '${projectId}', 'running', 'active')
   `)
@@ -185,9 +197,15 @@ test('startup rollout cleanup preserves local completion evidence before discard
       AND prompt_id = '${judgedPromptId}'
       AND model_id = '${modelId}'
   `)
+  const [dirtyWorkCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.review_serving_dirty_work
+    WHERE project_id = '${projectId}'
+  `)
 
   expect(job).toEqual({error: null, status: 'paused', storageState: 'draining'})
   expect(Number(judgmentCount?.count ?? 0)).toBe(1)
+  expect(Number(dirtyWorkCount?.count ?? 0)).toBe(5)
   expect(health.outboxRowCount).toBe(1)
   expect(health.pendingCompletionAckCount).toBe(0)
   expect(health.promptCounts).toEqual({claimed: 0, judged: 1, ready: 0, running: 0, skipped: 0})

@@ -1,6 +1,12 @@
 import {Elysia, t} from 'elysia'
 
 import {
+  countReadyReviewServingComponents,
+  defaultReadableReviewServingComponents,
+  filterReadyReviewServingComponents,
+  type ReviewServingProjectionComponent,
+} from '../../reviewServing/reviewServingContracts.ts'
+import {
   getReviewServingDiagnostics,
   type ReviewServingDiagnostics,
 } from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
@@ -30,12 +36,20 @@ type ReviewsIndexingBlockedReason =
 type ReviewsIndexingMaintenanceStatus = 'blocked' | 'failed' | 'idle' | 'processing'
 type ReviewsIndexingProgressState = 'blocked' | 'completed' | 'failed' | 'processing' | 'queued' | 'stalled'
 type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
+type ReviewsWarningsCoverage = {
+  countReadyArticleCount: number | null
+  detailReadyArticleCount: number | null
+  filterReadyArticleCount: number | null
+  reviewPageReadyArticleCount: number
+  rowReadyArticleCount: number | null
+  searchReadyArticleCount: number | null
+  totalArticleCount: number
+}
 
 const recentReviewServingProgressWindowMs = 120_000
 const reviewServingProgressClockSkewToleranceMs = 10_000
 const foregroundReviewServingRepairPriority = 1_000
 const stalledForegroundReviewServingRepairPriority = 10_000
-
 const getReviewWarningsWorkloadContext = (projectId: string, operation: string): DuckdbWorkloadContext => {
   return {
     fallbackIntent: 'serveStale',
@@ -122,16 +136,33 @@ const getReviewWarningsScopeState = async (projectId: string) => {
 
 const getReviewWarningsComponentState = (
   manifest: ReviewServingSnapshotManifest | null,
-  component: 'payload' | 'search',
+  component: ReviewServingProjectionComponent,
 ) => {
   return [...(manifest?.componentState.required ?? []), ...(manifest?.componentState.optional ?? [])].find((state) => {
     return state.component === component
   })
 }
 
+const getHasReviewWarningsComponentStates = (
+  manifest: ReviewServingSnapshotManifest | null,
+  components: readonly ReviewServingProjectionComponent[],
+) => {
+  return components.every((component) => {
+    return getReviewWarningsComponentState(manifest, component) !== undefined
+  })
+}
+
+const getReadyTierArticleCount = (input: {
+  components: readonly ReviewServingProjectionComponent[]
+  manifest: ReviewServingSnapshotManifest | null
+  totalArticleCount: number
+}) => {
+  return getHasReviewWarningsComponentStates(input.manifest, input.components) ? input.totalArticleCount : null
+}
+
 const getReviewWarningsComponentCanMaterialize = (
   manifest: ReviewServingSnapshotManifest | null,
-  component: 'payload' | 'search',
+  component: ReviewServingProjectionComponent,
 ) => {
   return (
     manifest?.optionalComponents.includes(component) === true
@@ -139,7 +170,13 @@ const getReviewWarningsComponentCanMaterialize = (
   )
 }
 
-const legacyRequiredBootstrapEnrichmentComponents = ['judgmentInputContent', 'payload', 'search'] as const
+const legacyRequiredBootstrapEnrichmentComponents = [
+  'posting',
+  'summary',
+  'judgmentInputContent',
+  'payload',
+  'search',
+] as const
 
 const getHasLegacyRequiredBootstrapEnrichmentCandidate = async (input: {
   projectId: string
@@ -191,37 +228,55 @@ const getReviewsWarningsCoverage = async (input: {
   projectId: string
   reviewConfigHash: string | null
   totalArticleCount: number
-}) => {
+}): Promise<ReviewsWarningsCoverage> => {
   const snapshotId = input.manifest?.snapshotId ?? null
 
   if (snapshotId === null) {
     return {
+      countReadyArticleCount: null,
       detailReadyArticleCount: null,
+      filterReadyArticleCount: null,
       reviewPageReadyArticleCount: 0,
+      rowReadyArticleCount: null,
       searchReadyArticleCount: null,
       totalArticleCount: input.totalArticleCount,
     }
   }
 
+  const hasRowsReady = getHasReviewWarningsComponentStates(input.manifest, defaultReadableReviewServingComponents)
+  const countReadyArticleCount = getReadyTierArticleCount({
+    components: countReadyReviewServingComponents,
+    manifest: input.manifest,
+    totalArticleCount: input.totalArticleCount,
+  })
+  const filterReadyArticleCount = getReadyTierArticleCount({
+    components: filterReadyReviewServingComponents,
+    manifest: input.manifest,
+    totalArticleCount: input.totalArticleCount,
+  })
   const canMaterializePayload = getReviewWarningsComponentCanMaterialize(input.manifest, 'payload')
   const canMaterializeSearch = getReviewWarningsComponentCanMaterialize(input.manifest, 'search')
   const searchComponentState = getReviewWarningsComponentState(input.manifest, 'search')
   const [coverage] = await getApiReadOnlyAppDatabaseService().queryJson<{
     detailReadyArticleCount: number | null
-    reviewPageReadyArticleCount: number
+    rowReadyArticleCount: number | null
     searchReadyArticleCount: number | null
   }>(
     `
     SELECT
-      CAST((
-        SELECT COUNT(DISTINCT serving.article_id)
-        FROM mart.review_article_serving_base_v4 serving
-        WHERE serving.project_id = '${escapeSqlString(input.projectId)}'
-          AND serving.review_config_hash IS NOT DISTINCT FROM ${
-            input.reviewConfigHash === null ? 'NULL' : `'${escapeSqlString(input.reviewConfigHash)}'`
-          }
-          AND serving.snapshot_id = '${escapeSqlString(snapshotId)}'
-      ) AS INTEGER) AS reviewPageReadyArticleCount,
+      ${
+        !hasRowsReady
+          ? 'NULL'
+          : `CAST((
+              SELECT COUNT(DISTINCT serving.article_id)
+              FROM mart.review_article_serving_base_v4 serving
+              WHERE serving.project_id = '${escapeSqlString(input.projectId)}'
+                AND serving.review_config_hash IS NOT DISTINCT FROM ${
+                  input.reviewConfigHash === null ? 'NULL' : `'${escapeSqlString(input.reviewConfigHash)}'`
+                }
+                AND serving.snapshot_id = '${escapeSqlString(snapshotId)}'
+            ) AS INTEGER)`
+      } AS rowReadyArticleCount,
       ${
         !canMaterializePayload
           ? 'NULL'
@@ -277,7 +332,9 @@ const getReviewsWarningsCoverage = async (input: {
                     )
                 )
                 SELECT CASE
-                  WHEN NOT EXISTS (SELECT 1 FROM latest_search_request) THEN ${input.totalArticleCount}
+                  WHEN NOT EXISTS (SELECT 1 FROM latest_search_request) THEN ${
+                    searchComponentState?.projectionIdentity === undefined ? 'NULL' : input.totalArticleCount
+                  }
                   ELSE (
                     SELECT COUNT(DISTINCT scope.article_id)
                     FROM mart.project_scope_article scope
@@ -291,19 +348,26 @@ const getReviewsWarningsCoverage = async (input: {
                       )
                   )
                 END
-              ), ${input.totalArticleCount})
+              ), ${searchComponentState?.projectionIdentity === undefined ? 'NULL' : input.totalArticleCount})
             ) AS INTEGER)`
       } AS searchReadyArticleCount
     `,
     getReviewWarningsWorkloadContext(input.projectId, 'coverage'),
   )
+  const rowReadyArticleCount =
+    coverage?.rowReadyArticleCount === null || coverage?.rowReadyArticleCount === undefined
+      ? null
+      : Number(coverage.rowReadyArticleCount)
 
   return {
+    countReadyArticleCount,
     detailReadyArticleCount:
       coverage?.detailReadyArticleCount === null || coverage?.detailReadyArticleCount === undefined
         ? null
         : Number(coverage.detailReadyArticleCount),
-    reviewPageReadyArticleCount: Number(coverage?.reviewPageReadyArticleCount ?? 0),
+    filterReadyArticleCount,
+    reviewPageReadyArticleCount: rowReadyArticleCount ?? 0,
+    rowReadyArticleCount,
     searchReadyArticleCount:
       coverage?.searchReadyArticleCount === null || coverage?.searchReadyArticleCount === undefined
         ? null
@@ -479,6 +543,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     })
     const {enabledPromptCount, hasAnyArticlesInScope, totalArticleCount} = await getReviewWarningsScopeState(projectId)
     const coverageManifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest({
+      componentStateMode: 'available',
       projectId,
       reviewConfigHash,
       workloadContext: getReviewWarningsWorkloadContext(projectId, 'coverageManifest'),
@@ -530,8 +595,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
-    const hasPendingCandidateSnapshotActivationWork =
-      pendingCandidateSnapshotActivationCount > 0 && hasPendingReviewServingWork
     const shouldAttemptCandidatePromotion =
       !isServerMutationWorkDisabled
       && !reviewServingProjectorPaused
@@ -549,7 +612,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         })
       }
     }
-    const hasLegacyRequiredBootstrapEnrichmentCandidate = hasPendingCandidateSnapshotActivationWork
+    const hasLegacyRequiredBootstrapEnrichmentCandidate = shouldPrioritizeMissingSnapshotRepair
       ? await getHasLegacyRequiredBootstrapEnrichmentCandidate({projectId, reviewConfigHash})
       : false
     const hasStalePendingCandidateActivationWork =

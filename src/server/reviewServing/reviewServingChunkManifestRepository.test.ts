@@ -129,34 +129,58 @@ const fakeCriticalComponents = [
   'projectScope',
   'selectedImport',
   'display',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
-  'summary',
   'payload',
+  'posting',
+  'summary',
+] as const satisfies readonly FakeChunkRow['projectionComponent'][]
+const fakeSecondaryComponents = [
+  'judgmentInputContent',
+  'search',
 ] as const satisfies readonly FakeChunkRow['projectionComponent'][]
 
 const fakeComponentPrerequisites = {
   display: ['projectScope', 'selectedImport'],
   humanStatus: ['projectScope', 'display'],
   judgmentInputContent: ['projectScope'],
-  llmStatus: ['projectScope', 'display', 'judgmentInputContent'],
+  llmStatus: ['projectScope', 'display'],
   payload: ['projectScope'],
-  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
+  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'payload'],
   projectScope: [],
   queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
   search: ['projectScope', 'selectedImport'],
   selectedImport: ['projectScope'],
-  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
+  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload'],
 } as const satisfies Record<FakeChunkRow['projectionComponent'], readonly FakeChunkRow['projectionComponent'][]>
 
-const getFakeClaimLane = (row: FakeChunkRow) => {
+const getFakeDefaultWorkloadClass = (row: FakeChunkRow) => {
   return fakeCriticalComponents.some((component) => {
     return component === row.projectionComponent
   })
-    ? 0
-    : 1
+    ? 'critical'
+    : 'bulk'
+}
+
+const getFakeEffectiveWorkloadClass = (row: FakeChunkRow) => {
+  if (row.projectionComponent === 'posting') {
+    return 'critical'
+  }
+
+  if (
+    fakeSecondaryComponents.some((component) => {
+      return component === row.projectionComponent
+    })
+  ) {
+    return 'bulk'
+  }
+
+  return row.workloadClass ?? getFakeDefaultWorkloadClass(row)
+}
+
+const getFakeClaimLane = (row: FakeChunkRow) => {
+  return getFakeEffectiveWorkloadClass(row) === 'critical' ? 0 : 1
 }
 
 const getFakeClaimPriority = (row: FakeChunkRow) => {
@@ -164,14 +188,14 @@ const getFakeClaimPriority = (row: FakeChunkRow) => {
     'projectScope',
     'selectedImport',
     'display',
-    'judgmentInputContent',
     'llmStatus',
     'humanStatus',
     'queue',
-    'summary',
     'payload',
-    'search',
     'posting',
+    'summary',
+    'judgmentInputContent',
+    'search',
   ]
 
   return componentOrder.indexOf(row.projectionComponent)
@@ -661,13 +685,21 @@ test('rebuild chunk workload classes mark durable critical and bulk lanes', asyn
     [
       {...baseChunkIdentity, projectionComponent: 'summary', projectionIdentity: 'summary:project-1'},
       {...baseChunkIdentity, projectionComponent: 'posting', projectionIdentity: 'posting:project-1'},
+      {...baseChunkIdentity, projectionComponent: 'payload', projectionIdentity: 'payload:project-1'},
+      {
+        ...baseChunkIdentity,
+        projectionComponent: 'judgmentInputContent',
+        projectionIdentity: 'judgmentInputContent:project-1',
+      },
     ],
     database,
   )
   const joined = statements.join('\n')
 
   expect(getReviewServingRebuildChunkWorkloadClass('summary')).toBe('critical')
-  expect(getReviewServingRebuildChunkWorkloadClass('posting')).toBe('bulk')
+  expect(getReviewServingRebuildChunkWorkloadClass('posting')).toBe('critical')
+  expect(getReviewServingRebuildChunkWorkloadClass('payload')).toBe('critical')
+  expect(getReviewServingRebuildChunkWorkloadClass('judgmentInputContent')).toBe('bulk')
   expect(joined).toContain("'critical'")
   expect(joined).toContain("'bulk'")
   expect(joined).toContain('workload_class')
@@ -903,7 +935,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     /candidate\.projection_component = 'search'[\s\S]*prerequisite\.projection_component IN \('projectScope', 'selectedImport'\)/,
   )
   expect(statements.join('\n')).toContain(
-    "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue')",
+    "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload')",
   )
   expect(statements.join('\n')).toContain("prerequisite.status <> 'completed'")
   expect(statements.join('\n')).not.toContain("prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')")
@@ -1151,7 +1183,7 @@ test('next claimable chunk discovery lets posting run before unrelated queue sea
   expect(next).toMatchObject({inputDigest: 'digest-posting', projectionComponent: 'posting'})
 })
 
-test('next claimable chunk discovery prioritizes summary before posting once queue is ready', async () => {
+test('next claimable chunk discovery prioritizes payload before posting and optional search', async () => {
   const completedComponents = [
     'projectScope',
     'selectedImport',
@@ -1160,6 +1192,69 @@ test('next claimable chunk discovery prioritizes summary before posting once que
     'llmStatus',
     'humanStatus',
     'queue',
+    'summary',
+  ] as const
+  const completed = completedComponents.map((projectionComponent) => {
+    return {
+      ...getChunkRowFromIdentity(
+        {...baseChunkIdentity, inputDigest: `digest-${projectionComponent}`, projectionComponent},
+        [],
+      ),
+      requestId: 'rebuild:foreground',
+      status: 'completed' as const,
+    }
+  })
+  const olderPayload = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-older-payload', projectionComponent: 'payload'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+    workloadClass: 'critical' as const,
+  }
+  const olderSearch = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-older-search', projectionComponent: 'search'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    updatedAt: '2026-06-16T14:01:00.000Z',
+  }
+  const posting = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-posting-readiness', projectionComponent: 'posting'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+    workloadClass: 'bulk' as const,
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([...completed, olderPayload, olderSearch, posting])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:15:00.000Z', projectId: 'project-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(next).toMatchObject({inputDigest: 'digest-older-payload', projectionComponent: 'payload'})
+  expect(joined).toMatch(/WHEN 'payload' THEN 6[\s\S]*WHEN 'posting' THEN 7[\s\S]*WHEN 'summary' THEN 8/)
+  expect(joined).toMatch(/WHEN 'posting' THEN 7[\s\S]*WHEN 'search' THEN 10/)
+  expect(joined).toContain("candidate.projection_component = 'posting'")
+  expect(joined).toContain("candidate.projection_component IN ('judgmentInputContent', 'search')")
+})
+
+test('next claimable chunk discovery prioritizes posting before summary once payload is ready', async () => {
+  const completedComponents = [
+    'projectScope',
+    'selectedImport',
+    'display',
+    'judgmentInputContent',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'payload',
   ] as const
   const completed = completedComponents.map((projectionComponent) => {
     return {
@@ -1194,7 +1289,7 @@ test('next claimable chunk discovery prioritizes summary before posting once que
     database,
   )
 
-  expect(next).toMatchObject({inputDigest: 'digest-summary', projectionComponent: 'summary'})
+  expect(next).toMatchObject({inputDigest: 'digest-old-posting', projectionComponent: 'posting'})
 })
 
 test('next claimable chunk discovery applies request priority before component order', async () => {
@@ -1457,9 +1552,9 @@ test('next claimable chunk discovery defers background chunks while same-project
     requestId: 'rebuild:foreground',
     status: 'completed' as const,
   }
-  const runningPayload = {
+  const runningPosting = {
     ...getChunkRowFromIdentity(
-      {...baseChunkIdentity, inputDigest: 'digest-running-payload', projectionComponent: 'payload'},
+      {...baseChunkIdentity, inputDigest: 'digest-running-posting', projectionComponent: 'posting'},
       [],
     ),
     leaseExpiresAt: '2026-06-16T14:30:00.000Z',
@@ -1475,7 +1570,7 @@ test('next claimable chunk discovery defers background chunks while same-project
   const {database, statements} = createFakeChunkManifestDatabase([
     completedProjectScope,
     completedSelectedImport,
-    runningPayload,
+    runningPosting,
     pendingSearch,
   ])
 
@@ -1487,7 +1582,7 @@ test('next claimable chunk discovery defers background chunks while same-project
   expect(next).toBeNull()
   expect(statements.join('\n')).toContain('FROM app.review_rebuild_chunk_manifest foreground_pressure')
   expect(statements.join('\n')).toContain("foreground_pressure.status = 'running'")
-  expect(statements.join('\n')).toContain('COALESCE(\n    candidate.workload_class')
+  expect(statements.join('\n')).toContain("candidate.projection_component = 'posting'")
 })
 
 test('next claimable chunk discovery allows background chunks after same-project foreground pressure clears', async () => {
@@ -1507,9 +1602,9 @@ test('next claimable chunk discovery allows background chunks after same-project
     requestId: 'rebuild:foreground',
     status: 'completed' as const,
   }
-  const completedPayload = {
+  const completedPosting = {
     ...getChunkRowFromIdentity(
-      {...baseChunkIdentity, inputDigest: 'digest-completed-payload', projectionComponent: 'payload'},
+      {...baseChunkIdentity, inputDigest: 'digest-completed-posting', projectionComponent: 'posting'},
       [],
     ),
     requestId: 'rebuild:foreground',
@@ -1523,7 +1618,7 @@ test('next claimable chunk discovery allows background chunks after same-project
   const {database} = createFakeChunkManifestDatabase([
     completedProjectScope,
     completedSelectedImport,
-    completedPayload,
+    completedPosting,
     pendingSearch,
   ])
 
@@ -2323,7 +2418,7 @@ test('rebuild timing diagnostics derive defaultReadableAt before search complete
   expect(diagnostics.timeline[0]?.defaultReadableAt).toEqual({
     note: null,
     status: 'known',
-    value: '2026-06-16T14:08:00.000Z',
+    value: '2026-06-16T14:06:00.000Z',
   })
   expect(diagnostics.timeline[0]?.detailReadyAt).toMatchObject({status: 'unknown', value: null})
   expect(diagnostics.timeline[0]?.fullyEnrichedAt).toMatchObject({status: 'unknown', value: null})

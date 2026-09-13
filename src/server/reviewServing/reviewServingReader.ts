@@ -3,7 +3,10 @@ import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseS
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {admitReviewServingDuckdbWorkload, type ReviewServingAdmissionDiagnostics} from './reviewServingAdmission.ts'
 import {
+  countReadyReviewServingComponents,
+  defaultReadableReviewServingComponents,
   detailReadyReviewServingComponents,
+  filterReadyReviewServingComponents,
   type NamedReviewFastCountKey,
   type ReviewServingBulkState,
   type ReviewServingCountState,
@@ -113,10 +116,14 @@ export type ReviewServingReaderDiagnostics = {
   diagnostics: ReviewServingDiagnostics | null
   filterSignature: string | null
   manifest: {
+    countReadiness: ReviewServingFreshnessState
     detailReadiness: ReviewServingFreshnessState
+    filterReadiness: ReviewServingFreshnessState
     freshness: ReviewServingFreshnessState
     lastError: string | null
     projectId: string | null
+    rowReadiness: ReviewServingFreshnessState
+    searchReadiness: ReviewServingFreshnessState
     snapshotId: string | null
     status: ReviewServingSnapshotStatus | 'missing'
   }
@@ -148,6 +155,11 @@ const maxArticleSetHydrationPayloadBytes = 2_000_000
 const reviewServingArticleBaseTable = 'mart.review_article_serving_base_v4'
 const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewServingPostingArticleSortAlias = 'serving_order'
+const manifestSearchReadinessComponents = [
+  'projectScope',
+  'search',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+const postingBackedRowFilterKeys = ['importRoute', 'promptAnswer'] as const satisfies readonly ReviewServingFilterKey[]
 
 const getReaderDatabase = () => {
   return getApiReadOnlyAppDatabaseService()
@@ -159,6 +171,16 @@ const getLazyPromptAnswerPostingDatabase = () => {
 
 const hasText = (value: string | null | undefined) => {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+const hasRuntimeFilterValue = (value: ReviewServingFilterSignatureValue): boolean => {
+  return Array.isArray(value)
+    ? value.some(hasRuntimeFilterValue)
+    : typeof value === 'string'
+      ? value.length > 0
+      : typeof value === 'number'
+        ? Number.isFinite(value)
+        : value === true
 }
 
 const isReviewServingFilterKey = (value: string): value is ReviewServingFilterKey => {
@@ -198,14 +220,56 @@ const getManifestDetailReadiness = (manifest: ReviewServingSnapshotManifest | nu
   return hasDetailReadyState ? 'ready' : 'indexing'
 }
 
+const getManifestComponentReadiness = (
+  manifest: ReviewServingSnapshotManifest | null,
+  components: readonly ReviewServingProjectionComponent[],
+): ReviewServingFreshnessState => {
+  if (!manifest) {
+    return 'unavailable'
+  }
+
+  if (manifest.status !== 'active') {
+    return getManifestFreshness(manifest)
+  }
+
+  const componentStates = getComponentCursorStates(manifest)
+  const hasReadyState = components.every((component) => {
+    return componentStates[component] !== undefined
+  })
+
+  return hasReadyState ? 'ready' : 'indexing'
+}
+
+const getManifestSearchReadiness = (manifest: ReviewServingSnapshotManifest | null): ReviewServingFreshnessState => {
+  if (!manifest) {
+    return 'unavailable'
+  }
+
+  if (manifest.status !== 'active') {
+    return getManifestFreshness(manifest)
+  }
+
+  const componentStates = getComponentCursorStates(manifest)
+
+  return componentStates.search !== undefined
+    ? getManifestComponentReadiness(manifest, manifestSearchReadinessComponents)
+    : manifest.optionalComponents.includes('search')
+      ? 'indexing'
+      : 'unavailable'
+}
+
 const getManifestDiagnostics = (manifest: ReviewServingSnapshotManifest | null) => {
   const status: ReviewServingSnapshotStatus | 'missing' = manifest?.status ?? 'missing'
 
   return {
+    countReadiness: getManifestComponentReadiness(manifest, countReadyReviewServingComponents),
     detailReadiness: getManifestDetailReadiness(manifest),
+    filterReadiness: getManifestComponentReadiness(manifest, filterReadyReviewServingComponents),
     freshness: getManifestFreshness(manifest),
     lastError: manifest?.lastError ?? null,
     projectId: manifest?.projectId ?? null,
+    rowReadiness: getManifestComponentReadiness(manifest, defaultReadableReviewServingComponents),
+    searchReadiness: getManifestSearchReadiness(manifest),
     snapshotId: manifest?.snapshotId ?? null,
     status,
   }
@@ -247,15 +311,30 @@ const getMissingRequiredComponents = (
   })
 }
 
+const getHasPostingBackedRowFilters = (contract: ReviewServingReadContract, request: ReviewServingReaderRequest) => {
+  return (
+    contract.physicalAccessStrategy === 'orderedPrefix'
+    && postingBackedRowFilterKeys.some((filterKey) => {
+      return hasRuntimeFilterValue(request.filters?.[filterKey])
+    })
+  )
+}
+
 const getMissingRuntimeComponents = (
   contract: ReviewServingReadContract,
   manifest: ReviewServingSnapshotManifest | null,
   request: ReviewServingReaderRequest,
 ) => {
   const componentStates = getComponentCursorStates(manifest)
+  const postingComponents =
+    getHasPostingBackedRowFilters(contract, request) && !componentStates.posting ? ['posting' as const] : []
   const searchComponents = request.searchMode === 'tokenPrefix' && !componentStates.search ? ['search' as const] : []
 
-  return [...getMissingRequiredComponents(contract, manifest), ...searchComponents]
+  return [...getMissingRequiredComponents(contract, manifest), ...postingComponents, ...searchComponents].filter(
+    (component, index, components) => {
+      return components.indexOf(component) === index
+    },
+  )
 }
 
 const getUnsupportedFilterKeys = (contract: ReviewServingReadContract, filters: ReviewServingReaderFilterInput) => {
@@ -944,6 +1023,7 @@ const getSnapshotManifest = async (
   if (hasText(request.snapshotId)) {
     return getReviewServingSnapshotManifest(
       {
+        componentStateMode: 'available',
         projectId: request.projectId as string,
         snapshotId: request.snapshotId as string,
         workloadContext: request.routeDiagnosticWorkloadContext,
@@ -954,6 +1034,7 @@ const getSnapshotManifest = async (
 
   return getActiveOrLastKnownGoodReviewServingSnapshotManifest(
     {
+      componentStateMode: 'available',
       projectId: request.projectId as string,
       reviewConfigHash: request.reviewConfigHash,
       workloadContext: request.routeDiagnosticWorkloadContext,
@@ -1153,7 +1234,35 @@ export const readReviewServingRows = async <T>(
     })
   }
 
-  if (!hasText(request.projectId) || !manifest?.snapshotId) {
+  if (!hasText(request.projectId)) {
+    return rejectReaderRequest({
+      admission: null,
+      contract,
+      diagnostics,
+      filterSignature,
+      manifest,
+      reason: 'servingIdentityMissing',
+    })
+  }
+
+  const snapshotFreshness = getManifestFreshness(manifest)
+
+  if (
+    contract.freshnessBehavior === 'requireReadySnapshot'
+    && snapshotFreshness !== 'ready'
+    && !(snapshotFreshness === 'stale' && request.allowStale === true)
+  ) {
+    return rejectReaderRequest({
+      admission: null,
+      contract,
+      diagnostics,
+      filterSignature,
+      manifest,
+      reason: 'manifestStatusRejected',
+    })
+  }
+
+  if (!manifest?.snapshotId) {
     return rejectReaderRequest({
       admission: null,
       contract,
@@ -1229,7 +1338,7 @@ export const readReviewServingRows = async <T>(
     requiresTempSpill: request.requiresTempSpill,
     searchMode: request.searchMode,
     searchState: request.searchState,
-    snapshotFreshness: getManifestFreshness(manifest),
+    snapshotFreshness,
     snapshotId: manifest.snapshotId,
     workloadClass: contract.workloadClass,
   })

@@ -480,9 +480,13 @@ const getExportServingSnapshotScopes = async (input: {job: ExportJobRow; sourceP
     input.sourceProjectIds.map(async (projectId) => {
       const reviewConfigHash = reviewConfigHashByProjectId[projectId] ?? input.job.reviewConfigHash
       const manifest = input.job.latestSnapshotSemantics
-        ? await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash})
+        ? await getActiveReviewServingSnapshotManifest({componentStateMode: 'available', projectId, reviewConfigHash})
         : input.job.snapshotId
-          ? await getReviewServingSnapshotManifest({projectId, snapshotId: input.job.snapshotId})
+          ? await getReviewServingSnapshotManifest({
+              componentStateMode: 'available',
+              projectId,
+              snapshotId: input.job.snapshotId,
+            })
           : null
 
       return manifest
@@ -659,8 +663,13 @@ const getMissingExportSnapshotSourceProjectIds = async (input: {
     input.sourceProjectIds.map(async (sourceProjectId) => {
       const manifest =
         input.snapshot.type === 'pinned'
-          ? await getReviewServingSnapshotManifest({projectId: sourceProjectId, snapshotId: input.snapshot.snapshotId})
+          ? await getReviewServingSnapshotManifest({
+              componentStateMode: 'available',
+              projectId: sourceProjectId,
+              snapshotId: input.snapshot.snapshotId,
+            })
           : await getActiveReviewServingSnapshotManifest({
+              componentStateMode: 'available',
               projectId: sourceProjectId,
               reviewConfigHash: input.reviewConfigHashByProjectId[sourceProjectId] ?? input.reviewConfigHash,
             })
@@ -686,8 +695,13 @@ const getPayloadPendingExportSourceProjectIds = async (input: {
     input.sourceProjectIds.map(async (sourceProjectId) => {
       const manifest =
         input.snapshot.type === 'pinned'
-          ? await getReviewServingSnapshotManifest({projectId: sourceProjectId, snapshotId: input.snapshot.snapshotId})
+          ? await getReviewServingSnapshotManifest({
+              componentStateMode: 'available',
+              projectId: sourceProjectId,
+              snapshotId: input.snapshot.snapshotId,
+            })
           : await getActiveReviewServingSnapshotManifest({
+              componentStateMode: 'available',
               projectId: sourceProjectId,
               reviewConfigHash: input.reviewConfigHashByProjectId[sourceProjectId] ?? input.reviewConfigHash,
             })

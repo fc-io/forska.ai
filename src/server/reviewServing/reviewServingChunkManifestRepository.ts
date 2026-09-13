@@ -460,25 +460,29 @@ const rebuildChunkPrerequisitesByComponent = {
   display: ['projectScope', 'selectedImport'],
   humanStatus: ['projectScope', 'display'],
   judgmentInputContent: ['projectScope'],
-  llmStatus: ['projectScope', 'display', 'judgmentInputContent'],
+  llmStatus: ['projectScope', 'display'],
   payload: ['projectScope'],
-  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
+  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'payload'],
   projectScope: [],
   queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
   search: ['projectScope', 'selectedImport'],
   selectedImport: ['projectScope'],
-  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
+  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload'],
 } as const satisfies Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
 const rebuildChunkCriticalLaneComponents = [
   'projectScope',
   'selectedImport',
   'display',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
-  'summary',
   'payload',
+  'posting',
+  'summary',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+const rebuildChunkSecondaryLaneComponents = [
+  'judgmentInputContent',
+  'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const rebuildChunkWorkloadClasses = {bulk: 'bulk', critical: 'critical'} as const satisfies Record<
   ReviewServingRebuildChunkWorkloadClass,
@@ -488,14 +492,14 @@ const rebuildChunkClaimPriorityOrder = [
   'projectScope',
   'selectedImport',
   'display',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
-  'summary',
   'payload',
-  'search',
   'posting',
+  'summary',
+  'judgmentInputContent',
+  'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const stalledForegroundRebuildRequestPriority = 10_000
 
@@ -507,15 +511,27 @@ export const getReviewServingRebuildChunkWorkloadClass = (
     : rebuildChunkWorkloadClasses.bulk
 }
 
-const getRebuildChunkEffectiveWorkloadClassSql = (tableAlias: string) => {
-  return `COALESCE(
-    ${tableAlias}.workload_class,
+const getRebuildChunkDefaultWorkloadClassSql = (tableAlias: string) => {
+  return `
     CASE
       WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkCriticalLaneComponents)}
       THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
       ELSE ${getSqlLiteral(rebuildChunkWorkloadClasses.bulk)}
     END
-  )`
+  `
+}
+
+const getRebuildChunkEffectiveWorkloadClassSql = (tableAlias: string) => {
+  return `CASE
+    WHEN ${tableAlias}.projection_component = ${getSqlLiteral('posting')}
+    THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
+    WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkSecondaryLaneComponents)}
+    THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.bulk)}
+    ELSE COALESCE(
+      ${tableAlias}.workload_class,
+      ${getRebuildChunkDefaultWorkloadClassSql(tableAlias)}
+    )
+  END`
 }
 
 const getRebuildChunkClaimLaneSql = (tableAlias: string) => {

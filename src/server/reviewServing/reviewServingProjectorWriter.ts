@@ -12,19 +12,17 @@ import {
 } from './reviewServingDeltaReconciliation.ts'
 import {
   completeReviewServingDirtyWorkClaims,
+  type CompleteReviewServingDirtyWorkCoverageResult,
   completeReviewServingDirtyWorkCoveredByRebuild,
   type ReviewServingDirtyWorkClaim,
-  type ReviewServingDirtyWorkCoverage,
   type ReviewServingDirtyWorkInput,
   upsertReviewServingDirtyWork,
 } from './reviewServingDirtyWorkService.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
   getActiveReviewServingSnapshotManifest,
-  getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingProjectionIdentityManifestInput,
-  type ReviewServingSnapshotManifest,
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
@@ -32,7 +30,10 @@ import {
   selectedImportCompatibilityView,
   selectedImportPublishedTable,
 } from './reviewServingSelectedImportMaintenance.ts'
-import {validateReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
+import {
+  getPromotedReviewServingSnapshotDirtyWorkCoverages,
+  validateReviewServingCandidateSnapshotManifest,
+} from './reviewServingSnapshotPromotionService.ts'
 
 export type ReviewServingProjectorWriterDatabase = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -94,6 +95,10 @@ export type PromoteReviewServingProjectorSnapshotResult =
   | {error: string; promoted: false; snapshotId: string}
   | {promoted: true; snapshotId: string}
 
+export type ActivateReviewServingProjectorSnapshotResult =
+  | {error: string; promoted: false; snapshotId: string}
+  | {dirtyWorkCompletion: CompleteReviewServingDirtyWorkCoverageResult; promoted: true; snapshotId: string}
+
 export type ReviewServingSelectedImportSnapshotCursorInput = {
   cursorJson: ReviewServingIdentityValue | null
   projectId: string
@@ -101,48 +106,6 @@ export type ReviewServingSelectedImportSnapshotCursorInput = {
   selectedImportSnapshotId: string
   sourceDeltaHighWater: number
   status: 'candidate' | 'completed'
-}
-
-const getPromotedSnapshotDirtyWorkCoverages = async (
-  candidate: ReviewServingSnapshotManifest,
-  database: ReviewServingProjectorWriterTransaction,
-): Promise<ReviewServingDirtyWorkCoverage[]> => {
-  const componentStates = [...candidate.componentState.required, ...candidate.componentState.optional]
-  const coverages = await componentStates.reduce<Promise<ReviewServingDirtyWorkCoverage[]>>(async (previous, state) => {
-    const accumulated = await previous
-    const manifest = await getReviewServingProjectionIdentityManifest(
-      {
-        projectId: candidate.projectId,
-        projectionComponent: state.component,
-        projectionIdentity: state.projectionIdentity,
-      },
-      database,
-    )
-
-    if (manifest === null) {
-      return accumulated
-    }
-
-    const manifestCoverages = Object.entries(manifest.inputWatermarks).flatMap(
-      ([sourcePartition, completedSourceHighWaterMark]) => {
-        return Number.isFinite(completedSourceHighWaterMark)
-          ? [
-              {
-                completedSourceHighWaterMark,
-                projectId: candidate.projectId,
-                projectionComponent: state.component,
-                projectionIdentity: state.projectionIdentity,
-                sourcePartition,
-              },
-            ]
-          : []
-      },
-    )
-
-    return [...accumulated, ...manifestCoverages]
-  }, Promise.resolve([]))
-
-  return coverages
 }
 
 export type WriteReviewServingTitleSearchRebuildRowsInput = {
@@ -675,27 +638,43 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
   `)
 }
 
-export const promoteReviewServingProjectorSnapshot = async (
+export const activateReviewServingProjectorSnapshot = async (
   input: PromoteReviewServingProjectorSnapshotInput,
-  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
-): Promise<PromoteReviewServingProjectorSnapshotResult> => {
-  return database.transaction(async (tx) => {
-    const candidate = await getReviewServingSnapshotManifest(
-      {projectId: input.projectId, snapshotId: input.snapshotId},
-      tx,
+  database: ReviewServingProjectorWriterTransaction,
+): Promise<ActivateReviewServingProjectorSnapshotResult> => {
+  const candidate = await getReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId: input.projectId, snapshotId: input.snapshotId},
+    database,
+  )
+
+  if (candidate === null) {
+    return {error: 'candidate snapshot manifest is missing', promoted: false, snapshotId: input.snapshotId}
+  }
+
+  if (input.reviewConfigHash !== undefined && candidate.reviewConfigHash !== (input.reviewConfigHash ?? null)) {
+    return {error: 'candidate snapshot manifest review config mismatch', promoted: false, snapshotId: input.snapshotId}
+  }
+
+  if (candidate.status === 'active') {
+    const dirtyWorkCompletion = await completeReviewServingDirtyWorkCoveredByRebuild(
+      await getPromotedReviewServingSnapshotDirtyWorkCoverages(candidate, database),
+      database,
     )
 
-    if (candidate === null || candidate.status !== 'candidate') {
-      return {error: 'candidate snapshot manifest is missing', promoted: false, snapshotId: input.snapshotId}
-    }
+    return {dirtyWorkCompletion, promoted: true, snapshotId: input.snapshotId}
+  }
 
-    const validation = await validateReviewServingCandidateSnapshotManifest(candidate, tx)
+  if (candidate.status !== 'candidate') {
+    return {error: 'candidate snapshot manifest is missing', promoted: false, snapshotId: input.snapshotId}
+  }
 
-    if (!validation.ok) {
-      return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
-    }
+  const validation = await validateReviewServingCandidateSnapshotManifest(candidate, database)
 
-    await tx.run(`
+  if (!validation.ok) {
+    return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
+  }
+
+  await database.run(`
       UPDATE app.review_serving_snapshot_manifest
       SET
         validation_result_json = ${getReviewServingJsonLiteral(validation.validationResult)},
@@ -703,16 +682,16 @@ export const promoteReviewServingProjectorSnapshot = async (
       WHERE project_id = ${getSqlLiteral(input.projectId)}
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
         AND snapshot_status = 'candidate'
-    `)
+  `)
 
-    const candidateReviewConfigHash = candidate.reviewConfigHash
-    const active = await getActiveReviewServingSnapshotManifest(
-      {projectId: input.projectId, reviewConfigHash: candidateReviewConfigHash},
-      tx,
-    )
-    const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
+  const candidateReviewConfigHash = candidate.reviewConfigHash
+  const active = await getActiveReviewServingSnapshotManifest(
+    {projectId: input.projectId, reviewConfigHash: candidateReviewConfigHash},
+    database,
+  )
+  const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
 
-    await tx.run(`
+  await database.run(`
       UPDATE app.review_serving_snapshot_manifest
       SET
         snapshot_status = 'retired',
@@ -722,7 +701,7 @@ export const promoteReviewServingProjectorSnapshot = async (
         AND snapshot_status = 'active'
         AND snapshot_id <> ${getSqlLiteral(input.snapshotId)}
     `)
-    await tx.run(`
+  await database.run(`
       UPDATE app.review_serving_snapshot_manifest
       SET
         snapshot_status = 'active',
@@ -736,9 +715,24 @@ export const promoteReviewServingProjectorSnapshot = async (
         AND snapshot_status = 'candidate'
     `)
 
-    await completeReviewServingDirtyWorkCoveredByRebuild(await getPromotedSnapshotDirtyWorkCoverages(candidate, tx), tx)
+  const dirtyWorkCompletion = await completeReviewServingDirtyWorkCoveredByRebuild(
+    await getPromotedReviewServingSnapshotDirtyWorkCoverages(candidate, database),
+    database,
+  )
 
-    return {promoted: true, snapshotId: input.snapshotId}
+  return {dirtyWorkCompletion, promoted: true, snapshotId: input.snapshotId}
+}
+
+export const promoteReviewServingProjectorSnapshot = async (
+  input: PromoteReviewServingProjectorSnapshotInput,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
+): Promise<PromoteReviewServingProjectorSnapshotResult> => {
+  return database.transaction(async (tx) => {
+    const result = await activateReviewServingProjectorSnapshot(input, tx)
+
+    return result.promoted
+      ? {promoted: true, snapshotId: input.snapshotId}
+      : {error: result.error, promoted: false, snapshotId: input.snapshotId}
   }, getReviewServingProjectorWriterWorkloadContext('snapshotPromotion'))
 }
 

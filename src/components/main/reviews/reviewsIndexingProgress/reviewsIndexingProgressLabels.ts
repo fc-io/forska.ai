@@ -40,30 +40,92 @@ const getCoverageCountLabel = (readyCount: number | null, totalCount: number) =>
     : `${getCountLabel(readyCount)} / ${getCountLabel(totalCount)} ${totalCount === 1 ? 'article' : 'articles'} ready`
 }
 
-const hasReadyReviewPages = (indexing: ReviewsIndexing) => {
+const hasReadyReviewRows = (indexing: ReviewsIndexing) => {
   const totalArticleCount = indexing.coverage.totalArticleCount
-  return (
-    totalArticleCount > 0
-    && indexing.coverage.reviewPageReadyArticleCount === totalArticleCount
-    && indexing.coverage.detailReadyArticleCount === totalArticleCount
-  )
+  return totalArticleCount > 0 && indexing.coverage.rowReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewCounts = (indexing: ReviewsIndexing) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return totalArticleCount > 0 && indexing.coverage.countReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewFilters = (indexing: ReviewsIndexing) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return totalArticleCount > 0 && indexing.coverage.filterReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewDetails = (indexing: ReviewsIndexing) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return totalArticleCount > 0 && indexing.coverage.detailReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewSearch = (indexing: ReviewsIndexing) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  const searchReadyArticleCount = indexing.coverage.searchReadyArticleCount
+
+  return searchReadyArticleCount === null
+    ? indexing.search.availability === 'unavailable'
+    : totalArticleCount > 0 && searchReadyArticleCount === totalArticleCount
 }
 
 const hasReadyReviewSurfaces = (indexing: ReviewsIndexing) => {
-  const totalArticleCount = indexing.coverage.totalArticleCount
   return (
-    hasReadyReviewPages(indexing)
-    && (indexing.coverage.searchReadyArticleCount === null
-      || indexing.coverage.searchReadyArticleCount === totalArticleCount)
+    hasReadyReviewRows(indexing)
+    && hasReadyReviewCounts(indexing)
+    && hasReadyReviewFilters(indexing)
+    && hasReadyReviewDetails(indexing)
+    && hasReadyReviewSearch(indexing)
   )
+}
+
+const getMissingReadyRowTierNames = (indexing: ReviewsIndexing) => {
+  return [
+    hasReadyReviewCounts(indexing) ? null : 'counts',
+    hasReadyReviewFilters(indexing) ? null : 'filters',
+    hasReadyReviewDetails(indexing) ? null : 'details',
+    hasReadyReviewSearch(indexing) ? null : 'search',
+  ].filter((tierName): tierName is string => {
+    return tierName !== null
+  })
+}
+
+const getJoinedTierNames = (tierNames: readonly string[]) => {
+  return tierNames.length <= 2
+    ? tierNames.join(' and ')
+    : `${tierNames.slice(0, -1).join(', ')} and ${tierNames.at(-1)}`
+}
+
+const getReadyRowsProcessingLabel = (indexing: ReviewsIndexing) => {
+  const missingTierNames = getMissingReadyRowTierNames(indexing)
+
+  return missingTierNames.length === 0
+    ? 'running background maintenance'
+    : `updating ${getJoinedTierNames(missingTierNames)} in the background`
+}
+
+const getReadyRowsQueuedLabel = (indexing: ReviewsIndexing) => {
+  const missingTierNames = getMissingReadyRowTierNames(indexing)
+
+  return missingTierNames.length === 0
+    ? 'background maintenance queued'
+    : `${getJoinedTierNames(missingTierNames)} queued`
 }
 
 export const getProjectRefreshLabel = (indexing: ReviewsIndexing) => {
   return joinLabelParts([
-    getCoverageCountLabel(indexing.coverage.reviewPageReadyArticleCount, indexing.coverage.totalArticleCount),
+    getCoverageCountLabel(indexing.coverage.rowReadyArticleCount, indexing.coverage.totalArticleCount),
     getTimestampSuffix('last progress', indexing.lastProgressedAt),
     getTimestampSuffix('started', indexing.lastStartedAt),
   ])
+}
+
+export const getCountRefreshLabel = (indexing: ReviewsIndexing) => {
+  return getCoverageCountLabel(indexing.coverage.countReadyArticleCount, indexing.coverage.totalArticleCount)
+}
+
+export const getFilterRefreshLabel = (indexing: ReviewsIndexing) => {
+  return getCoverageCountLabel(indexing.coverage.filterReadyArticleCount, indexing.coverage.totalArticleCount)
 }
 
 export const getArticleRefreshLabel = (indexing: ReviewsIndexing) => {
@@ -99,9 +161,9 @@ export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
       return 'running background maintenance'
     }
 
-    return hasReadyReviewPages(indexing)
-      ? 'updating search and enrichment in the background'
-      : 'maintenance worker is updating the review page index'
+    return hasReadyReviewRows(indexing)
+      ? getReadyRowsProcessingLabel(indexing)
+      : 'maintenance worker is updating the review row index'
   }
 
   if (indexing.progressState === 'queued') {
@@ -109,7 +171,7 @@ export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
       return 'background maintenance queued'
     }
 
-    return hasReadyReviewPages(indexing) ? 'search and enrichment queued' : 'queued for the maintenance worker'
+    return hasReadyReviewRows(indexing) ? getReadyRowsQueuedLabel(indexing) : 'queued for the maintenance worker'
   }
 
   return indexing.progressState === 'blocked' && indexing.blockedReason === 'paused_by_policy'
@@ -124,7 +186,7 @@ export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
 }
 
 export const getIndexingStatusHeading = (indexing: ReviewsIndexing) => {
-  return hasReadyReviewPages(indexing)
+  return hasReadyReviewRows(indexing)
     && (indexing.progressState === 'processing' || indexing.progressState === 'queued')
     ? 'Background work'
     : 'Indexing status'

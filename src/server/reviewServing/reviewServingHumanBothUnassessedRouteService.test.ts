@@ -1,3 +1,4 @@
+import {Buffer} from 'node:buffer'
 import {readFile} from 'node:fs/promises'
 
 import {expect, test} from 'bun:test'
@@ -36,8 +37,6 @@ const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
   'selectedImport',
   'llmStatus',
   'humanStatus',
-  'posting',
-  'summary',
   'queue',
 ]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
@@ -818,6 +817,38 @@ test('Human, Both, and Unassessed default routes stay foreground-readable withou
   expect(sql).not.toContain('model_id AS modelId')
 })
 
+test('human and both lists keep rows readable with nullable totals while filtered counts index', async () => {
+  const reader = createReaderDatabase()
+  const countStatements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (statement.includes(' AS totalCount')) {
+        countStatements.push(statement)
+        throw new Error('Review count is still indexing: count tier pending')
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+  }
+  const dependencies = {
+    currentReviewConfigHash: 'config-1',
+    database,
+    manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
+  }
+  const [humanResult, bothResult] = await Promise.all([
+    getHumanReviewArticlesFromServing({projectId: 'project-1', page: 1, limit: 25, prompts: {}}, dependencies),
+    getBothReviewArticlesFromServing({projectId: 'project-1', page: 1, limit: 25, prompts: {}}, dependencies),
+  ])
+
+  expect(humanResult.data).toHaveLength(1)
+  expect(bothResult.data).toHaveLength(1)
+  expect(humanResult.totalCount).toBe(null)
+  expect(bothResult.totalCount).toBe(null)
+  expect(humanResult.totalPages).toBe(null)
+  expect(bothResult.totalPages).toBe(null)
+  expect(countStatements).toHaveLength(2)
+})
+
 test('human review route service retries transient filtered count read failures', async () => {
   const reader = createReaderDatabase()
   let countAttempts = 0
@@ -1084,6 +1115,32 @@ test('unassessed review route service pages filtered distinct article rows and q
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('unassessed filtered count cache identity includes LLM status generation', async () => {
+  const reader = createReaderDatabase()
+
+  await getUnassessedReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, search: 'heart', prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const lookupStatement = reader.statements.find((statement) => {
+    return statement.includes('FROM mart.review_filtered_count_serving_v4')
+  })
+  const componentIdentity = lookupStatement?.match(/component_identity = '([^']+)'/u)?.[1] ?? ''
+  const decodedIdentity = JSON.parse(Buffer.from(componentIdentity, 'base64url').toString('utf8')) as Record<
+    string,
+    unknown
+  >
+
+  expect(decodedIdentity).toHaveProperty('display')
+  expect(decodedIdentity).toHaveProperty('llmStatus')
+  expect(decodedIdentity).toHaveProperty('queue')
+  expect(decodedIdentity).toHaveProperty('search')
 })
 
 test('unassessed review route service counts unfiltered pages from the queue serving rows', async () => {

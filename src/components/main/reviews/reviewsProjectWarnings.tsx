@@ -22,38 +22,99 @@ const formatCount = (value: number) => {
   return new Intl.NumberFormat().format(value)
 }
 
-const getReadySurfaceMaintenanceSegments = (params: {indexing: ReviewsWarningsData['indexing']}) => {
+const getPendingBackgroundMaintenanceLabel = (params: {indexing: ReviewsWarningsData['indexing']}) => {
   const diagnostics = params.indexing.serving.diagnostics
   const pendingRebuildChunkCount =
     (diagnostics.rebuildChunks?.pendingCount ?? 0) + (diagnostics.rebuildChunks?.runningCount ?? 0)
   const pendingDirtyWorkCount = (diagnostics.dirtyWork?.pendingCount ?? 0) + (diagnostics.dirtyWork?.runningCount ?? 0)
-  const segments = [
-    pendingRebuildChunkCount > 0
-      ? pendingRebuildChunkCount === 1
-        ? '1 rebuild chunk'
-        : `${formatCount(pendingRebuildChunkCount)} rebuild chunks`
-      : null,
-    pendingDirtyWorkCount > 0
-      ? pendingDirtyWorkCount === 1
-        ? '1 incremental row update'
-        : `${formatCount(pendingDirtyWorkCount)} incremental row updates`
-      : null,
-  ].filter((value): value is string => {
-    return value !== null
-  })
 
-  return segments.length === 0 ? null : segments
+  return pendingRebuildChunkCount + pendingDirtyWorkCount === 0 ? null : 'background maintenance queued'
+}
+
+const getArticleCountLabel = (count: number) => {
+  return `${formatCount(count)} ${count === 1 ? 'article' : 'articles'}`
+}
+
+const isReadyCoverage = (readyCount: number | null, totalArticleCount: number) => {
+  return totalArticleCount > 0 && readyCount === totalArticleCount
+}
+
+const hasReadyReviewRows = (indexing: ReviewsWarningsData['indexing']) => {
+  return isReadyCoverage(indexing.coverage.rowReadyArticleCount, indexing.coverage.totalArticleCount)
+}
+
+const hasReadyReviewCounts = (indexing: ReviewsWarningsData['indexing']) => {
+  return isReadyCoverage(indexing.coverage.countReadyArticleCount, indexing.coverage.totalArticleCount)
+}
+
+const hasReadyReviewFilters = (indexing: ReviewsWarningsData['indexing']) => {
+  return isReadyCoverage(indexing.coverage.filterReadyArticleCount, indexing.coverage.totalArticleCount)
+}
+
+const hasReadyReviewDetails = (indexing: ReviewsWarningsData['indexing']) => {
+  return isReadyCoverage(indexing.coverage.detailReadyArticleCount, indexing.coverage.totalArticleCount)
 }
 
 const hasReadyReviewSurfaces = (indexing: ReviewsWarningsData['indexing']) => {
   const totalArticleCount = indexing.coverage.totalArticleCount
+  const searchReadyArticleCount = indexing.coverage.searchReadyArticleCount
+  const hasSearchReady =
+    searchReadyArticleCount === null
+      ? indexing.search.availability === 'unavailable'
+      : searchReadyArticleCount === totalArticleCount
+
   return (
-    totalArticleCount > 0
-    && indexing.coverage.reviewPageReadyArticleCount === totalArticleCount
-    && indexing.coverage.detailReadyArticleCount === totalArticleCount
-    && (indexing.coverage.searchReadyArticleCount === null
-      || indexing.coverage.searchReadyArticleCount === totalArticleCount)
+    hasReadyReviewRows(indexing)
+    && hasReadyReviewCounts(indexing)
+    && hasReadyReviewFilters(indexing)
+    && hasReadyReviewDetails(indexing)
+    && hasSearchReady
   )
+}
+
+const getPendingReadySurfaceNames = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  const searchReadyArticleCount = indexing.coverage.searchReadyArticleCount
+  const hasSearchReady =
+    searchReadyArticleCount === null
+      ? indexing.search.availability === 'unavailable'
+      : totalArticleCount > 0 && searchReadyArticleCount === totalArticleCount
+
+  return [
+    hasReadyReviewCounts(indexing) ? null : 'counts',
+    hasReadyReviewFilters(indexing) ? null : 'filters',
+    hasReadyReviewDetails(indexing) ? null : 'details',
+    hasSearchReady ? null : 'search',
+  ].filter((value): value is string => {
+    return value !== null
+  })
+}
+
+const getJoinedLabel = (values: readonly string[]) => {
+  return values.length <= 2 ? values.join(' and ') : `${values.slice(0, -1).join(', ')} and ${values.at(-1)}`
+}
+
+const getPendingProjectRefreshMetaLabel = (params: {
+  indexing: ReviewsWarningsData['indexing']
+  pendingProjectRefreshCount: number
+}) => {
+  if (params.pendingProjectRefreshCount === 0) {
+    return null
+  }
+
+  const totalArticleCount = params.indexing.coverage.totalArticleCount
+  if (totalArticleCount > 0 && !hasReadyReviewRows(params.indexing)) {
+    return `Preparing review list and counts for ${getArticleCountLabel(totalArticleCount)}`
+  }
+
+  const pendingSurfaceNames = getPendingReadySurfaceNames(params.indexing)
+  if (totalArticleCount > 0 && pendingSurfaceNames.length > 0) {
+    return `Finishing ${getJoinedLabel(pendingSurfaceNames)} for ${getArticleCountLabel(totalArticleCount)}`
+  }
+
+  return params.pendingProjectRefreshCount === 1
+    ? '1 review index update remaining'
+    : `${formatCount(params.pendingProjectRefreshCount)} review index updates remaining`
 }
 
 const getPendingRefreshMetaLabel = (params: {
@@ -61,15 +122,11 @@ const getPendingRefreshMetaLabel = (params: {
   pendingArticleRefreshCount: number
   pendingProjectRefreshCount: number
 }) => {
-  const readySurfaceMaintenanceSegments = hasReadyReviewSurfaces(params.indexing)
-    ? getReadySurfaceMaintenanceSegments({indexing: params.indexing})
+  const readySurfaceMaintenanceLabel = hasReadyReviewSurfaces(params.indexing)
+    ? getPendingBackgroundMaintenanceLabel({indexing: params.indexing})
     : null
   const segments = [
-    readySurfaceMaintenanceSegments === null && params.pendingProjectRefreshCount > 0
-      ? params.pendingProjectRefreshCount === 1
-        ? '1 review-serving task remaining'
-        : `${formatCount(params.pendingProjectRefreshCount)} review-serving tasks remaining`
-      : readySurfaceMaintenanceSegments?.join(' and '),
+    readySurfaceMaintenanceLabel ?? getPendingProjectRefreshMetaLabel(params),
     params.pendingArticleRefreshCount > 0
       ? params.pendingArticleRefreshCount === 1
         ? '1 article judgment refresh remaining'

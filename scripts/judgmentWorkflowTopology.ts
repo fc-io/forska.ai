@@ -13,7 +13,7 @@ import {
   readJudgeWorkerJournalLock,
   resolveJudgeWorkerJournalIdentity,
 } from '../src/server/utils/judgeWorkerJournalIdentity.ts'
-import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
+import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {assertNoUnexpectedDuckdbRecovery} from './judgmentWorkflowTopology/assertNoUnexpectedDuckdbRecovery.ts'
 import {cleanupTopologyArtifacts, recordTopologyFailure, topologyFailureArtifactsDirectory} from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
 
@@ -106,6 +106,23 @@ export const isExpectedTopologySupervisorLockMetadata = ({
     && typeof lock.startedAt === 'string'
     && lock.startedAt.length > 0
   )
+}
+
+export const isRuntimeMonitorTargetHealthy = async ({
+  port,
+  role,
+}: {
+  port: number
+  role: RuntimeRole
+}): Promise<boolean> => {
+  return fetch(`http://127.0.0.1:${port}${runtimeStatePath}`)
+    .then(async (response) => {
+      const body = (await response.json()) as {data?: {ready?: boolean; role?: string}}
+      return response.ok && body.data?.role === role
+    })
+    .catch(() => {
+      return false
+    })
 }
 
 const getAvailablePort = (): number => {
@@ -806,14 +823,7 @@ export const startJudgmentWorkflowReadinessMonitor = ({
     while (!stopped && failure === null) {
       for (const target of targets) {
         const targetKey = `${target.role}:${target.port}`
-        const healthy = await fetch(`http://127.0.0.1:${target.port}${runtimeReadyPath}`)
-          .then(async (response) => {
-            const body = (await response.json()) as {data?: {ready?: boolean; role?: string}}
-            return response.ok && body.data?.ready === true && body.data.role === target.role
-          })
-          .catch(() => {
-            return false
-          })
+        const healthy = await isRuntimeMonitorTargetHealthy(target)
 
         if (healthy) {
           unhealthySinceByTarget.delete(targetKey)

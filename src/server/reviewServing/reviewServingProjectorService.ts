@@ -134,14 +134,14 @@ const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
   'projectScope',
   'selectedImport',
   'display',
-  'search',
-  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
   'payload',
   'posting',
   'summary',
+  'judgmentInputContent',
+  'search',
 ]
 const projectorFailureLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 

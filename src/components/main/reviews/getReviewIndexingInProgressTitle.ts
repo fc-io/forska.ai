@@ -61,22 +61,64 @@ const hasCleanupWork = (indexing: ReviewsWarningsData['indexing']) => {
   return (indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0
 }
 
-const hasReadyReviewPages = (indexing: ReviewsWarningsData['indexing']) => {
+const hasReadyReviewRows = (indexing: ReviewsWarningsData['indexing']) => {
   const totalArticleCount = indexing.coverage.totalArticleCount
-  return (
-    totalArticleCount > 0
-    && indexing.coverage.reviewPageReadyArticleCount === totalArticleCount
-    && indexing.coverage.detailReadyArticleCount === totalArticleCount
-  )
+  return totalArticleCount > 0 && indexing.coverage.rowReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewCounts = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return totalArticleCount > 0 && indexing.coverage.countReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewFilters = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return totalArticleCount > 0 && indexing.coverage.filterReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewDetails = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  return totalArticleCount > 0 && indexing.coverage.detailReadyArticleCount === totalArticleCount
+}
+
+const hasReadyReviewSearch = (indexing: ReviewsWarningsData['indexing']) => {
+  const totalArticleCount = indexing.coverage.totalArticleCount
+  const searchReadyArticleCount = indexing.coverage.searchReadyArticleCount
+
+  return searchReadyArticleCount === null
+    ? indexing.search.availability === 'unavailable'
+    : totalArticleCount > 0 && searchReadyArticleCount === totalArticleCount
 }
 
 const hasReadyReviewSurfaces = (indexing: ReviewsWarningsData['indexing']) => {
-  const totalArticleCount = indexing.coverage.totalArticleCount
   return (
-    hasReadyReviewPages(indexing)
-    && (indexing.coverage.searchReadyArticleCount === null
-      || indexing.coverage.searchReadyArticleCount === totalArticleCount)
+    hasReadyReviewRows(indexing)
+    && hasReadyReviewCounts(indexing)
+    && hasReadyReviewFilters(indexing)
+    && hasReadyReviewDetails(indexing)
+    && hasReadyReviewSearch(indexing)
   )
+}
+
+const getMissingReadyRowTierNames = (indexing: ReviewsWarningsData['indexing']) => {
+  return [
+    hasReadyReviewCounts(indexing) ? null : 'counts',
+    hasReadyReviewFilters(indexing) ? null : 'filters',
+    hasReadyReviewDetails(indexing) ? null : 'details',
+    hasReadyReviewSearch(indexing) ? null : 'search',
+  ].filter((tierName): tierName is string => {
+    return tierName !== null
+  })
+}
+
+const getJoinedTierNames = (tierNames: readonly string[]) => {
+  return tierNames.length <= 2
+    ? tierNames.join(' and ')
+    : `${tierNames.slice(0, -1).join(', ')} and ${tierNames.at(-1)}`
+}
+
+const getSentenceStart = (value: string) => {
+  return value.length === 0 ? value : `${value.charAt(0).toUpperCase()}${value.slice(1)}`
 }
 
 const getArticleRefreshQueuedDescription = (surface: ReviewIndexingCopySurface) => {
@@ -99,13 +141,14 @@ const getProjectRefreshProcessingDescription = (surface: ReviewIndexingCopySurfa
       : 'This project has scoped articles, but the review index is actively processing in the maintenance worker. Review lists may look partial or empty until indexing finishes.'
 }
 
-const getBackgroundProcessingDescription = (indexing: ReviewsWarningsData['indexing']) => {
-  const searchReadyArticleCount = indexing.coverage.searchReadyArticleCount
-  const totalArticleCount = indexing.coverage.totalArticleCount
+const getReadyRowsBackgroundDescription = (indexing: ReviewsWarningsData['indexing']) => {
+  const missingTierNames = getMissingReadyRowTierNames(indexing)
 
-  return searchReadyArticleCount !== null && searchReadyArticleCount < totalArticleCount
-    ? 'Review pages and details are ready. Search indexing is still catching up in the background.'
-    : 'Review pages and details are ready. Background maintenance is finishing review index enrichment.'
+  return missingTierNames.length === 0
+    ? 'Review rows, counts, filters, details, and search are ready. Background maintenance is finishing review index enrichment.'
+    : `Review rows are ready. ${getSentenceStart(getJoinedTierNames(missingTierNames))} ${
+        missingTierNames.length === 1 ? 'is' : 'are'
+      } still catching up in the background.`
 }
 
 const getFailedReviewIndexingCopy = (): ReviewIndexingCopy => {
@@ -135,17 +178,13 @@ const getQueuedReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIn
   if (hasReadyReviewSurfaces(params.indexing)) {
     return {
       description:
-        'Review pages, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
+        'Review rows, counts, filters, details, and search are ready. Remaining review-serving maintenance is queued in the background.',
       title: 'Background review maintenance queued',
     }
   }
 
-  if (hasReadyReviewPages(params.indexing)) {
-    return {
-      description:
-        'Review pages and details are ready. Search and remaining review-serving maintenance are queued in the background.',
-      title: 'Background review indexing queued',
-    }
+  if (hasReadyReviewRows(params.indexing)) {
+    return {description: getReadyRowsBackgroundDescription(params.indexing), title: 'Background review indexing queued'}
   }
 
   return {description: getReviewIndexingQueuedBody(), title: getReviewIndexingQueuedTitle(params.projectId)}
@@ -157,9 +196,9 @@ const getProcessingReviewIndexingCopy = (params: ReviewIndexingCopyParams): Revi
         description: getArticleRefreshProcessingDescription(params.surface),
         title: 'New judgments are still being incorporated',
       }
-    : hasReadyReviewPages(params.indexing)
+    : hasReadyReviewRows(params.indexing)
       ? {
-          description: getBackgroundProcessingDescription(params.indexing),
+          description: getReadyRowsBackgroundDescription(params.indexing),
           title: 'Background review indexing in progress',
         }
       : {

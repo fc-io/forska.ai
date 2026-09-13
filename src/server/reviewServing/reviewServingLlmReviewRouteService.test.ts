@@ -28,8 +28,7 @@ const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
   'projectScope',
   'selectedImport',
   'llmStatus',
-  'posting',
-  'summary',
+  'humanStatus',
   'queue',
 ]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
@@ -253,12 +252,70 @@ test('LLM default list remains foreground-readable while search and payload enri
   expect(result.detailReadiness).toBe('indexing')
   expect(result.data[0]?.detailReadiness).toBe('indexing')
   expect(result.totalCount).toBe(1)
+  expect(sql).toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
   expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).not.toContain('FROM mart.review_article_count_serving_v4')
   expect(sql).not.toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).not.toContain('mart.review_title_search_serving_v4')
   expect(sql).not.toContain('search_identity')
   expect(sql).not.toContain('lazy-detail-hydration')
   expect(sql).not.toContain('model_id AS modelId')
+})
+
+test('LLM list keeps rows readable with nullable totals while count indexing catches up', async () => {
+  const reader = createReaderDatabase(1, 1)
+  const countStatements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (statement.includes(' AS totalCount')) {
+        countStatements.push(statement)
+        throw new Error('Review count is still indexing: summary count pending')
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+  }
+
+  const result = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database,
+      manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
+    },
+  )
+
+  expect(result.data).toHaveLength(1)
+  expect(result.totalCount).toBe(null)
+  expect(result.totalPages).toBe(null)
+  expect(countStatements).toHaveLength(1)
+})
+
+test('LLM count reports indexing before using cache identities when required state is unavailable', async () => {
+  const reader = createReaderDatabase()
+
+  await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active', ['display', 'projectScope', 'selectedImport']),
+    },
+  ).then(
+    () => {
+      throw new Error('Expected LLM count indexing rejection')
+    },
+    (error) => {
+      expect(error).toEqual(
+        expect.objectContaining({
+          message: 'Review count is still indexing: LLM count requires llmStatus components that are still indexing',
+        }),
+      )
+    },
+  )
+
+  expect(reader.statements.join('\n')).not.toContain('FROM mart.review_filtered_count_serving_v4')
+  expect(reader.statements.join('\n')).not.toContain(' AS totalCount')
 })
 
 test('LLM review route chunks judgment hydration above the reader article-set cap', async () => {
@@ -551,6 +608,59 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
   expect(countStatement).not.toContain('serving.llm_judged_prompt_count > 0')
 })
 
+test('LLM status count remains readable before posting and summary are materialized', async () => {
+  const reader = createReaderDatabase()
+  const result = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
+    },
+  )
+  const joined = reader.statements.join('\n')
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  })
+
+  expect(result).toEqual({totalCount: 1, totalPages: 1})
+  expect(countStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(countStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(countStatement).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(joined).not.toContain('FROM mart.review_article_count_serving_v4')
+  expect(joined).not.toContain('FROM mart.review_article_filter_posting_serving_v4')
+  expect(joined).not.toContain('FROM mart.review_article_judgment_detail_serving_v4')
+})
+
+test('LLM prompt-answer counts still wait for posting before using filtered count semantics', async () => {
+  const reader = createReaderDatabase()
+
+  await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {'prompt-1': ['yes']}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
+    },
+  ).then(
+    () => {
+      throw new Error('Expected prompt-filtered LLM count indexing rejection')
+    },
+    (error) => {
+      expect(error).toEqual(
+        expect.objectContaining({
+          message:
+            'Review count is still indexing: prompt-answer count filters require posting buckets that are still indexing',
+        }),
+      )
+    },
+  )
+
+  expect(reader.statements.join('\n')).not.toContain(
+    'SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount',
+  )
+})
+
 test('LLM review list route rejects when no serving snapshot is readable', async () => {
   const reader = createReaderDatabase()
 
@@ -627,10 +737,14 @@ test('LLM review route diagnostics surface failed snapshot errors for articlesre
 
   expect(result.status).toBe('rejected')
   expect(result.diagnostics.manifest).toEqual({
+    countReadiness: 'unavailable',
     detailReadiness: 'unavailable',
+    filterReadiness: 'unavailable',
     freshness: 'unavailable',
     lastError: 'projection failed',
     projectId: 'project-1',
+    rowReadiness: 'unavailable',
+    searchReadiness: 'unavailable',
     snapshotId: 'failed-snapshot',
     status: 'failed',
   })
@@ -672,7 +786,7 @@ test('LLM review route diagnostics surface candidate and missing snapshot states
   expect(candidate.diagnostics.rejectionReason).toBe('manifestStatusRejected')
   expect(missing.status).toBe('rejected')
   expect(missing.diagnostics.manifest).toMatchObject({freshness: 'unavailable', snapshotId: null, status: 'missing'})
-  expect(missing.diagnostics.rejectionReason).toBe('servingIdentityMissing')
+  expect(missing.diagnostics.rejectionReason).toBe('manifestStatusRejected')
 })
 
 test('migrated LLM review routes do not import OLAP fallback wrappers', async () => {

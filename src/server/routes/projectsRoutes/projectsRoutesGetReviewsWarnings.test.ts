@@ -33,8 +33,11 @@ type ReviewsWarningsResponse = {
         | null
       cleanup: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
       coverage: {
+        countReadyArticleCount: number | null
         detailReadyArticleCount: number | null
+        filterReadyArticleCount: number | null
         reviewPageReadyArticleCount: number
+        rowReadyArticleCount: number | null
         searchReadyArticleCount: number | null
         totalArticleCount: number
       }
@@ -290,6 +293,41 @@ const insertReviewServingRow = async (projectId: string, articleId: string) => {
   `)
 }
 
+const insertReviewArticleServingBaseRow = async (input: {
+  articleId: string
+  projectId: string
+  reviewConfigHash: string
+  snapshotId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving_base_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      base_generation,
+      patch_watermark,
+      article_id,
+      article_created_at,
+      sort_key,
+      activity_sort_at
+    ) VALUES (
+      '${input.projectId}',
+      '${input.reviewConfigHash}',
+      '${input.snapshotId}',
+      1,
+      0,
+      '${input.articleId}',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z'
+    )
+  `)
+}
+
 const insertReviewRebuildChunk = async (input: {
   chunkId: string
   component?: ReviewServingProjectionComponent
@@ -447,6 +485,7 @@ const getReviewRebuildRequestCount = async (projectId: string) => {
 }
 
 const insertActiveReviewServingManifest = async (input: {
+  components?: readonly ReviewServingProjectionComponent[]
   includeSearchState: boolean
   optionalComponents: string[]
   projectId: string
@@ -462,7 +501,17 @@ const insertActiveReviewServingManifest = async (input: {
   const optional = input.includeSearchState
     ? [{baseGeneration: '1', component: 'search', patchWatermark: '0', projectionIdentity: 'search:identity-1'}]
     : []
-  const required = ['projectScope', 'posting', 'queue', 'summary'].map((component) => {
+  const components = input.components ?? [
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'posting',
+    'summary',
+  ]
+  const required = components.map((component) => {
     return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
   })
   const reviewConfigHash =
@@ -1886,6 +1935,59 @@ test('reviews warnings search diagnostic ignores active snapshots for older revi
   })
 })
 
+test('reviews warnings distinguishes row-ready coverage from count filter detail and search readiness', async () => {
+  const projectId = 'project-row-ready-partial-warning'
+  const articleId = `article-${projectId}`
+  const reviewConfigHash = getFixtureReviewConfigHash(projectId)
+  const snapshotId = 'snapshot-row-ready-partial-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, articleId)
+  await insertActiveReviewServingManifest({
+    components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'],
+    includeSearchState: false,
+    optionalComponents: ['search'],
+    projectId,
+    snapshotId,
+  })
+  await insertReviewArticleServingBaseRow({articleId, projectId, reviewConfigHash, snapshotId})
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-row-ready-summary-indexing-warning',
+    component: 'summary',
+    createdAt: '2026-06-23T10:00:00.000Z',
+    projectId,
+    status: 'pending',
+    updatedAt: '2026-06-23T10:00:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-row-ready-posting-indexing-warning',
+    component: 'posting',
+    createdAt: '2026-06-23T10:01:00.000Z',
+    projectId,
+    status: 'pending',
+    updatedAt: '2026-06-23T10:01:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.coverage).toEqual({
+    countReadyArticleCount: 1,
+    detailReadyArticleCount: null,
+    filterReadyArticleCount: null,
+    reviewPageReadyArticleCount: 1,
+    rowReadyArticleCount: 1,
+    searchReadyArticleCount: null,
+    totalArticleCount: 1,
+  })
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.search).toEqual({availability: 'indexing', optionalComponent: true, snapshotId})
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings exposes article coverage for review page details and search readiness', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -1900,34 +2002,12 @@ test('reviews warnings exposes article coverage for review page details and sear
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, articleId)
   await insertActiveReviewServingManifest({
-    includeSearchState: false,
+    includeSearchState: true,
     optionalComponents: ['payload', 'search'],
     projectId,
     snapshotId,
   })
-  await runDatabase(`
-    INSERT INTO mart.review_article_serving_base_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      base_generation,
-      patch_watermark,
-      article_id,
-      article_created_at,
-      sort_key,
-      activity_sort_at
-    ) VALUES (
-      '${projectId}',
-      '${reviewConfigHash}',
-      '${snapshotId}',
-      1,
-      0,
-      '${articleId}',
-      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
-      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
-      TIMESTAMPTZ '2026-04-02T12:00:00.000Z'
-    )
-  `)
+  await insertReviewArticleServingBaseRow({articleId, projectId, reviewConfigHash, snapshotId})
   await runDatabase(`
     INSERT INTO mart.review_article_judgment_detail_serving_v4 (
       project_id,
@@ -1980,8 +2060,11 @@ test('reviews warnings exposes article coverage for review page details and sear
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.coverage).toEqual({
+    countReadyArticleCount: 1,
     detailReadyArticleCount: 1,
+    filterReadyArticleCount: 1,
     reviewPageReadyArticleCount: 1,
+    rowReadyArticleCount: 1,
     searchReadyArticleCount: 1,
     totalArticleCount: 1,
   })
@@ -2210,16 +2293,20 @@ test('reviews warnings boost stale foreground V4 repairs that already have progr
   expect(after.updatedAt).not.toBe(before.updatedAt)
 })
 
-test('reviews warnings boost foreground V4 repairs with recent progress for legacy required-enrichment candidates', async () => {
+test('reviews warnings repair invalid legacy required-enrichment candidates despite recent progress', async () => {
   const projectId = 'project-missing-serving-stale-candidate-foreground-warning'
   const requestId = 'request-missing-serving-stale-candidate-foreground-warning'
   const selectedImportSnapshotId = 'selected-import-stale-candidate-foreground-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
   const recentTimestamp = new Date().toISOString()
   const requiredComponents = ['projectScope', 'posting', 'queue', 'summary', 'judgmentInputContent'] as const
-  const requiredState = requiredComponents.map((component) => {
-    return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
-  })
+  const requiredState = requiredComponents
+    .filter((component) => {
+      return component !== 'posting'
+    })
+    .map((component) => {
+      return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
+    })
 
   await insertProjectFixture(projectId)
   await insertReviewRebuildRequest({
@@ -2352,7 +2439,8 @@ test('reviews warnings do not requeue recent candidate repairs after enrichment 
   const selectedImportSnapshotId = 'selected-import-corrected-candidate-recent-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
   const recentTimestamp = new Date().toISOString()
-  const requiredComponents = ['projectScope', 'posting', 'queue', 'summary'] as const
+  const requiredComponents = ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'] as const
+  const optionalComponents = ['posting', 'summary', 'judgmentInputContent', 'payload', 'search'] as const
   const requiredState = requiredComponents.map((component) => {
     return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
   })
@@ -2364,7 +2452,7 @@ test('reviews warnings do not requeue recent candidate repairs after enrichment 
     projectId,
     reason: 'missingReviewServingSnapshot',
     requestId,
-    requestedComponents: requiredComponents,
+    requestedComponents: [...requiredComponents, ...optionalComponents],
     status: 'admitted',
     updatedAt: oldTimestamp,
   })
@@ -2437,7 +2525,7 @@ test('reviews warnings do not requeue recent candidate repairs after enrichment 
       '{}'::JSON,
       '${JSON.stringify({optional: [], required: requiredState}).replaceAll("'", "''")}'::JSON,
       '${JSON.stringify(requiredComponents).replaceAll("'", "''")}'::JSON,
-      '${JSON.stringify(['judgmentInputContent', 'payload', 'search']).replaceAll("'", "''")}'::JSON,
+      '${JSON.stringify(optionalComponents).replaceAll("'", "''")}'::JSON,
       '{}'::JSON,
       '${selectedImportSnapshotId}',
       TIMESTAMPTZ '${oldTimestamp}'
