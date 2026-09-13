@@ -60,7 +60,27 @@ export type DuckdbOwnerCronRuntimeTickState = {
   running: boolean
 }
 
+export type DuckdbOwnerCleanupStaleActivity = {
+  budgetMs: number | null
+  currentStep: string | null
+  currentStepStartedAtMs: number | null
+  exhaustedBudget: boolean
+  isCleanupStaleRunning: boolean
+  lastCompletedAtMs: number | null
+  lastErrorMessage: string | null
+  lastFinishedAtMs: number | null
+  lastPartial: boolean
+  lastPartialReason: string | null
+  overBudget: boolean
+  runId: string | null
+  runningForMs: number | null
+  shouldStartAnotherCleanupRun: boolean
+  startedAtMs: number | null
+  stale: boolean
+}
+
 export type DuckdbOwnerCronRuntimeOverview = {
+  cleanupStaleActivity: DuckdbOwnerCleanupStaleActivity
   crons: Record<string, DuckdbOwnerCronRuntimeTickState>
   duckdbMemoryLimit: string | null
   duckdbMemoryLimitMiB: number | null
@@ -187,6 +207,29 @@ const normalizeDuckdbOwnerCronRuntimeTicks = (value: unknown): Record<string, Du
   )
 }
 
+const normalizeDuckdbOwnerCleanupStaleActivity = (value: unknown): DuckdbOwnerCleanupStaleActivity => {
+  const row = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+
+  return {
+    budgetMs: normalizeDuckdbOwnerNumber(row.budgetMs),
+    currentStep: typeof row.currentStep === 'string' ? row.currentStep : null,
+    currentStepStartedAtMs: normalizeDuckdbOwnerNumber(row.currentStepStartedAtMs),
+    exhaustedBudget: row.exhaustedBudget === true,
+    isCleanupStaleRunning: row.isCleanupStaleRunning === true,
+    lastCompletedAtMs: normalizeDuckdbOwnerNumber(row.lastCompletedAtMs),
+    lastErrorMessage: typeof row.lastErrorMessage === 'string' ? row.lastErrorMessage : null,
+    lastFinishedAtMs: normalizeDuckdbOwnerNumber(row.lastFinishedAtMs),
+    lastPartial: row.lastPartial === true,
+    lastPartialReason: typeof row.lastPartialReason === 'string' ? row.lastPartialReason : null,
+    overBudget: row.overBudget === true,
+    runId: typeof row.runId === 'string' ? row.runId : null,
+    runningForMs: normalizeDuckdbOwnerNumber(row.runningForMs),
+    shouldStartAnotherCleanupRun: row.shouldStartAnotherCleanupRun === true,
+    startedAtMs: normalizeDuckdbOwnerNumber(row.startedAtMs),
+    stale: row.stale === true,
+  }
+}
+
 const normalizeDuckdbOwnerCronRuntimeOverview = (value: unknown): DuckdbOwnerCronRuntimeOverview | null => {
   if (!value || typeof value !== 'object') {
     return null
@@ -195,6 +238,7 @@ const normalizeDuckdbOwnerCronRuntimeOverview = (value: unknown): DuckdbOwnerCro
   const row = value as Record<string, unknown>
 
   return {
+    cleanupStaleActivity: normalizeDuckdbOwnerCleanupStaleActivity(row.cleanupStaleActivity),
     crons: normalizeDuckdbOwnerCronRuntimeTicks(row.crons),
     duckdbMemoryLimit: typeof row.duckdbMemoryLimit === 'string' ? row.duckdbMemoryLimit : null,
     duckdbMemoryLimitMiB: normalizeDuckdbOwnerNumber(row.duckdbMemoryLimitMiB),

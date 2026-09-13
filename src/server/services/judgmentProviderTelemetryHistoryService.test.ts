@@ -475,6 +475,34 @@ test('pruning deletes samples older than the three day sampled_at retention cuto
   expect(getIsoString(rows[0]?.sampledAt)).toBe('2026-05-09T12:00:00.000Z')
 })
 
+test('pruning limits deleted telemetry rows per batch', async () => {
+  const query = getTestQueryDatabase()
+  const jobId = `history-prune-limit-${Date.now()}`
+
+  await insertJudgmentProviderTelemetryHistorySamples({
+    samples: [
+      getInsertSample({jobId, providerKey: 'provider-prune-limit', sampledAt: '2026-05-09T11:58:00.000Z'}),
+      getInsertSample({jobId, providerKey: 'provider-prune-limit', sampledAt: '2026-05-09T11:59:00.000Z'}),
+      getInsertSample({jobId, providerKey: 'provider-prune-limit', sampledAt: '2026-05-09T11:59:30.000Z'}),
+    ],
+  })
+
+  const deletedCount = await pruneJudgmentProviderTelemetryHistorySamples({
+    maxRows: 2,
+    now: new Date('2026-05-12T12:00:00.000Z'),
+  })
+  const rows = await query<{sampledAt: unknown}>(`
+    SELECT sampled_at AS sampledAt
+    FROM app.judgment_job_provider_telemetry_sample
+    WHERE job_id = '${jobId}'
+    ORDER BY sampled_at ASC
+  `)
+
+  expect(deletedCount).toBe(2)
+  expect(rows).toHaveLength(1)
+  expect(getIsoString(rows[0]?.sampledAt)).toBe('2026-05-09T11:59:30.000Z')
+})
+
 test('deleting telemetry history for a job preserves other jobs', async () => {
   const query = getTestQueryDatabase()
   const jobId = `history-delete-${Date.now()}`

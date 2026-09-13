@@ -153,6 +153,8 @@ export type ProviderAdmissionLeaseSuspectFreshProof = {
 export type ProviderAdmissionLeaseReconciliationInput = {
   holderGraceMs?: number
   holderWorkerDemotions?: ProviderAdmissionLeaseHolderWorkerDemotion[]
+  maxExpiredLeaseDeletes?: number
+  maxProviderKeys?: number
   nowMs?: number
   suspectFreshHolderProofs?: ProviderAdmissionLeaseSuspectFreshProof[]
   suspectFreshProofs?: ProviderAdmissionLeaseSuspectFreshProof[]
@@ -198,6 +200,7 @@ const currentProviderSnapshots = new Map<string, ProviderBucketSnapshot>()
 const providerAdmissionLeases = new Map<string, ProviderAdmissionLease>()
 const providerAdmissionLeaseOperationQueues = new Map<string, Promise<void>>()
 const providerProbeOccupancyVersionCounters = new Map<string, number>()
+let providerAdmissionLeaseReconciliationProviderKeyCursor: string | null = null
 
 export const providerAdmissionLeaseTtlMs = 60_000
 export const providerAdmissionLeaseHeartbeatIntervalMs = 15_000
@@ -258,6 +261,10 @@ const getNormalizedLeaseDurationMs = (value: number): number => {
 
 const getNormalizedGraceDurationMs = (value: number): number => {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : providerAdmissionLeaseTtlMs
+}
+
+const getOptionalNonNegativeInteger = (value: number | undefined): number | null => {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value ?? 0)) : null
 }
 
 const getNormalizedTimestampMs = (value: number): number => {
@@ -975,18 +982,38 @@ const getProviderAdmissionLeaseByIdentity = async ({
 }
 
 const deleteExpiredProviderAdmissionLeases = async ({
+  maxRows,
   now,
   providerKey,
   tx,
 }: {
+  maxRows?: number
   now: Date
   providerKey: string
   tx: {queryJson: <T>(statement: string) => Promise<T[]>}
 }): Promise<number> => {
+  const normalizedMaxRows = getOptionalNonNegativeInteger(maxRows)
+
+  if (normalizedMaxRows === 0) {
+    return 0
+  }
+
+  const leaseIdentityPredicate =
+    normalizedMaxRows === null
+      ? ''
+      : `AND lease_identity IN (
+          SELECT lease_identity
+          FROM app.provider_admission_lease
+          WHERE provider_key = ${getSqlLiteral(providerKey)}
+            AND expires_at <= ${getSqlLiteral(now)}
+          ORDER BY expires_at ASC, lease_identity ASC
+          LIMIT ${normalizedMaxRows}
+        )`
   const rows = await tx.queryJson<DeletedProviderAdmissionLeaseRow>(`
     DELETE FROM app.provider_admission_lease
     WHERE provider_key = ${getSqlLiteral(providerKey)}
       AND expires_at <= ${getSqlLiteral(now)}
+      ${leaseIdentityPredicate}
     RETURNING
       provider_key AS providerKey,
       lease_kind AS leaseKind,
@@ -1019,23 +1046,66 @@ const deleteExpiredProviderAdmissionLeaseIdentity = async ({
   incrementProviderProbeOccupancyVersionForDeletedRows(rows)
 }
 
-const getProviderAdmissionLeaseProviderKeys = async (): Promise<string[]> => {
-  return (
+const getProviderAdmissionLeaseProviderKeyCursorOrderSql = (rotate: boolean): string => {
+  const cursor = getTrimmedValue(providerAdmissionLeaseReconciliationProviderKeyCursor)
+
+  return rotate && cursor
+    ? `CASE WHEN provider_key > ${getSqlLiteral(cursor)} THEN 0 ELSE 1 END ASC, provider_key ASC`
+    : 'provider_key ASC'
+}
+
+const getProviderAdmissionLeaseExcludedProviderKeysSql = (excludedProviderKeys: string[]): string => {
+  return excludedProviderKeys.length === 0
+    ? ''
+    : `WHERE provider_key NOT IN (${getSqlLiteralList(excludedProviderKeys)})`
+}
+
+const recordProviderAdmissionLeaseProviderKeyCursor = ({
+  providerKeys,
+  rotate,
+}: {
+  providerKeys: string[]
+  rotate: boolean
+}): void => {
+  if (rotate && providerKeys.length > 0) {
+    providerAdmissionLeaseReconciliationProviderKeyCursor = providerKeys[providerKeys.length - 1] ?? null
+  }
+}
+
+const getProviderAdmissionLeaseProviderKeys = async ({
+  excludedProviderKeys = [],
+  maxProviderKeys,
+}: {excludedProviderKeys?: string[]; maxProviderKeys?: number} = {}): Promise<string[]> => {
+  const normalizedMaxProviderKeys = getOptionalNonNegativeInteger(maxProviderKeys)
+  const normalizedExcludedProviderKeys = getUniqueTrimmedValues(excludedProviderKeys)
+
+  if (normalizedMaxProviderKeys === 0) {
+    return []
+  }
+
+  const rotateProviderKeys = normalizedMaxProviderKeys !== null
+  const providerKeys = (
     await getAppDatabaseService().queryJson<{providerKey: string}>(
       `
-      SELECT DISTINCT provider_key AS providerKey
+      SELECT provider_key AS providerKey
       FROM app.provider_admission_lease
-      ORDER BY provider_key ASC
+      ${getProviderAdmissionLeaseExcludedProviderKeysSql(normalizedExcludedProviderKeys)}
+      GROUP BY provider_key
+      ORDER BY ${getProviderAdmissionLeaseProviderKeyCursorOrderSql(rotateProviderKeys)}
+      ${normalizedMaxProviderKeys === null ? '' : `LIMIT ${normalizedMaxProviderKeys}`}
     `,
       providerAdmissionLeaseProviderKeysWorkloadContext,
     )
   ).map((row) => {
     return row.providerKey
   })
+
+  recordProviderAdmissionLeaseProviderKeyCursor({providerKeys, rotate: rotateProviderKeys})
+
+  return providerKeys
 }
 
 const getReconciliationProviderKeys = async (input: ProviderAdmissionLeaseReconciliationInput): Promise<string[]> => {
-  const existingProviderKeys = await getProviderAdmissionLeaseProviderKeys()
   const inputProviderKeys = [
     ...(input.terminalRequestAttemptCloseouts ?? []).map((closeout) => {
       return closeout.providerKey
@@ -1044,8 +1114,19 @@ const getReconciliationProviderKeys = async (input: ProviderAdmissionLeaseReconc
       return proof.providerKey
     }),
   ]
+  const normalizedMaxProviderKeys = getOptionalNonNegativeInteger(input.maxProviderKeys)
+  const uniqueInputProviderKeys = getUniqueTrimmedValues(inputProviderKeys)
+  const remainingMaxProviderKeys =
+    normalizedMaxProviderKeys === null
+      ? undefined
+      : Math.max(0, normalizedMaxProviderKeys - uniqueInputProviderKeys.length)
+  const existingProviderKeys = await getProviderAdmissionLeaseProviderKeys({
+    excludedProviderKeys: uniqueInputProviderKeys,
+    maxProviderKeys: remainingMaxProviderKeys,
+  })
+  const providerKeys = getUniqueTrimmedValues([...uniqueInputProviderKeys, ...existingProviderKeys])
 
-  return getUniqueTrimmedValues([...existingProviderKeys, ...inputProviderKeys])
+  return normalizedMaxProviderKeys === null ? providerKeys : providerKeys.slice(0, normalizedMaxProviderKeys)
 }
 
 const deleteDurableRequestCloseoutLeases = async ({
@@ -1207,7 +1288,12 @@ const reconcileProviderAdmissionLeasesForProvider = async ({
         providerKey,
         tx,
       })
-      const expiredLeaseCount = await deleteExpiredProviderAdmissionLeases({now, providerKey, tx})
+      const expiredLeaseCount = await deleteExpiredProviderAdmissionLeases({
+        maxRows: input.maxExpiredLeaseDeletes,
+        now,
+        providerKey,
+        tx,
+      })
       const graceHeldLeaseCount = await getActiveLeaseCountForHolderTokens({
         holderTokens: getGraceHeldHolderTokens({graceMs: holderGraceMs, holders: holderWorkerDemotions, nowMs}),
         now,
@@ -1749,4 +1835,5 @@ export const resetProviderAdmissionLeaseForTests = (): void => {
   providerAdmissionLeases.clear()
   providerAdmissionLeaseOperationQueues.clear()
   providerProbeOccupancyVersionCounters.clear()
+  providerAdmissionLeaseReconciliationProviderKeyCursor = null
 }

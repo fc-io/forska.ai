@@ -382,7 +382,14 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   const importedGlobalHealth = await requestJson<{
     data: {
       completionAckBacklog: number
-      jobs: Array<{action: string; blockedReason: string | null; jobId: string; progressState: string}>
+      jobs: Array<{
+        action: string
+        blockedReason: string | null
+        importBacklogCount: number
+        jobId: string
+        progressState: string
+      }>
+      progressStates: {queued: number}
       retainedOutbox: number
     }
   }>('/api/judgmentsjobs-health')
@@ -390,8 +397,12 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     importedGlobalHealth.body.data.jobs.find((job) => {
       return job.jobId === jobId
     }),
-  ).toMatchObject({action: 'resume_outbox_import', blockedReason: null, progressState: 'queued'})
-  expect(importedGlobalHealth.body.data).toMatchObject({completionAckBacklog: 0, retainedOutbox: 1})
+  ).toMatchObject({action: 'resume_outbox_import', blockedReason: null, importBacklogCount: 1, progressState: 'queued'})
+  expect(importedGlobalHealth.body.data).toMatchObject({
+    completionAckBacklog: 0,
+    progressStates: {queued: 1},
+    retainedOutbox: 1,
+  })
 
   const incompatibleFlags = Array.from({length: 16}, (_, value) => {
     return {

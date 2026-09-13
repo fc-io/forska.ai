@@ -8,6 +8,7 @@ import {
   shouldServerRoleMountMaintenanceCrons,
 } from '../utils/serverRole.ts'
 import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
+import {getJudgmentsCleanupStaleCronActivity, type JudgmentsCleanupStaleCronActivity} from './judgmentsJobsCronState.ts'
 
 export type CronRuntimeClassName =
   | 'heavyMaintenanceCrons'
@@ -54,6 +55,7 @@ export type CronRuntimeTickState = {
 }
 
 export type CronRuntimeDiagnostics = {
+  cleanupStaleActivity: JudgmentsCleanupStaleCronActivity
   crons: Record<CronRuntimeTickName, CronRuntimeTickState>
   duckdbMemoryLimit: string | null
   duckdbMemoryLimitMiB: number | null
@@ -199,6 +201,7 @@ export const buildCronRuntimeDiagnostics = ({
   const reports = cronRuntimeState.classReports
 
   return {
+    cleanupStaleActivity: getJudgmentsCleanupStaleCronActivity(),
     crons: getCronRuntimeTickStates(),
     duckdbMemoryLimit,
     duckdbMemoryLimitMiB,
