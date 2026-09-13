@@ -24,6 +24,7 @@ type TelemetrySectionProps = ParentProps<{description?: string; title: string}>
 type JobTelemetryPanelProps = {requestStats?: Partial<JudgmentJobRequestStats>}
 type EndpointDiagnostics = JudgmentJobProviderTelemetry['endpointDiagnostics'][number]
 type ControlPlaneCronState = NonNullable<JudgmentJobRequestStats['controlPlane']>['addToQueueCron']
+type CleanupStaleActivity = NonNullable<JudgmentJobRequestStats['controlPlane']>['cleanupStaleActivity']
 
 const getMetricToneClass = (tone: TelemetryTone | undefined): string => {
   switch (tone) {
@@ -150,6 +151,58 @@ const getControlPlaneCronDetailText = (cronState: ControlPlaneCronState): string
   }
 
   return 'No recorded tick yet'
+}
+
+const formatTelemetryMsTimestamp = (value: number | null | undefined): string => {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? formatTelemetryTimestamp(new Date(value).toISOString())
+    : 'N/A'
+}
+
+const getCleanupStaleActivityStatusText = (activity: CleanupStaleActivity): string => {
+  return activity.stale || activity.overBudget
+    ? 'Stuck / Over Budget'
+    : activity.lastErrorMessage
+      ? 'Failed'
+      : activity.isCleanupStaleRunning
+        ? 'Running'
+        : activity.lastPartial
+          ? 'Partial'
+          : activity.lastCompletedAtMs
+            ? 'Idle'
+            : 'No Runs'
+}
+
+const getCleanupStaleActivityTone = (activity: CleanupStaleActivity): TelemetryTone => {
+  return activity.stale || activity.overBudget || activity.lastErrorMessage
+    ? 'rose'
+    : activity.exhaustedBudget || activity.lastPartial
+      ? 'amber'
+      : activity.isCleanupStaleRunning
+        ? 'sky'
+        : 'green'
+}
+
+const getCleanupStaleActivityDetailText = (activity: CleanupStaleActivity): string => {
+  if (activity.lastErrorMessage) {
+    return `Last failure: ${activity.lastErrorMessage}`
+  }
+
+  if (activity.isCleanupStaleRunning) {
+    return `Step ${activity.currentStep ?? 'pending'}, running ${formatTelemetryDuration(
+      activity.runningForMs,
+    )}, budget ${formatTelemetryDuration(activity.budgetMs)}.`
+  }
+
+  if (activity.lastPartialReason) {
+    return `Last partial: ${formatTelemetryEnumValue(activity.lastPartialReason)}.`
+  }
+
+  if (activity.lastCompletedAtMs) {
+    return `Last completed: ${formatTelemetryMsTimestamp(activity.lastCompletedAtMs)}.`
+  }
+
+  return 'No recorded cleanup run yet.'
 }
 
 export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element => {
@@ -356,7 +409,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                       description={`Role ${controlPlane().serverRole}, DuckDB cap ${controlPlane().duckdbMemoryLimit ?? 'not set'}, low-memory owner ${formatTelemetryBoolean(controlPlane().lowMemoryOwner)}.`}
                       title="Operational Control Plane"
                     >
-                      <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                      <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
                         <TelemetryMetric
                           description={getControlPlaneCronDetailText(controlPlane().addToQueueCron)}
                           tone={controlPlane().addToQueueCron.active ? 'green' : 'amber'}
@@ -377,6 +430,13 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                           label="Provider Telemetry Cron"
                         >
                           {getControlPlaneCronStatusText(controlPlane().sampleProviderTelemetryCron)}
+                        </TelemetryMetric>
+                        <TelemetryMetric
+                          description={getCleanupStaleActivityDetailText(controlPlane().cleanupStaleActivity)}
+                          tone={getCleanupStaleActivityTone(controlPlane().cleanupStaleActivity)}
+                          label="Cleanup Stale"
+                        >
+                          {getCleanupStaleActivityStatusText(controlPlane().cleanupStaleActivity)}
                         </TelemetryMetric>
                         <TelemetryMetric
                           description={

@@ -24,7 +24,7 @@ process.env.RUN_SERVER_JUDGING = 'false'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
-let judgmentsJobsCleanupStale: (() => Promise<void>) | null = null
+let judgmentsJobsCleanupStale: ((options?: Record<string, number>) => Promise<unknown>) | null = null
 let runStartupJudgmentRolloutCleanup: ((input: {claimedBy: string}) => Promise<unknown>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
@@ -35,6 +35,8 @@ test('cleanupStale does not query token-use request attempts directly', () => {
 
   expect(source).not.toContain('app.token_use')
   expect(source).not.toContain('request_attempts_json')
+  expect(source).not.toContain('getQuotedStringList(sqliteJobIds)')
+  expect(source).not.toContain('id NOT IN (${getQuotedStringList(sqliteJobIds).join')
 })
 
 beforeAll(async () => {
@@ -285,6 +287,28 @@ test('startup rollout cleanup fails local jobs only when no completion evidence 
   `)
 })
 
+test('cleanupStale yields before candidate selection when DuckDB step budget is too small', async () => {
+  if (!judgmentsJobsCleanupStale) {
+    throw new Error('Test database not initialized')
+  }
+
+  const result = (await judgmentsJobsCleanupStale({maxDuckdbSteps: 4})) as {
+    completed: boolean
+    partialReason: string | null
+    steps: Array<{name: string; skippedReason?: string; status: string}>
+    totals: {duckdbStepsUsed: number}
+  }
+
+  expect(result.completed).toBe(false)
+  expect(result.partialReason).toBe('duckdb-step-budget-exhausted')
+  expect(result.steps[0]).toMatchObject({
+    name: 'select-candidates',
+    skippedReason: 'duckdb-step-budget-exhausted',
+    status: 'partial',
+  })
+  expect(result.totals.duckdbStepsUsed).toBe(0)
+})
+
 afterAll(async () => {
   await sqliteService?.().closeAll()
   await closeDatabase?.()
@@ -399,6 +423,123 @@ test('cleanupStale prunes old provider telemetry samples and keeps samples insid
       ORDER BY id ASC
     `),
   ).toEqual([{id: retainedSampleId}])
+})
+
+test('cleanupStale does not spend retention batch budget on empty job probes', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-empty-retention-connection-${timestamp}`
+  const modelId = `cleanup-stale-empty-retention-model-${timestamp}`
+  const projectId = `cleanup-stale-empty-retention-project-${timestamp}`
+  const providerKey = `cleanup-stale-empty-retention-provider-${timestamp}`
+  const prunedSampleId = `cleanup-stale-empty-retention-pruned-${timestamp}`
+  const emptyJobIds = Array.from({length: 6}, (_, index) => {
+    return `cleanup-stale-empty-retention-job-${timestamp}-${index}`
+  })
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale empty retention probe test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+
+  for (const jobId of emptyJobIds) {
+    await runDatabase(`
+      INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+      VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+    `)
+    await service.initializeJob(jobId)
+  }
+
+  await runDatabase(`
+    INSERT INTO app.judgment_job_provider_telemetry_sample (
+      id,
+      job_id,
+      project_id,
+      provider_key,
+      sampled_at,
+      provider_limit,
+      effective_provider_limit,
+      normal_request_capacity,
+      target_request_live_calls,
+      unallocated_target_live_calls,
+      provider_available_request_leases,
+      provider_leased_live_requests,
+      provider_leased_physical_calls,
+      provider_leased_probe_calls,
+      provider_request_fill_pct,
+      provider_limit_version,
+      provider_probe_occupancy_version,
+      provider_allocation_version,
+      bottleneck,
+      bottleneck_source,
+      bottleneck_subreason,
+      fresh_worker_count,
+      stale_worker_count,
+      unavailable_worker_count,
+      aggregate_completeness
+    ) VALUES (
+      ${getSqlLiteral(prunedSampleId)},
+      ${getSqlLiteral(emptyJobIds[0] ?? 'missing-job')},
+      ${getSqlLiteral(projectId)},
+      ${getSqlLiteral(providerKey)},
+      ${getTimestampLiteral(new Date(timestamp - 4 * 24 * 60 * 60 * 1000))},
+      12,
+      12,
+      10,
+      10,
+      0,
+      5,
+      5,
+      5,
+      0,
+      50,
+      'limit-v1',
+      'probe-v1',
+      'allocation-v1',
+      NULL,
+      NULL,
+      NULL,
+      1,
+      0,
+      0,
+      'complete'
+    )
+  `)
+
+  const result = (await judgmentsJobsCleanupStale({
+    budgetMs: 30_000,
+    maxDrainingJobs: 20,
+    maxDuckdbSteps: 100,
+    maxRepairActions: 10,
+    maxSqliteJobActions: 100,
+    maxSqliteRetentionBatches: 1,
+    maxSqliteRetentionRows: 1,
+  })) as {steps: Array<{name: string; status: string}>}
+
+  expect(
+    result.steps.find((step) => {
+      return step.name === 'prune-provider-telemetry-history'
+    }),
+  ).toMatchObject({status: 'completed'})
+  const [sampleCount] = await queryDatabase<{count: number | string}>(`
+      SELECT COUNT(*) AS count
+      FROM app.judgment_job_provider_telemetry_sample
+      WHERE id = ${getSqlLiteral(prunedSampleId)}
+    `)
+
+  expect(Number(sampleCount?.count ?? -1)).toBe(0)
 })
 
 test('cleanupStale automatically repairs recoverable orphaned judged queue rows for draining jobs', async () => {
@@ -621,6 +762,114 @@ test('cleanupStale clears acked draining retention beyond the legacy small batch
     `),
   ).toEqual([{storageState: 'drained'}])
   expect(existsSync(sqlitePath)).toBe(false)
+})
+
+test('cleanupStale yields large acked retention backlog and continues on the next tick', async () => {
+  if (!judgmentsJobsCleanupStale || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const service = sqliteService()
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
+  const rowCount = 25
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-retention-yield-connection-${timestamp}`
+  const modelId = `cleanup-stale-retention-yield-model-${timestamp}`
+  const projectId = `cleanup-stale-retention-yield-project-${timestamp}`
+  const jobId = `cleanup-stale-retention-yield-job-${timestamp}`
+  const prompts = Array.from({length: rowCount}, (_, index) => {
+    return {
+      articleId: `cleanup-stale-retention-yield-article-${timestamp}-${index}`,
+      promptId: `cleanup-stale-retention-yield-prompt-${timestamp}-${index}`,
+    }
+  })
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale bounded retention test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+
+  const claimedPrompts = await service.claimReadyPrompts(jobId, 'server-a', rowCount)
+
+  await Promise.all(
+    claimedPrompts.map((claimedPrompt, index) => {
+      return service.recordJudgmentSuccess(jobId, {
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: ['yes'],
+        articleId: claimedPrompt.articleId,
+        chunkingStrategy: null,
+        confidenceOriginal: 50,
+        createdAt: new Date(),
+        explanation: 'because',
+        isAnswered: true,
+        judgmentId: `cleanup-stale-retention-yield-judgment-${timestamp}-${index}`,
+        modelId,
+        projectId,
+        promptId: claimedPrompt.promptId,
+        queuePromptId: claimedPrompt.recordId,
+        quotes: ['quote'],
+        rawResponseJson: {answer: 'yes'},
+        snapshotProjectId: projectId,
+        snapshotProjectModelName: 'Qwen 35B',
+        updatedAt: new Date(),
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      })
+    }),
+  )
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: rowCount,
+  })
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+  await service.setLastProjectRefreshAckSeq(jobId, dirtyState?.dirtyToken ?? null)
+
+  expect(await service.getOutboxCount(jobId)).toBe(rowCount)
+
+  const firstResult = (await judgmentsJobsCleanupStale({
+    budgetMs: 30_000,
+    maxDrainingJobs: 100,
+    maxSqliteJobActions: 100,
+    maxSqliteRetentionBatches: 1,
+    maxSqliteRetentionRows: 10,
+  })) as {completed: boolean; exhaustedBudget: boolean}
+
+  expect(firstResult).toMatchObject({completed: false, exhaustedBudget: true})
+  expect(await service.getOutboxCount(jobId)).toBe(15)
+
+  const secondResult = (await judgmentsJobsCleanupStale({
+    budgetMs: 30_000,
+    maxDrainingJobs: 100,
+    maxSqliteJobActions: 100,
+    maxSqliteRetentionBatches: 1,
+    maxSqliteRetentionRows: 10,
+  })) as {completed: boolean; exhaustedBudget: boolean}
+
+  expect(secondResult).toMatchObject({completed: false, exhaustedBudget: true})
+  expect(await service.getOutboxCount(jobId)).toBe(5)
 })
 
 test('cleanupStale clears stale running prompts before finalizing draining jobs', async () => {
@@ -1434,6 +1683,136 @@ test('cleanupStale auto resumes recoverable OOM quarantine after project mart is
       storageState: 'active',
     },
   ])
+})
+
+test('cleanupStale pages OOM quarantine recovery candidates before expensive readiness filters', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-oom-page-connection-${timestamp}`
+  const modelId = `cleanup-stale-oom-page-model-${timestamp}`
+  const projectId = `cleanup-stale-oom-page-project-${timestamp}`
+  const targetJobId = `cleanup-stale-oom-page-job-target-${timestamp}`
+  const blockerJobIds = Array.from({length: 4}, (_, index) => {
+    return `cleanup-stale-oom-page-job-blocker-${index}-${timestamp}`
+  })
+  const oomMessage = 'Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)'
+  const oldestQuarantineAt = new Date('2001-01-01T00:00:00.000Z')
+  const getOrderedQuarantineAt = (index: number) => {
+    return new Date(oldestQuarantineAt.getTime() + index * 60_000)
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale OOM paged recovery test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, last_completed_dirty_token, refresh_status)
+    VALUES ('${projectId}', 7, 7, 'idle')
+  `)
+
+  for (const [index, jobId] of blockerJobIds.entries()) {
+    const quarantinedAt = getOrderedQuarantineAt(index)
+
+    await runDatabase(`
+      INSERT INTO app.judgment_job (
+        id,
+        project_id,
+        status,
+        storage_state,
+        quarantined_at,
+        quarantine_reason,
+        updated_at
+      ) VALUES (
+        '${jobId}',
+        '${projectId}',
+        'failed',
+        'quarantined',
+        ${getTimestampLiteral(quarantinedAt)},
+        'manual quarantine',
+        ${getTimestampLiteral(quarantinedAt)}
+      )
+    `)
+  }
+
+  const targetQuarantinedAt = getOrderedQuarantineAt(blockerJobIds.length)
+
+  await runDatabase(`
+    INSERT INTO app.judgment_job (
+      id,
+      project_id,
+      status,
+      storage_state,
+      quarantined_at,
+      quarantine_reason,
+      last_import_error_at,
+      last_import_error,
+      import_failure_count,
+      updated_at
+    ) VALUES (
+      '${targetJobId}',
+      '${projectId}',
+      'failed',
+      'quarantined',
+      ${getTimestampLiteral(targetQuarantinedAt)},
+      ${getSqlLiteral(oomMessage)},
+      ${getTimestampLiteral(targetQuarantinedAt)},
+      ${getSqlLiteral(oomMessage)},
+      3,
+      ${getTimestampLiteral(targetQuarantinedAt)}
+    )
+  `)
+
+  await service.initializeJob(targetJobId)
+  await service.releaseOwnedLease(targetJobId)
+
+  await judgmentsJobsCleanupStale({maxRepairActions: 1})
+
+  const [afterFirstTick] = await queryDatabase<{status: string; storageState: string}>(`
+    SELECT status, storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${targetJobId}'
+  `)
+
+  expect(afterFirstTick).toEqual({status: 'failed', storageState: 'quarantined'})
+
+  await judgmentsJobsCleanupStale({maxRepairActions: 1})
+
+  const [afterSecondTick] = await queryDatabase<{
+    importFailureCount: number | string
+    lastImportError: string | null
+    quarantineReason: string | null
+    status: string
+    storageState: string
+  }>(`
+    SELECT
+      import_failure_count AS importFailureCount,
+      last_import_error AS lastImportError,
+      quarantine_reason AS quarantineReason,
+      status,
+      storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${targetJobId}'
+  `)
+
+  expect(afterSecondTick).toEqual({
+    importFailureCount: 0,
+    lastImportError: null,
+    quarantineReason: null,
+    status: 'running',
+    storageState: 'active',
+  })
 })
 
 test('cleanupStale does not auto resume recoverable OOM quarantine after explicit pause', async () => {

@@ -302,6 +302,310 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
   expect(result.importCalls).toEqual(['server-low-memory'])
 })
 
+test('cleanup-stale partial budget result records cron success', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const operationalModulePath = getModulePath('./src/server/cron/judgmentsJobsOperationalCron.ts')
+        const runtimeStateModulePath = getModulePath('./src/server/cron/cronRuntimeState.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const importCronModulePath = getModulePath('./src/server/cron/judgmentsJobsImportCron.ts')
+        const sampleTelemetryModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')
+        const exclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const cronConfigs = []
+
+        console.warn = () => {}
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              constructor() {
+                this.uses = []
+              }
+
+              use(plugin) {
+                this.uses.push(plugin)
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              cronConfigs.push(config)
+              return {config, name: config.name}
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-partial-cleanup'}
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {judgmentsJobsAddToQueue: async () => {}}
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {judgmentsJobsCheckLLMStatus: async () => {}}
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {
+            judgmentsJobsCleanupStale: async () => ({
+              completed: false,
+              exhaustedBudget: true,
+              partialReason: 'sqlite-retention-row-budget-exhausted',
+              runId: 'cleanup-partial',
+              steps: [],
+              totals: {duckdbStepsUsed: 1, repairActionsUsed: 0, sqliteJobActionsUsed: 1, sqliteRetentionBatchesUsed: 1, sqliteRetentionRowsDeleted: 10},
+            }),
+          }
+        })
+        void mock.module(importCronModulePath, () => {
+          return {judgmentsJobsImportCron: {}}
+        })
+        void mock.module(sampleTelemetryModulePath, () => {
+          return {judgmentsJobsSampleProviderTelemetry: async () => ({})}
+        })
+        void mock.module(exclusiveWorkModulePath, () => {
+          return {
+            hasActiveDuckdbExclusiveWork: () => false,
+            isDuckdbExclusiveWorkAdmissionError: () => false,
+          }
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            getCurrentServerRole: () => 'maintenance-worker',
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => {},
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        const runtimeState = await import(runtimeStateModulePath)
+        runtimeState.resetCronRuntimeStateForTests()
+        await import(operationalModulePath)
+
+        const cleanupCron = cronConfigs.find((config) => {
+          return config.name === 'judgments-jobs-cleanup-stale'
+        })
+
+        if (!cleanupCron) {
+          throw new Error('Expected cleanup cron')
+        }
+
+        await cleanupCron.run()
+
+        const diagnostics = runtimeState.buildCronRuntimeDiagnostics({serverRole: 'maintenance-worker'})
+        process.stdout.write(JSON.stringify({cleanup: diagnostics.crons['judgments-jobs-cleanup-stale']}) + '\\n')
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'Cleanup partial cron test failed')
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    cleanup: {lastFailureAt: string | null; lastSuccessAt: string | null; running: boolean}
+  }
+
+  expect(result.cleanup.lastSuccessAt).toBeTruthy()
+  expect(result.cleanup.lastFailureAt).toBe(null)
+  expect(result.cleanup.running).toBe(false)
+})
+
+test('stale cleanup-stale activity skips duplicate cleanup but does not block add-to-queue', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const stateModulePath = getModulePath('./src/server/cron/judgmentsJobsCronState.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const getRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const sampleTelemetryModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')
+        const sendToLlmModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts')
+        const exclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const addCalls = []
+        let cleanupCalls = 0
+        let now = 1_000
+
+        Date.now = () => now
+        console.warn = () => {}
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              constructor() {
+                this.uses = []
+              }
+
+              use(plugin) {
+                this.uses.push(plugin)
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              return {config, name: config.name}
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-stale-cleanup'}
+        })
+        void mock.module(backgroundImportModulePath, () => {
+          return {runJudgmentJobSqliteBackgroundImport: async () => ({})}
+        })
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            getJudgmentJobSqliteService: () => {
+              return {publishHealthProjections: async () => {}, syncOwnedLeases: async () => {}}
+            },
+          }
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {
+            judgmentsJobsAddToQueue: async (serverJobId) => {
+              addCalls.push(serverJobId)
+            },
+          }
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {judgmentsJobsCheckLLMStatus: async () => {}}
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {
+            judgmentsJobsCleanupStale: async () => {
+              cleanupCalls += 1
+              return {completed: true, exhaustedBudget: false, partialReason: null, steps: [], totals: {}}
+            },
+          }
+        })
+        void mock.module(getRunningJobsModulePath, () => {
+          return {judgmentsJobsGetRunningJobs: async () => []}
+        })
+        void mock.module(sampleTelemetryModulePath, () => {
+          return {judgmentsJobsSampleProviderTelemetry: async () => ({})}
+        })
+        void mock.module(sendToLlmModulePath, () => {
+          return {judgmentsJobsSendToLLM: async () => {}}
+        })
+        void mock.module(exclusiveWorkModulePath, () => {
+          return {
+            hasActiveDuckdbExclusiveWork: () => false,
+            isDuckdbExclusiveWorkAdmissionError: () => false,
+          }
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            getCurrentServerRole: () => 'maintenance-worker',
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunJudgingLoops: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => {},
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        const state = await import(stateModulePath)
+        const cleanupRunId = state.beginJudgmentsCleanupStaleCronRun({budgetMs: 100, nowMs: 1_000})
+        state.updateJudgmentsCleanupStaleCronStep({nowMs: 1_010, runId: cleanupRunId, step: 'prune-retention'})
+        now = 1_200
+
+        const cronModule = await import(judgmentsJobsModulePath + '?stale-cleanup=' + Math.random())
+        const cleanupCron = cronModule.judgmentsJobsMaintenanceCron.uses.find((plugin) => {
+          return plugin.name === 'judgments-jobs-cleanup-stale'
+        })
+        const addCron = cronModule.judgmentsJobsMaintenanceCron.uses.find((plugin) => {
+          return plugin.name === 'judgments-jobs-add-to-queue'
+        })
+
+        if (!cleanupCron || !addCron) {
+          throw new Error('Expected cleanup and add-to-queue crons')
+        }
+
+        await cleanupCron.config.run()
+        await addCron.config.run()
+
+        process.stdout.write(
+          JSON.stringify({addCalls, cleanupCalls, cleanupActivity: state.getJudgmentsCleanupStaleCronActivity(now)}) + '\\n',
+        )
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'Stale cleanup cron test failed')
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    addCalls: string[]
+    cleanupActivity: {overBudget: boolean; shouldStartAnotherCleanupRun: boolean}
+    cleanupCalls: number
+  }
+
+  expect(result.cleanupCalls).toBe(0)
+  expect(result.addCalls).toEqual(['server-stale-cleanup'])
+  expect(result.cleanupActivity).toMatchObject({overBudget: true, shouldStartAnotherCleanupRun: false})
+})
+
 test('judgment import cron skips while project transfer background work is active', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

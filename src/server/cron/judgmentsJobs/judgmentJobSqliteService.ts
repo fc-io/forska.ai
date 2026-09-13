@@ -1363,6 +1363,10 @@ const getExistingOutboxJobIds = (jobId?: string) => {
     : getJudgmentJobSqliteJobIds()
 }
 
+const getOptionalNonNegativeInteger = (value: number | undefined): number | null => {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value ?? 0)) : null
+}
+
 const getTrackedJudgmentJobIds = async (jobId?: string) => {
   return [...getExistingOutboxJobIds(jobId)].sort()
 }
@@ -1380,25 +1384,95 @@ const getUniqueRequestAttemptCloseoutProofs = (
   )
 }
 
-const getDurableTerminalRequestAttemptCloseoutProofsFromDatabase = (
+type TerminalRequestAttemptCloseoutProofRow = {requestAttemptsJson: string | null}
+
+const terminalRequestAttemptCloseoutProofSourceCount = 3
+
+const getTerminalRequestAttemptCloseoutProofLimitSql = (normalizedMaxRows: number | null): string => {
+  return normalizedMaxRows === null ? '' : `LIMIT ${normalizedMaxRows}`
+}
+
+const getTerminalRequestAttemptCloseoutProofSourceMaxRows = (normalizedMaxRows: number | null): number | null => {
+  return normalizedMaxRows === null
+    ? null
+    : Math.max(1, Math.ceil(normalizedMaxRows / terminalRequestAttemptCloseoutProofSourceCount))
+}
+
+const getDurableTerminalQueuePromptProofRowsFromDatabase = (
   database: Database,
-): JudgmentRequestAttemptCloseoutProof[] => {
-  const rows = database
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  return database
     .query(
       `
         SELECT request_attempt_manifest_json AS requestAttemptsJson
         FROM queue_prompt
-        UNION ALL
+        WHERE request_attempt_manifest_json IS NOT NULL
+        ORDER BY ready_insert_seq ASC, id ASC
+        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
+      `,
+    )
+    .all() as TerminalRequestAttemptCloseoutProofRow[]
+}
+
+const getDurableTerminalOutboxProofRowsFromDatabase = (
+  database: Database,
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  return database
+    .query(
+      `
         SELECT request_attempts_json AS requestAttemptsJson
         FROM judgment_outbox
         WHERE request_attempts_json IS NOT NULL
-        UNION ALL
+        ORDER BY outbox_seq ASC
+        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
+      `,
+    )
+    .all() as TerminalRequestAttemptCloseoutProofRow[]
+}
+
+const getDurableTerminalCompletionAckProofRowsFromDatabase = (
+  database: Database,
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  return database
+    .query(
+      `
         SELECT request_attempts_json AS requestAttemptsJson
         FROM completion_ack
         WHERE request_attempts_json IS NOT NULL
+        ORDER BY completed_at ASC, claim_id ASC
+        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
       `,
     )
-    .all() as Array<{requestAttemptsJson: string | null}>
+    .all() as TerminalRequestAttemptCloseoutProofRow[]
+}
+
+const getDurableTerminalRequestAttemptCloseoutProofRowsFromDatabase = (
+  database: Database,
+  normalizedMaxRows: number | null,
+): TerminalRequestAttemptCloseoutProofRow[] => {
+  const normalizedSourceMaxRows = getTerminalRequestAttemptCloseoutProofSourceMaxRows(normalizedMaxRows)
+
+  return [
+    ...getDurableTerminalQueuePromptProofRowsFromDatabase(database, normalizedSourceMaxRows),
+    ...getDurableTerminalOutboxProofRowsFromDatabase(database, normalizedSourceMaxRows),
+    ...getDurableTerminalCompletionAckProofRowsFromDatabase(database, normalizedSourceMaxRows),
+  ]
+}
+
+const getDurableTerminalRequestAttemptCloseoutProofsFromDatabase = (
+  database: Database,
+  maxRows?: number,
+): JudgmentRequestAttemptCloseoutProof[] => {
+  const normalizedMaxRows = getOptionalNonNegativeInteger(maxRows)
+
+  if (normalizedMaxRows === 0) {
+    return []
+  }
+
+  const rows = getDurableTerminalRequestAttemptCloseoutProofRowsFromDatabase(database, normalizedMaxRows)
 
   return getUniqueRequestAttemptCloseoutProofs(
     rows.flatMap((row) => {
@@ -1409,16 +1483,26 @@ const getDurableTerminalRequestAttemptCloseoutProofsFromDatabase = (
 
 const getDurableTerminalRequestAttemptCloseoutProofsForJobIds = async (
   jobIds: string[],
+  maxProofRows?: number,
 ): Promise<JudgmentRequestAttemptCloseoutProof[]> => {
+  const normalizedMaxProofRows = getOptionalNonNegativeInteger(maxProofRows)
   const [jobId = '', ...remainingJobIds] = jobIds
 
-  if (!jobId) {
+  if (!jobId || normalizedMaxProofRows === 0) {
     return []
   }
 
+  const currentRows =
+    withJobDatabase(jobId, false, (database) => {
+      return getDurableTerminalRequestAttemptCloseoutProofsFromDatabase(database, normalizedMaxProofRows ?? undefined)
+    }) ?? []
+  const uniqueCurrentRows = getUniqueRequestAttemptCloseoutProofs(currentRows)
+  const remainingBudget =
+    normalizedMaxProofRows === null ? undefined : Math.max(0, normalizedMaxProofRows - uniqueCurrentRows.length)
+
   return getUniqueRequestAttemptCloseoutProofs([
-    ...(withJobDatabase(jobId, false, getDurableTerminalRequestAttemptCloseoutProofsFromDatabase) ?? []),
-    ...(await getDurableTerminalRequestAttemptCloseoutProofsForJobIds(remainingJobIds)),
+    ...uniqueCurrentRows,
+    ...(await getDurableTerminalRequestAttemptCloseoutProofsForJobIds(remainingJobIds, remainingBudget)),
   ])
 }
 
@@ -4140,7 +4224,16 @@ const getUnavailableRequestAttemptCloseoutEntries = ({
   })
 }
 
-const getUnavailableDiagnosticQueuePromptRows = (database: Database): UnavailableDiagnosticQueuePromptRow[] => {
+const getUnavailableDiagnosticQueuePromptRows = (
+  database: Database,
+  maxRows?: number,
+): UnavailableDiagnosticQueuePromptRow[] => {
+  const normalizedMaxRows = getOptionalNonNegativeInteger(maxRows)
+
+  if (normalizedMaxRows === 0) {
+    return []
+  }
+
   return database
     .query(
       `
@@ -4164,6 +4257,8 @@ const getUnavailableDiagnosticQueuePromptRows = (database: Database): Unavailabl
         FROM queue_prompt qp
         WHERE qp.request_attempt_manifest_json IS NOT NULL
           AND qp.request_attempt_manifest_json <> '[]'
+        ORDER BY qp.updated_at ASC, qp.id ASC
+        ${normalizedMaxRows === null ? '' : `LIMIT ${normalizedMaxRows}`}
       `,
     )
     .all() as UnavailableDiagnosticQueuePromptRow[]
@@ -4372,15 +4467,39 @@ const sqliteService = {
       finishJudgmentJobDatabaseOperation(jobId)
     }
   },
-  clearActiveQueue: async (jobId: string) => {
-    return withOwnedJobDatabase(jobId, false, (database) => {
-      const now = new Date().toISOString()
+  clearActiveQueue: async (jobId: string, maxRows?: number): Promise<number> => {
+    return (
+      (await withOwnedJobDatabase(jobId, false, (database) => {
+        const now = new Date().toISOString()
+        const normalizedMaxRows = getOptionalNonNegativeInteger(maxRows)
 
-      database.transaction(() => {
-        database.query(`DELETE FROM queue_prompt WHERE status = 'ready'`).run()
-        database
-          .query(
-            `
+        if (normalizedMaxRows === 0) {
+          return 0
+        }
+
+        return database.transaction(() => {
+          const result = database
+            .query(
+              `
+              DELETE FROM queue_prompt
+              WHERE status = 'ready'
+                ${
+                  normalizedMaxRows === null
+                    ? ''
+                    : `AND id IN (
+                        SELECT id
+                        FROM queue_prompt
+                        WHERE status = 'ready'
+                        ORDER BY ready_insert_seq ASC, id ASC
+                        LIMIT ${normalizedMaxRows}
+                      )`
+                }
+            `,
+            )
+            .run() as {changes?: number}
+          database
+            .query(
+              `
           UPDATE job_scan_state
           SET cursor_last_date = NULL,
               cursor_last_article_id = NULL,
@@ -4391,10 +4510,12 @@ const sqliteService = {
               updated_at = ?
           WHERE job_id = ?
         `,
-          )
-          .run(now, jobId)
-      })()
-    })
+            )
+            .run(now, jobId)
+          return Number(result.changes ?? 0)
+        })()
+      })) ?? 0
+    )
   },
   discardActiveRuntimeRows: async (jobId: string, serverJobId?: string): Promise<number> => {
     return (
@@ -5196,10 +5317,37 @@ const sqliteService = {
       })) ?? 0
     )
   },
-  reapStaleOutboxClaims: async ({jobId, staleBefore}: {jobId?: string; staleBefore: Date}) => {
+  reapStaleOutboxClaims: async ({
+    jobId,
+    maxRows,
+    staleBefore,
+  }: {
+    jobId?: string
+    maxRows?: number
+    staleBefore: Date
+  }) => {
+    const normalizedMaxRows = getOptionalNonNegativeInteger(maxRows)
+
+    if (normalizedMaxRows === 0) {
+      return 0
+    }
+
     const reapedCounts = await Promise.all(
       getExistingOutboxJobIds(jobId).map((currentJobId) => {
         return withOwnedJobDatabase(currentJobId, false, (database) => {
+          const rowLimitPredicate =
+            normalizedMaxRows === null
+              ? ''
+              : `AND outbox_seq IN (
+                  SELECT outbox_seq
+                  FROM judgment_outbox
+                  WHERE exported_at IS NULL
+                    AND export_claim_id IS NOT NULL
+                    AND export_claimed_at IS NOT NULL
+                    AND export_claimed_at <= ?
+                  ORDER BY export_claimed_at ASC, outbox_seq ASC
+                  LIMIT ${normalizedMaxRows}
+                )`
           const result = database
             .query(
               `
@@ -5212,9 +5360,12 @@ const sqliteService = {
                   AND export_claim_id IS NOT NULL
                   AND export_claimed_at IS NOT NULL
                   AND export_claimed_at <= ?
+                  ${rowLimitPredicate}
               `,
             )
-            .run(staleBefore.toISOString()) as {changes?: number}
+            .run(staleBefore.toISOString(), ...(normalizedMaxRows === null ? [] : [staleBefore.toISOString()])) as {
+            changes?: number
+          }
 
           return Number(result.changes ?? 0)
         }).catch((error: unknown) => {
@@ -5731,11 +5882,13 @@ const sqliteService = {
   },
   requeueAbandonedSentPrompts: async ({
     jobId,
+    maxRows,
     protectedRecordIds,
     serverJobId,
     staleBefore,
   }: {
     jobId: string
+    maxRows?: number
     protectedRecordIds?: string[]
     serverJobId: string
     staleBefore: Date
@@ -5746,6 +5899,12 @@ const sqliteService = {
         false,
         (database) => {
           const shouldRecoverCurrentServer = protectedRecordIds !== undefined
+          const normalizedMaxRows = getOptionalNonNegativeInteger(maxRows)
+
+          if (normalizedMaxRows === 0) {
+            return 0
+          }
+
           const protectedIds = Array.from(new Set(protectedRecordIds ?? []))
           const liveHeartbeatCutoff = new Date(Date.now() - judgeWorkerHeartbeatStaleMs).toISOString()
           const currentServerRecoveryPredicate =
@@ -5779,12 +5938,22 @@ const sqliteService = {
                   request_attempt_manifest_json AS requestAttemptManifestJson
                 FROM queue_prompt
                 WHERE ${targetPredicate}
+                ORDER BY sent_at ASC, ready_insert_seq ASC, id ASC
+                ${normalizedMaxRows === null ? '' : `LIMIT ${normalizedMaxRows}`}
               `,
             )
             .all(...targetArgs) as Array<{queueRecordId: string; requestAttemptManifestJson: string | null}>
 
+          if (targetRows.length === 0) {
+            pruneStaleJudgeWorkerHeartbeatsFromDatabase(database, liveHeartbeatCutoff)
+            return 0
+          }
+
           pruneStaleJudgeWorkerHeartbeatsFromDatabase(database, liveHeartbeatCutoff)
           closeRecoverableRequestAttemptsBeforeRequeue({database, jobId, rows: targetRows})
+          const targetIds = targetRows.map((row) => {
+            return row.queueRecordId
+          })
 
           const result = database
             .query(
@@ -5798,10 +5967,10 @@ const sqliteService = {
               claim_id = NULL,
               execution_snapshot_id = NULL,
               execution_snapshot_hash = NULL
-          WHERE ${targetPredicate}
+          WHERE id IN (${getSqlPlaceholders(targetIds.length).join(', ')})
         `,
             )
-            .run(new Date().toISOString(), serverJobId, ...targetArgs) as {changes?: number}
+            .run(new Date().toISOString(), serverJobId, ...targetIds) as {changes?: number}
 
           return Number(result.changes ?? 0)
         },
@@ -5824,10 +5993,12 @@ const sqliteService = {
   },
   repairUnavailableRequestAttemptDiagnostics: async ({
     jobId,
+    maxRows,
     serverJobId,
     staleBefore = new Date(Date.now() - unavailableRequestAttemptRepairDeadlineMs),
   }: {
     jobId: string
+    maxRows?: number
     serverJobId: string
     staleBefore?: Date
   }): Promise<number> => {
@@ -5837,7 +6008,7 @@ const sqliteService = {
         false,
         (database) => {
           const now = new Date().toISOString()
-          return getUnavailableDiagnosticQueuePromptRows(database).reduce((count, row) => {
+          return getUnavailableDiagnosticQueuePromptRows(database, maxRows).reduce((count, row) => {
             return count + repairUnavailableDiagnosticQueuePromptRow({database, jobId, now, row, staleBefore})
           }, 0)
         },
@@ -5959,8 +6130,8 @@ const sqliteService = {
       serverJobId,
     })
   },
-  getDurableTerminalRequestAttemptCloseoutProofs: async (jobId?: string) => {
-    return getDurableTerminalRequestAttemptCloseoutProofsForJobIds(await getTrackedJudgmentJobIds(jobId))
+  getDurableTerminalRequestAttemptCloseoutProofs: async (jobId?: string, maxProofRows?: number) => {
+    return getDurableTerminalRequestAttemptCloseoutProofsForJobIds(await getTrackedJudgmentJobIds(jobId), maxProofRows)
   },
 }
 

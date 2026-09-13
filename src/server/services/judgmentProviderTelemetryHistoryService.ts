@@ -20,6 +20,7 @@ export const judgmentProviderTelemetryHistoryRangePresets = {
 
 export const judgmentProviderTelemetrySampleCadenceSeconds = 30
 export const judgmentProviderTelemetryHistoryRetentionMs = 3 * 24 * 60 * 60 * 1000
+export const judgmentProviderTelemetryHistoryPruneBatchSize = 1_000
 
 export type JudgmentProviderTelemetryHistoryRange = keyof typeof judgmentProviderTelemetryHistoryRangePresets
 export type JudgmentProviderTelemetryAdherenceState = 'overLimit' | 'atLimit' | 'withinLimit' | 'unknown'
@@ -606,13 +607,27 @@ export const insertJudgmentProviderTelemetryHistorySample = async (params: {
 }
 
 export const pruneJudgmentProviderTelemetryHistorySamples = async (
-  params: {now?: Date; runner?: JudgmentProviderTelemetryHistoryRunner} = {},
+  params: {maxRows?: number; now?: Date; runner?: JudgmentProviderTelemetryHistoryRunner} = {},
 ): Promise<number> => {
   const cutoff = new Date((params.now ?? new Date()).getTime() - judgmentProviderTelemetryHistoryRetentionMs)
+  const maxRows = Number.isFinite(params.maxRows)
+    ? Math.max(0, Math.floor(params.maxRows ?? judgmentProviderTelemetryHistoryPruneBatchSize))
+    : judgmentProviderTelemetryHistoryPruneBatchSize
+
+  if (maxRows <= 0) {
+    return 0
+  }
+
   const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(
     `
     DELETE FROM app.judgment_job_provider_telemetry_sample
-    WHERE sampled_at < ${getTimestampLiteral(cutoff)}
+    WHERE id IN (
+      SELECT id
+      FROM app.judgment_job_provider_telemetry_sample
+      WHERE sampled_at < ${getTimestampLiteral(cutoff)}
+      ORDER BY sampled_at ASC, id ASC
+      LIMIT ${maxRows}
+    )
     RETURNING id
   `,
     judgmentProviderTelemetryPruneWorkloadContext,

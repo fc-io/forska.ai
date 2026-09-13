@@ -61,6 +61,10 @@ type CapacityBucket<T> = {capacity: Capacity; jobs: T[]; label: string}
 type JobRequestAllocation<T> = {job: T; limit: number}
 type ProviderConnectionRequestAllocation<T> = {connectionId: string; jobs: JobRequestAllocation<T>[]; limit: number}
 type ClaimableJobRequest<T> = JobRequestAllocation<T> & {dispatchMode: 'full' | 'probe'; runtime: PromptRuntime}
+type DispatchAvailability =
+  | {dispatchMode: 'full'; status: 'healthy'}
+  | {dispatchMode: 'probe'; status: 'cooldown'}
+  | {dispatchMode: 'skip'; status: 'cooldown' | 'misconfigured' | 'probing'}
 
 const schedulerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const schedulerFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -622,7 +626,7 @@ export const getDispatchAvailability = ({
 }: {
   providerConnectionId: string | null
   runtime: PromptRuntime
-}): {dispatchMode: 'full' | 'probe' | 'skip'; status: 'cooldown' | 'healthy' | 'misconfigured' | 'probing'} => {
+}): DispatchAvailability => {
   const endpointStates = getDispatchEndpoints(runtime).map((baseURL) => {
     return getJudgmentEndpointAvailability({
       effectiveBaseURL: baseURL,
@@ -655,7 +659,19 @@ export const getDispatchAvailability = ({
     return state.status === 'misconfigured'
   })
 
-  return {dispatchMode: 'skip', status: hasMisconfigured ? 'misconfigured' : 'cooldown'}
+  if (hasMisconfigured) {
+    return {dispatchMode: 'skip', status: 'misconfigured'}
+  }
+
+  const hasProbing = endpointStates.some((state) => {
+    return state.status === 'probing'
+  })
+
+  if (hasProbing) {
+    return {dispatchMode: 'skip', status: 'probing'}
+  }
+
+  return {dispatchMode: 'skip', status: 'cooldown'}
 }
 
 const logDispatchSkip = ({
@@ -722,7 +738,7 @@ export const getClaimableRequests = async ({
           if (availability.dispatchMode === 'skip') {
             logDispatchSkip({
               connectionId: allocation.connectionId,
-              dispatchStatus: availability.status === 'healthy' ? 'probing' : availability.status,
+              dispatchStatus: availability.status,
               label,
               runtime: jobAllocation.runtime,
             })
@@ -750,7 +766,7 @@ export const getClaimableRequests = async ({
         })
         logDispatchSkip({
           connectionId: allocation.connectionId,
-          dispatchStatus: availability.status === 'healthy' ? 'probing' : availability.status,
+          dispatchStatus: availability.status,
           label,
           runtime: jobAllocation.runtime,
         })
@@ -847,7 +863,7 @@ export const processClaimedPromptsByConnection = async ({
           await haltConnection(async () => {
             logDispatchSkip({
               connectionId: getPromptProviderKey(prompt),
-              dispatchStatus: availability.status === 'healthy' ? 'probing' : availability.status,
+              dispatchStatus: availability.status,
               label,
               runtime,
             })

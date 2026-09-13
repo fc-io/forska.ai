@@ -1,7 +1,11 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
 import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
-import {resetJudgmentEndpointAvailabilityForTests} from './judgmentEndpointAvailability.ts'
+import {
+  claimJudgmentEndpointAvailability,
+  judgmentEndpointProbeStaleThresholdMs,
+  resetJudgmentEndpointAvailabilityForTests,
+} from './judgmentEndpointAvailability.ts'
 import {
   getCapacityBuckets,
   getDispatchAvailability,
@@ -669,6 +673,18 @@ test('dispatch availability skips 404 misroutes during cooldown, probes once aft
   expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({dispatchMode: 'skip', status: 'cooldown'})
 
   now += 30_001
+
+  expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({dispatchMode: 'probe', status: 'cooldown'})
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: runtime.modelBaseUrl,
+      modelProvider: runtime.modelProvider,
+      providerConnectionId,
+    }),
+  ).toBe(true)
+  expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({dispatchMode: 'skip', status: 'probing'})
+
+  now += judgmentEndpointProbeStaleThresholdMs + 1
 
   expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({dispatchMode: 'probe', status: 'cooldown'})
 

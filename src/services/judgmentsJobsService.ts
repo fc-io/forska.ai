@@ -179,8 +179,28 @@ export type JudgmentJobControlPlaneCronState = {
   lastTickAt: string | null
   running: boolean
 }
+export type JudgmentJobCleanupStaleActivity = {
+  budgetMs: number | null
+  currentStep: string | null
+  currentStepStartedAtMs: number | null
+  exhaustedBudget: boolean
+  isCleanupStaleRunning: boolean
+  lastCompletedAtMs: number | null
+  lastErrorMessage: string | null
+  lastFinishedAtMs: number | null
+  lastPartial: boolean
+  lastPartialReason: string | null
+  overBudget: boolean
+  runId: string | null
+  runningForMs: number | null
+  shouldStartAnotherCleanupRun: boolean
+  startedAtMs: number | null
+  stale: boolean
+}
 export type JudgmentJobControlPlaneDiagnostics = {
   addToQueueCron: JudgmentJobControlPlaneCronState
+  cleanupStaleActivity: JudgmentJobCleanupStaleActivity
+  cleanupStaleCron: JudgmentJobControlPlaneCronState
   duckdbMemoryLimit: string | null
   duckdbMemoryLimitMiB: number | null
   heavyMaintenanceCrons: {

@@ -56,6 +56,7 @@ import {
   type RunningJudgmentJob,
 } from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {getProviderBucketSnapshot, type ProviderBucketSnapshot} from '../cron/judgmentsJobs/providerAdmissionLease.ts'
+import type {JudgmentsCleanupStaleCronActivity} from '../cron/judgmentsJobsCronState.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../providers/providerRuntimeMatchResolver.ts'
@@ -202,6 +203,9 @@ type FailedRequestSummary = {
 }
 type AnthropicRefusalSummary = Pick<FailedRequestSummary, 'anthropicRefusalArticles' | 'anthropicRefusals'>
 type JudgmentJobBlockedReason =
+  | 'cleanup_stale_backlog'
+  | 'cleanup_stale_budget_exhausted'
+  | 'cleanup_stale_stuck_or_over_budget'
   | 'endpoint_circuit_breaker'
   | 'endpoint_cooldown'
   | 'endpoint_misconfigured'
@@ -320,6 +324,8 @@ type JudgmentJobHealthProgress = {
 type JudgmentJobControlPlaneCronState = CronRuntimeTickState & {active: boolean; inactiveReason: string | null}
 type JudgmentJobControlPlaneDiagnostics = {
   addToQueueCron: JudgmentJobControlPlaneCronState
+  cleanupStaleActivity: JudgmentsCleanupStaleCronActivity
+  cleanupStaleCron: JudgmentJobControlPlaneCronState
   duckdbMemoryLimit: string | null
   duckdbMemoryLimitMiB: number | null
   heavyMaintenanceCrons: CronRuntimeClassState
@@ -2231,28 +2237,68 @@ const getProgressState = ({
                   : 'idle'
 }
 
+const cleanupStaleBacklogPartialReasons = new Set([
+  'candidate-job-budget-exhausted',
+  'provider-admission-reconciliation-budget-exhausted',
+  'provider-telemetry-prune-row-budget-exhausted',
+])
+const cleanupStaleBudgetExhaustedReasons = new Set([
+  'duckdb-step-budget-exhausted',
+  'repair-action-budget-exhausted',
+  'sqlite-job-action-budget-exhausted',
+  'sqlite-retention-batch-budget-exhausted',
+  'sqlite-retention-row-budget-exhausted',
+  'sqlite-row-budget-exhausted',
+  'wall-clock-budget-exhausted',
+])
+
+const getCleanupStaleBlockedReason = (
+  cleanupStaleActivity: JudgmentsCleanupStaleCronActivity,
+): JudgmentJobBlockedReason => {
+  const lastPartialReason = cleanupStaleActivity.lastPartialReason ?? ''
+  const lastPartialWasBacklog = cleanupStaleBacklogPartialReasons.has(lastPartialReason)
+  const lastPartialWasBudgetExhausted =
+    cleanupStaleActivity.exhaustedBudget || cleanupStaleBudgetExhaustedReasons.has(lastPartialReason)
+
+  return cleanupStaleActivity.stale || cleanupStaleActivity.overBudget
+    ? 'cleanup_stale_stuck_or_over_budget'
+    : lastPartialWasBacklog
+      ? 'cleanup_stale_backlog'
+      : lastPartialWasBudgetExhausted
+        ? 'cleanup_stale_budget_exhausted'
+        : cleanupStaleActivity.lastPartial
+          ? 'cleanup_stale_backlog'
+          : null
+}
+
 const getProgressBlockedReason = ({
+  cleanupStaleActivity,
   endpointBlockedReason,
   isStaleImport,
   progressState,
   repairRequired,
 }: {
+  cleanupStaleActivity: JudgmentsCleanupStaleCronActivity
   endpointBlockedReason: JudgmentJobBlockedReason
   isStaleImport: boolean
   progressState: JudgmentJobProgressState
   repairRequired: boolean
 }): JudgmentJobBlockedReason => {
+  const cleanupStaleBlockedReason = getCleanupStaleBlockedReason(cleanupStaleActivity)
+
   return repairRequired
     ? 'storage_repair_required'
     : progressState === 'waiting_for_owner_ack'
       ? 'waiting_for_owner_ack'
       : progressState === 'cooldown' && endpointBlockedReason
         ? endpointBlockedReason
-        : progressState === 'blocked_import' && isStaleImport
-          ? 'stale_import'
-          : progressState === 'blocked_import'
-            ? 'waiting_for_judge_worker'
-            : null
+        : progressState === 'blocked_import' && cleanupStaleBlockedReason
+          ? cleanupStaleBlockedReason
+          : progressState === 'blocked_import' && isStaleImport
+            ? 'stale_import'
+            : progressState === 'blocked_import'
+              ? 'waiting_for_judge_worker'
+              : null
 }
 
 const getJudgmentJobControlPlaneCronState = ({
@@ -2273,6 +2319,11 @@ const getJudgmentJobControlPlaneDiagnostics = (): JudgmentJobControlPlaneDiagnos
     addToQueueCron: getJudgmentJobControlPlaneCronState({
       classState: operationalClassState,
       tickState: cronRuntime.crons[cronRuntimeTickNames.addToQueue],
+    }),
+    cleanupStaleActivity: cronRuntime.cleanupStaleActivity,
+    cleanupStaleCron: getJudgmentJobControlPlaneCronState({
+      classState: operationalClassState,
+      tickState: cronRuntime.crons[cronRuntimeTickNames.cleanupStale],
     }),
     duckdbMemoryLimit: cronRuntime.duckdbMemoryLimit,
     duckdbMemoryLimitMiB: cronRuntime.duckdbMemoryLimitMiB,
@@ -2331,6 +2382,7 @@ const getJudgmentJobHealthProgress = ({
   const activePromptCount = sqliteHealth.promptCounts.claimed + sqliteHealth.promptCounts.running
   const endpointBlockedReason = getEndpointBlockedReason(endpointHealth)
   const repairRequired = isRepairRequiredAction(recommendedNextAction)
+  const cleanupStaleActivity = getCronRuntimeDiagnostics().cleanupStaleActivity
   const progressState = getProgressState({
     activeImportWorkCount: activeImportLeases.length,
     endpointBlockedReason,
@@ -2344,6 +2396,7 @@ const getJudgmentJobHealthProgress = ({
     repairRequired,
   })
   const blockedReason = getProgressBlockedReason({
+    cleanupStaleActivity,
     endpointBlockedReason,
     isStaleImport: isStaleImportJob(job),
     progressState,
