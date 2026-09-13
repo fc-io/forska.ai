@@ -3067,8 +3067,25 @@ test('duckdb service blocks marker-only indexed-table repair while preserving pe
 })
 
 const migrationGatedRepairMarkerCases = [
-  {name: '0230 conflict-resolution', slug: 'conflict-resolution', tableName: 'comparison_project_conflict_resolution'},
-  {name: '0231 chunk-manifest', slug: 'chunk-manifest', tableName: 'review_rebuild_chunk_manifest'},
+  {
+    name: '0228 review count serving',
+    schemaName: 'mart',
+    slug: 'review-count-serving',
+    tableName: 'review_article_count_serving_v4',
+  },
+  {
+    name: '0228 review facet serving',
+    schemaName: 'mart',
+    slug: 'review-facet-serving',
+    tableName: 'review_filter_facet_serving_v4',
+  },
+  {
+    name: '0230 conflict-resolution',
+    schemaName: 'app',
+    slug: 'conflict-resolution',
+    tableName: 'comparison_project_conflict_resolution',
+  },
+  {name: '0231 chunk-manifest', schemaName: 'app', slug: 'chunk-manifest', tableName: 'review_rebuild_chunk_manifest'},
 ]
 
 for (const markerCase of migrationGatedRepairMarkerCases) {
@@ -3087,8 +3104,8 @@ for (const markerCase of migrationGatedRepairMarkerCases) {
       JSON.stringify({
         phase: 'runtime-fatal-index-delete',
         reason: 'index-delete',
-        repairSpecs: [{schemaName: 'app', tableName: markerCase.tableName}],
-        schemaName: 'app',
+        repairSpecs: [{schemaName: markerCase.schemaName, tableName: markerCase.tableName}],
+        schemaName: markerCase.schemaName,
         tableName: markerCase.tableName,
       }),
     )
@@ -6249,6 +6266,9 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     expect(countServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_article_count_serving_v4')
     expect(countServingProbe?.mutationProbeSql).toContain('SET stale_reason = stale_reason')
     expect(countServingProbe?.mutationProbeSql).not.toContain('count_updated_at')
+    expect(countServingProbe?.skipStartupPreflightUntilMigration).toBe(
+      '0228_rebuildReviewSummaryServingWithoutIndexes.sql',
+    )
     const filteredCountServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filtered_count_serving_v4'
     })
@@ -6281,6 +6301,9 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     expect(facetServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_filter_facet_serving_v4')
     expect(facetServingProbe?.mutationProbeSql).toContain('SET availability = availability')
     expect(facetServingProbe?.mutationProbeSql).not.toContain('facet_updated_at')
+    expect(facetServingProbe?.skipStartupPreflightUntilMigration).toBe(
+      '0228_rebuildReviewSummaryServingWithoutIndexes.sql',
+    )
     const filterOptionServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_option_serving_v4'
     })

@@ -1426,6 +1426,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'filter_key',
     ],
     schemaName: 'mart',
+    skipStartupPreflightUntilMigration: '0228_rebuildReviewSummaryServingWithoutIndexes.sql',
     tableName: 'review_article_count_serving_v4',
   },
   {
@@ -1667,6 +1668,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     recreateRepairPrimaryKeyIndex: false,
     recreateSecondaryIndexes: false,
     schemaName: 'mart',
+    skipStartupPreflightUntilMigration: '0228_rebuildReviewSummaryServingWithoutIndexes.sql',
     tableName: 'review_filter_facet_serving_v4',
   },
   {

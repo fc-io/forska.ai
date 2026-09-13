@@ -183,6 +183,67 @@ test('api read-only DuckDB uses the owner background query path when this proces
   }
 })
 
+test('explicit owner-main read-only DuckDB queries keep the read-only guard and use the main query path', async () => {
+  const duckdbServiceModulePath = new URL('../utils/duckdbService.ts', import.meta.url).href
+  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).href
+  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).href
+  const calls: Array<{statement: string; workloadContext: unknown}> = []
+
+  void mock.module(serverRuntimeRoleModulePath, () => {
+    return {
+      canCurrentServerOwnDuckdb: () => {
+        return true
+      },
+      ensureCurrentDuckdbOwnerLease: async () => {},
+      registerDuckdbOwnerDemotionHandler: () => {},
+      releaseCurrentDuckdbOwnerLease: async () => {},
+    }
+  })
+
+  void mock.module(duckdbServiceModulePath, () => {
+    return {
+      getReadOnlyDuckdbRuntimeOptions: () => {
+        return {}
+      },
+      runDuckdbBackgroundJsonQuery: async () => {
+        throw new Error('owner-main read used the background query path')
+      },
+      runDuckdbJsonQuery: async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
+        calls.push({statement, workloadContext})
+        return [{value: 'owner-main'}] as T[]
+      },
+      runMeasuredDuckdbJsonWorkload: async <T>(input: {work: () => Promise<T>}) => {
+        return input.work()
+      },
+    }
+  })
+
+  try {
+    const readOnlyDuckdbService = (await import(
+      `${readOnlyDuckdbServiceModulePath}?api-owner-main-read-only=${Date.now()}`
+    )) as ReadOnlyDuckdbServiceModule
+    const workloadContext = {routeOrJobKey: 'judgments.cleanupStale', workloadClass: 'maintenance'} as const
+    const rows = await readOnlyDuckdbService.runReadOnlyDuckdbOwnerMainJsonQuery<{value: string}>(
+      'judge-worker',
+      'SELECT value FROM sample',
+      workloadContext,
+    )
+    let writeError: string | null = null
+
+    try {
+      await readOnlyDuckdbService.runReadOnlyDuckdbOwnerMainJsonQuery('judge-worker', 'UPDATE sample SET value = 1')
+    } catch (error) {
+      writeError = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(rows).toEqual([{value: 'owner-main'}])
+    expect(calls).toEqual([{statement: 'SELECT value FROM sample', workloadContext}])
+    expect(writeError).toContain('read-only DuckDB helper rejected a write-capable statement')
+  } finally {
+    mock.restore()
+  }
+})
+
 test('app read-only database service forwards workload context', async () => {
   const appReadOnlyDatabaseServiceModulePath = new URL('./appReadOnlyDatabaseService.ts', import.meta.url).href
   const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).href
@@ -197,6 +258,9 @@ test('app read-only database service forwards workload context', async () => {
         workloadContext?: unknown,
       ): Promise<T[]> => {
         calls.push({context, statement, workloadContext})
+        return []
+      },
+      runReadOnlyDuckdbOwnerMainJsonQuery: async <T>(): Promise<T[]> => {
         return []
       },
       validateReadOnlyDuckdbService: async () => {},

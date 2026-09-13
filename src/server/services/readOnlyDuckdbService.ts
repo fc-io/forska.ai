@@ -11,6 +11,7 @@ import {
   type DuckdbWorkloadContext,
   getReadOnlyDuckdbRuntimeOptions,
   runDuckdbBackgroundJsonQuery,
+  runDuckdbJsonQuery,
   runMeasuredDuckdbJsonWorkload,
 } from '../utils/duckdbService.ts'
 import {getEnv} from '../utils/env.ts'
@@ -233,6 +234,20 @@ const runOwnerGuardedReadQuery = async <T>(
   }
 
   return runDuckdbBackgroundJsonQuery<T>(statement, workloadContext)
+}
+
+export const runReadOnlyDuckdbOwnerMainJsonQuery = async <T>(
+  context: ReadOnlyDuckdbContext,
+  statement: string,
+  workloadContext?: DuckdbWorkloadContext,
+): Promise<T[]> => {
+  assertReadOnlyDuckdbSql(context, statement)
+
+  if (!shouldUseOwnerGuardedReadPath()) {
+    throw getReadOnlyDuckdbUnavailableError(context, 'owner guarded read path is not available')
+  }
+
+  return runDuckdbJsonQuery<T>(statement, workloadContext)
 }
 
 export const runReadOnlyDuckdbJsonQuery = async <T>(
