@@ -6,6 +6,11 @@ import {buildReviewDirtyProjectionIdentity} from './reviewProjectionIdentity.ts'
 import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {getReviewServingProjectionComponentIdentityKey} from './reviewServingProjectorDomain.ts'
+import {
+  getReviewServingReviewConfigHash,
+  type ReviewServingProjectPromptConfigRow,
+  type ReviewServingProjectReviewSettingsRow,
+} from './reviewServingReviewConfig.ts'
 import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedImportProjector.ts'
 import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
 
@@ -151,6 +156,63 @@ const getJsonObjectsFromSql = (statement: string) => {
   })
 }
 
+const getReviewConfigHashFromFakeRequest = (request: FakeRequestRow) => {
+  const parsed =
+    typeof request.identityJson === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(request.identityJson) as unknown
+          } catch (_error) {
+            return null
+          }
+        })()
+      : request.identityJson
+
+  return parsed !== null
+    && typeof parsed === 'object'
+    && !Array.isArray(parsed)
+    && typeof (parsed as {reviewConfigHash?: unknown}).reviewConfigHash === 'string'
+    ? (parsed as {reviewConfigHash: string}).reviewConfigHash
+    : null
+}
+
+const getFakeProjectReviewSettings = (stats: FakeStats): ReviewServingProjectReviewSettingsRow => {
+  return {
+    humanJudgmentMode: 'prompt',
+    modelExecutionOptions: null,
+    modelId: `model-${stats.modelExecutionIdentityDigest ?? 'default'}`,
+    modelProviderBaseUrl: null,
+    modelProviderConnectionId: null,
+    modelProviderKind: null,
+    modelRemoteModelId: null,
+    modelVariant: null,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+}
+
+const getFakeProjectPromptConfigRows = (stats: FakeStats): ReviewServingProjectPromptConfigRow[] => {
+  return Array.from({length: stats.enabledPromptCount}, (_, index) => {
+    return {
+      answerSchemaHash: null,
+      promptId: `prompt-${index + 1}`,
+      promptOrder: index,
+      promptTextHash: `${stats.promptIdentityDigest ?? 'prompt'}-${index + 1}`,
+      settingsVersion: 'prompt-v1',
+      thresholdVersion: null,
+    }
+  })
+}
+
+const getFakeReviewConfigHash = (stats: FakeStats) => {
+  return getReviewServingReviewConfigHash({
+    ...getFakeProjectReviewSettings(stats),
+    promptConfigRows: getFakeProjectPromptConfigRows(stats),
+  })
+}
+
 const baseStats = {
   activeSnapshotCount: 1,
   enabledPromptCount: 2,
@@ -219,6 +281,7 @@ const getFakeBootstrapSourceWatermarks = (options: FakeRequestDatabaseOptions) =
 
 const getFakeReusableProjectionManifest = (
   component: ReviewServingProjectionComponent,
+  reviewConfigHash: string | null,
   sourceWatermarks: Record<string, number>,
   options: FakeRequestDatabaseOptions,
 ) => {
@@ -246,7 +309,7 @@ const getFakeReusableProjectionManifest = (
     projectionComponent: component,
     projectionIdentity: getFakeBootstrapProjectionIdentity(component),
     promptConfigHash: null,
-    reviewConfigHash: null,
+    reviewConfigHash,
     status: new Set(options.activeBootstrapComponentsWithoutChunks ?? []).has(component) ? 'active' : 'candidate',
   } satisfies FakeProjectionManifestRow
 }
@@ -288,7 +351,7 @@ const getFakeArticleRanges = (chunkCount: number, stats: FakeStats) => {
 }
 
 const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabaseOptions = {}) => {
-  const effectiveStats = {...stats, activeSnapshotCount: Math.min(stats.activeSnapshotCount, stats.snapshotCount)}
+  let effectiveStats = {...stats, activeSnapshotCount: Math.min(stats.activeSnapshotCount, stats.snapshotCount)}
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
   const reusableBootstrapSourceWatermarks = getFakeBootstrapSourceWatermarks(options)
@@ -299,6 +362,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     ...activeNoChunkBootstrapComponentSet,
   ])
   const statements: string[] = []
+  const queryWorkloadContexts: Array<{statement: string; workloadContext: DuckdbWorkloadContext | undefined}> = []
   const transactionStatements: string[][] = []
   const transactionWorkloadContexts: Array<DuckdbWorkloadContext | undefined> = []
   const componentStateJson = {
@@ -319,7 +383,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       optionalComponentsJson: [],
       projectId: 'project-v4',
       requiredComponentsJson: fakeRebuildComponents,
-      reviewConfigHash: null,
+      reviewConfigHash: getFakeReviewConfigHash(effectiveStats),
       selectedImportSnapshotId: getFakeSelectedImportSnapshotId(
         reusableBootstrapSourceWatermarks.importRunArticle ?? 0,
       ),
@@ -331,7 +395,12 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   }
 
   reusableBootstrapComponentSet.forEach((component) => {
-    const manifest = getFakeReusableProjectionManifest(component, reusableBootstrapSourceWatermarks, options)
+    const manifest = getFakeReusableProjectionManifest(
+      component,
+      getFakeReviewConfigHash(effectiveStats),
+      reusableBootstrapSourceWatermarks,
+      options,
+    )
 
     projectionManifests.set(manifest.manifestId, manifest)
   })
@@ -397,6 +466,11 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     }
 
     const strings = getSqlStrings(statement)
+    const jsonObjects = getJsonObjectsFromSql(statement)
+    const identityJson =
+      jsonObjects.find((value) => {
+        return (value as {requestKind?: unknown}).requestKind === 'v4-review-serving-rebuild'
+      }) ?? '{}'
     const requestId = strings[0] ?? ''
     const status = (strings[6] ?? 'admitted') as FakeRequestRow['status']
     const admissionState = (strings[7] ?? 'admitted') as FakeRequestRow['admissionState']
@@ -414,7 +488,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       createdAt: '2026-06-20T10:04:00.000Z',
       diagnosticsJson,
       failedAt: null,
-      identityJson: strings[5] ?? '{}',
+      identityJson,
       lastError: null,
       leaseExpiresAt: null,
       leaseOwner: null,
@@ -434,8 +508,9 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     })
   }
 
-  const queryJson = async <T>(statement: string) => {
+  const queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
     statements.push(statement)
+    queryWorkloadContexts.push({statement, workloadContext})
 
     if (statement.includes('NTILE(')) {
       const chunkCount = Number(statement.match(/NTILE\((\d+)\)/u)?.[1] ?? 1)
@@ -445,6 +520,14 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
 
     if (statement.includes('WITH project_settings')) {
       return [effectiveStats] as T[]
+    }
+
+    if (statement.includes('FROM app.project project') && statement.includes('LEFT JOIN app.model model')) {
+      return [getFakeProjectReviewSettings(effectiveStats)] as T[]
+    }
+
+    if (statement.includes('FROM app.project_prompt project_prompt')) {
+      return getFakeProjectPromptConfigRows(effectiveStats) as T[]
     }
 
     if (statement.includes('FROM app.review_selected_import_snapshot')) {
@@ -567,6 +650,9 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
         const strings = getSqlStrings(statement)
         const projectId = strings[0] ?? ''
         const reasonFilter = statement.includes('AND reason =') ? strings[1] : undefined
+        const reviewConfigHashPathIndex = strings.indexOf('$.reviewConfigHash')
+        const reviewConfigHashFilter =
+          reviewConfigHashPathIndex === -1 ? undefined : strings[reviewConfigHashPathIndex + 1]
         const allowedStatuses = statement.includes("status IN ('admitted', 'running')")
           ? ['admitted', 'running']
           : ['admitted']
@@ -576,6 +662,8 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
             && allowedStatuses.includes(request.status)
             && request.admissionState === 'admitted'
             && (reasonFilter === undefined || request.reason === reasonFilter)
+            && (reviewConfigHashFilter === undefined
+              || getReviewConfigHashFromFakeRequest(request) === reviewConfigHashFilter)
           )
         })
 
@@ -615,7 +703,22 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     requests.set(requestId, {...request, status})
   }
 
-  return {database, setRequestStatus, statements, transactionStatements, transactionWorkloadContexts}
+  const setStats = (nextStats: FakeStats) => {
+    effectiveStats = {
+      ...nextStats,
+      activeSnapshotCount: Math.min(nextStats.activeSnapshotCount, nextStats.snapshotCount),
+    }
+  }
+
+  return {
+    database,
+    queryWorkloadContexts,
+    setRequestStatus,
+    setStats,
+    statements,
+    transactionStatements,
+    transactionWorkloadContexts,
+  }
 }
 
 test('V4 rebuild request service estimates admission budget from project data', async () => {
@@ -1188,6 +1291,59 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain('UPDATE app.review_rebuild_request')
   expect(statements.join('\n')).toContain('WHEN priority < 1000 THEN 1000')
+})
+
+test('V4 missing snapshot rebuild requests do not reuse active work for a different review config', async () => {
+  const {database, queryWorkloadContexts, setStats, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    activeSnapshotCount: 0,
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+  })
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+  setStats({
+    ...baseStats,
+    activeSnapshotCount: 0,
+    promptIdentityDigest: 'prompt-digest-v2',
+    promptUpdatedAt: '2026-06-20T10:06:00.000Z',
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+  })
+  const secondRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+  const firstIdentity = firstRequest.identityJson as {reviewConfigHash?: unknown}
+  const secondIdentity = secondRequest.identityJson as {reviewConfigHash?: unknown}
+  const rebuildRequestInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+  const contextlessQueries = queryWorkloadContexts.filter(({workloadContext}) => {
+    return workloadContext === undefined
+  })
+
+  expect(typeof firstIdentity.reviewConfigHash).toBe('string')
+  expect(typeof secondIdentity.reviewConfigHash).toBe('string')
+  expect(secondIdentity.reviewConfigHash).not.toBe(firstIdentity.reviewConfigHash)
+  expect(secondRequest.requestId).not.toBe(firstRequest.requestId)
+  expect(rebuildRequestInsertCount).toBe(2)
+  expect(contextlessQueries).toEqual([])
+  expect(queryWorkloadContexts.length).toBeGreaterThan(0)
+  for (const {workloadContext} of queryWorkloadContexts) {
+    expect(workloadContext).toMatchObject({
+      projectId: 'project-v4',
+      routeOrJobKey: 'reviewServing.v4RebuildRequest',
+      workloadClass: 'reviewProjector',
+    })
+  }
 })
 
 test('V4 missing snapshot rebuild requests retouch equal foreground priority on repeated foreground access', async () => {

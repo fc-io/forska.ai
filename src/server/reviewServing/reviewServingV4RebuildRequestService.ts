@@ -117,6 +117,34 @@ const getReviewServingV4RebuildRequestWorkloadContext = (projectId: string): Duc
   }
 }
 
+const getContextualReviewServingV4RebuildRequestDatabase = (
+  database: ReviewServingChunkManifestRepositoryDatabase,
+  workloadContext: DuckdbWorkloadContext,
+): ReviewServingChunkManifestRepositoryDatabase => {
+  return {
+    queryJson: (statement, queryWorkloadContext = workloadContext) => {
+      return database.queryJson(statement, queryWorkloadContext)
+    },
+    run: (statement, queryWorkloadContext = workloadContext) => {
+      return database.run(statement, queryWorkloadContext)
+    },
+    transaction: (operation, transactionWorkloadContext = workloadContext) => {
+      return database.transaction((tx) => {
+        const contextualTransaction: ReviewServingChunkManifestRepositoryTransaction = {
+          queryJson: (statement, queryWorkloadContext = transactionWorkloadContext) => {
+            return tx.queryJson(statement, queryWorkloadContext)
+          },
+          run: (statement, queryWorkloadContext = transactionWorkloadContext) => {
+            return tx.run(statement, queryWorkloadContext)
+          },
+        }
+
+        return operation(contextualTransaction)
+      }, transactionWorkloadContext)
+    },
+  }
+}
+
 type ReviewServingV4RebuildStatsRow = {
   activeSnapshotCount: number
   enabledPromptCount: number
@@ -1786,18 +1814,27 @@ export const requestReviewServingV4RebuildEffect = (
   database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   return Effect.tryPromise(async () => {
-    const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(input.projectId, database)
+    const workloadContext = getReviewServingV4RebuildRequestWorkloadContext(input.projectId)
+    const requestDatabase = getContextualReviewServingV4RebuildRequestDatabase(database, workloadContext)
+    const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(
+      input.projectId,
+      requestDatabase,
+      workloadContext,
+    )
     const activeRequest =
       input.reason === 'missingReviewServingSnapshot'
         ? await getActiveReviewServingRebuildRequestForProject(
-            {projectId: input.projectId, reason: 'missingReviewServingSnapshot'},
-            database,
+            {projectId: input.projectId, reason: 'missingReviewServingSnapshot', reviewConfigHash},
+            requestDatabase,
           )
         : null
 
     const activeRequestUsesLegacyRequiredEnrichmentBootstrap =
       activeRequest !== null && input.reason === 'missingReviewServingSnapshot'
-        ? await hasLegacyRequiredEnrichmentBootstrapCandidate({projectId: input.projectId, reviewConfigHash}, database)
+        ? await hasLegacyRequiredEnrichmentBootstrapCandidate(
+            {projectId: input.projectId, reviewConfigHash},
+            requestDatabase,
+          )
         : false
 
     if (activeRequest !== null && !activeRequestUsesLegacyRequiredEnrichmentBootstrap) {
@@ -1805,7 +1842,7 @@ export const requestReviewServingV4RebuildEffect = (
         return (
           (await boostReviewServingRebuildRequestPriority(
             {priority: input.priority, requestId: activeRequest.requestId},
-            database,
+            requestDatabase,
           )) ?? activeRequest
         )
       }
@@ -1814,7 +1851,7 @@ export const requestReviewServingV4RebuildEffect = (
     }
 
     const requestedComponents = input.components ?? defaultReviewServingV4RebuildComponents
-    const stats = await getReviewServingV4RebuildStats({projectId: input.projectId, reviewConfigHash}, database)
+    const stats = await getReviewServingV4RebuildStats({projectId: input.projectId, reviewConfigHash}, requestDatabase)
     const hasQueuedSnapshot = getSafeCount(stats.snapshotCount) > 0
     const hasActiveSnapshot = getSafeCount(stats.activeSnapshotCount) > 0
     const isFreshBootstrap =
@@ -1847,13 +1884,13 @@ export const requestReviewServingV4RebuildEffect = (
       ? await runReviewServingV4RebuildStatsPhase('bootstrapArticleRanges', () => {
           return getReviewServingV4BootstrapArticleRanges(
             {chunkCount: bootstrapChunkCount, projectId: input.projectId},
-            database,
+            requestDatabase,
           )
         })
       : []
     const bootstrapSourceWatermarks = isFreshBootstrap
       ? await runReviewServingV4RebuildStatsPhase('bootstrapSourceWatermarks', () => {
-          return getReviewServingV4BootstrapSourceWatermarks(input, database)
+          return getReviewServingV4BootstrapSourceWatermarks(input, requestDatabase)
         })
       : null
     const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
@@ -1867,7 +1904,7 @@ export const requestReviewServingV4RebuildEffect = (
               reviewConfigHash,
               sourceWatermarks: bootstrapSourceWatermarks ?? {},
             },
-            database,
+            requestDatabase,
           )
         })
       : null
@@ -1900,11 +1937,9 @@ export const requestReviewServingV4RebuildEffect = (
       })
     }
 
-    const workloadContext = getReviewServingV4RebuildRequestWorkloadContext(input.projectId)
-
     if (bootstrap !== null && requestOverBudgetReason === null) {
       await runReviewServingV4RebuildStatsPhase('seedBootstrap', () => {
-        return seedReviewServingV4Bootstrap(bootstrap, database)
+        return seedReviewServingV4Bootstrap(bootstrap, requestDatabase)
       })
     }
 
@@ -1912,7 +1947,7 @@ export const requestReviewServingV4RebuildEffect = (
       const promotion = await runReviewServingV4RebuildStatsPhase('promoteReusedBootstrap', () => {
         return promoteSeededReviewServingV4BootstrapCandidate(
           {projectId: bootstrap.projectId, snapshotId: bootstrap.snapshotId},
-          database,
+          requestDatabase,
         )
       })
 
@@ -1929,13 +1964,6 @@ export const requestReviewServingV4RebuildEffect = (
     }
 
     const chunks = bootstrap?.chunks
-    const requestDatabase = {
-      queryJson: database.queryJson,
-      run: database.run,
-      transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
-        return database.transaction(operation, workloadContext)
-      },
-    }
 
     return runReviewServingV4RebuildStatsPhase('createRequest', () => {
       return createReviewServingRebuildRequest(
@@ -1955,7 +1983,7 @@ export const requestReviewServingV4RebuildEffect = (
             v4Cutover: true,
           },
           estimate: requestEstimate,
-          identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild'},
+          identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild', reviewConfigHash},
           priority: input.priority,
           projectId: input.projectId,
           reason: input.reason,

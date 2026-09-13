@@ -8,6 +8,7 @@ import {
   boostActiveReviewServingRebuildRequestForProject,
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
+  getActiveReviewServingRebuildRequestForProject,
   releaseFailedRequestlessReviewServingRebuildChunks,
   type ReviewServingRebuildRequestStatus,
   terminalizeStaleZeroChunkReviewServingRebuildRequest,
@@ -900,6 +901,39 @@ test('boosting rebuild request priority refreshes update time for diagnostics or
   expect(joined).toContain('WHEN priority < 500 THEN 500')
   expect(joined).toContain('updated_at = current_timestamp')
   expect(joined).toContain('AND priority <= 500')
+})
+
+test('active project rebuild request lookup can be scoped by review config', async () => {
+  const statements: string[] = []
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(
+      operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+    ): Promise<T> => {
+      return operation(database)
+    },
+  }
+
+  await getActiveReviewServingRebuildRequestForProject(
+    {projectId: 'project-v4', reason: 'missingReviewServingSnapshot', reviewConfigHash: 'review:current'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain("project_id = 'project-v4'")
+  expect(joined).toContain("AND reason = 'missingReviewServingSnapshot'")
+  expect(joined).toContain("json_extract_string(identity_json, '$.reviewConfigHash')")
+  expect(joined).toContain("IS NOT DISTINCT FROM 'review:current'")
+  expect(joined).toContain('FROM app.review_rebuild_chunk_manifest chunk')
+  expect(joined).toContain('INNER JOIN app.review_serving_snapshot_manifest snapshot')
+  expect(joined).toContain('snapshot.review_config_hash IS NOT DISTINCT FROM')
 })
 
 test('boosting an active project rebuild request uses a lightweight foreground update', async () => {
