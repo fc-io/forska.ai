@@ -174,6 +174,278 @@ test('judgment maintenance crons pause while DuckDB exclusive work is active', (
   expect(result.calls).toEqual([])
 })
 
+test('judgment operational cron gate parks judgment maintenance work', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {resolve} = await import('node:path')
+        const {pathToFileURL} = await import('node:url')
+
+        const getModulePath = (relativePath) => {
+          return pathToFileURL(resolve(relativePath)).href
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const envModulePath = getModulePath('./src/server/utils/env.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const sampleTelemetryModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')
+        const exclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
+        const projectTransferModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferBackgroundActivity.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const cronConfigs = []
+        const calls = []
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              use() {
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              cronConfigs.push(config)
+              return () => {}
+            },
+          }
+        })
+        void mock.module(envModulePath, () => {
+          return {
+            env: {
+              RUN_SERVER_JUDGMENT_CLEANUP_STALE_CRON: true,
+              RUN_SERVER_JUDGMENT_LLM_STATUS_CRON: true,
+              RUN_SERVER_JUDGMENT_OPERATIONAL_CRON: false,
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-operational-cron-disabled'}
+        })
+        void mock.module(backgroundImportModulePath, () => {
+          return {runJudgmentJobSqliteBackgroundImport: async () => calls.push('import')}
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {judgmentsJobsAddToQueue: async () => calls.push('add-to-queue')}
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {judgmentsJobsCheckLLMStatus: async () => calls.push('check-status')}
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {judgmentsJobsCleanupStale: async () => calls.push('cleanup-stale')}
+        })
+        void mock.module(sampleTelemetryModulePath, () => {
+          return {judgmentsJobsSampleProviderTelemetry: async () => calls.push('sample-telemetry')}
+        })
+        void mock.module(exclusiveWorkModulePath, () => {
+          return {
+            hasActiveDuckdbExclusiveWork: () => false,
+            isDuckdbExclusiveWorkAdmissionError: () => false,
+          }
+        })
+        void mock.module(projectTransferModulePath, () => {
+          return {hasActiveProjectTransferBackgroundActivity: () => false}
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            getCurrentServerRole: () => 'maintenance-worker',
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => calls.push('failure-log'),
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        await import(judgmentsJobsModulePath)
+
+        for (const name of [
+          'judgments-jobs-import-judgments',
+          'judgments-jobs-add-to-queue',
+          'judgments-jobs-cleanup-stale',
+          'judgments-jobs-sample-provider-telemetry',
+          'judgments-jobs-check-llm-status',
+        ]) {
+          const cronConfig = cronConfigs.find((config) => {
+            return config.name === name
+          })
+          await cronConfig.run()
+        }
+
+        console.log(JSON.stringify({calls}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Judgment operational cron gate test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {calls: string[]}
+
+  expect(result.calls).toEqual([])
+})
+
+test('judgment operational cron gates cleanup-stale and llm-status independently', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {resolve} = await import('node:path')
+        const {pathToFileURL} = await import('node:url')
+
+        const getModulePath = (relativePath) => {
+          return pathToFileURL(resolve(relativePath)).href
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const envModulePath = getModulePath('./src/server/utils/env.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const sampleTelemetryModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts')
+        const exclusiveWorkModulePath = getModulePath('./src/server/utils/duckdbExclusiveWork.ts')
+        const projectTransferModulePath = getModulePath('./src/server/services/projectTransfer/projectTransferBackgroundActivity.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const cronConfigs = []
+        const calls = []
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              use() {
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              cronConfigs.push(config)
+              return () => {}
+            },
+          }
+        })
+        void mock.module(envModulePath, () => {
+          return {
+            env: {
+              RUN_SERVER_JUDGMENT_CLEANUP_STALE_CRON: false,
+              RUN_SERVER_JUDGMENT_LLM_STATUS_CRON: false,
+              RUN_SERVER_JUDGMENT_OPERATIONAL_CRON: true,
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-selective-operational-cron'}
+        })
+        void mock.module(backgroundImportModulePath, () => {
+          return {runJudgmentJobSqliteBackgroundImport: async () => calls.push('import')}
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {judgmentsJobsAddToQueue: async () => calls.push('add-to-queue')}
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {judgmentsJobsCheckLLMStatus: async () => calls.push('check-status')}
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {judgmentsJobsCleanupStale: async () => calls.push('cleanup-stale')}
+        })
+        void mock.module(sampleTelemetryModulePath, () => {
+          return {judgmentsJobsSampleProviderTelemetry: async () => calls.push('sample-telemetry')}
+        })
+        void mock.module(exclusiveWorkModulePath, () => {
+          return {
+            hasActiveDuckdbExclusiveWork: () => false,
+            isDuckdbExclusiveWorkAdmissionError: () => false,
+          }
+        })
+        void mock.module(projectTransferModulePath, () => {
+          return {hasActiveProjectTransferBackgroundActivity: () => false}
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            getCurrentServerRole: () => 'maintenance-worker',
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogConfig: () => ({
+              logDir: '/tmp/forska-test-logs',
+              logLevel: 'INFO',
+              logStderrLevel: 'ERROR',
+              runtimeProfile: 'local',
+            }),
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => calls.push('failure-log'),
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        await import(judgmentsJobsModulePath)
+
+        for (const name of [
+          'judgments-jobs-import-judgments',
+          'judgments-jobs-add-to-queue',
+          'judgments-jobs-cleanup-stale',
+          'judgments-jobs-sample-provider-telemetry',
+          'judgments-jobs-check-llm-status',
+        ]) {
+          const cronConfig = cronConfigs.find((config) => {
+            return config.name === name
+          })
+          await cronConfig.run()
+        }
+
+        console.log(JSON.stringify({calls}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Judgment selective cron gate test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {calls: string[]}
+
+  expect(result.calls.sort()).toEqual(['add-to-queue', 'import', 'sample-telemetry'])
+})
+
 test('judgment import cron stays enabled at the low-memory cap', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

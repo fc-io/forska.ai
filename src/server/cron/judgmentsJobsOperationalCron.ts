@@ -2,6 +2,7 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
+import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
@@ -34,17 +35,29 @@ const logJudgingCronError = (label: string, error: unknown) => {
   }
 }
 
+const isOperationalJudgmentCronEnabled = (cronName: CronRuntimeTickName): boolean => {
+  if (!env.RUN_SERVER_JUDGMENT_OPERATIONAL_CRON) {
+    return false
+  }
+
+  return cronName === cronRuntimeTickNames.cleanupStale
+    ? env.RUN_SERVER_JUDGMENT_CLEANUP_STALE_CRON
+    : cronName === cronRuntimeTickNames.checkLlmStatus
+      ? env.RUN_SERVER_JUDGMENT_LLM_STATUS_CRON
+      : true
+}
+
 const shouldRunJudgmentMaintenanceCron = (): boolean => {
   return shouldCurrentServerRunMaintenanceLoops() && !hasActiveDuckdbExclusiveWork()
 }
 
 const shouldRunOperationalJudgmentCron = (cronName: CronRuntimeTickName): boolean => {
-  if (shouldRunJudgmentMaintenanceCron()) {
-    return true
+  if (!isOperationalJudgmentCronEnabled(cronName) || !shouldRunJudgmentMaintenanceCron()) {
+    recordCronRuntimeTick(cronName, 'skipped')
+    return false
   }
 
-  recordCronRuntimeTick(cronName, 'skipped')
-  return false
+  return true
 }
 
 const recordJudgmentCronError = (cronName: CronRuntimeTickName, label: string, error: unknown) => {

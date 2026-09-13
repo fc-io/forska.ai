@@ -39,6 +39,27 @@ test('cleanupStale does not query token-use request attempts directly', () => {
   expect(source).not.toContain('id NOT IN (${getQuotedStringList(sqliteJobIds).join')
 })
 
+test('cleanupStale candidate reads stay sequential and workload-context bounded', () => {
+  const source = readFileSync(new URL('./judgmentsJobsCleanupStale.ts', import.meta.url), 'utf8')
+  const selectCandidatesSource = source.slice(
+    source.indexOf('const selectCleanupCandidates = async'),
+    source.indexOf('const reapStaleOutboxClaimsForJobs = async'),
+  )
+
+  expect(selectCandidatesSource).toContain('runCandidateSelector')
+  expect(selectCandidatesSource).not.toContain('Promise.all')
+  expect(source).toContain('getCleanupStaleDuckdbWorkloadContext')
+  expect(source).toContain('Math.min(30_000, getCleanupBudgetRemainingMs(budget))')
+  expect(source).toContain("getCleanupStaleDuckdbWorkloadContext('drainingLocalSqliteJobs'")
+  expect(source).toContain("getCleanupStaleDuckdbWorkloadContext('recoverableOomQuarantinedJobs'")
+  expect(selectCandidatesSource).toContain('const selection = await select()')
+  expect(selectCandidatesSource).toContain(
+    'ensureCleanupBudgetRemaining({budget, reason, result}) ? selection : emptySelection',
+  )
+  expect(selectCandidatesSource).toContain('getDrainingSqliteJobIds({budget,')
+  expect(selectCandidatesSource).toContain('getMissingLocalSqliteDrainingJobIds(budget.maxSqliteJobActions, budget)')
+})
+
 beforeAll(async () => {
   const [
     {migrateDuckdb},

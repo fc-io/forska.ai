@@ -372,6 +372,48 @@ test('review filter route service marks selected schema prompt fast when selecte
   expect(statements.join('\n')).not.toContain("'review:promptAnswer:prompt-1:maybe'")
 })
 
+test('review filter route service avoids posting probes before posting is materialized', async () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.review_article_filter_posting_serving_v4')) {
+        throw new Error('posting should not be probed before the posting component is materialized')
+      }
+
+      return statement.includes('FROM mart.review_filter_option_serving_v4') ? ([] as T[]) : ([] as T[])
+    },
+  }
+
+  const response = await getReviewFiltersFromServing({
+    dependencies: {
+      currentReviewConfigHash: 'config-1',
+      database,
+      manifestDatabase: createManifestDatabase('active', [
+        'display',
+        'projectScope',
+        'selectedImport',
+        'llmStatus',
+        'humanStatus',
+      ]),
+    },
+    mode: 'review',
+    params: {projectId: 'project-1'},
+    promptRows: [
+      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: "'yes' | 'no' | 'maybe'"},
+    ],
+  })
+
+  expect(response.promptFilterDefinitions[0]).toMatchObject({
+    articleReadinessState: 'slow',
+    debugDisplayState: 'project/slow',
+    optionSourceState: 'schema',
+  })
+  expect(response.searchScope).toMatchObject({availability: 'unavailable', searchIdentity: ''})
+  expect(statements.join('\n')).not.toContain('FROM mart.review_article_filter_posting_serving_v4')
+})
+
 test('review filter route service keeps prompt debug readiness slow when any answer bucket is unavailable', async () => {
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string): Promise<T[]> => {

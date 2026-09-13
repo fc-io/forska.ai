@@ -469,7 +469,7 @@ const getReviewRebuildRequestMetadata = async (requestId: string) => {
   return {priority: Number(row.priority), updatedAt: row.updatedAt}
 }
 
-const getReviewRebuildRequestCount = async (projectId: string) => {
+const getReviewRebuildRequestCount = async (projectId: string, reason = 'missingReviewServingSnapshot') => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -479,7 +479,7 @@ const getReviewRebuildRequestCount = async (projectId: string) => {
     SELECT COUNT(*) AS count
     FROM app.review_rebuild_request
     WHERE project_id = '${projectId}'
-      AND reason = 'missingReviewServingSnapshot'
+      AND reason = '${reason}'
       AND status = 'admitted'
       AND admission_state = 'admitted'
   `)
@@ -1989,6 +1989,12 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
   expect(body.data.indexing.search).toEqual({availability: 'indexing', optionalComponent: true, snapshotId})
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('refreshing')
+  expect(await getReviewRebuildRequestCount(projectId, 'filterReadinessEnrichment')).toBe(1)
+
+  const {response: secondResponse} = await postWarningsRequest(projectId)
+
+  expect(secondResponse.status).toBe(200)
+  expect(await getReviewRebuildRequestCount(projectId, 'filterReadinessEnrichment')).toBe(1)
 })
 
 test('reviews warnings exposes article coverage for review page details and search readiness', async () => {

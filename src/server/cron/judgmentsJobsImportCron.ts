@@ -3,6 +3,7 @@ import {Elysia} from 'elysia'
 
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
+import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
@@ -35,7 +36,7 @@ const logImportCronError = (label: string, error: unknown) => {
 export const importJudgmentsCron = async (): Promise<void> => {
   const cronName = cronRuntimeTickNames.importJudgments
 
-  if (!shouldCurrentServerRunMaintenanceLoops()) {
+  if (!env.RUN_SERVER_JUDGMENT_OPERATIONAL_CRON || !shouldCurrentServerRunMaintenanceLoops()) {
     recordCronRuntimeTick(cronName, 'skipped')
     return
   }
