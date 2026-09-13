@@ -3,12 +3,14 @@ import {
   closeReadOnlyDuckdbService,
   type ReadOnlyDuckdbContext,
   runReadOnlyDuckdbJsonQuery,
+  runReadOnlyDuckdbOwnerMainJsonQuery,
   validateReadOnlyDuckdbService,
 } from './readOnlyDuckdbService.ts'
 
 export type AppReadOnlyDatabaseService = {
   close: () => Promise<void>
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  queryJsonOwnerMain: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
   validate: () => Promise<void>
 }
 
@@ -17,6 +19,9 @@ const createAppReadOnlyDatabaseService = (context: ReadOnlyDuckdbContext): AppRe
     close: closeReadOnlyDuckdbService,
     queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
       return runReadOnlyDuckdbJsonQuery<T>(context, statement, workloadContext)
+    },
+    queryJsonOwnerMain: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+      return runReadOnlyDuckdbOwnerMainJsonQuery<T>(context, statement, workloadContext)
     },
     validate: () => {
       return validateReadOnlyDuckdbService(context)

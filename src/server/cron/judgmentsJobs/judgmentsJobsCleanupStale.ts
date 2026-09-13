@@ -4,7 +4,11 @@ import {
   judgmentProviderTelemetryHistoryPruneBatchSize,
   pruneJudgmentProviderTelemetryHistorySamples,
 } from '../../services/judgmentProviderTelemetryHistoryService.ts'
-import {type DuckdbWorkloadContext, getMaintenanceDuckdbWorkloadContext} from '../../utils/duckdbService.ts'
+import {
+  type DuckdbWorkloadContext,
+  getDuckdbRuntimeWorkloadDiagnosticsSnapshot,
+  getMaintenanceDuckdbWorkloadContext,
+} from '../../utils/duckdbService.ts'
 import {
   beginJudgmentsCleanupStaleCronRun,
   failJudgmentsCleanupStaleCronRun,
@@ -121,9 +125,12 @@ const cleanupStaleDefaultMaxSqliteRowsPerJob = 1_000
 const cleanupStaleDefaultMaxSqliteRetentionBatches = 5
 const cleanupStaleDefaultMaxSqliteRetentionRows = 5_000
 const cleanupStaleLocalCandidateScanWindowMultiplier = 4
+const cleanupStaleGlobalCandidateMinimumBudgetMs = 10_000
+const cleanupStaleGlobalCandidateMinimumRemainingMs = 1_000
 const cleanupStaleMissingLocalCandidateScanWindowMultiplier = 4
 const cleanupStaleRecoverableOomCandidateScanWindowMultiplier = 4
 const cleanupStaleNullQuarantinedAtCursorDate = new Date('9999-12-31T23:59:59.999Z')
+const cleanupStaleCandidateSelectorTimeoutResult = Symbol('cleanupStaleCandidateSelectorTimeoutResult')
 
 let cleanupStaleLocalCandidateCursor = 0
 let cleanupStaleMissingLocalDrainingCursorId: string | null = null
@@ -146,6 +153,10 @@ const getCleanupStaleDuckdbWorkloadContext = (
     ...(maxResultRows === undefined ? {} : {maxResultRows}),
     timeoutMs,
   }
+}
+
+const getCleanupStaleDuckdbQueueDepth = (queue: 'background' | 'main'): number => {
+  return getDuckdbRuntimeWorkloadDiagnosticsSnapshot().queues[queue].queueDepth
 }
 
 const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPruneResult): RetentionPruneResult => {
@@ -282,6 +293,18 @@ export const getCleanupBudgetRemainingMs = (budget: CleanupStaleBudget): number 
 
 export const hasCleanupBudgetRemaining = (budget: CleanupStaleBudget): boolean => {
   return getCleanupBudgetRemainingMs(budget) > 0
+}
+
+const getCleanupBudgetDurationMs = (budget: CleanupStaleBudget): number => {
+  return Math.max(0, budget.deadlineMs - budget.now.getTime())
+}
+
+const shouldRunGlobalCleanupCandidateSelectors = (budget: CleanupStaleBudgetState): boolean => {
+  return (
+    getCleanupBudgetDurationMs(budget) >= cleanupStaleGlobalCandidateMinimumBudgetMs
+    && getCleanupBudgetRemainingMs(budget) >= cleanupStaleGlobalCandidateMinimumRemainingMs
+    && getDuckdbStepsRemaining(budget) > 0
+  )
 }
 
 const markCleanupStalePartial = ({
@@ -663,7 +686,7 @@ const getDrainingSqliteJobIds = async ({
   }
 
   const jobIds = (
-    await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(
+    await getJudgeWorkerReadOnlyAppDatabaseService().queryJsonOwnerMain<{id: string}>(
       `
       SELECT id
       FROM app.judgment_job
@@ -673,6 +696,47 @@ const getDrainingSqliteJobIds = async ({
       LIMIT ${normalizedMaxJobIds + 1}
     `,
       getCleanupStaleDuckdbWorkloadContext('drainingLocalSqliteJobs', normalizedMaxJobIds + 1, budget),
+    )
+  ).map((row) => {
+    return row.id
+  })
+
+  const bounded = getBoundedSelection(jobIds, normalizedMaxJobIds)
+
+  return {...bounded, limited: bounded.limited || localSelection.limited}
+}
+
+const getDrainedLocalSqliteCleanupJobIds = async ({
+  budget,
+  localSelection,
+  maxJobIds,
+}: {
+  budget?: CleanupStaleBudget
+  localSelection: CleanupLocalSqliteJobSelection
+  maxJobIds: number
+}): Promise<CleanupCandidateSelection> => {
+  const normalizedMaxJobIds = getPositiveIntegerOption(maxJobIds, cleanupStaleDefaultMaxSqliteJobActions)
+
+  if (normalizedMaxJobIds <= 0) {
+    return {jobIds: [], limited: localSelection.totalJobIds > 0}
+  }
+
+  if (localSelection.jobIds.length === 0) {
+    return {jobIds: [], limited: localSelection.limited}
+  }
+
+  const jobIds = (
+    await getJudgeWorkerReadOnlyAppDatabaseService().queryJsonOwnerMain<{id: string}>(
+      `
+      SELECT id
+      FROM app.judgment_job
+      WHERE id IN (${getQuotedStringList(localSelection.jobIds).join(', ')})
+        AND storage_state = ${getSqlLiteral('drained')}
+        AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
+      ORDER BY updated_at ASC, id ASC
+      LIMIT ${normalizedMaxJobIds + 1}
+    `,
+      getCleanupStaleDuckdbWorkloadContext('drainedLocalSqliteCleanupJobs', normalizedMaxJobIds + 1, budget),
     )
   ).map((row) => {
     return row.id
@@ -703,7 +767,7 @@ const getTransientLockedQuarantinedSqliteJobIds = async ({
   }
 
   const jobIds = (
-    await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(
+    await getJudgeWorkerReadOnlyAppDatabaseService().queryJsonOwnerMain<{id: string}>(
       `
       SELECT id
       FROM app.judgment_job
@@ -939,35 +1003,6 @@ const getRecoverableOomQuarantinedJobIds = async (
   const bounded = getBoundedSelection(jobIds, normalizedMaxJobIds)
 
   return {...bounded, limited: bounded.limited || prefixRows.length >= scanLimit}
-}
-
-const getDrainedSqliteCleanupJobIds = async (
-  maxJobIds: number,
-  budget?: CleanupStaleBudget,
-): Promise<CleanupCandidateSelection> => {
-  const normalizedMaxJobIds = getPositiveIntegerOption(maxJobIds, cleanupStaleDefaultMaxSqliteJobActions)
-
-  if (normalizedMaxJobIds <= 0) {
-    return {jobIds: [], limited: false}
-  }
-
-  const jobIds = (
-    await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(
-      `
-      SELECT id
-      FROM app.judgment_job
-      WHERE storage_state = ${getSqlLiteral('drained')}
-        AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
-      ORDER BY updated_at ASC, id ASC
-      LIMIT ${normalizedMaxJobIds + 1}
-    `,
-      getCleanupStaleDuckdbWorkloadContext('drainedSqliteCleanupJobs', normalizedMaxJobIds + 1, budget),
-    )
-  ).map((row) => {
-    return row.id
-  })
-
-  return getBoundedSelection(jobIds, normalizedMaxJobIds)
 }
 
 const hasFreshLiveJudgmentJobLease = async (jobId: string) => {
@@ -1362,27 +1397,59 @@ const selectCleanupCandidates = async ({
   const runCandidateSelector = async (
     reason: string,
     select: () => Promise<CleanupCandidateSelection>,
+    options: {queue?: 'background' | 'main'} = {},
   ): Promise<CleanupCandidateSelection> => {
     if (!ensureCleanupBudgetRemaining({budget, reason, result})) {
       return emptySelection
     }
 
-    const selection = await select()
+    if (options.queue !== undefined && getCleanupStaleDuckdbQueueDepth(options.queue) > 0) {
+      markCleanupStalePartial({
+        budget,
+        exhaustedBudget: false,
+        reason: `candidate-duckdb-${options.queue}-queue-busy`,
+        result,
+      })
+      return emptySelection
+    }
+
+    const remainingMs = getCleanupBudgetRemainingMs(budget)
+
+    if (remainingMs <= 0) {
+      markCleanupStalePartial({budget, reason, result})
+      return emptySelection
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const timeoutPromise = new Promise<typeof cleanupStaleCandidateSelectorTimeoutResult>((resolve) => {
+      timeout = setTimeout(() => {
+        resolve(cleanupStaleCandidateSelectorTimeoutResult)
+      }, remainingMs)
+    })
+    const selectionPromise = select()
+    const selection = await Promise.race([selectionPromise, timeoutPromise])
+
+    if (timeout !== null) {
+      clearTimeout(timeout)
+    }
+
+    if (selection === cleanupStaleCandidateSelectorTimeoutResult) {
+      void selectionPromise.catch(() => {
+        return undefined
+      })
+      markCleanupStalePartial({budget, reason, result})
+      return emptySelection
+    }
 
     return ensureCleanupBudgetRemaining({budget, reason, result}) ? selection : emptySelection
   }
 
-  const drainingSelection = await runCandidateSelector('candidate-draining-selection-budget-exhausted', () => {
-    return getDrainingSqliteJobIds({budget, localSelection: localSqliteSelection, maxJobIds: budget.maxDrainingJobs})
-  })
-  const missingLocalSelection = await runCandidateSelector('candidate-missing-local-selection-budget-exhausted', () => {
-    return getMissingLocalSqliteDrainingJobIds(budget.maxSqliteJobActions, budget)
-  })
-  const recoverableOomSelection = await runCandidateSelector(
-    'candidate-recoverable-oom-selection-budget-exhausted',
+  const drainingSelection = await runCandidateSelector(
+    'candidate-draining-selection-budget-exhausted',
     () => {
-      return getRecoverableOomQuarantinedJobIds(budget.maxRepairActions, budget)
+      return getDrainingSqliteJobIds({budget, localSelection: localSqliteSelection, maxJobIds: budget.maxDrainingJobs})
     },
+    {queue: 'main'},
   )
   const transientLockedSelection = await runCandidateSelector(
     'candidate-transient-locked-selection-budget-exhausted',
@@ -1393,10 +1460,38 @@ const selectCleanupCandidates = async ({
         maxJobIds: budget.maxRepairActions,
       })
     },
+    {queue: 'main'},
   )
-  const drainedSelection = await runCandidateSelector('candidate-drained-selection-budget-exhausted', () => {
-    return getDrainedSqliteCleanupJobIds(budget.maxSqliteJobActions, budget)
-  })
+  const runGlobalCandidateSelectors = shouldRunGlobalCleanupCandidateSelectors(budget)
+  const missingLocalSelection = runGlobalCandidateSelectors
+    ? await runCandidateSelector(
+        'candidate-missing-local-selection-budget-exhausted',
+        () => {
+          return getMissingLocalSqliteDrainingJobIds(budget.maxSqliteJobActions, budget)
+        },
+        {queue: 'background'},
+      )
+    : emptySelection
+  const recoverableOomSelection = runGlobalCandidateSelectors
+    ? await runCandidateSelector(
+        'candidate-recoverable-oom-selection-budget-exhausted',
+        () => {
+          return getRecoverableOomQuarantinedJobIds(budget.maxRepairActions, budget)
+        },
+        {queue: 'background'},
+      )
+    : emptySelection
+  const drainedSelection = await runCandidateSelector(
+    'candidate-drained-selection-budget-exhausted',
+    () => {
+      return getDrainedLocalSqliteCleanupJobIds({
+        budget,
+        localSelection: localSqliteSelection,
+        maxJobIds: budget.maxSqliteJobActions,
+      })
+    },
+    {queue: 'main'},
+  )
 
   if (
     drainingSelection.limited

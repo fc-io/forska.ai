@@ -49,14 +49,27 @@ test('cleanupStale candidate reads stay sequential and workload-context bounded'
   expect(selectCandidatesSource).toContain('runCandidateSelector')
   expect(selectCandidatesSource).not.toContain('Promise.all')
   expect(source).toContain('getCleanupStaleDuckdbWorkloadContext')
+  expect(source).toContain('getDuckdbRuntimeWorkloadDiagnosticsSnapshot')
   expect(source).toContain('Math.min(30_000, getCleanupBudgetRemainingMs(budget))')
+  expect(source).toContain('cleanupStaleGlobalCandidateMinimumBudgetMs = 10_000')
+  expect(source).toContain('shouldRunGlobalCleanupCandidateSelectors')
   expect(source).toContain("getCleanupStaleDuckdbWorkloadContext('drainingLocalSqliteJobs'")
+  expect(source).toContain("getCleanupStaleDuckdbWorkloadContext('drainedLocalSqliteCleanupJobs'")
+  expect(source).not.toContain("getCleanupStaleDuckdbWorkloadContext('drainedSqliteCleanupJobs'")
   expect(source).toContain("getCleanupStaleDuckdbWorkloadContext('recoverableOomQuarantinedJobs'")
-  expect(selectCandidatesSource).toContain('const selection = await select()')
+  expect(selectCandidatesSource).toContain('const selectionPromise = select()')
+  expect(selectCandidatesSource).toContain('cleanupStaleCandidateSelectorTimeoutResult')
+  expect(selectCandidatesSource).toContain('candidate-duckdb-${options.queue}-queue-busy')
+  expect(selectCandidatesSource).toContain("{queue: 'main'}")
+  expect(selectCandidatesSource).toContain("{queue: 'background'}")
   expect(selectCandidatesSource).toContain(
     'ensureCleanupBudgetRemaining({budget, reason, result}) ? selection : emptySelection',
   )
   expect(selectCandidatesSource).toContain('getDrainingSqliteJobIds({budget,')
+  expect(selectCandidatesSource).toContain(
+    'const runGlobalCandidateSelectors = shouldRunGlobalCleanupCandidateSelectors(budget)',
+  )
+  expect(selectCandidatesSource).toContain('runGlobalCandidateSelectors')
   expect(selectCandidatesSource).toContain('getMissingLocalSqliteDrainingJobIds(budget.maxSqliteJobActions, budget)')
 })
 
@@ -675,6 +688,16 @@ test('cleanupStale finalizes terminal draining jobs without local SQLite files',
   expect(existsSync(sqlitePath)).toBe(false)
 
   await judgmentsJobsCleanupStale()
+
+  expect(
+    await queryDatabase<{status: string; storageState: string}>(`
+      SELECT status, storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{status: 'paused', storageState: 'draining'}])
+
+  await judgmentsJobsCleanupStale({budgetMs: 30_000})
 
   expect(
     await queryDatabase<{status: string; storageState: string}>(`
@@ -1673,7 +1696,7 @@ test('cleanupStale auto resumes recoverable OOM quarantine after project mart is
 
   await service.initializeJob(jobId)
   await service.releaseOwnedLease(jobId)
-  await judgmentsJobsCleanupStale()
+  await judgmentsJobsCleanupStale({budgetMs: 30_000})
 
   expect(
     await queryDatabase<{
@@ -1798,7 +1821,7 @@ test('cleanupStale pages OOM quarantine recovery candidates before expensive rea
   await service.initializeJob(targetJobId)
   await service.releaseOwnedLease(targetJobId)
 
-  await judgmentsJobsCleanupStale({maxRepairActions: 1})
+  await judgmentsJobsCleanupStale({budgetMs: 30_000, maxRepairActions: 1})
 
   const [afterFirstTick] = await queryDatabase<{status: string; storageState: string}>(`
     SELECT status, storage_state AS storageState
@@ -1808,7 +1831,7 @@ test('cleanupStale pages OOM quarantine recovery candidates before expensive rea
 
   expect(afterFirstTick).toEqual({status: 'failed', storageState: 'quarantined'})
 
-  await judgmentsJobsCleanupStale({maxRepairActions: 1})
+  await judgmentsJobsCleanupStale({budgetMs: 30_000, maxRepairActions: 1})
 
   const [afterSecondTick] = await queryDatabase<{
     importFailureCount: number | string
@@ -1893,7 +1916,7 @@ test('cleanupStale does not auto resume recoverable OOM quarantine after explici
 
   await service.initializeJob(jobId)
   await service.releaseOwnedLease(jobId)
-  await judgmentsJobsCleanupStale()
+  await judgmentsJobsCleanupStale({budgetMs: 30_000})
 
   const [job] = await queryDatabase<{
     pauseRequestedAt: string | null
