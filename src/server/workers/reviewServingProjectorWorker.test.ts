@@ -1237,7 +1237,7 @@ test('worker writes compatible fresh project scope rebuild chunks through one ba
   expect(joined).toContain('projectScopeBatchWriter')
 })
 
-test('worker writes compatible selected import rebuild chunks through one batch writer', async () => {
+test('worker keeps selected import rebuild chunks in single-range transactions', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
   const firstChunkInput = {
@@ -1247,6 +1247,7 @@ test('worker writes compatible selected import rebuild chunks through one batch 
     inputDigest: 'freshReviewServingSnapshot',
     projectionComponent: 'selectedImport' as const,
     projectionIdentity: 'selectedImport:project-1',
+    requestId: 'rebuild-selected-import',
   }
   const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
   const firstChunk = {
@@ -1293,6 +1294,10 @@ test('worker writes compatible selected import rebuild chunks through one batch 
 
   harness.database.queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
       const chunkId = [...chunksById.keys()].find((id) => {
@@ -1356,22 +1361,20 @@ test('worker writes compatible selected import rebuild chunks through one batch 
   )
   const joined = statements.join('\n')
 
-  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
-  expect(result.chunkBatchCount).toBe(2)
-  expect(harness.claimInputs).toHaveLength(2)
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, status: 'completed'})
+  expect(result.chunkBatchCount).toBe(1)
+  expect(harness.claimInputs).toHaveLength(1)
   expect(
     new Set(
       harness.heartbeatInputs.map((input) => {
         return (input as {chunkId: string}).chunkId
       }),
     ),
-  ).toEqual(new Set([firstChunk.chunkId, secondChunk.chunkId]))
-  expect(harness.runChunkInputs).toEqual([])
-  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
-  expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
-  expect(joined).toContain('source_delta_high_water = 9')
-  expect(joined).toContain('\'{"importRunArticle":42}\'::JSON')
-  expect(joined).toContain('selectedImportBatchWriter')
+  ).toEqual(new Set([firstChunk.chunkId]))
+  expect(harness.runChunkInputs).toEqual([firstChunk])
+  expect(joined).not.toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(joined).not.toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
+  expect(joined).not.toContain('selectedImportBatchWriter')
 })
 
 test('low-memory worker charges request-associated selected import batch completions as one run unit', () => {
