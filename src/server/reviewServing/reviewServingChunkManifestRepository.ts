@@ -476,12 +476,12 @@ const rebuildChunkCriticalLaneComponents = [
   'llmStatus',
   'humanStatus',
   'queue',
+  'judgmentInputContent',
   'payload',
-  'posting',
-  'summary',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const rebuildChunkSecondaryLaneComponents = [
-  'judgmentInputContent',
+  'posting',
+  'summary',
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const rebuildChunkWorkloadClasses = {bulk: 'bulk', critical: 'critical'} as const satisfies Record<
@@ -495,10 +495,10 @@ const rebuildChunkClaimPriorityOrder = [
   'llmStatus',
   'humanStatus',
   'queue',
+  'judgmentInputContent',
   'payload',
   'posting',
   'summary',
-  'judgmentInputContent',
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const stalledForegroundRebuildRequestPriority = 10_000
@@ -523,8 +523,6 @@ const getRebuildChunkDefaultWorkloadClassSql = (tableAlias: string) => {
 
 const getRebuildChunkEffectiveWorkloadClassSql = (tableAlias: string) => {
   return `CASE
-    WHEN ${tableAlias}.projection_component = ${getSqlLiteral('posting')}
-    THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
     WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkSecondaryLaneComponents)}
     THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.bulk)}
     ELSE COALESCE(
@@ -571,6 +569,44 @@ const getRebuildChunkClaimRequestUpdatedAtSql = (tableAlias: string) => {
 
 const getComponentSqlList = (components: readonly ReviewServingProjectionComponent[]) => {
   return `(${components.map(getSqlLiteral).join(', ')})`
+}
+
+const getRebuildChunkSnapshotComponentRequirementPredicate = (snapshotAlias: string, chunkAlias: string) => {
+  return `(
+    EXISTS (
+      SELECT 1
+      FROM json_each(${snapshotAlias}.required_components_json) required_component
+      WHERE COALESCE(
+        json_extract_string(required_component.value, '$.component'),
+        json_extract_string(required_component.value, '$')
+      ) = ${chunkAlias}.projection_component
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM json_each(${snapshotAlias}.optional_components_json) optional_component
+      WHERE COALESCE(
+        json_extract_string(optional_component.value, '$.component'),
+        json_extract_string(optional_component.value, '$')
+      ) = ${chunkAlias}.projection_component
+    )
+  )`
+}
+
+const getRebuildChunkSnapshotContextPredicate = (tableAlias: string) => {
+  return `
+    ${tableAlias}.project_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM app.review_serving_snapshot_manifest snapshot
+      WHERE snapshot.project_id IS NOT DISTINCT FROM ${tableAlias}.project_id
+        AND snapshot.snapshot_status IN ('candidate', 'active')
+        AND (
+          ${tableAlias}.snapshot_id IS NULL
+          OR snapshot.snapshot_id IS NOT DISTINCT FROM ${tableAlias}.snapshot_id
+        )
+        AND ${getRebuildChunkSnapshotComponentRequirementPredicate('snapshot', tableAlias)}
+    )
+  `
 }
 
 export const releaseInactiveRequestRebuildChunkManifests = async (
@@ -1431,6 +1467,7 @@ export const getReviewServingRebuildChunkClaimPredicate = (
           : getRebuildChunkSingleComponentPrerequisitePredicate(input.projectionComponent, tableAlias)
       }
     )
+    AND (${getRebuildChunkSnapshotContextPredicate(tableAlias ?? 'app.review_rebuild_chunk_manifest')})
   `
 }
 
@@ -1575,6 +1612,7 @@ const getReviewServingRebuildChunkLeaseClaimPredicate = (
           )
       )
     )
+    AND (${getRebuildChunkSnapshotContextPredicate(tableAlias)})
   `
 }
 

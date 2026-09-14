@@ -30,7 +30,11 @@ import {
   upsertReviewServingRebuildChunkManifests,
   writeReviewServingRebuildChunkOutput,
 } from '../reviewServing/reviewServingChunkManifestRepository.ts'
-import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
+import {
+  countReadyReviewServingComponents,
+  reviewServingListModes,
+  type ReviewServingProjectionComponent,
+} from '../reviewServing/reviewServingContracts.ts'
 import {
   cleanupReviewServingDirtyWorkRetention,
   type CleanupReviewServingDirtyWorkRetentionResult,
@@ -131,7 +135,9 @@ import {
 } from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
-type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
+type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']> & {
+  queryJsonBackground?: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+}
 
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
@@ -438,7 +444,6 @@ const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
 const foregroundHumanStatusRebuildChunkBatchSize = 4
 const foregroundLlmStatusRebuildChunkBatchSize = 8
 const foregroundStatusRebuildDrainBatchBudget = 16
-const foregroundLightweightNativeHeavyRebuildDrainBatchBudget = 32
 const foregroundStatusReviewServingProjectorWorkerProgressYieldMs = 100
 const lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs = 25
 const lowMemoryMaintenanceDuckdbLimitMiB = 8192
@@ -456,12 +461,22 @@ const foregroundBatchableStatusRebuildComponents = new Set<ReviewServingProjecti
   'llmStatus',
 ])
 const foregroundBatchableRangeRebuildComponents = new Set<ReviewServingProjectionComponent>([
+  'payload',
   'posting',
   'queue',
   'search',
   'selectedImport',
   'summary',
 ])
+const dispatchReadyReviewServingComponents = [
+  ...countReadyReviewServingComponents,
+  'judgmentInputContent',
+  'payload',
+] as const
+const foregroundActivationRebuildDrainComponents = new Set<ReviewServingProjectionComponent>(
+  dispatchReadyReviewServingComponents,
+)
+const foregroundActivationDirtyWorkComponents = dispatchReadyReviewServingComponents
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk forced GC is unnecessary.
 const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
 const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
@@ -1770,18 +1785,13 @@ const runDisplayRebuildChunk = async (
               chunkEndArticleId: input.chunk.chunkEndKey,
               chunkStartArticleId: input.chunk.chunkStartKey,
               displayIdentity: input.chunk.projectionIdentity,
-              humanStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'humanStatus'),
               listModeKeys: reviewServingListModes,
-              llmStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'llmStatus'),
-              payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
-              postingIdentity: requireSnapshotComponentIdentity(snapshot, 'posting'),
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportIdentity: requireSnapshotComponentIdentity(snapshot, 'selectedImport'),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
-              summaryIdentity: requireSnapshotComponentIdentity(snapshot, 'summary'),
             },
             chunkDatabase,
           )
@@ -3496,18 +3506,13 @@ const runDisplayRebuildChunkBatch = async (
               chunkEndArticleId: chunk.chunkEndKey,
               chunkStartArticleId: chunk.chunkStartKey,
               displayIdentity: chunk.projectionIdentity,
-              humanStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'humanStatus'),
               listModeKeys: reviewServingListModes,
-              llmStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'llmStatus'),
-              payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
-              postingIdentity: requireSnapshotComponentIdentity(snapshot, 'posting'),
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportIdentity: requireSnapshotComponentIdentity(snapshot, 'selectedImport'),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
-              summaryIdentity: requireSnapshotComponentIdentity(snapshot, 'summary'),
             }
           }),
         },
@@ -5628,6 +5633,15 @@ const failInconsistentAndSupersededForegroundRebuildRequests = async (input: {
           AND newer_request.failed_at IS NULL
           AND newer_request.created_at > request.created_at
           AND newer_request.priority >= request.priority
+          AND json_array_length(newer_request.requested_components_json) = json_array_length(request.requested_components_json)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM json_each(request.requested_components_json) requested_component
+            WHERE json_extract_string(requested_component.value, '$') NOT IN (
+              SELECT json_extract_string(newer_component.value, '$')
+              FROM json_each(newer_request.requested_components_json) newer_component
+            )
+          )
           AND EXISTS (
             SELECT 1
             FROM app.review_rebuild_chunk_manifest newer_chunk
@@ -6441,6 +6455,12 @@ const getReviewServingProjectorWorkerDatabase = (
     queryJson: <T>(statement: string) => {
       return database.queryJson<T>(statement, workloadContext)
     },
+    queryJsonBackground:
+      database.queryJsonBackground === undefined
+        ? undefined
+        : <T>(statement: string) => {
+            return database.queryJsonBackground<T>(statement, workloadContext)
+          },
     run: (statement: string) => {
       return database.run(statement, workloadContext)
     },
@@ -6625,9 +6645,7 @@ const shouldPrioritizeNextRebuildChunk = (input: {
   const defaultDrainBudget =
     input.chunk.status === 'completed' && isForegroundBatchableStatusRebuildChunk(input.chunk)
       ? foregroundStatusRebuildDrainBatchBudget
-      : shouldUseExtendedForegroundRebuildDrainBudget(input)
-        ? foregroundLightweightNativeHeavyRebuildDrainBatchBudget
-        : defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget
+      : defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget
   const budget = getPositiveInteger(input.options.foregroundRebuildDrainChunkBudget, defaultDrainBudget)
   const ttlMs = getPositiveInteger(
     input.options.foregroundRebuildDrainTtlMs,
@@ -6639,6 +6657,7 @@ const shouldPrioritizeNextRebuildChunk = (input: {
   return (
     input.chunk.status === 'completed'
     && input.chunk.requestId !== null
+    && foregroundActivationRebuildDrainComponents.has(input.chunk.projectionComponent)
     && startedAtMs !== null
     && completedCount <= budget
     && input.nowMs - startedAtMs <= ttlMs
@@ -6677,25 +6696,6 @@ const getReviewServingProjectorWorkerProgressYieldMs = (input: {
   })
     ? nativeHeavyReviewServingProjectorWorkerProgressYieldMs
     : lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs
-}
-
-const shouldUseExtendedForegroundRebuildDrainBudget = (input: {
-  chunk: ReviewServingProjectorWorkerChunkResult
-  dependencies: ReviewServingProjectorWorkerDependencies
-  options: ReviewServingProjectorWorkerCycleOptions
-}) => {
-  if (input.chunk.status !== 'completed' || input.chunk.requestId === null) {
-    return false
-  }
-
-  if (isForegroundBatchableStatusRebuildChunk(input.chunk)) {
-    return true
-  }
-
-  return (
-    reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
-    && !hasReviewServingProjectorWorkerReachedRssCap(input)
-  )
 }
 
 const getNextForegroundRebuildDrainOptions = (input: {
@@ -9318,6 +9318,17 @@ export const runReviewServingProjectorWorkerCycle = async (
       return readmitRetryableFailedRebuildRequests({database, projectId: options.rebuildProjectId})
     })
   }
+  await runReviewServingProjectorWorkerCyclePhase('completeJudgmentJobVisibility', () => {
+    return publishProjectedJudgmentJobVisibility(database, async ({ackToken, jobId}) => {
+      await getJudgmentJobSqliteService()
+        .setLastProjectRefreshAckSeq(jobId, ackToken)
+        .catch((error) => {
+          if (!(error instanceof JudgmentJobLeaseError)) {
+            throw error
+          }
+        })
+    })
+  })
   const chunkBatch =
     terminalFailedChunk === null
       ? await runReviewServingProjectorWorkerRebuildChunkBatch({
@@ -9341,17 +9352,21 @@ export const runReviewServingProjectorWorkerCycle = async (
     options,
     admissionDeadlineMs,
   )
+  const shouldDrainNextForegroundActivationChunk = shouldPrioritizeNextRebuildChunk({
+    chunk,
+    dependencies,
+    nowMs,
+    options,
+  })
   const shouldRunOnlyRebuildChunk =
-    terminalFailedChunk !== null
-    || chunk.status === 'failed'
-    || shouldYieldToForegroundDuckdbWork
-    || shouldPrioritizeNextRebuildChunk({chunk, dependencies, nowMs, options})
-  const deltaIntake = shouldRunOnlyRebuildChunk
+    terminalFailedChunk !== null || chunk.status === 'failed' || shouldYieldToForegroundDuckdbWork
+  const shouldSkipBackgroundMaintenance = shouldRunOnlyRebuildChunk || shouldDrainNextForegroundActivationChunk
+  const deltaIntake = shouldSkipBackgroundMaintenance
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     : await runReviewServingProjectorWorkerCyclePhase('deltaIntake', () => {
         return runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
       })
-  const cleanup = shouldRunOnlyRebuildChunk
+  const cleanup = shouldSkipBackgroundMaintenance
     ? {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
     : await runReviewServingProjectorWorkerCyclePhase('retentionCleanup', () => {
         return runReviewServingProjectorWorkerCleanup({database, dependencies, options})
@@ -9372,6 +9387,9 @@ export const runReviewServingProjectorWorkerCycle = async (
         return dependencies.wakeProjectors(
           {
             ...getWakeInput({dependencies, options, wakeId}),
+            componentOrder: shouldDrainNextForegroundActivationChunk
+              ? foregroundActivationDirtyWorkComponents
+              : undefined,
             maxWakeMs: Math.max(0, admissionDeadlineMs - getWorkerNowMs(dependencies, options)),
           },
           {
@@ -9383,19 +9401,6 @@ export const runReviewServingProjectorWorkerCycle = async (
           },
         )
       })
-  if (!shouldRunOnlyRebuildChunk) {
-    await runReviewServingProjectorWorkerCyclePhase('completeJudgmentJobVisibility', () => {
-      return publishProjectedJudgmentJobVisibility(database, async ({ackToken, jobId}) => {
-        await getJudgmentJobSqliteService()
-          .setLastProjectRefreshAckSeq(jobId, ackToken)
-          .catch((error) => {
-            if (!(error instanceof JudgmentJobLeaseError)) {
-              throw error
-            }
-          })
-      })
-    })
-  }
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
 

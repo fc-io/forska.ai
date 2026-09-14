@@ -2,8 +2,9 @@ import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {countReadyReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
+  blockReviewServingDirtyWorkClaimsForRebuild,
   claimReviewServingDirtyWork,
   type ClaimReviewServingDirtyWorkParams,
   completeReviewServingDirtyWorkClaims,
@@ -71,6 +72,7 @@ export type ReviewServingProjectorServiceDependencies = {
   failDirtyWork?: typeof failReviewServingDirtyWorkClaims
   getQueueState?: () => Promise<ReviewServingProjectorQueueState>
   nowMs?: () => number
+  blockDirtyWorkForRebuild?: typeof blockReviewServingDirtyWorkClaimsForRebuild
   promoteSnapshot?: typeof promoteReviewServingProjectorSnapshot
   releaseDirtyWork?: typeof releaseReviewServingDirtyWorkClaims
   requestRebuild?: typeof requestReviewServingV4RebuildEffect
@@ -84,6 +86,11 @@ type ReviewServingClaimManifestEnsurer = (
   claims: readonly ReviewServingDirtyWorkClaim[],
   database: ReviewServingManifestRepositoryTransaction,
 ) => Promise<void>
+
+const countReadyRepairComponents = new Set<ReviewServingProjectionComponent>(countReadyReviewServingComponents)
+const activationMissingSnapshotRepairPriority = 10_000
+const enrichmentMissingSnapshotRepairPriority = 50
+const searchDirtyWorkRebuildPriority = enrichmentMissingSnapshotRepairPriority
 
 export type IntakeReviewServingProjectorDirtyWorkInput = {
   identityResolver: ReviewServingProjectorIdentityResolver
@@ -199,6 +206,20 @@ const getDirtyWorkIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   })
 }
 
+const getMissingSnapshotRepairComponents = (component: ReviewServingProjectionComponent) => {
+  if (component === 'summary') {
+    return [...new Set([...countReadyReviewServingComponents, 'payload', component])]
+  }
+
+  return [...new Set([...countReadyReviewServingComponents, component])]
+}
+
+const getMissingSnapshotRepairPriority = (component: ReviewServingProjectionComponent) => {
+  return countReadyRepairComponents.has(component)
+    ? activationMissingSnapshotRepairPriority
+    : enrichmentMissingSnapshotRepairPriority
+}
+
 const getClaimProjectIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
     ...new Set(
@@ -246,6 +267,7 @@ const isMissingSnapshotDiagnostic = (diagnostic: string) => {
     diagnostic.includes('cannot run projector without a candidate or active snapshot')
     || diagnostic.includes('cannot run projector without selected import snapshot id')
     || diagnostic.includes('selected import snapshot is not completed')
+    || /cannot run projector without [A-Za-z]+ identity in snapshot/u.test(diagnostic)
   )
 }
 
@@ -425,6 +447,7 @@ export const wakeReviewServingProjectorService = async (
   const completeDirtyWork = dependencies.completeDirtyWork ?? completeReviewServingDirtyWorkClaims
   const failDirtyWork = dependencies.failDirtyWork ?? failReviewServingDirtyWorkClaims
   const releaseDirtyWork = dependencies.releaseDirtyWork ?? releaseReviewServingDirtyWorkClaims
+  const blockDirtyWorkForRebuild = dependencies.blockDirtyWorkForRebuild ?? blockReviewServingDirtyWorkClaimsForRebuild
   const ensureClaimManifests = dependencies.ensureClaimManifests ?? ensureReviewServingClaimManifests
   const promoteSnapshot = dependencies.promoteSnapshot ?? promoteReviewServingProjectorSnapshot
   const requestRebuild = dependencies.requestRebuild ?? requestReviewServingV4RebuildEffect
@@ -490,7 +513,12 @@ export const wakeReviewServingProjectorService = async (
               searchDirtyWorkProjectIds,
               (projectId) => {
                 return requestRebuild(
-                  {components: ['search'], priority: 5_000, projectId, reason: 'searchDirtyWork'},
+                  {
+                    components: ['search'],
+                    priority: searchDirtyWorkRebuildPriority,
+                    projectId,
+                    reason: 'searchDirtyWork',
+                  },
                   database,
                 )
               },
@@ -587,7 +615,16 @@ export const wakeReviewServingProjectorService = async (
               Effect.forEach(
                 missingSnapshotProjectIds,
                 (projectId) => {
-                  return requestRebuild({projectId, reason: 'missingReviewServingSnapshot'}, database)
+                  return requestRebuild(
+                    {
+                      components: getMissingSnapshotRepairComponents(component),
+                      pageFirstOnly: true,
+                      priority: getMissingSnapshotRepairPriority(component),
+                      projectId,
+                      reason: 'missingReviewServingSnapshot',
+                    },
+                    database,
+                  )
                 },
                 {concurrency: 1},
               ),
@@ -638,7 +675,7 @@ export const wakeReviewServingProjectorService = async (
             }
           }
 
-          await releaseDirtyWork(claimIds, database)
+          await blockDirtyWorkForRebuild(claimIds, database)
 
           return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
         }

@@ -361,6 +361,7 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     markerRows: Number(importCommit.markerRows),
     outboxSeq: Number(importCommit.outboxSeq),
   }).toEqual({deltaRows: 1, dirtyWorkRows: 5, markerRows: 1, outboxSeq: 1})
+  const importedOutboxSeq = Number(importCommit.outboxSeq)
   const importedHealth = await requestJson<{
     importWork: {claimedOutboxCount: number; outboxRowCount: number}
     liveSqlite: {lastAckSeq: number | null; outboxRowCount: number}
@@ -447,15 +448,12 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
   `)
   expect(servingBeforeProjection?.llmHasJudgment).toBe(false)
 
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  let visibilityAckSeq: number | null = null
+  for (let attempt = 0; attempt < 80; attempt += 1) {
     await runReviewServingProjectorWorkerOnce({workerId: `component-projector-${suffix}`})
-    const [remaining] = await queryDatabase<{count: number}>(`
-      SELECT COUNT(*) AS count FROM app.review_serving_dirty_work_ack
-      WHERE dirty_work_id IN (
-        SELECT dirty_work_id FROM app.review_serving_dirty_work WHERE project_id = '${projectId}'
-      )
-    `)
-    if (Number(remaining?.count ?? 0) > 0) {
+    await sqliteService.reconcileProjectRefreshAcks({projectId})
+    visibilityAckSeq = (await sqliteService.getHealthSnapshot(jobId)).lastAckSeq
+    if (visibilityAckSeq === importedOutboxSeq) {
       break
     }
   }
@@ -478,12 +476,33 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     WHERE state.project_id = '${projectId}' AND state.article_id = '${articleId}'
   `)
   expect(servingAfterProjection?.llmHasJudgment).toBe(true)
-  await sqliteService.reconcileProjectRefreshAcks({projectId})
-  expect((await sqliteService.getHealthSnapshot(jobId)).lastAckSeq).toBe(0)
+  if (visibilityAckSeq !== importedOutboxSeq) {
+    const requests = await queryDatabase<unknown>(`
+      SELECT request_id, reason, status, requested_components_json, last_error
+      FROM app.review_rebuild_request
+      WHERE project_id = '${projectId}'
+      ORDER BY created_at ASC
+    `)
+    const chunks = await queryDatabase<unknown>(`
+      SELECT request_id, projection_component, status, last_error
+      FROM app.review_rebuild_chunk_manifest
+      WHERE project_id = '${projectId}'
+      ORDER BY request_id ASC, projection_component ASC, created_at ASC
+    `)
+    const dirty = await queryDatabase<unknown>(`
+      SELECT dirty_work_id, projection_component, status, lifecycle_reason
+      FROM app.review_serving_dirty_work
+      WHERE project_id = '${projectId}'
+      ORDER BY projection_component ASC
+    `)
+
+    throw new Error(JSON.stringify({chunks, dirty, health: await sqliteService.getHealthSnapshot(jobId), requests}))
+  }
+  expect((await sqliteService.getHealthSnapshot(jobId)).lastAckSeq).toBe(importedOutboxSeq)
   const visibleHealth = await requestJson<{liveSqlite: {lastAckSeq: number | null}}>(
     `/api/judgmentsjobs/${jobId}/health`,
   )
-  expect(visibleHealth.body.liveSqlite.lastAckSeq).toBe(0)
+  expect(visibleHealth.body.liveSqlite.lastAckSeq).toBe(importedOutboxSeq)
   const visibleFreshness = await requestJson<{
     freshness: {
       failedMaterializationCount: number

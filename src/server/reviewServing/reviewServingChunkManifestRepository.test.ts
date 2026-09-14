@@ -132,12 +132,12 @@ const fakeCriticalComponents = [
   'llmStatus',
   'humanStatus',
   'queue',
+  'judgmentInputContent',
+] as const satisfies readonly FakeChunkRow['projectionComponent'][]
+const fakeSecondaryComponents = [
   'payload',
   'posting',
   'summary',
-] as const satisfies readonly FakeChunkRow['projectionComponent'][]
-const fakeSecondaryComponents = [
-  'judgmentInputContent',
   'search',
 ] as const satisfies readonly FakeChunkRow['projectionComponent'][]
 
@@ -164,10 +164,6 @@ const getFakeDefaultWorkloadClass = (row: FakeChunkRow) => {
 }
 
 const getFakeEffectiveWorkloadClass = (row: FakeChunkRow) => {
-  if (row.projectionComponent === 'posting') {
-    return 'critical'
-  }
-
   if (
     fakeSecondaryComponents.some((component) => {
       return component === row.projectionComponent
@@ -191,10 +187,10 @@ const getFakeClaimPriority = (row: FakeChunkRow) => {
     'llmStatus',
     'humanStatus',
     'queue',
+    'judgmentInputContent',
     'payload',
     'posting',
     'summary',
-    'judgmentInputContent',
     'search',
   ]
 
@@ -678,11 +674,12 @@ test('null-request chunk ids preserve legacy identity hashes', () => {
   )
 })
 
-test('rebuild chunk workload classes mark durable critical and bulk lanes', async () => {
+test('rebuild chunk workload classes prioritize count and dispatch work before enrichment', async () => {
   const {database, statements} = createFakeChunkManifestDatabase([])
 
   await upsertReviewServingRebuildChunkManifests(
     [
+      {...baseChunkIdentity, projectionComponent: 'queue', projectionIdentity: 'queue:project-1'},
       {...baseChunkIdentity, projectionComponent: 'summary', projectionIdentity: 'summary:project-1'},
       {...baseChunkIdentity, projectionComponent: 'posting', projectionIdentity: 'posting:project-1'},
       {...baseChunkIdentity, projectionComponent: 'payload', projectionIdentity: 'payload:project-1'},
@@ -696,10 +693,11 @@ test('rebuild chunk workload classes mark durable critical and bulk lanes', asyn
   )
   const joined = statements.join('\n')
 
-  expect(getReviewServingRebuildChunkWorkloadClass('summary')).toBe('critical')
-  expect(getReviewServingRebuildChunkWorkloadClass('posting')).toBe('critical')
+  expect(getReviewServingRebuildChunkWorkloadClass('queue')).toBe('critical')
+  expect(getReviewServingRebuildChunkWorkloadClass('summary')).toBe('bulk')
+  expect(getReviewServingRebuildChunkWorkloadClass('posting')).toBe('bulk')
   expect(getReviewServingRebuildChunkWorkloadClass('payload')).toBe('critical')
-  expect(getReviewServingRebuildChunkWorkloadClass('judgmentInputContent')).toBe('bulk')
+  expect(getReviewServingRebuildChunkWorkloadClass('judgmentInputContent')).toBe('critical')
   expect(joined).toContain("'critical'")
   expect(joined).toContain("'bulk'")
   expect(joined).toContain('workload_class')
@@ -741,6 +739,13 @@ test('completed chunks resume after restart and are skipped for the same maintai
       return statement.includes('input_digest IS NOT DISTINCT FROM')
     }),
   ).toBe(true)
+  expect(statements.join('\n')).toContain('FROM app.review_serving_snapshot_manifest snapshot')
+  expect(statements.join('\n')).toContain('snapshot.project_id IS NOT DISTINCT FROM manifest.project_id')
+  expect(statements.join('\n')).toContain('manifest.snapshot_id IS NULL')
+  expect(statements.join('\n')).toContain('json_each(snapshot.required_components_json)')
+  expect(statements.join('\n')).toContain('json_each(snapshot.optional_components_json)')
+  expect(statements.join('\n')).toContain("json_extract_string(required_component.value, '$.component')")
+  expect(statements.join('\n')).toContain("json_extract_string(optional_component.value, '$.component')")
   expect(
     statements.some((statement) => {
       return statement.includes('FROM mart.') || statement.includes('FROM app.review_change_delta')
@@ -922,6 +927,16 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain("request.status IN ('admitted', 'running')")
   expect(statements.join('\n')).toContain("(request.request_id || '') = candidate.request_id")
   expect(statements.join('\n')).toContain("(policy.request_id || '') = candidate.request_id")
+  expect(statements.join('\n')).toContain('FROM app.review_serving_snapshot_manifest snapshot')
+  expect(statements.join('\n')).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
+  expect(statements.join('\n')).toContain('snapshot.project_id IS NOT DISTINCT FROM candidate.project_id')
+  expect(statements.join('\n')).toContain('candidate.snapshot_id IS NULL')
+  expect(statements.join('\n')).toContain('json_each(snapshot.required_components_json)')
+  expect(statements.join('\n')).toContain('json_each(snapshot.optional_components_json)')
+  expect(statements.join('\n')).toContain("json_extract_string(required_component.value, '$.component')")
+  expect(statements.join('\n')).toContain("json_extract_string(required_component.value, '$')")
+  expect(statements.join('\n')).toContain("json_extract_string(optional_component.value, '$.component')")
+  expect(statements.join('\n')).toContain("json_extract_string(optional_component.value, '$')")
   expect(statements.join('\n')).toContain('FROM app.project project')
   expect(statements.join('\n')).toContain('project.id IS NOT DISTINCT FROM candidate.project_id')
   expect(statements.join('\n')).toContain('project.archived = FALSE')
@@ -1183,7 +1198,7 @@ test('next claimable chunk discovery lets posting run before unrelated queue sea
   expect(next).toMatchObject({inputDigest: 'digest-posting', projectionComponent: 'posting'})
 })
 
-test('next claimable chunk discovery prioritizes payload before posting and optional search', async () => {
+test('next claimable chunk discovery treats posting summary and search as bulk after result visibility', async () => {
   const completedComponents = [
     'projectScope',
     'selectedImport',
@@ -1230,7 +1245,21 @@ test('next claimable chunk discovery prioritizes payload before posting and opti
     updatedAt: '2026-06-16T14:10:00.000Z',
     workloadClass: 'bulk' as const,
   }
-  const {database, statements} = createFakeChunkManifestDatabase([...completed, olderPayload, olderSearch, posting])
+  const queue = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-queue-readiness', projectionComponent: 'queue'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([
+    ...completed,
+    olderPayload,
+    olderSearch,
+    posting,
+    queue,
+  ])
 
   const next = await getNextClaimableReviewServingRebuildChunk(
     {now: '2026-06-16T14:15:00.000Z', projectId: 'project-1'},
@@ -1238,11 +1267,11 @@ test('next claimable chunk discovery prioritizes payload before posting and opti
   )
   const joined = statements.join('\n')
 
-  expect(next).toMatchObject({inputDigest: 'digest-older-payload', projectionComponent: 'payload'})
-  expect(joined).toMatch(/WHEN 'payload' THEN 6[\s\S]*WHEN 'posting' THEN 7[\s\S]*WHEN 'summary' THEN 8/)
-  expect(joined).toMatch(/WHEN 'posting' THEN 7[\s\S]*WHEN 'search' THEN 10/)
+  expect(next).toMatchObject({inputDigest: 'digest-queue-readiness', projectionComponent: 'queue'})
+  expect(joined).toMatch(/WHEN 'queue' THEN 5[\s\S]*WHEN 'judgmentInputContent' THEN 6[\s\S]*WHEN 'payload' THEN 7/)
+  expect(joined).toMatch(/WHEN 'posting' THEN 8[\s\S]*WHEN 'summary' THEN 9[\s\S]*WHEN 'search' THEN 10/)
   expect(joined).toContain("candidate.projection_component = 'posting'")
-  expect(joined).toContain("candidate.projection_component IN ('judgmentInputContent', 'search')")
+  expect(joined).toContain("candidate.projection_component IN ('posting', 'summary', 'search')")
 })
 
 test('next claimable chunk discovery prioritizes posting before summary once payload is ready', async () => {
@@ -1535,26 +1564,21 @@ test('next claimable chunk discovery lets freshly requested stalled foreground w
   })
 })
 
-test('next claimable chunk discovery defers background chunks while same-project foreground work is running', async () => {
-  const completedProjectScope = {
+test('next claimable chunk discovery defers background chunks while same-project count or dispatch work is running', async () => {
+  const completedComponents = ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'] as const
+  const completed = completedComponents.map((projectionComponent) => {
+    return {
+      ...getChunkRowFromIdentity(
+        {...baseChunkIdentity, inputDigest: `digest-${projectionComponent}`, projectionComponent},
+        [],
+      ),
+      requestId: 'rebuild:foreground',
+      status: 'completed' as const,
+    }
+  })
+  const runningQueue = {
     ...getChunkRowFromIdentity(
-      {...baseChunkIdentity, inputDigest: 'digest-project-scope', projectionComponent: 'projectScope'},
-      [],
-    ),
-    requestId: 'rebuild:foreground',
-    status: 'completed' as const,
-  }
-  const completedSelectedImport = {
-    ...getChunkRowFromIdentity(
-      {...baseChunkIdentity, inputDigest: 'digest-selected-import', projectionComponent: 'selectedImport'},
-      [],
-    ),
-    requestId: 'rebuild:foreground',
-    status: 'completed' as const,
-  }
-  const runningPosting = {
-    ...getChunkRowFromIdentity(
-      {...baseChunkIdentity, inputDigest: 'digest-running-posting', projectionComponent: 'posting'},
+      {...baseChunkIdentity, inputDigest: 'digest-running-queue', projectionComponent: 'queue'},
       [],
     ),
     leaseExpiresAt: '2026-06-16T14:30:00.000Z',
@@ -1567,12 +1591,7 @@ test('next claimable chunk discovery defers background chunks while same-project
     requestId: 'rebuild:foreground',
     updatedAt: '2026-06-16T14:00:00.000Z',
   }
-  const {database, statements} = createFakeChunkManifestDatabase([
-    completedProjectScope,
-    completedSelectedImport,
-    runningPosting,
-    pendingSearch,
-  ])
+  const {database, statements} = createFakeChunkManifestDatabase([...completed, runningQueue, pendingSearch])
 
   const next = await getNextClaimableReviewServingRebuildChunk(
     {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
@@ -1582,7 +1601,7 @@ test('next claimable chunk discovery defers background chunks while same-project
   expect(next).toBeNull()
   expect(statements.join('\n')).toContain('FROM app.review_rebuild_chunk_manifest foreground_pressure')
   expect(statements.join('\n')).toContain("foreground_pressure.status = 'running'")
-  expect(statements.join('\n')).toContain("candidate.projection_component = 'posting'")
+  expect(statements.join('\n')).toContain("candidate.projection_component IN ('posting', 'summary', 'search')")
 })
 
 test('next claimable chunk discovery allows background chunks after same-project foreground pressure clears', async () => {

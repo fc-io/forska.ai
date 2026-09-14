@@ -238,28 +238,34 @@ const createFakeManifestDatabase = (
     })
   }
   const upsertCandidate = (statement: string) => {
-    const strings = getSqlStrings(statement)
-    const projectId = strings[0] ?? ''
-    const snapshotId = strings[1] ?? ''
-    const reviewConfigHash = strings[3] ?? null
+    const values = getSqlValueList(statement)
+    const projectId = decodeSqlValue(values[0] ?? null) ?? ''
+    const snapshotId = decodeSqlValue(values[1] ?? null) ?? ''
+    const reviewConfigHash = decodeSqlValue(values[3] ?? null)
     const existing = snapshots.get(getSnapshotKey(projectId, snapshotId))
 
     snapshots.set(getSnapshotKey(projectId, snapshotId), {
       activatedAt: existing?.activatedAt ?? null,
-      componentState: componentState as FakeSnapshotRow['componentState'],
-      composedIdentity: {route: 'review.llm.rows', version: 1},
+      componentState: JSON.parse(
+        decodeSqlValue(values[5] ?? null) ?? '{"optional":[],"required":[]}',
+      ) as FakeSnapshotRow['componentState'],
+      composedIdentity: JSON.parse(decodeSqlValue(values[4] ?? null) ?? '{}') as FakeSnapshotRow['composedIdentity'],
       lastError: null,
-      lastKnownGoodSnapshotId: strings[10] ?? null,
-      optionalComponents: [],
+      lastKnownGoodSnapshotId: decodeSqlValue(values[11] ?? null),
+      optionalComponents: JSON.parse(
+        decodeSqlValue(values[7] ?? null) ?? '[]',
+      ) as FakeSnapshotRow['optionalComponents'],
       projectId,
-      requiredComponents: ['display'],
+      requiredComponents: JSON.parse(
+        decodeSqlValue(values[6] ?? null) ?? '[]',
+      ) as FakeSnapshotRow['requiredComponents'],
       reviewConfigHash,
-      selectedImportSnapshotId: strings[9] ?? null,
+      selectedImportSnapshotId: decodeSqlValue(values[10] ?? null),
       snapshotId,
-      sourceWatermarks: {reviewChange: 10},
+      sourceWatermarks: JSON.parse(decodeSqlValue(values[8] ?? null) ?? '{}') as FakeSnapshotRow['sourceWatermarks'],
       status: 'candidate',
       updatedAt: getClock(),
-      validationResult: null,
+      validationResult: JSON.parse(decodeSqlValue(values[9] ?? null) ?? 'null') as FakeSnapshotRow['validationResult'],
     })
     const snapshotKey = getSnapshotKey(projectId, snapshotId)
     snapshotPhysicalRows.set(snapshotKey, (snapshotPhysicalRows.get(snapshotKey) ?? 0) + 1)
@@ -1028,6 +1034,65 @@ test('promotion retires previous active and preserves it as last-known-good', as
   expect(statements.join('\n')).toContain("'display:identity-1'")
   expect(statements.join('\n')).toContain("'reviewChange'")
   expect(statements.join('\n')).toContain('latest_source_high_water_mark <= coverage.completed_source_high_water_mark')
+})
+
+test('promotion refreshes stale candidate component state before activation', async () => {
+  const staleCandidate: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: null,
+    componentState: {optional: [], required: [{...componentState.required[0], patchWatermark: '0'}]},
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: ['posting'],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-stale-candidate',
+    status: 'candidate',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const {database, snapshots, statements} = createFakeManifestDatabase([staleCandidate], {
+    chunkAvailabilityRows: [
+      {
+        completedChunkCount: 1,
+        component: 'display',
+        outputBaseGeneration: 1,
+        projectionIdentity: 'display:identity-1',
+        requestStatus: 'admitted',
+        totalChunkCount: 1,
+      },
+    ],
+  })
+
+  await upsertReviewServingProjectionIdentityManifest(
+    {
+      baseGeneration: 1,
+      definitionVersion: 'display-v1',
+      inputDigest: 'display-digest-1',
+      inputWatermark: 10,
+      inputWatermarks: {reviewChange: 10},
+      patchWatermark: 3,
+      projectId: 'project-1',
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      reviewConfigHash: 'review-config-1',
+      status: 'candidate',
+    },
+    database,
+  )
+
+  const promotionResult = await promoteReviewServingProjectorSnapshot(
+    {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-stale-candidate'},
+    database,
+  )
+  const active = snapshots.get('project-1:snapshot-stale-candidate')
+
+  expect(promotionResult).toEqual({promoted: true, snapshotId: 'snapshot-stale-candidate'})
+  expect(active?.status).toBe('active')
+  expect(active?.componentState.required).toEqual([{...componentState.required[0], patchWatermark: '3'}])
+  expect(active?.optionalComponents).toEqual(['posting'])
+  expect(active?.componentState.optional).toEqual([])
+  expect(statements.join('\n')).toContain('UPDATE app.review_projection_identity_manifest AS manifest')
+  expect(statements.join('\n')).toContain("status = 'active'")
 })
 
 test('retire obsolete manifests updates status without deleting snapshot rows', async () => {

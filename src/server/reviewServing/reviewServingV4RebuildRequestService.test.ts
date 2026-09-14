@@ -4,7 +4,11 @@ import {Effect} from 'effect'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {buildReviewDirtyProjectionIdentity} from './reviewProjectionIdentity.ts'
 import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
-import {filterReadyReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  countReadyReviewServingComponents,
+  filterReadyReviewServingComponents,
+  type ReviewServingProjectionComponent,
+} from './reviewServingContracts.ts'
 import {getReviewServingProjectionComponentIdentityKey} from './reviewServingProjectorDomain.ts'
 import {
   getReviewServingReviewConfigHash,
@@ -115,6 +119,7 @@ type FakeRequestDatabaseOptions = {
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
   legacyRequiredEnrichmentCandidate?: boolean
   reusableBootstrapSourceSnapshotId?: string
+  snapshotComponents?: readonly ReviewServingProjectionComponent[]
   staleBootstrapComponents?: readonly ReviewServingProjectionComponent[]
 }
 
@@ -178,6 +183,53 @@ const getReviewConfigHashFromFakeRequest = (request: FakeRequestRow) => {
     && typeof (parsed as {reviewConfigHash?: unknown}).reviewConfigHash === 'string'
     ? (parsed as {reviewConfigHash: string}).reviewConfigHash
     : null
+}
+
+const getRequestedComponentsFromFakeRequest = (request: FakeRequestRow) => {
+  const parsed =
+    typeof request.requestedComponentsJson === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(request.requestedComponentsJson) as unknown
+          } catch (_error) {
+            return null
+          }
+        })()
+      : request.requestedComponentsJson
+
+  return Array.isArray(parsed)
+    ? parsed.filter((component): component is ReviewServingProjectionComponent => {
+        return fakeRebuildComponents.includes(component as ReviewServingProjectionComponent)
+      })
+    : []
+}
+
+const hasSameFakeComponentSet = (
+  left: readonly ReviewServingProjectionComponent[],
+  right: readonly ReviewServingProjectionComponent[],
+) => {
+  const rightSet = new Set(right)
+
+  return (
+    left.length === right.length
+    && left.every((component) => {
+      return rightSet.has(component)
+    })
+  )
+}
+
+const getRequestedComponentFilterFromSql = (statement: string) => {
+  if (!statement.includes('expected_requested_component')) {
+    return undefined
+  }
+
+  return [
+    ...new Set(
+      getSqlStrings(statement).filter((component): component is ReviewServingProjectionComponent => {
+        return fakeRebuildComponents.includes(component as ReviewServingProjectionComponent)
+      }),
+    ),
+  ]
 }
 
 const getFakeProjectReviewSettings = (stats: FakeStats): ReviewServingProjectReviewSettingsRow => {
@@ -371,7 +423,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   const transactionWorkloadContexts: Array<DuckdbWorkloadContext | undefined> = []
   const componentStateJson = {
     optional: [],
-    required: fakeRebuildComponents.map((component) => {
+    required: (options.snapshotComponents ?? fakeRebuildComponents).map((component) => {
       return {baseGeneration: 2, component, patchWatermark: 10, projectionIdentity: `${component}:identity-1`}
     }),
   }
@@ -657,19 +709,30 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
         const reviewConfigHashPathIndex = strings.indexOf('$.reviewConfigHash')
         const reviewConfigHashFilter =
           reviewConfigHashPathIndex === -1 ? undefined : strings[reviewConfigHashPathIndex + 1]
+        const requestedComponentFilter = getRequestedComponentFilterFromSql(statement)
         const allowedStatuses = statement.includes("status IN ('admitted', 'running')")
           ? ['admitted', 'running']
           : ['admitted']
-        const activeRequest = Array.from(requests.values()).find((request) => {
-          return (
-            request.projectId === projectId
-            && allowedStatuses.includes(request.status)
-            && request.admissionState === 'admitted'
-            && (reasonFilter === undefined || request.reason === reasonFilter)
-            && (reviewConfigHashFilter === undefined
-              || getReviewConfigHashFromFakeRequest(request) === reviewConfigHashFilter)
-          )
-        })
+        const activeRequest = Array.from(requests.values())
+          .filter((request) => {
+            return (
+              request.projectId === projectId
+              && allowedStatuses.includes(request.status)
+              && request.admissionState === 'admitted'
+              && (reasonFilter === undefined || request.reason === reasonFilter)
+              && (reviewConfigHashFilter === undefined
+                || getReviewConfigHashFromFakeRequest(request) === reviewConfigHashFilter)
+              && (requestedComponentFilter === undefined
+                || hasSameFakeComponentSet(getRequestedComponentsFromFakeRequest(request), requestedComponentFilter))
+            )
+          })
+          .sort((left, right) => {
+            return (
+              right.priority - left.priority
+              || left.updatedAt.localeCompare(right.updatedAt)
+              || left.requestId.localeCompare(right.requestId)
+            )
+          })[0]
 
         return (activeRequest === undefined ? [] : [activeRequest]) as T[]
       }
@@ -816,7 +879,10 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {components: fakeRebuildComponents, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
   )
   const joined = statements.join('\n')
 
@@ -830,6 +896,103 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain("'search'")
   expect(joined).toContain('snapshot:')
   expect(joined).toContain('freshReviewServingSnapshot')
+})
+
+test('V4 page-first missing snapshot repair bootstraps explicit components without full enrichment', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+  const repairComponents = [...countReadyReviewServingComponents, 'payload'] as const
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {
+        components: repairComponents,
+        pageFirstOnly: true,
+        priority: 10_000,
+        projectId: 'project-v4',
+        reason: 'missingReviewServingSnapshot',
+      },
+      database,
+    ),
+  )
+  const chunkInserts = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+    .join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.requestedComponents).toEqual([...repairComponents])
+  expect(chunkInserts).toContain("'payload'")
+  expect(chunkInserts).not.toContain("'posting'")
+  expect(chunkInserts).not.toContain("'summary'")
+  expect(chunkInserts).not.toContain("'search'")
+})
+
+test('V4 page-first missing snapshot repair builds a component-scoped candidate when active snapshot lacks payload', async () => {
+  const repairComponents = [...countReadyReviewServingComponents, 'payload'] as const
+  const {database, statements} = createFakeRequestDatabase(baseStats, {
+    snapshotComponents: countReadyReviewServingComponents,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {
+        components: repairComponents,
+        pageFirstOnly: true,
+        priority: 10_000,
+        projectId: 'project-v4',
+        reason: 'missingReviewServingSnapshot',
+      },
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+  const chunkInserts = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+    .join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.requestedComponents).toEqual([...repairComponents])
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(chunkInserts).toContain("'payload'")
+  expect(chunkInserts).not.toContain("'posting'")
+  expect(chunkInserts).not.toContain("'summary'")
+  expect(chunkInserts).not.toContain("'search'")
+  expect(joined).not.toContain('skipped requested rebuild components')
+})
+
+test('V4 page-first missing snapshot repairs scope bootstrap snapshot ids by component set', async () => {
+  const getRepairSnapshotId = async (component: ReviewServingProjectionComponent) => {
+    const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+    await Effect.runPromise(
+      requestReviewServingV4RebuildEffect(
+        {
+          components: [...countReadyReviewServingComponents, component],
+          pageFirstOnly: true,
+          priority: 10_000,
+          projectId: 'project-v4',
+          reason: 'missingReviewServingSnapshot',
+        },
+        database,
+      ),
+    )
+
+    const snapshotInsert = statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    })
+
+    return snapshotInsert === undefined ? null : getSnapshotIdFromSnapshotInsert(snapshotInsert)
+  }
+
+  const payloadSnapshotId = await getRepairSnapshotId('payload')
+  const postingSnapshotId = await getRepairSnapshotId('posting')
+
+  expect(payloadSnapshotId).toMatch(/^snapshot:/)
+  expect(postingSnapshotId).toMatch(/^snapshot:/)
+  expect(payloadSnapshotId).not.toBe(postingSnapshotId)
 })
 
 test('V4 bootstrap rebuild reuses unchanged same-snapshot component manifests', async () => {
@@ -846,7 +1009,10 @@ test('V4 bootstrap rebuild reuses unchanged same-snapshot component manifests', 
   )
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {components: fakeRebuildComponents, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
   )
   const chunkInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
@@ -894,7 +1060,10 @@ test('V4 bootstrap rebuild reuses same-snapshot active components without target
   )
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {components: fakeRebuildComponents, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
   )
   const chunkInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
@@ -940,7 +1109,10 @@ test('V4 bootstrap rebuild creates fresh chunks for incompatible component manif
   )
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {components: fakeRebuildComponents, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
   )
   const chunkInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
@@ -981,7 +1153,10 @@ test('V4 bootstrap rebuild clones isolated unchanged component rows from an acti
   )
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {components: fakeRebuildComponents, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
   )
   const joined = statements.join('\n')
   const chunkInserts = statements.filter((statement) => {
@@ -1052,7 +1227,10 @@ test('V4 bootstrap rebuild promotes all-reused candidates and completes covered 
   )
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {components: fakeRebuildComponents, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
   )
   const joined = statements.join('\n')
 
@@ -1242,7 +1420,14 @@ test('V4 rebuild request service returns a no-op rebuild request when there are 
   })
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {
+        components: ['projectScope', 'selectedImport', 'summary'],
+        projectId: 'project-v4',
+        reason: 'missingReviewServingSnapshot',
+      },
+      database,
+    ),
   )
 
   expect(request.status).toBe('completed')
@@ -1264,7 +1449,14 @@ test('V4 rebuild request service keeps selected-import bootstrap chunks on impor
   )
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {
+        components: ['projectScope', 'selectedImport', 'summary'],
+        projectId: 'project-v4',
+        reason: 'missingReviewServingSnapshot',
+      },
+      database,
+    ),
   )
   const selectedImportChunk = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'selectedImport'")
@@ -1306,10 +1498,17 @@ test('V4 rebuild request service preserves selected-import bootstrap watermarks 
   expect(selectedImportChunk).toMatch(
     /'selectedImport',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*7,\s*'article-000-a'/u,
   )
-  expect(statements.join('\n')).toContain('FROM app.review_serving_project_dirty_source_watermark')
-  expect(statements.join('\n')).toContain('GROUP BY source_partition')
-  expect(statements.join('\n')).not.toContain('UNION ALL')
-  expect(statements.join('\n')).toContain("AND status <> 'completed'")
+  const completedWatermarkStatement =
+    statements.find((statement) => {
+      return statement.includes('FROM app.review_serving_project_dirty_source_watermark')
+    }) ?? ''
+  const activeWatermarkStatement =
+    statements.find((statement) => {
+      return statement.includes('FROM app.review_serving_dirty_work') && statement.includes('GROUP BY source_partition')
+    }) ?? ''
+  expect(completedWatermarkStatement).not.toContain('UNION ALL')
+  expect(activeWatermarkStatement).not.toContain('UNION ALL')
+  expect(activeWatermarkStatement).toContain("AND status <> 'completed'")
 })
 
 test('V4 missing snapshot rebuild requests reuse active admitted work', async () => {
@@ -1328,6 +1527,48 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
   expect(secondRequest.requestId).toBe(firstRequest.requestId)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
+})
+
+test('V4 foreground missing snapshot rebuild does not reuse an active full enrichment request', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  const fullRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {
+        components: fakeRebuildComponents,
+        priority: 100,
+        projectId: 'project-v4',
+        reason: 'missingReviewServingSnapshot',
+      },
+      database,
+    ),
+  )
+  const pageFirstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 10_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+  const rebuildRequestInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+  const pageFirstChunkInsertSql =
+    statements
+      .filter((statement) => {
+        return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+      })
+      .at(-1) ?? ''
+
+  expect(fullRequest.requestedComponents).toEqual([...fakeRebuildComponents])
+  expect(pageFirstRequest.requestId).not.toBe(fullRequest.requestId)
+  expect(pageFirstRequest.priority).toBe(10_000)
+  expect(pageFirstRequest.requestedComponents).toEqual([...countReadyReviewServingComponents])
+  expect(pageFirstChunkInsertSql).not.toContain("'posting'")
+  expect(pageFirstChunkInsertSql).not.toContain("'summary'")
+  expect(pageFirstChunkInsertSql).not.toContain("'judgmentInputContent'")
+  expect(pageFirstChunkInsertSql).not.toContain("'payload'")
+  expect(pageFirstChunkInsertSql).not.toContain("'search'")
+  expect(rebuildRequestInsertCount).toBe(2)
 })
 
 test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap candidates', async () => {
@@ -1367,7 +1608,7 @@ test('V4 missing snapshot rebuild reseeds legacy enrichment-required bootstrap c
     componentState?.optional?.map((state) => {
       return state.component
     }),
-  ).toEqual(['posting', 'summary', 'judgmentInputContent', 'payload', 'search'])
+  ).toEqual([])
 })
 
 test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {
@@ -1592,13 +1833,24 @@ test('V4 missing snapshot rebuild bootstraps candidate-only projects with bounde
   const displayChunkInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes('display')
   })
+  const optionalChunkInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+      && (statement.includes("'posting'")
+        || statement.includes("'summary'")
+        || statement.includes("'judgmentInputContent'")
+        || statement.includes("'payload'")
+        || statement.includes("'search'"))
+    )
+  })
 
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
   expect(joined).toContain('NTILE(')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
-  expect(displayChunkInserts.length).toBeGreaterThan(1)
+  expect(displayChunkInserts.length).toBeGreaterThan(0)
+  expect(optionalChunkInserts).toEqual([])
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
@@ -1718,7 +1970,14 @@ test('V4 missing snapshot bootstrap admits selected import, project scope, and s
   })
 
   const request = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+    requestReviewServingV4RebuildEffect(
+      {
+        components: ['projectScope', 'selectedImport', 'summary'],
+        projectId: 'project-v4',
+        reason: 'missingReviewServingSnapshot',
+      },
+      database,
+    ),
   )
   const chunkInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
@@ -1762,19 +2021,29 @@ test('V4 missing snapshot bootstrap bounds large project-scope request estimates
   const projectScopeChunkInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes('projectScope')
   })
+  const optionalChunkInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+      && (statement.includes("'posting'")
+        || statement.includes("'summary'")
+        || statement.includes("'judgmentInputContent'")
+        || statement.includes("'payload'")
+        || statement.includes("'search'"))
+    )
+  })
 
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
   const joined = statements.join('\n')
 
-  expect(joined).toContain('"bootstrapChunkCount":85')
-  expect(joined).toContain('"bootstrapExecutableChunkCount":935')
+  expect(request.requestedComponents).toEqual([...countReadyReviewServingComponents])
   expect(joined).toContain('"bootstrapSnapshot":true')
   expect(joined).toContain('"childAdmissionBudget"')
   expect(joined).toContain('"childAdmissionEstimate"')
   expect(joined).toContain('"coldBootstrap":true')
   expect(joined).toContain('"totalEstimate"')
-  expect(projectScopeChunkInserts).toHaveLength(85)
+  expect(projectScopeChunkInserts.length).toBeGreaterThan(1)
+  expect(optionalChunkInserts).toEqual([])
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {

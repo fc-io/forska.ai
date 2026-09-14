@@ -6,13 +6,8 @@ import {
   publishProjectedJudgmentJobVisibility,
 } from './judgmentJobReviewServingVisibilityService.ts'
 
-test('visibility publication bridges bounded active job partitions into the project dirty-token domain', () => {
+test('visibility publication waits for V4 result detail visibility before acking job partitions', () => {
   expect(completedJudgmentJobVisibilitySql).toContain("job.storage_state IN ('active', 'draining')")
-  expect(completedJudgmentJobVisibilitySql).toContain('WHEN refresh.dirty_token IS NULL THEN 0')
-  expect(completedJudgmentJobVisibilitySql).toContain('THEN refresh.last_completed_dirty_token')
-  expect(completedJudgmentJobVisibilitySql).toContain('refresh.dirty_token <= refresh.last_completed_dirty_token')
-  expect(completedJudgmentJobVisibilitySql).toContain('project_mart_dirty_materialization_state materialization')
-  expect(completedJudgmentJobVisibilitySql).toContain('project_mart_dirty_refresh_article_quarantine quarantine')
   expect(completedJudgmentJobVisibilitySql).toContain('review_delta_reconciliation_cursor cursor')
   expect(completedJudgmentJobVisibilitySql).toContain('ORDER BY job.id')
   expect(completedJudgmentJobVisibilitySql).toContain('LIMIT 64')
@@ -21,8 +16,15 @@ test('visibility publication bridges bounded active job partitions into the proj
   expect(completedJudgmentJobVisibilitySql).toContain(
     'completed.source_high_water_mark < candidate.source_high_water_mark',
   )
-  expect(completedJudgmentJobVisibilitySql).not.toContain('THEN cursor.source_high_water_mark')
-  expect(completedJudgmentJobVisibilitySql).not.toContain('review_change_delta')
+  expect(completedJudgmentJobVisibilitySql).toContain('pending_result_visibility_work')
+  expect(completedJudgmentJobVisibilitySql).toContain("SELECT * FROM (VALUES ('llmStatus'), ('queue'), ('payload'))")
+  expect(completedJudgmentJobVisibilitySql).toContain("dirty_work.status <> 'completed'")
+  expect(completedJudgmentJobVisibilitySql).toContain('invisible_llm_delta')
+  expect(completedJudgmentJobVisibilitySql).toContain('FROM mart.review_article_judgment_detail_serving_v4 detail')
+  expect(completedJudgmentJobVisibilitySql).toContain("detail.payload_kind = 'llm'")
+  expect(completedJudgmentJobVisibilitySql).toContain('ELSE candidate.source_high_water_mark')
+  expect(completedJudgmentJobVisibilitySql).not.toContain('project_mart_refresh_state')
+  expect(completedJudgmentJobVisibilitySql).not.toContain('THEN 0')
   expect(completedJudgmentJobVisibilitySql).not.toContain('review_serving_dirty_work_ack')
 })
 
@@ -81,4 +83,30 @@ test('visibility publication preserves the project dirty token selected for each
     {ackToken: 31, jobId: 'job-1'},
     {ackToken: 82, jobId: 'job-2'},
   ])
+})
+
+test('visibility publication uses the background query lane when available', async () => {
+  const queryStatements: string[] = []
+  const backgroundStatements: string[] = []
+  const database = {
+    queryJson: async (statement: string): Promise<never> => {
+      queryStatements.push(statement)
+      throw new Error('foreground visibility query should not run')
+    },
+    queryJsonBackground: async <T>(statement: string) => {
+      backgroundStatements.push(statement)
+      return [{ackToken: 17, jobId: 'job-background'}] as T[]
+    },
+  }
+  const published: Array<{ackToken: number; jobId: string}> = []
+
+  const publishedCount = await publishProjectedJudgmentJobVisibility(database, async (visibility) => {
+    published.push(visibility)
+  })
+
+  expect(publishedCount).toBe(1)
+  expect(queryStatements).toEqual([])
+  expect(backgroundStatements).toHaveLength(1)
+  expect(backgroundStatements[0]).toContain('candidate_job_visibility')
+  expect(published).toEqual([{ackToken: 17, jobId: 'job-background'}])
 })

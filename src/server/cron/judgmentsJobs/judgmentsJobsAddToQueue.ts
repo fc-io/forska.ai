@@ -3,6 +3,7 @@ import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJu
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
+import type {JobCursor} from './judgmentJobSqliteService.ts'
 import {
   getJudgmentJobSqliteErrorMessage,
   isTransientJudgmentJobSqliteLockError,
@@ -28,7 +29,6 @@ type JobConfig = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
-type ProjectMartVisibilityState = {dirtyToken: number | null; lastCompletedDirtyToken: number | null}
 
 const addToQueueLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const addToQueueWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -37,8 +37,12 @@ const sqliteScanOverscanMultiplier = 1
 const sqliteScanMaxWindowsPerTick = 1
 const sqliteScanMaxWindowSize = 128
 const sqliteScanExhaustedCooldownMs = 60_000
+const defaultServingQueueReadTimeoutMs = 5_000
+const servingQueueReadTimeoutCooldownMs = 30_000
 const sqliteActiveBacklogRefillLowWatermarkRatio = 1
 const sqliteActiveBacklogRefillLowWatermarkMinimumTarget = 32
+let configuredServingQueueReadTimeoutMs = defaultServingQueueReadTimeoutMs
+const servingQueueReadTimeoutCooldownUntilByJobId = new Map<string, number>()
 
 type AddToQueueBucket = {addToQueueMaxBatchSize: number; jobs: Job[]; label: string; readyTargetPerJob: number}
 
@@ -127,6 +131,81 @@ const getPromptsToFetchCount = (
   return Math.min(deficit, addToQueueMaxBatchSize)
 }
 
+const isServingQueueReadCoolingDown = (jobId: string): boolean => {
+  const cooldownUntil = servingQueueReadTimeoutCooldownUntilByJobId.get(jobId)
+
+  if (cooldownUntil === undefined) {
+    return false
+  }
+
+  if (cooldownUntil <= Date.now()) {
+    servingQueueReadTimeoutCooldownUntilByJobId.delete(jobId)
+    return false
+  }
+
+  return true
+}
+
+const readServingQueuePromptsWithTimeout = async ({
+  cursor,
+  job,
+  requestedWindowSize,
+}: {
+  cursor: JobCursor | null
+  job: Job
+  requestedWindowSize: number
+}): Promise<ServingQueueReadResult> => {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  const timedOut = Symbol('servingQueueReadTimedOut')
+  const promptRead = judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor)
+  const timeoutRead = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => {
+      resolve(timedOut)
+    }, configuredServingQueueReadTimeoutMs)
+  })
+
+  const result = await Promise.race([promptRead, timeoutRead])
+
+  if (timeout !== null) {
+    clearTimeout(timeout)
+  }
+
+  if (result !== timedOut) {
+    servingQueueReadTimeoutCooldownUntilByJobId.delete(job.id)
+    return {promptData: result, timedOut: false}
+  }
+
+  servingQueueReadTimeoutCooldownUntilByJobId.set(job.id, Date.now() + servingQueueReadTimeoutCooldownMs)
+  void promptRead.catch((error) => {
+    addToQueueWarningLogger.warn(
+      `judgmentQueue.addToQueue.servingQueueReadLateFailure.${job.id}`,
+      '[addToQueue] skipped serving queue read later failed after timeout',
+      {
+        component: addToQueueComponent,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        event: 'servingQueueReadLateFailure',
+        jobId: job.id,
+        projectId: job.projectId,
+      },
+    )
+  })
+
+  addToQueueWarningLogger.warn(
+    `judgmentQueue.addToQueue.servingQueueReadTimedOut.${job.id}`,
+    '[addToQueue] skipped serving queue read after timeout',
+    {
+      component: addToQueueComponent,
+      event: 'servingQueueReadTimedOut',
+      jobId: job.id,
+      projectId: job.projectId,
+      requested: requestedWindowSize,
+      timeoutMs: configuredServingQueueReadTimeoutMs,
+    },
+  )
+
+  return {promptData: null, timedOut: true}
+}
+
 const getActiveQueueBacklogCount = async ({
   jobId,
   readyCount,
@@ -169,9 +248,21 @@ const shouldRefillActiveQueueBacklog = ({
 }
 
 type PromptQueueEntry = {articleId: string; promptId: string}
+type QueuePromptsResult = Awaited<ReturnType<typeof judgmentsJobsCronGetPrompts>>
+type ServingQueueReadResult = {promptData: QueuePromptsResult; timedOut: false} | {promptData: null; timedOut: true}
 
 const sqliteBatchSize = 1000
 const orphanedLocalQueueAutoRepairMaxRows = 1_000
+
+export const setJudgmentsJobsAddToQueueServingReadTimeoutMsForTests = (timeoutMs: number): void => {
+  configuredServingQueueReadTimeoutMs = Math.max(1, Math.trunc(timeoutMs))
+  servingQueueReadTimeoutCooldownUntilByJobId.clear()
+}
+
+export const resetJudgmentsJobsAddToQueueServingReadTimeoutMsForTests = (): void => {
+  configuredServingQueueReadTimeoutMs = defaultServingQueueReadTimeoutMs
+  servingQueueReadTimeoutCooldownUntilByJobId.clear()
+}
 
 const getPromptQueueEntryKey = (entry: PromptQueueEntry) => {
   return `${entry.articleId}:${entry.promptId}`
@@ -520,39 +611,6 @@ const hasSqliteExhaustedCooldown = (scanState: {exhaustedAt: Date | null; wrapVi
     : false
 }
 
-const getProjectMartVisibilityState = async (jobId: string): Promise<ProjectMartVisibilityState | null> => {
-  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<ProjectMartVisibilityState>(`
-    SELECT
-      CAST(pmrs.dirty_token AS INTEGER) AS dirtyToken,
-      CAST(pmrs.last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
-    FROM app.judgment_job jj
-    INNER JOIN app.project_mart_refresh_state pmrs ON pmrs.project_id = jj.project_id
-    WHERE jj.id = '${escapeSqlString(jobId)}'
-    LIMIT 1
-  `)
-
-  return row
-    ? {
-        dirtyToken: row.dirtyToken == null ? null : Number(row.dirtyToken),
-        lastCompletedDirtyToken: row.lastCompletedDirtyToken == null ? null : Number(row.lastCompletedDirtyToken),
-      }
-    : null
-}
-
-const getProjectDirtyToken = async (jobId: string): Promise<number | null> => {
-  return (await getProjectMartVisibilityState(jobId))?.dirtyToken ?? null
-}
-
-const getWrapVisibilityToken = ({
-  lastProjectRefreshAckSeq,
-  projectDirtyToken,
-}: {
-  lastProjectRefreshAckSeq: number | null
-  projectDirtyToken: number | null
-}) => {
-  return projectDirtyToken ?? lastProjectRefreshAckSeq
-}
-
 const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
   const sqliteService = getJudgmentJobSqliteService()
@@ -610,6 +668,15 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     return
   }
 
+  if (isServingQueueReadCoolingDown(job.id)) {
+    addToQueueLogger.log(
+      `judgmentQueue.addToQueue.servingQueueReadCooldown.${job.id}`,
+      '[addToQueue] skipped serving queue read during timeout cooldown',
+      {component: addToQueueComponent, event: 'servingQueueReadCooldown', jobId: job.id, projectId: job.projectId},
+    )
+    return
+  }
+
   const baseCursor = scanState.exhaustedAt ? null : scanState.cursor
   const initializeScanState = scanState.exhaustedAt
     ? sqliteService.setScanState(job.id, {
@@ -637,7 +704,13 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
     const readyDeficit = Math.max(0, readyTargetPerJob - readyCount)
     const requestedWindowSize = getSqliteWindowSize(readyDeficit, addToQueueMaxBatchSize)
-    const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor)
+    const promptRead = await readServingQueuePromptsWithTimeout({cursor, job, requestedWindowSize})
+
+    if (promptRead.timedOut) {
+      return
+    }
+
+    const promptData = promptRead.promptData
     const filteredEntries = await filterAlreadyJudged(
       promptData.promptEntries,
       job.id,
@@ -665,12 +738,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       readyCount: await sqliteService.getReadyCount(job.id),
       sqliteService,
     })
-    const wrapVisibilityAckSeq = promptData.nextCursor
-      ? null
-      : getWrapVisibilityToken({
-          lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
-          projectDirtyToken: await getProjectDirtyToken(job.id),
-        })
+    const wrapVisibilityAckSeq = promptData.nextCursor ? null : scanState.lastProjectRefreshAckSeq
     const nextScanState = promptData.nextCursor
       ? {cursor: promptData.nextCursor, exhaustedAt: null, wrapVisibilityAckSeq: null}
       : {cursor: null, exhaustedAt: wrapVisibilityAckSeq === null ? null : new Date(), wrapVisibilityAckSeq}

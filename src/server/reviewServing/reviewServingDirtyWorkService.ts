@@ -11,9 +11,10 @@ import {
 } from './reviewServingDeltaReconciliation.ts'
 import {getReviewServingDirtyWorkScopeKey, type ReviewServingDirtyWorkScope} from './reviewServingProjectorDomain.ts'
 
-export type ReviewServingDirtyWorkStatus = 'completed' | 'failed' | 'pending' | 'running'
+export type ReviewServingDirtyWorkStatus = 'blocked_by_rebuild' | 'completed' | 'failed' | 'pending' | 'running'
 
 export type ReviewServingDirtyWorkLifecycleReason =
+  | 'blocked_by_rebuild'
   | 'covered_by_rebuild'
   | 'failed'
   | 'projected'
@@ -1263,6 +1264,46 @@ export const releaseReviewServingDirtyWorkClaims = async (
   }
 
   return {releasedCount: uniqueDirtyWorkIds.length}
+}
+
+export const blockReviewServingDirtyWorkClaimsForRebuild = async (
+  dirtyWorkIds: readonly string[],
+  database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
+) => {
+  const uniqueDirtyWorkIds = [...new Set(dirtyWorkIds)]
+
+  if (uniqueDirtyWorkIds.length > 0) {
+    const rows = await database.queryJson<DirtyWorkRow>(`
+      UPDATE app.review_serving_dirty_work
+      SET status = 'blocked_by_rebuild', lifecycle_reason = 'blocked_by_rebuild', updated_at = current_timestamp
+      WHERE dirty_work_id IN (${uniqueDirtyWorkIds.map(getSqlLiteral).join(', ')})
+        AND status = 'running'
+      RETURNING
+        CAST(NULL AS BIGINT) AS storageRowId,
+        dirty_work_id AS dirtyWorkId,
+        project_id AS projectId,
+        scope_kind AS scopeKind,
+        scope_id AS scopeId,
+        article_id AS articleId,
+        projection_key AS projectionKey,
+        dirty_kind AS dirtyKind,
+        source_partition AS sourcePartition,
+        first_source_high_water_mark AS firstSourceHighWaterMark,
+        latest_source_high_water_mark AS latestSourceHighWaterMark,
+        lifecycle_reason AS lifecycleReason,
+        latest_delta_id AS latestDeltaId,
+        dirty_range_start AS dirtyRangeStart,
+        dirty_range_end AS dirtyRangeEnd,
+        projection_component AS projectionComponent,
+        projection_identity AS projectionIdentity,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+    `)
+    await maintainReviewServingDirtyWorkClaimStates(rows.map(getDirtyWorkRecordFromRow), database)
+  }
+
+  return {blockedCount: uniqueDirtyWorkIds.length}
 }
 
 export const failReviewServingDirtyWorkClaims = async (

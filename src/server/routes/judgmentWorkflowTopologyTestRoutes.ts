@@ -270,15 +270,90 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         ORDER BY project_id
       `)
       const [queue] = await getAppDatabaseService().queryJson<{count: number}>(`
+        WITH required_dispatch_component(component) AS (
+          SELECT *
+          FROM (VALUES
+            ('projectScope'),
+            ('selectedImport'),
+            ('display'),
+            ('llmStatus'),
+            ('queue'),
+            ('judgmentInputContent')
+          )
+        ), dispatch_ready_candidate AS (
+          SELECT
+            snapshot.project_id,
+            snapshot.review_config_hash,
+            snapshot.snapshot_id
+          FROM app.review_serving_snapshot_manifest snapshot
+          WHERE snapshot.project_id IN (${projectList})
+            AND snapshot.snapshot_status = 'candidate'
+            AND snapshot.selected_import_snapshot_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM app.review_selected_import_snapshot selected_import
+              WHERE selected_import.project_id = snapshot.project_id
+                AND selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
+                AND selected_import.status = 'completed'
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM required_dispatch_component required
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_chunk_manifest chunk
+                WHERE chunk.project_id = snapshot.project_id
+                  AND (chunk.snapshot_id || '') = (snapshot.snapshot_id || '')
+                  AND chunk.projection_component = required.component
+                  AND chunk.status = 'completed'
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_chunk_manifest chunk
+                WHERE chunk.project_id = snapshot.project_id
+                  AND (chunk.snapshot_id || '') = (snapshot.snapshot_id || '')
+                  AND chunk.projection_component = required.component
+                  AND chunk.status <> 'completed'
+              )
+            )
+        ), active_scope AS (
+          SELECT
+            snapshot.project_id,
+            snapshot.review_config_hash,
+            snapshot.snapshot_id
+          FROM app.review_serving_snapshot_manifest snapshot
+          WHERE snapshot.project_id IN (${projectList})
+            AND snapshot.snapshot_status = 'active'
+            AND snapshot.selected_import_snapshot_id IS NOT NULL
+        ), eligible_scope AS (
+          SELECT * FROM active_scope
+          UNION ALL
+          SELECT * FROM dispatch_ready_candidate
+        )
         SELECT COUNT(*) AS count
-        FROM mart.review_unassessed_queue_article_rank_serving_v4
-        WHERE project_id IN (${projectList})
+        FROM (
+          SELECT DISTINCT queue.project_id, queue.review_config_hash, queue.queue_kind, queue.article_id
+          FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
+          INNER JOIN eligible_scope scope
+            ON scope.project_id = queue.project_id
+            AND scope.review_config_hash = queue.review_config_hash
+            AND scope.snapshot_id = queue.snapshot_id
+          WHERE queue.project_id IN (${projectList})
+        ) queue
       `)
       const [projection] = await getAppDatabaseService().queryJson<{count: number}>(`
         SELECT COUNT(*) AS count
-        FROM mart.review_article_judgment_detail_serving_v4
-        WHERE project_id IN (${projectList})
-          AND payload_kind = 'llm'
+        FROM (
+          SELECT DISTINCT
+            project_id,
+            review_config_hash,
+            payload_kind,
+            article_id,
+            prompt_id
+          FROM mart.review_article_judgment_detail_serving_v4
+          WHERE project_id IN (${projectList})
+            AND payload_kind = 'llm'
+        ) projection
       `)
       const appliedBoundaryMigrations = await getAppDatabaseService().queryJson<{name: string}>(`
         SELECT name

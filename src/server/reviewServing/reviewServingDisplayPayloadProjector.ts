@@ -19,18 +19,13 @@ export type ProjectReviewServingDisplayBaseInput = {
   chunkEndArticleId?: string | null
   chunkStartArticleId?: string | null
   displayIdentity: string
-  humanStatusIdentity: string
   listModeKeys: readonly string[]
-  llmStatusIdentity: string
-  payloadIdentity: string
-  postingIdentity: string
   projectId: string
   projectScopeIdentity: string
   reviewConfigHash: string
   selectedImportIdentity: string
   selectedImportSnapshotId: string
   snapshotId: string
-  summaryIdentity: string
 }
 
 export type ProjectReviewServingDisplayBaseRangesInput = {ranges: readonly ProjectReviewServingDisplayBaseInput[]}

@@ -1,7 +1,7 @@
 import {expect, test} from 'bun:test'
 import {Effect} from 'effect'
 
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {countReadyReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim, ReviewServingDirtyWorkInput} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingDirtyWorkScopeForChange,
@@ -89,6 +89,7 @@ const createDependencyHarness = (
 ) => {
   const failedClaimIds: string[] = []
   const releasedClaimIds: string[] = []
+  const blockedClaimIds: string[] = []
   const completedClaimIds: string[] = []
   const claimedComponents: ReviewServingProjectionComponent[] = []
   const database = {
@@ -106,6 +107,11 @@ const createDependencyHarness = (
     },
   }
   const dependencies: ReviewServingProjectorServiceDependencies = {
+    blockDirtyWorkForRebuild: async (dirtyWorkIds: readonly string[]) => {
+      blockedClaimIds.push(...dirtyWorkIds)
+
+      return {blockedCount: dirtyWorkIds.length}
+    },
     claimDirtyWork: async (params: {limit: number; projectionComponent: ReviewServingProjectionComponent}) => {
       claimedComponents.push(params.projectionComponent)
       const claims = pending[params.projectionComponent] ?? []
@@ -138,7 +144,7 @@ const createDependencyHarness = (
     runners: {},
   }
 
-  return {claimedComponents, completedClaimIds, dependencies, failedClaimIds, releasedClaimIds}
+  return {blockedClaimIds, claimedComponents, completedClaimIds, dependencies, failedClaimIds, releasedClaimIds}
 }
 
 test('component run plan starts at the invalidation registry first affected component', () => {
@@ -389,14 +395,26 @@ test('wake releases claimed work when the duration budget is exhausted after cla
   expect(releasedClaimIds).toEqual(['posting-1'])
 })
 
-test('wake requests V4 rebuild and releases claims when a snapshot is not ready yet', async () => {
-  const {dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+test('wake requests page-first V4 rebuild and blocks claims when a snapshot is not ready yet', async () => {
+  const {blockedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
   })
-  const rebuildRequests: Array<{projectId: string; reason: string}> = []
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    pageFirstOnly: boolean | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
 
   dependencies.requestRebuild = (input) => {
-    rebuildRequests.push({projectId: input.projectId, reason: input.reason})
+    rebuildRequests.push({
+      components: input.components,
+      pageFirstOnly: input.pageFirstOnly,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
 
     return Effect.succeed({status: 'admitted'} as never)
   }
@@ -413,9 +431,116 @@ test('wake requests V4 rebuild and releases claims when a snapshot is not ready 
 
   expect(result.status).toBe('partial')
   expect(result.failures).toEqual([])
-  expect(rebuildRequests).toEqual([{projectId: 'project-1', reason: 'missingReviewServingSnapshot'}])
-  expect(releasedClaimIds).toEqual(['queue-1'])
+  expect(rebuildRequests).toEqual([
+    {
+      components: [...countReadyReviewServingComponents],
+      pageFirstOnly: true,
+      priority: 10_000,
+      projectId: 'project-1',
+      reason: 'missingReviewServingSnapshot',
+    },
+  ])
+  expect(blockedClaimIds).toEqual(['queue-1'])
+  expect(releasedClaimIds).toEqual([])
   expect(failedClaimIds).toEqual([])
+})
+
+test('wake requests payload repair with count-ready dependencies for missing result visibility snapshots', async () => {
+  const {blockedClaimIds, dependencies, releasedClaimIds} = createDependencyHarness({
+    payload: [getClaim({component: 'payload', dirtyWorkId: 'payload-1'})],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    pageFirstOnly: boolean | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      pageFirstOnly: input.pageFirstOnly,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    payload: async () => {
+      throw new Error('cannot run projector without a candidate or active snapshot for project project-1')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['payload'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(rebuildRequests).toEqual([
+    {
+      components: [...countReadyReviewServingComponents, 'payload'],
+      pageFirstOnly: true,
+      priority: 50,
+      projectId: 'project-1',
+      reason: 'missingReviewServingSnapshot',
+    },
+  ])
+  expect(blockedClaimIds).toEqual(['payload-1'])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake requests payload-backed summary repair when a candidate lacks payload identity', async () => {
+  const {blockedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    summary: [getClaim({component: 'summary', dirtyWorkId: 'summary-1'})],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    pageFirstOnly: boolean | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      pageFirstOnly: input.pageFirstOnly,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    summary: async () => {
+      throw new Error('cannot run projector without payload identity in snapshot snapshot-1')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['summary'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(result.failures).toEqual([])
+  expect(rebuildRequests).toEqual([
+    {
+      components: [...countReadyReviewServingComponents, 'payload', 'summary'],
+      pageFirstOnly: true,
+      priority: 50,
+      projectId: 'project-1',
+      reason: 'missingReviewServingSnapshot',
+    },
+  ])
+  expect(blockedClaimIds).toEqual(['summary-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
 })
 
 test('wake routes search dirty work through chunked rebuilds instead of direct projection', async () => {
@@ -459,7 +584,7 @@ test('wake routes search dirty work through chunked rebuilds instead of direct p
   ])
   expect(runnerCalled).toBe(false)
   expect(rebuildRequests).toEqual([
-    {components: ['search'], priority: 5_000, projectId: 'project-1', reason: 'searchDirtyWork'},
+    {components: ['search'], priority: 50, projectId: 'project-1', reason: 'searchDirtyWork'},
   ])
   expect(completedClaimIds).toEqual(['search-article-1'])
   expect(failedClaimIds).toEqual([])

@@ -23,14 +23,17 @@ import {
   getActiveReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingProjectionIdentityManifestInput,
+  type ReviewServingSnapshotManifest,
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
+import {type ReviewServingProjectionComponentIdentity} from './reviewServingProjectorDomain.ts'
 import {
   selectedImportCompatibilityView,
   selectedImportPublishedTable,
 } from './reviewServingSelectedImportMaintenance.ts'
 import {
+  composeReviewServingCandidateSnapshotManifest,
   getPromotedReviewServingSnapshotDirtyWorkCoverages,
   validateReviewServingCandidateSnapshotManifest,
 } from './reviewServingSnapshotPromotionService.ts'
@@ -638,12 +641,105 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
   `)
 }
 
+const getCandidateSnapshotComponentIdentities = (
+  candidate: ReviewServingSnapshotManifest,
+): Partial<Record<ReviewServingProjectionComponent, ReviewServingProjectionComponentIdentity>> => {
+  const states = [...(candidate.componentState.required ?? []), ...(candidate.componentState.optional ?? [])]
+
+  return Object.fromEntries(
+    states.map((state) => {
+      return [
+        state.component,
+        {
+          projectId: candidate.projectId,
+          projectionComponent: state.component,
+          projectionIdentity: state.projectionIdentity,
+        },
+      ]
+    }),
+  )
+}
+
+const getCandidateProjectionManifestValuesSql = (candidate: ReviewServingSnapshotManifest) => {
+  const states = [...(candidate.componentState.required ?? []), ...(candidate.componentState.optional ?? [])]
+
+  return states
+    .map((state) => {
+      return `(${getSqlLiteral(state.component)}, ${getSqlLiteral(state.projectionIdentity)}, ${getSqlLiteral(
+        state.baseGeneration,
+      )})`
+    })
+    .join(', ')
+}
+
+const markActivatedProjectionManifests = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingProjectorWriterTransaction,
+) => {
+  const stateValuesSql = getCandidateProjectionManifestValuesSql(candidate)
+
+  if (stateValuesSql.length === 0) {
+    return
+  }
+
+  await database.run(`
+      WITH activated_component(component, projection_identity, base_generation) AS (
+        SELECT * FROM (VALUES ${stateValuesSql})
+      )
+      UPDATE app.review_projection_identity_manifest AS manifest
+      SET
+        status = 'active',
+        updated_at = current_timestamp
+      FROM activated_component activated
+      WHERE manifest.project_id IS NOT DISTINCT FROM ${getSqlLiteral(candidate.projectId)}
+        AND manifest.projection_component = activated.component
+        AND manifest.projection_identity = activated.projection_identity
+        AND manifest.base_generation = CAST(activated.base_generation AS BIGINT)
+        AND manifest.status <> 'active'
+  `)
+}
+
+const refreshCandidateSnapshotForPromotion = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingProjectorWriterTransaction,
+) => {
+  if (candidate.selectedImportSnapshotId === null) {
+    return candidate
+  }
+
+  const refreshedCandidateInput = await composeReviewServingCandidateSnapshotManifest(
+    {
+      componentIdentities: getCandidateSnapshotComponentIdentities(candidate),
+      componentRequirements: {
+        optionalComponents: candidate.optionalComponents,
+        requiredComponents: candidate.requiredComponents,
+      },
+      composedIdentity: candidate.composedIdentity,
+      projectId: candidate.projectId,
+      reviewConfigHash: candidate.reviewConfigHash,
+      selectedImportSnapshotId: candidate.selectedImportSnapshotId,
+      snapshotId: candidate.snapshotId,
+      sourceWatermarks: candidate.sourceWatermarks,
+    },
+    database,
+  )
+
+  await createCandidateReviewServingSnapshotManifest(refreshedCandidateInput, database)
+
+  return (
+    (await getReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId: candidate.projectId, snapshotId: candidate.snapshotId},
+      database,
+    )) ?? candidate
+  )
+}
+
 export const activateReviewServingProjectorSnapshot = async (
   input: PromoteReviewServingProjectorSnapshotInput,
   database: ReviewServingProjectorWriterTransaction,
 ): Promise<ActivateReviewServingProjectorSnapshotResult> => {
   const candidate = await getReviewServingSnapshotManifest(
-    {componentStateMode: 'available', projectId: input.projectId, snapshotId: input.snapshotId},
+    {componentStateMode: 'raw', projectId: input.projectId, snapshotId: input.snapshotId},
     database,
   )
 
@@ -668,7 +764,8 @@ export const activateReviewServingProjectorSnapshot = async (
     return {error: 'candidate snapshot manifest is missing', promoted: false, snapshotId: input.snapshotId}
   }
 
-  const validation = await validateReviewServingCandidateSnapshotManifest(candidate, database)
+  const refreshedCandidate = await refreshCandidateSnapshotForPromotion(candidate, database)
+  const validation = await validateReviewServingCandidateSnapshotManifest(refreshedCandidate, database)
 
   if (!validation.ok) {
     return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
@@ -684,7 +781,7 @@ export const activateReviewServingProjectorSnapshot = async (
         AND snapshot_status = 'candidate'
   `)
 
-  const candidateReviewConfigHash = candidate.reviewConfigHash
+  const candidateReviewConfigHash = refreshedCandidate.reviewConfigHash
   const active = await getActiveReviewServingSnapshotManifest(
     {projectId: input.projectId, reviewConfigHash: candidateReviewConfigHash},
     database,
@@ -714,9 +811,10 @@ export const activateReviewServingProjectorSnapshot = async (
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
         AND snapshot_status = 'candidate'
     `)
+  await markActivatedProjectionManifests(refreshedCandidate, database)
 
   const dirtyWorkCompletion = await completeReviewServingDirtyWorkCoveredByRebuild(
-    await getPromotedReviewServingSnapshotDirtyWorkCoverages(candidate, database),
+    await getPromotedReviewServingSnapshotDirtyWorkCoverages(refreshedCandidate, database),
     database,
   )
 

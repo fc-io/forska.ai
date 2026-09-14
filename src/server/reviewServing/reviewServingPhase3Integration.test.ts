@@ -358,7 +358,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(result.status).toBe('completed')
   expect(searchRunner).not.toHaveBeenCalled()
   expect(rebuildRequests).toEqual([
-    {components: ['search'], priority: 5_000, projectId: 'project-1', reason: 'searchDirtyWork'},
+    {components: ['search'], priority: 50, projectId: 'project-1', reason: 'searchDirtyWork'},
   ])
   expect(
     result.runs.find((run) => {

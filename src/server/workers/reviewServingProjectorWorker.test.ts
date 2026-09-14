@@ -7,6 +7,7 @@ import {expect, mock, setDefaultTimeout, test} from 'bun:test'
 
 import {buildReviewConfigHash} from '../reviewServing/reviewProjectionIdentity.ts'
 import type {ReviewServingRebuildChunkManifest} from '../reviewServing/reviewServingChunkManifestRepository.ts'
+import {countReadyReviewServingComponents} from '../reviewServing/reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
@@ -132,10 +133,15 @@ const createWorkerHarness = (input?: {
   runChunkThrows?: boolean
   wakeStatus?: 'blocked' | 'completed' | 'failed' | 'partial'
 }) => {
+  const events: string[] = []
   const workloadContexts: DuckdbWorkloadContext[] = []
   const runStatements: string[] = []
   const database: TestDatabase = {
-    queryJson: async <T>(_statement: string, workloadContext?: DuckdbWorkloadContext) => {
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+      if (statement.includes('candidate_job_visibility')) {
+        events.push('visibility')
+      }
+
       if (workloadContext) {
         workloadContexts.push(workloadContext)
       }
@@ -226,6 +232,7 @@ const createWorkerHarness = (input?: {
         return {...chunkManifest, status: 'failed' as const}
       },
       getNextChunk: async (getNextInput) => {
+        events.push('getNextChunk')
         getNextChunkInputs.push(getNextInput)
 
         return chunkInput
@@ -273,6 +280,7 @@ const createWorkerHarness = (input?: {
     database,
     dependencies,
     dirtyWorkRetentionCleanupInputs,
+    events,
     failedChunks,
     fatalRecycledInputs,
     garbageCollectedChunks,
@@ -313,6 +321,19 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
     fallbackIntent: 'reject',
     workloadClass: 'reviewProjector',
   })
+})
+
+test('worker publishes judgment visibility before selecting rebuild chunks', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+
+  await runReviewServingProjectorWorkerOnce(
+    {now: new Date('2026-06-16T10:00:00.000Z'), rebuildProjectId: 'project-1', workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(harness.events).toContain('visibility')
+  expect(harness.events).toContain('getNextChunk')
+  expect(harness.events.indexOf('visibility')).toBeLessThan(harness.events.indexOf('getNextChunk'))
 })
 
 test('rebuild timing summaries keep compact aggregate phase stats', () => {
@@ -537,7 +558,6 @@ for (const barrier of ['exclusive', 'transfer', 'aborted'] as const) {
     expect(result.projector.status).toBe('blocked')
     expect(harness.getNextChunkInputs).toEqual([])
     expect(harness.runChunkInputs).toEqual([])
-    expect(harness.wakeInputs).toEqual([])
   })
 }
 
@@ -2976,7 +2996,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
     } else {
       expect(harness.runChunkInputs).toEqual([])
     }
-    expect(harness.wakeInputs).toEqual([])
+    expect(harness.wakeInputs).toHaveLength(1)
     const completionChecks = statements.filter((statement) => {
       return statement.includes('pendingChunkCount')
     })
@@ -3640,7 +3660,7 @@ test('worker stops a rebuild chunk batch after a foreground request chunk comple
   expect(result.chunkBatchCount).toBe(1)
   expect(harness.claimInputs).toHaveLength(1)
   expect(harness.runChunkInputs).toEqual([firstChunk])
-  expect(harness.wakeInputs).toEqual([])
+  expect(harness.wakeInputs).toHaveLength(1)
 })
 
 test('worker drains foreground critical rebuild chunks within a bounded chunk budget', async () => {
@@ -3675,8 +3695,12 @@ test('worker drains foreground critical rebuild chunks within a bounded chunk bu
 
   expect(result.chunk).toMatchObject({requestId: 'rebuild:foreground', status: 'completed'})
   expect(result.deltaIntake).toEqual({convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'})
-  expect(result.projector).toMatchObject({status: 'blocked'})
-  expect(harness.wakeInputs).toEqual([])
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
+  expect(harness.wakeInputs[0]).toMatchObject({
+    componentOrder: [...countReadyReviewServingComponents, 'judgmentInputContent', 'payload'],
+  })
+  expect(harness.cleanupInputs).toEqual([])
 })
 
 test('worker resumes normal projector work after the foreground drain budget is exhausted', async () => {
@@ -3800,11 +3824,13 @@ test('worker keeps draining foreground status rebuild chunks beyond the heavy-ch
   )
 
   expect(result.chunk).toMatchObject({projectionComponent: 'llmStatus', requestId: 'rebuild:foreground-status'})
-  expect(result.projector).toMatchObject({status: 'blocked'})
-  expect(harness.wakeInputs).toEqual([])
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
+  expect(result.deltaIntake).toEqual({convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'})
+  expect(harness.cleanupInputs).toEqual([])
 })
 
-test('worker keeps draining foreground native-heavy rebuild chunks beyond the heavy-chunk budget while RSS is below cap', async () => {
+test('worker yields to activation projectors after foreground native-heavy rebuild chunks', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const foregroundSummaryChunkInput = {
     ...chunkInput,
@@ -3849,8 +3875,9 @@ test('worker keeps draining foreground native-heavy rebuild chunks beyond the he
   )
 
   expect(result.chunk).toMatchObject({projectionComponent: 'summary', requestId: 'rebuild:foreground-summary'})
-  expect(result.projector).toMatchObject({status: 'blocked'})
-  expect(harness.wakeInputs).toEqual([])
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
+  expect(harness.wakeInputs[0]).not.toMatchObject({componentOrder: [...countReadyReviewServingComponents]})
   expect(harness.recycledChunks).toEqual([foregroundSummaryChunk])
   expect(harness.garbageCollectedChunks).toEqual([foregroundSummaryChunk])
 })
@@ -4065,8 +4092,8 @@ test('worker marks rebuild requests completed after their final chunk completes'
 
   expect(result.chunk.status).toBe('completed')
   expect(result.deltaIntake.status).toBe('idle')
-  expect(result.projector.status).toBe('blocked')
-  expect(harness.wakeInputs).toEqual([])
+  expect(result.projector.status).toBe('completed')
+  expect(harness.wakeInputs).toHaveLength(1)
   expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain("status = 'completed'")
   expect(joined).toContain("request_id = 'rebuild-1'")
@@ -5070,6 +5097,11 @@ test('worker fails inconsistent and superseded foreground rebuild requests befor
   expect(supersededStatement).toContain('newer_request.reason = request.reason')
   expect(supersededStatement).toContain("newer_request.status IN ('admitted', 'running')")
   expect(supersededStatement).toContain('newer_request.failed_at IS NULL')
+  expect(supersededStatement).toContain(
+    'json_array_length(newer_request.requested_components_json) = json_array_length(request.requested_components_json)',
+  )
+  expect(supersededStatement).toContain('FROM json_each(request.requested_components_json) requested_component')
+  expect(supersededStatement).toContain('FROM json_each(newer_request.requested_components_json) newer_component')
   expect(supersededStatement).toContain("newer_chunk.status IN ('pending', 'running', 'failed')")
   expect(supersededStatement).toContain("newer_blocked_chunk.status IN ('blocked_over_budget', 'quarantined')")
   expect(inconsistentStatementIndex).toBeGreaterThanOrEqual(0)
@@ -5396,8 +5428,8 @@ test('worker yields after background request chunks before continuing maintenanc
     sleepCalls.push(delayMs)
     controller.abort()
   })
-  harness.dependencies.wakeProjectors = async () => {
-    controller.abort()
+  harness.dependencies.wakeProjectors = async (wakeInput) => {
+    harness.wakeInputs.push(wakeInput)
 
     return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
   }
@@ -5406,6 +5438,7 @@ test('worker yields after background request chunks before continuing maintenanc
 
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
   expect(harness.runChunkInputs).toEqual([requestChunk])
+  expect(harness.wakeInputs).toHaveLength(1)
 })
 
 test('worker yields briefly after active projector work before continuing maintenance loop', async () => {
@@ -5460,7 +5493,7 @@ test('worker keeps yielding while foreground rebuild chunks stay isolated', asyn
     harness.dependencies,
   )
 
-  expect(harness.wakeInputs).toEqual([])
+  expect(harness.wakeInputs).toHaveLength(1)
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
   expect(harness.runChunkInputs).toEqual([requestChunk])
 })
@@ -7103,7 +7136,7 @@ test('worker finalizes completed rebuild requests left admitted after no chunks 
   expect(result.chunkBatchCount).toBe(1)
   expect(harness.claimInputs).toHaveLength(0)
   expect(harness.runChunkInputs).toHaveLength(0)
-  expect(harness.wakeInputs).toHaveLength(0)
+  expect(harness.wakeInputs).toHaveLength(1)
   expect(joined).toContain('FROM app.review_rebuild_request request')
   expect(joined).toContain("request.status IN ('admitted', 'running')")
   expect(joined).toContain("request.admission_state = 'admitted'")
