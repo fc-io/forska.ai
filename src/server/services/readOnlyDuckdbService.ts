@@ -9,6 +9,7 @@ import {
 } from '../utils/duckdbEngineCompatibility.ts'
 import {
   type DuckdbWorkloadContext,
+  type DuckdbWorkloadExecution,
   getReadOnlyDuckdbRuntimeOptions,
   runDuckdbBackgroundJsonQuery,
   runDuckdbJsonQuery,
@@ -208,13 +209,19 @@ const enqueueReadOnlyDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> 
   return queuedWork
 }
 
-const runEphemeralReadOnlyDuckdbJsonQuery = async <T>(context: ReadOnlyDuckdbContext, statement: string) => {
+const runEphemeralReadOnlyDuckdbJsonQuery = async <T>(
+  context: ReadOnlyDuckdbContext,
+  statement: string,
+  runExecution: DuckdbWorkloadExecution,
+) => {
   const connection = await ensureReadOnlyDuckdbServiceStarted(context)
 
   try {
-    const reader = await connection.runAndReadAll(statement)
+    return await runExecution(async () => {
+      const reader = await connection.runAndReadAll(statement)
 
-    return reader.getRowObjectsJson() as T[]
+      return reader.getRowObjectsJson() as T[]
+    })
   } finally {
     closeReadOnlyDuckdbServiceDirect()
   }
@@ -269,8 +276,8 @@ export const runReadOnlyDuckdbJsonQuery = async <T>(
       queue: 'readOnly',
       queueDepthAtStart,
       workloadContext,
-      work: () => {
-        return runEphemeralReadOnlyDuckdbJsonQuery<T>(context, statement)
+      work: (runExecution) => {
+        return runEphemeralReadOnlyDuckdbJsonQuery<T>(context, statement, runExecution)
       },
     })
   })

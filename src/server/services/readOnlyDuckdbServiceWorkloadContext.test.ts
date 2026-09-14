@@ -2,7 +2,7 @@ import {rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {expect, mock, test} from 'bun:test'
+import {expect, mock, spyOn, test} from 'bun:test'
 
 import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
 
@@ -30,6 +30,10 @@ test('read-only DuckDB workload context records metrics without using the owner 
   const previousServerDuckdbOwnerUrl = process.env.SERVER_DUCKDB_OWNER_URL
   const previousServerRole = process.env.SERVER_ROLE
   const duckdbPath = join(tmpdir(), `forska-read-only-workload-${Date.now()}-${Math.random()}.duckdb`)
+  const clock = {now: Date.now()}
+  const nowSpy = spyOn(Date, 'now').mockImplementation(() => {
+    return clock.now
+  })
 
   void mock.module(serverRuntimeRoleModulePath, () => {
     return {
@@ -53,6 +57,7 @@ test('read-only DuckDB workload context records metrics without using the owner 
   void mock.module('@duckdb/node-api', () => {
     class MockConnection {
       async runAndReadAll() {
+        clock.now += 5_000
         return {
           getRowObjectsJson() {
             return [{value: 'a'}, {value: 'b'}]
@@ -65,6 +70,7 @@ test('read-only DuckDB workload context records metrics without using the owner 
 
     class MockInstance {
       static async create() {
+        clock.now += 6_000
         return new MockInstance()
       }
 
@@ -100,6 +106,8 @@ test('read-only DuckDB workload context records metrics without using the owner 
       projectId: 'project-a',
       routeOrJobKey: 'review.search.tokenPrefix',
       searchMode: 'tokenPrefix',
+      timeoutMs: 5_000,
+      timeoutScope: 'execution' as const,
       workloadClass: 'foregroundReviewSearch',
     }
     const rows = await readOnlyDuckdbService.runReadOnlyDuckdbJsonQuery<{value: string}>(
@@ -111,16 +119,21 @@ test('read-only DuckDB workload context records metrics without using the owner 
 
     expect(rows).toEqual([{value: 'a'}, {value: 'b'}])
     expect(metric).toMatchObject({
+      durationMs: 11_000,
+      executionDurationMs: 5_000,
       operation: 'readOnlyQuery',
       projectId: 'project-a',
       queue: 'readOnly',
       resultRows: 2,
       routeOrJobKey: 'review.search.tokenPrefix',
       searchMode: 'tokenPrefix',
+      timeoutMs: 5_000,
+      timeoutScope: 'execution',
       workloadClass: 'foregroundReviewSearch',
     })
     readOnlyDuckdbService.resetReadOnlyDuckdbServiceForTests()
   } finally {
+    nowSpy.mockRestore()
     restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
     restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
     restoreEnvValue('SERVER_DUCKDB_OWNER_URL', previousServerDuckdbOwnerUrl)

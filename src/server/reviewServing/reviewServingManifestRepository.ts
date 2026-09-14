@@ -276,6 +276,7 @@ const getSnapshotManifestAvailabilityWorkloadContext = (
     routeOrJobKey: `${workloadContext?.routeOrJobKey ?? 'reviewServing.snapshotManifest'}.componentAvailability`,
     searchMode: workloadContext?.searchMode,
     timeoutMs: Math.min(workloadContext?.timeoutMs ?? 5_000, 5_000),
+    timeoutScope: workloadContext?.timeoutScope ?? 'execution',
     workloadClass: workloadContext?.workloadClass ?? 'reviewServingManifest',
   }
 }

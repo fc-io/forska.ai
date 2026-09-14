@@ -125,6 +125,7 @@ export type DuckdbWorkloadContext = {
   routeOrJobKey: string
   searchMode?: string
   timeoutMs?: number
+  timeoutScope?: 'execution' | 'workload'
   workloadClass: string
 }
 export type DuckdbWorkloadOperation =
@@ -143,6 +144,7 @@ export type DuckdbWorkloadRuntimeMetric = {
   allowsTempSpill: boolean | null
   durationMs: number
   error: string | null
+  executionDurationMs: number | null
   fallbackIntent: DuckdbWorkloadFallbackIntent | null
   memoryLimit: string
   operation: DuckdbWorkloadOperation
@@ -157,6 +159,7 @@ export type DuckdbWorkloadRuntimeMetric = {
   tempDirectory: string | null
   tempSpillDeltaBytes: number | null
   timeoutMs: number | null
+  timeoutScope: 'execution' | 'workload'
   workloadClass: string
 }
 export type DuckdbBackgroundRuntimeDiagnostics = {
@@ -175,6 +178,7 @@ export type DuckdbBackgroundRuntimeDiagnostics = {
   workloads: DuckdbWorkloadRuntimeMetric[]
 }
 type DuckdbWorkloadResultMetrics = {resultBytes: number | null; resultRows: number | null}
+export type DuckdbWorkloadExecution = <T>(query: () => Promise<T>) => Promise<T>
 type DuckdbWorkloadDiagnosticContext = {
   activeMainWorkId?: string
   context?: DuckdbWorkloadContext
@@ -7095,8 +7099,11 @@ const getDuckdbWorkloadBudgetFailure = (context: DuckdbWorkloadContext, metric: 
     return `temp spill ${metric.tempSpillDeltaBytes} bytes is not allowed`
   }
 
-  if (context.timeoutMs !== undefined && metric.durationMs > context.timeoutMs) {
-    return `duration ${metric.durationMs}ms exceeded timeout ${context.timeoutMs}ms`
+  const timeoutDurationMs =
+    context.timeoutScope === 'execution' ? (metric.executionDurationMs ?? metric.durationMs) : metric.durationMs
+
+  if (context.timeoutMs !== undefined && timeoutDurationMs > context.timeoutMs) {
+    return `duration ${timeoutDurationMs}ms exceeded timeout ${context.timeoutMs}ms`
   }
 
   return null
@@ -7165,6 +7172,7 @@ const getDuckdbWorkloadRuntimeMetric = ({
   context,
   durationMs,
   error,
+  executionDurationMs,
   operation,
   queue,
   queueDepthAtStart,
@@ -7175,6 +7183,7 @@ const getDuckdbWorkloadRuntimeMetric = ({
   context: DuckdbWorkloadContext
   durationMs: number
   error: unknown
+  executionDurationMs: number | null
   operation: DuckdbWorkloadOperation
   queue: DuckdbWorkloadQueue
   queueDepthAtStart: number
@@ -7186,6 +7195,7 @@ const getDuckdbWorkloadRuntimeMetric = ({
     allowsTempSpill: context.allowsTempSpill ?? null,
     durationMs,
     error: error === null ? null : getCompactDuckdbErrorMessage(error),
+    executionDurationMs,
     fallbackIntent: context.fallbackIntent ?? null,
     memoryLimit: getDuckdbRuntimeConfigValue().memoryLimit,
     operation,
@@ -7200,6 +7210,7 @@ const getDuckdbWorkloadRuntimeMetric = ({
     tempDirectory: tempAfter?.tempDirectory ?? tempBefore?.tempDirectory ?? null,
     tempSpillDeltaBytes: getDuckdbTempSpillDeltaBytes(tempBefore, tempAfter),
     timeoutMs: context.timeoutMs ?? null,
+    timeoutScope: context.timeoutScope ?? 'workload',
     workloadClass: context.workloadClass,
   }
 }
@@ -7225,18 +7236,30 @@ const withDuckdbWorkloadContext = <T>({
   operation: DuckdbWorkloadOperation
   queue: DuckdbWorkloadQueue
   queueDepthAtStart: number
-  work: () => Promise<T>
+  work: (runExecution: DuckdbWorkloadExecution) => Promise<T>
 }) => {
   assertDuckdbWorkloadContextIsAllowed(operation, context)
 
   const diagnosticContext = context ?? duckdbWorkloadDiagnosticStorage.getStore()?.context
+  const timing = {executionDurationMs: null as number | null}
+  const runExecution: DuckdbWorkloadExecution = async (query) => {
+    const startedAtMs = Date.now()
+
+    try {
+      return await query()
+    } finally {
+      timing.executionDurationMs = (timing.executionDurationMs ?? 0) + Date.now() - startedAtMs
+    }
+  }
 
   const runWork = () => {
     const activeMainWorkId = duckdbWorkloadDiagnosticStorage.getStore()?.activeMainWorkId
 
     return duckdbWorkloadDiagnosticStorage.run(
       {activeMainWorkId, context: diagnosticContext, operation, queue, queueDepthAtStart},
-      work,
+      () => {
+        return work(runExecution)
+      },
     )
   }
 
@@ -7254,6 +7277,7 @@ const withDuckdbWorkloadContext = <T>({
         context,
         durationMs: Date.now() - startedAtMs,
         error: null,
+        executionDurationMs: timing.executionDurationMs,
         operation,
         queue,
         queueDepthAtStart,
@@ -7272,6 +7296,7 @@ const withDuckdbWorkloadContext = <T>({
           context,
           durationMs: Date.now() - startedAtMs,
           error,
+          executionDurationMs: timing.executionDurationMs,
           operation,
           queue,
           queueDepthAtStart,
@@ -7311,7 +7336,7 @@ export const runMeasuredDuckdbJsonWorkload = async <T>({
   queue: DuckdbWorkloadQueue
   queueDepthAtStart: number
   workloadContext?: DuckdbWorkloadContext
-  work: () => Promise<T[]>
+  work: (runExecution: DuckdbWorkloadExecution) => Promise<T[]>
 }): Promise<T[]> => {
   return withDuckdbWorkloadContext({
     context: workloadContext,
@@ -7338,14 +7363,16 @@ export const runDuckdbJsonQuery = async <T>(
         operation: 'mainQuery',
         queue: 'main',
         queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
-        work: async () => {
+        work: async (runExecution) => {
           await waitForDuckdbAppendBarrier()
 
           return withNormalizedDuckdbError(() => {
             return enqueueDuckdbWork(async () => {
               await ensureStartedDuckdbProcess()
               return withProjectTransferForegroundMemoryHeadroomIfNeeded(workloadContext, statement, () => {
-                return runDuckdbJsonQueryDirect<T>(statement)
+                return runExecution(() => {
+                  return runDuckdbJsonQueryDirect<T>(statement)
+                })
               })
             })
           })
@@ -7402,7 +7429,7 @@ export const runDuckdbBackgroundJsonQuery = async <T>(
         operation: 'backgroundQuery',
         queue,
         queueDepthAtStart,
-        work: () => {
+        work: (runExecution) => {
           return withNormalizedDuckdbError(() => {
             return waitForDuckdbAppendBarrier().then(() => {
               const enqueue = getDuckdbRuntimeConfigValue().serializeConcurrentWork
@@ -7411,7 +7438,9 @@ export const runDuckdbBackgroundJsonQuery = async <T>(
 
               return enqueue(async () => {
                 await ensureStartedDuckdbProcess()
-                return runDuckdbBackgroundJsonQueryDirect<T>(statement)
+                return runExecution(() => {
+                  return runDuckdbBackgroundJsonQueryDirect<T>(statement)
+                })
               })
             })
           })

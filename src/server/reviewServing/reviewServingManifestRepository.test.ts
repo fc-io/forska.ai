@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
@@ -748,6 +749,69 @@ test('active-or-last-known-good manifest selection returns the latest retired sn
 
   expect(manifest?.snapshotId).toBe('snapshot-latest')
   expect(statements).toHaveLength(1)
+})
+
+test.each([
+  {expectedTimeoutMs: 5_000, timeoutMs: undefined, timeoutScope: undefined},
+  {expectedTimeoutMs: 1_000, timeoutMs: 1_000, timeoutScope: undefined},
+  {expectedTimeoutMs: 5_000, timeoutMs: 10_000, timeoutScope: undefined},
+  {expectedTimeoutMs: 5_000, timeoutMs: 5_000, timeoutScope: 'workload' as const},
+])('component availability keeps the $expectedTimeoutMs ms budget for a $timeoutMs ms caller', async (input) => {
+  const snapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const {database} = createFakeManifestDatabase([snapshot])
+  const availabilityContexts: DuckdbWorkloadContext[] = []
+  const measuredDatabase = {
+    queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+      if (workloadContext?.routeOrJobKey.endsWith('.componentAvailability')) {
+        availabilityContexts.push(workloadContext)
+      }
+
+      return database.queryJson<T>(statement, workloadContext)
+    },
+  }
+
+  const available = await getReviewServingSnapshotManifest(
+    {
+      componentStateMode: 'available',
+      projectId: snapshot.projectId,
+      snapshotId: snapshot.snapshotId,
+      workloadContext: {
+        routeOrJobKey: 'review.warnings.servingDiagnostics',
+        timeoutMs: input.timeoutMs,
+        timeoutScope: input.timeoutScope,
+        workloadClass: 'foreground-diagnostic',
+      },
+    },
+    measuredDatabase,
+  )
+
+  expect(available?.componentState).toEqual(componentState)
+  expect(availabilityContexts).toHaveLength(2)
+  expect(availabilityContexts).toEqual(
+    Array.from({length: 2}, () => {
+      return {
+        allowsTempSpill: false,
+        fallbackIntent: 'serveStale',
+        maxResultRows: 64,
+        projectId: snapshot.projectId,
+        routeOrJobKey: 'review.warnings.servingDiagnostics.componentAvailability',
+        searchMode: undefined,
+        timeoutMs: input.expectedTimeoutMs,
+        timeoutScope: input.timeoutScope ?? 'execution',
+        workloadClass: 'foreground-diagnostic',
+      }
+    }),
+  )
 })
 
 test('available manifest state hides incomplete chunk-backed components without mutating raw builder state', async () => {

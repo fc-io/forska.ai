@@ -1,6 +1,7 @@
 import {readFileSync} from 'node:fs'
+import {setTimeout as delay} from 'node:timers/promises'
 
-import {expect, mock, test} from 'bun:test'
+import {expect, mock, spyOn, test} from 'bun:test'
 
 import duckdbDistributionManifest from '../../../vendor/duckdb/manifest.json'
 import {prepareDuckdbExclusiveWork, resetDuckdbExclusiveWorkForTests} from './duckdbExclusiveWork.ts'
@@ -217,6 +218,154 @@ test('duckdb workload context rejects over-budget query results and records metr
     mock.restore()
   }
 })
+
+test.each(
+  (['runDuckdbJsonQuery', 'runDuckdbBackgroundJsonQuery'] as const).flatMap((queryMethod) => {
+    return (['startup', 'queue'] as const).flatMap((delayPhase) => {
+      return [
+        {executionMs: 5_000, timeoutScope: 'execution' as const},
+        {executionMs: 5_001, timeoutScope: 'execution' as const},
+        {executionMs: 1, timeoutScope: undefined},
+      ].map((budget) => {
+        return {...budget, delayPhase, queryMethod, scopeLabel: budget.timeoutScope ?? 'workload'}
+      })
+    })
+  }),
+)(
+  '$queryMethod applies $scopeLabel timeout to $executionMs ms execution after $delayPhase delay',
+  async ({delayPhase, executionMs, queryMethod, timeoutScope}) => {
+    const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+    const previousDuckdbPath = process.env.DUCKDB_PATH
+    const previousServerRole = process.env.SERVER_ROLE
+    const clock = {now: Date.now()}
+    const queueStarted = Promise.withResolvers<undefined>()
+    const releaseQueue = Promise.withResolvers<undefined>()
+    const nowSpy = spyOn(Date, 'now').mockImplementation(() => {
+      return clock.now
+    })
+
+    void mock.module(new URL('./serverRuntimeRole.ts', import.meta.url).href, () => {
+      return getServerRuntimeRoleMock({
+        canOwnDuckdb: true,
+        currentRole: 'maintenance-worker',
+        shouldProxyToOwner: false,
+      })
+    })
+    void mock.module('@duckdb/node-api', () => {
+      const connection = {
+        closeSync: () => {},
+        interrupt: () => {},
+        run: async () => {},
+        runAndReadAll: async (statement: string) => {
+          if (statement === 'SELECT blocker') {
+            queueStarted.resolve(undefined)
+            await releaseQueue.promise
+          }
+
+          if (statement === 'SELECT timed') {
+            clock.now += executionMs
+          }
+
+          return {
+            getRowObjectsJson: () => {
+              return statement === 'PRAGMA version'
+                ? [
+                    {
+                      library_version: duckdbDistributionManifest.engine.version,
+                      source_id: duckdbDistributionManifest.engine.sourceId,
+                    },
+                  ]
+                : [{value: 1}]
+            },
+          }
+        },
+      }
+
+      return {
+        DuckDBConnection: {},
+        DuckDBInstance: {
+          create: async () => {
+            if (delayPhase === 'startup') {
+              clock.now += 6_000
+            }
+
+            return {
+              closeSync: () => {},
+              connect: async () => {
+                return connection
+              },
+            }
+          },
+        },
+        version: () => {
+          return duckdbDistributionManifest.engine.version
+        },
+      }
+    })
+
+    process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+    process.env.DUCKDB_PATH = ':memory:'
+    process.env.SERVER_ROLE = 'maintenance-worker'
+    const duckdbService = await getImportedDuckdbService('query-timeout-scope')
+    const pendingWork: Promise<unknown>[] = []
+
+    try {
+      if (delayPhase === 'queue') {
+        pendingWork.push(duckdbService.runDuckdbJsonQuery('SELECT blocker'))
+        await queueStarted.promise
+      }
+
+      const resultPromise = duckdbService[queryMethod]('SELECT timed', {
+        maxResultRows: 1,
+        routeOrJobKey: 'reviewServing.snapshotManifest.componentAvailability',
+        timeoutMs: 5_000,
+        timeoutScope,
+        workloadClass: 'reviewServingManifest',
+      }).then(
+        (rows) => {
+          return {error: null, rows}
+        },
+        (error: unknown) => {
+          return {error: error instanceof Error ? error.message : String(error), rows: null}
+        },
+      )
+      pendingWork.push(resultPromise)
+
+      if (delayPhase === 'queue') {
+        await delay(0)
+        clock.now += 6_000
+        releaseQueue.resolve(undefined)
+      }
+
+      const result = await resultPromise
+      const metric = duckdbService.getDuckdbWorkloadRuntimeMetricsSnapshot().at(-1)
+
+      expect(metric).toMatchObject({
+        durationMs: 6_000 + executionMs,
+        executionDurationMs: executionMs,
+        resultRows: 1,
+        timeoutMs: 5_000,
+        timeoutScope: timeoutScope ?? 'workload',
+      })
+
+      if (timeoutScope === 'execution' && executionMs === 5_000) {
+        expect(result).toEqual({error: null, rows: [{value: 1}]})
+      } else {
+        const expectedDuration = timeoutScope === 'execution' ? executionMs : 6_000 + executionMs
+        expect(result.error).toContain(`duration ${expectedDuration}ms exceeded timeout 5000ms`)
+      }
+    } finally {
+      releaseQueue.resolve(undefined)
+      await Promise.allSettled(pendingWork)
+      await duckdbService.closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+      nowSpy.mockRestore()
+      restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
+      restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
+      restoreEnvValue('SERVER_ROLE', previousServerRole)
+      mock.restore()
+    }
+  },
+)
 
 test('serialized low-memory owner prioritizes queued foreground work over queued background work', async () => {
   const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).href
