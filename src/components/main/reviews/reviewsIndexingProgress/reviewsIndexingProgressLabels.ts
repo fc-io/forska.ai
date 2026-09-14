@@ -1,6 +1,11 @@
 import type {ReviewsWarningsData} from '../reviewsWarningsQuery.ts'
 
 type ReviewsIndexing = ReviewsWarningsData['indexing']
+type RebuildChunkComponentProgress = NonNullable<
+  NonNullable<ReviewsIndexing['serving']['diagnostics']['rebuildChunks']>['components']
+>[number]
+
+type IndexTaskProgressLabel = {label: string; value: string}
 
 export const getProgressContainerClass = (compact: boolean) => {
   return compact
@@ -38,6 +43,90 @@ const getCoverageCountLabel = (readyCount: number | null, totalCount: number) =>
   return readyCount === null
     ? `indexing ${getCountLabel(totalCount)} ${totalCount === 1 ? 'article' : 'articles'}`
     : `${getCountLabel(readyCount)} / ${getCountLabel(totalCount)} ${totalCount === 1 ? 'article' : 'articles'} ready`
+}
+
+const componentProgressLabels: Record<string, string> = {
+  display: 'Review rows',
+  humanStatus: 'Human status',
+  judgmentInputContent: 'Article text',
+  llmStatus: 'AI status',
+  payload: 'Details',
+  posting: 'Filter lists',
+  projectScope: 'Project scope',
+  queue: 'Unassessed queue',
+  search: 'Search index',
+  selectedImport: 'Selected articles',
+  summary: 'Summary counts',
+}
+
+const componentProgressOrder = [
+  'posting',
+  'summary',
+  'payload',
+  'search',
+  'display',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'judgmentInputContent',
+  'selectedImport',
+  'projectScope',
+]
+
+const getComponentProgressOrderIndex = (component: string) => {
+  const index = componentProgressOrder.indexOf(component)
+
+  return index === -1 ? componentProgressOrder.length : index
+}
+
+const getIncompleteTaskCount = (component: RebuildChunkComponentProgress) => {
+  return (
+    component.pendingCount
+    + component.runningCount
+    + component.failedCount
+    + component.quarantinedCount
+    + component.blockedCount
+  )
+}
+
+const getIndexTaskStatusParts = (component: RebuildChunkComponentProgress) => {
+  return [
+    component.runningCount > 0 ? `${getCountLabel(component.runningCount)} running` : null,
+    component.pendingCount > 0 ? `${getCountLabel(component.pendingCount)} waiting` : null,
+    component.blockedCount > 0 ? `${getCountLabel(component.blockedCount)} blocked` : null,
+    component.failedCount > 0 ? `${getCountLabel(component.failedCount)} failed` : null,
+    component.quarantinedCount > 0 ? `${getCountLabel(component.quarantinedCount)} quarantined` : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+}
+
+export const getIndexTaskProgressLabels = (indexing: ReviewsIndexing): IndexTaskProgressLabel[] => {
+  const components = indexing.serving.diagnostics.rebuildChunks?.components ?? []
+
+  return components
+    .filter((component) => {
+      return component.totalCount > 0 && getIncompleteTaskCount(component) > 0
+    })
+    .sort((left, right) => {
+      const orderDifference =
+        getComponentProgressOrderIndex(left.projectionComponent)
+        - getComponentProgressOrderIndex(right.projectionComponent)
+
+      return orderDifference === 0
+        ? left.projectionComponent.localeCompare(right.projectionComponent)
+        : orderDifference
+    })
+    .map((component) => {
+      const statusParts = getIndexTaskStatusParts(component)
+      const progressLabel =
+        `${getCountLabel(component.completedCount)} / ${getCountLabel(component.totalCount)} index `
+        + `${component.totalCount === 1 ? 'task' : 'tasks'} done`
+      const statusLabel = statusParts.length === 0 ? null : statusParts.join(', ')
+      const label = componentProgressLabels[component.projectionComponent] ?? component.projectionComponent
+
+      return {label, value: joinLabelParts([progressLabel, statusLabel])}
+    })
 }
 
 const hasReadyReviewRows = (indexing: ReviewsIndexing) => {

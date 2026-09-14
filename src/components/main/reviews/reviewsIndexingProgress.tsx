@@ -1,4 +1,4 @@
-import {Show} from 'solid-js'
+import {For, Show} from 'solid-js'
 
 import {
   getArticleRefreshLabel,
@@ -7,6 +7,7 @@ import {
   getFilterRefreshLabel,
   getIndexingStatusHeading,
   getIndexingStatusLabel,
+  getIndexTaskProgressLabels,
   getProgressContainerClass,
   getProjectRefreshLabel,
   getSearchCoverageLabel,
@@ -39,6 +40,15 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
         <p>
           <span class="font-medium text-slate-700">Search:</span> {getSearchCoverageLabel(props.indexing)}
         </p>
+        <For each={getIndexTaskProgressLabels(props.indexing)}>
+          {(progress) => {
+            return (
+              <p>
+                <span class="font-medium text-slate-700">{progress.label}:</span> {progress.value}
+              </p>
+            )
+          }}
+        </For>
         <Show when={getCleanupLabel(props.indexing)}>
           {(cleanupLabel) => {
             return (

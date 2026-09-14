@@ -6126,6 +6126,31 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
       schemaName: 'app',
       tableName: 'request_attempt_closeout',
     })
+    const providerTelemetryProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'judgment_job_provider_telemetry_sample'
+    })
+    expect(providerTelemetryProbe?.repairPrimaryKeyColumns).toEqual(['job_id', 'provider_key', 'sampled_at'])
+    expect(providerTelemetryProbe?.repairStrategy).toBe('dedupe-latest')
+    expect(providerTelemetryProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(providerTelemetryProbe?.recreateSecondaryIndexes).toBe(false)
+    expect(providerTelemetryProbe?.skipStartupPreflightUntilMigration).toBe(
+      '0233_rebuildJudgmentProviderTelemetrySampleWithoutIndexes.sql',
+    )
+    expect(providerTelemetryProbe?.repairDedupeOrderSql).toContain('created_at ASC')
+    expect(providerTelemetryProbe?.mutationProbeSql).toContain(
+      'startup_probe_judgment_job_provider_telemetry_sample',
+    )
+    expect(providerTelemetryProbe?.mutationProbeSql).toContain(
+      'DELETE FROM app.judgment_job_provider_telemetry_sample',
+    )
+    expect(providerTelemetryProbe?.mutationProbeSql).toContain(
+      'INSERT INTO app.judgment_job_provider_telemetry_sample BY NAME',
+    )
+    expect(providerTelemetryProbe?.schemaRequirements).toContainEqual({
+      columnNames: ['id', 'job_id', 'provider_key', 'sampled_at', 'created_at'],
+      schemaName: 'app',
+      tableName: 'judgment_job_provider_telemetry_sample',
+    })
     const rebuildRequestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_request'
     })

@@ -503,6 +503,31 @@ test('pruning limits deleted telemetry rows per batch', async () => {
   expect(getIsoString(rows[0]?.sampledAt)).toBe('2026-05-09T11:59:30.000Z')
 })
 
+test('pruning selects bounded stale telemetry ids before deleting without returning rows', async () => {
+  const statements: string[] = []
+  const deletedCount = await pruneJudgmentProviderTelemetryHistorySamples({
+    maxRows: 2,
+    now: new Date('2026-05-12T12:00:00.000Z'),
+    runner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return statements.length === 1 ? ([{id: 'sample-a'}, {id: 'sample-b'}] as T[]) : []
+      },
+    },
+  })
+
+  expect(deletedCount).toBe(2)
+  expect(statements).toHaveLength(2)
+  expect(statements[0]).toContain('SELECT id')
+  expect(statements[0]).toContain('LIMIT 2')
+  expect(statements[0]).not.toContain('DELETE FROM app.judgment_job_provider_telemetry_sample')
+  expect(statements[1]).toContain('DELETE FROM app.judgment_job_provider_telemetry_sample')
+  expect(statements[1]).toContain("'sample-a'")
+  expect(statements[1]).toContain("'sample-b'")
+  expect(statements[1]).not.toContain('RETURNING')
+})
+
 test('deleting telemetry history for a job preserves other jobs', async () => {
   const query = getTestQueryDatabase()
   const jobId = `history-delete-${Date.now()}`
@@ -527,6 +552,50 @@ test('deleting telemetry history for a job preserves other jobs', async () => {
 
   expect(deletedCount).toBe(2)
   expect(rows).toEqual([{jobId: otherJobId, total: '1'}])
+})
+
+test('deleting telemetry history for a job avoids indexed delete returning rows', async () => {
+  const statements: string[] = []
+  const deletedCount = await deleteJudgmentProviderTelemetryHistoryForJob({
+    jobId: 'history-delete-job-contract',
+    runner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return statements.length === 1 ? ([{id: 'sample-for-job'}] as T[]) : []
+      },
+    },
+  })
+
+  expect(deletedCount).toBe(1)
+  expect(statements).toHaveLength(2)
+  expect(statements[0]).toContain('SELECT id')
+  expect(statements[0]).toContain("job_id = 'history-delete-job-contract'")
+  expect(statements[1]).toContain('DELETE FROM app.judgment_job_provider_telemetry_sample')
+  expect(statements[1]).toContain("'sample-for-job'")
+  expect(statements[1]).not.toContain('RETURNING')
+})
+
+test('migrations keep provider telemetry history table free of mutable lookup indexes', async () => {
+  const query = getTestQueryDatabase()
+  const constraints = await query<{constraintType: string}>(`
+    SELECT constraint_type AS constraintType
+    FROM duckdb_constraints()
+    WHERE schema_name = 'app'
+      AND table_name = 'judgment_job_provider_telemetry_sample'
+      AND constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+    ORDER BY constraint_type
+  `)
+  const indexes = await query<{indexName: string}>(`
+    SELECT index_name AS indexName
+    FROM duckdb_indexes()
+    WHERE schema_name = 'app'
+      AND table_name = 'judgment_job_provider_telemetry_sample'
+    ORDER BY index_name
+  `)
+
+  expect(constraints).toEqual([])
+  expect(indexes).toEqual([])
 })
 
 test('bucketed history query returns aligned ordered buckets with utilization adherence and bottleneck summaries', async () => {

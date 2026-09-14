@@ -291,6 +291,28 @@ test('LLM list keeps rows readable with nullable totals while count indexing cat
   expect(countStatements).toHaveLength(1)
 })
 
+test('LLM prompt-filtered list falls back to lazy prompt-answer postings while posting buckets are indexing', async () => {
+  const reader = createReaderDatabase(1, 1)
+  const result = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {'prompt-1': ['yes']}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
+    },
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result.data).toHaveLength(1)
+  expect(result.detailReadiness).toBe('indexing')
+  expect(result.totalCount).toBe(1)
+  expect(result.totalPages).toBe(1)
+  expect(sql).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(sql).toContain('SELECT requested.filter_value AS filterValue')
+  expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4')
+  expect(sql).toContain('SELECT COUNT(*)::INTEGER AS promptCount')
+})
+
 test('LLM count reports indexing before using cache identities when required state is unavailable', async () => {
   const reader = createReaderDatabase()
 
@@ -632,33 +654,27 @@ test('LLM status count remains readable before posting and summary are materiali
   expect(joined).not.toContain('FROM mart.review_article_judgment_detail_serving_v4')
 })
 
-test('LLM prompt-answer counts still wait for posting before using filtered count semantics', async () => {
+test('LLM prompt-answer counts remain exact while posting buckets are indexing', async () => {
   const reader = createReaderDatabase()
 
-  await countLlmReviewArticlesFromServing(
+  const result = await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {'prompt-1': ['yes']}},
     {
       currentReviewConfigHash: 'config-1',
       database: reader.database,
       manifestDatabase: createManifestDatabase('active', defaultReadableComponents),
     },
-  ).then(
-    () => {
-      throw new Error('Expected prompt-filtered LLM count indexing rejection')
-    },
-    (error) => {
-      expect(error).toEqual(
-        expect.objectContaining({
-          message:
-            'Review count is still indexing: prompt-answer count filters require posting buckets that are still indexing',
-        }),
-      )
-    },
   )
+  const joined = reader.statements.join('\n')
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+  })
 
-  expect(reader.statements.join('\n')).not.toContain(
-    'SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount',
-  )
+  expect(result).toEqual({totalCount: 1, totalPages: 1})
+  expect(joined).toContain('SELECT requested.filter_value AS filterValue')
+  expect(countStatement).toContain('FROM mart.review_article_filter_posting_serving_v4 posting')
+  expect(countStatement).toContain("posting.filter_kind = 'promptAnswer'")
+  expect(joined).not.toContain('FROM mart.review_article_count_serving_v4')
 })
 
 test('LLM review list route rejects when no serving snapshot is readable', async () => {

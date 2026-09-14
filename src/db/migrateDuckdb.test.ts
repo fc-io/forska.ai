@@ -462,6 +462,23 @@ test('DuckDB migration rebuilds write-hot review-serving manifests without index
   expect(migrationSql).not.toContain('CREATE INDEX')
 })
 
+test('DuckDB migration rebuilds provider telemetry samples without mutable indexes', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0233_rebuildJudgmentProviderTelemetrySampleWithoutIndexes.sql'),
+    'utf8',
+  )
+
+  expect(migrationSql).toContain('CREATE TABLE app.judgment_job_provider_telemetry_sample_noindex_repair_0233')
+  expect(migrationSql).toContain('INSERT INTO app.judgment_job_provider_telemetry_sample_noindex_repair_0233 BY NAME')
+  expect(migrationSql).toContain('PARTITION BY job_id, provider_key, sampled_at')
+  expect(migrationSql).toContain('ORDER BY created_at ASC, id ASC')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS app.idx_app_judgment_job_provider_telemetry_sample_sampled_at')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_app_judgment_job_provider_telemetry_sample_sampled_at')
+  expect(migrationSql).not.toContain('PRIMARY KEY')
+  expect(migrationSql).not.toContain('UNIQUE')
+  expect(migrationSql).not.toContain('CREATE INDEX')
+})
+
 test('review-serving manifest writers replace no-index logical identities', () => {
   const manifestRepositorySql = readFileSync(
     resolve(import.meta.dir, '../server/reviewServing/reviewServingManifestRepository.ts'),

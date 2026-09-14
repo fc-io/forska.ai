@@ -244,6 +244,13 @@ bun test src/server/routes/JudgmentsJobsRoutes.test.ts src/server/cron/judgments
 
 - `test:judgment-workflow` is the fast focused route, queue, dispatch, SQLite,
   import, repair, health, and read-model regression gate.
+- Provider telemetry cleanup/index repairs should run these suites as separate
+  Bun processes because the DuckDB lifecycle suites own process-global runtime
+  env during setup:
+  `bun test src/server/services/judgmentProviderTelemetryHistoryService.test.ts --timeout 120000`
+  `bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts --timeout 120000`
+  `bun test src/db/migrateDuckdb.test.ts --timeout 120000`
+  `bun test src/server/utils/duckdbServiceReload.test.ts --timeout 120000`
 - `test:judgment-workflow:e2e` is the deterministic component lifecycle. It
   proves route creation, queue/claim/dispatch, durable SQLite completion,
   canonical DuckDB import, V4 serving visibility, visibility acknowledgement,

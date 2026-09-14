@@ -71,6 +71,18 @@ export type ReviewsWarningsData = {
         dirtyWork?: {failedCount?: number; pendingCount?: number; runningCount?: number}
         rebuildChunks?: {
           claimableCount?: number
+          components?: Array<{
+            blockedCount: number
+            completedCount: number
+            failedCount: number
+            oldestQueuedAt: string | null
+            pendingCount: number
+            projectionComponent: string
+            quarantinedCount: number
+            runningCount: number
+            totalCount: number
+            updatedAt: string | null
+          }>
           expiredLeaseCount?: number
           pendingCount?: number
           runningCount?: number

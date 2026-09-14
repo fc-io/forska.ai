@@ -327,13 +327,6 @@ const getFilteredCountIndexingReason = (params: ArticlesReviewsParams, manifest:
     return `LLM count requires ${missingRequiredComponents.join(', ')} components that are still indexing`
   }
 
-  if (
-    getPromptAnswerPostingFilterGroups(params.prompts).length > 0
-    && !hasManifestComponentState(manifest, 'posting')
-  ) {
-    return 'prompt-answer count filters require posting buckets that are still indexing'
-  }
-
   if (getSearchTokenPrefixes(params.search).length > 0 && !hasManifestComponentState(manifest, 'search')) {
     return 'search-scoped counts require the search index that is still indexing'
   }
@@ -651,6 +644,19 @@ const getResponseRows = (
   })
 }
 
+const isRuntimeFilteredRowsIndexing = (
+  rowsResult: Awaited<ReturnType<typeof readReviewServingRows<ReviewServingArticleRow>>>,
+) => {
+  return (
+    rowsResult.status === 'rejected'
+    && rowsResult.reason === 'missingRequiredComponentState'
+    && rowsResult.diagnostics.missingRequiredComponents.length > 0
+    && rowsResult.diagnostics.missingRequiredComponents.every((component) => {
+      return component === 'posting' || component === 'search'
+    })
+  )
+}
+
 export const getLlmReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
@@ -665,7 +671,6 @@ export const getLlmReviewArticlesFromServing = async (
     throw new Error(reviewServingSnapshotUnavailableError)
   }
 
-  const enabledPromptCountPromise = getEnabledPromptCount(params.projectId, {...dependencies, database})
   const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
     {
       ...getBaseReaderRequest(effectiveParams, manifest, limit + 1),
@@ -676,9 +681,22 @@ export const getLlmReviewArticlesFromServing = async (
   )
 
   if (rowsResult.status === 'rejected') {
+    if (isRuntimeFilteredRowsIndexing(rowsResult)) {
+      return {
+        data: [],
+        detailReadiness: getResponseDetailReadiness(rowsResult.diagnostics.manifest.detailReadiness),
+        totalCount: null,
+        page,
+        limit,
+        totalPages: null,
+        nextCursor: null,
+      }
+    }
+
     throw new Error(`reviewServingReader rejected LLM review rows: ${rowsResult.reason}`)
   }
 
+  const enabledPromptCountPromise = getEnabledPromptCount(params.projectId, {...dependencies, database})
   const pageRows = rowsResult.rows.slice(0, limit)
   const enabledPromptCount = await enabledPromptCountPromise
   const detailReadiness = getResponseDetailReadiness(rowsResult.diagnostics.manifest.detailReadiness)

@@ -712,6 +712,54 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT job_id, provider_key, sampled_at
+        FROM app.judgment_job_provider_telemetry_sample
+        GROUP BY job_id, provider_key, sampled_at
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_judgment_job_provider_telemetry_sample;
+      CREATE TEMP TABLE startup_probe_judgment_job_provider_telemetry_sample AS
+      SELECT *
+      FROM app.judgment_job_provider_telemetry_sample
+      ORDER BY sampled_at DESC, id ASC
+      LIMIT 1;
+      BEGIN;
+      DELETE FROM app.judgment_job_provider_telemetry_sample
+      WHERE id IN (
+        SELECT id
+        FROM startup_probe_judgment_job_provider_telemetry_sample
+      );
+      INSERT INTO app.judgment_job_provider_telemetry_sample BY NAME
+      SELECT *
+      FROM startup_probe_judgment_job_provider_telemetry_sample;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_judgment_job_provider_telemetry_sample;
+    `,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairDedupeOrderSql: `
+      created_at ASC,
+      id ASC
+    `,
+    repairPrimaryKeyColumns: ['job_id', 'provider_key', 'sampled_at'],
+    repairStrategy: 'dedupe-latest',
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: ['id', 'job_id', 'provider_key', 'sampled_at', 'created_at'],
+        schemaName: 'app',
+        tableName: 'judgment_job_provider_telemetry_sample',
+      },
+    ],
+    skipStartupPreflightUntilMigration: '0233_rebuildJudgmentProviderTelemetrySampleWithoutIndexes.sql',
+    tableName: 'judgment_job_provider_telemetry_sample',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT comparison_project_id
         FROM app.comparison_project_serving_generation
         GROUP BY comparison_project_id

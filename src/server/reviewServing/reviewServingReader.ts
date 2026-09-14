@@ -159,7 +159,7 @@ const manifestSearchReadinessComponents = [
   'projectScope',
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
-const postingBackedRowFilterKeys = ['importRoute', 'promptAnswer'] as const satisfies readonly ReviewServingFilterKey[]
+const postingComponentRequiredRowFilterKeys = ['importRoute'] as const satisfies readonly ReviewServingFilterKey[]
 
 const getReaderDatabase = () => {
   return getApiReadOnlyAppDatabaseService()
@@ -311,10 +311,13 @@ const getMissingRequiredComponents = (
   })
 }
 
-const getHasPostingBackedRowFilters = (contract: ReviewServingReadContract, request: ReviewServingReaderRequest) => {
+const getHasPostingComponentRequiredRowFilters = (
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
   return (
     contract.physicalAccessStrategy === 'orderedPrefix'
-    && postingBackedRowFilterKeys.some((filterKey) => {
+    && postingComponentRequiredRowFilterKeys.some((filterKey) => {
       return hasRuntimeFilterValue(request.filters?.[filterKey])
     })
   )
@@ -327,7 +330,7 @@ const getMissingRuntimeComponents = (
 ) => {
   const componentStates = getComponentCursorStates(manifest)
   const postingComponents =
-    getHasPostingBackedRowFilters(contract, request) && !componentStates.posting ? ['posting' as const] : []
+    getHasPostingComponentRequiredRowFilters(contract, request) && !componentStates.posting ? ['posting' as const] : []
   const searchComponents = request.searchMode === 'tokenPrefix' && !componentStates.search ? ['search' as const] : []
 
   return [...getMissingRequiredComponents(contract, manifest), ...postingComponents, ...searchComponents].filter(

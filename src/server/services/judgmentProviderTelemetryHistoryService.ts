@@ -8,7 +8,7 @@ import type {
 } from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getDateValue, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getDateValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
 export const judgmentProviderTelemetryHistoryRangePresets = {
   '5m': {bucketSizeSeconds: 30, durationSeconds: 5 * 60},
@@ -214,6 +214,81 @@ const getSampleInsertValueSql = (params: {createdAt: Date; sample: JudgmentProvi
 
 const getSampleInsertSql = (params: {createdAt: Date; samples: JudgmentProviderTelemetryHistorySampleInsert[]}) => {
   return `
+    WITH incoming (
+      id,
+      created_at,
+      job_id,
+      project_id,
+      provider_key,
+      sampled_at,
+      provider_limit,
+      effective_provider_limit,
+      normal_request_capacity,
+      target_request_live_calls,
+      unallocated_target_live_calls,
+      provider_available_request_leases,
+      provider_leased_live_requests,
+      provider_leased_physical_calls,
+      provider_leased_probe_calls,
+      provider_request_fill_pct,
+      provider_limit_version,
+      provider_probe_occupancy_version,
+      provider_allocation_version,
+      bottleneck,
+      bottleneck_source,
+      bottleneck_subreason,
+      fresh_worker_count,
+      stale_worker_count,
+      unavailable_worker_count,
+      aggregate_completeness,
+      snapshot_json
+    ) AS (
+      VALUES ${params.samples
+        .map((sample) => {
+          return getSampleInsertValueSql({createdAt: params.createdAt, sample})
+        })
+        .join(', ')}
+    ),
+    deduped_incoming AS (
+      SELECT
+        id,
+        created_at,
+        job_id,
+        project_id,
+        provider_key,
+        sampled_at,
+        provider_limit,
+        effective_provider_limit,
+        normal_request_capacity,
+        target_request_live_calls,
+        unallocated_target_live_calls,
+        provider_available_request_leases,
+        provider_leased_live_requests,
+        provider_leased_physical_calls,
+        provider_leased_probe_calls,
+        provider_request_fill_pct,
+        provider_limit_version,
+        provider_probe_occupancy_version,
+        provider_allocation_version,
+        bottleneck,
+        bottleneck_source,
+        bottleneck_subreason,
+        fresh_worker_count,
+        stale_worker_count,
+        unavailable_worker_count,
+        aggregate_completeness,
+        snapshot_json
+      FROM (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY job_id, provider_key, sampled_at
+            ORDER BY created_at ASC, id ASC
+          ) AS incoming_row_number
+        FROM incoming
+      )
+      WHERE incoming_row_number = 1
+    )
     INSERT INTO app.judgment_job_provider_telemetry_sample (
       id,
       created_at,
@@ -242,14 +317,47 @@ const getSampleInsertSql = (params: {createdAt: Date; samples: JudgmentProviderT
       unavailable_worker_count,
       aggregate_completeness,
       snapshot_json
-    ) VALUES ${params.samples
-      .map((sample) => {
-        return getSampleInsertValueSql({createdAt: params.createdAt, sample})
-      })
-      .join(', ')}
-    ON CONFLICT(job_id, provider_key, sampled_at) DO NOTHING
+    )
+    SELECT
+      candidate.id,
+      candidate.created_at,
+      candidate.job_id,
+      candidate.project_id,
+      candidate.provider_key,
+      candidate.sampled_at,
+      candidate.provider_limit,
+      candidate.effective_provider_limit,
+      candidate.normal_request_capacity,
+      candidate.target_request_live_calls,
+      candidate.unallocated_target_live_calls,
+      candidate.provider_available_request_leases,
+      candidate.provider_leased_live_requests,
+      candidate.provider_leased_physical_calls,
+      candidate.provider_leased_probe_calls,
+      candidate.provider_request_fill_pct,
+      candidate.provider_limit_version,
+      candidate.provider_probe_occupancy_version,
+      candidate.provider_allocation_version,
+      candidate.bottleneck,
+      candidate.bottleneck_source,
+      candidate.bottleneck_subreason,
+      candidate.fresh_worker_count,
+      candidate.stale_worker_count,
+      candidate.unavailable_worker_count,
+      candidate.aggregate_completeness,
+      candidate.snapshot_json
+    FROM deduped_incoming candidate
+    LEFT JOIN app.judgment_job_provider_telemetry_sample existing
+      ON existing.job_id = candidate.job_id
+     AND existing.provider_key = candidate.provider_key
+     AND existing.sampled_at = candidate.sampled_at
+    WHERE existing.id IS NULL
     RETURNING id
   `
+}
+
+const getSelectedTelemetrySampleIdListSql = (ids: string[]) => {
+  return getQuotedStringList(ids).join(', ')
 }
 
 const getHistorySampleFromRow = (row: JudgmentProviderTelemetryHistoryRow): JudgmentProviderTelemetryHistorySample => {
@@ -618,17 +726,30 @@ export const pruneJudgmentProviderTelemetryHistorySamples = async (
     return 0
   }
 
-  const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(
+  const runner = getHistoryRunner(params.runner)
+  const rows = await runner.queryJson<{id: string}>(
+    `
+    SELECT id
+    FROM app.judgment_job_provider_telemetry_sample
+    WHERE sampled_at < ${getTimestampLiteral(cutoff)}
+    ORDER BY sampled_at ASC, id ASC
+    LIMIT ${maxRows}
+  `,
+    judgmentProviderTelemetryPruneWorkloadContext,
+  )
+
+  if (rows.length === 0) {
+    return 0
+  }
+
+  await runner.queryJson<{id: string}>(
     `
     DELETE FROM app.judgment_job_provider_telemetry_sample
-    WHERE id IN (
-      SELECT id
-      FROM app.judgment_job_provider_telemetry_sample
-      WHERE sampled_at < ${getTimestampLiteral(cutoff)}
-      ORDER BY sampled_at ASC, id ASC
-      LIMIT ${maxRows}
-    )
-    RETURNING id
+    WHERE id IN (${getSelectedTelemetrySampleIdListSql(
+      rows.map((row) => {
+        return row.id
+      }),
+    )})
   `,
     judgmentProviderTelemetryPruneWorkloadContext,
   )
@@ -640,11 +761,28 @@ export const deleteJudgmentProviderTelemetryHistoryForJob = async (params: {
   jobId: string
   runner?: JudgmentProviderTelemetryHistoryRunner
 }): Promise<number> => {
-  const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(
+  const runner = getHistoryRunner(params.runner)
+  const rows = await runner.queryJson<{id: string}>(
+    `
+    SELECT id
+    FROM app.judgment_job_provider_telemetry_sample
+    WHERE job_id = ${getSqlLiteral(params.jobId)}
+  `,
+    judgmentProviderTelemetryDeleteJobWorkloadContext,
+  )
+
+  if (rows.length === 0) {
+    return 0
+  }
+
+  await runner.queryJson<{id: string}>(
     `
     DELETE FROM app.judgment_job_provider_telemetry_sample
-    WHERE job_id = ${getSqlLiteral(params.jobId)}
-    RETURNING id
+    WHERE id IN (${getSelectedTelemetrySampleIdListSql(
+      rows.map((row) => {
+        return row.id
+      }),
+    )})
   `,
     judgmentProviderTelemetryDeleteJobWorkloadContext,
   )

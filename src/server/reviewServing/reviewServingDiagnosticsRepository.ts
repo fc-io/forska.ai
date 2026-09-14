@@ -62,10 +62,24 @@ export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnostics
   blockedQueuedCount: number
   blockedOverBudgetCount: number
   claimableCount: number
+  components: ReviewServingDiagnosticsRebuildChunkComponentState[]
   expiredLeaseCount: number
   oldestClaimableQueuedAt: string | null
   quarantinedCount: number
   terminalQuarantinedCount: number
+}
+
+export type ReviewServingDiagnosticsRebuildChunkComponentState = {
+  blockedCount: number
+  completedCount: number
+  failedCount: number
+  oldestQueuedAt: string | null
+  pendingCount: number
+  projectionComponent: string
+  quarantinedCount: number
+  runningCount: number
+  totalCount: number
+  updatedAt: string | null
 }
 
 export type ReviewServingDiagnosticsQuarantineBarrier = {
@@ -146,6 +160,7 @@ type DiagnosticsSummaryRow = {
   quarantinedOutboxCount: number
   rebuildChunkBlockedOverBudgetCount: number
   rebuildChunkBlockedQueuedCount: number
+  rebuildChunkComponentsJson: unknown
   rebuildChunkClaimableCount: number
   rebuildChunkCompletedCount: number
   rebuildChunkExpiredLeaseCount: number
@@ -241,6 +256,7 @@ const emptyRebuildChunkState: ReviewServingDiagnosticsRebuildChunkState = {
   blockedQueuedCount: 0,
   blockedOverBudgetCount: 0,
   claimableCount: 0,
+  components: [],
   expiredLeaseCount: 0,
   oldestClaimableQueuedAt: null,
   quarantinedCount: 0,
@@ -417,6 +433,27 @@ const getDirtyWorkLifecycleReasonCount = (
     lifecycleReason: getNullableString(value.lifecycleReason),
     rowCount: getNumberValue(value.rowCount),
     status: getRequiredString(value.status),
+  }
+}
+
+const getRebuildChunkComponentState = (
+  value: unknown,
+): ReviewServingDiagnosticsRebuildChunkComponentState | null => {
+  if (!isRecord(value) || typeof value.projectionComponent !== 'string') {
+    return null
+  }
+
+  return {
+    blockedCount: getNumberValue(value.blockedCount),
+    completedCount: getNumberValue(value.completedCount),
+    failedCount: getNumberValue(value.failedCount),
+    oldestQueuedAt: getNullableString(value.oldestQueuedAt),
+    pendingCount: getNumberValue(value.pendingCount),
+    projectionComponent: value.projectionComponent,
+    quarantinedCount: getNumberValue(value.quarantinedCount),
+    runningCount: getNumberValue(value.runningCount),
+    totalCount: getNumberValue(value.totalCount),
+    updatedAt: getNullableString(value.updatedAt),
   }
 }
 
@@ -764,6 +801,21 @@ const getDiagnosticsSummaryRowsEffect = (
           MAX(classified_chunk.updated_at) FILTER (WHERE classified_chunk.status IN ('running', 'completed')) AS updatedAt
         FROM classified_chunk
         LEFT JOIN latest_request ON TRUE
+      ), rebuild_chunk_component AS (
+        SELECT
+          projection_component AS projectionComponent,
+          CAST(COUNT(*) AS INTEGER) AS totalCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'pending') AS INTEGER) AS pendingCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'running') AS INTEGER) AS runningCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'failed') AS INTEGER) AS failedCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'quarantined') AS INTEGER) AS quarantinedCount,
+          CAST(COUNT(*) FILTER (WHERE status IN ('blocked_over_budget', 'blocked')) AS INTEGER) AS blockedCount,
+          MIN(created_at) FILTER (WHERE status <> 'completed') AS oldestQueuedAt,
+          MAX(updated_at) FILTER (WHERE status IN ('running', 'completed')) AS updatedAt
+        FROM classified_chunk
+        WHERE projection_component IS NOT NULL
+        GROUP BY projection_component
       ), quarantine_state AS (
         SELECT
           CAST(COUNT(*) FILTER (WHERE status NOT IN (${getOutboxTerminalStatusList()})) AS INTEGER) AS unresolvedOutboxCount,
@@ -847,6 +899,28 @@ const getDiagnosticsSummaryRowsEffect = (
         rebuild_chunk.runningCount AS rebuildChunkRunningCount,
         rebuild_chunk.failedCount AS rebuildChunkFailedCount,
         rebuild_chunk.completedCount AS rebuildChunkCompletedCount,
+        COALESCE((
+          SELECT to_json(LIST(STRUCT_PACK(
+            projectionComponent := projectionComponent,
+            totalCount := totalCount,
+            completedCount := completedCount,
+            pendingCount := pendingCount,
+            runningCount := runningCount,
+            failedCount := failedCount,
+            quarantinedCount := quarantinedCount,
+            blockedCount := blockedCount,
+            oldestQueuedAt := oldestQueuedAt,
+            updatedAt := updatedAt
+          )))
+          FROM (
+            SELECT *
+            FROM rebuild_chunk_component
+            ORDER BY
+              pendingCount + runningCount DESC,
+              totalCount DESC,
+              projectionComponent ASC
+          )
+        ), '[]') AS rebuildChunkComponentsJson,
         rebuild_chunk.claimableCount AS rebuildChunkClaimableCount,
         rebuild_chunk.blockedQueuedCount AS rebuildChunkBlockedQueuedCount,
         rebuild_chunk.blockedOverBudgetCount AS rebuildChunkBlockedOverBudgetCount,
@@ -917,6 +991,7 @@ const getDiagnosticsRebuildChunkState = (row: DiagnosticsSummaryRow | undefined)
         blockedQueuedCount: Number(row.rebuildChunkBlockedQueuedCount),
         blockedOverBudgetCount: Number(row.rebuildChunkBlockedOverBudgetCount),
         claimableCount: Number(row.rebuildChunkClaimableCount),
+        components: getTypedJsonArray(row.rebuildChunkComponentsJson, getRebuildChunkComponentState),
         expiredLeaseCount: Number(row.rebuildChunkExpiredLeaseCount),
         oldestClaimableQueuedAt: row.rebuildChunkOldestClaimableQueuedAt,
         quarantinedCount: Number(row.rebuildChunkQuarantinedCount),

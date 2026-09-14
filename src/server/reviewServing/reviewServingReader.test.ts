@@ -344,6 +344,7 @@ test('readReviewServingRows rejects missing required component state before Duck
 
 test('readReviewServingRows accepts row-only readiness while keeping count filter search and detail gates explicit', async () => {
   const reader = createReaderDatabase()
+  const lazyPosting = createLazyPromptAnswerPostingDatabase()
   const manifestDatabase = createManifestDatabase({
     bySnapshot: {
       'active-snapshot': getSnapshotRow({
@@ -376,6 +377,10 @@ test('readReviewServingRows accepts row-only readiness while keeping count filte
     {...readyRequest, filters: {importRoute: 'import-route-1'}},
     dependencies,
   )
+  const promptFilteredRows = await readReviewServingRows(
+    {...readyRequest, filters: {promptAnswer: ['prompt-1:yes']}},
+    {...dependencies, lazyPromptAnswerPostingDatabase: lazyPosting.database},
+  )
   const searchedRows = await readReviewServingRows(
     {
       ...readyRequest,
@@ -400,11 +405,16 @@ test('readReviewServingRows accepts row-only readiness while keeping count filte
   expect(count.diagnostics.missingRequiredComponents).toEqual(['posting', 'summary'])
   expect(filteredRows).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
   expect(filteredRows.diagnostics.missingRequiredComponents).toEqual(['posting'])
+  expect(promptFilteredRows.status).toBe('accepted')
+  expect(promptFilteredRows.status === 'accepted' ? promptFilteredRows.sql : '').toContain(
+    'review_article_filter_posting_serving_v4',
+  )
+  expect(lazyPosting.statements.join('\n')).toContain('SELECT requested.filter_value AS filterValue')
   expect(searchedRows).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
   expect(searchedRows.diagnostics.missingRequiredComponents).toEqual(['search'])
   expect(detail).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
   expect(detail.diagnostics.missingRequiredComponents).toContain('payload')
-  expect(reader.statements).toHaveLength(1)
+  expect(reader.statements).toHaveLength(2)
 })
 
 test('readReviewServingRows validates cursors and filter signatures before DuckDB execution', async () => {

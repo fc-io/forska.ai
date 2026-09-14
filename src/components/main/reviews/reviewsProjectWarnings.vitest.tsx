@@ -317,6 +317,95 @@ test('renders article coverage instead of rebuild chunk diagnostics', async () =
   }
 })
 
+test('renders background index task progress with user-facing component names', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      coverage: {
+        countReadyArticleCount: 100,
+        detailReadyArticleCount: 47,
+        filterReadyArticleCount: null,
+        reviewPageReadyArticleCount: 100,
+        rowReadyArticleCount: 100,
+        searchReadyArticleCount: 0,
+        totalArticleCount: 100,
+      },
+      progressState: 'processing',
+      serving: {
+        diagnostics: {
+          rebuildChunks: {
+            components: [
+              {
+                blockedCount: 0,
+                completedCount: 40,
+                failedCount: 0,
+                oldestQueuedAt: '2026-04-02T12:00:00.000Z',
+                pendingCount: 10,
+                projectionComponent: 'posting',
+                quarantinedCount: 0,
+                runningCount: 2,
+                totalCount: 52,
+                updatedAt: '2026-04-02T12:05:00.000Z',
+              },
+              {
+                blockedCount: 0,
+                completedCount: 25,
+                failedCount: 0,
+                oldestQueuedAt: '2026-04-02T12:00:00.000Z',
+                pendingCount: 5,
+                projectionComponent: 'summary',
+                quarantinedCount: 0,
+                runningCount: 0,
+                totalCount: 30,
+                updatedAt: '2026-04-02T12:05:00.000Z',
+              },
+              {
+                blockedCount: 0,
+                completedCount: 0,
+                failedCount: 0,
+                oldestQueuedAt: '2026-04-02T12:00:00.000Z',
+                pendingCount: 18,
+                projectionComponent: 'search',
+                quarantinedCount: 0,
+                runningCount: 0,
+                totalCount: 18,
+                updatedAt: null,
+              },
+              {
+                blockedCount: 0,
+                completedCount: 4,
+                failedCount: 0,
+                oldestQueuedAt: null,
+                pendingCount: 0,
+                projectionComponent: 'payload',
+                quarantinedCount: 0,
+                runningCount: 0,
+                totalCount: 4,
+                updatedAt: '2026-04-02T12:05:00.000Z',
+              },
+            ],
+            pendingCount: 33,
+            runningCount: 2,
+          },
+        },
+        manifest: {},
+        readable: true,
+        usable: true,
+      },
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Filters: indexing 100 articles')
+    expect(container.textContent).toContain('Filter lists: 40 / 52 index tasks done, 2 running, 10 waiting')
+    expect(container.textContent).toContain('Summary counts: 25 / 30 index tasks done, 5 waiting')
+    expect(container.textContent).toContain('Search index: 0 / 18 index tasks done, 18 waiting')
+    expect(container.textContent).not.toContain('payload:')
+    expect(container.textContent).not.toContain('rebuild chunk')
+  } finally {
+    dispose()
+  }
+})
+
 test('labels row-ready indexing as background enrichment work', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({

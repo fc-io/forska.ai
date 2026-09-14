@@ -87,6 +87,18 @@ type ReviewsWarningsResponse = {
           rebuildChunks: {
             blockedQueuedCount?: number
             claimableCount?: number
+            components?: Array<{
+              blockedCount: number
+              completedCount: number
+              failedCount: number
+              oldestQueuedAt: string | null
+              pendingCount: number
+              projectionComponent: string
+              quarantinedCount: number
+              runningCount: number
+              totalCount: number
+              updatedAt: string | null
+            }>
             expiredLeaseCount?: number
             failedCount: number
             pendingCount: number
@@ -1419,6 +1431,15 @@ test('reviews warnings keep retry-backed V4 rebuild chunk failures out of claima
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
     blockedQueuedCount: 1,
     claimableCount: 0,
+    components: [
+      expect.objectContaining({
+        completedCount: 0,
+        failedCount: 1,
+        pendingCount: 0,
+        projectionComponent: 'summary',
+        totalCount: 1,
+      }),
+    ],
     pendingCount: 1,
   })
   expect(body.data.indexing.status).toBe('refreshing')
