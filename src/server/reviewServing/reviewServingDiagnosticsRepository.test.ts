@@ -307,7 +307,7 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('AS blockedQueuedCount')
   expect(statements.join('\n')).toContain('visible_chunk.lease_expires_at IS NULL')
   expect(statements.join('\n')).toContain("WHEN admission_state = 'admitted' AND status IN ('admitted', 'running')")
-  expect(statements.join('\n')).toContain('SELECT request_id, admission_state, reason, status')
+  expect(statements.join('\n')).toContain('SELECT request_id, admission_state, priority, reason, status')
   expect(statements.join('\n')).toContain('FROM terminal_request')
   expect(statements.join('\n')).toContain('classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id')
   expect(statements.join('\n')).toContain('classified_chunk.request_id IS NULL')
@@ -402,12 +402,12 @@ test('live rebuild diagnostics prefer unfinished admitted work over a repeatedly
     await connection.run(`CREATE SCHEMA app;
       CREATE TABLE app.review_rebuild_request (
         request_id VARCHAR, project_id VARCHAR, admission_state VARCHAR,
-        reason VARCHAR, status VARCHAR, created_at TIMESTAMP, updated_at TIMESTAMP);
+        priority INTEGER, reason VARCHAR, status VARCHAR, created_at TIMESTAMP, updated_at TIMESTAMP);
       CREATE TABLE app.review_rebuild_chunk_manifest (request_id VARCHAR, project_id VARCHAR, status VARCHAR);
       INSERT INTO app.review_rebuild_request VALUES
-        ('old-empty', 'project-1', 'admitted', 'searchDirtyWork', 'admitted', '2026-09-07', '2026-09-10'),
-        ('new-work', 'project-1', 'admitted', 'nativeFix', 'admitted', '2026-09-09', '2026-09-09'),
-        ('unrelated', 'project-2', 'admitted', 'otherProject', 'running', '2026-09-11', '2026-09-11');
+        ('old-empty', 'project-1', 'admitted', 100, 'searchDirtyWork', 'admitted', '2026-09-07', '2026-09-10'),
+        ('new-work', 'project-1', 'admitted', 100, 'nativeFix', 'admitted', '2026-09-09', '2026-09-09'),
+        ('unrelated', 'project-2', 'admitted', 100, 'otherProject', 'running', '2026-09-11', '2026-09-11');
       INSERT INTO app.review_rebuild_chunk_manifest VALUES
         ('old-empty', 'project-1', 'completed'),
         ('new-work', 'project-1', 'pending'),
@@ -424,14 +424,27 @@ test('live rebuild diagnostics prefer unfinished admitted work over a repeatedly
     )
     expect(await read()).toEqual([{requestId: 'new-work', pending: 2, running: 1, completed: 1, failed: 0}])
 
+    await connection.run(`INSERT INTO app.review_rebuild_request VALUES
+        ('low-priority-enrichment', 'project-1', 'admitted', 50, 'filterReadinessEnrichment', 'admitted', '2026-09-13', '2026-09-13');
+      INSERT INTO app.review_rebuild_chunk_manifest VALUES
+        ('low-priority-enrichment', 'project-1', 'pending')`)
+    expect(await read()).toEqual([{requestId: 'new-work', pending: 2, running: 1, completed: 1, failed: 0}])
+
+    await connection.run(
+      `UPDATE app.review_rebuild_request SET updated_at = '2026-09-14' WHERE request_id = 'low-priority-enrichment'`,
+    )
+    expect(await read()).toEqual([{requestId: 'new-work', pending: 2, running: 1, completed: 1, failed: 0}])
+
     await connection.run(
       `UPDATE app.review_rebuild_chunk_manifest SET status = 'completed' WHERE request_id = 'new-work'`,
     )
-    expect(await read()).toEqual([{requestId: 'old-empty', pending: 1, running: 0, completed: 1, failed: 0}])
+    expect(await read()).toEqual([
+      {requestId: 'low-priority-enrichment', pending: 2, running: 0, completed: 0, failed: 0},
+    ])
 
     await connection.run(`UPDATE app.review_rebuild_request SET status = 'completed' WHERE project_id = 'project-1';
       INSERT INTO app.review_rebuild_request VALUES
-        ('terminal', 'project-1', 'blocked_over_budget', 'manualRebuild', 'failed', '2026-09-13', '2026-09-13');
+        ('terminal', 'project-1', 'blocked_over_budget', 100, 'manualRebuild', 'failed', '2026-09-13', '2026-09-13');
       INSERT INTO app.review_rebuild_chunk_manifest VALUES ('terminal', 'project-1', 'failed')`)
     expect(await read()).toEqual([{requestId: 'terminal', pending: 1, running: 0, completed: 0, failed: 1}])
   } finally {

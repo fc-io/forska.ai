@@ -668,7 +668,7 @@ const getDiagnosticsSummaryRowsEffect = (
           AND request_id IS NOT NULL
           AND status <> 'completed'
       ), latest_request AS (
-        SELECT request_id, admission_state, reason, status
+        SELECT request_id, admission_state, priority, reason, status
         FROM app.review_rebuild_request
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
         ORDER BY
@@ -678,6 +678,7 @@ const getDiagnosticsSummaryRowsEffect = (
             WHEN admission_state = 'admitted' AND status IN ('admitted', 'running') THEN 1
             ELSE 2
           END ASC,
+          priority DESC,
           updated_at DESC,
           created_at DESC,
           request_id DESC

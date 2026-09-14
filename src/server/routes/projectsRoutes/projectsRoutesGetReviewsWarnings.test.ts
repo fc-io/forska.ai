@@ -1189,6 +1189,80 @@ test('reviews warnings report processing for recently progressed queued V4 rebui
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
+test('reviews warnings prefer high-priority foreground rebuild progress over newer enrichment requests', async () => {
+  const projectId = 'project-v4-foreground-progress-before-enrichment-warning'
+  const foregroundRequestId = 'rebuild:foreground-progress-before-enrichment-warning'
+  const enrichmentRequestId = 'rebuild:enrichment-newer-than-foreground-warning'
+  const recentProgressAt = new Date().toISOString()
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-foreground-progress-before-enrichment-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T11:00:00.000Z',
+    priority: 10_000,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId: foregroundRequestId,
+    status: 'admitted',
+    updatedAt: '2026-04-02T11:05:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-foreground-progress-completed-warning',
+    component: 'summary',
+    createdAt: '2026-04-02T11:01:00.000Z',
+    projectId,
+    requestId: foregroundRequestId,
+    status: 'completed',
+    updatedAt: recentProgressAt,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-foreground-progress-pending-warning',
+    component: 'summary',
+    createdAt: '2026-04-02T11:02:00.000Z',
+    projectId,
+    requestId: foregroundRequestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T11:02:00.000Z',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    priority: 500,
+    projectId,
+    reason: 'filterReadinessEnrichment',
+    requestId: enrichmentRequestId,
+    status: 'admitted',
+    updatedAt: '2026-04-02T12:10:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-enrichment-newer-pending-warning',
+    component: 'summary',
+    createdAt: '2026-04-02T12:01:00.000Z',
+    projectId,
+    requestId: enrichmentRequestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:01:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeConsumerCount).toBe(1)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.inFlightRefreshCount).toBe(0)
+  expect(body.data.indexing.lastProgressedAt).not.toBeNull()
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings do not report processing for only recently enqueued V4 rebuild chunks', async () => {
   const projectId = 'project-v4-recent-enqueue-warning'
   const recentEnqueuedAt = new Date().toISOString()
