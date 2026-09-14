@@ -269,6 +269,72 @@ afterEach(() => {
   mock.restore()
 })
 
+test('skips timed-out serving queue reads without marking the scan exhausted', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyCalls: Array<{jobId: string}> = []
+  const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (jobId) => {
+      addReadyCalls.push({jobId})
+      return 0
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: 12, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async (jobId, state) => {
+      setScanStateCalls.push({jobId, state})
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async () => {
+      return new Promise<{nextCursor: MockCursor | null; promptEntries: Array<{articleId: string; promptId: string}>}>(
+        () => {
+          return undefined
+        },
+      )
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?serving-read-timeout=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  module.setJudgmentsJobsAddToQueueServingReadTimeoutMsForTests(1)
+
+  try {
+    await module.judgmentsJobsAddToQueue('server-1')
+    await module.judgmentsJobsAddToQueue('server-1')
+  } finally {
+    module.resetJudgmentsJobsAddToQueueServingReadTimeoutMsForTests()
+  }
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(addReadyCalls).toEqual([])
+  expect(setScanStateCalls).toEqual([])
+})
+
 test('skips a transient SQLite lock for one job and continues filling later jobs', async () => {
   const getPromptsCalls = {count: 0}
   const addReadyJobIds: string[] = []

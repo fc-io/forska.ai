@@ -1879,10 +1879,19 @@ test('reviews warnings report quarantine barriers before mutation-disabled dirty
 
 test('reviews warnings prefer claimable orphan recovery chunks over older terminal rebuild requests', async () => {
   const projectId = 'project-v4-terminal-request-orphan-chunk-warning'
+  const snapshotId = 'snapshot-v4-terminal-request-orphan-chunk-warning'
 
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    components: ['summary'],
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+    status: 'candidate',
+  })
   await insertReviewRebuildRequest({
     createdAt: '2026-04-02T12:00:00.000Z',
     failedAt: '2026-04-02T12:01:00.000Z',
@@ -1896,6 +1905,7 @@ test('reviews warnings prefer claimable orphan recovery chunks over older termin
     createdAt: '2026-04-02T12:02:00.000Z',
     projectId,
     requestId: null,
+    snapshotId,
     status: 'pending',
     updatedAt: '2026-04-02T12:02:00.000Z',
   })
@@ -1943,6 +1953,7 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
   const articleId = `article-${projectId}`
   const reviewConfigHash = getFixtureReviewConfigHash(projectId)
   const snapshotId = 'snapshot-row-ready-partial-warning'
+  const enrichmentSnapshotId = 'snapshot-row-ready-partial-enrichment-warning'
 
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
@@ -1954,12 +1965,21 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
     projectId,
     snapshotId,
   })
+  await insertActiveReviewServingManifest({
+    components: ['posting', 'summary'],
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: enrichmentSnapshotId,
+    status: 'candidate',
+  })
   await insertReviewArticleServingBaseRow({articleId, projectId, reviewConfigHash, snapshotId})
   await insertReviewRebuildChunk({
     chunkId: 'chunk-row-ready-summary-indexing-warning',
     component: 'summary',
     createdAt: '2026-06-23T10:00:00.000Z',
     projectId,
+    snapshotId: enrichmentSnapshotId,
     status: 'pending',
     updatedAt: '2026-06-23T10:00:00.000Z',
   })
@@ -1968,6 +1988,7 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
     component: 'posting',
     createdAt: '2026-06-23T10:01:00.000Z',
     projectId,
+    snapshotId: enrichmentSnapshotId,
     status: 'pending',
     updatedAt: '2026-06-23T10:01:00.000Z',
   })
@@ -2277,6 +2298,7 @@ test('reviews warnings seed foreground repair when recent progress belongs to an
 
   await insertProjectFixture(projectId)
   await insertActiveReviewServingManifest({
+    components: ['search'],
     includeSearchState: false,
     optionalComponents: [],
     projectId,
@@ -2357,13 +2379,13 @@ test('reviews warnings boost stale foreground V4 repairs that already have progr
     projectId,
     reason: 'missingReviewServingSnapshot',
     requestId,
-    requestedComponents: ['projectScope', 'selectedImport', 'display', 'summary'],
+    requestedComponents: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'],
     status: 'admitted',
     updatedAt: oldTimestamp,
   })
   await insertReviewRebuildChunk({
     chunkId: 'chunk-missing-serving-stale-foreground-pending-warning',
-    component: 'summary',
+    component: 'queue',
     createdAt: oldTimestamp,
     projectId,
     requestId,
@@ -2530,7 +2552,7 @@ test('reviews warnings repair invalid legacy required-enrichment candidates desp
   expect(afterCount).toBeGreaterThan(beforeCount)
 })
 
-test('reviews warnings do not requeue recent candidate repairs after enrichment requirements are corrected', async () => {
+test('reviews warnings seed row-first repair when the active repair still requests full enrichment', async () => {
   const projectId = 'project-corrected-candidate-recent-foreground-warning'
   const requestId = 'request-corrected-candidate-recent-foreground-warning'
   const selectedImportSnapshotId = 'selected-import-corrected-candidate-recent-warning'
@@ -2634,6 +2656,7 @@ test('reviews warnings do not requeue recent candidate repairs after enrichment 
     createdAt: oldTimestamp,
     projectId,
     requestId,
+    snapshotId: 'snapshot-corrected-candidate-recent-warning',
     status: 'pending',
     updatedAt: oldTimestamp,
   })
@@ -2643,6 +2666,7 @@ test('reviews warnings do not requeue recent candidate repairs after enrichment 
     createdAt: oldTimestamp,
     projectId,
     requestId,
+    snapshotId: 'snapshot-corrected-candidate-recent-warning',
     status: 'completed',
     updatedAt: recentTimestamp,
   })
@@ -2655,15 +2679,22 @@ test('reviews warnings do not requeue recent candidate repairs after enrichment 
   })
   const after = await getReviewRebuildRequestMetadata(requestId)
   const afterCount = await getReviewRebuildRequestCount(projectId)
+  const repeated = await postWarningsRequest(projectId)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+  const repeatedCount = await getReviewRebuildRequestCount(projectId)
 
   expect(response.status).toBe(200)
+  expect(repeated.response.status).toBe(200)
   expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
   expect(body.data.indexing.progressState).toBe('processing')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('refreshing')
   expect(after.priority).toBe(before.priority)
   expect(after.updatedAt).toBe(before.updatedAt)
-  expect(afterCount).toBe(beforeCount)
+  expect(afterCount).toBeGreaterThan(beforeCount)
+  expect(repeatedCount).toBe(afterCount)
 })
 
 test('reviews warnings do not mutate stale queued V4 repairs even when serving rows are readable', async () => {
@@ -2852,8 +2883,17 @@ test('reviews warnings prioritize terminal V4 request over disabled mutation bac
 test('reviews warnings ignore stale terminal chunks after same request is re-admitted', async () => {
   const projectId = 'project-readmitted-request-stale-terminal-warning'
   const requestId = 'request-readmitted-request-stale-terminal-warning'
+  const snapshotId = 'snapshot-readmitted-request-stale-terminal-warning'
 
   await insertProjectFixture(projectId)
+  await insertActiveReviewServingManifest({
+    components: ['summary'],
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+    status: 'candidate',
+  })
   await insertReviewRebuildRequest({
     createdAt: '2026-04-02T12:00:00.000Z',
     projectId,
@@ -2866,6 +2906,7 @@ test('reviews warnings ignore stale terminal chunks after same request is re-adm
     createdAt: '2026-04-02T12:00:00.000Z',
     projectId,
     requestId,
+    snapshotId,
     status: 'blocked_over_budget',
     updatedAt: '2026-04-02T12:00:00.000Z',
   })
@@ -2874,6 +2915,7 @@ test('reviews warnings ignore stale terminal chunks after same request is re-adm
     createdAt: '2026-04-02T12:10:00.000Z',
     projectId,
     requestId,
+    snapshotId,
     status: 'pending',
     updatedAt: '2026-04-02T12:10:00.000Z',
   })

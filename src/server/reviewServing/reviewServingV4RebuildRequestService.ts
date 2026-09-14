@@ -22,6 +22,7 @@ import {
   type ReviewServingComponentRequirements,
   reviewServingListModes,
   type ReviewServingProjectionComponent,
+  reviewServingProjectionComponents,
 } from './reviewServingContracts.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
@@ -203,6 +204,7 @@ type ReviewServingV4BootstrapDirtyWatermarkRow = {latestSourceHighWaterMark: num
 
 export type RequestReviewServingV4RebuildInput = {
   components?: readonly ReviewServingProjectionComponent[]
+  pageFirstOnly?: boolean
   priority?: number
   projectId: string
   reason: string
@@ -523,6 +525,33 @@ const getReviewServingV4BootstrapHash = (label: string, value: ReviewServingIden
   return createHash('sha256')
     .update(`${label}:${getStableReviewServingJson(value)}`)
     .digest('hex')
+}
+
+const getCanonicalReviewServingComponents = (components: readonly ReviewServingProjectionComponent[]) => {
+  const componentSet = new Set(components)
+
+  return reviewServingProjectionComponents.filter((component) => {
+    return componentSet.has(component)
+  })
+}
+
+const shouldScopeReviewServingV4BootstrapSnapshotToComponents = (input: {
+  components: readonly ReviewServingProjectionComponent[]
+  pageFirstOnly?: boolean
+  requestedOnly?: boolean
+}) => {
+  if (input.pageFirstOnly === true || input.requestedOnly === true) {
+    return true
+  }
+
+  const defaultComponentSet = new Set(defaultReviewServingV4RebuildComponents)
+
+  return (
+    input.components.length !== defaultComponentSet.size
+    || input.components.some((component) => {
+      return !defaultComponentSet.has(component)
+    })
+  )
 }
 
 const getReviewServingV4BootstrapSnapshotId = (input: {
@@ -1258,7 +1287,18 @@ const prepareReviewServingV4Bootstrap = async (
     sourceDeltaHighWater: input.sourceWatermarks.importRunArticle ?? 0,
   })
   const snapshotId = getReviewServingV4BootstrapSnapshotId({
-    ...(input.requestedOnly ? {bootstrapFlavor: 'requested-component-bootstrap', components} : {}),
+    ...(shouldScopeReviewServingV4BootstrapSnapshotToComponents({
+      components,
+      pageFirstOnly: input.pageFirstOnly,
+      requestedOnly: input.requestedOnly,
+    })
+      ? {
+          bootstrapFlavor: input.requestedOnly
+            ? 'requested-component-bootstrap'
+            : 'requested-component-missing-snapshot-bootstrap',
+          components: getCanonicalReviewServingComponents(components),
+        }
+      : {}),
     projectId: input.projectId,
     reviewConfigHash: input.reviewConfigHash,
     selectedImportSnapshotId,
@@ -1851,11 +1891,21 @@ export const requestReviewServingV4RebuildEffect = (
       requestDatabase,
       workloadContext,
     )
+    const hasExplicitComponents = input.components !== undefined
+    const shouldUsePageFirstBootstrapDependencies =
+      input.reason === 'missingReviewServingSnapshot'
+      && (input.pageFirstOnly === true || (!hasExplicitComponents && input.pageFirstOnly !== false))
+    const isFilterReadinessEnrichment = input.reason === 'filterReadinessEnrichment'
+    const requestedComponents =
+      input.components
+      ?? (shouldUsePageFirstBootstrapDependencies
+        ? pageFirstReviewServingV4RebuildComponents
+        : defaultReviewServingV4RebuildComponents)
     const shouldReuseActiveRequest =
       input.reason === 'missingReviewServingSnapshot' || input.reason === 'filterReadinessEnrichment'
     const activeRequest = shouldReuseActiveRequest
       ? await getActiveReviewServingRebuildRequestForProject(
-          {projectId: input.projectId, reason: input.reason, reviewConfigHash},
+          {projectId: input.projectId, reason: input.reason, requestedComponents, reviewConfigHash},
           requestDatabase,
         )
       : null
@@ -1881,26 +1931,18 @@ export const requestReviewServingV4RebuildEffect = (
       return activeRequest
     }
 
-    const hasExplicitComponents = input.components !== undefined
-    const isForegroundMissingSnapshotRepair =
-      input.reason === 'missingReviewServingSnapshot' && !hasExplicitComponents && input.priority !== undefined
-    const isFilterReadinessEnrichment = input.reason === 'filterReadinessEnrichment'
-    const requestedComponents =
-      input.components
-      ?? (isForegroundMissingSnapshotRepair
-        ? pageFirstReviewServingV4RebuildComponents
-        : defaultReviewServingV4RebuildComponents)
     const stats = await getReviewServingV4RebuildStats({projectId: input.projectId, reviewConfigHash}, requestDatabase)
     const hasQueuedSnapshot = getSafeCount(stats.snapshotCount) > 0
     const hasActiveSnapshot = getSafeCount(stats.activeSnapshotCount) > 0
     const isFreshBootstrap =
       !hasQueuedSnapshot
-      || (input.reason === 'missingReviewServingSnapshot' && !hasActiveSnapshot)
+      || (input.reason === 'missingReviewServingSnapshot'
+        && (!hasActiveSnapshot || shouldUsePageFirstBootstrapDependencies))
       || isFilterReadinessEnrichment
     const components = isFreshBootstrap
       ? getReviewServingV4BootstrapComponents({
           components: requestedComponents,
-          pageFirstOnly: isForegroundMissingSnapshotRepair,
+          pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
           requestedOnly: isFilterReadinessEnrichment,
         })
       : requestedComponents
@@ -1946,7 +1988,7 @@ export const requestReviewServingV4RebuildEffect = (
             {
               articleRanges: bootstrapArticleRanges,
               components,
-              pageFirstOnly: isForegroundMissingSnapshotRepair,
+              pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
               requestedOnly: isFilterReadinessEnrichment,
               projectId: input.projectId,
               reviewConfigHash,

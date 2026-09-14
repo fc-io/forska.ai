@@ -1414,10 +1414,41 @@ export const releaseFailedRequestlessReviewServingRebuildChunks = async (
 }
 
 export const getActiveReviewServingRebuildRequestForProject = async (
-  input: {projectId: string; reason?: string; reviewConfigHash?: string | null},
+  input: {
+    projectId: string
+    reason?: string
+    requestedComponents?: readonly ReviewServingProjectionComponent[]
+    reviewConfigHash?: string | null
+  },
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
 ) => {
   const reasonFilter = input.reason === undefined ? '' : `\n      AND reason = ${getSqlLiteral(input.reason)}`
+  const requestedComponents =
+    input.requestedComponents === undefined ? null : getNormalizedComponents(input.requestedComponents)
+  const requestedComponentsFilter =
+    requestedComponents === null
+      ? ''
+      : requestedComponents.length === 0
+        ? '\n      AND FALSE'
+        : `\n      AND json_array_length(requested_components_json) = ${getSqlLiteral(requestedComponents.length)}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM json_each(requested_components_json) requested_component
+        WHERE json_extract_string(requested_component.value, '$') NOT IN (${getSqlStringList(requestedComponents)})
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM (${requestedComponents
+          .map((component) => {
+            return `SELECT ${getSqlLiteral(component)} AS component`
+          })
+          .join('\n          UNION ALL\n          ')}) expected_requested_component
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM json_each(requested_components_json) requested_component
+          WHERE json_extract_string(requested_component.value, '$') = expected_requested_component.component
+        )
+      )`
   const reviewConfigHashFilter =
     input.reviewConfigHash === undefined
       ? ''
@@ -1440,6 +1471,7 @@ export const getActiveReviewServingRebuildRequestForProject = async (
     ${getRequestSelectSql()}
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       ${reasonFilter}
+      ${requestedComponentsFilter}
       ${reviewConfigHashFilter}
       AND status = 'admitted'
       AND admission_state = 'admitted'

@@ -12,11 +12,13 @@ import {
   waitAtJudgeWorkerLeaseLossTestBarrier,
 } from '../src/server/cron/judgmentsJobs/judgeWorkerLeaseLossTestBarrier.ts'
 import {resolveJudgeWorkerJournalIdentity} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
+import {runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {
   createJudgmentWorkflowTopology,
-  isRuntimeMonitorTargetHealthy,
+  getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit,
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
+  isRuntimeMonitorTargetHealthy,
   isTopologyJobCleanupComplete,
   startJudgmentWorkflowTopology,
   topologyLongRunningProcessStdio,
@@ -29,7 +31,6 @@ import {
   recordTopologyFailure,
   topologyFailureArtifactsDirectory,
 } from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
-import {runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 
 const topologyRoots: string[] = []
 
@@ -80,6 +81,12 @@ test('topology derives a production-valid durable journal from DuckDB and worker
     join(dirname(topology.duckdbPath), 'judge-worker-journals', `${identity.workerId}.sqlite`),
   )
   expect(existsSync(topology.root)).toBe(true)
+})
+
+test('topology uses the stable Windows maintenance DuckDB memory profile', () => {
+  expect(getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit('linux')).toBe('10GB')
+  expect(getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit('darwin')).toBe('10GB')
+  expect(getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit('win32')).toBe('6400MiB')
 })
 
 test('topology lease-loss barrier is opt-in, worker-specific, and test-only', async () => {

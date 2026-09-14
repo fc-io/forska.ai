@@ -922,13 +922,23 @@ test('active project rebuild request lookup can be scoped by review config', asy
   }
 
   await getActiveReviewServingRebuildRequestForProject(
-    {projectId: 'project-v4', reason: 'missingReviewServingSnapshot', reviewConfigHash: 'review:current'},
+    {
+      projectId: 'project-v4',
+      reason: 'missingReviewServingSnapshot',
+      requestedComponents: ['projectScope', 'llmStatus'],
+      reviewConfigHash: 'review:current',
+    },
     database,
   )
   const joined = statements.join('\n')
 
   expect(joined).toContain("project_id = 'project-v4'")
   expect(joined).toContain("AND reason = 'missingReviewServingSnapshot'")
+  expect(joined).toContain('json_array_length(requested_components_json) = 2')
+  expect(joined).toContain('json_each(requested_components_json)')
+  expect(joined).toContain("'projectScope'")
+  expect(joined).toContain("'llmStatus'")
+  expect(joined).toContain('expected_requested_component')
   expect(joined).toContain("json_extract_string(identity_json, '$.reviewConfigHash')")
   expect(joined).toContain("IS NOT DISTINCT FROM 'review:current'")
   expect(joined).toContain('FROM app.review_rebuild_chunk_manifest chunk')

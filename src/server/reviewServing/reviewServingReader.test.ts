@@ -23,6 +23,7 @@ const hydratedListComponents: readonly ReviewServingProjectionComponent[] = [
   'selectedImport',
   'llmStatus',
   'humanStatus',
+  'payload',
   'posting',
   'summary',
   'search',
@@ -1122,7 +1123,7 @@ test('readReviewServingRows hydrates filtered lists through postings and article
   expect(reader.statements.join('\n')).not.toContain('selected_scoped_article_import')
 })
 
-test('readReviewServingRows accepts visible-page judgment hydration without payload manifest readiness', async () => {
+test('readReviewServingRows rejects visible-page judgment hydration without payload manifest readiness', async () => {
   const reader = createReaderDatabase()
   const manifestDatabase = createManifestDatabase({
     bySnapshot: {
@@ -1145,10 +1146,9 @@ test('readReviewServingRows accepts visible-page judgment hydration without payl
     {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
   )
 
-  expect(result.status).toBe('accepted')
-  expect(reader.statements).toHaveLength(1)
-  expect(reader.statements[0]).toContain('FROM mart.review_article_judgment_detail_serving_v4')
-  expect(reader.statements[0]).toContain("payload_kind = 'llm'")
+  expect(result.status).toBe('rejected')
+  expect(result.reason).toBe('missingRequiredComponentState')
+  expect(reader.statements).toHaveLength(0)
 })
 
 test('readReviewServingRows rejects article-set hydration over article ID and payload byte caps', async () => {

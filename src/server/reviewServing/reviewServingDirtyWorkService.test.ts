@@ -4,6 +4,7 @@ import {expect, test} from 'bun:test'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {
+  blockReviewServingDirtyWorkClaimsForRebuild,
   claimReviewServingDirtyWork,
   cleanupReviewServingDirtyWorkRetention,
   compactReviewServingDirtyWorkAcknowledgements,
@@ -980,6 +981,14 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     if (
       statement.includes('UPDATE app.review_serving_dirty_work')
       && statement.includes('RETURNING')
+      && statement.includes("SET status = 'blocked_by_rebuild'")
+    ) {
+      return updateDirtyWorkReturningRows(statement, 'blocked_by_rebuild', 'running') as T[]
+    }
+
+    if (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes('RETURNING')
       && statement.includes("SET status = 'failed'")
     ) {
       return updateDirtyWorkReturningRows(statement, 'failed', 'running') as T[]
@@ -1175,6 +1184,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     if (statement.includes("SET status = 'pending'")) {
       updateStatus(statement, 'pending', 'running')
+    }
+
+    if (statement.includes("SET status = 'blocked_by_rebuild'")) {
+      updateStatus(statement, 'blocked_by_rebuild', 'running')
     }
 
     if (statement.includes("SET status = 'failed'")) {
@@ -1733,6 +1746,44 @@ test('release returns running claims to pending for the next wake', async () => 
   const row = await getReviewServingDirtyWork(claim?.dirtyWorkId ?? '', database)
 
   expect(row?.status).toBe('pending')
+})
+
+test('blocked rebuild claims wait for rebuild coverage instead of being reclaimed', async () => {
+  const {database} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1), 'delta-1')
+  const [claim] = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  if (claim === undefined) {
+    throw new Error('expected dirty work claim')
+  }
+
+  await blockReviewServingDirtyWorkClaimsForRebuild([claim.dirtyWorkId], database)
+
+  const blocked = await getReviewServingDirtyWork(claim.dirtyWorkId, database)
+  const reclaimed = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  expect(blocked?.status).toBe('blocked_by_rebuild')
+  expect(blocked?.lifecycleReason).toBe('blocked_by_rebuild')
+  expect(reclaimed).toEqual([])
+
+  await completeReviewServingDirtyWorkCoveredByRebuild(
+    [
+      {
+        completedSourceHighWaterMark: claim.latestSourceHighWaterMark,
+        projectId: claim.projectId ?? '',
+        projectionComponent: claim.projectionComponent,
+        projectionIdentity: claim.projectionIdentity,
+        sourcePartition: claim.sourcePartition,
+      },
+    ],
+    database,
+  )
+
+  const completed = await getReviewServingDirtyWork(claim.dirtyWorkId, database)
+
+  expect(completed?.status).toBe('completed')
+  expect(completed?.lifecycleReason).toBe('covered_by_rebuild')
 })
 
 test('claims stale running work after the running lease expires', async () => {

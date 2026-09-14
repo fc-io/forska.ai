@@ -15,7 +15,11 @@ import {
 } from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {assertNoUnexpectedDuckdbRecovery} from './judgmentWorkflowTopology/assertNoUnexpectedDuckdbRecovery.ts'
-import {cleanupTopologyArtifacts, recordTopologyFailure, topologyFailureArtifactsDirectory} from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
+import {
+  cleanupTopologyArtifacts,
+  recordTopologyFailure,
+  topologyFailureArtifactsDirectory,
+} from './judgmentWorkflowTopology/topologyFailureArtifacts.ts'
 
 export type JudgmentWorkflowTopology = {
   apiPort: number
@@ -148,11 +152,19 @@ const getAllowedHostEnvironment = (envValues: Record<string, string | undefined>
   }, {})
 }
 
+export const getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit = (platform = process.platform): string => {
+  return platform === 'win32' ? '6400MiB' : '10GB'
+}
+
 export const createJudgmentWorkflowTopology = ({
   cwd = process.cwd(),
   envValues = process.env,
   preserveFailureArtifacts = envValues.FORSKA_TEST_TOPOLOGY_PRESERVE_FAILURE_ARTIFACTS === 'true',
-}: {cwd?: string; envValues?: Record<string, string | undefined>; preserveFailureArtifacts?: boolean} = {}): JudgmentWorkflowTopology => {
+}: {
+  cwd?: string
+  envValues?: Record<string, string | undefined>
+  preserveFailureArtifacts?: boolean
+} = {}): JudgmentWorkflowTopology => {
   const [apiPort, maintenancePort, judgePort] = getDistinctPorts()
   const artifactsParent = preserveFailureArtifacts ? topologyFailureArtifactsDirectory : ''
   const root = resolve(cwd, '.tmp', artifactsParent, `judgment-workflow-topology-${randomUUID()}`)
@@ -175,7 +187,7 @@ export const createJudgmentWorkflowTopology = ({
     env: {
       ...getAllowedHostEnvironment(envValues),
       API_SERVER_PORT: String(apiPort),
-      BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT: '10GB',
+      BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT: getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit(),
       BACKGROUND_JUDGE_PORT: String(judgePort),
       BACKGROUND_MAINTENANCE_PORT: String(maintenancePort),
       DUCKDB_PATH: duckdbPath,
