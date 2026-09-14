@@ -147,7 +147,17 @@ const createArticleRows = (articleCount: number) => {
   })
 }
 
-const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCount?: number) => {
+type CreateReaderDatabaseOptions = {
+  articleRows?: readonly Record<string, unknown>[]
+  judgmentRows?: readonly Record<string, unknown>[]
+}
+
+const createReaderDatabase = (
+  totalCount = 1,
+  articleCount = 1,
+  enabledPromptCount?: number,
+  options: CreateReaderDatabaseOptions = {},
+) => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
@@ -162,11 +172,11 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
       }
 
       if (hasArticleServingRowSource(statement)) {
-        return createArticleRows(articleCount) as T[]
+        return (options.articleRows ?? createArticleRows(articleCount)) as T[]
       }
 
       if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
-        return [
+        return (options.judgmentRows ?? [
           {
             article_id: 'article-1',
             prompt_id: 'prompt-1',
@@ -186,7 +196,7 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
             answered_original_as_array: [],
             placeholder_kind: 'llm.unanswered',
           },
-        ] as T[]
+        ]) as T[]
       }
 
       if (statement.includes('FROM app.project')) {
@@ -289,6 +299,29 @@ test('LLM list keeps rows readable with nullable totals while count indexing cat
   expect(result.totalCount).toBe(null)
   expect(result.totalPages).toBe(null)
   expect(countStatements).toHaveLength(1)
+})
+
+test('LLM complete list uses serving status when judgment detail hydration is sparse', async () => {
+  const articleRows = createArticleRows(1).map((row) => {
+    return {...row, llm_status: 'answered'}
+  })
+  const reader = createReaderDatabase(1, 1, 1, {articleRows, judgmentRows: []})
+  const result = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result.data).toHaveLength(1)
+  expect(result.data[0]?.judgments).toEqual([])
+  expect(result.data[0]?.judgedPromptIds).toEqual([])
+  expect(result.data[0]?.isFullyJudged).toBe(true)
+  expect(sql).toContain('list_mode_state.llm_status')
+  expect(sql).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
 })
 
 test('LLM prompt-filtered list falls back to lazy prompt-answer postings while posting buckets are indexing', async () => {

@@ -132,6 +132,9 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(sql).toContain('list_mode_state.has_llm_list_mode IS TRUE')
   expect(sql).toContain('list_mode_state.llm_patch_watermark AS patch_watermark')
+  expect(sql).toContain('list_mode_state.llm_status')
+  expect(sql).toContain('list_mode_state.human_status')
+  expect(sql).toContain('list_mode_state.llm_has_judgment')
   expect(sql).not.toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('selected_import.project_id = serving.project_id')
   expect(sql).toContain('selected_import.project_scope_identity = $projectScopeIdentity')
@@ -591,7 +594,10 @@ test('direct article reads expand list modes from flags instead of stale list ke
         llm_patch_watermark INTEGER,
         human_patch_watermark INTEGER,
         both_patch_watermark INTEGER,
-        unassessed_patch_watermark INTEGER
+        unassessed_patch_watermark INTEGER,
+        llm_status VARCHAR,
+        human_status VARCHAR,
+        llm_has_judgment BOOLEAN
       );
       CREATE TABLE mart.review_selected_article_import_current_v4 (
         project_id VARCHAR,
@@ -670,7 +676,10 @@ test('direct article reads expand list modes from flags instead of stale list ke
         11,
         22,
         33,
-        44
+        44,
+        'answered',
+        'unanswered',
+        TRUE
       ),
       (
         'project-1',
@@ -685,7 +694,10 @@ test('direct article reads expand list modes from flags instead of stale list ke
         111,
         222,
         333,
-        444
+        444,
+        'answered',
+        'answered',
+        TRUE
       );
       INSERT INTO app.article VALUES
       (
@@ -724,6 +736,9 @@ test('direct article reads expand list modes from flags instead of stale list ke
 
     const staleArrayReader = await connection.runAndReadAll(getSql('article-1'))
     const staleArrayRows = staleArrayReader.getRowObjectsJson() as Array<{
+      human_status: string | null
+      llm_has_judgment: boolean
+      llm_status: string | null
       list_mode_key: string
       patch_watermark: number
     }>
@@ -731,18 +746,25 @@ test('direct article reads expand list modes from flags instead of stale list ke
     expect(staleArrayRows).toHaveLength(1)
     expect(staleArrayRows[0]?.list_mode_key).toBe('human')
     expect(staleArrayRows[0]?.patch_watermark).toBe(22)
+    expect(staleArrayRows[0]?.llm_status).toBe('answered')
+    expect(staleArrayRows[0]?.human_status).toBe('unanswered')
+    expect(staleArrayRows[0]?.llm_has_judgment).toBe(true)
 
     const priorityReader = await connection.runAndReadAll(getSql('article-2'))
-    const priorityRows = priorityReader.getRowObjectsJson() as Array<{list_mode_key: string; patch_watermark: number}>
+    const priorityRows = priorityReader.getRowObjectsJson() as Array<{
+      llm_status: string | null
+      list_mode_key: string
+      patch_watermark: number
+    }>
 
     expect(
       priorityRows.map((row) => {
-        return {listModeKey: row.list_mode_key, patchWatermark: row.patch_watermark}
+        return {listModeKey: row.list_mode_key, llmStatus: row.llm_status, patchWatermark: row.patch_watermark}
       }),
     ).toEqual([
-      {listModeKey: 'both', patchWatermark: 333},
-      {listModeKey: 'llm', patchWatermark: 111},
-      {listModeKey: 'human', patchWatermark: 222},
+      {listModeKey: 'both', llmStatus: 'answered', patchWatermark: 333},
+      {listModeKey: 'llm', llmStatus: 'answered', patchWatermark: 111},
+      {listModeKey: 'human', llmStatus: 'answered', patchWatermark: 222},
     ])
   } finally {
     connection.closeSync()

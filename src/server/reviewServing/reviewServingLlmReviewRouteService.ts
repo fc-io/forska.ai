@@ -59,6 +59,8 @@ type ReviewServingArticleRow = {
   fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
+  llm_status?: string | null
+  llmStatus?: string | null
   medrxiv_id?: string | null
   medrxivId?: string | null
   original_data?: unknown
@@ -599,6 +601,28 @@ const getResponseDetailReadiness = (value: string): ReviewDetailReadiness => {
   return value === 'ready' || value === 'indexing' ? value : 'unavailable'
 }
 
+const getRowLlmStatus = (row: ReviewServingArticleRow) => {
+  return row.llm_status ?? row.llmStatus ?? null
+}
+
+const getIsFullyJudged = (
+  row: ReviewServingArticleRow,
+  judgedPromptIds: readonly string[],
+  enabledPromptCount: number,
+) => {
+  const llmStatus = getRowLlmStatus(row)
+
+  if (llmStatus === 'answered') {
+    return true
+  }
+
+  if (llmStatus === 'unanswered') {
+    return false
+  }
+
+  return enabledPromptCount > 0 && new Set(judgedPromptIds).size >= enabledPromptCount
+}
+
 const getResponseRows = (
   rows: readonly ReviewServingArticleRow[],
   judgmentRows: readonly ReviewServingJudgmentRow[],
@@ -639,7 +663,7 @@ const getResponseRows = (
       url: row.url ?? null,
       judgments,
       judgedPromptIds,
-      isFullyJudged: enabledPromptCount > 0 && new Set(judgedPromptIds).size >= enabledPromptCount,
+      isFullyJudged: getIsFullyJudged(row, judgedPromptIds, enabledPromptCount),
     }
   })
 }

@@ -1277,6 +1277,9 @@ const getReviewServingArticlePhysicalSelectColumns = (contract: ReviewServingRea
     shouldUseQueueAnchoredUnassessedRowsRead(contract)
       ? `${reviewServingUnassessedQueuePageAlias}.activity_sort_at AS activity_sort_at`
       : `${reviewServingArticleDirectBaseAlias}.activity_sort_at`,
+    `${reviewServingArticleDirectStateAlias}.llm_status`,
+    `${reviewServingArticleDirectStateAlias}.human_status`,
+    `${reviewServingArticleDirectStateAlias}.llm_has_judgment`,
   ]
 }
 
