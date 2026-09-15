@@ -4,6 +4,7 @@ import {format} from 'date-fns'
 import type {Accessor, Setter} from 'solid-js'
 import {For, Show} from 'solid-js'
 
+import {decodeAndSanitize} from '../../../../app/utils/decodeAndSanitize.ts'
 import {type ArticleUrlInput, getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
@@ -206,6 +207,12 @@ const getSourceArticleId = (article: ArticleWithJudgments) => {
   return trimmed ? trimmed : null
 }
 
+const getArticleTitleHtml = (title?: string | null) => {
+  const trimmed = (title ?? '').trim()
+
+  return trimmed ? decodeAndSanitize(trimmed, {convertNewlines: false}) : 'Untitled'
+}
+
 const selectionColumn: ColumnDef<ArticleWithJudgments, unknown> = {
   id: 'select',
   header: () => {
@@ -272,6 +279,8 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     minSize: 200,
     maxSize: 600,
     cell: (info) => {
+      const titleHtml = getArticleTitleHtml(info.getValue() as string | null)
+
       return (
         <div>
           <Link
@@ -279,7 +288,8 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
             params={{id: info.table.options.meta?.projectId?.() || '', articleId: info.row.original.id}}
             class="text-blue-600 hover:underline"
           >
-            {(info.getValue() as string) || 'Untitled'}
+            {/* eslint-disable-next-line solid/no-innerhtml */}
+            <span innerHTML={titleHtml} />
           </Link>
           <ReviewsCovidenceBadges sourceMetadata={info.row.original.sourceMetadata} />
         </div>

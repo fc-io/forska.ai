@@ -84,4 +84,24 @@ describe('ReviewsArticlesTable', () => {
       container.remove()
     }
   })
+
+  test('decodes sanitized article title markup in review list links', () => {
+    const {container, dispose} = renderTable([
+      getArticle({
+        articleTitle:
+          'Draft genome sequence of &lt;i&gt;Stutzerimonas degradans&lt;/i&gt; strain RB, a bacterium capable of complete denitrification.',
+      }),
+    ])
+
+    try {
+      const link = container.querySelector('a')
+
+      expect(link?.textContent).toContain('Draft genome sequence of Stutzerimonas degradans strain RB')
+      expect(link?.textContent).not.toContain('<i>')
+      expect(link?.querySelector('i')?.textContent).toBe('Stutzerimonas degradans')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })
