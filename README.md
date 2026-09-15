@@ -27,13 +27,9 @@ cd forska.ai
 bun install
 ```
 
-The current stable version is the latest commit on `main`:
+The current stable version tracks the latest commit on `main`.
 
-```text
-e2a51b92d450301e84963f4818d3e870c339d484
-```
-
-Clone the stable version from `main`:
+Clone the stable version:
 
 ```bash
 git clone --branch main https://github.com/fc-io/forska.ai.git
