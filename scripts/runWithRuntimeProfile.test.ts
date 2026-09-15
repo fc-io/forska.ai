@@ -353,6 +353,12 @@ const getPrimaryRuntimeLogDir = () => {
   return getRuntimeLogConfig({envValues: {...process.env, FORSKA_RUNTIME_PROFILE: 'primary'}}).logDir
 }
 
+const getPrimaryChildRuntimeLogDir = (pid: number) => {
+  const testLogRoot = process.env.FORSKA_TEST_LOG_ROOT?.trim() || tmpdir()
+
+  return join(testLogRoot, 'forska-runtime-logs', String(pid), 'primary')
+}
+
 const getRuntimeLogPaths = (logDir: string) => {
   if (!existsSync(logDir)) {
     return []
@@ -2480,11 +2486,18 @@ realDevServerSmokeTest(
         }),
       ])
 
+      const {pids: progressProbePids} = await getReadyRuntimePidsUntil([3001, 3002, 3003], Date.now() + 20_000)
+      const progressProbeLogDir = getPrimaryChildRuntimeLogDir(progressProbePids[1])
+      const progressProbeLogSnapshot = getRuntimeLogSnapshot(progressProbeLogDir)
+
       await Promise.race([
         (async () => {
           let progressProbeDone = false
           await Promise.all([
-            expectCurrentDbReviewServingQueuedWorkProgresses(3001).finally(() => {
+            expectCurrentDbReviewServingQueuedWorkProgresses(3001, {
+              logDir: progressProbeLogDir,
+              logSnapshot: progressProbeLogSnapshot,
+            }).finally(() => {
               progressProbeDone = true
             }),
             expectReviewServingWarningRouteRemainsResponsive({

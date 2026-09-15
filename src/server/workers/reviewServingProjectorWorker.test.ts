@@ -33,16 +33,19 @@ const readWorkerSource = () => {
   return readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8').replaceAll('\r\n', '\n')
 }
 
+type TestTransaction = <T>(
+  operation: (tx: {
+    queryJson: <T>(statement: string) => Promise<T[]>
+    run: (statement: string) => Promise<void>
+  }) => Promise<T>,
+  workloadContext?: DuckdbWorkloadContext,
+) => Promise<T>
+
 type TestDatabase = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
   run: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
-  transaction: <T>(
-    operation: (tx: {
-      queryJson: <T>(statement: string) => Promise<T[]>
-      run: (statement: string) => Promise<void>
-    }) => Promise<T>,
-    workloadContext?: DuckdbWorkloadContext,
-  ) => Promise<T>
+  transaction: TestTransaction
+  transactionBackground?: TestTransaction
 }
 
 type DeltaIntakeParams = Parameters<
@@ -321,6 +324,40 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
     fallbackIntent: 'reject',
     workloadClass: 'reviewProjector',
   })
+})
+
+test('worker routes rebuild chunk executor transactions through background priority when available', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const transactionModes: string[] = []
+
+  harness.database.transactionBackground = async (operation, workloadContext) => {
+    transactionModes.push('background')
+
+    if (workloadContext) {
+      harness.workloadContexts.push(workloadContext)
+    }
+
+    return operation(harness.database)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    runClaimedChunk: async ({database}) => {
+      await database.transaction(async (tx) => {
+        await tx.run('SELECT chunk write')
+      })
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 1, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: chunkManifest.chunkId, status: 'completed'})
+  expect(transactionModes).toEqual(['background'])
+  expect(harness.runStatements).toContain('SELECT chunk write')
 })
 
 test('worker publishes judgment visibility before selecting rebuild chunks', async () => {
@@ -8604,13 +8641,16 @@ test('worker splits already-admitted oversized high-fanout chunks before executi
       return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
     })
     const expectedBucketCount =
-      component === 'humanStatus' || component === 'llmStatus' || component === 'summary'
+      component === 'humanStatus'
+      || component === 'llmStatus'
+      || component === 'selectedImport'
+      || component === 'summary'
         ? 485
         : component === 'payload'
-        ? 25
-        : component === 'queue' || component === 'selectedImport'
-          ? 50
-          : 64
+          ? 25
+          : component === 'queue'
+            ? 50
+            : 64
 
     expect(result.chunk).toMatchObject({chunkId: oversizedChunk.chunkId, status: 'completed'})
     expect(prepared).toBe(false)

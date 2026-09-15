@@ -137,6 +137,7 @@ import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']> & {
   queryJsonBackground?: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  transactionBackground?: ReviewServingChunkManifestRepositoryDatabase['transaction']
 }
 
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
@@ -666,6 +667,7 @@ const canSplitRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
 
 const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
 const highFanoutArticleRangeRebuildChunkPresplitRowLimit = 5_000
+const selectedImportArticleRangeRebuildChunkPresplitRowLimit = 512
 const summaryArticleRangeRebuildChunkPresplitRowLimit = 512
 const statusArticleRangeRebuildChunkPresplitRowLimit = 512
 // Live evidence showed 512-row title-search ranges can hold DuckDB main writes for 20s+.
@@ -681,7 +683,7 @@ const admittedOversizedRebuildChunkInputRowLimits: Partial<Record<ReviewServingP
   posting: 512,
   queue: highFanoutArticleRangeRebuildChunkPresplitRowLimit,
   search: searchArticleRangeRebuildRuntimeRowLimit,
-  selectedImport: highFanoutArticleRangeRebuildChunkPresplitRowLimit,
+  selectedImport: selectedImportArticleRangeRebuildChunkPresplitRowLimit,
   summary: 512,
 }
 const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
@@ -787,6 +789,10 @@ const getRequestlessBootstrapRebuildRequestId = (chunk: ReviewServingRebuildChun
 }
 
 const getArticleRangeRebuildChunkPresplitRowLimit = (chunk: ReviewServingRebuildChunkManifest) => {
+  if (chunk.projectionComponent === 'selectedImport') {
+    return selectedImportArticleRangeRebuildChunkPresplitRowLimit
+  }
+
   if (chunk.projectionComponent === 'summary') {
     return summaryArticleRangeRebuildChunkPresplitRowLimit
   }
@@ -839,13 +845,15 @@ const getArticleRangeRebuildChunkSplitBucketCount = (
       : undefined
   const presplitRowLimit = admittedOversizedInputRowLimit ?? getArticleRangeRebuildChunkPresplitRowLimit(chunk)
   const maxBucketCount =
-    chunk.projectionComponent === 'summary'
+    chunk.projectionComponent === 'selectedImport'
       ? summaryArticleRangeRebuildChunkPresplitMaxBucketCount
-      : statusArticleRangeRebuildComponents.has(chunk.projectionComponent)
-        ? statusArticleRangeRebuildChunkPresplitMaxBucketCount
-        : highFanoutArticleRangeRebuildComponents.has(chunk.projectionComponent)
-          ? highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount
-          : articleRangeRebuildChunkPresplitMaxBucketCount
+      : chunk.projectionComponent === 'summary'
+        ? summaryArticleRangeRebuildChunkPresplitMaxBucketCount
+        : statusArticleRangeRebuildComponents.has(chunk.projectionComponent)
+          ? statusArticleRangeRebuildChunkPresplitMaxBucketCount
+          : highFanoutArticleRangeRebuildComponents.has(chunk.projectionComponent)
+            ? highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount
+            : articleRangeRebuildChunkPresplitMaxBucketCount
 
   if (estimatedRows === null) {
     return 2
@@ -1004,6 +1012,14 @@ const getChunkProjectorDatabase = (
             return operation(database)
           },
   } as ReviewServingProjectorWorkerDatabase
+}
+
+const getRebuildChunkExecutionDatabase = (
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  return database.transactionBackground === undefined
+    ? database
+    : {...database, transaction: database.transactionBackground.bind(database)}
 }
 
 const getRebuildChunkSnapshots = async (
@@ -4449,50 +4465,51 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
   const effectiveInput = isRequestlessSummaryRangeRebuildChunk(input.chunk)
     ? {...input, chunk: await adoptRequestlessRebuildChunk(input, database)}
     : input
+  const executionDatabase = getRebuildChunkExecutionDatabase(database)
 
   try {
     if (effectiveInput.chunk.projectionComponent === 'projectScope') {
-      return await runProjectScopeRebuildChunk(effectiveInput, database)
+      return await runProjectScopeRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'selectedImport') {
-      return await runSelectedImportRebuildChunk(effectiveInput, database)
+      return await runSelectedImportRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'display') {
-      return await runDisplayRebuildChunk(effectiveInput, database)
+      return await runDisplayRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'payload') {
-      return await runPayloadRebuildChunk(effectiveInput, database)
+      return await runPayloadRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'search') {
-      return await runSearchRebuildChunk(effectiveInput, database)
+      return await runSearchRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'llmStatus') {
-      return await runLlmStatusRebuildChunk(effectiveInput, database)
+      return await runLlmStatusRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'humanStatus') {
-      return await runHumanStatusRebuildChunk(effectiveInput, database)
+      return await runHumanStatusRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'queue') {
-      return await runQueueRebuildChunk(effectiveInput, database)
+      return await runQueueRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'posting') {
-      return await runPostingRebuildChunk(effectiveInput, database)
+      return await runPostingRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'summary') {
-      return await runSummaryRebuildChunk(effectiveInput, database)
+      return await runSummaryRebuildChunk(effectiveInput, executionDatabase)
     }
 
     if (effectiveInput.chunk.projectionComponent === 'judgmentInputContent') {
-      return await runJudgmentInputContentRebuildChunk(effectiveInput, database)
+      return await runJudgmentInputContentRebuildChunk(effectiveInput, executionDatabase)
     }
   } catch (error) {
     const split =
@@ -7611,6 +7628,7 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
     workerId,
   })
   let effectiveClaimedChunk = claimedChunk
+  const executionDatabase = getRebuildChunkExecutionDatabase(database)
 
   try {
     await measureReviewServingProjectorWorkerPhase(timings, 'heartbeatMs', async () => {
@@ -7636,13 +7654,13 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
       await measureReviewServingProjectorWorkerPhase(timings, 'executeMs', async () => {
         const preparedOutput = await service.prepareClaimedChunk?.({
           chunk: effectiveClaimedChunk,
-          database,
+          database: executionDatabase,
           leaseOwner: workerId,
           workloadContext,
         })
         await service.runClaimedChunk({
           chunk: effectiveClaimedChunk,
-          database,
+          database: executionDatabase,
           leaseOwner: workerId,
           preparedOutput,
           workloadContext,
@@ -8128,6 +8146,8 @@ const prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input
   workloadContext: DuckdbWorkloadContext
   workerId: string
 }) => {
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
+
   await heartbeatClaimedRebuildChunkBatchLeases(input)
   const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
@@ -8137,7 +8157,7 @@ const prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input
         return measureReviewServingProjectorWorkerPhase(claimed.timings, 'prepareMs', async () => {
           return claimed.service.prepareClaimedChunk?.({
             chunk: claimed.chunk,
-            database: input.database,
+            database: executionDatabase,
             leaseOwner: input.workerId,
             workloadContext: input.workloadContext,
           })
@@ -8156,10 +8176,12 @@ const runPreparedClaimedReviewServingProjectorWorkerRebuildChunk = async (input:
   workloadContext: DuckdbWorkloadContext
   workerId: string
 }) => {
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
+
   return measureReviewServingProjectorWorkerPhase(input.claimed.timings, 'executeMs', async () => {
     await input.claimed.service.runClaimedChunk({
       chunk: input.claimed.chunk,
-      database: input.database,
+      database: executionDatabase,
       leaseOwner: input.workerId,
       preparedOutput: input.preparedOutput,
       workloadContext: input.workloadContext,
@@ -8190,13 +8212,14 @@ const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (inpu
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runProjectScopeRebuildChunkBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
     const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
     try {
-      batchResults = await runProjectScopeRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+      batchResults = await runProjectScopeRebuildChunkBatch({chunks, leaseOwner: input.workerId}, executionDatabase)
     } finally {
       stopHeartbeat()
     }
@@ -8263,13 +8286,14 @@ const runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch = async (in
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runSelectedImportRebuildChunkBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
     const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
     try {
-      batchResults = await runSelectedImportRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+      batchResults = await runSelectedImportRebuildChunkBatch({chunks, leaseOwner: input.workerId}, executionDatabase)
     } finally {
       stopHeartbeat()
     }
@@ -8336,13 +8360,14 @@ const runDisplayReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runDisplayRebuildChunkBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
     const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
     try {
-      batchResults = await runDisplayRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+      batchResults = await runDisplayRebuildChunkBatch({chunks, leaseOwner: input.workerId}, executionDatabase)
     } finally {
       stopHeartbeat()
     }
@@ -8409,13 +8434,14 @@ const runPayloadReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runPayloadRebuildChunkBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
     const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
     try {
-      batchResults = await runPayloadRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+      batchResults = await runPayloadRebuildChunkBatch({chunks, leaseOwner: input.workerId}, executionDatabase)
     } finally {
       stopHeartbeat()
     }
@@ -8482,13 +8508,14 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runSearchRebuildChunkBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
     const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
     try {
-      batchResults = await runSearchRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+      batchResults = await runSearchRebuildChunkBatch({chunks, leaseOwner: input.workerId}, executionDatabase)
     } finally {
       stopHeartbeat()
     }
@@ -8555,13 +8582,14 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runQueueRebuildChunkBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
     const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
     try {
-      batchResults = await runQueueRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+      batchResults = await runQueueRebuildChunkBatch({chunks, leaseOwner: input.workerId}, executionDatabase)
     } finally {
       stopHeartbeat()
     }
@@ -8628,6 +8656,7 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runJudgmentInputContentRebuildChunkBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
@@ -8636,7 +8665,7 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
     try {
       batchResults = await runJudgmentInputContentRebuildChunkBatch(
         {chunks, leaseOwner: input.workerId},
-        input.database,
+        executionDatabase,
       )
     } finally {
       stopHeartbeat()
@@ -8710,13 +8739,14 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
   let batchResults: Awaited<ReturnType<typeof runBatch>>
+  const executionDatabase = getRebuildChunkExecutionDatabase(input.database)
 
   try {
     await heartbeatClaimedRebuildChunkBatchLeases(input)
     const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
 
     try {
-      batchResults = await runBatch({chunks, leaseOwner: input.workerId}, input.database)
+      batchResults = await runBatch({chunks, leaseOwner: input.workerId}, executionDatabase)
     } finally {
       stopHeartbeat()
     }

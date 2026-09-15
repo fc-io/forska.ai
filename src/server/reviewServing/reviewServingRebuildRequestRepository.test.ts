@@ -2150,7 +2150,7 @@ test('summary-only default rebuilds presplit into non-overlapping bounded chunks
   expect(joined).toContain('"component":"summary"')
 })
 
-test('selected-import-only default rebuilds avoid admission presplit boundary overlap', async () => {
+test('selected-import-only default rebuilds admission-presplit with bounded article ranges', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {
       optional: [],
@@ -2214,9 +2214,13 @@ test('selected-import-only default rebuilds avoid admission presplit boundary ov
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'selectedImport'")
   })
 
-  expect(joined).not.toContain('NTILE(')
-  expect(selectedImportChunkInserts).toHaveLength(2)
-  expect(joined).not.toContain('"admissionPresplit":true')
+  expect(joined).toContain('NTILE(196)')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
+  expect(selectedImportChunkInserts).toHaveLength(8)
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"component":"selectedImport"')
+  expect(joined).toContain('"inputRowLimit":512')
+  expect(joined).toContain('"maxAdmissionSplitCount":512')
 })
 
 test('default rebuild request keeps same projection identity across base generations', async () => {

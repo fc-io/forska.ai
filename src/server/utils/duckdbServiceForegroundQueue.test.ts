@@ -129,6 +129,35 @@ test('a short foreground burst wakes all observers only after the whole real que
   expectNoWaiters()
 })
 
+test('foreground work preempts a queued background transaction after the active foreground drains', async () => {
+  const held = await holdForegroundTransaction()
+  const events: string[] = []
+  const background = service.runDuckdbBackgroundTransaction(async (runner) => {
+    await runner.queryJson('SELECT 5 AS value')
+    events.push('background')
+
+    return 'background'
+  }, workloadContext)
+  const foreground = service.runDuckdbJsonQuery('SELECT 6 AS value', workloadContext).then((rows) => {
+    events.push('foreground')
+
+    return rows
+  })
+
+  try {
+    await Promise.resolve()
+    await Promise.resolve()
+    held.release()
+    expect(await foreground).toEqual([{value: 6}])
+    expect(events).toEqual(['foreground'])
+    expect(await background).toBe('background')
+  } finally {
+    held.release()
+  }
+
+  expect(events).toEqual(['foreground', 'background'])
+})
+
 test('sustained foreground work times out without interrupting or dropping the query', async () => {
   const held = await holdForegroundTransaction()
   try {

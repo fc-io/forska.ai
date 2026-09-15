@@ -762,6 +762,62 @@ test('wake routes high-fanout LLM status dirty work through chunked rebuilds ins
   expect(releasedClaimIds).toEqual([])
 })
 
+test('wake routes high-fanout selected import dirty work through chunked rebuilds instead of direct projection', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    selectedImport: [
+      getClaim({
+        articleId: null,
+        component: 'selectedImport',
+        dirtyWorkId: 'selected-import-project-1',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
+  let runnerCalled = false
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    selectedImport: async () => {
+      runnerCalled = true
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['selectedImport'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'selectedImport', processedCount: 0, status: 'completed'},
+  ])
+  expect(runnerCalled).toBe(false)
+  expect(rebuildRequests).toEqual([
+    {components: ['selectedImport'], priority: 10_000, projectId: 'project-1', reason: 'selectedImportDirtyWork'},
+  ])
+  expect(completedClaimIds).toEqual(['selected-import-project-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
 test('wake keeps article-scoped human status dirty work on the direct patch path', async () => {
   const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     humanStatus: [getClaim({component: 'humanStatus', dirtyWorkId: 'human-status-article-1'})],
@@ -787,6 +843,38 @@ test('wake keeps article-scoped human status dirty work on the direct patch path
   expect(result.status).toBe('completed')
   expect(result.runs).toEqual([
     {attempts: 1, claimCount: 1, component: 'humanStatus', processedCount: 1, status: 'completed'},
+  ])
+  expect(rebuildRequests).toEqual([])
+  expect(completedClaimIds).toEqual([])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake keeps article-scoped selected import dirty work on the direct patch path', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    selectedImport: [getClaim({component: 'selectedImport', dirtyWorkId: 'selected-import-article-1'})],
+  })
+  const rebuildRequests: Array<{projectId: string; reason: string}> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({projectId: input.projectId, reason: input.reason})
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    selectedImport: async () => {
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['selectedImport'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'selectedImport', processedCount: 1, status: 'completed'},
   ])
   expect(rebuildRequests).toEqual([])
   expect(completedClaimIds).toEqual([])

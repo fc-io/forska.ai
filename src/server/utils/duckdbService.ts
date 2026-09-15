@@ -133,6 +133,7 @@ export type DuckdbWorkloadOperation =
   | 'appendQuery'
   | 'backgroundQuery'
   | 'backgroundStatement'
+  | 'backgroundTransaction'
   | 'externalQuery'
   | 'mainQuery'
   | 'mainStatement'
@@ -7691,6 +7692,50 @@ export const runDuckdbTransaction = async <T>(
                 throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
               }
             })
+          })
+        })
+      })
+    },
+  })
+}
+
+export const runDuckdbBackgroundTransaction = async <T>(
+  work: (runner: DuckdbTransactionRunner) => Promise<T>,
+  workloadContext?: DuckdbWorkloadContext,
+): Promise<T> => {
+  return withDuckdbWorkloadContext({
+    context: workloadContext,
+    getResultMetrics: getDuckdbUnknownWorkloadResultMetrics,
+    operation: 'backgroundTransaction',
+    queue: 'main',
+    queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
+    work: async () => {
+      await waitForDuckdbAppendBarrier()
+      await Promise.resolve()
+
+      return withNormalizedDuckdbError(() => {
+        return enqueueDuckdbSerializedBackgroundWork(async () => {
+          return withDuckdbAppendBarrier(async () => {
+            await ensureStartedDuckdbProcess()
+            await runDuckdbStatementDirect('BEGIN TRANSACTION')
+
+            try {
+              const result = await work({
+                queryJson: async <T>(statement: string) => {
+                  return runDuckdbJsonQueryDirect<T>(statement)
+                },
+                run: async (statement: string) => {
+                  await runDuckdbStatementDirect(statement)
+                },
+              })
+
+              await runDuckdbStatementDirect('COMMIT')
+              return result
+            } catch (error) {
+              const rollbackError = await getDuckdbRollbackError()
+
+              throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
+            }
           })
         })
       })

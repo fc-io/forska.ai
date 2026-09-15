@@ -99,6 +99,7 @@ const highFanoutDirtyWorkRebuildComponents = new Set<ReviewServingProjectionComp
   'payload',
   'posting',
   'queue',
+  'selectedImport',
   'summary',
 ])
 

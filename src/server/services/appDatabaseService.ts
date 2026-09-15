@@ -13,6 +13,7 @@ import {
   runDuckdbAppendTransaction,
   runDuckdbBackgroundJsonQuery,
   runDuckdbBackgroundStatement,
+  runDuckdbBackgroundTransaction,
   runDuckdbJsonQuery,
   runDuckdbMaintenance,
   runDuckdbStatement,
@@ -259,6 +260,14 @@ const appDatabaseService = {
   ) => {
     return withDuckdbOwnerWriteTracking('transaction', () => {
       return runDuckdbTransaction(operation, workloadContext)
+    })
+  },
+  transactionBackground: async <T>(
+    operation: (runner: DuckdbTransactionRunner) => Promise<T>,
+    workloadContext?: DuckdbWorkloadContext,
+  ) => {
+    return withDuckdbOwnerWriteTracking('transactionBackground', () => {
+      return runDuckdbBackgroundTransaction(operation, workloadContext)
     })
   },
 }

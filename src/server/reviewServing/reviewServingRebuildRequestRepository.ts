@@ -373,11 +373,11 @@ const getDefaultRebuildArticleBounds = async (
 }
 
 const defaultRebuildMaxAdmissionSplitCount = 64
+const selectedImportDefaultRebuildMaxAdmissionSplitCount = 512
 const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjectionComponent>([
   'display',
   'judgmentInputContent',
   'projectScope',
-  'selectedImport',
 ])
 const defaultRebuildNativeHeavyComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
 const defaultRebuildCoalescingCandidateComponents = new Set<ReviewServingProjectionComponent>([
@@ -397,7 +397,7 @@ const defaultRebuildPresplitInputRowLimits = {
   projectScope: 50_000,
   queue: 5_000,
   search: 50_000,
-  selectedImport: 25_000,
+  selectedImport: 512,
   summary: 512,
 } as const satisfies Record<ReviewServingProjectionComponent, number>
 
@@ -495,13 +495,17 @@ const getDefaultRebuildPresplitBucketCount = (input: {
 }) => {
   const estimatedInputRows = input.estimate?.estimatedInputRows
   const inputRowLimit = defaultRebuildPresplitInputRowLimits[input.component]
+  const maxAdmissionSplitCount =
+    input.component === 'selectedImport'
+      ? selectedImportDefaultRebuildMaxAdmissionSplitCount
+      : defaultRebuildMaxAdmissionSplitCount
 
   return (input.requestedComponents.length === 1 || defaultRebuildNativeHeavyComponents.has(input.component))
     && !defaultRebuildNonPresplittableComponents.has(input.component)
     && estimatedInputRows !== null
     && estimatedInputRows !== undefined
     && estimatedInputRows > inputRowLimit
-    ? Math.min(defaultRebuildMaxAdmissionSplitCount, Math.max(2, Math.ceil(estimatedInputRows / inputRowLimit)))
+    ? Math.min(maxAdmissionSplitCount, Math.max(2, Math.ceil(estimatedInputRows / inputRowLimit)))
     : 1
 }
 
@@ -520,7 +524,10 @@ const getDefaultRebuildChunkPlanningDiagnostics = (input: {
           component: input.component,
           estimatedInputRows: input.estimate?.estimatedInputRows ?? null,
           inputRowLimit: defaultRebuildPresplitInputRowLimits[input.component],
-          maxAdmissionSplitCount: defaultRebuildMaxAdmissionSplitCount,
+          maxAdmissionSplitCount:
+            input.component === 'selectedImport'
+              ? selectedImportDefaultRebuildMaxAdmissionSplitCount
+              : defaultRebuildMaxAdmissionSplitCount,
           requestedComponentCount: input.requestedComponents.length,
         },
         admissionPresplit: true,
