@@ -171,6 +171,7 @@ type DeltaIntakePartitionRow = {
 }
 
 type DeltaIntakePartitionSampleRow = {sourceHighWaterMark: number; sourcePartition: string}
+type JobDrivenLlmStatusDirtyWorkPendingRow = {pendingCount: number}
 
 type ReviewServingProjectorWorkerRebuildChunkService = {
   claimChunk: typeof claimReviewServingRebuildChunk
@@ -6571,6 +6572,39 @@ const getBlockedReviewServingProjectorWakeResult = (): WakeReviewServingProjecto
   return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
 }
 
+const combineReviewServingProjectorWakeResults = (
+  first: WakeReviewServingProjectorServiceResult | null,
+  second: WakeReviewServingProjectorServiceResult,
+): WakeReviewServingProjectorServiceResult => {
+  if (first === null || first.status === 'blocked') {
+    return second
+  }
+
+  if (second.status === 'blocked') {
+    return first
+  }
+
+  const failureCount = first.failures.length + second.failures.length
+  const releasedCount = first.releasedClaimIds.length + second.releasedClaimIds.length
+  const runCount = first.runs.length + second.runs.length
+  const status =
+    failureCount > 0
+      ? 'failed'
+      : releasedCount > 0 || first.status === 'partial' || second.status === 'partial'
+        ? 'partial'
+        : runCount > 0 || first.status === 'completed' || second.status === 'completed'
+          ? 'completed'
+          : 'blocked'
+
+  return {
+    failures: [...first.failures, ...second.failures],
+    promotions: [...first.promotions, ...second.promotions],
+    releasedClaimIds: [...first.releasedClaimIds, ...second.releasedClaimIds],
+    runs: [...first.runs, ...second.runs],
+    status,
+  }
+}
+
 const hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker = (
   dependencies: ReviewServingProjectorWorkerDependencies,
 ) => {
@@ -9203,6 +9237,27 @@ const getDeltaIntakePartitions = async (
   })
 }
 
+const getHasPendingJobDrivenLlmStatusDirtyWork = async (input: {
+  database: ReviewServingProjectorWorkerDatabase
+  projectId?: string | null
+}) => {
+  const projectPredicate = input.projectId ? `AND state.project_id = ${getSqlLiteral(input.projectId)}` : ''
+  const [row] = await input.database.queryJson<JobDrivenLlmStatusDirtyWorkPendingRow>(`
+    SELECT 1 AS pendingCount
+    FROM app.review_serving_dirty_work_claim_state state
+    INNER JOIN app.judgment_job job
+      ON state.source_partition = 'judgmentSqliteOutboxImport:' || job.id
+      AND state.project_id = job.project_id
+    WHERE state.projection_component = 'llmStatus'
+      AND state.status = 'pending'
+      AND job.storage_state IN ('active', 'draining')
+      ${projectPredicate}
+    LIMIT 1
+  `)
+
+  return Number(row?.pendingCount ?? 0) > 0
+}
+
 const runReviewServingProjectorWorkerDeltaIntake = async ({
   database,
   dependencies,
@@ -9264,6 +9319,61 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
     },
     Promise.resolve(reviewChangeResults),
   )
+}
+
+const getWorkerProjectorServiceDependencies = (input: {
+  admissionDeadlineMs: number
+  database: ReviewServingProjectorWorkerDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  return {
+    getQueueState: async () => {
+      const blocked = await shouldYieldReviewServingProjectorAdmission(
+        input.dependencies,
+        input.options,
+        input.admissionDeadlineMs,
+      )
+      const foregroundDuckdbQueueDepth = input.dependencies.getForegroundQueueDepth?.() ?? 0
+
+      return {blocked, foregroundDuckdbQueueDepth}
+    },
+    runners: getLoggedReviewServingProjectorRunners(input.database),
+    ...(input.dependencies.projectorServiceDependencies ?? {}),
+    database: input.database,
+    nowMs: () => {
+      return getWorkerNowMs(input.dependencies, input.options)
+    },
+  }
+}
+
+const runJobDrivenLlmStatusDirtyWorkBeforeBacklog = async (input: {
+  admissionDeadlineMs: number
+  database: ReviewServingProjectorWorkerDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  projectorServiceDependencies: ReviewServingProjectorServiceDependencies
+  wakeId: string
+}) => {
+  const hasPendingLlmStatusWork = await getHasPendingJobDrivenLlmStatusDirtyWork({
+    database: input.database,
+    projectId: input.options.rebuildProjectId,
+  })
+
+  if (!hasPendingLlmStatusWork) {
+    return null
+  }
+
+  const projector = await input.dependencies.wakeProjectors(
+    {
+      ...getWakeInput({dependencies: input.dependencies, options: input.options, wakeId: input.wakeId}),
+      componentOrder: ['llmStatus'],
+      maxWakeMs: Math.max(0, input.admissionDeadlineMs - getWorkerNowMs(input.dependencies, input.options)),
+    },
+    input.projectorServiceDependencies,
+  )
+
+  return projector.status === 'blocked' ? null : projector
 }
 
 export const runReviewServingProjectorWorkerCycle = async (
@@ -9338,6 +9448,26 @@ export const runReviewServingProjectorWorkerCycle = async (
         })
     })
   })
+  const projectorServiceDependencies = getWorkerProjectorServiceDependencies({
+    admissionDeadlineMs,
+    database,
+    dependencies,
+    options,
+  })
+  const jobDrivenLlmStatusProjector =
+    terminalFailedChunk === null
+      ? await runReviewServingProjectorWorkerCyclePhase('wakeJobDrivenLlmStatusDirtyWork', () => {
+          return runJobDrivenLlmStatusDirtyWorkBeforeBacklog({
+            admissionDeadlineMs,
+            database,
+            dependencies,
+            options,
+            projectorServiceDependencies,
+            wakeId,
+          })
+        })
+      : null
+
   const chunkBatch =
     terminalFailedChunk === null
       ? await runReviewServingProjectorWorkerRebuildChunkBatch({
@@ -9380,17 +9510,7 @@ export const runReviewServingProjectorWorkerCycle = async (
     : await runReviewServingProjectorWorkerCyclePhase('retentionCleanup', () => {
         return runReviewServingProjectorWorkerCleanup({database, dependencies, options})
       })
-  const projectorServiceDependencies = {
-    getQueueState: async () => {
-      const blocked = await shouldYieldReviewServingProjectorAdmission(dependencies, options, admissionDeadlineMs)
-      const foregroundDuckdbQueueDepth = dependencies.getForegroundQueueDepth?.() ?? 0
-
-      return {blocked, foregroundDuckdbQueueDepth}
-    },
-    runners: getLoggedReviewServingProjectorRunners(database),
-    ...(dependencies.projectorServiceDependencies ?? {}),
-  }
-  const projector = shouldRunOnlyRebuildChunk
+  const backlogProjector = shouldRunOnlyRebuildChunk
     ? getBlockedReviewServingProjectorWakeResult()
     : await runReviewServingProjectorWorkerCyclePhase('wakeProjectors', () => {
         return dependencies.wakeProjectors(
@@ -9401,15 +9521,10 @@ export const runReviewServingProjectorWorkerCycle = async (
               : undefined,
             maxWakeMs: Math.max(0, admissionDeadlineMs - getWorkerNowMs(dependencies, options)),
           },
-          {
-            ...projectorServiceDependencies,
-            database,
-            nowMs: () => {
-              return getWorkerNowMs(dependencies, options)
-            },
-          },
+          projectorServiceDependencies,
         )
       })
+  const projector = combineReviewServingProjectorWakeResults(jobDrivenLlmStatusProjector, backlogProjector)
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
 

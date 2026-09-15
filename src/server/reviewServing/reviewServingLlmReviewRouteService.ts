@@ -358,6 +358,13 @@ const getCountValue = async (
   return getFilteredCountValue(params, manifest, dependencies)
 }
 
+const shouldCountDirectServingState = (input: {
+  promptAnswerPostingFilterGroups: readonly ReviewServingDynamicCountPostingFilterGroup[]
+  searchTokenPrefixes: readonly string[]
+}) => {
+  return input.promptAnswerPostingFilterGroups.length === 0 && input.searchTokenPrefixes.length === 0
+}
+
 const getFilteredCountValue = async (
   params: ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -383,56 +390,62 @@ const getFilteredCountValue = async (
     identityComponents.push('search')
   }
 
+  const computeCount = async () => {
+    const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
+      return group.filterValues
+    })
+    let useCanonicalPromptAnswerPostings = false
+
+    if (promptAnswerFilterValues.length > 0) {
+      try {
+        await ensureReviewServingLazyPromptAnswerPostingBuckets({
+          database,
+          filterValues: promptAnswerFilterValues,
+          listModeKey: 'llm',
+          projectId: params.projectId,
+          reviewConfigHash: manifest.reviewConfigHash,
+          snapshotId: manifest.snapshotId,
+        })
+      } catch (_error) {
+        useCanonicalPromptAnswerPostings = true
+      }
+    }
+
+    const [row] = await database.queryJson<{totalCount: number}>(`
+      ${getReviewServingDynamicFilteredCountSql({
+        listModeKey: 'llm',
+        postingFilterGroups: [
+          ...promptAnswerPostingFilterGroups,
+          ...getFlagPostingFilterGroups(filters),
+          ...getStatusPostingFilterGroups(filters),
+        ],
+        projectId: params.projectId,
+        projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
+        reviewConfigHash: manifest.reviewConfigHash,
+        requireLlmJudgment: filters.llmHasJudgment,
+        searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
+        searchTokenPrefixes,
+        servingPredicates: [
+          filters.articleCreatedAtFrom
+            ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
+            : '',
+          getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
+        ],
+        snapshotId: manifest.snapshotId,
+        useCanonicalPromptAnswerPostings,
+      })}
+    `)
+
+    return Number(row?.totalCount ?? 0)
+  }
+
+  if (shouldCountDirectServingState({promptAnswerPostingFilterGroups, searchTokenPrefixes})) {
+    return computeCount()
+  }
+
   return getReviewServingFilteredCountValue({
     ...getReviewServingFilteredCountComponentIdentities(manifest, identityComponents),
-    computeCount: async () => {
-      const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
-        return group.filterValues
-      })
-      let useCanonicalPromptAnswerPostings = false
-
-      if (promptAnswerFilterValues.length > 0) {
-        try {
-          await ensureReviewServingLazyPromptAnswerPostingBuckets({
-            database,
-            filterValues: promptAnswerFilterValues,
-            listModeKey: 'llm',
-            projectId: params.projectId,
-            reviewConfigHash: manifest.reviewConfigHash,
-            snapshotId: manifest.snapshotId,
-          })
-        } catch (_error) {
-          useCanonicalPromptAnswerPostings = true
-        }
-      }
-
-      const [row] = await database.queryJson<{totalCount: number}>(`
-        ${getReviewServingDynamicFilteredCountSql({
-          listModeKey: 'llm',
-          postingFilterGroups: [
-            ...promptAnswerPostingFilterGroups,
-            ...getFlagPostingFilterGroups(filters),
-            ...getStatusPostingFilterGroups(filters),
-          ],
-          projectId: params.projectId,
-          projectScopeIdentity: getManifestComponentIdentity(manifest, 'projectScope') ?? '',
-          reviewConfigHash: manifest.reviewConfigHash,
-          requireLlmJudgment: filters.llmHasJudgment,
-          searchIdentity: getManifestComponentIdentity(manifest, 'search') ?? '',
-          searchTokenPrefixes,
-          servingPredicates: [
-            filters.articleCreatedAtFrom
-              ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}`
-              : '',
-            getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo),
-          ],
-          snapshotId: manifest.snapshotId,
-          useCanonicalPromptAnswerPostings,
-        })}
-      `)
-
-      return Number(row?.totalCount ?? 0)
-    },
+    computeCount,
     database,
     filterSignature: getReviewServingFilteredCountSignature({filters, searchTokenPrefixes}),
     listModeKey: 'llm',

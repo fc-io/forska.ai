@@ -192,6 +192,11 @@ test('LLM deletes update serving directly without rebuilding unrelated component
   const joined = statements.join('\n')
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).toContain("'llmStatus'")
+  expect(joined).toContain('UPDATE app.review_serving_component_revision revision')
+  expect(joined).toContain('INSERT INTO app.review_serving_component_revision')
+  expect(joined).toContain(
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'llmStatus:identity-1'",
+  )
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).not.toContain("'selectedImport'")

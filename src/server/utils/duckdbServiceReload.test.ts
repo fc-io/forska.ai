@@ -6137,12 +6137,8 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
       '0233_rebuildJudgmentProviderTelemetrySampleWithoutIndexes.sql',
     )
     expect(providerTelemetryProbe?.repairDedupeOrderSql).toContain('created_at ASC')
-    expect(providerTelemetryProbe?.mutationProbeSql).toContain(
-      'startup_probe_judgment_job_provider_telemetry_sample',
-    )
-    expect(providerTelemetryProbe?.mutationProbeSql).toContain(
-      'DELETE FROM app.judgment_job_provider_telemetry_sample',
-    )
+    expect(providerTelemetryProbe?.mutationProbeSql).toContain('startup_probe_judgment_job_provider_telemetry_sample')
+    expect(providerTelemetryProbe?.mutationProbeSql).toContain('DELETE FROM app.judgment_job_provider_telemetry_sample')
     expect(providerTelemetryProbe?.mutationProbeSql).toContain(
       'INSERT INTO app.judgment_job_provider_telemetry_sample BY NAME',
     )

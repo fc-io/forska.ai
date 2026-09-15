@@ -1,5 +1,6 @@
-import {existsSync, readdirSync, readFileSync, unlinkSync} from 'node:fs'
-import {resolve} from 'node:path'
+import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join, resolve} from 'node:path'
 
 import {expect, mock, setDefaultTimeout, test} from 'bun:test'
 
@@ -10202,7 +10203,9 @@ test('migrateDuckdb skips checkpoint when no migration files are applied', async
 })
 
 test('DuckDB migration converts selected-import compatibility mirror to a view over current mart', async () => {
-  const duckdbPath = `/tmp/forska-selected-import-compatibility-view-${Date.now()}.duckdb`
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'forska-selected-import-compatibility-view-'))
+  const duckdbPath = join(tempDirectory, 'fixture.duckdb')
+  const verificationPath = join(tempDirectory, 'verification.json')
   const targetMigrationFile = '0219_selectedImportCompatibilityView.sql'
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return fileName !== targetMigrationFile
@@ -10212,7 +10215,14 @@ test('DuckDB migration converts selected-import compatibility mirror to a view o
       'bun',
       '-e',
       `
-        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+        const [
+          {writeFileSync},
+          {migrateDuckdb},
+          {getAppDatabaseService},
+          {resetDuckdbServiceForTests},
+          {resetServerRuntimeRoleForTests},
+        ] = await Promise.all([
+          import('node:fs'),
           import('./src/db/migrateDuckdb.ts'),
           import('./src/server/services/appDatabaseService.ts'),
           import('./src/server/utils/duckdbService.ts'),
@@ -10299,7 +10309,9 @@ test('DuckDB migration converts selected-import compatibility mirror to a view o
           "SELECT name FROM app_schema_migration WHERE name = '0219_selectedImportCompatibilityView.sql'"
         )
 
-        console.log(JSON.stringify({migrationRows, rows, tableRows, viewRows}))
+        const verification = JSON.stringify({migrationRows, rows, tableRows, viewRows})
+        writeFileSync(process.env.VERIFY_OUTPUT_PATH, verification)
+        console.log(verification)
         await database.close()
       `,
     ],
@@ -10310,8 +10322,11 @@ test('DuckDB migration converts selected-import compatibility mirror to a view o
         API_SERVER_PORT: '39991',
         DUCKDB_PATH: duckdbPath,
         SERVER_ROLE: 'dev-single',
+        VERIFY_OUTPUT_PATH: verificationPath,
         VITE_PORT: '39992',
       },
+      stderr: 'pipe',
+      stdout: 'pipe',
     },
   )
 
@@ -10320,13 +10335,23 @@ test('DuckDB migration converts selected-import compatibility mirror to a view o
       throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
     }
 
+    const verificationJson = existsSync(verificationPath) ? readFileSync(verificationPath, 'utf8') : null
     const stdoutLines = result.stdout
       .toString()
       .split('\n')
       .filter((line) => {
         return line.trim().startsWith('{')
       })
-    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+    if (verificationJson === null && stdoutLines.length === 0) {
+      throw new Error(
+        [
+          'Failed to parse selected-import compatibility migration verification JSON',
+          `stdout:\n${result.stdout.toString()}`,
+          `stderr:\n${result.stderr.toString()}`,
+        ].join('\n'),
+      )
+    }
+    const parsed = JSON.parse(verificationJson ?? stdoutLines.at(-1) ?? '{}') as {
       migrationRows: {name: string}[]
       rows: {
         importRouteId: string
@@ -10352,7 +10377,7 @@ test('DuckDB migration converts selected-import compatibility mirror to a view o
       },
     ])
   } finally {
-    removeFileIfExists(duckdbPath)
+    rmSync(tempDirectory, {force: true, recursive: true})
   }
 })
 

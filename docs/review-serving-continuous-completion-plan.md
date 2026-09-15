@@ -343,7 +343,8 @@ Coverage:
 Commands:
 
 ```sh
-bunx vitest run src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.vitest.tsx src/components/main/reviews/reviewsArticleQueryGating.test.ts
+bunx vitest run src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.vitest.tsx
+bun test src/components/main/reviews/reviewsArticleQueryGating.test.ts --timeout 120000
 ```
 
 Coverage:
@@ -383,7 +384,8 @@ bun test src/server/reviewServing/reviewServingSql.test.ts src/server/reviewServ
 bun test src/server/reviewServing/reviewServingLlmStatusProjector.test.ts src/server/reviewServing/reviewServingProjectorWriter.test.ts --timeout 120000
 bun test src/server/workers/reviewServingProjectorWorker.test.ts --timeout 120000
 bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.test.ts src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts --timeout 120000
-bunx vitest run src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.vitest.tsx src/components/main/reviews/reviewsArticleQueryGating.test.ts
+bunx vitest run src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTable.vitest.tsx
+bun test src/components/main/reviews/reviewsArticleQueryGating.test.ts --timeout 120000
 git diff --check
 ```
 

@@ -57,6 +57,20 @@ const createDiagnosticsDatabase = () => {
             ]),
             dirtyWorkOldestQueuedAt: '2026-06-18T09:00:00.000Z',
             dirtyWorkPendingCount: 3,
+            dirtyWorkSourcePartitionLagsJson: JSON.stringify([
+              {
+                dirtyHighWaterLag: '17',
+                dirtySourceHighWaterMark: '25',
+                importedSourceHighWaterMark: '42',
+                jobId: 'job-1',
+                llmStatusCompletedHighWaterMark: '24',
+                llmStatusFailedCount: '0',
+                llmStatusPendingCount: '2',
+                llmStatusRunningCount: '1',
+                projectId: 'project-1',
+                sourcePartition: 'judgmentSqliteOutboxImport:job-1',
+              },
+            ]),
             dirtyWorkRunningCount: 2,
             dirtyWorkUpdatedAt: '2026-06-18T10:01:00.000Z',
             oldestBarrierOutboxId: 'outbox-1',
@@ -230,6 +244,20 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
       ],
       pendingCount: 3,
       runningCount: 2,
+      sourcePartitionLags: [
+        {
+          dirtyHighWaterLag: 17,
+          dirtySourceHighWaterMark: 25,
+          importedSourceHighWaterMark: 42,
+          jobId: 'job-1',
+          llmStatusCompletedHighWaterMark: 24,
+          llmStatusFailedCount: 0,
+          llmStatusPendingCount: 2,
+          llmStatusRunningCount: 1,
+          projectId: 'project-1',
+          sourcePartition: 'judgmentSqliteOutboxImport:job-1',
+        },
+      ],
     },
     maintenance: {
       dirtyWorkRunningCount: 2,
@@ -326,6 +354,11 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('dirty_work_lifecycle_reason AS')
   expect(statements.join('\n')).toContain('AS dirtyWorkBucketsJson')
   expect(statements.join('\n')).toContain('AS dirtyWorkLifecycleReasonCountsJson')
+  expect(statements.join('\n')).toContain('judgment_job_source AS')
+  expect(statements.join('\n')).toContain("'judgmentSqliteOutboxImport:' || job.id")
+  expect(statements.join('\n')).toContain('judgment_job_llm_status_claim AS')
+  expect(statements.join('\n')).toContain('judgment_job_dirty_source_lag AS')
+  expect(statements.join('\n')).toContain('AS dirtyWorkSourcePartitionLagsJson')
   expect(statements.join('\n')).toContain("status IN ('failed', 'running')")
   expect(statements.join('\n')).toContain('CAST(0 AS INTEGER) AS failedCount')
   expect(statements.join('\n')).toContain("INTERVAL '900 seconds'")

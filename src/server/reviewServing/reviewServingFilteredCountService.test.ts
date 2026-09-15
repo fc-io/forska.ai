@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {
   getReviewServingFilteredCountComponentIdentities,
+  getReviewServingFilteredCountComponentRevisionReadSql,
   getReviewServingFilteredCountPruneSql,
   getReviewServingFilteredCountReadSql,
   getReviewServingFilteredCountSignature,
@@ -142,6 +143,96 @@ test('filtered count component identities ignore payload churn and track count d
   expect(payloadV2.componentIdentity).toBe(payloadV1.componentIdentity)
   expect(postingV2.componentIdentity).not.toBe(payloadV1.componentIdentity)
   expect(postingWatermarkV2.componentIdentity).not.toBe(payloadV1.componentIdentity)
+})
+
+test('filtered count component revision SQL reads bounded dependency revisions', () => {
+  const revisionSql = getReviewServingFilteredCountComponentRevisionReadSql({
+    ...lookup,
+    ...getReviewServingFilteredCountComponentIdentities(getManifest({payloadIdentity: 'payload:identity-1'}), [
+      'display',
+      'llmStatus',
+      'posting',
+      'search',
+    ]),
+  })
+
+  expect(revisionSql).toContain('WITH requested_component')
+  expect(revisionSql).toContain('LEFT JOIN app.review_projection_identity_manifest projection')
+  expect(revisionSql).toContain('LEFT JOIN app.review_serving_component_revision component_revision')
+  expect(revisionSql).toContain("component_revision.snapshot_id IS NOT DISTINCT FROM 'snapshot-1'")
+  expect(revisionSql).toContain("component_revision.list_mode_key IS NOT DISTINCT FROM 'llm'")
+  expect(revisionSql).toContain('MAX(component_revision.revision) AS servingRevision')
+  expect(revisionSql).not.toContain('FROM app.review_serving_dirty_work')
+})
+
+test('filtered count serving misses stale positive cache rows after component revision changes', async () => {
+  const componentIdentity = getReviewServingFilteredCountComponentIdentities(
+    getManifest({payloadIdentity: 'payload:identity-1'}),
+    ['display', 'llmStatus'],
+  ).componentIdentity
+  const statements: string[] = []
+  const database: ReviewServingFilteredCountDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('LEFT JOIN app.review_projection_identity_manifest projection')) {
+        return [
+          {
+            baseGeneration: '1',
+            component: 'display',
+            manifestPatchWatermark: '2',
+            projectionIdentity: 'display:identity-1',
+            projectionInputWatermark: 2,
+            projectionInputWatermarksJson: {reviewChange: 2},
+            projectionPatchWatermark: 2,
+            servingRevision: null,
+            servingSourceHighWaterMark: null,
+          },
+          {
+            baseGeneration: '1',
+            component: 'llmStatus',
+            manifestPatchWatermark: '2',
+            projectionIdentity: 'llmStatus:identity-1',
+            projectionInputWatermark: 14,
+            projectionInputWatermarksJson: {reviewChange: 14},
+            projectionPatchWatermark: 14,
+            servingRevision: 3,
+            servingSourceHighWaterMark: 14,
+          },
+        ] as T[]
+      }
+
+      if (
+        statement.includes('FROM mart.review_filtered_count_serving_v4')
+        && statement.includes(`component_identity = '${componentIdentity}'`)
+      ) {
+        return [{countFound: true, countValue: 450}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+  }
+
+  const value = await getReviewServingFilteredCountValue({
+    ...lookup,
+    componentIdentity,
+    computeCount: async () => {
+      return 451
+    },
+    database,
+  })
+  const cacheRead = statements.find((statement) => {
+    return statement.includes('FROM mart.review_filtered_count_serving_v4')
+  })
+
+  expect(value).toBe(451)
+  expect(cacheRead).toBeDefined()
+  expect(cacheRead).not.toContain(`component_identity = '${componentIdentity}'`)
+  expect(statements.join('\n')).toContain('INSERT INTO mart.review_filtered_count_serving_v4')
+  expect(statements.join('\n')).toContain('servingRevision')
 })
 
 test('filtered count serving returns cache hits without computing or writing', async () => {
