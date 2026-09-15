@@ -277,7 +277,7 @@ test('renders article coverage instead of rebuild chunk diagnostics', async () =
       activeWorkCount: 2,
       coverage: {
         countReadyArticleCount: 72,
-        detailReadyArticleCount: 47,
+        detailReadyArticleCount: 100,
         filterReadyArticleCount: 38,
         reviewPageReadyArticleCount: 92,
         rowReadyArticleCount: 92,
@@ -307,7 +307,7 @@ test('renders article coverage instead of rebuild chunk diagnostics', async () =
     expect(container.textContent).toContain('Rows: 92 / 100 articles ready')
     expect(container.textContent).toContain('Counts: 72 / 100 articles ready')
     expect(container.textContent).toContain('Filters: 38 / 100 articles ready')
-    expect(container.textContent).toContain('Details: 47 / 100 articles ready')
+    expect(container.textContent).toContain('Details: 100 / 100 articles ready')
     expect(container.textContent).toContain('Search: 24 / 100 articles ready')
     expect(container.textContent).not.toContain('rebuild chunk')
     expect(container.textContent).not.toContain('dirty-work')
@@ -322,7 +322,7 @@ test('renders background index task progress with user-facing component names', 
     getWarningsData({
       coverage: {
         countReadyArticleCount: 100,
-        detailReadyArticleCount: 47,
+        detailReadyArticleCount: 100,
         filterReadyArticleCount: null,
         reviewPageReadyArticleCount: 100,
         rowReadyArticleCount: 100,

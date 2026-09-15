@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {
   countReadyReviewServingComponents,
   defaultReadableReviewServingComponents,
+  detailReadyReviewServingComponents,
   filterReadyReviewServingComponents,
   type ReviewServingProjectionComponent,
 } from '../../reviewServing/reviewServingContracts.ts'
@@ -311,11 +312,14 @@ const getReviewsWarningsCoverage = async (input: {
     manifest: input.manifest,
     totalArticleCount: input.totalArticleCount,
   })
-  const canMaterializePayload = getReviewWarningsComponentCanMaterialize(input.manifest, 'payload')
+  const detailReadyArticleCount = getReadyTierArticleCount({
+    components: detailReadyReviewServingComponents,
+    manifest: input.manifest,
+    totalArticleCount: input.totalArticleCount,
+  })
   const canMaterializeSearch = getReviewWarningsComponentCanMaterialize(input.manifest, 'search')
   const searchComponentState = getReviewWarningsComponentState(input.manifest, 'search')
   const [coverage] = await getApiReadOnlyAppDatabaseService().queryJson<{
-    detailReadyArticleCount: number | null
     rowReadyArticleCount: number | null
     searchReadyArticleCount: number | null
   }>(
@@ -335,19 +339,6 @@ const getReviewsWarningsCoverage = async (input: {
             ) AS INTEGER)`
       } AS rowReadyArticleCount,
       ${
-        !canMaterializePayload
-          ? 'NULL'
-          : `CAST((
-              SELECT COUNT(DISTINCT detail.article_id)
-              FROM mart.review_article_judgment_detail_serving_v4 detail
-              WHERE detail.project_id = '${escapeSqlString(input.projectId)}'
-                AND detail.review_config_hash IS NOT DISTINCT FROM ${
-                  input.reviewConfigHash === null ? 'NULL' : `'${escapeSqlString(input.reviewConfigHash)}'`
-                }
-                AND detail.snapshot_id = '${escapeSqlString(snapshotId)}'
-            ) AS INTEGER)`
-      } AS detailReadyArticleCount,
-      ${
         !canMaterializeSearch
           ? 'NULL'
           : `CAST((
@@ -366,45 +357,39 @@ const getReviewsWarningsCoverage = async (input: {
                   )
                 ORDER BY request.priority DESC, request.updated_at DESC, request.request_id DESC
                 LIMIT 1
+              ), leaf_search_chunk AS (
+                SELECT search_chunk.status
+                FROM app.review_rebuild_chunk_manifest search_chunk
+                INNER JOIN latest_search_request
+                  ON latest_search_request.request_id IS NOT DISTINCT FROM search_chunk.request_id
+                WHERE search_chunk.project_id = '${escapeSqlString(input.projectId)}'
+                  AND search_chunk.projection_component = 'search'
+                  ${
+                    searchComponentState?.projectionIdentity === undefined
+                      ? ''
+                      : `AND search_chunk.projection_identity = '${escapeSqlString(searchComponentState.projectionIdentity)}'`
+                  }
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM app.review_rebuild_chunk_manifest child_chunk
+                    WHERE child_chunk.parent_chunk_id IS NOT DISTINCT FROM search_chunk.chunk_id
+                      AND child_chunk.project_id IS NOT DISTINCT FROM search_chunk.project_id
+                  )
+              ), search_progress AS (
+                SELECT
+                  CAST(COUNT(*) AS DOUBLE) AS totalLeafCount,
+                  CAST(COUNT(*) FILTER (WHERE status = 'completed') AS DOUBLE) AS completedLeafCount
+                FROM leaf_search_chunk
               )
               SELECT COALESCE((
-                WITH completed_search_range AS (
-                  SELECT search_chunk.chunk_start_key, search_chunk.chunk_end_key
-                  FROM app.review_rebuild_chunk_manifest search_chunk
-                  INNER JOIN latest_search_request
-                    ON latest_search_request.request_id IS NOT DISTINCT FROM search_chunk.request_id
-                  WHERE search_chunk.project_id = '${escapeSqlString(input.projectId)}'
-                    AND search_chunk.projection_component = 'search'
-                    ${
-                      searchComponentState?.projectionIdentity === undefined
-                        ? ''
-                        : `AND search_chunk.projection_identity = '${escapeSqlString(searchComponentState.projectionIdentity)}'`
-                    }
-                    AND search_chunk.status = 'completed'
-                    AND NOT EXISTS (
-                      SELECT 1
-                      FROM app.review_rebuild_chunk_manifest child_chunk
-                      WHERE child_chunk.parent_chunk_id IS NOT DISTINCT FROM search_chunk.chunk_id
-                        AND child_chunk.project_id IS NOT DISTINCT FROM search_chunk.project_id
-                    )
-                )
                 SELECT CASE
                   WHEN NOT EXISTS (SELECT 1 FROM latest_search_request) THEN ${
                     searchComponentState?.projectionIdentity === undefined ? 'NULL' : input.totalArticleCount
                   }
-                  ELSE (
-                    SELECT COUNT(DISTINCT scope.article_id)
-                    FROM mart.project_scope_article scope
-                    WHERE scope.project_id = '${escapeSqlString(input.projectId)}'
-                      AND (scope.in_curated_scope OR scope.in_route_scope)
-                      AND EXISTS (
-                        SELECT 1
-                        FROM completed_search_range search_range
-                        WHERE scope.article_id >= search_range.chunk_start_key
-                          AND scope.article_id <= search_range.chunk_end_key
-                      )
-                  )
+                  WHEN search_progress.totalLeafCount <= 0 THEN 0
+                  ELSE CAST(ROUND(${input.totalArticleCount} * search_progress.completedLeafCount / search_progress.totalLeafCount) AS INTEGER)
                 END
+                FROM search_progress
               ), ${searchComponentState?.projectionIdentity === undefined ? 'NULL' : input.totalArticleCount})
             ) AS INTEGER)`
       } AS searchReadyArticleCount
@@ -418,10 +403,7 @@ const getReviewsWarningsCoverage = async (input: {
 
   return {
     countReadyArticleCount,
-    detailReadyArticleCount:
-      coverage?.detailReadyArticleCount === null || coverage?.detailReadyArticleCount === undefined
-        ? null
-        : Number(coverage.detailReadyArticleCount),
+    detailReadyArticleCount,
     filterReadyArticleCount,
     reviewPageReadyArticleCount: rowReadyArticleCount ?? 0,
     rowReadyArticleCount,

@@ -2113,7 +2113,7 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
   expect(await getReviewRebuildRequestCount(projectId, 'filterReadinessEnrichment')).toBe(1)
 })
 
-test('reviews warnings exposes article coverage for review page details and search readiness', async () => {
+test('reviews warnings exposes component readiness for details and search readiness', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -2127,33 +2127,13 @@ test('reviews warnings exposes article coverage for review page details and sear
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, articleId)
   await insertActiveReviewServingManifest({
+    components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
     includeSearchState: true,
     optionalComponents: ['payload', 'search'],
     projectId,
     snapshotId,
   })
   await insertReviewArticleServingBaseRow({articleId, projectId, reviewConfigHash, snapshotId})
-  await runDatabase(`
-    INSERT INTO mart.review_article_judgment_detail_serving_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      payload_kind,
-      article_id,
-      prompt_id,
-      prompt_order,
-      is_answered
-    ) VALUES (
-      '${projectId}',
-      '${reviewConfigHash}',
-      '${snapshotId}',
-      'llm',
-      '${articleId}',
-      'prompt-${projectId}',
-      1,
-      TRUE
-    )
-  `)
   await runDatabase(`
     INSERT INTO mart.review_title_search_serving_v4 (
       project_id,

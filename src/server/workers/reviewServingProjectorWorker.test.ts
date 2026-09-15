@@ -1851,15 +1851,18 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
   expect(joined).toContain('payloadBatchWriter')
 })
 
-test('worker claims one search rebuild range at a time so foreground reads can run between chunks', async () => {
+test('worker batches a few small search rebuild ranges while preserving foreground yield points', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
   const firstChunkInput = {
     ...chunkInput,
     chunkEndKey: 'article-008',
     chunkStartKey: 'article-001',
+    estimatedInputRows: 64,
+    estimatedOutputRows: 64,
     projectionComponent: 'search' as const,
     projectionIdentity: 'search:project-1',
+    requestId: 'request-search-batch',
   }
   const chunkInputs = Array.from({length: 9}, (_, index) => {
     const start = index * 8 + 1
@@ -1876,8 +1879,8 @@ test('worker claims one search rebuild range at a time so foreground reads can r
       ...chunkManifest,
       ...input,
       chunkId: `chunk-search-batch-${index + 1}`,
+      leaseExpiresAt: '2099-01-01T00:00:00.000Z',
       parentChunkId: 'chunk-search-parent',
-      requestId: 'request-search-batch',
       splitDepth: 1,
     } satisfies ReviewServingRebuildChunkManifest
   })
@@ -1911,6 +1914,17 @@ test('worker claims one search rebuild range at a time so foreground reads can r
 
     if (statement.includes('COUNT(*) AS pendingChunkCount')) {
       return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId')) {
+      return [] as T[]
+    }
+
+    if (
+      statement.includes('SELECT DISTINCT')
+      && statement.includes('output_base_generation AS outputBaseGeneration')
+    ) {
+      return [] as T[]
     }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
@@ -1966,17 +1980,18 @@ test('worker claims one search rebuild range at a time so foreground reads can r
   } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
 
   const result = await runReviewServingProjectorWorkerOnce(
-    {rebuildChunkBatchSize: 64, workerId: 'worker-1'},
+    {maxCompletedRebuildChunksPerRun: 128, rebuildChunkBatchSize: 64, workerId: 'worker-1'},
     harness.dependencies,
   )
   const joined = statements.join('\n')
 
-  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-batch-1'})
-  expect(harness.claimInputs).toHaveLength(1)
-  expect(harness.runChunkInputs).toEqual([firstChunk])
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-batch-4'})
+  expect(result.chunkBatchCount).toBe(4)
+  expect(harness.claimInputs).toHaveLength(4)
+  expect(harness.runChunkInputs).toEqual([])
   expect(joined).not.toContain("scope.article_id >= 'article-065'")
   expect(joined).not.toContain("scope.article_id <= 'article-072'")
-  expect(joined).not.toContain('searchBatchWriter')
+  expect(joined).toContain('searchBatchWriter')
 })
 
 test('worker splits 512-row foreground search rebuild ranges before writer execution', async () => {
@@ -2791,7 +2806,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       component: 'search',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'search:project-1',
-      preclaimTailLimit: 0,
+      preclaimTailLimit: 3,
       startKeys: ['article-001', 'article-034', 'article-067'],
       validationTable: 'FROM mart.review_title_search_serving_v4 search',
       writerName: 'searchBatchWriter',

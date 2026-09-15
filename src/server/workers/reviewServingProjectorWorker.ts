@@ -443,6 +443,7 @@ const defaultReviewServingProjectorWorkerRisingRssPressureBytes = 256 * 1024 ** 
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
 const foregroundHumanStatusRebuildChunkBatchSize = 4
 const foregroundLlmStatusRebuildChunkBatchSize = 8
+const foregroundSearchRebuildChunkBatchSize = 4
 const foregroundStatusRebuildDrainBatchBudget = 16
 const foregroundStatusReviewServingProjectorWorkerProgressYieldMs = 100
 const lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs = 25
@@ -7101,7 +7102,11 @@ const getForegroundRebuildChunkBatchSize = (chunk: {
   }
 
   if (chunk.projectionComponent === 'search') {
-    return 1
+    const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
+
+    return estimatedRows !== null && estimatedRows <= searchArticleRangeRebuildRuntimeRowLimit
+      ? foregroundSearchRebuildChunkBatchSize
+      : 1
   }
 
   return 16
@@ -7175,7 +7180,7 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
   }
 
   if (firstClaimedChunk?.projectionComponent === 'search') {
-    return Math.min(1, remainingCompletedChunkRunBudget)
+    return Math.min(getForegroundRebuildChunkBatchSize(firstClaimedChunk), remainingCompletedChunkRunBudget)
   }
 
   if (
