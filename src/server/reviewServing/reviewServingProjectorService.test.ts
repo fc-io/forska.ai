@@ -33,12 +33,15 @@ const getScope = (changeKind = 'judgment.human.updated') => {
 }
 
 const getClaim = (input: {
+  articleId?: string | null
   component: ReviewServingProjectionComponent
   dirtyWorkId: string
   latestSourceHighWaterMark?: number
+  scopeId?: string
+  scopeKind?: string
 }) => {
   return {
-    articleId: 'article-1',
+    articleId: input.articleId ?? 'article-1',
     dirtyKind: 'judgment.human.updated',
     dirtyRangeEnd: null,
     dirtyRangeStart: null,
@@ -49,8 +52,8 @@ const getClaim = (input: {
     projectId: 'project-1',
     projectionComponent: input.component,
     projectionIdentity: `${input.component}:identity`,
-    scopeId: 'project-1:article-1',
-    scopeKind: 'article',
+    scopeId: input.scopeId ?? 'project-1:article-1',
+    scopeKind: input.scopeKind ?? 'article',
     sourcePartition: 'review-change',
     status: 'running',
   } satisfies ReviewServingDirtyWorkClaim
@@ -587,6 +590,238 @@ test('wake routes search dirty work through chunked rebuilds instead of direct p
     {components: ['search'], priority: 50, projectId: 'project-1', reason: 'searchDirtyWork'},
   ])
   expect(completedClaimIds).toEqual(['search-article-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake routes high-fanout queue dirty work through chunked rebuilds instead of direct projection', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    queue: [
+      getClaim({
+        articleId: null,
+        component: 'queue',
+        dirtyWorkId: 'queue-project-1',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
+  let runnerCalled = false
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    queue: async () => {
+      runnerCalled = true
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['queue'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'queue', processedCount: 0, status: 'completed'},
+  ])
+  expect(runnerCalled).toBe(false)
+  expect(rebuildRequests).toEqual([
+    {components: ['queue'], priority: 10_000, projectId: 'project-1', reason: 'queueDirtyWork'},
+  ])
+  expect(completedClaimIds).toEqual(['queue-project-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake routes high-fanout human status dirty work through chunked rebuilds instead of direct projection', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    humanStatus: [
+      getClaim({
+        articleId: null,
+        component: 'humanStatus',
+        dirtyWorkId: 'human-status-project-1',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
+  let runnerCalled = false
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    humanStatus: async () => {
+      runnerCalled = true
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['humanStatus'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'humanStatus', processedCount: 0, status: 'completed'},
+  ])
+  expect(runnerCalled).toBe(false)
+  expect(rebuildRequests).toEqual([
+    {components: ['humanStatus'], priority: 10_000, projectId: 'project-1', reason: 'humanStatusDirtyWork'},
+  ])
+  expect(completedClaimIds).toEqual(['human-status-project-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake routes high-fanout LLM status dirty work through chunked rebuilds instead of direct projection', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    llmStatus: [
+      getClaim({
+        articleId: null,
+        component: 'llmStatus',
+        dirtyWorkId: 'llm-status-project-1',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
+  let runnerCalled = false
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    llmStatus: async () => {
+      runnerCalled = true
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['llmStatus'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'llmStatus', processedCount: 0, status: 'completed'},
+  ])
+  expect(runnerCalled).toBe(false)
+  expect(rebuildRequests).toEqual([
+    {components: ['llmStatus'], priority: 10_000, projectId: 'project-1', reason: 'llmStatusDirtyWork'},
+  ])
+  expect(completedClaimIds).toEqual(['llm-status-project-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake keeps article-scoped human status dirty work on the direct patch path', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    humanStatus: [getClaim({component: 'humanStatus', dirtyWorkId: 'human-status-article-1'})],
+  })
+  const rebuildRequests: Array<{projectId: string; reason: string}> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({projectId: input.projectId, reason: input.reason})
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    humanStatus: async () => {
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['humanStatus'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'humanStatus', processedCount: 1, status: 'completed'},
+  ])
+  expect(rebuildRequests).toEqual([])
+  expect(completedClaimIds).toEqual([])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake keeps article-scoped queue dirty work on the direct patch path', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-article-1'})],
+  })
+  const rebuildRequests: Array<{projectId: string; reason: string}> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({projectId: input.projectId, reason: input.reason})
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    queue: async () => {
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['queue'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'queue', processedCount: 1, status: 'completed'},
+  ])
+  expect(rebuildRequests).toEqual([])
+  expect(completedClaimIds).toEqual([])
   expect(failedClaimIds).toEqual([])
   expect(releasedClaimIds).toEqual([])
 })

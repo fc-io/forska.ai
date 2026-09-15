@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -24,6 +25,7 @@ export type ProjectReviewServingQueueInput = {
   chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
+  onPhaseStart?: (event: ReviewServingQueueProjectorPhaseStartEvent) => Promise<void> | void
   projectId: string
   projectScopeIdentity: string
   projectionIdentity: string
@@ -56,7 +58,125 @@ type QueueSourceRow = {
 }
 
 const queueProjectorName = 'queue-projector'
+const queueProjectScopeDirtySourceRowLimit = 50_000
 const staleQueueSortAt = '1970-01-01T00:00:00.000Z'
+const queueProjectorPhaseLogger = createRateLimitedLogger({showSuppressedCount: false, sink: 'file-only', windowMs: 0})
+
+type QueueProjectorPhase = 'rebuildBatchWriter' | 'rebuildWriter' | 'sourceQuery' | 'writer'
+
+export type ReviewServingQueueProjectorPhaseStartEvent = {
+  articleCount?: number
+  broadProjectClaim?: boolean
+  chunkCount?: number
+  chunkEndArticleId?: string | null
+  chunkIndex?: number
+  chunkStartArticleId?: string | null
+  claimCount?: number
+  phase: QueueProjectorPhase
+  projectId: string
+  rangeCount?: number
+  recordCount?: number
+  scopeKinds?: readonly string[]
+  snapshotId?: string | null
+  sourceRowCount?: number
+  sourceRowLimit?: number
+  statementCount?: number
+}
+
+type QueueProjectScopeChunkRangeRow = {
+  articleCount: number
+  articleLimit: number
+  chunkEndArticleId: string | null
+  chunkStartArticleId: string | null
+  estimatedSourceRowCount: number
+  sourceFanout: number
+}
+
+type QueueProjectScopeChunkRange = {
+  articleCount: number
+  articleLimit: number
+  chunkEndArticleId: string
+  chunkStartArticleId: string
+  estimatedSourceRowCount: number
+  sourceFanout: number
+}
+
+type QueueProjectorChunkDiagnostics = {
+  articleCount?: number
+  articleLimit?: number
+  chunkCount?: number
+  chunkIndex?: number
+  estimatedSourceRowCount?: number
+  sourceFanout?: number
+  sourceRowLimit?: number
+}
+
+type ProjectReviewServingQueueChunkInput = ProjectReviewServingQueueInput & {
+  chunkDiagnostics?: QueueProjectorChunkDiagnostics
+}
+
+const logQueueProjectorPhaseStarted = async (
+  input: ReviewServingQueueProjectorPhaseStartEvent & {onPhaseStart?: ProjectReviewServingQueueInput['onPhaseStart']},
+) => {
+  const chunkKey = input.chunkIndex === undefined ? 'single' : String(input.chunkIndex)
+
+  queueProjectorPhaseLogger.force(
+    `review-serving-queue-projector:${input.phase}:started:${input.projectId}:${input.snapshotId ?? 'no-snapshot'}:${chunkKey}`,
+    '[reviewServingQueueProjector] phase started',
+    'log',
+    {
+      articleCount: input.articleCount,
+      broadProjectClaim: input.broadProjectClaim,
+      chunkCount: input.chunkCount,
+      chunkEndArticleId: input.chunkEndArticleId,
+      chunkIndex: input.chunkIndex,
+      chunkStartArticleId: input.chunkStartArticleId,
+      claimCount: input.claimCount,
+      component: 'queue',
+      event: 'queueProjectorPhaseStarted',
+      phase: input.phase,
+      projectId: input.projectId,
+      rangeCount: input.rangeCount,
+      recordCount: input.recordCount,
+      scopeKinds: input.scopeKinds,
+      snapshotId: input.snapshotId,
+      sourceRowCount: input.sourceRowCount,
+      sourceRowLimit: input.sourceRowLimit,
+      statementCount: input.statementCount,
+    },
+  )
+
+  await input.onPhaseStart?.(input)
+}
+
+const getQueueProjectorChunkDiagnostics = (input: ProjectReviewServingQueueChunkInput) => {
+  return input.chunkDiagnostics ?? {}
+}
+
+const getQueueProjectorPhaseChunkInput = (input: ProjectReviewServingQueueChunkInput) => {
+  const chunkDiagnostics = getQueueProjectorChunkDiagnostics(input)
+
+  return {
+    articleCount: chunkDiagnostics.articleCount,
+    chunkCount: chunkDiagnostics.chunkCount,
+    chunkIndex: chunkDiagnostics.chunkIndex,
+    sourceRowLimit: chunkDiagnostics.sourceRowLimit,
+  }
+}
+
+const getQueueProjectorClaimPhaseInput = (input: ProjectReviewServingQueueChunkInput) => {
+  return {
+    broadProjectClaim: hasProjectScopedClaim(input.claims),
+    chunkEndArticleId: input.chunkEndArticleId,
+    chunkStartArticleId: input.chunkStartArticleId,
+    claimCount: input.claims.length,
+    onPhaseStart: input.onPhaseStart,
+    projectId: input.projectId,
+    scopeKinds: getClaimScopeKinds(input.claims),
+    snapshotId: input.snapshotId,
+    ...getQueueProjectorPhaseChunkInput(input),
+  }
+}
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -81,13 +201,20 @@ const getTimedProjector = () => {
 }
 
 const getQueueDiagnosticsJson = (input: {
+  chunkDiagnostics?: QueueProjectorChunkDiagnostics
+  chunkedProjectScope?: {chunkCount: number; chunkDiagnostics: readonly unknown[]; sourceRowLimit: number}
   phaseTimings: Record<string, number>
   sourceRowCount?: number
   writer?: ReviewServingProjectorWriterDiagnostics
 }) => {
   return {
     phaseTimings: input.phaseTimings,
-    queueProjector: {sourceRowCount: input.sourceRowCount, writer: input.writer},
+    queueProjector: {
+      chunkDiagnostics: input.chunkDiagnostics,
+      chunkedProjectScope: input.chunkedProjectScope,
+      sourceRowCount: input.sourceRowCount,
+      writer: input.writer,
+    },
   }
 }
 
@@ -124,6 +251,16 @@ const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
       }),
     ),
   ].join(',')
+}
+
+const getClaimScopeKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.scopeKind
+      }),
+    ),
+  ]
 }
 
 const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -368,7 +505,7 @@ const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], pr
 }
 
 const getQueueDirtyArticleCte = (
-  input: ProjectReviewServingQueueInput,
+  input: ProjectReviewServingQueueChunkInput,
   articleIds: readonly string[],
   promptIds: readonly string[],
 ) => {
@@ -383,7 +520,10 @@ const getQueueDirtyArticleCte = (
     : getDirtyArticleCte(input.projectId, articleIds, promptIds)
 }
 
-const getQueueRows = async (input: ProjectReviewServingQueueInput, database: ReviewServingQueueProjectorDatabase) => {
+const getQueueRows = async (
+  input: ProjectReviewServingQueueChunkInput,
+  database: ReviewServingQueueProjectorDatabase,
+) => {
   const broadProjectClaim = hasProjectScopedClaim(input.claims)
   const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
   const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
@@ -415,7 +555,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
 }
 
 const getUnassessedQueueArticleRankRecords = (
-  input: ProjectReviewServingQueueInput,
+  input: ProjectReviewServingQueueChunkInput,
   rows: readonly QueueSourceRow[],
 ): ReviewServingProjectorRecord[] => {
   const groupedRows = new Map<string, QueueSourceRow>()
@@ -475,7 +615,9 @@ const getUnassessedQueueArticleRankRecords = (
   })
 }
 
-const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewServingProjectionIdentityManifestInput => {
+const getQueuePatchManifest = (
+  input: ProjectReviewServingQueueChunkInput,
+): ReviewServingProjectionIdentityManifestInput => {
   const patchWatermark = getPatchWatermark(input.claims)
 
   return {
@@ -496,7 +638,7 @@ const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewSer
 }
 
 const getRefreshUnassessedQueueArticleRankStatements = (
-  input: ProjectReviewServingQueueInput,
+  input: ProjectReviewServingQueueChunkInput,
   rows: readonly QueueSourceRow[],
 ) => {
   const broadProjectClaim = hasProjectScopedClaim(input.claims)
@@ -532,12 +674,14 @@ const getRefreshUnassessedQueueArticleRankStatements = (
       ]
 }
 
-export const projectReviewServingQueuePatches = async (
-  input: ProjectReviewServingQueueInput,
-  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
+const projectReviewServingQueuePatchChunk = async (
+  input: ProjectReviewServingQueueChunkInput,
+  database: ReviewServingQueueProjectorDatabase,
 ) => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
   const rows = await measure('sourceQueryMs', async () => {
+    await logQueueProjectorPhaseStarted({...getQueueProjectorClaimPhaseInput(input), phase: 'sourceQuery'})
+
     return getQueueRows(input, database)
   })
   const articleRankRecords = measureSync('recordTransformMs', () => {
@@ -550,6 +694,14 @@ export const projectReviewServingQueuePatches = async (
   })
 
   const writer = await measure('writerMs', async () => {
+    await logQueueProjectorPhaseStarted({
+      ...getQueueProjectorClaimPhaseInput(input),
+      phase: 'writer',
+      recordCount: articleRankRecords.length,
+      sourceRowCount: rows.length,
+      statementCount: refreshArticleRankStatements.length,
+    })
+
     return writeReviewServingProjectorComponent(
       {
         acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
@@ -573,8 +725,214 @@ export const projectReviewServingQueuePatches = async (
 
   return withDiagnosticsJson(
     {patchRowCount: 0, patchWatermark, servingRowCount: articleRankRecords.length},
-    getQueueDiagnosticsJson({phaseTimings, sourceRowCount: rows.length, writer: writer.diagnostics}),
+    getQueueDiagnosticsJson({
+      chunkDiagnostics: input.chunkDiagnostics,
+      phaseTimings,
+      sourceRowCount: rows.length,
+      writer: writer.diagnostics,
+    }),
   )
+}
+
+const getQueueProjectScopeChunkRanges = async (
+  input: ProjectReviewServingQueueInput,
+  database: Pick<ReviewServingQueueProjectorDatabase, 'queryJson'>,
+) => {
+  const rows = await database.queryJson<QueueProjectScopeChunkRangeRow>(`
+    WITH project_settings AS (
+      SELECT COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode
+      FROM app.project project
+      WHERE project.id = ${getSqlLiteral(input.projectId)}
+    ), enabled_prompt AS (
+      SELECT CAST(COUNT(*) AS INTEGER) AS enabled_prompt_count
+      FROM app.project_prompt project_prompt
+      INNER JOIN app.prompt prompt
+        ON prompt.id = project_prompt.prompt_id
+      WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
+        AND project_prompt.enabled
+        AND NOT project_prompt.archived
+        AND COALESCE(prompt.archived, FALSE) = FALSE
+    ), queue_source_budget AS (
+      SELECT
+        GREATEST(1, enabled_prompt.enabled_prompt_count) AS enabled_prompt_count,
+        CASE
+          WHEN COALESCE(project_settings.human_judgment_mode, 'prompt') = 'summary' THEN 1
+          ELSE GREATEST(1, enabled_prompt.enabled_prompt_count)
+        END AS human_prompt_count
+      FROM enabled_prompt
+      LEFT JOIN project_settings ON TRUE
+    ), article_limit AS (
+      SELECT
+        GREATEST(
+          1,
+          CAST(FLOOR(${queueProjectScopeDirtySourceRowLimit} / GREATEST(1, enabled_prompt_count + human_prompt_count)) AS INTEGER)
+        ) AS article_limit,
+        GREATEST(1, enabled_prompt_count + human_prompt_count) AS source_fanout
+      FROM queue_source_budget
+    ), scoped_article AS (
+      SELECT
+        scope.article_id
+      FROM mart.project_scope_article scope
+      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+        AND (scope.in_curated_scope OR scope.in_route_scope)
+    ), scoped_article_count AS (
+      SELECT CAST(COUNT(*) AS INTEGER) AS scoped_article_count
+      FROM scoped_article
+    ), article_plan AS (
+      SELECT
+        article_limit.article_limit,
+        article_limit.source_fanout,
+        GREATEST(
+          1,
+          CAST(CEIL(scoped_article_count.scoped_article_count / article_limit.article_limit) AS INTEGER)
+        ) AS chunk_count
+      FROM article_limit
+      CROSS JOIN scoped_article_count
+    ), chunked_article AS (
+      SELECT
+        scoped_article.article_id,
+        NTILE(article_plan.chunk_count) OVER (ORDER BY scoped_article.article_id) AS chunk_index,
+        article_plan.article_limit,
+        article_plan.source_fanout
+      FROM scoped_article
+      CROSS JOIN article_plan
+    ), bucket_range AS (
+      SELECT
+        chunk_index,
+        CAST(COUNT(*) AS INTEGER) AS article_count,
+        MIN(article_id) AS scoped_start_key,
+        MAX(article_id) AS scoped_end_key,
+        ANY_VALUE(article_limit) AS article_limit,
+        ANY_VALUE(source_fanout) AS source_fanout
+      FROM chunked_article
+      GROUP BY chunk_index
+      HAVING COUNT(*) > 0
+    ), bucket_with_boundary AS (
+      SELECT
+        article_count,
+        article_limit,
+        source_fanout,
+        scoped_start_key,
+        scoped_end_key,
+        LAG(scoped_end_key) OVER (ORDER BY chunk_index) AS previous_scoped_end_key
+      FROM bucket_range
+    )
+    SELECT
+      CASE
+        WHEN previous_scoped_end_key IS NULL THEN scoped_start_key
+        ELSE previous_scoped_end_key || ' '
+      END AS chunkStartArticleId,
+      scoped_end_key AS chunkEndArticleId,
+      article_count AS articleCount,
+      article_limit AS articleLimit,
+      source_fanout AS sourceFanout,
+      article_count * source_fanout AS estimatedSourceRowCount
+    FROM bucket_with_boundary
+    ORDER BY scoped_start_key
+  `)
+
+  return rows.flatMap((row): QueueProjectScopeChunkRange[] => {
+    return row.chunkStartArticleId === null || row.chunkEndArticleId === null
+      ? []
+      : [
+          {
+            articleCount: Number(row.articleCount),
+            articleLimit: Number(row.articleLimit),
+            chunkEndArticleId: row.chunkEndArticleId,
+            chunkStartArticleId: row.chunkStartArticleId,
+            estimatedSourceRowCount: Number(row.estimatedSourceRowCount),
+            sourceFanout: Number(row.sourceFanout),
+          },
+        ]
+  })
+}
+
+const getChunkedQueuePatchResultDiagnosticsJson = (result: object) => {
+  return (result as {diagnosticsJson?: unknown}).diagnosticsJson ?? {}
+}
+
+const yieldBetweenQueueProjectorChunks = async () => {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
+const projectReviewServingQueueProjectScopeChunks = async (
+  input: ProjectReviewServingQueueInput,
+  chunkRanges: readonly QueueProjectScopeChunkRange[],
+  database: ReviewServingQueueProjectorDatabase,
+) => {
+  const startedAtMs = Date.now()
+  const chunkResults = await chunkRanges.reduce<
+    Promise<Array<Awaited<ReturnType<typeof projectReviewServingQueuePatchChunk>>>>
+  >(async (previous, range, index) => {
+    const results = await previous
+    const acknowledgeClaims = index === chunkRanges.length - 1 ? input.acknowledgeClaims : false
+    const result = await projectReviewServingQueuePatchChunk(
+      {
+        ...input,
+        acknowledgeClaims,
+        chunkDiagnostics: {
+          articleCount: range.articleCount,
+          articleLimit: range.articleLimit,
+          chunkCount: chunkRanges.length,
+          chunkIndex: index,
+          estimatedSourceRowCount: range.estimatedSourceRowCount,
+          sourceFanout: range.sourceFanout,
+          sourceRowLimit: queueProjectScopeDirtySourceRowLimit,
+        },
+        chunkEndArticleId: range.chunkEndArticleId,
+        chunkStartArticleId: range.chunkStartArticleId,
+      },
+      database,
+    )
+
+    if (index < chunkRanges.length - 1) {
+      await yieldBetweenQueueProjectorChunks()
+    }
+
+    return [...results, result]
+  }, Promise.resolve([]))
+  const patchWatermark = getPatchWatermark(input.claims)
+  const phaseTimings = {chunkedProjectScopeMs: getNonNegativeElapsedMs(startedAtMs)}
+
+  return withDiagnosticsJson(
+    {
+      patchRowCount: 0,
+      patchWatermark,
+      servingRowCount: chunkResults.reduce((total, result) => {
+        return total + result.servingRowCount
+      }, 0),
+    },
+    getQueueDiagnosticsJson({
+      chunkedProjectScope: {
+        chunkCount: chunkRanges.length,
+        chunkDiagnostics: chunkResults.map(getChunkedQueuePatchResultDiagnosticsJson),
+        sourceRowLimit: queueProjectScopeDirtySourceRowLimit,
+      },
+      phaseTimings,
+    }),
+  )
+}
+
+export const projectReviewServingQueuePatches = async (
+  input: ProjectReviewServingQueueInput,
+  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
+) => {
+  if (
+    hasProjectScopedClaim(input.claims)
+    && !hasChunkArticleRange(input)
+    && input.snapshotId !== null
+    && input.snapshotId !== undefined
+  ) {
+    const chunkRanges = await getQueueProjectScopeChunkRanges(input, database)
+
+    return chunkRanges.length === 0
+      ? projectReviewServingQueuePatchChunk(input, database)
+      : projectReviewServingQueueProjectScopeChunks(input, chunkRanges, database)
+  }
+
+  return projectReviewServingQueuePatchChunk(input, database)
 }
 
 export const projectReviewServingQueueRebuildRows = async (
@@ -583,6 +941,15 @@ export const projectReviewServingQueueRebuildRows = async (
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   await measure('writerMs', async () => {
+    await logQueueProjectorPhaseStarted({
+      chunkEndArticleId: input.chunkEndArticleId,
+      chunkStartArticleId: input.chunkStartArticleId,
+      phase: 'rebuildWriter',
+      projectId: input.projectId,
+      rangeCount: 1,
+      snapshotId: input.snapshotId,
+    })
+
     return writeReviewServingQueueRebuildRows(getReviewServingQueueRebuildWriterInput(input), database)
   })
 
@@ -605,6 +972,17 @@ export const projectReviewServingQueueRebuildRanges = async (
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
+    const [firstRange] = input.ranges
+
+    await logQueueProjectorPhaseStarted({
+      chunkEndArticleId: firstRange?.chunkEndArticleId,
+      chunkStartArticleId: firstRange?.chunkStartArticleId,
+      phase: 'rebuildBatchWriter',
+      projectId: firstRange?.projectId ?? 'unknown',
+      rangeCount: input.ranges.length,
+      snapshotId: firstRange?.snapshotId,
+    })
+
     return writeReviewServingQueueRebuildRanges(
       {
         ranges: input.ranges.map((range) => {

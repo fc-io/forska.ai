@@ -83,7 +83,6 @@ const reviewArticleServingDirectReadScopedRangeEnd = "AND base.article_id <= 'ar
 const reviewArticleServingDirectReadFlagExpansion = 'AS list_mode(list_mode_key, has_list_mode)'
 const reviewArticleServingDirectReadFlagPredicate = 'WHERE list_mode.has_list_mode IS TRUE'
 const reviewArticleServingCompatibilityViewRead = 'FROM mart.review_article_serving_v4 serving'
-const reviewUnassessedQueueArticleRankRead = 'FROM mart.review_unassessed_queue_article_rank_serving_v4 serving'
 
 const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
   const digest = createHash('sha256')
@@ -2127,7 +2126,7 @@ test('worker splits 512-row foreground search rebuild ranges before writer execu
   expect(joined).not.toContain('searchBatchWriter')
 })
 
-test('worker writes compatible queue rebuild chunks through one batch writer', async () => {
+test('worker keeps compatible queue rebuild chunks single-range', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
   const firstChunkInput = {
@@ -2136,11 +2135,13 @@ test('worker writes compatible queue rebuild chunks through one batch writer', a
     chunkStartKey: 'article-001',
     projectionComponent: 'queue' as const,
     projectionIdentity: 'queue:project-1',
+    requestId: 'rebuild-queue-batch',
   }
   const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
   const firstChunk = {
     ...chunkManifest,
     ...firstChunkInput,
+    checksum: 'checksum-queue-batch',
     chunkId: 'chunk-queue-batch-1',
     parentChunkId: 'chunk-queue-parent',
     splitDepth: 1,
@@ -2148,6 +2149,7 @@ test('worker writes compatible queue rebuild chunks through one batch writer', a
   const secondChunk = {
     ...chunkManifest,
     ...secondChunkInput,
+    checksum: 'checksum-queue-batch',
     chunkId: 'chunk-queue-batch-2',
     parentChunkId: 'chunk-queue-parent',
     splitDepth: 1,
@@ -2232,19 +2234,15 @@ test('worker writes compatible queue rebuild chunks through one batch writer', a
   )
   const joined = statements.join('\n')
 
-  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
-  expect(result.chunkBatchCount).toBe(2)
-  expect(harness.claimInputs).toHaveLength(2)
-  expect(harness.runChunkInputs).toEqual([])
-  expect(joined).toContain("serving.article_id >= 'article-001'")
-  expect(joined).toContain("serving.article_id <= 'article-050'")
-  expect(joined).toContain("serving.article_id >= 'article-051'")
-  expect(joined).toContain("serving.article_id <= 'article-099'")
-  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
-  expect(joined).toContain('queueBatchWriter')
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId})
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.getNextChunkInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toEqual([firstChunk])
+  expect(joined).not.toContain("serving.article_id >= 'article-051'")
+  expect(joined).not.toContain("serving.article_id <= 'article-099'")
 })
 
-test('worker clamps foreground queue rebuild batches to the completed chunk run cap', async () => {
+test('worker keeps foreground queue rebuild chunks single-range under larger run caps', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
   const queueChunks = Array.from({length: 20}, (_, index) => {
@@ -2355,8 +2353,8 @@ test('worker clamps foreground queue rebuild batches to the completed chunk run 
   )
 
   expect(result.chunk).toMatchObject({chunkId: 'chunk-queue-cap-0', status: 'failed'})
-  expect(harness.claimInputs).toHaveLength(16)
-  expect(harness.getNextChunkInputs).toHaveLength(16)
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.getNextChunkInputs).toHaveLength(1)
 })
 
 test('worker fails completed foreground queue rebuild request when batch finalization throws', async () => {
@@ -2453,7 +2451,7 @@ test('worker fails completed foreground queue rebuild request when batch finaliz
   const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, requestId, status: 'failed'})
-  expect(result.chunkBatchCount).toBe(1)
+  expect(result.chunkBatchCount).toBe(0)
   expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain("status = 'failed'")
   expect(joined).toContain(`request_id = '${requestId}'`)
@@ -2834,15 +2832,6 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       writerName: 'humanStatusBatchWriter',
     },
     {
-      component: 'queue',
-      endKeys: ['article-033', 'article-066', 'article-099'],
-      identity: 'queue:project-1',
-      preclaimTailLimit: 31,
-      startKeys: ['article-001', 'article-034', 'article-067'],
-      validationTable: reviewUnassessedQueueArticleRankRead,
-      writerName: 'queueBatchWriter',
-    },
-    {
       component: 'search',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'search:project-1',
@@ -3081,7 +3070,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
   }
 })
 
-test('worker executes oversized foreground status rebuild chunks without input-budget pre-splitting', async () => {
+test('worker splits oversized foreground status rebuild chunks before execution', async () => {
   const statements: string[] = []
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const oversizedChunkInput = {
@@ -3148,10 +3137,9 @@ test('worker executes oversized foreground status rebuild chunks without input-b
     requestId: oversizedChunk.requestId,
     status: 'completed',
   })
-  expect(harness.runChunkInputs).toEqual([oversizedChunk])
-  expect(joined).not.toContain("checksum = 'split:chunk-oversized-status'")
-  expect(joined).not.toContain('"splitReason":"input_row_budget"')
-  expect(joined).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(harness.runChunkInputs).toEqual([])
+  expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(joined).toContain('"splitReason":"admitted_oversized"')
   expect(joined).not.toContain("oom_category = 'duckdb_oom_split'")
 })
 
@@ -8533,7 +8521,16 @@ test('request-associated summary chunks stage partials without refreshing filter
 })
 
 test('worker splits already-admitted oversized high-fanout chunks before execution', async () => {
-  for (const component of ['payload', 'search', 'selectedImport', 'summary', 'posting'] as const) {
+  for (const component of [
+    'humanStatus',
+    'llmStatus',
+    'payload',
+    'queue',
+    'search',
+    'selectedImport',
+    'summary',
+    'posting',
+  ] as const) {
     const harness = createWorkerHarness({wakeStatus: 'completed'})
     const statements: string[] = []
     const oversizedChunkInput = {
@@ -8606,14 +8603,20 @@ test('worker splits already-admitted oversized high-fanout chunks before executi
     const childInserts = statements.filter((statement) => {
       return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
     })
+    const expectedBucketCount =
+      component === 'humanStatus' || component === 'llmStatus' || component === 'summary'
+        ? 485
+        : component === 'payload'
+        ? 25
+        : component === 'queue' || component === 'selectedImport'
+          ? 50
+          : 64
 
     expect(result.chunk).toMatchObject({chunkId: oversizedChunk.chunkId, status: 'completed'})
     expect(prepared).toBe(false)
     expect(harness.runChunkInputs).toHaveLength(0)
     expect(joined).toContain('FROM mart.project_scope_article scope')
-    expect(joined).toContain(
-      `NTILE(${component === 'payload' ? 25 : component === 'selectedImport' ? 50 : component === 'summary' ? 485 : 64}) OVER (ORDER BY scope.article_id)`,
-    )
+    expect(joined).toContain(`NTILE(${expectedBucketCount}) OVER (ORDER BY scope.article_id)`)
     expect(joined).toContain("status = 'completed'")
     expect(joined).toContain('lease_expires_at > current_timestamp')
     expect(joined).toContain('last_error = last_error')

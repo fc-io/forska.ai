@@ -465,7 +465,6 @@ const foregroundBatchableStatusRebuildComponents = new Set<ReviewServingProjecti
 const foregroundBatchableRangeRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'payload',
   'posting',
-  'queue',
   'search',
   'selectedImport',
   'summary',
@@ -676,8 +675,11 @@ const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
 const summaryArticleRangeRebuildChunkPresplitMaxBucketCount = 512
 const statusArticleRangeRebuildChunkPresplitMaxBucketCount = 512
 const admittedOversizedRebuildChunkInputRowLimits: Partial<Record<ReviewServingProjectionComponent, number>> = {
+  humanStatus: statusArticleRangeRebuildChunkPresplitRowLimit,
+  llmStatus: statusArticleRangeRebuildChunkPresplitRowLimit,
   payload: 10_000,
   posting: 512,
+  queue: highFanoutArticleRangeRebuildChunkPresplitRowLimit,
   search: searchArticleRangeRebuildRuntimeRowLimit,
   selectedImport: highFanoutArticleRangeRebuildChunkPresplitRowLimit,
   summary: 512,
@@ -701,6 +703,7 @@ const highFanoutArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjecti
   'llmStatus',
   'payload',
   'posting',
+  'queue',
   'search',
   'selectedImport',
   'summary',
@@ -7132,7 +7135,7 @@ const getForegroundRebuildChunkBatchSize = (chunk: {
   }
 
   if (chunk.projectionComponent === 'queue') {
-    return 32
+    return 1
   }
 
   if (chunk.projectionComponent === 'search') {
@@ -7210,6 +7213,10 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
       : Number.POSITIVE_INFINITY
 
   if (firstClaimedChunk?.projectionComponent === 'selectedImport') {
+    return Math.min(1, remainingCompletedChunkRunBudget)
+  }
+
+  if (firstClaimedChunk?.projectionComponent === 'queue') {
     return Math.min(1, remainingCompletedChunkRunBudget)
   }
 

@@ -376,9 +376,7 @@ const defaultRebuildMaxAdmissionSplitCount = 64
 const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjectionComponent>([
   'display',
   'judgmentInputContent',
-  'llmStatus',
   'projectScope',
-  'queue',
   'selectedImport',
 ])
 const defaultRebuildNativeHeavyComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])

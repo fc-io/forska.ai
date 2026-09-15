@@ -91,6 +91,16 @@ const countReadyRepairComponents = new Set<ReviewServingProjectionComponent>(cou
 const activationMissingSnapshotRepairPriority = 10_000
 const enrichmentMissingSnapshotRepairPriority = 50
 const searchDirtyWorkRebuildPriority = enrichmentMissingSnapshotRepairPriority
+const queueDirtyWorkRebuildPriority = activationMissingSnapshotRepairPriority
+// Only components with bounded article-range rebuild admission belong here; non-presplittable components stay direct.
+const highFanoutDirtyWorkRebuildComponents = new Set<ReviewServingProjectionComponent>([
+  'humanStatus',
+  'llmStatus',
+  'payload',
+  'posting',
+  'queue',
+  'summary',
+])
 
 export type IntakeReviewServingProjectorDirtyWorkInput = {
   identityResolver: ReviewServingProjectorIdentityResolver
@@ -275,11 +285,37 @@ const isSearchDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
   return claim.projectionComponent === 'search' && claim.projectId !== null
 }
 
-const getSearchDirtyWorkProjectIds = (
+const isHighFanoutDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
+  return (
+    claim.projectId !== null
+    && claim.scopeKind !== 'article'
+    && highFanoutDirtyWorkRebuildComponents.has(claim.projectionComponent)
+  )
+}
+
+const getChunkedDirtyWorkProjectIds = (
   component: ReviewServingProjectionComponent,
   claims: readonly ReviewServingDirtyWorkClaim[],
 ) => {
-  return component === 'search' && claims.some(isSearchDirtyWorkClaim) ? getClaimProjectIds(claims) : []
+  if (component === 'search' && claims.some(isSearchDirtyWorkClaim)) {
+    return getClaimProjectIds(claims)
+  }
+
+  return highFanoutDirtyWorkRebuildComponents.has(component) && claims.some(isHighFanoutDirtyWorkClaim)
+    ? getClaimProjectIds(claims)
+    : []
+}
+
+const getChunkedDirtyWorkRebuildPriority = (component: ReviewServingProjectionComponent) => {
+  if (component === 'queue' || countReadyRepairComponents.has(component)) {
+    return queueDirtyWorkRebuildPriority
+  }
+
+  return searchDirtyWorkRebuildPriority
+}
+
+const getChunkedDirtyWorkRebuildReason = (component: ReviewServingProjectionComponent) => {
+  return `${component}DirtyWork`
 }
 
 const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServingSourcePartitionWatermarks => {
@@ -504,20 +540,20 @@ export const wakeReviewServingProjectorService = async (
         return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
       }
 
-      const searchDirtyWorkProjectIds = getSearchDirtyWorkProjectIds(component, claims)
+      const chunkedDirtyWorkProjectIds = getChunkedDirtyWorkProjectIds(component, claims)
 
-      if (searchDirtyWorkProjectIds.length > 0) {
+      if (chunkedDirtyWorkProjectIds.length > 0) {
         const rebuildResult = await Effect.runPromise(
           Effect.either(
             Effect.forEach(
-              searchDirtyWorkProjectIds,
+              chunkedDirtyWorkProjectIds,
               (projectId) => {
                 return requestRebuild(
                   {
-                    components: ['search'],
-                    priority: searchDirtyWorkRebuildPriority,
+                    components: [component],
+                    priority: getChunkedDirtyWorkRebuildPriority(component),
                     projectId,
-                    reason: 'searchDirtyWork',
+                    reason: getChunkedDirtyWorkRebuildReason(component),
                   },
                   database,
                 )

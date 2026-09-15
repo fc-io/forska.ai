@@ -8,6 +8,7 @@ import {
 } from './reviewServingQueueProjector.ts'
 
 const createQueueDatabase = (input?: {
+  projectScopeChunkRanges?: readonly Record<string, unknown>[]
   queueRows?: readonly Record<string, unknown>[]
   reviewConfigHash?: string | null
 }) => {
@@ -18,6 +19,10 @@ const createQueueDatabase = (input?: {
 
       if (statement.includes('FROM app.review_source_change_outbox')) {
         return [] as T[]
+      }
+
+      if (statement.includes('queue_source_budget AS')) {
+        return (input?.projectScopeChunkRanges ?? []) as T[]
       }
 
       if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -106,6 +111,45 @@ test('LLM answer changes acknowledge queue work without legacy patch rows', asyn
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('mart.review_unassessed_queue_serving_v4')
   expect(articleRankDelete).toContain("article_id IN ('article-1')")
+})
+
+test('queue projector emits phase-start diagnostics before source SELECT and writer mutations', async () => {
+  const {database, statements} = createQueueDatabase({queueRows: [queueRow()], reviewConfigHash: 'review-config-1'})
+  const phaseEvents: string[] = []
+
+  const result = await projectReviewServingQueuePatches(
+    {
+      ...projectInput([queueClaim()]),
+      onPhaseStart: (event) => {
+        phaseEvents.push(event.phase)
+        statements.push(`phase:${event.phase}`)
+      },
+    },
+    database,
+  )
+  const sourcePhaseIndex = statements.findIndex((statement) => {
+    return statement === 'phase:sourceQuery'
+  })
+  const sourceSelectIndex = statements.findIndex((statement) => {
+    return statement.includes('FROM queue_union queue')
+  })
+  const writerPhaseIndex = statements.findIndex((statement) => {
+    return statement === 'phase:writer'
+  })
+  const deleteIndex = statements.findIndex((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
+  })
+  const insertIndex = statements.findIndex((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
+  })
+
+  expect(result.servingRowCount).toBe(1)
+  expect(phaseEvents).toEqual(['sourceQuery', 'writer'])
+  expect(sourcePhaseIndex).toBeGreaterThanOrEqual(0)
+  expect(sourcePhaseIndex).toBeLessThan(sourceSelectIndex)
+  expect(writerPhaseIndex).toBeGreaterThanOrEqual(0)
+  expect(writerPhaseIndex).toBeLessThan(deleteIndex)
+  expect(writerPhaseIndex).toBeLessThan(insertIndex)
 })
 
 test('queue no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -308,6 +352,118 @@ test('project review config changes rebuild queue rows for all scoped project ar
   expect(statements.join('\n')).not.toContain('mart.review_unassessed_queue_serving_v4')
   expect(articleRankDelete).not.toContain('article_id IN')
   expect(articleRankDelete).not.toContain('prompt_ids')
+})
+
+test('project-scoped queue dirty work runs bounded article chunks before acknowledging', async () => {
+  const {database, statements} = createQueueDatabase({
+    projectScopeChunkRanges: [
+      {
+        articleCount: 50,
+        articleLimit: 50,
+        chunkEndArticleId: 'article-050',
+        chunkStartArticleId: 'article-001',
+        estimatedSourceRowCount: 50_000,
+        sourceFanout: 1_000,
+      },
+      {
+        articleCount: 50,
+        articleLimit: 50,
+        chunkEndArticleId: 'article-100',
+        chunkStartArticleId: 'article-050 ',
+        estimatedSourceRowCount: 50_000,
+        sourceFanout: 1_000,
+      },
+    ],
+    queueRows: [queueRow({articleId: 'article-025'})],
+    reviewConfigHash: 'review-config-1',
+  })
+  const phaseEvents: Array<{chunkIndex?: number; phase: string; sourceRowLimit?: number}> = []
+
+  const result = await projectReviewServingQueuePatches(
+    {
+      ...projectInput([
+        queueClaim({
+          articleId: null,
+          dirtyKind: 'project.reviewConfig.updated',
+          scopeId: 'project-1',
+          scopeKind: 'project',
+        }),
+      ]),
+      onPhaseStart: (event) => {
+        phaseEvents.push({chunkIndex: event.chunkIndex, phase: event.phase, sourceRowLimit: event.sourceRowLimit})
+      },
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+  const sourceSelects = statements.filter((statement) => {
+    return statement.includes('FROM queue_union queue')
+  })
+  const articleRankDeletes = statements.filter((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
+  })
+  const acknowledgements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes("'dirty-work-1'")
+  })
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 2})
+  expect(joined).toContain('queue_source_budget AS')
+  expect(joined).toContain('NTILE(article_plan.chunk_count) OVER (ORDER BY scoped_article.article_id)')
+  expect(joined).toContain('FLOOR(50000 / GREATEST(1, enabled_prompt_count + human_prompt_count))')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
+  expect(sourceSelects).toHaveLength(2)
+  expect(sourceSelects[0]).toContain("scope.article_id >= 'article-001'")
+  expect(sourceSelects[0]).toContain("scope.article_id <= 'article-050'")
+  expect(sourceSelects[1]).toContain("scope.article_id >= 'article-050 '")
+  expect(sourceSelects[1]).toContain("scope.article_id <= 'article-100'")
+  expect(articleRankDeletes).toHaveLength(2)
+  expect(articleRankDeletes[0]).toContain("article_id >= 'article-001'")
+  expect(articleRankDeletes[0]).toContain("article_id <= 'article-050'")
+  expect(articleRankDeletes[1]).toContain("article_id >= 'article-050 '")
+  expect(articleRankDeletes[1]).toContain("article_id <= 'article-100'")
+  expect(acknowledgements).toHaveLength(1)
+  expect(phaseEvents).toEqual([
+    {chunkIndex: 0, phase: 'sourceQuery', sourceRowLimit: 50_000},
+    {chunkIndex: 0, phase: 'writer', sourceRowLimit: 50_000},
+    {chunkIndex: 1, phase: 'sourceQuery', sourceRowLimit: 50_000},
+    {chunkIndex: 1, phase: 'writer', sourceRowLimit: 50_000},
+  ])
+})
+
+test('project-scoped queue dirty work without a snapshot skips project-scope chunk planning', async () => {
+  const {database, statements} = createQueueDatabase({
+    projectScopeChunkRanges: [
+      {
+        articleCount: 50,
+        articleLimit: 50,
+        chunkEndArticleId: 'article-050',
+        chunkStartArticleId: 'article-001',
+        estimatedSourceRowCount: 50_000,
+        sourceFanout: 1_000,
+      },
+    ],
+  })
+
+  const result = await projectReviewServingQueuePatches(
+    {
+      ...projectInput([
+        queueClaim({
+          articleId: null,
+          dirtyKind: 'project.reviewConfig.updated',
+          scopeId: 'project-1',
+          scopeKind: 'project',
+        }),
+      ]),
+      snapshotId: null,
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(joined).not.toContain('queue_source_budget AS')
+  expect(joined).not.toContain('FROM queue_union queue')
+  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 
 test('queue rebuild rows do not let selected-import tombstones suppress scoped articles', async () => {

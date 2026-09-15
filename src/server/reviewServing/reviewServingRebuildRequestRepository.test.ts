@@ -1799,6 +1799,71 @@ test('human status default rebuilds presplit into bounded article chunks', async
   expect(joined).toContain('"admissionPresplit":true')
 })
 
+test('LLM status default rebuilds presplit into bounded article chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 4,
+          component: 'llmStatus',
+          patchWatermark: 12,
+          projectionIdentity: 'llmStatus:active-identity-1',
+        },
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 2, component: 'llmStatus', patchWatermark: 10, projectionIdentity: 'llmStatus:identity-1'},
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'llm-status-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'llmStatus',
+        projectionIdentity: 'llmStatus:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'llm-status-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'llmStatus',
+        projectionIdentity: 'llmStatus:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 256},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['llmStatus'],
+      requestId: 'rebuild:llm-status-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'llmStatus'")
+  })
+
+  expect(joined).toContain('NTILE(4)')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
+  expect(chunkInserts).toHaveLength(8)
+  expect(joined).toContain('"admissionPresplit":true')
+})
+
 test('judgment input content default rebuilds avoid admission presplit boundary overlap', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {
@@ -1871,19 +1936,15 @@ test('judgment input content default rebuilds avoid admission presplit boundary 
   expect(joined).not.toContain('"admissionPresplit":true')
 })
 
-test('queue default rebuilds avoid admission presplit boundary overlap', async () => {
+test('queue default rebuilds presplit without boundary overlap', async () => {
   const {database, statements} = createFakeRequestDatabase({
-    activeComponentStateJson: {
-      optional: [],
-      required: [
-        {baseGeneration: 4, component: 'queue', patchWatermark: 12, projectionIdentity: 'queue:active-identity-1'},
-      ],
-    },
+    activeComponentStateJson: {optional: [], required: []},
     articleRangeRows: [
-      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
-      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
-      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
-      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+      {chunkEndKey: 'article-050', chunkStartKey: 'article-001', scopedArticleCount: 50},
+      {chunkEndKey: 'article-100', chunkStartKey: 'article-050', scopedArticleCount: 50},
+      {chunkEndKey: 'article-150', chunkStartKey: 'article-100', scopedArticleCount: 50},
+      {chunkEndKey: 'article-200', chunkStartKey: 'article-150', scopedArticleCount: 50},
+      {chunkEndKey: 'article-250', chunkStartKey: 'article-200', scopedArticleCount: 50},
     ],
     componentStateJson: {
       optional: [],
@@ -1896,13 +1957,6 @@ test('queue default rebuilds avoid admission presplit boundary overlap', async (
         inputWatermark: 10,
         projectionComponent: 'queue',
         projectionIdentity: 'queue:identity-1',
-      },
-      {
-        baseGeneration: 4,
-        inputDigest: 'queue-active-digest-v1',
-        inputWatermark: 12,
-        projectionComponent: 'queue',
-        projectionIdentity: 'queue:active-identity-1',
       },
     ],
   })
@@ -1923,9 +1977,62 @@ test('queue default rebuilds avoid admission presplit boundary overlap', async (
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'queue'")
   })
 
-  expect(joined).not.toContain('NTILE(')
-  expect(chunkInserts).toHaveLength(2)
-  expect(joined).not.toContain('"admissionPresplit":true')
+  expect(joined).toContain('NTILE(5)')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
+  expect(chunkInserts).toHaveLength(5)
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"inputRowLimit":5000')
+})
+
+test('queue-only default rebuild admission compares per-chunk budget after presplit', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {optional: [], required: []},
+    articleRangeRows: [
+      {chunkEndKey: 'article-050', chunkStartKey: 'article-001', scopedArticleCount: 50},
+      {chunkEndKey: 'article-100', chunkStartKey: 'article-050', scopedArticleCount: 50},
+      {chunkEndKey: 'article-150', chunkStartKey: 'article-100', scopedArticleCount: 50},
+      {chunkEndKey: 'article-200', chunkStartKey: 'article-150', scopedArticleCount: 50},
+      {chunkEndKey: 'article-250', chunkStartKey: 'article-200', scopedArticleCount: 50},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [{baseGeneration: 2, component: 'queue', patchWatermark: 10, projectionIdentity: 'queue:identity-1'}],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'queue-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'queue',
+        projectionIdentity: 'queue:identity-1',
+      },
+    ],
+  })
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      budget: {maxInputRows: 25_000, maxOutputBytes: 128 * 1024 * 1024},
+      estimate: {estimatedInputRows: 100_001, estimatedOutputBytes: 100_001 * 512},
+      projectId: 'project-v4',
+      reason: 'queueDirtyWork',
+      requestedComponents: ['queue'],
+      requestId: 'rebuild:queue-budget-presplit',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(request).toMatchObject({
+    admissionState: 'admitted',
+    overBudgetReason: null,
+    requestId: 'rebuild:queue-budget-presplit',
+    status: 'admitted',
+  })
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"inputRowLimit":5000')
+  expect(joined).toContain("'admitted'")
+  expect(joined).toContain('20001')
+  expect(joined).toContain('25000')
 })
 
 test('display-only default rebuilds avoid admission presplit boundary overlap', async () => {
