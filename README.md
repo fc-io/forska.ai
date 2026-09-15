@@ -27,20 +27,19 @@ cd forska.ai
 bun install
 ```
 
-The current stable version tracks the latest commit on `main`.
+The current stable release is the Git tag `stable-2026-09-15`.
 
 Clone the stable version:
 
 ```bash
-git clone --branch main https://github.com/fc-io/forska.ai.git
+git clone --branch stable-2026-09-15 https://github.com/fc-io/forska.ai.git
 ```
 
 From an existing checkout:
 
 ```bash
-git fetch origin
-git switch main
-git pull --ff-only
+git fetch origin --tags
+git switch --detach stable-2026-09-15
 bun install
 ```
 
