@@ -562,6 +562,18 @@ const getRouteDatabase = (dependencies?: ReviewServingRouteDependencies) => {
   return createRetryingRouteDatabase(dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase))
 }
 
+const shouldCountDirectServingState = (input: {
+  mode: ReviewServingReviewMode
+  promptAnswerPostingFilterGroups: readonly ReviewServingDynamicCountPostingFilterGroup[]
+  searchTokenPrefixes: readonly string[]
+}) => {
+  return (
+    input.mode !== 'unassessed'
+    && input.promptAnswerPostingFilterGroups.length === 0
+    && input.searchTokenPrefixes.length === 0
+  )
+}
+
 const getFilteredCountValue = async (
   params: ArticlesReviewsBothParams | ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -588,32 +600,30 @@ const getFilteredCountValue = async (
     identityComponents.push('search')
   }
 
-  return getReviewServingFilteredCountValue({
-    ...getReviewServingFilteredCountComponentIdentities(manifest, identityComponents),
-    computeCount: async () => {
-      const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
-        return group.filterValues
-      })
-      let useCanonicalPromptAnswerPostings = false
+  const computeCount = async () => {
+    const promptAnswerFilterValues = promptAnswerPostingFilterGroups.flatMap((group) => {
+      return group.filterValues
+    })
+    let useCanonicalPromptAnswerPostings = false
 
-      if (promptAnswerFilterValues.length > 0) {
-        try {
-          await ensureReviewServingLazyPromptAnswerPostingBuckets({
-            database,
-            filterValues: promptAnswerFilterValues,
-            listModeKey: mode,
-            projectId: params.projectId,
-            reviewConfigHash: manifest.reviewConfigHash,
-            snapshotId: manifest.snapshotId,
-          })
-        } catch (_error) {
-          useCanonicalPromptAnswerPostings = true
-        }
+    if (promptAnswerFilterValues.length > 0) {
+      try {
+        await ensureReviewServingLazyPromptAnswerPostingBuckets({
+          database,
+          filterValues: promptAnswerFilterValues,
+          listModeKey: mode,
+          projectId: params.projectId,
+          reviewConfigHash: manifest.reviewConfigHash,
+          snapshotId: manifest.snapshotId,
+        })
+      } catch (_error) {
+        useCanonicalPromptAnswerPostings = true
       }
+    }
 
-      const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
-        database,
-        `
+    const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
+      database,
+      `
         ${getReviewServingDynamicFilteredCountSql({
           includeUnassessedQueue: mode === 'unassessed',
           listModeKey: mode,
@@ -637,10 +647,18 @@ const getFilteredCountValue = async (
           useCanonicalPromptAnswerPostings,
         })}
       `,
-      )
+    )
 
-      return Number(row?.totalCount ?? 0)
-    },
+    return Number(row?.totalCount ?? 0)
+  }
+
+  if (shouldCountDirectServingState({mode, promptAnswerPostingFilterGroups, searchTokenPrefixes})) {
+    return computeCount()
+  }
+
+  return getReviewServingFilteredCountValue({
+    ...getReviewServingFilteredCountComponentIdentities(manifest, identityComponents),
+    computeCount,
     database,
     filterSignature: getReviewServingFilteredCountSignature({filters, searchTokenPrefixes}),
     listModeKey: mode,

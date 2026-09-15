@@ -266,6 +266,7 @@ const createWorkerHarness = (input?: {
     },
     sleep: async (_delayMs: number) => {},
     wakeProjectors: async (wakeInput, serviceDependencies) => {
+      events.push('wakeProjectors')
       wakeInputs.push(wakeInput)
       await serviceDependencies.database?.run('SELECT 1')
 
@@ -334,6 +335,48 @@ test('worker publishes judgment visibility before selecting rebuild chunks', asy
   expect(harness.events).toContain('visibility')
   expect(harness.events).toContain('getNextChunk')
   expect(harness.events.indexOf('visibility')).toBeLessThan(harness.events.indexOf('getNextChunk'))
+})
+
+test('worker runs fresh job-driven llmStatus dirty work before rebuild backlog chunks without starving chunks', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+
+  harness.database.queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+    if (statement.includes('candidate_job_visibility')) {
+      harness.events.push('visibility')
+    }
+
+    if (workloadContext) {
+      harness.workloadContexts.push(workloadContext)
+    }
+
+    if (
+      statement.includes('FROM app.review_serving_dirty_work_claim_state state')
+      && statement.includes("state.projection_component = 'llmStatus'")
+      && statement.includes('judgmentSqliteOutboxImport:')
+    ) {
+      return [{pendingCount: 1}] as T[]
+    }
+
+    return [] as T[]
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {now: new Date('2026-06-16T10:00:00.000Z'), rebuildProjectId: 'project-1', workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result).toMatchObject({
+    chunk: {chunkId: 'chunk-1', status: 'completed'},
+    chunkBatchCount: 1,
+    projector: {status: 'completed'},
+    status: 'completed',
+  })
+  expect(harness.events.indexOf('wakeProjectors')).toBeLessThan(harness.events.indexOf('getNextChunk'))
+  expect(harness.wakeInputs.length).toBeGreaterThanOrEqual(1)
+  expect(harness.wakeInputs[0]).toMatchObject({componentOrder: ['llmStatus']})
+  expect(harness.getNextChunkInputs).toHaveLength(1)
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toHaveLength(1)
 })
 
 test('rebuild timing summaries keep compact aggregate phase stats', () => {
@@ -1920,10 +1963,7 @@ test('worker batches a few small search rebuild ranges while preserving foregrou
       return [] as T[]
     }
 
-    if (
-      statement.includes('SELECT DISTINCT')
-      && statement.includes('output_base_generation AS outputBaseGeneration')
-    ) {
+    if (statement.includes('SELECT DISTINCT') && statement.includes('output_base_generation AS outputBaseGeneration')) {
       return [] as T[]
     }
 

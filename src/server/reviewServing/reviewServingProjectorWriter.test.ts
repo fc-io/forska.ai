@@ -1,6 +1,7 @@
-import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync} from 'node:fs'
-import {dirname, join, relative} from 'node:path'
+import {readdirSync, readFileSync} from 'node:fs'
+import {join, relative} from 'node:path'
 
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
@@ -21,23 +22,6 @@ const workspaceRoot = join(import.meta.dir, '../../..')
 
 const getRepoPath = (filePath: string) => {
   return relative(workspaceRoot, filePath).replaceAll('\\', '/')
-}
-
-const removeFileIfExists = (filePath: string) => {
-  if (existsSync(filePath)) {
-    rmSync(filePath, {force: true, recursive: true})
-  }
-}
-
-const runDuckdbSql = (duckdbPath: string, sql: string) => {
-  // eslint-disable-next-line no-undef
-  const result = Bun.spawnSync(['duckdb', duckdbPath], {stdin: new TextEncoder().encode(sql)})
-
-  if (result.exitCode !== 0) {
-    throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB command failed')
-  }
-
-  return result.stdout.toString()
 }
 
 const getTypeScriptFiles = (directory: string): readonly string[] => {
@@ -207,6 +191,44 @@ test('projector replay keys include snapshot, generation, watermark, identity, a
   expect(first).not.toBe(nextPatch)
 })
 
+test('projector writer advances bounded component revisions in the write transaction', async () => {
+  const {database, getTransactionCount, statements} = createWriterDatabase()
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'llmStatus',
+      componentRevisionAdvancements: [
+        {
+          listModeKeys: ['llm', 'both'],
+          projectId: 'project-1',
+          projectionComponent: 'llmStatus',
+          projectionIdentity: 'llmStatus:identity-1',
+          sourceHighWaterMark: 14,
+        },
+      ],
+      projectionManifests: [],
+      records: [],
+      statements: [],
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+
+  expect(getTransactionCount()).toBe(1)
+  expect(joined).toContain('UPDATE app.review_serving_component_revision revision')
+  expect(joined).toContain('INSERT INTO app.review_serving_component_revision')
+  expect(joined).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
+  expect(joined).toContain("json_extract_string(component_state.value, '$.component') = 'llmStatus'")
+  expect(joined).toContain(
+    "json_extract_string(component_state.value, '$.projectionIdentity') = 'llmStatus:identity-1'",
+  )
+  expect(joined).toContain("('llm')")
+  expect(joined).toContain("('both')")
+  expect(joined).toContain('source_high_water_mark = GREATEST')
+  expect(joined).not.toContain('FROM app.review_serving_dirty_work')
+})
+
 test('queue rebuild rows ignore overlapping split chunk boundary rows', async () => {
   const {database, statements} = createWriterDatabase()
 
@@ -305,14 +327,11 @@ test('title search rebuild ranges append chunk-local rows without existing-mart 
 
 test('title search rebuild range append executes against compact DuckDB token postings', async () => {
   const {database, statements} = createWriterDatabase()
-  const duckdbPath = join(workspaceRoot, '.tmp', `title-search-rebuild-merge-${Date.now()}.duckdb`)
-  mkdirSync(dirname(duckdbPath), {recursive: true})
-  removeFileIfExists(duckdbPath)
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
 
   try {
-    runDuckdbSql(
-      duckdbPath,
-      `
+    await connection.run(`
         CREATE SCHEMA app;
         CREATE SCHEMA mart;
         CREATE TABLE mart.project_scope_article(
@@ -335,8 +354,7 @@ test('title search rebuild range append executes against compact DuckDB token po
           ('project-1', 'article-2', 'Beta Gamma', TRUE, FALSE);
         INSERT INTO mart.review_title_search_serving_v4 VALUES
           ('project-1', 'search:identity-1', 'scope:identity-1', 'snapshot-1', 'beta', ['article-0']);
-      `,
-    )
+      `)
 
     await writeReviewServingTitleSearchRebuildRanges(
       {
@@ -358,22 +376,27 @@ test('title search rebuild range append executes against compact DuckDB token po
     const mergeStatements = statements.filter((statement) => {
       return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
     })
-    runDuckdbSql(duckdbPath, mergeStatements.join(';\n'))
+    await connection.run(mergeStatements.join(';\n'))
 
-    const rowsJson = runDuckdbSql(
-      duckdbPath,
-      `
+    const reader = await connection.runAndReadAll(`
         SELECT token, article_ids AS articleIds
         FROM mart.review_title_search_serving_v4
         ORDER BY token;
-      `,
-    )
-    expect(rowsJson).toContain('alpha')
-    expect(rowsJson).toContain('gamma')
-    expect(rowsJson).toContain('[article-0]')
-    expect(rowsJson).toContain('[article-1, article-2]')
+      `)
+    const rows = (reader.getRowObjectsJson() as Array<{articleIds: string[]; token: string}>).sort((left, right) => {
+      return (
+        left.token.localeCompare(right.token) || left.articleIds.join(',').localeCompare(right.articleIds.join(','))
+      )
+    })
+    expect(rows).toEqual([
+      {articleIds: ['article-1'], token: 'alpha'},
+      {articleIds: ['article-0'], token: 'beta'},
+      {articleIds: ['article-1', 'article-2'], token: 'beta'},
+      {articleIds: ['article-2'], token: 'gamma'},
+    ])
   } finally {
-    removeFileIfExists(duckdbPath)
+    connection.closeSync()
+    duckdbInstance.closeSync()
   }
 })
 

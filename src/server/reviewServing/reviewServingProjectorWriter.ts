@@ -27,7 +27,10 @@ import {
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
-import {type ReviewServingProjectionComponentIdentity} from './reviewServingProjectorDomain.ts'
+import {
+  getSnapshotComponentProjectionIdentityPredicate,
+  type ReviewServingProjectionComponentIdentity,
+} from './reviewServingProjectorDomain.ts'
 import {
   selectedImportCompatibilityView,
   selectedImportPublishedTable,
@@ -197,9 +200,18 @@ export type WriteReviewServingQueueRebuildRowsInput = {
 
 export type WriteReviewServingQueueRebuildRangesInput = {ranges: readonly WriteReviewServingQueueRebuildRowsInput[]}
 
+export type ReviewServingProjectorComponentRevisionAdvanceInput = {
+  listModeKeys: readonly string[]
+  projectId: string
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+  sourceHighWaterMark: number
+}
+
 export type WriteReviewServingProjectorComponentInput = {
   acknowledgements?: readonly ReviewServingDirtyWorkClaim[]
   candidateSnapshot?: ReviewServingSnapshotManifestInput
+  componentRevisionAdvancements?: readonly ReviewServingProjectorComponentRevisionAdvanceInput[]
   component: ReviewServingProjectionComponent
   projectionManifests?: readonly ReviewServingProjectionIdentityManifestInput[]
   postRecordStatements?: readonly string[]
@@ -639,6 +651,126 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
       WHERE (existing.selected_import_snapshot_id || '') = (${getSqlLiteral(input.selectedImportSnapshotId)} || '')
     )
   `)
+}
+
+const getReviewServingComponentRevisionTargetPredicate = (
+  input: ReviewServingProjectorComponentRevisionAdvanceInput,
+  snapshotAlias = 'snapshot',
+) => {
+  return `
+    ${snapshotAlias}.project_id = ${getSqlLiteral(input.projectId)}
+    AND ${snapshotAlias}.snapshot_status IN ('candidate', 'active')
+    AND ${getSnapshotComponentProjectionIdentityPredicate(
+      snapshotAlias,
+      input.projectionComponent,
+      getSqlLiteral(input.projectionIdentity),
+    )}
+  `
+}
+
+const getReviewServingComponentRevisionListModeValuesSql = (
+  input: Pick<ReviewServingProjectorComponentRevisionAdvanceInput, 'listModeKeys'>,
+) => {
+  return [...new Set(input.listModeKeys)]
+    .filter((listModeKey) => {
+      return listModeKey.trim().length > 0
+    })
+    .map((listModeKey) => {
+      return `(${getSqlLiteral(listModeKey)})`
+    })
+    .join(', ')
+}
+
+const getAdvanceReviewServingComponentRevisionStatements = (
+  input: ReviewServingProjectorComponentRevisionAdvanceInput,
+) => {
+  const listModeValuesSql = getReviewServingComponentRevisionListModeValuesSql(input)
+
+  if (listModeValuesSql.length === 0) {
+    return []
+  }
+
+  const targetSnapshotPredicate = getReviewServingComponentRevisionTargetPredicate(input)
+  const revisionJoinPredicate = `
+    revision.project_id IS NOT DISTINCT FROM snapshot.project_id
+    AND revision.review_config_hash IS NOT DISTINCT FROM snapshot.review_config_hash
+    AND revision.snapshot_id IS NOT DISTINCT FROM snapshot.snapshot_id
+    AND revision.list_mode_key IS NOT DISTINCT FROM requested_list_mode.list_mode_key
+    AND revision.projection_component = ${getSqlLiteral(input.projectionComponent)}
+    AND revision.projection_identity = ${getSqlLiteral(input.projectionIdentity)}
+  `
+
+  return [
+    `
+    WITH requested_list_mode(list_mode_key) AS (
+      SELECT * FROM (VALUES ${listModeValuesSql})
+    )
+    UPDATE app.review_serving_component_revision revision
+    SET
+      revision = revision.revision + 1,
+      source_high_water_mark = GREATEST(
+        COALESCE(revision.source_high_water_mark, 0),
+        ${getSqlLiteral(input.sourceHighWaterMark)}
+      ),
+      updated_at = current_timestamp
+    FROM app.review_serving_snapshot_manifest snapshot
+    CROSS JOIN requested_list_mode
+    WHERE ${targetSnapshotPredicate}
+      AND ${revisionJoinPredicate}
+  `,
+    `
+    WITH requested_list_mode(list_mode_key) AS (
+      SELECT * FROM (VALUES ${listModeValuesSql})
+    )
+    INSERT INTO app.review_serving_component_revision (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      list_mode_key,
+      projection_component,
+      projection_identity,
+      revision,
+      source_high_water_mark,
+      updated_at
+    )
+    SELECT
+      snapshot.project_id,
+      snapshot.review_config_hash,
+      snapshot.snapshot_id,
+      requested_list_mode.list_mode_key,
+      ${getSqlLiteral(input.projectionComponent)},
+      ${getSqlLiteral(input.projectionIdentity)},
+      1,
+      ${getSqlLiteral(input.sourceHighWaterMark)},
+      current_timestamp
+    FROM app.review_serving_snapshot_manifest snapshot
+    CROSS JOIN requested_list_mode
+    WHERE ${targetSnapshotPredicate}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_component_revision revision
+        WHERE ${revisionJoinPredicate}
+      )
+  `,
+  ]
+}
+
+const advanceReviewServingComponentRevisions = async (
+  inputs: readonly ReviewServingProjectorComponentRevisionAdvanceInput[],
+  tx: ReviewServingProjectorWriterTransaction,
+) => {
+  await inputs.reduce<Promise<void>>((previous, input) => {
+    return previous.then(async () => {
+      await getAdvanceReviewServingComponentRevisionStatements(input).reduce<Promise<void>>(
+        (statementPromise, statement) => {
+          return statementPromise.then(async () => {
+            await tx.run(statement)
+          })
+        },
+        Promise.resolve(),
+      )
+    })
+  }, Promise.resolve())
 }
 
 const getCandidateSnapshotComponentIdentities = (
@@ -1181,6 +1313,10 @@ export const writeReviewServingProjectorComponent = async (
           await tx.run(statement)
         })
       }, Promise.resolve())
+    })
+
+    await measure('componentRevisionAdvancementsMs', async () => {
+      await advanceReviewServingComponentRevisions(input.componentRevisionAdvancements ?? [], tx)
     })
 
     if (input.selectedImportSnapshotCursor !== undefined) {

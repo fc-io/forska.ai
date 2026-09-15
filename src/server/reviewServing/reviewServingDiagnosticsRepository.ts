@@ -53,9 +53,23 @@ export type ReviewServingDiagnosticsDirtyWorkLifecycleReasonCount = {
   status: string
 }
 
+export type ReviewServingDiagnosticsDirtySourceLag = {
+  dirtyHighWaterLag: number
+  dirtySourceHighWaterMark: number
+  importedSourceHighWaterMark: number
+  jobId: string
+  llmStatusCompletedHighWaterMark: number
+  llmStatusFailedCount: number
+  llmStatusPendingCount: number
+  llmStatusRunningCount: number
+  projectId: string
+  sourcePartition: string
+}
+
 export type ReviewServingDiagnosticsDirtyWorkState = ReviewServingDiagnosticsCountState & {
   buckets: ReviewServingDiagnosticsDirtyWorkBucket[]
   lifecycleReasonCounts: ReviewServingDiagnosticsDirtyWorkLifecycleReasonCount[]
+  sourcePartitionLags: ReviewServingDiagnosticsDirtySourceLag[]
 }
 
 export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnosticsCountState & {
@@ -150,6 +164,7 @@ type DiagnosticsSummaryRow = {
   dirtyWorkLifecycleReasonCountsJson: unknown
   dirtyWorkOldestQueuedAt: string | null
   dirtyWorkPendingCount: number
+  dirtyWorkSourcePartitionLagsJson: unknown
   dirtyWorkRunningCount: number
   dirtyWorkUpdatedAt: string | null
   oldestBarrierOutboxId: string | null
@@ -250,6 +265,7 @@ const emptyDirtyWorkState: ReviewServingDiagnosticsDirtyWorkState = {
   ...emptyCountState,
   buckets: [],
   lifecycleReasonCounts: [],
+  sourcePartitionLags: [],
 }
 const emptyRebuildChunkState: ReviewServingDiagnosticsRebuildChunkState = {
   ...emptyCountState,
@@ -436,9 +452,26 @@ const getDirtyWorkLifecycleReasonCount = (
   }
 }
 
-const getRebuildChunkComponentState = (
-  value: unknown,
-): ReviewServingDiagnosticsRebuildChunkComponentState | null => {
+const getDirtySourceLag = (value: unknown): ReviewServingDiagnosticsDirtySourceLag | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  return {
+    dirtyHighWaterLag: getNumberValue(value.dirtyHighWaterLag),
+    dirtySourceHighWaterMark: getNumberValue(value.dirtySourceHighWaterMark),
+    importedSourceHighWaterMark: getNumberValue(value.importedSourceHighWaterMark),
+    jobId: getRequiredString(value.jobId),
+    llmStatusCompletedHighWaterMark: getNumberValue(value.llmStatusCompletedHighWaterMark),
+    llmStatusFailedCount: getNumberValue(value.llmStatusFailedCount),
+    llmStatusPendingCount: getNumberValue(value.llmStatusPendingCount),
+    llmStatusRunningCount: getNumberValue(value.llmStatusRunningCount),
+    projectId: getRequiredString(value.projectId),
+    sourcePartition: getRequiredString(value.sourcePartition),
+  }
+}
+
+const getRebuildChunkComponentState = (value: unknown): ReviewServingDiagnosticsRebuildChunkComponentState | null => {
   if (!isRecord(value) || typeof value.projectionComponent !== 'string') {
     return null
   }
@@ -698,6 +731,59 @@ const getDiagnosticsSummaryRowsEffect = (
         FROM app.review_serving_dirty_work_claim_state
         WHERE project_id = ${getSqlLiteral(input.projectId)}
         GROUP BY status
+      ), judgment_job_source AS (
+        SELECT
+          job.id AS jobId,
+          job.project_id AS projectId,
+          cursor.source_partition AS sourcePartition,
+          cursor.source_high_water_mark AS importedSourceHighWaterMark
+        FROM app.judgment_job job
+        INNER JOIN app.review_delta_reconciliation_cursor cursor
+          ON cursor.source_partition = 'judgmentSqliteOutboxImport:' || job.id
+        WHERE job.project_id = ${getSqlLiteral(input.projectId)}
+          AND job.storage_state IN ('active', 'draining')
+      ), judgment_job_llm_status_claim AS (
+        SELECT
+          state.project_id AS projectId,
+          state.source_partition AS sourcePartition,
+          COALESCE(MAX(state.latest_source_high_water_mark) FILTER (WHERE state.status = 'completed'), 0) AS llmStatusCompletedHighWaterMark,
+          CAST(COUNT(*) FILTER (WHERE state.status = 'pending') AS INTEGER) AS llmStatusPendingCount,
+          CAST(COUNT(*) FILTER (WHERE state.status = 'running') AS INTEGER) AS llmStatusRunningCount,
+          CAST(COUNT(*) FILTER (WHERE state.status = 'failed') AS INTEGER) AS llmStatusFailedCount
+        FROM app.review_serving_dirty_work_claim_state state
+        INNER JOIN judgment_job_source source
+          ON source.projectId = state.project_id
+          AND source.sourcePartition = state.source_partition
+        WHERE state.projection_component = 'llmStatus'
+        GROUP BY state.project_id, state.source_partition
+      ), judgment_job_dirty_source_lag AS (
+        SELECT
+          source.jobId,
+          source.projectId,
+          source.sourcePartition,
+          source.importedSourceHighWaterMark,
+          GREATEST(
+            COALESCE(completed.source_high_water_mark, 0),
+            COALESCE(claim.llmStatusCompletedHighWaterMark, 0)
+          ) AS dirtySourceHighWaterMark,
+          COALESCE(claim.llmStatusCompletedHighWaterMark, 0) AS llmStatusCompletedHighWaterMark,
+          COALESCE(claim.llmStatusPendingCount, 0) AS llmStatusPendingCount,
+          COALESCE(claim.llmStatusRunningCount, 0) AS llmStatusRunningCount,
+          COALESCE(claim.llmStatusFailedCount, 0) AS llmStatusFailedCount,
+          GREATEST(
+            0,
+            source.importedSourceHighWaterMark - GREATEST(
+              COALESCE(completed.source_high_water_mark, 0),
+              COALESCE(claim.llmStatusCompletedHighWaterMark, 0)
+            )
+          ) AS dirtyHighWaterLag
+        FROM judgment_job_source source
+        LEFT JOIN judgment_job_llm_status_claim claim
+          ON claim.projectId = source.projectId
+          AND claim.sourcePartition = source.sourcePartition
+        LEFT JOIN app.review_serving_project_dirty_source_watermark completed
+          ON completed.project_id = source.projectId
+          AND completed.source_partition = source.sourcePartition
       ), unfinished_request AS (
         SELECT DISTINCT request_id
         FROM app.review_rebuild_chunk_manifest
@@ -889,6 +975,28 @@ const getDiagnosticsSummaryRowsEffect = (
             ORDER BY rowCount DESC, status ASC, lifecycleReason ASC NULLS LAST
           )
         ), '[]') AS dirtyWorkLifecycleReasonCountsJson,
+        COALESCE((
+          SELECT to_json(LIST(STRUCT_PACK(
+            jobId := jobId,
+            projectId := projectId,
+            sourcePartition := sourcePartition,
+            importedSourceHighWaterMark := importedSourceHighWaterMark,
+            dirtySourceHighWaterMark := dirtySourceHighWaterMark,
+            dirtyHighWaterLag := dirtyHighWaterLag,
+            llmStatusCompletedHighWaterMark := llmStatusCompletedHighWaterMark,
+            llmStatusPendingCount := llmStatusPendingCount,
+            llmStatusRunningCount := llmStatusRunningCount,
+            llmStatusFailedCount := llmStatusFailedCount
+          )))
+          FROM (
+            SELECT *
+            FROM judgment_job_dirty_source_lag
+            WHERE dirtyHighWaterLag > 0
+              OR llmStatusPendingCount + llmStatusRunningCount + llmStatusFailedCount > 0
+            ORDER BY dirtyHighWaterLag DESC, importedSourceHighWaterMark DESC, sourcePartition ASC
+            LIMIT ${dirtyWorkDiagnosticsBucketLimit}
+          )
+        ), '[]') AS dirtyWorkSourcePartitionLagsJson,
         dirty_work.pendingCount AS dirtyWorkPendingCount,
         dirty_work.runningCount AS dirtyWorkRunningCount,
         dirty_work.failedCount AS dirtyWorkFailedCount,
@@ -980,6 +1088,7 @@ const getDiagnosticsDirtyWorkState = (
     ...getDiagnosticsCountState(row, 'dirtyWork'),
     buckets: getTypedJsonArray(row.dirtyWorkBucketsJson, getDirtyWorkBucket),
     lifecycleReasonCounts: getTypedJsonArray(row.dirtyWorkLifecycleReasonCountsJson, getDirtyWorkLifecycleReasonCount),
+    sourcePartitionLags: getTypedJsonArray(row.dirtyWorkSourcePartitionLagsJson, getDirtySourceLag),
   }
 }
 

@@ -2127,7 +2127,17 @@ test('reviews warnings exposes component readiness for details and search readin
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, articleId)
   await insertActiveReviewServingManifest({
-    components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
+    components: [
+      'projectScope',
+      'selectedImport',
+      'display',
+      'llmStatus',
+      'humanStatus',
+      'queue',
+      'posting',
+      'summary',
+      'payload',
+    ],
     includeSearchState: true,
     optionalComponents: ['payload', 'search'],
     projectId,

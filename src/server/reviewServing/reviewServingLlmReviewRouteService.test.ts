@@ -453,7 +453,7 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
-  expect(reader.statements).toHaveLength(11)
+  expect(reader.statements).toHaveLength(12)
   expect(sql).toContain('SELECT requested.filter_value AS filterValue')
   expect(sql).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(sql).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
@@ -534,6 +534,74 @@ test('LLM review filtered count route serves a cached signature without dynamic 
   expect(joined).not.toContain('review_unassessed_queue_serving_v4')
   expect(joined).not.toContain('review_article_judgment_detail_serving_v4')
   expect(joined).not.toContain('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+})
+
+test('LLM complete count bypasses stale positive filtered-count cache after dirty status patches', async () => {
+  const statements: string[] = []
+  const answeredRows = createArticleRows(2).map((row) => {
+    return {...row, llm_status: 'answered'}
+  })
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('SELECT COUNT(*)::INTEGER AS promptCount')) {
+        return [{promptCount: 1}] as T[]
+      }
+
+      if (statement.includes('FROM app.project')) {
+        return [{dateFrom: null, dateTo: null}] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_filtered_count_serving_v4')) {
+        return [{countFound: true, countValue: 450}] as T[]
+      }
+
+      if (statement.includes(' AS totalCount')) {
+        return [{totalCount: 451}] as T[]
+      }
+
+      if (hasArticleServingRowSource(statement)) {
+        return answeredRows as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
+        return [] as T[]
+      }
+
+      return [] as T[]
+    },
+  }
+  const dependencies = {
+    currentReviewConfigHash: 'config-1',
+    database,
+    manifestDatabase: createManifestDatabase('active'),
+  }
+
+  const countResult = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    dependencies,
+  )
+  const listResult = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, llmStatus: 'complete'},
+    dependencies,
+  )
+  const joined = statements.join('\n')
+  const countStatements = statements.filter((statement) => {
+    return statement.includes(' AS totalCount')
+  })
+
+  expect(countResult).toEqual({totalCount: 451, totalPages: 19})
+  expect(listResult.totalCount).toBe(451)
+  expect(listResult.totalPages).toBe(19)
+  expect(listResult.data).toHaveLength(2)
+  expect(countStatements).toHaveLength(2)
+  expect(joined).not.toContain('FROM mart.review_filtered_count_serving_v4')
+  expect(joined).toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
+  expect(joined).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(joined).not.toContain('FROM mart.review_article_filter_posting_serving_v4')
+  expect(joined).not.toContain('mart.review_title_search_serving_v4')
 })
 
 test('LLM review prompt-filtered count intersects through one posting CTE', async () => {
@@ -652,10 +720,11 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
   })
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
-  expect(reader.statements).toHaveLength(6)
+  expect(reader.statements).toHaveLength(2)
   expect(countStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(countStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(countStatement).toContain("WHEN 'llm' THEN list_mode_state.has_llm_list_mode")
+  expect(reader.statements.join('\n')).not.toContain('FROM mart.review_filtered_count_serving_v4')
   expect(countStatement).not.toContain('FROM mart.review_article_serving_v4')
   expect(countStatement).toContain('list_mode_state.llm_has_judgment IS TRUE')
   expect(countStatement).not.toContain('llm_judged_article_ids AS')
@@ -682,6 +751,7 @@ test('LLM status count remains readable before posting and summary are materiali
   expect(countStatement).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(countStatement).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 list_mode_state')
   expect(countStatement).toContain("list_mode_state.llm_status IN (SELECT unnest(['answered']::VARCHAR[]))")
+  expect(joined).not.toContain('FROM mart.review_filtered_count_serving_v4')
   expect(joined).not.toContain('FROM mart.review_article_count_serving_v4')
   expect(joined).not.toContain('FROM mart.review_article_filter_posting_serving_v4')
   expect(joined).not.toContain('FROM mart.review_article_judgment_detail_serving_v4')

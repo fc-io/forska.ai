@@ -1039,6 +1039,18 @@ export const projectReviewServingLlmStatusPatches = async (
     return writeReviewServingProjectorComponent(
       {
         acknowledgements: input.claims,
+        componentRevisionAdvancements:
+          input.claims.length === 0
+            ? []
+            : [
+                {
+                  listModeKeys: input.listModeKeys,
+                  projectId: input.projectId,
+                  projectionComponent: 'llmStatus',
+                  projectionIdentity: input.projectionIdentity,
+                  sourceHighWaterMark: patchWatermark,
+                },
+              ],
         component: 'llmStatus',
         projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
         records: [],

@@ -113,9 +113,7 @@ export const getIndexTaskProgressLabels = (indexing: ReviewsIndexing): IndexTask
         getComponentProgressOrderIndex(left.projectionComponent)
         - getComponentProgressOrderIndex(right.projectionComponent)
 
-      return orderDifference === 0
-        ? left.projectionComponent.localeCompare(right.projectionComponent)
-        : orderDifference
+      return orderDifference === 0 ? left.projectionComponent.localeCompare(right.projectionComponent) : orderDifference
     })
     .map((component) => {
       const statusParts = getIndexTaskStatusParts(component)

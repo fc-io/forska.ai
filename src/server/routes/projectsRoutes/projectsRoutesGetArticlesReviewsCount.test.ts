@@ -49,6 +49,9 @@ const registerModuleMocks = () => {
       countLlmReviewArticlesFromServing: (input: unknown) => {
         return countRef.current(input)
       },
+      getLlmReviewArticlesFromServing: async () => {
+        return {data: [], limit: 100, page: 1, totalCount: null, totalPages: null}
+      },
     }
   })
 }
