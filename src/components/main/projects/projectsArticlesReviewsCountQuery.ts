@@ -4,6 +4,8 @@ import {apiClient} from '../../../services/apiClient.ts'
 import type {LlmStatus} from '../../../services/olap/olapTypes.ts'
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+const liveStateCountStaleMs = 15_000
+const expensiveCountStaleMs = 1000 * 60 * 5
 
 export const createArticlesReviewsCountQueryOptions = (
   projectId: string,
@@ -30,6 +32,27 @@ export const createArticlesReviewsCountQueryOptions = (
     const s = toStr()
     return isoDatePattern.test(s) ? s : null
   }
+  const hasPromptFilters = () => {
+    return Object.values(promptFilters()).some((value) => {
+      return Array.isArray(value) && value.length > 0
+    })
+  }
+  const isLiveStateCount = () => {
+    return Boolean(llmStatus?.()) && !hasPromptFilters() && (searchTitleApplied() || '').trim() === ''
+  }
+  const countFreshnessOptions = () => {
+    if (isLiveStateCount()) {
+      return {
+        refetchInterval: liveStateCountStaleMs,
+        refetchOnMount: 'always' as const,
+        refetchOnWindowFocus: 'always' as const,
+        staleTime: liveStateCountStaleMs,
+      }
+    }
+
+    return {refetchInterval: false, refetchOnWindowFocus: false, staleTime: expensiveCountStaleMs}
+  }
+
   return {
     // Query key matches filters (not page) since count doesn't depend on page
     queryKey: [
@@ -86,8 +109,7 @@ export const createArticlesReviewsCountQueryOptions = (
 
       return response.data
     },
-    refetchOnWindowFocus: false,
-    // Cache count for longer since it's expensive to compute
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    // Expensive prompt/search counts stay cached; simple status counts are now incremental serving-state reads.
+    ...countFreshnessOptions(),
   }
 }

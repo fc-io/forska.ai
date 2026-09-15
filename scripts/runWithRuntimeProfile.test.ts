@@ -15,7 +15,14 @@ import {expect, test} from 'bun:test'
 
 import {getRuntimeLogConfig} from '../src/server/utils/runtimeLogger.ts'
 import {getRuntimeProfileDuckdbPath} from '../src/utils/runtimeProfile.ts'
-import {getRuntimeProfileCommandEnv} from './runWithRuntimeProfile.ts'
+import {
+  type AppPortListenerProcess,
+  ensureAppPortAvailable,
+  formatAppPortListeners,
+  getAppPortConflictPolicy,
+  getRuntimeProfileCommandEnv,
+  parseLsofFieldOutput,
+} from './runWithRuntimeProfile.ts'
 
 type SpawnedProcess = ReturnType<typeof globalThis.Bun.spawn>
 type RuntimeReadyBody = {data?: {ready?: boolean; role?: string}}
@@ -2134,6 +2141,69 @@ test('propagates the selected runtime profile into launcher child env', () => {
   expect(
     getRuntimeProfileCommandEnv({mode: 'maintenance-only-server', profileName: 'secondary'}).FORSKA_RUNTIME_PROFILE,
   ).toBe('secondary')
+})
+
+test('app launcher port preflight explains conflicting Vite listeners', async () => {
+  const listener: AppPortListenerProcess = {
+    command: 'node /other-checkout/node_modules/.bin/vite',
+    cwd: '/other-checkout',
+    names: ['[::1]:3000'],
+    pid: 4242,
+  }
+
+  let caughtError: unknown = null
+
+  try {
+    await ensureAppPortAvailable({
+      envValues: {FORSKA_VITE_PORT_CONFLICT: 'abort', VITE_PORT: '3000'},
+      getListeners: () => {
+        return [listener]
+      },
+    })
+  } catch (error) {
+    caughtError = error
+  }
+
+  expect(caughtError).toBeInstanceOf(Error)
+  expect((caughtError as Error).message).toContain('Vite port 3000 is already in use')
+})
+
+test('app launcher port preflight can terminate conflicting Vite listeners when explicitly requested', async () => {
+  const listener: AppPortListenerProcess = {
+    command: 'node /other-checkout/node_modules/.bin/vite',
+    cwd: '/other-checkout',
+    names: ['[::1]:3000'],
+    pid: 4242,
+  }
+  const terminatedPids: number[] = []
+  let callCount = 0
+
+  await ensureAppPortAvailable({
+    envValues: {FORSKA_VITE_PORT_CONFLICT: 'kill', VITE_PORT: '3000'},
+    getListeners: () => {
+      callCount += 1
+      return callCount === 1 ? [listener] : []
+    },
+    terminateListener: async (processToTerminate) => {
+      terminatedPids.push(processToTerminate.pid)
+    },
+  })
+
+  expect(terminatedPids).toEqual([4242])
+})
+
+test('app launcher port preflight parser keeps listener process context', () => {
+  expect(
+    parseLsofFieldOutput(['p4242', 'cnode', 'n[::1]:3000', 'p4343', 'cbun', 'n127.0.0.1:3000', ''].join('\n')),
+  ).toEqual([
+    {command: 'node', cwd: null, names: ['[::1]:3000'], pid: 4242},
+    {command: 'bun', cwd: null, names: ['127.0.0.1:3000'], pid: 4343},
+  ])
+
+  expect(formatAppPortListeners([{command: 'node vite', cwd: '/tmp/old', names: ['[::1]:3000'], pid: 4242}])).toContain(
+    '/tmp/old',
+  )
+  expect(getAppPortConflictPolicy({FORSKA_VITE_PORT_CONFLICT: 'takeover'})).toBe('kill')
 })
 
 test('fixes sink-owning runtime service names in launcher child env', () => {
