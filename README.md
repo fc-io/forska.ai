@@ -27,17 +27,24 @@ cd forska.ai
 bun install
 ```
 
-For the current stable release branch, clone or switch to `release/amber-mesa`:
+The current stable version is the latest commit on `main`:
+
+```text
+e2a51b92d450301e84963f4818d3e870c339d484
+```
+
+Clone the stable version from `main`:
 
 ```bash
-git clone --branch release/amber-mesa https://github.com/fc-io/forska.ai.git
+git clone --branch main https://github.com/fc-io/forska.ai.git
 ```
 
 From an existing checkout:
 
 ```bash
 git fetch origin
-git switch release/amber-mesa
+git switch main
+git pull --ff-only
 bun install
 ```
 
