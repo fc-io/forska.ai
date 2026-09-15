@@ -66,6 +66,13 @@ const safetyTriggered = (waiting: number, running: number): boolean => {
   return waiting > 4 * thr
 }
 
+type ProviderMetricsConfig = {
+  baseURL: string | null
+  modelName: string | null
+  providerConfigJson: unknown
+  providerKind: string | null
+}
+
 const getProviderRuntime = ({
   baseURL,
   providerConfigJson,
@@ -74,12 +81,13 @@ const getProviderRuntime = ({
   baseURL: string | null
   providerConfigJson: unknown
   providerKind: string | null
-}): {baseURL: string | null; workerUrls: string[]} => {
+}): {baseURL: string | null; modelNames: string[]; workerUrls: string[]} => {
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
   const workerState = getProviderConnectionWorkerState({baseURL, config, providerKind})
 
   return {
     baseURL: getProviderConnectionEffectiveBaseURL({baseURL, config, providerKind}),
+    modelNames: workerState.match.modelNames,
     workerUrls: workerState.effectiveWorkerUrls,
   }
 }
@@ -88,15 +96,8 @@ const getStatusModelName = (modelNames: string[]) => {
   return modelNames.length === 1 ? (modelNames[0] ?? 'unknown') : 'multiple'
 }
 
-// Generic LLM status ingestion targeting the new llm_status table.
-// Initially feeds engine='vllm' using the existing vLLM metrics adapter.
-export const judgmentsJobsCheckLLMStatus = async () => {
-  const runningJobConfigs = await getAppDatabaseService().queryJson<{
-    providerKind: string | null
-    modelName: string | null
-    baseURL: string | null
-    providerConfigJson: unknown
-  }>(`
+const getRunningJobConfigs = async () => {
+  return getAppDatabaseService().queryJson<ProviderMetricsConfig>(`
     WITH active_running_projects AS (
       SELECT DISTINCT project_id
       FROM app.judgment_job
@@ -114,42 +115,99 @@ export const judgmentsJobsCheckLLMStatus = async () => {
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE lower(trim(pc.provider_kind)) = 'sglang'
   `)
-  const validConfigs = runningJobConfigs.filter((r) => {
-    return (
-      String(r.providerKind ?? '')
-        .trim()
-        .toLowerCase() === 'sglang'
-      && !!getProviderRuntime({
-        baseURL: r.baseURL,
-        providerConfigJson: r.providerConfigJson,
-        providerKind: r.providerKind,
-      }).baseURL
-    )
-  })
-  const workerUrlToModelNames = validConfigs.reduce((acc, cfg) => {
-    const runtime = getProviderRuntime({
-      baseURL: cfg.baseURL,
-      providerConfigJson: cfg.providerConfigJson,
-      providerKind: cfg.providerKind,
-    })
-    const baseURL = runtime.baseURL
-    const targetWorkers = (runtime.workerUrls.length > 0 ? runtime.workerUrls : baseURL ? [baseURL] : [])
-      .map((url) => {
-        return url.trim()
-      })
-      .filter((url) => {
-        return url.length > 0
-      })
-    const modelName = String(cfg.modelName ?? '').trim() || 'unknown'
+}
 
-    targetWorkers.reduce((nextAcc, workerUrl) => {
-      const existingModelNames = nextAcc.get(workerUrl) ?? new Set<string>()
-      nextAcc.set(workerUrl, new Set([...existingModelNames, modelName]))
-      return nextAcc
-    }, acc)
+const getRuntimeProviderConfigs = async () => {
+  return getAppDatabaseService().queryJson<ProviderMetricsConfig>(`
+    SELECT DISTINCT
+      pc.provider_kind AS providerKind,
+      COALESCE(m.remote_model_id, m.name) AS modelName,
+      pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS providerConfigJson
+    FROM app.provider_connection pc
+    LEFT JOIN app.model m ON m.provider_connection_id = pc.id
+      AND m.enabled = TRUE
+    WHERE pc.enabled = TRUE
+      AND lower(trim(pc.provider_kind)) = 'sglang'
+  `)
+}
 
+const addProviderConfigWorkers = (
+  acc: Map<string, Set<string>>,
+  cfg: ProviderMetricsConfig,
+  getModelNames: (runtimeModelNames: string[]) => string[],
+) => {
+  if (
+    String(cfg.providerKind ?? '')
+      .trim()
+      .toLowerCase() !== 'sglang'
+  ) {
     return acc
+  }
+
+  const runtime = getProviderRuntime({
+    baseURL: cfg.baseURL,
+    providerConfigJson: cfg.providerConfigJson,
+    providerKind: cfg.providerKind,
+  })
+  const baseURL = runtime.baseURL
+  const targetWorkers = (runtime.workerUrls.length > 0 ? runtime.workerUrls : baseURL ? [baseURL] : [])
+    .map((url) => {
+      return url.trim()
+    })
+    .filter((url) => {
+      return url.length > 0
+    })
+
+  const modelNames = getModelNames(runtime.modelNames)
+
+  targetWorkers.reduce((nextAcc, workerUrl) => {
+    const existingModelNames = nextAcc.get(workerUrl) ?? new Set<string>()
+    nextAcc.set(workerUrl, new Set([...existingModelNames, ...modelNames]))
+    return nextAcc
+  }, acc)
+
+  return acc
+}
+
+const getConfiguredModelNames = (cfg: ProviderMetricsConfig, runtimeModelNames: string[]) => {
+  const configuredModelName = String(cfg.modelName ?? '').trim()
+
+  return configuredModelName ? [configuredModelName] : runtimeModelNames.length > 0 ? runtimeModelNames : ['unknown']
+}
+
+const getRuntimeModelNames = (cfg: ProviderMetricsConfig, runtimeModelNames: string[]) => {
+  const configuredModelName = String(cfg.modelName ?? '').trim()
+
+  return runtimeModelNames.length > 0 ? runtimeModelNames : configuredModelName ? [configuredModelName] : ['unknown']
+}
+
+const buildWorkerModelMap = ({
+  runningJobConfigs,
+  runtimeProviderConfigs,
+}: {
+  runningJobConfigs: ProviderMetricsConfig[]
+  runtimeProviderConfigs: ProviderMetricsConfig[]
+}) => {
+  const runningWorkerUrlToModelNames = runningJobConfigs.reduce((acc, cfg) => {
+    return addProviderConfigWorkers(acc, cfg, (runtimeModelNames) => {
+      return getConfiguredModelNames(cfg, runtimeModelNames)
+    })
   }, new Map<string, Set<string>>())
+
+  return runtimeProviderConfigs.reduce((acc, cfg) => {
+    return addProviderConfigWorkers(acc, cfg, (runtimeModelNames) => {
+      return getRuntimeModelNames(cfg, runtimeModelNames)
+    })
+  }, runningWorkerUrlToModelNames)
+}
+
+// Generic LLM status ingestion targeting the llm_status table.
+export const judgmentsJobsCheckLLMStatus = async () => {
+  const runningJobConfigs = await getRunningJobConfigs()
+  const runtimeProviderConfigs = await getRuntimeProviderConfigs()
+  const workerUrlToModelNames = buildWorkerModelMap({runningJobConfigs, runtimeProviderConfigs})
+
   if (workerUrlToModelNames.size === 0) return
 
   for (const [workerUrl, modelNameSet] of workerUrlToModelNames.entries()) {

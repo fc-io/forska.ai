@@ -7,6 +7,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
+import {isExpectedNvidiaSmiTelemetryUnavailable} from './nvidiaSmiErrors.ts'
 
 type NvidiaSmiSample = {
   ts: Date
@@ -161,13 +162,8 @@ const pollNvidiaSmiForWorker = async (
   }
 
   if (result.code !== 0) {
-    // Suppress common non-error cases
-    if (
-      result.stderr.includes('Executable not found')
-      || result.stderr.includes('command not found')
-      || result.stderr.includes('Connection refused')
-      || result.stderr.includes('Connection timed out')
-    ) {
+    // Suppress common unavailable-telemetry cases; SGLang runtime metrics are polled separately.
+    if (isExpectedNvidiaSmiTelemetryUnavailable(result.stderr)) {
       return []
     }
     console.error(`[nvidia-smi] poll failed for ${remoteWorkerUrl}`, {

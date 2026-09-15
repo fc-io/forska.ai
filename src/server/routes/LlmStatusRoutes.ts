@@ -81,8 +81,11 @@ type LlmStatusResponseMetadata = {
 type LlmStatusResponseBody = {
   data: LlmStatusRow[]
   hasMetricsCompatibleJob: boolean
+  hasMetricsCompatibleRuntime: boolean
   metadata: LlmStatusResponseMetadata
 }
+
+type MetricsCompatibleSourceState = {hasMetricsCompatibleJob: boolean; hasMetricsCompatibleRuntime: boolean}
 
 let cachedLlmStatus: LlmStatusResponseBody | null = null
 let pendingLlmStatusRefresh: Promise<LlmStatusResponseBody> | null = null
@@ -143,28 +146,31 @@ const getInactiveIngestionReason = (operationalJudgmentCrons: CronRuntimeClassSt
 const getLlmStatusStaleReason = ({
   cron,
   hasMetricsCompatibleJob,
+  hasMetricsCompatibleRuntime,
   latestIngestedAgeMs,
   latestIngestedAt,
   tableExists,
 }: {
   cron: LlmStatusCronMetadata
   hasMetricsCompatibleJob: boolean
+  hasMetricsCompatibleRuntime: boolean
   latestIngestedAgeMs: number | null
   latestIngestedAt: Date | null
   tableExists: boolean | null
 }): LlmStatusStaleReason | null => {
-  const shouldExplainIngestionState = hasMetricsCompatibleJob || latestIngestedAt !== null
+  const hasMetricsCompatibleSource = hasMetricsCompatibleJob || hasMetricsCompatibleRuntime
+  const shouldExplainIngestionState = hasMetricsCompatibleSource || latestIngestedAt !== null
   const inactiveReason = shouldExplainIngestionState ? getInactiveIngestionReason(cron.operationalJudgmentCrons) : null
 
   if (inactiveReason !== null) {
     return inactiveReason
   }
 
-  if (hasMetricsCompatibleJob && tableExists === false) {
+  if (hasMetricsCompatibleSource && tableExists === false) {
     return 'llm-status-table-missing'
   }
 
-  if (hasMetricsCompatibleJob && latestIngestedAt === null) {
+  if (hasMetricsCompatibleSource && latestIngestedAt === null) {
     return 'no-ingested-rows'
   }
 
@@ -173,10 +179,14 @@ const getLlmStatusStaleReason = ({
 
 const getLlmStatusStaleMessage = ({
   cron,
+  hasMetricsCompatibleJob,
+  hasMetricsCompatibleRuntime,
   latestIngestedAt,
   staleReason,
 }: {
   cron: LlmStatusCronMetadata
+  hasMetricsCompatibleJob: boolean
+  hasMetricsCompatibleRuntime: boolean
   latestIngestedAt: Date | null
   staleReason: LlmStatusStaleReason | null
 }) => {
@@ -193,25 +203,41 @@ const getLlmStatusStaleMessage = ({
   }
 
   if (staleReason === 'llm-status-table-missing') {
-    return 'Metrics-compatible job is running, but app.llm_status is unavailable.'
+    return hasMetricsCompatibleJob
+      ? 'Metrics-compatible job is running, but app.llm_status is unavailable.'
+      : 'Enabled SGLang runtime source exists, but app.llm_status is unavailable.'
   }
 
   if (staleReason === 'no-ingested-rows') {
-    return 'Metrics-compatible job is running, but no SGLang status rows have been ingested.'
+    return hasMetricsCompatibleJob
+      ? 'Metrics-compatible job is running, but no SGLang status rows have been ingested.'
+      : 'Enabled SGLang runtime source exists, but no SGLang status rows have been ingested.'
   }
 
-  return latestIngestedAt === null
-    ? 'Latest SGLang status row is stale.'
-    : `Latest SGLang status row was ingested at ${latestIngestedAt.toISOString()}.`
+  if (latestIngestedAt === null) {
+    return 'Latest SGLang status row is stale.'
+  }
+
+  if (hasMetricsCompatibleRuntime && !hasMetricsCompatibleJob) {
+    return `Latest SGLang status row was ingested at ${latestIngestedAt.toISOString()}. An enabled SGLang runtime source exists, so ingestion may be failing to sample /metrics.`
+  }
+
+  if (!hasMetricsCompatibleRuntime && !hasMetricsCompatibleJob) {
+    return `Latest SGLang status row was ingested at ${latestIngestedAt.toISOString()}, and no enabled SGLang metrics source is currently available.`
+  }
+
+  return `Latest SGLang status row was ingested at ${latestIngestedAt.toISOString()}.`
 }
 
 const buildLlmStatusResponse = ({
   data,
   hasMetricsCompatibleJob,
+  hasMetricsCompatibleRuntime,
   tableExists,
 }: {
   data: LlmStatusRow[]
   hasMetricsCompatibleJob: boolean
+  hasMetricsCompatibleRuntime: boolean
   tableExists: boolean | null
 }): LlmStatusResponseBody => {
   const generatedAt = new Date()
@@ -222,6 +248,7 @@ const buildLlmStatusResponse = ({
   const staleReason = getLlmStatusStaleReason({
     cron,
     hasMetricsCompatibleJob,
+    hasMetricsCompatibleRuntime,
     latestIngestedAgeMs,
     latestIngestedAt,
     tableExists,
@@ -230,6 +257,7 @@ const buildLlmStatusResponse = ({
   return {
     data,
     hasMetricsCompatibleJob,
+    hasMetricsCompatibleRuntime,
     metadata: {
       cron,
       generatedAt: generatedAt.toISOString(),
@@ -237,7 +265,13 @@ const buildLlmStatusResponse = ({
       latestIngestedAgeMs,
       latestIngestedAt: latestIngestedAt?.toISOString() ?? null,
       staleAfterMs: llmStatusStaleAfterMs,
-      staleMessage: getLlmStatusStaleMessage({cron, latestIngestedAt, staleReason}),
+      staleMessage: getLlmStatusStaleMessage({
+        cron,
+        hasMetricsCompatibleJob,
+        hasMetricsCompatibleRuntime,
+        latestIngestedAt,
+        staleReason,
+      }),
       staleReason,
       tableExists,
     },
@@ -248,32 +282,52 @@ const refreshLlmStatusMetadata = (status: LlmStatusResponseBody) => {
   return buildLlmStatusResponse({
     data: status.data,
     hasMetricsCompatibleJob: status.hasMetricsCompatibleJob,
+    hasMetricsCompatibleRuntime: status.hasMetricsCompatibleRuntime,
     tableExists: status.metadata.tableExists,
   })
 }
 
-const hasMetricsCompatibleRunningJob = async (): Promise<boolean> => {
-  const rows = await getAppDatabaseService().queryJson<{count: number}>(
-    `
-    SELECT COUNT(*) AS count
-    FROM app.judgment_job jj
-    INNER JOIN app.project p ON jj.project_id = p.id
-    INNER JOIN app.model m ON p.model_id = m.id
-    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE jj.status = 'running'
-      AND LOWER(TRIM(COALESCE(pc.provider_kind, ''))) IN (${metricsCompatibleProviderKinds
-        .map((k) => {
-          return `'${k}'`
-        })
-        .join(', ')})
-  `,
-    llmStatusSingleRowWorkloadContext,
-  )
-  return (rows[0]?.count ?? 0) > 0
+const getMetricsCompatibleSourceState = async (): Promise<MetricsCompatibleSourceState> => {
+  const [jobRows, runtimeRows] = await Promise.all([
+    getAppDatabaseService().queryJson<{count: number}>(
+      `
+      SELECT COUNT(*) AS count
+      FROM app.judgment_job jj
+      INNER JOIN app.project p ON jj.project_id = p.id
+      INNER JOIN app.model m ON p.model_id = m.id
+      INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+      WHERE jj.status = 'running'
+        AND LOWER(TRIM(COALESCE(pc.provider_kind, ''))) IN (${metricsCompatibleProviderKinds
+          .map((k) => {
+            return `'${k}'`
+          })
+          .join(', ')})
+    `,
+      llmStatusSingleRowWorkloadContext,
+    ),
+    getAppDatabaseService().queryJson<{count: number}>(
+      `
+      SELECT COUNT(*) AS count
+      FROM app.provider_connection pc
+      WHERE COALESCE(pc.enabled, TRUE) = TRUE
+        AND LOWER(TRIM(COALESCE(pc.provider_kind, ''))) IN (${metricsCompatibleProviderKinds
+          .map((k) => {
+            return `'${k}'`
+          })
+          .join(', ')})
+    `,
+      llmStatusSingleRowWorkloadContext,
+    ),
+  ])
+
+  return {
+    hasMetricsCompatibleJob: (jobRows[0]?.count ?? 0) > 0,
+    hasMetricsCompatibleRuntime: (runtimeRows[0]?.count ?? 0) > 0,
+  }
 }
 
 const readLlmStatus = async (): Promise<LlmStatusResponseBody> => {
-  const hasCompatibleJob = await hasMetricsCompatibleRunningJob()
+  const sourceState = await getMetricsCompatibleSourceState()
 
   const [tableRow] = await getAppDatabaseService().queryJson<{tableName: string}>(
     `
@@ -287,7 +341,7 @@ const readLlmStatus = async (): Promise<LlmStatusResponseBody> => {
   )
 
   if (!tableRow) {
-    return buildLlmStatusResponse({data: [], hasMetricsCompatibleJob: hasCompatibleJob, tableExists: false})
+    return buildLlmStatusResponse({...sourceState, data: [], tableExists: false})
   }
 
   const data = await getAppDatabaseService().queryJson<LlmStatusRow>(
@@ -320,7 +374,7 @@ const readLlmStatus = async (): Promise<LlmStatusResponseBody> => {
     llmStatusRowsWorkloadContext,
   )
 
-  return buildLlmStatusResponse({data, hasMetricsCompatibleJob: hasCompatibleJob, tableExists: true})
+  return buildLlmStatusResponse({...sourceState, data, tableExists: true})
 }
 
 const refreshLlmStatus = async () => {
@@ -349,5 +403,13 @@ export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/ll
 
   const status = await withTimeout(refreshLlmStatus(), llmStatusForegroundBudgetMs)
 
-  return status ?? buildLlmStatusResponse({data: [], hasMetricsCompatibleJob: false, tableExists: null})
+  return (
+    status
+    ?? buildLlmStatusResponse({
+      data: [],
+      hasMetricsCompatibleJob: false,
+      hasMetricsCompatibleRuntime: false,
+      tableExists: null,
+    })
+  )
 })

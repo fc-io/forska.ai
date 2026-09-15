@@ -77,7 +77,12 @@ export const Navigation = () => {
     }
   })
 
-  const defaultLlmStatusResponse: LlmStatusResponse = {rows: [], hasMetricsCompatibleJob: false, metadata: null}
+  const defaultLlmStatusResponse: LlmStatusResponse = {
+    rows: [],
+    hasMetricsCompatibleJob: false,
+    hasMetricsCompatibleRuntime: false,
+    metadata: null,
+  }
 
   const llmMetrics = () => {
     return getLlmMetricsSummary(llmMetricsQuery.data ?? defaultLlmStatusResponse)
@@ -190,7 +195,7 @@ export const Navigation = () => {
             </Link>
           </div>
           <div class="flex shrink-0 items-center space-x-4">
-            <Show when={llmMetrics()?.hasMetricsCompatibleJob}>
+            <Show when={llmMetrics()?.hasMetricsCompatibleJob || llmMetrics()?.hasMetricsCompatibleRuntime}>
               <div
                 class="flex flex-col items-end px-2 py-1"
                 title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}

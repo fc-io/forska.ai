@@ -29,6 +29,7 @@ export type LlmMetricsSummary = {
   running: number
   lastUpdate: Date | null
   hasMetricsCompatibleJob: boolean
+  hasMetricsCompatibleRuntime: boolean
 }
 
 export type LlmStatusStaleReason =
@@ -198,6 +199,7 @@ const normalizeLlmStatusMetadata = (value: unknown): LlmStatusMetadata | null =>
 export type LlmStatusResponse = {
   rows: LlmStatusRow[]
   hasMetricsCompatibleJob: boolean
+  hasMetricsCompatibleRuntime: boolean
   metadata: LlmStatusMetadata | null
 }
 
@@ -211,6 +213,8 @@ export const fetchLlmStatus = async (): Promise<LlmStatusResponse> => {
   const entries = response.data?.data ?? []
   const hasMetricsCompatibleJob =
     (response.data as Record<string, unknown> | undefined)?.hasMetricsCompatibleJob === true
+  const hasMetricsCompatibleRuntime =
+    (response.data as Record<string, unknown> | undefined)?.hasMetricsCompatibleRuntime === true
   const metadata = normalizeLlmStatusMetadata((response.data as Record<string, unknown> | undefined)?.metadata)
 
   const rows = entries.map((row: Record<string, unknown>) => {
@@ -237,7 +241,7 @@ export const fetchLlmStatus = async (): Promise<LlmStatusResponse> => {
     }
   })
 
-  return {rows, hasMetricsCompatibleJob, metadata}
+  return {rows, hasMetricsCompatibleJob, hasMetricsCompatibleRuntime, metadata}
 }
 
 export const getLatestLlmStatusRowsByInstance = (rows: LlmStatusRow[]) => {
@@ -262,7 +266,13 @@ export const getLlmMetricsSummary = (response: LlmStatusResponse): LlmMetricsSum
   const latestRows = getLatestLlmStatusRowsByInstance(response.rows)
 
   if (latestRows.length === 0) {
-    return {waiting: 0, running: 0, lastUpdate: null, hasMetricsCompatibleJob: response.hasMetricsCompatibleJob}
+    return {
+      waiting: 0,
+      running: 0,
+      lastUpdate: null,
+      hasMetricsCompatibleJob: response.hasMetricsCompatibleJob,
+      hasMetricsCompatibleRuntime: response.hasMetricsCompatibleRuntime,
+    }
   }
 
   const waiting = latestRows.reduce((sum, row) => {
@@ -283,7 +293,13 @@ export const getLlmMetricsSummary = (response: LlmStatusResponse): LlmMetricsSum
         )
       : null
 
-  return {waiting, running, lastUpdate, hasMetricsCompatibleJob: response.hasMetricsCompatibleJob}
+  return {
+    waiting,
+    running,
+    lastUpdate,
+    hasMetricsCompatibleJob: response.hasMetricsCompatibleJob,
+    hasMetricsCompatibleRuntime: response.hasMetricsCompatibleRuntime,
+  }
 }
 
 const isLlmStatusActive = (row: LlmStatusRow) => {

@@ -6,7 +6,12 @@ const apiClientModulePath = new URL('../services/apiClient.ts', import.meta.url)
 
 let llmStatusResponse: {
   error?: unknown
-  data?: {data?: Record<string, unknown>[]; metadata?: Record<string, unknown>}
+  data?: {
+    data?: Record<string, unknown>[]
+    hasMetricsCompatibleJob?: boolean
+    hasMetricsCompatibleRuntime?: boolean
+    metadata?: Record<string, unknown>
+  }
 } = {data: {data: []}}
 
 void mock.module(apiClientModulePath, () => {
@@ -85,6 +90,8 @@ test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () =
           maxInFlight: '400',
         },
       ],
+      hasMetricsCompatibleJob: false,
+      hasMetricsCompatibleRuntime: true,
       metadata: {
         cron: {
           duckdbMemoryLimit: '6400MiB',
@@ -136,6 +143,8 @@ test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () =
     tableExists: true,
   })
   expect(response.metadata?.latestIngestedAt?.toISOString()).toBe('2026-03-25T09:07:00.073Z')
+  expect(response.hasMetricsCompatibleJob).toBe(false)
+  expect(response.hasMetricsCompatibleRuntime).toBe(true)
   expect(response.metadata?.cron?.operationalJudgmentCrons).toMatchObject({
     active: true,
     lastSuccessAt: new Date('2026-03-25T09:07:05.000Z'),
@@ -167,10 +176,12 @@ test('getLlmMetricsSummary keeps waiting and running counts numeric when runtime
       }),
     ],
     hasMetricsCompatibleJob: true,
+    hasMetricsCompatibleRuntime: true,
     metadata: null,
   })
 
   expect(summary?.waiting).toBe(185)
   expect(summary?.running).toBe(204)
   expect(summary?.lastUpdate?.toISOString()).toBe('2026-03-25T09:07:00.073Z')
+  expect(summary?.hasMetricsCompatibleRuntime).toBe(true)
 })
