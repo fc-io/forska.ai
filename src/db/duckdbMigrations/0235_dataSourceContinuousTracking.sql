@@ -100,3 +100,9 @@ CREATE TABLE IF NOT EXISTS app.data_source_article_change_log (
   ),
   CHECK (run_kind IN ('incremental', 'automatic_age_bucket', 'manual_full_range'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_data_source_article_change_log_timeline
+ON app.data_source_article_change_log(data_source_id, detected_at, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_data_source_article_change_log_source_record_history
+ON app.data_source_article_change_log(data_source_id, route, change_kind, source_record_key, detected_at, created_at, id);

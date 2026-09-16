@@ -52,6 +52,7 @@ const reviewServingV4RebuildRequestsRef = {
   current: [] as Array<{components?: readonly string[]; priority?: number; projectId: string; reason: string}>,
 }
 const rejectReviewServingV4RebuildRef = {current: false}
+const reviewServingV4RebuildStatusRef = {current: 'admitted'}
 
 const assertProjectIsActiveRef = {
   current: async (_projectId: string): Promise<unknown> => {
@@ -108,7 +109,7 @@ const registerModuleMocks = () => {
         }
 
         reviewServingV4RebuildRequestsRef.current.push(input)
-        return {requestId: 'request-1', status: 'admitted'}
+        return {requestId: 'request-1', status: reviewServingV4RebuildStatusRef.current}
       },
     }
   })
@@ -152,6 +153,7 @@ afterEach(() => {
 beforeEach(() => {
   reviewServingV4RebuildRequestsRef.current = []
   rejectReviewServingV4RebuildRef.current = false
+  reviewServingV4RebuildStatusRef.current = 'admitted'
   projectReviewConfigRef.current = async () => {
     return {
       humanJudgmentMode: 'prompt',
@@ -468,6 +470,27 @@ test('project review details reports repairRequested false when detail repair en
     status: 'unavailable',
   })
   expect(reviewServingV4RebuildRequestsRef.current).toEqual([])
+})
+
+test('project review details reports repairRequested false when detail repair is blocked by budget', async () => {
+  reviewServingV4RebuildStatusRef.current = 'blocked_over_budget'
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {diagnostics: {snapshotId: null}, reason: 'snapshot unavailable', status: 'rejected'}
+      : {rows: [], status: 'accepted'}
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {article: null; reason: string; repairRequested: boolean; status: string}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    article: null,
+    reason: 'snapshot unavailable',
+    repairRequested: false,
+    status: 'unavailable',
+  })
+  expect(reviewServingV4RebuildRequestsRef.current).toHaveLength(1)
 })
 
 test('project review details treats absent out-of-scope detail rows as terminal', async () => {

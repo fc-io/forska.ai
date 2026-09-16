@@ -447,12 +447,6 @@ const getClaimedReconciliationResult = async ({
       nextRetryAt: new Date(failureNow.getTime() + defaultFailureRetryMs),
       now: failureNow,
     })
-    await trackingRepository.recordTrackingFailure({
-      dataSourceId: work.dataSourceId,
-      error: message,
-      nextRunAfter: null,
-      now: failureNow,
-    })
 
     return {
       dataSourceId: work.dataSourceId,

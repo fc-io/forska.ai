@@ -612,7 +612,59 @@ test('monthly reconciliation scheduler catches up configured age buckets without
       {ageMonths: 3, periodEnd: '2026-06-01T00:00:00.000Z', periodStart: '2026-05-01T00:00:00.000Z', status: 'queued'},
       {ageMonths: 3, periodEnd: '2026-07-01T00:00:00.000Z', periodStart: '2026-06-01T00:00:00.000Z', status: 'queued'},
     ])
-    expect(state?.lastReconciliationSchedulerAt?.toISOString()).toBe('2026-09-16T12:00:10.000Z')
+    expect(state?.lastReconciliationSchedulerAt?.toISOString()).toBe('2026-09-01T00:00:00.000Z')
+  })
+})
+
+test('monthly reconciliation scheduler advances only through bounded processed months', async () => {
+  await withTrackingDatabase(async (database) => {
+    const trackingRepository = createDataSourceTrackingRepository(database)
+    const workRepository = createDataSourceReconciliationWorkRepository(database)
+    const sourceId = 'tracking-source-reconciliation-scheduler-bounded'
+    const route = '/api/datasources/import/pubmed'
+
+    await database.run(`
+      INSERT INTO app.data_source (
+        id,
+        title,
+        import_route,
+        tracking_enabled,
+        tracking_reconcile_schedule_months,
+        date_from
+      )
+      VALUES (
+        '${sourceId}',
+        'Tracked source bounded scheduler',
+        '${route}',
+        TRUE,
+        CAST('[3,12]' AS JSON),
+        TIMESTAMPTZ '2020-01-01T00:00:00.000Z'
+      )
+    `)
+    await trackingRepository.createOrUpdateTrackingState({dataSourceId: sourceId, granularity: 'day', route})
+    await trackingRepository.updateTrackingState(
+      sourceId,
+      {lastReconciliationSchedulerAt: new Date('2026-01-01T00:00:00.000Z')},
+      new Date('2026-01-01T00:00:00.000Z'),
+    )
+
+    const first = await workRepository.scheduleDueMonthlyAgeBucketWork({
+      maxScheduledWork: 2,
+      now: new Date('2026-04-16T12:00:00.000Z'),
+      routes: [route],
+    })
+    const firstState = await trackingRepository.getTrackingState(sourceId)
+    const second = await workRepository.scheduleDueMonthlyAgeBucketWork({
+      maxScheduledWork: 2,
+      now: new Date('2026-04-16T12:00:10.000Z'),
+      routes: [route],
+    })
+    const secondState = await trackingRepository.getTrackingState(sourceId)
+
+    expect(first).toHaveLength(2)
+    expect(firstState?.lastReconciliationSchedulerAt?.toISOString()).toBe('2026-02-01T00:00:00.000Z')
+    expect(second).toHaveLength(2)
+    expect(secondState?.lastReconciliationSchedulerAt?.toISOString()).toBe('2026-03-01T00:00:00.000Z')
   })
 })
 

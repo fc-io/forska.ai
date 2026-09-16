@@ -84,7 +84,7 @@ const requestReviewDetailReadinessRepair = async (projectId: string): Promise<bo
     return null
   })
 
-  return request !== null
+  return request?.status === 'pending_admission' || request?.status === 'admitted' || request?.status === 'running'
 }
 
 type ProjectReviewDetailJudgmentRow = {
