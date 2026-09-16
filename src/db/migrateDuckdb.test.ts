@@ -9544,6 +9544,98 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
   }
 })
 
+test('DuckDB migration 0236 backfills source article dates before index migration on existing imports', async () => {
+  const duckdbPath = `/tmp/forska-source-article-created-at-backfill-${Date.now()}.duckdb`
+  const schemaPayloadPath = `${duckdbPath}.schema.json`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb({throughFileName: '0235_dataSourceContinuousTracking.sql'})
+
+        const database = getAppDatabaseService()
+        await database.run(
+          "INSERT INTO app.import_route (id, route, name) VALUES ('source-created-route', 'source-created:test', 'Source Created Test')"
+        )
+        await database.run(
+          "INSERT INTO app.article (id, article_title, article_id) VALUES ('source-created-article', 'Source Created Article', NULL)"
+        )
+        await database.run(
+          "INSERT INTO app.article_import_route (id, article_id, import_route_id, raw_payload) VALUES ('source-created-link', 'source-created-article', 'source-created-route', CAST('{\\"firstPublicationDate\\":\\"2024-01-15\\"}' AS JSON))"
+        )
+        await database.run(
+          "INSERT INTO app.article_import_route_source_record (id, article_id, import_route_id, source_record_key, source_record_hash, raw_payload) VALUES ('source-created-record', 'source-created-article', 'source-created-route', 'source-created-key', 'source-created-hash', CAST('{\\"publicationDate\\":\\"2024-02-16\\"}' AS JSON))"
+        )
+
+        await migrateDuckdb()
+
+        const [routeBackfill] = await database.queryJson(
+          "SELECT CAST(source_article_created_at AS VARCHAR) AS createdAt FROM app.article_import_route WHERE id = 'source-created-link'"
+        )
+        const [sourceRecordBackfill] = await database.queryJson(
+          "SELECT CAST(source_article_created_at AS VARCHAR) AS createdAt FROM app.article_import_route_source_record WHERE id = 'source-created-record'"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'app' AND table_name IN ('article_import_route', 'article_import_route_source_record') ORDER BY index_name ASC"
+        )
+
+        await Bun.write(${JSON.stringify(schemaPayloadPath)}, JSON.stringify({indexRows, routeBackfill, sourceRecordBackfill}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString()
+          || result.stdout.toString()
+          || 'Failed to verify source article created date backfill migration',
+      )
+    }
+
+    const parsed = JSON.parse(readFileSync(schemaPayloadPath, 'utf8')) as {
+      indexRows: Array<{indexName: string}>
+      routeBackfill: {createdAt: string}
+      sourceRecordBackfill: {createdAt: string}
+    }
+    const indexNames = parsed.indexRows.map((row) => {
+      return row.indexName
+    })
+
+    expect(parsed.routeBackfill.createdAt).toContain('2024-01-15')
+    expect(parsed.sourceRecordBackfill.createdAt).toContain('2024-02-16')
+    expect(indexNames).toContain('idx_app_article_import_route_source_article_created_at')
+    expect(indexNames).toContain('idx_app_article_import_route_source_record_source_article_created_at')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(schemaPayloadPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('DuckDB migrations add project transfer session and history invariants', async () => {
   const duckdbPath = `/tmp/forska-project-transfer-schema-${Date.now()}.duckdb`
   const transferMigrationSql = readFileSync(resolve(migrationsFolder, '0084_projectTransferSessionHistory.sql'), 'utf8')
