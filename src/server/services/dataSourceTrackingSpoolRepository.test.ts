@@ -200,7 +200,68 @@ test('tracking spool reports backlog backpressure and preserves failed-window ba
     expect(failed?.nextRetryAt?.toISOString()).toBe('2026-09-15T10:00:00.000Z')
     expect(failed?.status).toBe('ingest_failed')
     expect(backlogAfterFailure.failedWindowCount).toBe(1)
-    expect(backlogAfterFailure.pendingPageCount).toBe(1)
+    expect(backlogAfterFailure.pendingPageCount).toBe(2)
+  })
+})
+
+test('tracking spool counts fetching pages toward backpressure', () => {
+  withSpoolRepository((repository) => {
+    const window = repository.createOrResumeWindow({
+      dataSourceId: 'source-1',
+      route: '/api/datasources/import/pubmed',
+      runKind: 'manual_full_range',
+      windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+      windowStart: new Date('2026-09-13T00:00:00.000Z'),
+    })
+
+    repository.appendPage({
+      cursorAfter: 'cursor-after-page-1',
+      cursorBefore: null,
+      normalizedRecordsJson: [{id: 'article-1'}],
+      pageIndex: 0,
+      rawPayloadJson: {page: 1},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-page-1',
+      windowId: window.id,
+    })
+
+    const signal = repository.getBackpressureSignal({maxPendingPages: 1, maxPendingWindows: 10})
+
+    expect(signal.backpressureActive).toBe(true)
+    expect(signal.backlog.pendingPageCount).toBe(1)
+    expect(signal.backlog.pendingWindowCount).toBe(1)
+  })
+})
+
+test('tracking spool creates a fresh manual window after prior terminal manual ingest', () => {
+  withSpoolRepository((repository) => {
+    const windowInput = {
+      dataSourceId: 'source-1',
+      route: '/api/datasources/import/pubmed',
+      runKind: 'manual_full_range' as const,
+      windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+      windowStart: new Date('2026-09-13T00:00:00.000Z'),
+    }
+    const firstWindow = repository.createOrResumeWindow({...windowInput, id: 'manual-work-1'})
+
+    repository.appendPage({
+      cursorAfter: null,
+      cursorBefore: null,
+      normalizedRecordsJson: [{id: 'article-1'}],
+      pageIndex: 0,
+      rawPayloadJson: {page: 1},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-page-1',
+      windowId: firstWindow.id,
+    })
+    repository.markWindowIngested({windowId: firstWindow.id})
+
+    const secondWindow = repository.createOrResumeWindow({...windowInput, id: 'manual-work-2'})
+
+    expect(secondWindow.id).toBe('manual-work-2')
+    expect(secondWindow.status).toBe('fetching')
+    expect(repository.getWindow(firstWindow.id)).toBeNull()
+    expect(repository.getWindowPages(secondWindow.id)).toEqual([])
   })
 })
 
@@ -352,5 +413,31 @@ test('tracking spool renews owned ingest leases and never reclaims rejected wind
     expect(rejected?.status).toBe('rejected')
     expect(rejected?.lastError).toBe('route changed')
     expect(retryClaim).toEqual([])
+  })
+})
+
+test('tracking spool recreates rejected incremental windows for retry after re-enable', () => {
+  withSpoolRepository((repository) => {
+    const windowInput = {
+      dataSourceId: 'source-1',
+      route: '/api/datasources/import/pubmed',
+      runKind: 'incremental' as const,
+      windowEnd: new Date('2026-09-14T00:00:00.000Z'),
+      windowStart: new Date('2026-09-14T00:00:00.000Z'),
+    }
+    const rejectedWindow = repository.createOrResumeWindow(windowInput)
+
+    repository.markWindowRejected({
+      error: 'Continuous tracking is not enabled for this data source',
+      now: new Date('2026-09-15T09:00:00.000Z'),
+      windowId: rejectedWindow.id,
+    })
+
+    const retryWindow = repository.createOrResumeWindow(windowInput)
+
+    expect(retryWindow.id).not.toBe(rejectedWindow.id)
+    expect(retryWindow.status).toBe('fetching')
+    expect(repository.getWindow(rejectedWindow.id)).toBeNull()
+    expect(repository.getWindowPages(retryWindow.id)).toEqual([])
   })
 })

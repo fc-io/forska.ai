@@ -18,7 +18,7 @@ const getDataSource = (): DataSourceRecord => {
     archived: false,
     createdAt: new Date('2026-09-01T00:00:00.000Z'),
     cursor: null,
-    dateFrom: new Date('2026-09-01T00:00:00.000Z'),
+    dateFrom: new Date('2026-01-01T00:00:00.000Z'),
     dateTo: null,
     description: null,
     id: 'source-1',
@@ -276,7 +276,8 @@ test('spool ingester uses reconciliation sync semantics and completes work after
         expect(input.importRoute).toBe(pubmedTrackedImportRoute)
         expect(input.periodStart.toISOString()).toBe('2026-06-01T00:00:00.000Z')
         expect(input.periodEnd.toISOString()).toBe('2026-07-01T00:00:00.000Z')
-        expect(input.sourceRecordKeys).toEqual(['pmid:1'])
+        expect(input.sourceRecordKeys).toEqual([])
+        expect([...(input.sourceRecordKeyBatches ?? [])].flat()).toEqual(['pmid:1'])
         return {deletedSourceRecordCount: 0, importRouteIds: ['route-id-1']}
       },
       storeImportedArticlesForReconciliationBatchWithTx: async (input) => {
@@ -421,7 +422,8 @@ test('spool ingester stores reconciliation pages in bounded batches before final
       } as never,
       spoolRepository,
       finalizeImportedArticlesForReconciliationPeriodWithTx: async (input) => {
-        expect(input.sourceRecordKeys).toEqual(['pmid:1', 'pmid:2'])
+        expect(input.sourceRecordKeys).toEqual([])
+        expect([...(input.sourceRecordKeyBatches ?? [])].flat()).toEqual(['pmid:1', 'pmid:2'])
         return {deletedSourceRecordCount: 0, importRouteIds: ['route-id-1']}
       },
       storeImportedArticlesForReconciliationBatchWithTx: async (input) => {
@@ -500,6 +502,68 @@ test('spool ingester rejects stale route windows before DuckDB ingest', async ()
     expect(rejectedWindow?.status).toBe('rejected')
     expect(rejectedWindow?.lastError).toContain('no longer matches data source route')
     expect(order).toEqual([])
+  })
+})
+
+test('spool ingester rejects stale-bound reconciliation windows without completing work', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const order: string[] = []
+    const readyWindow = createReadyWindow(spoolRepository, {
+      runKind: 'automatic_age_bucket',
+      windowEnd: new Date('2026-07-01T00:00:00.000Z'),
+      windowStart: new Date('2026-06-01T00:00:00.000Z'),
+    })
+    const ingester = createDataSourceTrackingSpoolIngester({
+      dataSourceQueryService: {
+        countArticlesLinkedToImportRoute: async () => {
+          order.push('datasource:count-linked')
+          return 0
+        },
+        getDataSourceById: async () => {
+          return {...getDataSource(), dateFrom: new Date('2026-06-15T00:00:00.000Z')}
+        },
+        updateDataSourceAfterImport: async () => {
+          order.push('datasource:update-after-import')
+          return getDataSource()
+        },
+      } as never,
+      database: {
+        transactionBackground: async () => {
+          order.push('duckdb:transaction')
+          throw new Error('stale bounds should not reach DuckDB')
+        },
+      } as never,
+      reconciliationWorkRepository: {
+        markWorkCompletedForSpoolWindow: async () => {
+          order.push('work:completed')
+          return null
+        },
+        markWorkFailedForSpoolWindow: async (input: {
+          error: string
+          nextRetryAt?: Date | null
+          spoolWindowId: string
+        }) => {
+          order.push(`work:failed:${input.spoolWindowId}:${input.nextRetryAt?.toISOString()}:${input.error}`)
+          return null
+        },
+      } as never,
+      spoolRepository,
+    })
+
+    const result = await ingester.drainReadyWindows({
+      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker',
+      limit: 1,
+      now: new Date('2026-09-16T09:00:00.000Z'),
+    })
+    const rejectedWindow = spoolRepository.getWindow(readyWindow.id)
+
+    expect(result).toMatchObject([{reason: 'stale-bounds', status: 'failed'}])
+    expect(rejectedWindow?.status).toBe('rejected')
+    expect(rejectedWindow?.lastError).toContain('no longer fits data source bounds')
+    expect(order).toHaveLength(1)
+    expect(order[0]).toContain(`work:failed:${readyWindow.id}:`)
+    expect(order[0]).toContain(':Tracking spool window ')
   })
 })
 

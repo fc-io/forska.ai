@@ -230,13 +230,13 @@ const getNumericSourceWatermark = (watermarks: Record<string, unknown>, sourceKe
 }
 
 const isClaimCoveredByRebuildRequest = (claim: ReviewServingDirtyWorkClaim, request: ReviewServingRebuildRequest) => {
+  if (claim.projectId === null || request.projectId !== claim.projectId) {
+    return false
+  }
+
   const sourceWatermarks = getObjectRecord(request.sourceWatermarksJson)
 
   if (sourceWatermarks === null) {
-    return true
-  }
-
-  if (claim.projectId === null || request.projectId !== claim.projectId) {
     return false
   }
 

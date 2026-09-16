@@ -176,6 +176,49 @@ test('data source tracking state resets window progress when the tracked route c
   })
 })
 
+test('data source tracking state treats a fixed date_to day as complete when high water reaches that UTC day', async () => {
+  await withTrackingDatabase(async (database) => {
+    const trackingRepository = createDataSourceTrackingRepository(database)
+    const sourceId = 'tracking-source-fixed-date-to-complete-day'
+    const route = '/api/datasources/import/pubmed'
+    const now = new Date('2026-09-16T10:00:00.000Z')
+
+    await database.run(`
+      INSERT INTO app.data_source (id, title, import_route, tracking_enabled, date_from, date_to)
+      VALUES (
+        '${sourceId}',
+        'Tracked fixed end source',
+        '${route}',
+        TRUE,
+        TIMESTAMPTZ '2026-09-01T00:00:00.000Z',
+        TIMESTAMPTZ '2026-09-15T23:59:00.000Z'
+      )
+    `)
+
+    await trackingRepository.createOrUpdateTrackingState({dataSourceId: sourceId, granularity: 'day', route})
+    await trackingRepository.recordTrackingSuccess({
+      dataSourceId: sourceId,
+      highWaterCompletedAt: new Date('2026-09-15T00:00:00.000Z'),
+      now,
+    })
+
+    const dueSources = await trackingRepository.selectDueSources({limit: 5, now})
+    const claim = await trackingRepository.claimDueSource({
+      dataSourceId: sourceId,
+      leaseExpiresAt: new Date('2026-09-16T10:05:00.000Z'),
+      leaseOwner: 'worker-a',
+      now,
+    })
+
+    expect(
+      dueSources.map((source) => {
+        return source.dataSourceId
+      }),
+    ).not.toContain(sourceId)
+    expect(claim).toBeNull()
+  })
+})
+
 test('data source reconciliation work scheduling is idempotent and claims one active lease', async () => {
   await withTrackingDatabase(async (database) => {
     const workRepository = createDataSourceReconciliationWorkRepository(database)

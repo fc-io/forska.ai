@@ -254,10 +254,14 @@ test('data source tracking worker claims and spools reconciliation work separate
     'tracking:start',
     'reconciliation:renew',
     'reconciliation:fetch',
+    'reconciliation:renew',
     'reconciliation:progress',
     'tracking:cursor',
+    'reconciliation:renew',
+    'reconciliation:renew',
     'reconciliation:progress',
     'tracking:cursor',
+    'reconciliation:renew',
     'reconciliation:progress',
     'spool:drain',
   ])
@@ -361,9 +365,17 @@ test('data source tracking worker rechecks backpressure after each spooled page'
           cursor: string | null
           window: {cursor: string | null; id: string}
         }) => Promise<void> | void
+        assertPageAppendAllowed?: (input: {
+          cursor: string | null
+          window: {cursor: string | null; id: string}
+        }) => Promise<void> | void
       }) => {
         calls.push('source:fetch')
         pageSpooled = true
+        await input.assertPageAppendAllowed?.({
+          cursor: 'cursor-after-page',
+          window: {cursor: 'cursor-after-page', id: 'window-1'},
+        })
         await input.onPageSpooled?.({
           cursor: 'cursor-after-page',
           window: {cursor: 'cursor-after-page', id: 'window-1'},
@@ -425,8 +437,177 @@ test('data source tracking worker rechecks backpressure after each spooled page'
     'tracking:start',
     'tracking:renew',
     'source:fetch',
-    'tracking:cursor',
+    'tracking:renew',
     'tracking:failure',
     'spool:drain',
   ])
+})
+
+test('data source tracking worker aborts page append as soon as source lease renewal fails', async () => {
+  const now = new Date('2099-01-01T00:00:00.000Z')
+  const activeState = {
+    ...getState(),
+    activeRunKind: 'incremental' as const,
+    activeWindowEnd: new Date('2026-09-15T00:00:00.000Z'),
+    activeWindowStart: new Date('2026-09-15T00:00:00.000Z'),
+    leaseExpiresAt: new Date('2099-01-01T00:10:00.000Z'),
+    leaseOwner: 'worker',
+  }
+  let renewCount = 0
+  let pageAppendAllowedCalled = false
+  let onPageSpooledCalled = false
+  let recordedFailure: {error: string; nextRunAfterIso: string | null; nowIso: string | null} | null = null
+  const worker = createDataSourceTrackingWorker({
+    dataSourceQueryService: {
+      getDataSourceById: async () => {
+        return {
+          archived: false,
+          createdAt: new Date('2026-09-01T00:00:00.000Z'),
+          cursor: null,
+          dateFrom: new Date('2026-09-01T00:00:00.000Z'),
+          dateTo: null,
+          description: null,
+          id: 'source-1',
+          importRoute: pubmedTrackedImportRoute,
+          itemsAfterLastImport: 0,
+          lastImportAt: null,
+          title: 'Tracked source',
+          trackingEnabled: true,
+          trackingReconcileScheduleMonths: [3],
+          updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+        }
+      },
+    } as never,
+    logger: {
+      log: () => {
+        return undefined
+      },
+      warn: () => {
+        return undefined
+      },
+    },
+    providerRegistry: {
+      getProvider: () => {
+        return {
+          getNextWindow: () => {
+            return {
+              reason: 'next-window',
+              status: 'window',
+              window: {
+                dataSourceId: 'source-1',
+                route: pubmedTrackedImportRoute,
+                runKind: 'incremental',
+                windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+                windowStart: new Date('2026-09-15T00:00:00.000Z'),
+              },
+            }
+          },
+          route: pubmedTrackedImportRoute,
+        }
+      },
+    } as never,
+    reconciliationWorkRepository: {
+      claimNextWork: async () => {
+        return null
+      },
+      scheduleDueMonthlyAgeBucketWork: async () => {
+        return []
+      },
+    } as never,
+    spoolIngester: {
+      drainReadyWindows: async () => {
+        return []
+      },
+    },
+    spoolRepository: {
+      getBackpressureSignal: () => {
+        return {
+          backpressureActive: false,
+          backlog: {
+            failedWindowCount: 0,
+            oldestReadyAt: null,
+            pendingPageCount: 0,
+            pendingWindowCount: 0,
+            readyWindowCount: 0,
+          },
+        }
+      },
+    } as never,
+    trackedImportService: {
+      fetchWindowToSpool: async (input: {
+        assertPageAppendAllowed?: (input: {
+          cursor: string | null
+          window: {cursor: string | null; id: string}
+        }) => Promise<void> | void
+        onPageSpooled?: (input: {
+          cursor: string | null
+          window: {cursor: string | null; id: string}
+        }) => Promise<void> | void
+      }) => {
+        pageAppendAllowedCalled = true
+        await input.assertPageAppendAllowed?.({
+          cursor: 'cursor-after-page',
+          window: {cursor: 'cursor-after-page', id: 'window-1'},
+        })
+        onPageSpooledCalled = true
+        await input.onPageSpooled?.({
+          cursor: 'cursor-after-page',
+          window: {cursor: 'cursor-after-page', id: 'window-1'},
+        })
+        return {fetchedTotal: 1, pageCount: 1, reason: 'fetched', status: 'spooled', window: {id: 'window-1'}}
+      },
+    } as never,
+    trackingRepository: {
+      claimDueSource: async ({dataSourceId}: {dataSourceId: string}) => {
+        return {...getState(), dataSourceId, leaseExpiresAt: new Date('2099-01-01T00:10:00.000Z'), leaseOwner: 'worker'}
+      },
+      getTrackingState: async () => {
+        return activeState
+      },
+      recordTrackingFailure: async (input: {error: string; nextRunAfter?: Date | null; now?: Date}) => {
+        recordedFailure = {
+          error: input.error,
+          nextRunAfterIso: input.nextRunAfter?.toISOString() ?? null,
+          nowIso: input.now?.toISOString() ?? null,
+        }
+        return null
+      },
+      renewSourceLease: async () => {
+        renewCount += 1
+        return renewCount === 1 ? activeState : null
+      },
+      selectDueSources: async () => {
+        return [getState()]
+      },
+      startTrackingWindow: async () => {
+        return activeState
+      },
+      updateTrackingState: async () => {
+        throw new Error('cursor should not advance after lease loss')
+      },
+    } as never,
+  })
+
+  const result = await worker.wake({maxFetchSources: 1, now})
+
+  expect(pageAppendAllowedCalled).toBe(true)
+  expect(onPageSpooledCalled).toBe(false)
+  expect(result.sourceResults).toEqual([
+    {
+      dataSourceId: 'source-1',
+      error: 'Data source tracking lease lost',
+      reason: 'fetch-failed',
+      status: 'failed',
+      windowId: '2026-09-15T00:00:00.000Z',
+    },
+  ])
+  const failure = recordedFailure
+
+  if (!failure?.nowIso || !failure.nextRunAfterIso) {
+    throw new Error('Expected tracking failure timestamp evidence')
+  }
+
+  expect(failure.error).toBe('Data source tracking lease lost')
+  expect(failure.nowIso).toBe('2099-01-01T00:00:00.000Z')
+  expect(failure.nextRunAfterIso).toBe('2099-01-01T00:05:00.000Z')
 })

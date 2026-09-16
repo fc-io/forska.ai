@@ -228,10 +228,19 @@ const initializeSpoolDatabase = (database: Database) => {
       UNIQUE(window_id, page_index)
     );
 
+    CREATE TABLE IF NOT EXISTS tracking_spool_source_record_key (
+      window_id TEXT NOT NULL REFERENCES tracking_spool_window(id) ON DELETE CASCADE,
+      source_record_key TEXT NOT NULL,
+      first_seen_at TEXT NOT NULL,
+      PRIMARY KEY(window_id, source_record_key)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tracking_spool_window_ready
       ON tracking_spool_window(status, spooled_at, lease_expires_at);
     CREATE INDEX IF NOT EXISTS idx_tracking_spool_page_window
       ON tracking_spool_page(window_id, page_index);
+    CREATE INDEX IF NOT EXISTS idx_tracking_spool_source_record_key_window
+      ON tracking_spool_source_record_key(window_id, source_record_key);
   `)
 }
 
@@ -289,7 +298,7 @@ export const createDataSourceTrackingSpoolRepository = (
       .query(
         `
         SELECT
-          SUM(CASE WHEN status IN ('ready', 'ingesting') THEN 1 ELSE 0 END) AS pendingWindowCount,
+          SUM(CASE WHEN status IN ('fetching', 'fetch_failed', 'ready', 'ingesting', 'ingest_failed') THEN 1 ELSE 0 END) AS pendingWindowCount,
           SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS readyWindowCount,
           SUM(CASE WHEN status IN ('fetch_failed', 'ingest_failed', 'rejected') THEN 1 ELSE 0 END) AS failedWindowCount,
           MIN(CASE WHEN status = 'ready' THEN spooled_at ELSE NULL END) AS oldestReadyAt
@@ -309,7 +318,7 @@ export const createDataSourceTrackingSpoolRepository = (
         FROM tracking_spool_page page
         INNER JOIN tracking_spool_window spool_window ON spool_window.id = page.window_id
         WHERE page.duckdb_ingested_at IS NULL
-          AND spool_window.status IN ('ready', 'ingesting')
+          AND spool_window.status IN ('fetching', 'fetch_failed', 'ready', 'ingesting', 'ingest_failed')
       `,
       )
       .all() as Array<{pendingPageCount: number | null}>
@@ -490,12 +499,17 @@ export const createDataSourceTrackingSpoolRepository = (
             return '?'
           })
           .join(', ')
+        const keysResult = database
+          .query(`DELETE FROM tracking_spool_source_record_key WHERE window_id IN (${placeholders})`)
+          .run(...ids) as {changes?: number}
         const pagesResult = database
           .query(`DELETE FROM tracking_spool_page WHERE window_id IN (${placeholders})`)
           .run(...ids) as {changes?: number}
         const windowsResult = database
           .query(`DELETE FROM tracking_spool_window WHERE id IN (${placeholders})`)
           .run(...ids) as {changes?: number}
+
+        void keysResult
 
         return {pagesDeleted: pagesResult.changes ?? 0, windowsDeleted: windowsResult.changes ?? 0}
       })()
@@ -514,64 +528,94 @@ export const createDataSourceTrackingSpoolRepository = (
       windowEnd: Date
       windowStart: Date
     }): DataSourceTrackingSpoolWindowRecord => {
-      const now = input.now ?? new Date()
-      const id = input.id ?? randomUUID()
-
-      database
-        .query(
-          `
-          INSERT INTO tracking_spool_window (
-            id,
-            data_source_id,
-            route,
-            run_kind,
-            window_start,
-            window_end,
-            status,
-            created_at,
-            updated_at
+      return database.transaction(() => {
+        const now = input.now ?? new Date()
+        const id = input.id ?? randomUUID()
+        const identityArgs = [
+          input.dataSourceId,
+          input.route,
+          input.runKind,
+          input.windowStart.toISOString(),
+          input.windowEnd.toISOString(),
+        ] as const
+        const existing = database
+          .query(
+            `
+            SELECT *
+            FROM tracking_spool_window
+            WHERE data_source_id = ?
+              AND route = ?
+              AND run_kind = ?
+              AND window_start = ?
+              AND window_end = ?
+            LIMIT 1
+          `,
           )
-          VALUES (?, ?, ?, ?, ?, ?, 'fetching', ?, ?)
-          ON CONFLICT(data_source_id, route, run_kind, window_start, window_end) DO NOTHING
-        `,
-        )
-        .run(
-          id,
-          input.dataSourceId,
-          input.route,
-          input.runKind,
-          input.windowStart.toISOString(),
-          input.windowEnd.toISOString(),
-          now.toISOString(),
-          now.toISOString(),
-        )
+          .get(...identityArgs) as SpoolWindowRow | null
 
-      const row = database
-        .query(
-          `
-          SELECT *
-          FROM tracking_spool_window
-          WHERE data_source_id = ?
-            AND route = ?
-            AND run_kind = ?
-            AND window_start = ?
-            AND window_end = ?
-          LIMIT 1
-        `,
-        )
-        .get(
-          input.dataSourceId,
-          input.route,
-          input.runKind,
-          input.windowStart.toISOString(),
-          input.windowEnd.toISOString(),
-        ) as SpoolWindowRow | null
+        if (
+          existing
+          && ((input.id
+            && existing.id !== input.id
+            && input.runKind === 'manual_full_range'
+            && (existing.status === 'ingested' || existing.status === 'rejected'))
+            || (existing.status === 'rejected' && (input.runKind === 'incremental' || input.id)))
+        ) {
+          database.query(`DELETE FROM tracking_spool_source_record_key WHERE window_id = ?`).run(existing.id)
+          database.query(`DELETE FROM tracking_spool_page WHERE window_id = ?`).run(existing.id)
+          database.query(`DELETE FROM tracking_spool_window WHERE id = ?`).run(existing.id)
+        }
 
-      if (!row) {
-        throw new Error('Failed to create or resume tracking spool window')
-      }
+        database
+          .query(
+            `
+            INSERT INTO tracking_spool_window (
+              id,
+              data_source_id,
+              route,
+              run_kind,
+              window_start,
+              window_end,
+              status,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'fetching', ?, ?)
+            ON CONFLICT(data_source_id, route, run_kind, window_start, window_end) DO NOTHING
+          `,
+          )
+          .run(
+            id,
+            input.dataSourceId,
+            input.route,
+            input.runKind,
+            input.windowStart.toISOString(),
+            input.windowEnd.toISOString(),
+            now.toISOString(),
+            now.toISOString(),
+          )
 
-      return getWindowRecordFromRow(row)
+        const row = database
+          .query(
+            `
+            SELECT *
+            FROM tracking_spool_window
+            WHERE data_source_id = ?
+              AND route = ?
+              AND run_kind = ?
+              AND window_start = ?
+              AND window_end = ?
+            LIMIT 1
+          `,
+          )
+          .get(...identityArgs) as SpoolWindowRow | null
+
+        if (!row) {
+          throw new Error('Failed to create or resume tracking spool window')
+        }
+
+        return getWindowRecordFromRow(row)
+      })()
     },
     getBacklog,
     getBackpressureSignal: (input: {
@@ -627,6 +671,30 @@ export const createDataSourceTrackingSpoolRepository = (
         .all(input.windowId, input.afterPageIndex ?? -1, getLimitValue(input.limit)) as SpoolPageRow[]
 
       return rows.map(getPageRecordFromRow)
+    },
+    getWindowSourceRecordKeysBatch: (input: {
+      afterSourceRecordKey?: string | null
+      limit: number
+      windowId: string
+    }): string[] => {
+      const rows = database
+        .query(
+          `
+          SELECT source_record_key AS sourceRecordKey
+          FROM tracking_spool_source_record_key
+          WHERE window_id = ?
+            AND source_record_key > ?
+          ORDER BY source_record_key ASC
+          LIMIT ?
+        `,
+        )
+        .all(input.windowId, input.afterSourceRecordKey ?? '', getLimitValue(input.limit)) as Array<{
+        sourceRecordKey: string
+      }>
+
+      return rows.map((row) => {
+        return row.sourceRecordKey
+      })
     },
     markWindowFailed: (input: {
       error: string
@@ -758,6 +826,43 @@ export const createDataSourceTrackingSpoolRepository = (
         .run(spooledAt.toISOString(), spooledAt.toISOString(), input.windowId)
 
       return getWindowById(database, input.windowId)
+    },
+    recordWindowSourceRecordKeys: (input: {
+      now?: Date
+      sourceRecordKeys: string[]
+      windowId: string
+    }): {insertedCount: number} => {
+      const keys = [...new Set(input.sourceRecordKeys)].filter((key) => {
+        return key.trim() !== ''
+      })
+
+      if (keys.length === 0) {
+        return {insertedCount: 0}
+      }
+
+      const now = input.now ?? new Date()
+
+      return database.transaction(() => {
+        let insertedCount = 0
+        const insert = database.query(
+          `
+          INSERT OR IGNORE INTO tracking_spool_source_record_key (
+            window_id,
+            source_record_key,
+            first_seen_at
+          )
+          VALUES (?, ?, ?)
+        `,
+        )
+
+        for (const key of keys) {
+          const result = insert.run(input.windowId, key, now.toISOString()) as {changes?: number}
+
+          insertedCount += result.changes ?? 0
+        }
+
+        return {insertedCount}
+      })()
     },
     renewWindowLease: (input: {
       leaseExpiresAt: Date

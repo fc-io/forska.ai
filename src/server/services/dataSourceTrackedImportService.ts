@@ -36,6 +36,10 @@ export type DataSourceTrackedImportResult =
 export type DataSourceTrackedImportService = {
   fetchReconciliationWorkToSpool: (input: {
     dataSource: DataSourceRecord
+    assertPageAppendAllowed?: (input: {
+      cursor: string | null
+      window: DataSourceTrackingSpoolWindowRecord
+    }) => Promise<void> | void
     now?: Date
     onPageSpooled?: (input: {
       cursor: string | null
@@ -46,6 +50,10 @@ export type DataSourceTrackedImportService = {
   }) => Promise<DataSourceTrackedImportResult>
   fetchWindowToSpool: (input: {
     dataSource: DataSourceRecord
+    assertPageAppendAllowed?: (input: {
+      cursor: string | null
+      window: DataSourceTrackingSpoolWindowRecord
+    }) => Promise<void> | void
     now?: Date
     onPageSpooled?: (input: {
       cursor: string | null
@@ -87,6 +95,10 @@ const getEmptyPageHash = () => {
   return createHash('sha256').update(getStableJsonValue([])).digest('hex')
 }
 
+const getRetryBaseNow = (startedAt: Date) => {
+  return new Date(Math.max(Date.now(), startedAt.getTime()))
+}
+
 const getInclusiveRangeEnd = (periodStart: Date, periodEnd: Date) => {
   const startDay = new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth(), periodStart.getUTCDate()))
   const endDay = new Date(Date.UTC(periodEnd.getUTCFullYear(), periodEnd.getUTCMonth(), periodEnd.getUTCDate()))
@@ -103,6 +115,7 @@ export const createDataSourceTrackedImportService = ({
   spoolRepository?: DataSourceTrackingSpoolRepository
 } = {}): DataSourceTrackedImportService => {
   const fetchToSpool = async ({
+    assertPageAppendAllowed,
     dataSource,
     fetchRange,
     now,
@@ -110,9 +123,14 @@ export const createDataSourceTrackedImportService = ({
     onSpoolWindowCreated,
     route,
     runKind,
+    spoolWindowId,
     windowEnd,
     windowStart,
   }: {
+    assertPageAppendAllowed?: (input: {
+      cursor: string | null
+      window: DataSourceTrackingSpoolWindowRecord
+    }) => Promise<void> | void
     dataSource: DataSourceRecord
     fetchRange: boolean
     now: Date
@@ -123,6 +141,7 @@ export const createDataSourceTrackedImportService = ({
     onSpoolWindowCreated?: (window: DataSourceTrackingSpoolWindowRecord) => Promise<void> | void
     route: string
     runKind: DataSourceTrackingSpoolWindowRecord['runKind']
+    spoolWindowId?: string
     windowEnd: Date
     windowStart: Date
   }): Promise<DataSourceTrackedImportResult> => {
@@ -134,6 +153,7 @@ export const createDataSourceTrackedImportService = ({
 
     const spoolWindow = spoolRepository.createOrResumeWindow({
       dataSourceId: dataSource.id,
+      id: spoolWindowId,
       now,
       route,
       runKind,
@@ -201,6 +221,7 @@ export const createDataSourceTrackedImportService = ({
         fromDate: formatUtcDay(windowStart),
         importRoute: route,
         onPage: async (page) => {
+          await assertPageAppendAllowed?.({cursor: page.cursorAfter, window: spoolWindow})
           spoolRepository.appendPage({
             cursorAfter: page.cursorAfter,
             cursorBefore: page.cursorBefore,
@@ -230,10 +251,11 @@ export const createDataSourceTrackedImportService = ({
         window: readyWindow,
       }
     } catch (error) {
+      const failureNow = getRetryBaseNow(now)
       spoolRepository.markWindowFailed({
         error: getErrorMessage(error),
-        nextRetryAt: new Date(now.getTime() + 5 * 60 * 1000),
-        now,
+        nextRetryAt: new Date(failureNow.getTime() + 5 * 60 * 1000),
+        now: failureNow,
         status: 'fetch_failed',
         windowId: spoolWindow.id,
       })
@@ -242,6 +264,7 @@ export const createDataSourceTrackedImportService = ({
   }
 
   const fetchWindowToSpool: DataSourceTrackedImportService['fetchWindowToSpool'] = async ({
+    assertPageAppendAllowed,
     dataSource,
     now = new Date(),
     onPageSpooled,
@@ -250,6 +273,7 @@ export const createDataSourceTrackedImportService = ({
   }) => {
     return await fetchToSpool({
       dataSource,
+      assertPageAppendAllowed,
       fetchRange: false,
       now,
       onPageSpooled,
@@ -262,6 +286,7 @@ export const createDataSourceTrackedImportService = ({
   }
 
   const fetchReconciliationWorkToSpool: DataSourceTrackedImportService['fetchReconciliationWorkToSpool'] = async ({
+    assertPageAppendAllowed,
     dataSource,
     now = new Date(),
     onPageSpooled,
@@ -270,12 +295,14 @@ export const createDataSourceTrackedImportService = ({
   }) => {
     return await fetchToSpool({
       dataSource,
+      assertPageAppendAllowed,
       fetchRange: true,
       now,
       onPageSpooled,
       onSpoolWindowCreated,
       route: work.route,
       runKind: work.runKind,
+      spoolWindowId: work.id,
       windowEnd: work.periodEnd,
       windowStart: work.periodStart,
     })
