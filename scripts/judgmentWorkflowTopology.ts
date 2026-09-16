@@ -590,7 +590,16 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     jobEvidence: Array<{
       artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
       claims: Array<{claimId: string; queueRecordId: string; serverId: string; status: string}>
-      health: {lastAckSeq: number | null; retainedRowCount: number}
+      health: {
+        hasOutboxRows: boolean
+        hasPendingCompletionAck: boolean
+        hasQueueRows: boolean
+        lastAckSeq: number | null
+        outboxRowCount: number
+        pendingCompletionAckCount: number
+        promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
+        retainedRowCount: number
+      }
       jobId: string
       scanState: {lastProjectRefreshAckSeq: number | null}
     }>
@@ -621,7 +630,16 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
         jobEvidence: Array<{
           artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
           claims: Array<{claimId: string; queueRecordId: string; serverId: string; status: string}>
-          health: {lastAckSeq: number | null; retainedRowCount: number}
+          health: {
+            hasOutboxRows: boolean
+            hasPendingCompletionAck: boolean
+            hasQueueRows: boolean
+            lastAckSeq: number | null
+            outboxRowCount: number
+            pendingCompletionAckCount: number
+            promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
+            retainedRowCount: number
+          }
           jobId: string
           scanState: {lastProjectRefreshAckSeq: number | null}
         }>
@@ -687,8 +705,26 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     const hasReconciledProjectRefreshAcks = evidence.data.jobEvidence.every((job) => {
       return job.health.lastAckSeq !== null && job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
     })
+    const hasIdleLocalJobStores = evidence.data.jobEvidence.every((job) => {
+      const promptCounts = job.health.promptCounts
 
-    if (totalJudgments === 4 && hasVisibleProjection && hasReconciledProjectRefreshAcks) {
+      return (
+        job.claims.length === 0
+        && job.health.retainedRowCount === 0
+        && job.health.outboxRowCount === 0
+        && job.health.pendingCompletionAckCount === 0
+        && !job.health.hasQueueRows
+        && !job.health.hasOutboxRows
+        && !job.health.hasPendingCompletionAck
+        && promptCounts.claimed === 0
+        && promptCounts.judged === 0
+        && promptCounts.ready === 0
+        && promptCounts.running === 0
+        && promptCounts.skipped === 0
+      )
+    })
+
+    if (totalJudgments === 4 && hasVisibleProjection && (hasReconciledProjectRefreshAcks || hasIdleLocalJobStores)) {
       return evidence.data
     }
 
