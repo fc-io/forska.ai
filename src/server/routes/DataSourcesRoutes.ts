@@ -1076,7 +1076,7 @@ export const dataSourcesRoutes = new Elysia()
         getDataSourcesWorkloadContext({operation: 'updateTransaction'}),
       )
 
-      if (refreshed && (dateBoundsChanged || importRouteChanged)) {
+      if (refreshed && (dateBoundsChanged || importRouteChanged || trackingScheduleChanged)) {
         getDataSourceTrackingSpoolRepositoryForRoute().rejectOpenWindowsForDataSource({
           dataSourceId: refreshed.id,
           error: 'Tracked data source configuration changed',
@@ -1114,6 +1114,10 @@ export const dataSourcesRoutes = new Elysia()
 
     if (!existing.trackingEnabled) {
       throw new Error('Continuous tracking is not enabled for this data source')
+    }
+
+    if (existing.archived) {
+      throw new Error('Archived data sources cannot queue reconciliation work')
     }
 
     const dateFrom = getDateValue(existing.dateFrom)

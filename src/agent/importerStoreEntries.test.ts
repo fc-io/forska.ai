@@ -161,6 +161,7 @@ test('pubmed page fetch callback receives ordered cursors and normalized records
     },
     {
       hitCount: 2,
+      nextCursorMark: 'cursor-terminal',
       resultList: {
         result: [
           {
@@ -456,6 +457,7 @@ test('europe pmc ppr page fetch callback receives ordered cursors and normalized
     },
     {
       hitCount: 2,
+      nextCursorMark: 'ppr-cursor-terminal',
       resultList: {
         result: [
           {

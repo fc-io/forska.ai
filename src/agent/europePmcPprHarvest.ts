@@ -399,7 +399,10 @@ export const fetchEuropePmcPprHarvestPages = async (
     })
     const newImportedCount = baseImportedCount + workflowEntries.length
     const newFetchedCount = baseFetchedCount + items.length
-    const cursorAfter = nextCursor ?? null
+    const doneByLimit = newImportedCount >= maxResults
+    const doneByExhaustion = newImportedCount >= hitCount
+    const isTerminalPage = doneByLimit || !nextCursor || nextCursor === cursorMark || doneByExhaustion
+    const cursorAfter = isTerminalPage ? null : nextCursor
 
     await input.onPage({
       cursorBefore: cursorMark,
@@ -416,9 +419,7 @@ export const fetchEuropePmcPprHarvestPages = async (
       importedCount: newImportedCount,
     })
 
-    const doneByLimit = newImportedCount >= maxResults
-    const doneByExhaustion = newImportedCount >= hitCount
-    if (doneByLimit || !nextCursor || nextCursor === cursorMark || doneByExhaustion) {
+    if (isTerminalPage) {
       return {fetchedTotal: newFetchedCount, pageCount: pageIndex + 1}
     }
 

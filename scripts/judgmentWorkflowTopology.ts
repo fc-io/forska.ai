@@ -131,6 +131,16 @@ export const isTopologyJudgmentWorkflowComplete = ({
   return hasReconciledProjectRefreshAcks && visibleProjectionCount === 4
 }
 
+export const shouldDrainTopologyReviewServingProjection = ({
+  totalJudgments,
+  visibleProjectionCount,
+}: {
+  totalJudgments: number
+  visibleProjectionCount: number
+}) => {
+  return totalJudgments === 4 && visibleProjectionCount < 4
+}
+
 export const hasTopologyReconciledProjectRefreshAcks = (
   jobs: Array<{
     health: {
@@ -794,6 +804,18 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       })
     ) {
       return evidence.data
+    }
+
+    if (
+      shouldDrainTopologyReviewServingProjection({
+        totalJudgments,
+        visibleProjectionCount: evidence.data.visibleProjectionCount,
+      })
+    ) {
+      await postJson(`${ownerBaseUrl}/api/test/judgment-workflow-topology/drain-review-serving-projection`, {
+        fixtureId,
+        token,
+      })
     }
 
     if (Date.now() >= deadline) {

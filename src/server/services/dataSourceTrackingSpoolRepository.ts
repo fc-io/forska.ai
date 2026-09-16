@@ -653,12 +653,6 @@ export const createDataSourceTrackingSpoolRepository = (
             AND (? IS NULL OR spool_window.id = ?)
             AND (? IS NULL OR spool_window.data_source_id = ?)
             AND (spool_window.next_retry_at IS NULL OR spool_window.next_retry_at <= ?)
-            AND EXISTS (
-              SELECT 1
-              FROM tracking_spool_page page
-              WHERE page.window_id = spool_window.id
-              LIMIT 1
-            )
           LIMIT 1
         `,
         )

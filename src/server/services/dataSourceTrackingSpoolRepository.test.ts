@@ -305,6 +305,35 @@ test('tracking spool counts fetching pages toward backpressure', () => {
   })
 })
 
+test('tracking spool reports empty retryable fetch-failed windows without promoting them for ingest', () => {
+  withSpoolRepository((repository) => {
+    const window = repository.createOrResumeWindow({
+      dataSourceId: 'source-1',
+      route: '/api/datasources/import/pubmed',
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-14T00:00:00.000Z'),
+      windowStart: new Date('2026-09-14T00:00:00.000Z'),
+    })
+
+    repository.markWindowFailed({
+      error: 'provider failed before first page',
+      nextRetryAt: new Date('2026-09-15T09:00:00.000Z'),
+      status: 'fetch_failed',
+      windowId: window.id,
+    })
+
+    expect(
+      repository.hasRetryableFetchFailedWindow({dataSourceId: 'source-1', now: new Date('2026-09-15T09:00:00.000Z')}),
+    ).toBe(true)
+    expect(
+      repository.promoteRetryableFetchFailedWindowForIngest({
+        dataSourceId: 'source-1',
+        now: new Date('2026-09-15T09:00:00.000Z'),
+      }),
+    ).toBeNull()
+  })
+})
+
 test('tracking spool creates a fresh manual window after prior terminal manual ingest', () => {
   withSpoolRepository((repository) => {
     const windowInput = {
