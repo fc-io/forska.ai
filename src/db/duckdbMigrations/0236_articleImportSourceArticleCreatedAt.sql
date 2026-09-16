@@ -45,9 +45,3 @@ SET source_article_created_at = TRY_CAST(NULLIF(COALESCE(
 ), '') AS TIMESTAMPTZ)
 WHERE source_article_created_at IS NULL
   AND raw_payload IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_app_article_import_route_source_article_created_at
-ON app.article_import_route(import_route_id, source_article_created_at);
-
-CREATE INDEX IF NOT EXISTS idx_app_article_import_route_source_record_source_article_created_at
-ON app.article_import_route_source_record(import_route_id, source_article_created_at);
