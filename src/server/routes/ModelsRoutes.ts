@@ -11,7 +11,7 @@ import {getFirstEnabledProviderConnection, listProviderConnections} from '../pro
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
-import {type ProviderModelRecord} from '../providers/providerTypes.ts'
+import {type ProviderConnectionRecord, type ProviderModelRecord} from '../providers/providerTypes.ts'
 import {
   getCodexAppDeviceLoginJob,
   getCodexAppRuntimeStatus,
@@ -52,6 +52,65 @@ const getCodexStoredModelKey = (model: {
   const effort = getTrimmedValue(model.variant ?? model.version)
 
   return toCodexVirtualId(modelName, effort)
+}
+
+const isPreferredCodexProviderModel = ({
+  model,
+  preferredProviderConnectionId,
+}: {
+  model: ProviderModelRecord
+  preferredProviderConnectionId: string | null
+}): boolean => {
+  return Boolean(preferredProviderConnectionId && model.providerConnectionId === preferredProviderConnectionId)
+}
+
+const getCodexStoredModelTimestamp = (model: ProviderModelRecord): number => {
+  return model.updatedAt?.getTime() ?? model.createdAt?.getTime() ?? 0
+}
+
+const shouldReplaceCodexStoredModel = ({
+  current,
+  model,
+  preferredProviderConnectionId,
+}: {
+  current: ProviderModelRecord | undefined
+  model: ProviderModelRecord
+  preferredProviderConnectionId: string | null
+}): boolean => {
+  if (!current) {
+    return true
+  }
+
+  const currentIsPreferred = isPreferredCodexProviderModel({model: current, preferredProviderConnectionId})
+  const modelIsPreferred = isPreferredCodexProviderModel({model, preferredProviderConnectionId})
+
+  if (currentIsPreferred !== modelIsPreferred) {
+    return modelIsPreferred
+  }
+
+  if (current.enabled !== model.enabled) {
+    return model.enabled
+  }
+
+  return getCodexStoredModelTimestamp(model) > getCodexStoredModelTimestamp(current)
+}
+
+const getCodexStoredModelMap = ({
+  preferredProviderConnectionId,
+  storedModels,
+}: {
+  preferredProviderConnectionId: string | null
+  storedModels: ProviderModelRecord[]
+}): Map<string, ProviderModelRecord> => {
+  return storedModels.reduce((storedModelMap, model) => {
+    const modelId = getCodexStoredModelKey(model)
+
+    if (shouldReplaceCodexStoredModel({current: storedModelMap.get(modelId), model, preferredProviderConnectionId})) {
+      storedModelMap.set(modelId, model)
+    }
+
+    return storedModelMap
+  }, new Map<string, ProviderModelRecord>())
 }
 
 const getSelectableCodexModel = ({
@@ -177,8 +236,18 @@ const getSelectableAnthropicVirtualModel = ({
   }
 }
 
-const getCodexVirtualModelsFromStoredModels = async (storedModels: ProviderModelRecord[]) => {
-  return storedModels
+const getCodexVirtualModelsFromStoredModels = async ({
+  preferredProviderConnectionId,
+  storedModels,
+}: {
+  preferredProviderConnectionId: string | null
+  storedModels: ProviderModelRecord[]
+}) => {
+  const deduplicatedStoredModels = Array.from(
+    getCodexStoredModelMap({preferredProviderConnectionId, storedModels}).values(),
+  )
+
+  return deduplicatedStoredModels
     .filter((model) => {
       return (
         model.enabled
@@ -202,9 +271,13 @@ const getCodexVirtualModelsFromStoredModels = async (storedModels: ProviderModel
     })
 }
 
-const getCodexVirtualModelsFromServer = async (storedModels: ProviderModelRecord[]) => {
-  const connection = await getFirstEnabledProviderConnection('codex')
-
+const getCodexVirtualModelsFromServer = async ({
+  connection,
+  storedModels,
+}: {
+  connection: ProviderConnectionRecord | null
+  storedModels: ProviderModelRecord[]
+}) => {
   if (!connection) {
     return []
   }
@@ -213,11 +286,7 @@ const getCodexVirtualModelsFromServer = async (storedModels: ProviderModelRecord
     const definition = requireProviderRegistryEntry(connection.providerKind)
     const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
     const discoveredModels = await definition.listModels({connection, runtimeCredentials})
-    const storedModelMap = new Map(
-      storedModels.map((model) => {
-        return [getCodexStoredModelKey(model), model]
-      }),
-    )
+    const storedModelMap = getCodexStoredModelMap({preferredProviderConnectionId: connection.id, storedModels})
     const discoveredIds = new Set<string>()
     const mergedDiscoveredModels = discoveredModels
       .filter((model) => {
@@ -238,7 +307,7 @@ const getCodexVirtualModelsFromServer = async (storedModels: ProviderModelRecord
           version: model.variant ?? model.version,
         })
       })
-    const missingStoredModels = storedModels
+    const missingStoredModels = Array.from(storedModelMap.values())
       .filter((model) => {
         return model.enabled && !discoveredIds.has(getCodexStoredModelKey(model))
       })
@@ -327,8 +396,15 @@ const getSelectableModelsPayload = async () => {
     })
     .map(getSelectableStoredModel)
   const anthropicModels = getAnthropicSelectableModels(storedModels)
-  const codexVirtualFromServer = await getCodexVirtualModelsFromServer(storedCodexModels)
-  const codexVirtualFromDb = await getCodexVirtualModelsFromStoredModels(storedCodexModels)
+  const codexConnection = await getFirstEnabledProviderConnection('codex')
+  const codexVirtualFromServer = await getCodexVirtualModelsFromServer({
+    connection: codexConnection,
+    storedModels: storedCodexModels,
+  })
+  const codexVirtualFromDb = await getCodexVirtualModelsFromStoredModels({
+    preferredProviderConnectionId: codexConnection?.id ?? null,
+    storedModels: storedCodexModels,
+  })
   const codexModels = codexVirtualFromServer.length > 0 ? codexVirtualFromServer : codexVirtualFromDb
 
   return [...nonCodexModels, ...anthropicModels, ...codexModels]

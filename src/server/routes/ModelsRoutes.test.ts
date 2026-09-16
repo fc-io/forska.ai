@@ -70,6 +70,21 @@ const getCodexVariantModel = (): ProviderModelRecord => {
   }
 }
 
+const getCodexGpt55Model = (overrides: Partial<ProviderModelRecord> = {}): ProviderModelRecord => {
+  return {
+    ...getCodexVariantModel(),
+    displayName: 'GPT-5.5 (thinking: xhigh)',
+    id: 'codex-gpt-55-xhigh',
+    metadataJson: {options: {thinking: 'xhigh'}},
+    modelName: 'gpt-5.5',
+    name: 'GPT-5.5 (thinking: xhigh)',
+    remoteModelId: 'gpt-5.5',
+    variant: 'xhigh',
+    version: 'xhigh',
+    ...overrides,
+  }
+}
+
 const state = {
   createProviderConnection: mock(async () => {
     return getCodexConnection()
@@ -365,6 +380,59 @@ test('models list omits disabled Codex connection fallback models', async () => 
       return model.provider === 'codex'
     }),
   ).toBe(false)
+})
+
+test('models list keeps enabled canonical Codex variants when duplicate imports are disabled', async () => {
+  state.listCodexAppModels.mockImplementationOnce(async () => {
+    return [
+      {
+        displayName: 'GPT-5.5 (thinking: xhigh)',
+        metadataJson: null,
+        modelName: 'gpt-5.5',
+        remoteModelId: 'gpt-5.5',
+        variant: 'xhigh',
+        version: 'xhigh',
+      },
+    ]
+  })
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [
+      {
+        ...getCodexConnection(),
+        models: [
+          getCodexGpt55Model(),
+          getCodexGpt55Model({
+            enabled: false,
+            id: 'imported-disabled-codex-gpt-55-xhigh',
+            providerConnectionId: 'imported-codex-connection',
+          }),
+        ],
+      },
+    ]
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(new Request('http://localhost/api/models'))
+  const body = (await response.json()) as {
+    data: Array<{
+      id: string
+      modelName: string
+      provider: string
+      providerConnectionId?: string | null
+      version: string | null
+    }>
+  }
+  const codexModel = body.data.find((model) => {
+    return model.id === 'codex:gpt-5.5:xhigh'
+  })
+
+  expect(response.status).toBe(200)
+  expect(codexModel).toMatchObject({
+    id: 'codex:gpt-5.5:xhigh',
+    modelName: 'gpt-5.5',
+    provider: 'codex',
+    providerConnectionId: 'codex-connection-1',
+    version: 'xhigh',
+  })
 })
 
 test('models list keeps Anthropic thinking variants as virtual ids with provider connection handoff data', async () => {
