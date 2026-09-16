@@ -2539,6 +2539,56 @@ const storeImportedArticlesInTx = async (
   return getMergedImportRefreshState(states)
 }
 
+const reconciliationSeenSourceRecordKeyTableName = 'reconciliation_seen_source_record_keys'
+
+const insertReconciliationSeenSourceRecordKeys = async (tx: ArticleImportStoreTx, sourceRecordKeys: string[]) => {
+  const uniqueKeys = getUniqueValues(sourceRecordKeys).filter((key) => {
+    return key.trim() !== ''
+  })
+
+  await getValueChunks(uniqueKeys).reduce<Promise<void>>(async (previousRun, keyChunk) => {
+    await previousRun
+
+    if (keyChunk.length === 0) {
+      return
+    }
+
+    await tx.run(`
+      INSERT INTO ${reconciliationSeenSourceRecordKeyTableName} (source_record_key)
+      SELECT source_record_key
+      FROM (
+        VALUES ${keyChunk
+          .map((sourceRecordKey) => {
+            return `(${getSqlLiteral(sourceRecordKey)})`
+          })
+          .join(', ')}
+      ) AS incoming(source_record_key)
+    `)
+  }, Promise.resolve())
+}
+
+const createReconciliationSeenSourceRecordKeyTable = async (
+  tx: ArticleImportStoreTx,
+  sourceRecordKeys: string[],
+  sourceRecordKeyBatches: Iterable<string[]> | undefined,
+) => {
+  await tx.run(`
+    CREATE OR REPLACE TEMP TABLE ${reconciliationSeenSourceRecordKeyTableName} (
+      source_record_key TEXT PRIMARY KEY
+    )
+  `)
+
+  await insertReconciliationSeenSourceRecordKeys(tx, sourceRecordKeys)
+
+  if (sourceRecordKeyBatches) {
+    for (const sourceRecordKeyBatch of sourceRecordKeyBatches) {
+      await insertReconciliationSeenSourceRecordKeys(tx, sourceRecordKeyBatch)
+    }
+  }
+
+  return reconciliationSeenSourceRecordKeyTableName
+}
+
 const clearStaleImportRouteLinks = async (
   tx: ArticleImportStoreTx,
   importRouteId: string,
@@ -2547,16 +2597,34 @@ const clearStaleImportRouteLinks = async (
     changeLogContext?: ReconciliationChangeLogContext | null
     periodEnd?: Date | null
     periodStart?: Date | null
+    seenSourceRecordKeyTableName?: string | null
   } = {},
 ) => {
-  const sourceRecordKeyClause =
-    sourceRecordKeys.length === 0
+  const sourceRecordKeyClause = options.seenSourceRecordKeyTableName
+    ? `AND NOT EXISTS (
+        SELECT 1
+        FROM ${options.seenSourceRecordKeyTableName} seen_source_record_key
+        WHERE seen_source_record_key.source_record_key = source_record.source_record_key
+      )`
+    : sourceRecordKeys.length === 0
       ? ''
       : `AND source_record_key NOT IN (${getQuotedStringList(sourceRecordKeys).join(', ')})`
-  const currentLinkSourceRecordKeyClause =
-    sourceRecordKeys.length === 0
+  const currentLinkSourceRecordKeyClause = options.seenSourceRecordKeyTableName
+    ? `AND NOT EXISTS (
+        SELECT 1
+        FROM ${options.seenSourceRecordKeyTableName} seen_source_record_key
+        WHERE seen_source_record_key.source_record_key = app.article_import_route.source_record_key
+      )`
+    : sourceRecordKeys.length === 0
       ? ''
       : `AND (source_record_key IS NULL OR source_record_key NOT IN (${getQuotedStringList(sourceRecordKeys).join(', ')}))`
+  const sourceRecordDeleteKeyClause = options.seenSourceRecordKeyTableName
+    ? `AND NOT EXISTS (
+        SELECT 1
+        FROM ${options.seenSourceRecordKeyTableName} seen_source_record_key
+        WHERE seen_source_record_key.source_record_key = app.article_import_route_source_record.source_record_key
+      )`
+    : sourceRecordKeyClause
   const hasPeriodScope = options.periodStart instanceof Date && options.periodEnd instanceof Date
   const currentLinkPeriodClause = hasPeriodScope
     ? `
@@ -2655,7 +2723,7 @@ const clearStaleImportRouteLinks = async (
     DELETE FROM app.article_import_route_source_record
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       AND (quarantined_at IS NULL OR COALESCE(quarantine_reason, '') <> 'source_record_remap')
-      ${sourceRecordKeyClause}
+      ${sourceRecordDeleteKeyClause}
       ${sourceRecordDeletePeriodClause}
   `)
 
@@ -2859,6 +2927,7 @@ export const finalizeImportedArticlesForReconciliationPeriodWithTx = async (para
   importRoute: string
   periodEnd: Date
   periodStart: Date
+  sourceRecordKeyBatches?: Iterable<string[]>
   sourceRecordKeys: string[]
   tx: ArticleImportStoreTx
 }) => {
@@ -2866,11 +2935,19 @@ export const finalizeImportedArticlesForReconciliationPeriodWithTx = async (para
   const routes = importRoute === '' ? [] : [importRoute]
   const routeIdMap = await ensureImportRoutes(params.tx, routes)
   const importRouteId = routeIdMap.get(importRoute)
+  const seenSourceRecordKeyTableName = params.sourceRecordKeyBatches
+    ? await createReconciliationSeenSourceRecordKeyTable(
+        params.tx,
+        params.sourceRecordKeys,
+        params.sourceRecordKeyBatches,
+      )
+    : null
   const staleResult = importRouteId
     ? await clearStaleImportRouteLinks(params.tx, importRouteId, params.sourceRecordKeys, {
         changeLogContext: params.changeLogContext,
         periodEnd: params.periodEnd,
         periodStart: params.periodStart,
+        seenSourceRecordKeyTableName,
       })
     : {deletedRecords: [], deletedSourceRecords: []}
 

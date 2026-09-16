@@ -1,3 +1,4 @@
+import type {DataSourceRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import type {ArticleImportStoreRow, ArticleImportStoreTx} from './articleImportStoreService.ts'
 import {
@@ -44,6 +45,7 @@ export type DataSourceTrackingSpoolIngestResult =
         | 'data-source-missing'
         | 'lease-lost'
         | 'provider-missing'
+        | 'stale-bounds'
         | 'stale-route'
         | 'store-failed'
         | 'tracking-disabled'
@@ -64,9 +66,22 @@ const defaultIngestLimit = 2
 const defaultLeaseDurationMs = 5 * 60 * 1000
 const defaultPageBatchSize = 1
 const defaultRetryDelayMs = 5 * 60 * 1000
+const millisecondsPerDay = 24 * 60 * 60 * 1000
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
+}
+
+const getUtcDayStart = (date: Date) => {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+}
+
+const addUtcDays = (date: Date, days: number) => {
+  return new Date(getUtcDayStart(date).getTime() + days * millisecondsPerDay)
+}
+
+const isUsableDate = (date: Date | null | undefined): date is Date => {
+  return date instanceof Date && !Number.isNaN(date.getTime())
 }
 
 class SpoolIngestLeaseLostError extends Error {
@@ -128,6 +143,21 @@ const getImportRunId = (window: DataSourceTrackingSpoolWindowRecord) => {
   return `data-source-tracking:${window.id}`
 }
 
+const getWindowExclusiveEnd = (window: DataSourceTrackingSpoolWindowRecord) => {
+  return window.runKind === 'incremental' ? addUtcDays(window.windowEnd, 1) : window.windowEnd
+}
+
+const isWindowWithinDataSourceBounds = (window: DataSourceTrackingSpoolWindowRecord, dataSource: DataSourceRecord) => {
+  const dateFrom = isUsableDate(dataSource.dateFrom) ? getUtcDayStart(dataSource.dateFrom) : null
+  const endExclusive = isUsableDate(dataSource.dateTo) ? addUtcDays(dataSource.dateTo, 1) : null
+
+  if (dateFrom && window.windowStart.getTime() < dateFrom.getTime()) {
+    return false
+  }
+
+  return !endExclusive || getWindowExclusiveEnd(window).getTime() <= endExclusive.getTime()
+}
+
 export const createDataSourceTrackingSpoolIngester = ({
   dataSourceQueryService = getDataSourceQueryService(),
   database = getAppDatabaseService(),
@@ -152,6 +182,7 @@ export const createDataSourceTrackingSpoolIngester = ({
     importRoute: string
     periodEnd: Date
     periodStart: Date
+    sourceRecordKeyBatches?: Iterable<string[]>
     sourceRecordKeys: string[]
     tx: ArticleImportStoreTx
   }) => Promise<{deletedSourceRecordCount: number; importRouteIds: string[]}>
@@ -222,14 +253,18 @@ export const createDataSourceTrackingSpoolIngester = ({
       return timer
     }
     const rejectWindow = async (
-      reason: 'stale-route' | 'tracking-disabled',
+      reason: 'stale-bounds' | 'stale-route' | 'tracking-disabled',
       error: string,
     ): Promise<DataSourceTrackingSpoolIngestResult> => {
-      spoolRepository.markWindowRejected({error, now, windowId: window.id})
+      const failureNow = new Date()
+      const nextRetryAt = new Date(failureNow.getTime() + defaultRetryDelayMs)
+
+      spoolRepository.markWindowRejected({error, now: failureNow, windowId: window.id})
       if (window.runKind !== 'incremental') {
-        await reconciliationWorkRepository.markWorkCompletedForSpoolWindow({
-          importRunId: null,
-          now,
+        await reconciliationWorkRepository.markWorkFailedForSpoolWindow({
+          error,
+          nextRetryAt,
+          now: failureNow,
           spoolWindowId: window.id,
         })
       }
@@ -273,6 +308,13 @@ export const createDataSourceTrackingSpoolIngester = ({
       )
     }
 
+    if (!isWindowWithinDataSourceBounds(window, dataSource)) {
+      return await rejectWindow(
+        'stale-bounds',
+        `Tracking spool window ${window.windowStart.toISOString()}..${window.windowEnd.toISOString()} no longer fits data source bounds`,
+      )
+    }
+
     const provider = providerRegistry.getProvider(window.route)
 
     if (!provider) {
@@ -307,7 +349,6 @@ export const createDataSourceTrackingSpoolIngester = ({
     try {
       renewWindowLease()
       leaseRenewalTimer = startLeaseRenewal()
-      const sourceRecordKeys = new Set<string>()
       let acceptedCount = 0
       let pageCount = 0
       let recordCount = 0
@@ -344,8 +385,11 @@ export const createDataSourceTrackingSpoolIngester = ({
           })
         }, articleImportStoreWorkloadContext)
 
-        for (const sourceRecordKey of storeResult.sourceRecordKeys) {
-          sourceRecordKeys.add(sourceRecordKey)
+        if (window.runKind !== 'incremental') {
+          spoolRepository.recordWindowSourceRecordKeys({
+            sourceRecordKeys: storeResult.sourceRecordKeys,
+            windowId: window.id,
+          })
         }
 
         acceptedCount += storeResult.acceptedCount
@@ -355,6 +399,25 @@ export const createDataSourceTrackingSpoolIngester = ({
       }
 
       if (window.runKind !== 'incremental') {
+        const sourceRecordKeyBatches = function* () {
+          let afterSourceRecordKey: string | null = null
+
+          while (true) {
+            const sourceRecordKeyBatch = spoolRepository.getWindowSourceRecordKeysBatch({
+              afterSourceRecordKey,
+              limit: 1000,
+              windowId: window.id,
+            })
+
+            if (sourceRecordKeyBatch.length === 0) {
+              break
+            }
+
+            yield sourceRecordKeyBatch
+            afterSourceRecordKey = sourceRecordKeyBatch.at(-1) ?? afterSourceRecordKey
+          }
+        }
+
         renewWindowLease()
         await transaction(async (tx) => {
           return await finalizeImportedArticlesForReconciliationPeriodWithTx({
@@ -367,7 +430,8 @@ export const createDataSourceTrackingSpoolIngester = ({
             importRoute: window.route,
             periodEnd: window.windowEnd,
             periodStart: window.windowStart,
-            sourceRecordKeys: Array.from(sourceRecordKeys),
+            sourceRecordKeyBatches: sourceRecordKeyBatches(),
+            sourceRecordKeys: [],
             tx,
           })
         }, articleImportStoreWorkloadContext)

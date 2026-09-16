@@ -624,6 +624,21 @@ const deleteReconciliationWorkOutsideBounds = async (
   )
 }
 
+const deleteReconciliationWorkForStaleRoute = async (
+  db: DataSourceTrackingDatabaseRunner,
+  params: {dataSourceId: string; route: string | null},
+) => {
+  await db.run(
+    `
+    DELETE FROM app.data_source_reconciliation_work
+    WHERE data_source_id = ${getSqlLiteral(params.dataSourceId)}
+      AND status IN ('queued', 'running', 'failed')
+      AND ${params.route === null ? 'TRUE' : `(route IS NULL OR route <> ${getSqlLiteral(params.route)})`}
+  `,
+    getDataSourcesWorkloadContext({operation: 'trackingReconciliationWorkInvalidateRoute'}),
+  )
+}
+
 export const dataSourcesRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/datasources', async () => {
@@ -1006,6 +1021,10 @@ export const dataSourcesRoutes = new Elysia()
                 dateFrom: nextDateFrom,
                 dateTo: nextDateTo,
               })
+            }
+
+            if (importRouteChanged) {
+              await deleteReconciliationWorkForStaleRoute(tx, {dataSourceId: updated.id, route: updated.importRoute})
             }
           }
 

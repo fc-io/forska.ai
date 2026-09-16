@@ -121,13 +121,17 @@ const getLeaseRenewalIntervalMs = (leaseDurationMs: number) => {
   return Math.max(1000, Math.min(60_000, Math.floor(leaseDurationMs / 2)))
 }
 
+const getRetryBaseNow = (startedAt: Date) => {
+  return new Date(Math.max(Date.now(), startedAt.getTime()))
+}
+
 const withLeaseRenewal = async <T>({
   leaseDurationMs,
   operation,
   renewLease,
 }: {
   leaseDurationMs: number
-  operation: () => Promise<T>
+  operation: (controls: {assertLeaseOwned: () => Promise<void>}) => Promise<T>
   renewLease: (input: {leaseExpiresAt: Date; now: Date}) => Promise<unknown>
 }) => {
   let leaseLostError: Error | null = null
@@ -146,8 +150,15 @@ const withLeaseRenewal = async <T>({
       leaseLostError = new Error('Data source tracking lease lost')
     }
   }
+  const assertLeaseOwned = async () => {
+    await renew()
 
-  await renew()
+    if (leaseLostError) {
+      throw leaseLostError
+    }
+  }
+
+  await assertLeaseOwned()
 
   if (leaseLostError) {
     throw leaseLostError
@@ -163,7 +174,7 @@ const withLeaseRenewal = async <T>({
   maybeUnrefTimer.unref?.()
 
   try {
-    const result = await operation()
+    const result = await operation({assertLeaseOwned})
 
     if (leaseLostError) {
       throw leaseLostError
@@ -254,13 +265,19 @@ const getClaimedSourceResult = async ({
   try {
     const result = await withLeaseRenewal({
       leaseDurationMs: fetchLeaseMs,
-      operation: async () => {
+      operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchWindowToSpool({
+          assertPageAppendAllowed: async () => {
+            await assertLeaseOwned()
+            await assertSpoolCapacity()
+            await assertLeaseOwned()
+          },
           dataSource,
           now,
           onPageSpooled: async ({cursor}) => {
+            await assertLeaseOwned()
             await trackingRepository.updateTrackingState(state.dataSourceId, {activeCursor: cursor}, new Date())
-            await assertSpoolCapacity()
+            await assertLeaseOwned()
           },
           window: selection.window,
         })
@@ -285,6 +302,7 @@ const getClaimedSourceResult = async ({
       windowId: result.window.id,
     }
   } catch (error) {
+    const failureNow = getRetryBaseNow(now)
     const message = getErrorMessage(error)
     const activeState = await trackingRepository.getTrackingState(state.dataSourceId)
 
@@ -292,8 +310,8 @@ const getClaimedSourceResult = async ({
       dataSourceId: state.dataSourceId,
       error: message,
       leaseOwner,
-      nextRunAfter: new Date(now.getTime() + defaultFailureRetryMs),
-      now,
+      nextRunAfter: new Date(failureNow.getTime() + defaultFailureRetryMs),
+      now: failureNow,
     })
 
     return {
@@ -353,11 +371,17 @@ const getClaimedReconciliationResult = async ({
     })
     const result = await withLeaseRenewal({
       leaseDurationMs: fetchLeaseMs,
-      operation: async () => {
+      operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchReconciliationWorkToSpool({
+          assertPageAppendAllowed: async () => {
+            await assertLeaseOwned()
+            await assertSpoolCapacity()
+            await assertLeaseOwned()
+          },
           dataSource,
           now,
           onPageSpooled: async ({cursor, window}) => {
+            await assertLeaseOwned()
             await reconciliationWorkRepository.updateWorkSpoolProgress({
               cursor,
               id: work.id,
@@ -365,9 +389,10 @@ const getClaimedReconciliationResult = async ({
               spoolWindowId: window.id,
             })
             await trackingRepository.updateTrackingState(work.dataSourceId, {activeCursor: cursor}, new Date())
-            await assertSpoolCapacity()
+            await assertLeaseOwned()
           },
           onSpoolWindowCreated: async (window) => {
+            await assertLeaseOwned()
             await reconciliationWorkRepository.updateWorkSpoolProgress({
               cursor: window.cursor,
               id: work.id,
@@ -375,6 +400,7 @@ const getClaimedReconciliationResult = async ({
               spoolWindowId: window.id,
             })
             await trackingRepository.updateTrackingState(work.dataSourceId, {activeCursor: window.cursor}, new Date())
+            await assertLeaseOwned()
           },
           work,
         })
@@ -405,20 +431,21 @@ const getClaimedReconciliationResult = async ({
       workId: work.id,
     }
   } catch (error) {
+    const failureNow = getRetryBaseNow(now)
     const message = getErrorMessage(error)
 
     await reconciliationWorkRepository.markWorkFailed({
       error: message,
       id: work.id,
       leaseOwner,
-      nextRetryAt: new Date(now.getTime() + defaultFailureRetryMs),
-      now,
+      nextRetryAt: new Date(failureNow.getTime() + defaultFailureRetryMs),
+      now: failureNow,
     })
     await trackingRepository.recordTrackingFailure({
       dataSourceId: work.dataSourceId,
       error: message,
       nextRunAfter: null,
-      now,
+      now: failureNow,
     })
 
     return {

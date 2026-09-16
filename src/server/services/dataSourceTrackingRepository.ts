@@ -623,7 +623,8 @@ export const createDataSourceTrackingRepository = (
                 app.data_source_tracking_state.active_window_start IS NOT NULL
                 OR data_source.date_to IS NULL
                 OR app.data_source_tracking_state.high_water_completed_at IS NULL
-                OR app.data_source_tracking_state.high_water_completed_at < data_source.date_to
+                OR CAST((app.data_source_tracking_state.high_water_completed_at AT TIME ZONE 'UTC') AS DATE)
+                  < CAST((data_source.date_to AT TIME ZONE 'UTC') AS DATE)
               )
           )
         RETURNING ${trackingStateSelectSql}
@@ -882,7 +883,8 @@ export const createDataSourceTrackingRepository = (
             state.active_window_start IS NOT NULL
             OR data_source.date_to IS NULL
             OR state.high_water_completed_at IS NULL
-            OR state.high_water_completed_at < data_source.date_to
+            OR CAST((state.high_water_completed_at AT TIME ZONE 'UTC') AS DATE)
+              < CAST((data_source.date_to AT TIME ZONE 'UTC') AS DATE)
           )
           AND (state.next_run_after IS NULL OR state.next_run_after <= ${getSqlLiteral(now)})
           AND (
@@ -1201,32 +1203,125 @@ export const createDataSourceReconciliationWorkRepository = (
         input.routes && input.routes.length > 0
           ? `AND data_source.import_route IN (${input.routes.map(getSqlLiteral).join(', ')})`
           : ''
-      const sourceRows = await database.queryJson<DataSourceReconciliationScheduleSourceRow>(
-        `
-        SELECT
-          data_source.id AS dataSourceId,
-          data_source.import_route AS route,
-          data_source.date_from AS dateFrom,
-          data_source.date_to AS dateTo,
-          TO_JSON(data_source.tracking_reconcile_schedule_months) AS trackingReconcileScheduleMonths,
-          state.last_reconciliation_scheduler_at AS lastReconciliationSchedulerAt
-        FROM app.data_source data_source
-        INNER JOIN app.data_source_tracking_state state ON state.data_source_id = data_source.id
-        WHERE data_source.tracking_enabled = TRUE
-          AND data_source.archived = FALSE
-          AND data_source.import_route IS NOT NULL
-          ${routeClause}
-        ORDER BY data_source.id ASC
-      `,
-        trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly', 1000),
-      )
       const scheduledWork: DataSourceReconciliationWorkRecord[] = []
+      const schedulerBatchSize = 500
+      let afterDataSourceId: string | null = null
 
-      for (const source of sourceRows) {
-        const rawDateFrom = getDateValue(source.dateFrom)
-        const dateFrom = rawDateFrom ? getUtcDayStart(rawDateFrom) : null
+      while (true) {
+        const afterClause = afterDataSourceId ? `AND data_source.id > ${getSqlLiteral(afterDataSourceId)}` : ''
+        const sourceRows: DataSourceReconciliationScheduleSourceRow[] =
+          await database.queryJson<DataSourceReconciliationScheduleSourceRow>(
+            `
+          SELECT
+            data_source.id AS dataSourceId,
+            data_source.import_route AS route,
+            data_source.date_from AS dateFrom,
+            data_source.date_to AS dateTo,
+            TO_JSON(data_source.tracking_reconcile_schedule_months) AS trackingReconcileScheduleMonths,
+            state.last_reconciliation_scheduler_at AS lastReconciliationSchedulerAt
+          FROM app.data_source data_source
+          INNER JOIN app.data_source_tracking_state state ON state.data_source_id = data_source.id
+          WHERE data_source.tracking_enabled = TRUE
+            AND data_source.archived = FALSE
+            AND data_source.import_route IS NOT NULL
+            ${routeClause}
+            ${afterClause}
+          ORDER BY data_source.id ASC
+          LIMIT ${schedulerBatchSize}
+        `,
+            trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly.page', schedulerBatchSize),
+          )
 
-        if (!dateFrom) {
+        if (sourceRows.length === 0) {
+          break
+        }
+
+        for (const source of sourceRows) {
+          const rawDateFrom = getDateValue(source.dateFrom)
+          const dateFrom = rawDateFrom ? getUtcDayStart(rawDateFrom) : null
+
+          if (!dateFrom) {
+            await database.run(
+              `
+              UPDATE app.data_source_tracking_state
+              SET last_reconciliation_scheduler_at = ${getSqlLiteral(now)},
+                  updated_at = ${getSqlLiteral(now)}
+              WHERE data_source_id = ${getSqlLiteral(source.dataSourceId)}
+            `,
+              trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly.recordSkipped'),
+            )
+            continue
+          }
+
+          const dateTo = getDateValue(source.dateTo)
+          const lastSchedulerMonth = getDateValue(source.lastReconciliationSchedulerAt)
+          const firstSchedulerMonth = lastSchedulerMonth
+            ? addUtcMonths(getUtcMonthStart(lastSchedulerMonth), 1)
+            : currentSchedulerMonth
+          const scheduleMonths = getTrackingReconcileScheduleMonths(source.trackingReconcileScheduleMonths)
+
+          for (
+            let schedulerMonth = firstSchedulerMonth;
+            schedulerMonth.getTime() <= currentSchedulerMonth.getTime();
+            schedulerMonth = addUtcMonths(schedulerMonth, 1)
+          ) {
+            for (const ageMonths of scheduleMonths) {
+              const targetMonthStart = addUtcMonths(schedulerMonth, -ageMonths)
+              const targetMonthEnd = addUtcMonths(targetMonthStart, 1)
+              const periodStart = maxDate(targetMonthStart, dateFrom)
+              const periodEnd = dateTo ? minDate(targetMonthEnd, addUtcDays(getUtcDayStart(dateTo), 1)) : targetMonthEnd
+
+              if (periodEnd.getTime() <= periodStart.getTime()) {
+                continue
+              }
+
+              const id = getDataSourceReconciliationWorkId({
+                ageMonths,
+                dataSourceId: source.dataSourceId,
+                periodEnd,
+                periodStart,
+                runKind: 'automatic_age_bucket',
+              })
+
+              await database.run(
+                `
+                INSERT INTO app.data_source_reconciliation_work (
+                  id,
+                  data_source_id,
+                  route,
+                  run_kind,
+                  age_months,
+                  period_start,
+                  period_end,
+                  status,
+                  scheduled_at,
+                  updated_at
+                )
+                VALUES (
+                  ${getSqlLiteral(id)},
+                  ${getSqlLiteral(source.dataSourceId)},
+                  ${getSqlLiteral(source.route)},
+                  'automatic_age_bucket',
+                  ${getSqlLiteral(ageMonths)},
+                  ${getSqlLiteral(periodStart)},
+                  ${getSqlLiteral(periodEnd)},
+                  'queued',
+                  ${getSqlLiteral(now)},
+                  ${getSqlLiteral(now)}
+                )
+                ON CONFLICT(id) DO NOTHING
+              `,
+                trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly.insert'),
+              )
+
+              const work = await getWorkById(id)
+
+              if (work) {
+                scheduledWork.push(work)
+              }
+            }
+          }
+
           await database.run(
             `
             UPDATE app.data_source_tracking_state
@@ -1234,89 +1329,11 @@ export const createDataSourceReconciliationWorkRepository = (
                 updated_at = ${getSqlLiteral(now)}
             WHERE data_source_id = ${getSqlLiteral(source.dataSourceId)}
           `,
-            trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly.recordSkipped'),
+            trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly.recordRun'),
           )
-          continue
         }
 
-        const dateTo = getDateValue(source.dateTo)
-        const lastSchedulerMonth = getDateValue(source.lastReconciliationSchedulerAt)
-        const firstSchedulerMonth = lastSchedulerMonth
-          ? addUtcMonths(getUtcMonthStart(lastSchedulerMonth), 1)
-          : currentSchedulerMonth
-        const scheduleMonths = getTrackingReconcileScheduleMonths(source.trackingReconcileScheduleMonths)
-
-        for (
-          let schedulerMonth = firstSchedulerMonth;
-          schedulerMonth.getTime() <= currentSchedulerMonth.getTime();
-          schedulerMonth = addUtcMonths(schedulerMonth, 1)
-        ) {
-          for (const ageMonths of scheduleMonths) {
-            const targetMonthStart = addUtcMonths(schedulerMonth, -ageMonths)
-            const targetMonthEnd = addUtcMonths(targetMonthStart, 1)
-            const periodStart = maxDate(targetMonthStart, dateFrom)
-            const periodEnd = dateTo ? minDate(targetMonthEnd, addUtcDays(getUtcDayStart(dateTo), 1)) : targetMonthEnd
-
-            if (periodEnd.getTime() <= periodStart.getTime()) {
-              continue
-            }
-
-            const id = getDataSourceReconciliationWorkId({
-              ageMonths,
-              dataSourceId: source.dataSourceId,
-              periodEnd,
-              periodStart,
-              runKind: 'automatic_age_bucket',
-            })
-
-            await database.run(
-              `
-              INSERT INTO app.data_source_reconciliation_work (
-                id,
-                data_source_id,
-                route,
-                run_kind,
-                age_months,
-                period_start,
-                period_end,
-                status,
-                scheduled_at,
-                updated_at
-              )
-              VALUES (
-                ${getSqlLiteral(id)},
-                ${getSqlLiteral(source.dataSourceId)},
-                ${getSqlLiteral(source.route)},
-                'automatic_age_bucket',
-                ${getSqlLiteral(ageMonths)},
-                ${getSqlLiteral(periodStart)},
-                ${getSqlLiteral(periodEnd)},
-                'queued',
-                ${getSqlLiteral(now)},
-                ${getSqlLiteral(now)}
-              )
-              ON CONFLICT(id) DO NOTHING
-            `,
-              trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly.insert'),
-            )
-
-            const work = await getWorkById(id)
-
-            if (work) {
-              scheduledWork.push(work)
-            }
-          }
-        }
-
-        await database.run(
-          `
-          UPDATE app.data_source_tracking_state
-          SET last_reconciliation_scheduler_at = ${getSqlLiteral(now)},
-              updated_at = ${getSqlLiteral(now)}
-          WHERE data_source_id = ${getSqlLiteral(source.dataSourceId)}
-        `,
-          trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleDueMonthly.recordRun'),
-        )
+        afterDataSourceId = sourceRows[sourceRows.length - 1]?.dataSourceId ?? afterDataSourceId
       }
 
       return scheduledWork

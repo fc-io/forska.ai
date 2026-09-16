@@ -37,6 +37,7 @@ const getClaim = (input: {
   component: ReviewServingProjectionComponent
   dirtyWorkId: string
   latestSourceHighWaterMark?: number
+  projectId?: string
   scopeId?: string
   scopeKind?: string
 }) => {
@@ -49,7 +50,7 @@ const getClaim = (input: {
     firstSourceHighWaterMark: 1,
     latestDeltaId: null,
     latestSourceHighWaterMark: input.latestSourceHighWaterMark ?? 1,
-    projectId: 'project-1',
+    projectId: input.projectId ?? 'project-1',
     projectionComponent: input.component,
     projectionIdentity: `${input.component}:identity`,
     scopeId: input.scopeId ?? 'project-1:article-1',
@@ -57,6 +58,14 @@ const getClaim = (input: {
     sourcePartition: 'review-change',
     status: 'running',
   } satisfies ReviewServingDirtyWorkClaim
+}
+
+const getAdmittedRebuildRequest = (input: {projectId?: string; sourceWatermark?: number} = {}) => {
+  return {
+    projectId: input.projectId ?? 'project-1',
+    sourceWatermarksJson: {reviewChange: input.sourceWatermark ?? 1},
+    status: 'admitted',
+  } as never
 }
 
 const promptConfigRow = () => {
@@ -419,7 +428,7 @@ test('wake requests page-first V4 rebuild and blocks claims when a snapshot is n
       reason: input.reason,
     })
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     queue: async () => {
@@ -471,7 +480,7 @@ for (const component of ['payload', 'posting', 'summary', 'judgmentInputContent'
         reason: input.reason,
       })
 
-      return Effect.succeed({status: 'admitted'} as never)
+      return Effect.succeed(getAdmittedRebuildRequest())
     }
     dependencies.runners = {
       [component]: async () => {
@@ -524,7 +533,7 @@ test('wake routes search dirty work through chunked rebuilds instead of direct p
       reason: input.reason,
     })
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     search: async () => {
@@ -585,6 +594,43 @@ test('wake retains chunked dirty work when an older active rebuild is reused', a
   expect(releasedClaimIds).toEqual(['search-article-1'])
 })
 
+test('wake does not complete dirty work from another project with malformed rebuild watermarks', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    search: [
+      getClaim({
+        component: 'search',
+        dirtyWorkId: 'search-project-2',
+        latestSourceHighWaterMark: 5,
+        projectId: 'project-2',
+        scopeId: 'project-2:article-1',
+      }),
+    ],
+  })
+  let runnerCalled = false
+
+  dependencies.requestRebuild = () => {
+    return Effect.succeed({projectId: 'project-1', sourceWatermarksJson: null, status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    search: async () => {
+      runnerCalled = true
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['search'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(runnerCalled).toBe(false)
+  expect(completedClaimIds).toEqual([])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual(['search-project-2'])
+})
+
 test('wake routes high-fanout queue dirty work through chunked rebuilds instead of direct projection', async () => {
   const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     queue: [
@@ -613,7 +659,7 @@ test('wake routes high-fanout queue dirty work through chunked rebuilds instead 
       reason: input.reason,
     })
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     queue: async () => {
@@ -669,7 +715,7 @@ test('wake routes high-fanout human status dirty work through chunked rebuilds i
       reason: input.reason,
     })
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     humanStatus: async () => {
@@ -725,7 +771,7 @@ test('wake routes high-fanout LLM status dirty work through chunked rebuilds ins
       reason: input.reason,
     })
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     llmStatus: async () => {
@@ -781,7 +827,7 @@ test('wake routes high-fanout selected import dirty work through chunked rebuild
       reason: input.reason,
     })
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     selectedImport: async () => {
@@ -818,7 +864,7 @@ test('wake keeps article-scoped human status dirty work on the direct patch path
   dependencies.requestRebuild = (input) => {
     rebuildRequests.push({projectId: input.projectId, reason: input.reason})
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     humanStatus: async () => {
@@ -850,7 +896,7 @@ test('wake keeps article-scoped selected import dirty work on the direct patch p
   dependencies.requestRebuild = (input) => {
     rebuildRequests.push({projectId: input.projectId, reason: input.reason})
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     selectedImport: async () => {
@@ -882,7 +928,7 @@ test('wake keeps article-scoped queue dirty work on the direct patch path', asyn
   dependencies.requestRebuild = (input) => {
     rebuildRequests.push({projectId: input.projectId, reason: input.reason})
 
-    return Effect.succeed({status: 'admitted'} as never)
+    return Effect.succeed(getAdmittedRebuildRequest())
   }
   dependencies.runners = {
     queue: async () => {

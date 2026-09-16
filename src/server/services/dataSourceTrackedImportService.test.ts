@@ -353,6 +353,93 @@ test('tracked import marks provider failures as fetch-failed so partial pages ar
   })
 })
 
+test('tracked import checks page append permission before writing provider pages', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const startedAt = new Date('2099-01-01T00:00:00.000Z')
+    let permissionCheckCount = 0
+    const provider: DataSourceTrackingProvider = {
+      fetchRangePages: async () => {
+        throw new Error('not used')
+      },
+      fetchWindowPages: async ({onPage}) => {
+        await onPage({
+          cursorAfter: 'cursor-after-page-1',
+          cursorBefore: '*',
+          normalizedRecords: [
+            {
+              articleAuthors: ['Ada Lovelace'],
+              articleId: 'pmid:1',
+              articleSummary: 'Abstract',
+              articleTitle: 'Article 1',
+              importRoute: pubmedTrackedImportRoute,
+            },
+          ],
+          pageIndex: 0,
+          rawPage: {page: 1},
+          sourceRecordCount: 1,
+          sourceRecordHash: 'hash-page-1',
+        })
+
+        return {fetchedTotal: 1, pageCount: 1}
+      },
+      getGranularity: () => {
+        return 'day'
+      },
+      getNextRunAfter: () => {
+        return null
+      },
+      getNextWindow: () => {
+        throw new Error('not used')
+      },
+      getReconciliationRange: () => {
+        throw new Error('not used')
+      },
+      route: pubmedTrackedImportRoute,
+    }
+    const service = createDataSourceTrackedImportService({
+      providerRegistry: createDataSourceTrackingProviderRegistry([provider]),
+      spoolRepository,
+    })
+
+    let caughtError: Error | null = null
+
+    try {
+      await service.fetchWindowToSpool({
+        assertPageAppendAllowed: () => {
+          permissionCheckCount += 1
+          throw new Error('Data source tracking lease lost')
+        },
+        dataSource: getDataSource(),
+        now: startedAt,
+        window: {
+          dataSourceId: 'source-1',
+          route: pubmedTrackedImportRoute,
+          runKind: 'incremental',
+          windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+          windowStart: new Date('2026-09-15T00:00:00.000Z'),
+        },
+      })
+    } catch (error) {
+      caughtError = error instanceof Error ? error : new Error(String(error))
+    }
+
+    const failedWindow = spoolRepository.createOrResumeWindow({
+      dataSourceId: 'source-1',
+      route: pubmedTrackedImportRoute,
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+      windowStart: new Date('2026-09-15T00:00:00.000Z'),
+    })
+
+    expect(caughtError?.message).toBe('Data source tracking lease lost')
+    expect(permissionCheckCount).toBe(1)
+    expect(failedWindow.status).toBe('fetch_failed')
+    expect(failedWindow.lastError).toBe('Data source tracking lease lost')
+    expect(failedWindow.nextRetryAt?.toISOString()).toBe('2099-01-01T00:05:00.000Z')
+    expect(spoolRepository.getWindowPages(failedWindow.id)).toEqual([])
+  })
+})
+
 test('tracked import recovers a terminal spooled page as ready after restart', async () => {
   await withSpoolRepository(async (spoolRepository) => {
     let fetchCallCount = 0
