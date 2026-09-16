@@ -68,11 +68,65 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
         `Migration-boundary topology did not preserve its deployed-schema sentinel: ${JSON.stringify(lifecycle.result.migrationBoundary)}`,
       )
     }
-    // The fenced worker's accepted request is retried exactly once after its
-    // heartbeat and admission lease expire. Owner-backed admission must keep
-    // both the live-worker phase and that failover at the configured cap.
-    if (providerEvidence.maxConcurrentRequests !== 1 || providerEvidence.requestCount !== 5) {
-      const requestSummary = providerEvidence.renderedInputs.map((input) => {
+    const requestSummary = providerEvidence.renderedInputs.map((input) => {
+      return {
+        article: input.includes('Topology article A') ? 'A' : input.includes('Topology article B') ? 'B' : 'unknown',
+        criterion: input.includes('criterion A') ? 'A' : input.includes('criterion B') ? 'B' : 'unknown',
+        retry: input.includes('Your previous answer'),
+      }
+    })
+    const requestCountsByPrompt = requestSummary.reduce((counts, request) => {
+      const key = `${request.article}:${request.criterion}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+      return counts
+    }, new Map<string, number>())
+    const topologyPromptKeys = ['A:A', 'A:B', 'B:A', 'B:B'] as const
+    const topologyPromptCoverageOk = topologyPromptKeys.every((key) => {
+      return (requestCountsByPrompt.get(key) ?? 0) >= 1
+    })
+    const duplicatedPromptKeys = [...requestCountsByPrompt].flatMap(([key, count]) => {
+      return count > 1 ? [key] : []
+    })
+
+    // The fenced worker's accepted request is retried after its heartbeat and
+    // admission lease expire. Depending on whether the second project-A claim
+    // reaches the owner before the first worker's stale completion replay, the
+    // harness may observe one or two duplicate provider calls. The production
+    // contract is that owner-backed admission keeps both the live-worker phase
+    // and failover at the configured cap, and that canonical judgments remain
+    // exactly-once.
+    if (
+      providerEvidence.maxConcurrentRequests !== 1
+      || providerEvidence.requestCount < 5
+      || providerEvidence.requestCount > 6
+      || !topologyPromptCoverageOk
+      || duplicatedPromptKeys.some((key) => {
+        return !key.startsWith('A:')
+      })
+      || [...requestCountsByPrompt.values()].some((count) => {
+        return count > 2
+      })
+    ) {
+      throw new Error(
+        `Topology provider admission evidence was unexpected: ${JSON.stringify({
+          duplicatedPromptKeys,
+          maxConcurrentRequests: providerEvidence.maxConcurrentRequests,
+          requestCount: providerEvidence.requestCount,
+          requestSummary,
+        })}`,
+      )
+    }
+    if (
+      providerEvidence.renderedInputs.some((input) => {
+        const request = {
+          article: input.includes('Topology article A') ? 'A' : input.includes('Topology article B') ? 'B' : 'unknown',
+          criterion: input.includes('criterion A') ? 'A' : input.includes('criterion B') ? 'B' : 'unknown',
+          retry: input.includes('Your previous answer'),
+        }
+        return request.article === 'unknown' || request.criterion === 'unknown' || request.retry
+      })
+    ) {
+      const invalidRequests = providerEvidence.renderedInputs.map((input) => {
         return {
           article: input.includes('Topology article A') ? 'A' : input.includes('Topology article B') ? 'B' : 'unknown',
           criterion: input.includes('criterion A') ? 'A' : input.includes('criterion B') ? 'B' : 'unknown',
@@ -80,7 +134,7 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
         }
       })
       throw new Error(
-        `Topology provider admission evidence was unexpected: ${JSON.stringify({maxConcurrentRequests: providerEvidence.maxConcurrentRequests, requestCount: providerEvidence.requestCount, requestSummary})}`,
+        `Topology provider rendered an unexpected request: ${JSON.stringify(invalidRequests)}`,
       )
     }
     if (

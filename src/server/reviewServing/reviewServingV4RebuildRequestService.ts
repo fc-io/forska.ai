@@ -111,6 +111,8 @@ const defaultRequestBudget = {
   maxTempBytes: 0,
 } as const
 
+const coldMissingSnapshotBootstrapPriority = 20_000
+
 const getReviewServingV4RebuildRequestWorkloadContext = (projectId: string): DuckdbWorkloadContext => {
   return {
     allowsTempSpill: true,
@@ -1912,6 +1914,11 @@ export const requestReviewServingV4RebuildEffect = (
       ?? (shouldUsePageFirstBootstrapDependencies
         ? pageFirstReviewServingV4RebuildComponents
         : defaultReviewServingV4RebuildComponents)
+    const requestPriority =
+      input.priority
+      ?? (input.reason === 'missingReviewServingSnapshot' && shouldUsePageFirstBootstrapDependencies
+        ? coldMissingSnapshotBootstrapPriority
+        : undefined)
     const isRequestedOptionalDirtyWorkBootstrap =
       input.reason.endsWith('DirtyWork')
       && requestedComponents.length > 0
@@ -1937,10 +1944,10 @@ export const requestReviewServingV4RebuildEffect = (
         : false
 
     if (activeRequest !== null && !activeRequestUsesLegacyRequiredEnrichmentBootstrap) {
-      if (input.priority !== undefined && activeRequest.priority <= input.priority) {
+      if (requestPriority !== undefined && activeRequest.priority <= requestPriority) {
         return (
           (await boostReviewServingRebuildRequestPriority(
-            {priority: input.priority, requestId: activeRequest.requestId},
+            {priority: requestPriority, requestId: activeRequest.requestId},
             requestDatabase,
           )) ?? activeRequest
         )
@@ -2039,7 +2046,7 @@ export const requestReviewServingV4RebuildEffect = (
         components,
         noScopedArticles: true,
         projectId: input.projectId,
-        priority: input.priority,
+        priority: requestPriority,
         reason: input.reason,
         requestEstimate,
         sourceWatermarks,
@@ -2065,7 +2072,7 @@ export const requestReviewServingV4RebuildEffect = (
         components,
         diagnostics: {componentReuse: bootstrap.reuseDiagnostics, promotion},
         projectId: input.projectId,
-        priority: input.priority,
+        priority: requestPriority,
         reason: input.reason,
         requestEstimate,
         sourceWatermarks,
@@ -2094,7 +2101,7 @@ export const requestReviewServingV4RebuildEffect = (
           },
           estimate: requestEstimate,
           identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild', reviewConfigHash},
-          priority: input.priority,
+          priority: requestPriority,
           projectId: input.projectId,
           reason: input.reason,
           requestedComponents,

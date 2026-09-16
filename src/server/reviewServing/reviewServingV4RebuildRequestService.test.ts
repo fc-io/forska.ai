@@ -1637,10 +1637,7 @@ test('V4 foreground missing snapshot rebuild does not reuse an active full enric
     ),
   )
   const pageFirstRequest = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect(
-      {priority: 10_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
-      database,
-    ),
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
   )
   const rebuildRequestInsertCount = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_request')
@@ -1654,7 +1651,7 @@ test('V4 foreground missing snapshot rebuild does not reuse an active full enric
 
   expect(fullRequest.requestedComponents).toEqual([...fakeRebuildComponents])
   expect(pageFirstRequest.requestId).not.toBe(fullRequest.requestId)
-  expect(pageFirstRequest.priority).toBe(10_000)
+  expect(pageFirstRequest.priority).toBe(20_000)
   expect(pageFirstRequest.requestedComponents).toEqual([...countReadyReviewServingComponents])
   expect(pageFirstChunkInsertSql).not.toContain("'posting'")
   expect(pageFirstChunkInsertSql).not.toContain("'summary'")
@@ -1712,7 +1709,7 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   )
   const boostedRequest = await Effect.runPromise(
     requestReviewServingV4RebuildEffect(
-      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      {priority: 30_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
       database,
     ),
   )
@@ -1721,10 +1718,10 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   }).length
 
   expect(boostedRequest.requestId).toBe(firstRequest.requestId)
-  expect(boostedRequest.priority).toBe(1_000)
+  expect(boostedRequest.priority).toBe(30_000)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain('UPDATE app.review_rebuild_request')
-  expect(statements.join('\n')).toContain('WHEN priority < 1000 THEN 1000')
+  expect(statements.join('\n')).toContain('WHEN priority < 30000 THEN 30000')
 })
 
 test('V4 missing snapshot rebuild requests do not reuse active work for a different review config', async () => {
