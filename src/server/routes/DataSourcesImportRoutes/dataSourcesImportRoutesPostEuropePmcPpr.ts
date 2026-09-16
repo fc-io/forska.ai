@@ -2,6 +2,7 @@ import {format} from 'date-fns'
 
 import {europePmcPprHarvest} from '../../../agent/europePmcPprHarvest.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
+import {withDataSourceImportTrackingLease} from './dataSourceImportTrackingLease.ts'
 import {createCursorUpdater} from './dataSourcesImportCursor.ts'
 
 export const dataSourcesImportRoutesPostEuropePmcPpr = async (body: {id: string}) => {
@@ -21,17 +22,31 @@ export const dataSourcesImportRoutesPostEuropePmcPpr = async (body: {id: string}
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostEuropePmcPpr – To date is good to have')
   }
-  const saveCursor = createCursorUpdater(record.id)
-  await europePmcPprHarvest({fromDate, toDate, importRoute, cursor: record.cursor ?? null, onCursorUpdate: saveCursor})
-  const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
-    route: importRoute,
-    dateFrom: record.dateFrom,
-    dateTo: record.dateTo,
-  })
-  const updatedDataSource = await dataSourceQueryService.updateDataSourceAfterImport({
-    id: record.id,
-    importedCount,
-    cursor: null,
+  const updatedDataSource = await withDataSourceImportTrackingLease(record, async ({assertLeaseOwned}) => {
+    const saveCursor = createCursorUpdater(record.id)
+    const saveCursorWithLease = async (cursor: string | null) => {
+      await assertLeaseOwned()
+      await saveCursor(cursor)
+      await assertLeaseOwned()
+    }
+
+    await assertLeaseOwned()
+    await europePmcPprHarvest({
+      fromDate,
+      toDate,
+      importRoute,
+      cursor: record.cursor ?? null,
+      onCursorUpdate: saveCursorWithLease,
+    })
+    await assertLeaseOwned()
+    const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
+      route: importRoute,
+      dateFrom: record.dateFrom,
+      dateTo: record.dateTo,
+    })
+    await assertLeaseOwned()
+
+    return await dataSourceQueryService.updateDataSourceAfterImport({id: record.id, importedCount, cursor: null})
   })
 
   return {success: true, data: updatedDataSource}
