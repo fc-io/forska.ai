@@ -3,6 +3,7 @@ import {existsSync} from 'node:fs'
 import {Elysia, t} from 'elysia'
 
 import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from '../cron/judgmentsJobs/judgmentJobPaths.ts'
+import {runJudgmentJobSqliteBackgroundImport} from '../cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {judgmentsJobsCleanupStale} from '../cron/judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
@@ -15,6 +16,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
+import {runReviewServingProjectorWorkerOnce} from '../workers/reviewServingProjectorWorker.ts'
 
 const seedTokenEnvKey = 'FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN'
 
@@ -39,6 +41,27 @@ const getFixtureIds = (fixtureId: string) => {
     projectIds: [`${fixtureId}-project-a`, `${fixtureId}-project-b`],
     promptIds: [`${fixtureId}-prompt-a`, `${fixtureId}-prompt-b`],
   }
+}
+
+const getTopologyVisibleProjectionCount = async (fixtureId: string) => {
+  const ids = getFixtureIds(fixtureId)
+  const projectList = ids.projectIds.map(getSqlLiteral).join(', ')
+  const [projection] = await getAppDatabaseService().queryJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM (
+      SELECT DISTINCT
+        project_id,
+        review_config_hash,
+        payload_kind,
+        article_id,
+        prompt_id
+      FROM mart.review_article_judgment_detail_serving_v4
+      WHERE project_id IN (${projectList})
+        AND payload_kind = 'llm'
+    ) projection
+  `)
+
+  return Number(projection?.count ?? 0)
 }
 
 const seedTopologyFixture = async ({
@@ -258,6 +281,71 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
     {body: t.Object({fixtureId: t.String({pattern: '^[A-Za-z0-9_-]+$'}), token: t.String()})},
   )
   .post(
+    '/api/test/judgment-workflow-topology/drain-review-serving-projection',
+    async ({body}) => {
+      requireTopologySeedBoundary(body.token)
+      const ids = getFixtureIds(body.fixtureId)
+      const maxCycles = Math.min(16, Math.max(1, Math.trunc(body.maxCycles ?? 8)))
+      const cycles: Array<{
+        cycleIndex: number
+        importSummary: Awaited<ReturnType<typeof runJudgmentJobSqliteBackgroundImport>>
+        projectorResults: Array<{
+          chunkStatus: string
+          deltaIntakeStatus: string
+          dirtyWorkCount: number
+          projectId: string
+          status: string
+        }>
+        reconciledCounts: Array<{projectId: string; updatedCount: number}>
+        visibleProjectionCount: number
+      }> = []
+      let visibleProjectionCount = await getTopologyVisibleProjectionCount(body.fixtureId)
+
+      for (let cycleIndex = 0; cycleIndex < maxCycles && visibleProjectionCount < 4; cycleIndex += 1) {
+        const importSummary = await runJudgmentJobSqliteBackgroundImport({
+          claimedBy: `topology-${body.fixtureId}-sqlite-import`,
+        })
+        const projectorResults = []
+
+        for (const projectId of ids.projectIds) {
+          const projectorResult = await runReviewServingProjectorWorkerOnce({
+            maxWakeMs: 5_000,
+            rebuildProjectId: projectId,
+            workerId: `topology-${body.fixtureId}-projector-${cycleIndex}-${projectId}`,
+          })
+
+          projectorResults.push({
+            chunkStatus: projectorResult.chunk.status,
+            deltaIntakeStatus: projectorResult.deltaIntake.status,
+            dirtyWorkCount: projectorResult.deltaIntake.dirtyWorkCount,
+            projectId,
+            status: projectorResult.status,
+          })
+        }
+
+        const reconciledCounts = await Promise.all(
+          ids.projectIds.map(async (projectId) => {
+            return {
+              projectId,
+              updatedCount: await getJudgmentJobSqliteService().reconcileProjectRefreshAcks({projectId}),
+            }
+          }),
+        )
+        visibleProjectionCount = await getTopologyVisibleProjectionCount(body.fixtureId)
+        cycles.push({cycleIndex, importSummary, projectorResults, reconciledCounts, visibleProjectionCount})
+      }
+
+      return {data: {cycles, visibleProjectionCount}, error: null}
+    },
+    {
+      body: t.Object({
+        fixtureId: t.String({pattern: '^[A-Za-z0-9_-]+$'}),
+        maxCycles: t.Optional(t.Number()),
+        token: t.String(),
+      }),
+    },
+  )
+  .post(
     '/api/test/judgment-workflow-topology/evidence',
     async ({body}) => {
       requireTopologySeedBoundary(body.token)
@@ -356,20 +444,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
           WHERE queue.project_id IN (${projectList})
         ) queue
       `)
-      const [projection] = await getAppDatabaseService().queryJson<{count: number}>(`
-        SELECT COUNT(*) AS count
-        FROM (
-          SELECT DISTINCT
-            project_id,
-            review_config_hash,
-            payload_kind,
-            article_id,
-            prompt_id
-          FROM mart.review_article_judgment_detail_serving_v4
-          WHERE project_id IN (${projectList})
-            AND payload_kind = 'llm'
-        ) projection
-      `)
+      const visibleProjectionCount = await getTopologyVisibleProjectionCount(body.fixtureId)
       const appliedBoundaryMigrations = await getAppDatabaseService().queryJson<{name: string}>(`
         SELECT name
         FROM app_schema_migration
@@ -432,7 +507,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
             sentinel: migrationSentinel ? {...migrationSentinel, count: Number(migrationSentinel.count)} : undefined,
           },
           readyPairCount: Number(queue?.count ?? 0),
-          visibleProjectionCount: Number(projection?.count ?? 0),
+          visibleProjectionCount,
         },
         error: null,
       }

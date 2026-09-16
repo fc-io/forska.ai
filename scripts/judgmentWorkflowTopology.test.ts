@@ -23,6 +23,7 @@ import {
   isRuntimeMonitorTargetHealthy,
   isTopologyJobCleanupComplete,
   isTopologyJudgmentWorkflowComplete,
+  shouldDrainTopologyReviewServingProjection,
   startJudgmentWorkflowTopology,
   topologyLongRunningProcessStdio,
   topologyProjectorQuietWindowMs,
@@ -282,6 +283,27 @@ test('topology judgment completion still requires visible projection evidence wh
       hasTerminalJobStores: true,
       totalJudgments: 4,
       visibleProjectionCount: 0,
+    }),
+  ).toBe(false)
+})
+
+test('topology review-serving drain waits for canonical judgments before projection catch-up', () => {
+  expect(
+    shouldDrainTopologyReviewServingProjection({
+      totalJudgments: 3,
+      visibleProjectionCount: 0,
+    }),
+  ).toBe(false)
+  expect(
+    shouldDrainTopologyReviewServingProjection({
+      totalJudgments: 4,
+      visibleProjectionCount: 0,
+    }),
+  ).toBe(true)
+  expect(
+    shouldDrainTopologyReviewServingProjection({
+      totalJudgments: 4,
+      visibleProjectionCount: 4,
     }),
   ).toBe(false)
 })

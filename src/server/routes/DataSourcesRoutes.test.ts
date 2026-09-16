@@ -570,6 +570,17 @@ test('manual tracking reconciliation endpoint schedules full-range work', async 
   )
 })
 
+test('manual tracking reconciliation endpoint rejects archived data sources', async () => {
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {method: 'POST'},
+    row: {...trackedRow, archived: true},
+    url: 'http://localhost/api/datasources/datasource-tracked/tracking/reconcile',
+  })) as {body: string; status: number}
+
+  expect(parsed.status).toBe(500)
+  expect(parsed.body).toContain('Archived data sources cannot queue reconciliation work')
+})
+
 test('tracking-enabled datasource create inserts the row and tracking state in one transaction', async () => {
   const parsed = (await runDataSourcesRoute({
     requestInit: {
@@ -651,7 +662,7 @@ test('datasource patch rewinds tracking and invalidates stale reconciliation wor
   ])
 })
 
-test('datasource patch deletes queued automatic reconciliation work for removed schedule ages', async () => {
+test('datasource patch deletes queued automatic reconciliation work and rejects spooled windows for removed schedule ages', async () => {
   const parsed = (await runDataSourcesRoute({
     requestInit: {
       body: JSON.stringify({trackingReconcileScheduleMonths: [3]}),
@@ -660,7 +671,12 @@ test('datasource patch deletes queued automatic reconciliation work for removed 
     },
     row: trackedRow,
     url: 'http://localhost/api/datasources/datasource-tracked',
-  })) as {runStatements: string[]; status: number; transactionCallCount: number}
+  })) as {
+    rejectedSpoolWindows: Array<{dataSourceId: string; error: string}>
+    runStatements: string[]
+    status: number
+    transactionCallCount: number
+  }
   const statements = parsed.runStatements.join('\n')
 
   expect(parsed.status).toBe(200)
@@ -670,6 +686,9 @@ test('datasource patch deletes queued automatic reconciliation work for removed 
   expect(statements).toContain("run_kind = 'automatic_age_bucket'")
   expect(statements).toContain("status IN ('queued', 'running', 'failed')")
   expect(statements).toContain('(age_months IS NULL OR age_months NOT IN (3))')
+  expect(parsed.rejectedSpoolWindows).toEqual([
+    {dataSourceId: 'datasource-tracked', error: 'Tracked data source configuration changed'},
+  ])
 })
 
 test('datasource patch rewinds disabled tracking state when bounds change before re-enable', async () => {

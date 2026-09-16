@@ -51,6 +51,7 @@ const reviewServingRowsRef = {
 const reviewServingV4RebuildRequestsRef = {
   current: [] as Array<{components?: readonly string[]; priority?: number; projectId: string; reason: string}>,
 }
+const rejectReviewServingV4RebuildRef = {current: false}
 
 const assertProjectIsActiveRef = {
   current: async (_projectId: string): Promise<unknown> => {
@@ -102,6 +103,10 @@ const registerModuleMocks = () => {
         projectId: string
         reason: string
       }) => {
+        if (rejectReviewServingV4RebuildRef.current) {
+          throw new Error('rebuild enqueue failed')
+        }
+
         reviewServingV4RebuildRequestsRef.current.push(input)
         return {requestId: 'request-1', status: 'admitted'}
       },
@@ -146,6 +151,7 @@ afterEach(() => {
 
 beforeEach(() => {
   reviewServingV4RebuildRequestsRef.current = []
+  rejectReviewServingV4RebuildRef.current = false
   projectReviewConfigRef.current = async () => {
     return {
       humanJudgmentMode: 'prompt',
@@ -441,6 +447,27 @@ test('project review details returns unavailable when V4 article detail is unava
       reason: 'detailReadinessDirtyWork',
     },
   ])
+})
+
+test('project review details reports repairRequested false when detail repair enqueue fails', async () => {
+  rejectReviewServingV4RebuildRef.current = true
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {diagnostics: {snapshotId: null}, reason: 'snapshot unavailable', status: 'rejected'}
+      : {rows: [], status: 'accepted'}
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {article: null; reason: string; repairRequested: boolean; status: string}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    article: null,
+    reason: 'snapshot unavailable',
+    repairRequested: false,
+    status: 'unavailable',
+  })
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([])
 })
 
 test('project review details treats absent out-of-scope detail rows as terminal', async () => {

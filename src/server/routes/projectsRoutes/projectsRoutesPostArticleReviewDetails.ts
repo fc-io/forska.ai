@@ -74,15 +74,17 @@ const articleDetailRepairReviewServingComponents = [
   ...detailReadyReviewServingComponents,
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
-const requestReviewDetailReadinessRepair = async (projectId: string) => {
-  await requestReviewServingV4Rebuild({
+const requestReviewDetailReadinessRepair = async (projectId: string): Promise<boolean> => {
+  const request = await requestReviewServingV4Rebuild({
     components: articleDetailRepairReviewServingComponents,
     priority: detailReadinessReviewServingRepairPriority,
     projectId,
     reason: 'detailReadinessDirtyWork',
   }).catch(() => {
-    return undefined
+    return null
   })
+
+  return request !== null
 }
 
 type ProjectReviewDetailJudgmentRow = {
@@ -894,12 +896,12 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const articleDetailResult = await readProjectReviewArticleDetail({articleId, projectId, reviewConfigHash})
 
       if (articleDetailResult.status === 'rejected') {
-        await requestReviewDetailReadinessRepair(projectId)
+        const repairRequested = await requestReviewDetailReadinessRepair(projectId)
         return getUnavailableReviewDetail({
           articleId,
           diagnostics: articleDetailResult.diagnostics,
           reason: articleDetailResult.reason,
-          repairRequested: true,
+          repairRequested,
         })
       }
 
@@ -912,8 +914,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           return getUnavailableReviewDetail({articleId, reason: 'article not in project scope'})
         }
 
-        await requestReviewDetailReadinessRepair(projectId)
-        return getUnavailableReviewDetail({articleId, reason: 'detail row unavailable', repairRequested: true})
+        const repairRequested = await requestReviewDetailReadinessRepair(projectId)
+        return getUnavailableReviewDetail({articleId, reason: 'detail row unavailable', repairRequested})
       }
 
       const [articleFullTextRows, allArticleJudgments] = await Promise.all([
@@ -949,8 +951,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       ])
 
       if (projectReviewDetailJudgmentResult === null) {
-        await requestReviewDetailReadinessRepair(projectId)
-        return getUnavailableReviewDetail({articleId, reason: 'detail judgments unavailable', repairRequested: true})
+        const repairRequested = await requestReviewDetailReadinessRepair(projectId)
+        return getUnavailableReviewDetail({articleId, reason: 'detail judgments unavailable', repairRequested})
       }
 
       const projectReviewDetailJudgmentRows = projectReviewDetailJudgmentResult.judgmentRows
