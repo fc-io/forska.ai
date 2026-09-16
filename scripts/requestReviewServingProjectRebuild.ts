@@ -1,3 +1,5 @@
+import {writeFileSync} from 'node:fs'
+
 import {
   type ReviewServingProjectionComponent,
   reviewServingProjectionComponents,
@@ -9,12 +11,23 @@ import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbSer
 
 type CliOptions = {
   components: readonly ReviewServingProjectionComponent[] | null
+  jsonOutputFile: string | null
   projectId: string | null
   reason: string
 }
 
 const defaultReason = 'requestReviewServingProjectRebuild'
 const workloadContext = getMaintenanceDuckdbWorkloadContext('requestReviewServingProjectRebuild')
+
+const writeJson = (value: unknown, options: Pick<CliOptions, 'jsonOutputFile'>) => {
+  const output = `${JSON.stringify(value)}\n`
+
+  process.stdout.write(output)
+
+  if (options.jsonOutputFile !== null) {
+    writeFileSync(options.jsonOutputFile, output, 'utf8')
+  }
+}
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -57,6 +70,7 @@ const parseComponents = (value: string | undefined) => {
 const getCliOptions = (): CliOptions => {
   return {
     components: parseComponents(getArgValue(['--components'])),
+    jsonOutputFile: getArgValue(['--json-output-file', '--output-json']) ?? null,
     projectId: getArgValue(['--projectId', '--project-id']) ?? null,
     reason: getArgValue(['--reason']) ?? defaultReason,
   }
@@ -84,14 +98,15 @@ const requestReviewServingProjectRebuildCli = async () => {
     )
 
     if (!project) {
-      console.log(
-        JSON.stringify({
+      writeJson(
+        {
           projectId: options.projectId,
           reason: options.reason,
           requestIds: [],
           requestedCount: 0,
           status: 'not_found',
-        }),
+        },
+        options,
       )
       return
     }
@@ -101,15 +116,16 @@ const requestReviewServingProjectRebuildCli = async () => {
       projectId: options.projectId,
       reason: options.reason,
     })
-    console.log(
-      JSON.stringify({
+    writeJson(
+      {
         components: options.components,
         projectId: options.projectId,
         reason: options.reason,
         requestIds: [request.requestId],
         requestedCount: 1,
         status: 'requested',
-      }),
+      },
+      options,
     )
   })
 }

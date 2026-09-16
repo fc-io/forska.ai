@@ -784,9 +784,23 @@ const getDiagnosticsSummaryRowsEffect = (
         LEFT JOIN app.review_serving_project_dirty_source_watermark completed
           ON completed.project_id = source.projectId
           AND completed.source_partition = source.sourcePartition
+      ), live_rebuild_chunk AS (
+        SELECT chunk.*
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+          AND (
+            chunk.snapshot_id IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM app.review_serving_snapshot_manifest snapshot
+              WHERE snapshot.project_id IS NOT DISTINCT FROM chunk.project_id
+                AND snapshot.snapshot_id IS NOT DISTINCT FROM chunk.snapshot_id
+                AND snapshot.snapshot_status IN ('candidate', 'active')
+            )
+          )
       ), unfinished_request AS (
         SELECT DISTINCT request_id
-        FROM app.review_rebuild_chunk_manifest
+        FROM live_rebuild_chunk
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
           AND request_id IS NOT NULL
           AND status <> 'completed'
@@ -808,7 +822,7 @@ const getDiagnosticsSummaryRowsEffect = (
         LIMIT 1
       ), visible_chunk AS (
         SELECT chunk.*
-        FROM app.review_rebuild_chunk_manifest chunk
+        FROM live_rebuild_chunk chunk
         LEFT JOIN latest_request ON TRUE
         WHERE chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
           AND (

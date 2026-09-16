@@ -875,6 +875,99 @@ test('V4 rebuild request service admits large search rebuilds as executable rang
   expect(searchChunkInserts[0]).not.toContain('input_row_budget_split')
 })
 
+test('V4 search dirty work bootstraps requested search when active snapshot lacks search state', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
+    {snapshotComponents: countReadyReviewServingComponents},
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['search'], priority: 50, projectId: 'project-v4', reason: 'searchDirtyWork'},
+      database,
+    ),
+  )
+
+  const snapshotInsert =
+    statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    }) ?? ''
+  const componentState = getJsonObjectsFromSql(snapshotInsert).find((entry) => {
+    return 'optional' in entry && 'required' in entry
+  }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
+  const chunkInsertSql = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+    .join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.requestedComponents).toEqual(['search'])
+  expect(
+    componentState?.required?.map((state) => {
+      return state.component
+    }),
+  ).toEqual([...countReadyReviewServingComponents])
+  expect(
+    componentState?.optional?.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['search'])
+  expect(chunkInsertSql).toContain("'search'")
+  expect(chunkInsertSql).toContain("'projectScope'")
+  expect(chunkInsertSql).toContain("'selectedImport'")
+  expect(chunkInsertSql).toContain('freshReviewServingSnapshot')
+})
+
+for (const component of ['payload', 'posting', 'summary'] as const) {
+  test(`V4 ${component} dirty work bootstraps requested optional component when active snapshot lacks it`, async () => {
+    const {database, statements} = createFakeRequestDatabase(
+      {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
+      {snapshotComponents: countReadyReviewServingComponents},
+    )
+
+    const request = await Effect.runPromise(
+      requestReviewServingV4RebuildEffect(
+        {components: [component], priority: 50, projectId: 'project-v4', reason: `${component}DirtyWork`},
+        database,
+      ),
+    )
+
+    const snapshotInsert =
+      statements.find((statement) => {
+        return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+      }) ?? ''
+    const componentState = getJsonObjectsFromSql(snapshotInsert).find((entry) => {
+      return 'optional' in entry && 'required' in entry
+    }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
+    const chunkInsertSql = statements
+      .filter((statement) => {
+        return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+      })
+      .join('\n')
+
+    expect(request.status).toBe('admitted')
+    expect(request.requestedComponents).toEqual([component])
+    expect(
+      componentState?.required?.map((state) => {
+        return state.component
+      }),
+    ).toEqual([...countReadyReviewServingComponents])
+    expect(
+      componentState?.optional?.map((state) => {
+        return state.component
+      }),
+    ).toEqual(component === 'summary' ? ['payload', 'summary'] : [component])
+    expect(chunkInsertSql).toContain(`'${component}'`)
+    expect(chunkInsertSql).toContain("'projectScope'")
+    expect(chunkInsertSql).toContain("'selectedImport'")
+    if (component === 'summary') {
+      expect(chunkInsertSql).toContain("'payload'")
+    }
+    expect(chunkInsertSql).toContain('freshReviewServingSnapshot')
+  })
+}
+
 test('V4 rebuild request service bootstraps explicit chunks when a project has no snapshot yet', async () => {
   const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
 

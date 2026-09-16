@@ -273,8 +273,8 @@ test('wake runs claimed component batches in dependency order under row budgets'
   const order: ReviewServingProjectionComponent[] = []
   const {dependencies} = createDependencyHarness({
     humanStatus: [getClaim({component: 'humanStatus', dirtyWorkId: 'human-1'})],
-    posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
-    summary: [getClaim({component: 'summary', dirtyWorkId: 'summary-1'})],
+    queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
+    selectedImport: [getClaim({component: 'selectedImport', dirtyWorkId: 'selected-import-1'})],
   })
 
   dependencies.runners = {
@@ -283,13 +283,13 @@ test('wake runs claimed component batches in dependency order under row budgets'
 
       return {processedCount: 1}
     },
-    posting: async () => {
-      order.push('posting')
+    queue: async () => {
+      order.push('queue')
 
       return {processedCount: 1}
     },
-    summary: async () => {
-      order.push('summary')
+    selectedImport: async () => {
+      order.push('selectedImport')
 
       return {processedCount: 1}
     },
@@ -298,7 +298,7 @@ test('wake runs claimed component batches in dependency order under row budgets'
   const result = await wakeReviewServingProjectorService(
     {
       batchSize: 1,
-      componentOrder: ['humanStatus', 'posting', 'summary'],
+      componentOrder: ['humanStatus', 'queue', 'selectedImport'],
       maxRowsPerWake: 2,
       maxWakeMs: 1_000,
       wakeId: 'wake-1',
@@ -307,22 +307,22 @@ test('wake runs claimed component batches in dependency order under row budgets'
   )
 
   expect(result.status).toBe('completed')
-  expect(order).toEqual(['humanStatus', 'posting'])
+  expect(order).toEqual(['humanStatus', 'queue'])
   expect(
     result.runs.map((run) => {
       return run.component
     }),
-  ).toEqual(['humanStatus', 'posting'])
+  ).toEqual(['humanStatus', 'queue'])
 })
 
 test('wake retries a failing projector batch and avoids marking it failed after replay succeeds', async () => {
   const {dependencies, failedClaimIds} = createDependencyHarness({
-    posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
+    queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
   })
   let attempts = 0
 
   dependencies.runners = {
-    posting: async () => {
+    queue: async () => {
       attempts += 1
 
       if (attempts === 1) {
@@ -334,7 +334,7 @@ test('wake retries a failing projector batch and avoids marking it failed after 
   }
 
   const result = await wakeReviewServingProjectorService(
-    {batchSize: 1, componentOrder: ['posting'], maxRetries: 1, maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    {batchSize: 1, componentOrder: ['queue'], maxRetries: 1, maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
     dependencies,
   )
 
@@ -345,17 +345,17 @@ test('wake retries a failing projector batch and avoids marking it failed after 
 
 test('wake marks exhausted failures as failed lane blockers with diagnostics', async () => {
   const {dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
-    posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
+    queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
   })
 
   dependencies.runners = {
-    posting: async () => {
+    queue: async () => {
       throw new Error('projector crashed after write validation')
     },
   }
 
   const result = await wakeReviewServingProjectorService(
-    {batchSize: 1, componentOrder: ['posting'], maxRetries: 1, maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    {batchSize: 1, componentOrder: ['queue'], maxRetries: 1, maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
     dependencies,
   )
 
@@ -363,13 +363,13 @@ test('wake marks exhausted failures as failed lane blockers with diagnostics', a
   expect(result.failures).toEqual([
     {
       attempts: 2,
-      claimIds: ['posting-1'],
-      component: 'posting',
+      claimIds: ['queue-1'],
+      component: 'queue',
       diagnostic: 'projector crashed after write validation',
       status: 'failed',
     },
   ])
-  expect(failedClaimIds).toEqual(['posting-1'])
+  expect(failedClaimIds).toEqual(['queue-1'])
   expect(releasedClaimIds).toEqual([])
 })
 
@@ -448,103 +448,61 @@ test('wake requests page-first V4 rebuild and blocks claims when a snapshot is n
   expect(failedClaimIds).toEqual([])
 })
 
-test('wake requests payload repair with count-ready dependencies for missing result visibility snapshots', async () => {
-  const {blockedClaimIds, dependencies, releasedClaimIds} = createDependencyHarness({
-    payload: [getClaim({component: 'payload', dirtyWorkId: 'payload-1'})],
-  })
-  const rebuildRequests: Array<{
-    components: readonly ReviewServingProjectionComponent[] | undefined
-    pageFirstOnly: boolean | undefined
-    priority: number | undefined
-    projectId: string
-    reason: string
-  }> = []
-
-  dependencies.requestRebuild = (input) => {
-    rebuildRequests.push({
-      components: input.components,
-      pageFirstOnly: input.pageFirstOnly,
-      priority: input.priority,
-      projectId: input.projectId,
-      reason: input.reason,
+for (const component of ['payload', 'posting', 'summary', 'judgmentInputContent'] as const) {
+  test(`wake routes article-scoped ${component} dirty work through chunked rebuilds before direct projection`, async () => {
+    const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+      [component]: [getClaim({component, dirtyWorkId: `${component}-article-1`})],
     })
+    const rebuildRequests: Array<{
+      components: readonly ReviewServingProjectionComponent[] | undefined
+      pageFirstOnly: boolean | undefined
+      priority: number | undefined
+      projectId: string
+      reason: string
+    }> = []
+    let runnerCalled = false
 
-    return Effect.succeed({status: 'admitted'} as never)
-  }
-  dependencies.runners = {
-    payload: async () => {
-      throw new Error('cannot run projector without a candidate or active snapshot for project project-1')
-    },
-  }
+    dependencies.requestRebuild = (input) => {
+      rebuildRequests.push({
+        components: input.components,
+        pageFirstOnly: input.pageFirstOnly,
+        priority: input.priority,
+        projectId: input.projectId,
+        reason: input.reason,
+      })
 
-  const result = await wakeReviewServingProjectorService(
-    {batchSize: 1, componentOrder: ['payload'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
-    dependencies,
-  )
+      return Effect.succeed({status: 'admitted'} as never)
+    }
+    dependencies.runners = {
+      [component]: async () => {
+        runnerCalled = true
 
-  expect(result.status).toBe('partial')
-  expect(rebuildRequests).toEqual([
-    {
-      components: [...countReadyReviewServingComponents, 'payload'],
-      pageFirstOnly: true,
-      priority: 50,
-      projectId: 'project-1',
-      reason: 'missingReviewServingSnapshot',
-    },
-  ])
-  expect(blockedClaimIds).toEqual(['payload-1'])
-  expect(releasedClaimIds).toEqual([])
-})
+        return {processedCount: 1}
+      },
+    }
 
-test('wake requests payload-backed summary repair when a candidate lacks payload identity', async () => {
-  const {blockedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
-    summary: [getClaim({component: 'summary', dirtyWorkId: 'summary-1'})],
+    const result = await wakeReviewServingProjectorService(
+      {batchSize: 1, componentOrder: [component], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+      dependencies,
+    )
+
+    expect(result.status).toBe('completed')
+    expect(result.runs).toEqual([{attempts: 1, claimCount: 1, component, processedCount: 0, status: 'completed'}])
+    expect(runnerCalled).toBe(false)
+    expect(rebuildRequests).toEqual([
+      {
+        components: [component],
+        pageFirstOnly: undefined,
+        priority: 50,
+        projectId: 'project-1',
+        reason: `${component}DirtyWork`,
+      },
+    ])
+    expect(completedClaimIds).toEqual([`${component}-article-1`])
+    expect(failedClaimIds).toEqual([])
+    expect(releasedClaimIds).toEqual([])
   })
-  const rebuildRequests: Array<{
-    components: readonly ReviewServingProjectionComponent[] | undefined
-    pageFirstOnly: boolean | undefined
-    priority: number | undefined
-    projectId: string
-    reason: string
-  }> = []
-
-  dependencies.requestRebuild = (input) => {
-    rebuildRequests.push({
-      components: input.components,
-      pageFirstOnly: input.pageFirstOnly,
-      priority: input.priority,
-      projectId: input.projectId,
-      reason: input.reason,
-    })
-
-    return Effect.succeed({status: 'admitted'} as never)
-  }
-  dependencies.runners = {
-    summary: async () => {
-      throw new Error('cannot run projector without payload identity in snapshot snapshot-1')
-    },
-  }
-
-  const result = await wakeReviewServingProjectorService(
-    {batchSize: 1, componentOrder: ['summary'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
-    dependencies,
-  )
-
-  expect(result.status).toBe('partial')
-  expect(result.failures).toEqual([])
-  expect(rebuildRequests).toEqual([
-    {
-      components: [...countReadyReviewServingComponents, 'payload', 'summary'],
-      pageFirstOnly: true,
-      priority: 50,
-      projectId: 'project-1',
-      reason: 'missingReviewServingSnapshot',
-    },
-  ])
-  expect(blockedClaimIds).toEqual(['summary-1'])
-  expect(failedClaimIds).toEqual([])
-  expect(releasedClaimIds).toEqual([])
-})
+}
 
 test('wake routes search dirty work through chunked rebuilds instead of direct projection', async () => {
   const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
@@ -1141,9 +1099,7 @@ test('wake releases claimed work when foreground DuckDB work queues before proje
 })
 
 test('failed snapshot promotion is reported without replacing last-known-good data in the service', async () => {
-  const {dependencies} = createDependencyHarness({
-    summary: [getClaim({component: 'summary', dirtyWorkId: 'summary-1'})],
-  })
+  const {dependencies} = createDependencyHarness({queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})]})
 
   dependencies.promoteSnapshot = async (input: PromoteReviewServingProjectorSnapshotInput) => {
     return {
@@ -1153,7 +1109,7 @@ test('failed snapshot promotion is reported without replacing last-known-good da
     }
   }
   dependencies.runners = {
-    summary: async () => {
+    queue: async () => {
       return {
         candidateSnapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'candidate-1'}],
         processedCount: 1,
@@ -1162,7 +1118,7 @@ test('failed snapshot promotion is reported without replacing last-known-good da
   }
 
   const result = await wakeReviewServingProjectorService(
-    {batchSize: 1, componentOrder: ['summary'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    {batchSize: 1, componentOrder: ['queue'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
     dependencies,
   )
 

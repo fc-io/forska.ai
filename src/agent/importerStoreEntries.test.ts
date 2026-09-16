@@ -6,10 +6,12 @@ import {afterEach, expect, mock, test} from 'bun:test'
 const articleImportStoreServiceModulePath = new URL('../server/services/articleImportStoreService.ts', import.meta.url)
   .href
 const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).href
+const sleepModulePath = new URL('../utils/sleep.ts', import.meta.url).href
 
 type StoredArticleRow = Record<string, unknown>
 
 const storedRowsRef: {current: StoredArticleRow[][]} = {current: []}
+const originalFetch = globalThis.fetch
 
 const registerModuleMocks = () => {
   void mock.module(articleImportStoreServiceModulePath, () => {
@@ -45,6 +47,14 @@ const registerModuleMocks = () => {
       },
     }
   })
+
+  void mock.module(sleepModulePath, () => {
+    return {
+      sleep: async () => {
+        return undefined
+      },
+    }
+  })
 }
 
 const loadAgentModule = async <T>(relativePath: string): Promise<T> => {
@@ -59,8 +69,31 @@ const getStoredRows = () => {
   })
 }
 
+const getFetchUrl = (input: RequestInfo | URL): string => {
+  return typeof input === 'string' || input instanceof URL ? input.toString() : input.url
+}
+
+const mockEuropePmcFetchPages = (pages: unknown[]) => {
+  const requestedUrls: string[] = []
+  let pageIndex = 0
+
+  globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+    requestedUrls.push(getFetchUrl(input))
+    const page = pages[pageIndex]
+    pageIndex += 1
+    if (!page) {
+      throw new Error(`Unexpected Europe PMC fetch ${pageIndex}`)
+    }
+
+    return new Response(JSON.stringify(page), {status: 200, statusText: 'OK'})
+  }) as unknown as typeof fetch
+
+  return {requestedUrls}
+}
+
 afterEach(() => {
   storedRowsRef.current = []
+  globalThis.fetch = originalFetch
   mock.restore()
 })
 
@@ -105,6 +138,120 @@ test('pubmed harvest mapping keeps DOI and import metadata', async () => {
       journalTitle: 'Nature',
       firstPublicationDate: '2024-01-02',
     },
+  })
+})
+
+test('pubmed page fetch callback receives ordered cursors and normalized records', async () => {
+  mockEuropePmcFetchPages([
+    {
+      hitCount: 2,
+      nextCursorMark: 'cursor-1',
+      resultList: {
+        result: [
+          {
+            id: '1001',
+            source: 'MED',
+            pmid: '1001',
+            title: 'PubMed page one',
+            abstractText: 'First abstract',
+            firstPublicationDate: '2024-01-01',
+          },
+        ],
+      },
+    },
+    {
+      hitCount: 2,
+      resultList: {
+        result: [
+          {
+            id: '1002',
+            source: 'MED',
+            pmid: '1002',
+            title: 'PubMed page two',
+            abstractText: 'Second abstract',
+            firstPublicationDate: '2024-01-02',
+          },
+        ],
+      },
+    },
+  ])
+  const {fetchPubmedHarvestPages} = await loadAgentModule<typeof import('./pubmedHarvest.ts')>('./pubmedHarvest.ts')
+  const callbacks: Array<{
+    cursorAfter: string | null
+    cursorBefore: string
+    ids: string[]
+    pageIndex: number
+    sourceRecordCount: number
+  }> = []
+
+  const result = await fetchPubmedHarvestPages({
+    fromDate: '2024-01-01',
+    toDate: '2024-01-02',
+    importRoute: '/api/datasources/import/pubmed',
+    cursor: 'resume-cursor',
+    onPage: (page) => {
+      callbacks.push({
+        cursorBefore: page.cursorBefore,
+        cursorAfter: page.cursorAfter,
+        pageIndex: page.pageIndex,
+        ids: page.normalizedRecords.map((row) => {
+          return row.articleId
+        }),
+        sourceRecordCount: page.sourceRecordCount,
+      })
+    },
+  })
+
+  expect(result).toEqual({fetchedTotal: 2, pageCount: 2})
+  expect(callbacks).toEqual([
+    {cursorBefore: 'resume-cursor', cursorAfter: 'cursor-1', pageIndex: 0, ids: ['pmid:1001'], sourceRecordCount: 1},
+    {cursorBefore: 'cursor-1', cursorAfter: null, pageIndex: 1, ids: ['pmid:1002'], sourceRecordCount: 1},
+  ])
+  expect(getStoredRows()).toEqual([])
+})
+
+test('pubmed harvest preserves legacy cursor update and workflow store path', async () => {
+  mockEuropePmcFetchPages([
+    {
+      hitCount: 1,
+      resultList: {
+        result: [
+          {
+            id: '2001',
+            source: 'MED',
+            pmid: '2001',
+            title: 'Stored PubMed page',
+            abstractText: 'Stored abstract',
+            authorList: {author: [{fullName: 'PubMed Author'}]},
+            firstPublicationDate: '2024-01-03',
+          },
+        ],
+      },
+    },
+  ])
+  const {pubmedHarvest} = await loadAgentModule<typeof import('./pubmedHarvest.ts')>('./pubmedHarvest.ts')
+  const cursorUpdates: (string | null)[] = []
+
+  await pubmedHarvest({
+    fromDate: '2024-01-03',
+    toDate: '2024-01-03',
+    importRoute: '/api/datasources/import/pubmed',
+    cursor: null,
+    onCursorUpdate: async (cursor) => {
+      cursorUpdates.push(cursor)
+    },
+  })
+
+  expect(cursorUpdates).toEqual([null])
+  expect(getStoredRows()).toHaveLength(1)
+  expect(getStoredRows()[0]).toMatchObject({
+    articleId: 'pmid:2001',
+    articleTitle: 'Stored PubMed page',
+    articleSummary: 'Stored abstract',
+    articleAuthors: ['PubMed Author'],
+    articleVersion: 1,
+    pubmedId: '2001',
+    importRoute: '/api/datasources/import/pubmed',
   })
 })
 
@@ -287,6 +434,127 @@ test('europe pmc ppr workflow store entries pass DOI, URL, and raw payload', asy
       source: 'PPR',
       fullTextUrlList: {fullTextUrl: [{url: 'https://example.org/ppr.pdf', site: 'Europe PMC'}]},
     },
+  })
+})
+
+test('europe pmc ppr page fetch callback receives ordered cursors and normalized records', async () => {
+  mockEuropePmcFetchPages([
+    {
+      hitCount: 2,
+      nextCursorMark: 'ppr-cursor-1',
+      resultList: {
+        result: [
+          {
+            id: 'PPR1001',
+            source: 'PPR',
+            title: 'PPR page one',
+            abstractText: 'First PPR abstract',
+            firstPublicationDate: '2024-02-01',
+          },
+        ],
+      },
+    },
+    {
+      hitCount: 2,
+      resultList: {
+        result: [
+          {
+            id: 'PPR1002',
+            source: 'PPR',
+            title: 'PPR page two',
+            abstractText: 'Second PPR abstract',
+            firstPublicationDate: '2024-02-02',
+          },
+        ],
+      },
+    },
+  ])
+  const {fetchEuropePmcPprHarvestPages} =
+    await loadAgentModule<typeof import('./europePmcPprHarvest.ts')>('./europePmcPprHarvest.ts')
+  const callbacks: Array<{
+    cursorAfter: string | null
+    cursorBefore: string
+    ids: string[]
+    pageIndex: number
+    sourceRecordCount: number
+  }> = []
+
+  const result = await fetchEuropePmcPprHarvestPages({
+    fromDate: '2024-02-01',
+    toDate: '2024-02-02',
+    importRoute: '/api/datasources/import/europe-pmc-ppr',
+    cursor: 'ppr-resume-cursor',
+    onPage: (page) => {
+      callbacks.push({
+        cursorBefore: page.cursorBefore,
+        cursorAfter: page.cursorAfter,
+        pageIndex: page.pageIndex,
+        ids: page.normalizedRecords.map((row) => {
+          return row.articleId
+        }),
+        sourceRecordCount: page.sourceRecordCount,
+      })
+    },
+  })
+
+  expect(result).toEqual({fetchedTotal: 2, pageCount: 2})
+  expect(callbacks).toEqual([
+    {
+      cursorBefore: 'ppr-resume-cursor',
+      cursorAfter: 'ppr-cursor-1',
+      pageIndex: 0,
+      ids: ['ppr:PPR1001'],
+      sourceRecordCount: 1,
+    },
+    {cursorBefore: 'ppr-cursor-1', cursorAfter: null, pageIndex: 1, ids: ['ppr:PPR1002'], sourceRecordCount: 1},
+  ])
+  expect(getStoredRows()).toEqual([])
+})
+
+test('europe pmc ppr harvest preserves legacy cursor update and workflow store path', async () => {
+  mockEuropePmcFetchPages([
+    {
+      hitCount: 1,
+      resultList: {
+        result: [
+          {
+            id: 'PPR2001',
+            source: 'PPR',
+            doi: '10.1101/2024.02.03.123456',
+            title: 'Stored PPR page',
+            abstractText: 'Stored PPR abstract',
+            authorList: {author: [{fullName: 'PPR Author'}]},
+            firstPublicationDate: '2024-02-03',
+          },
+        ],
+      },
+    },
+  ])
+  const {europePmcPprHarvest} =
+    await loadAgentModule<typeof import('./europePmcPprHarvest.ts')>('./europePmcPprHarvest.ts')
+  const cursorUpdates: (string | null)[] = []
+
+  await europePmcPprHarvest({
+    fromDate: '2024-02-03',
+    toDate: '2024-02-03',
+    importRoute: '/api/datasources/import/europe-pmc-ppr',
+    cursor: null,
+    onCursorUpdate: async (cursor) => {
+      cursorUpdates.push(cursor)
+    },
+  })
+
+  expect(cursorUpdates).toEqual([null])
+  expect(getStoredRows()).toHaveLength(1)
+  expect(getStoredRows()[0]).toMatchObject({
+    articleId: 'ppr:PPR2001',
+    articleTitle: 'Stored PPR page',
+    articleSummary: 'Stored PPR abstract',
+    articleAuthors: ['PPR Author'],
+    articleVersion: 1,
+    doi: '10.1101/2024.02.03.123456',
+    url: 'https://doi.org/10.1101/2024.02.03.123456',
+    importRoute: '/api/datasources/import/europe-pmc-ppr',
   })
 })
 

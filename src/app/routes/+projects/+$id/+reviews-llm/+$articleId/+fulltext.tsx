@@ -14,6 +14,7 @@ import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTi
 import {
   getArchivedReviewDetailFromResponseError,
   getAvailableReviewDetail,
+  getReviewDetailRefetchInterval,
   isArchivedReviewDetail,
   isUnavailableReviewDetail,
   ReviewDetailArchivedState,
@@ -41,6 +42,9 @@ export const ReviewDetailFulltext = () => {
           throw new Error('Failed to load article review details')
         }
         return response.data
+      },
+      refetchInterval: (query: {state: {data?: unknown}}) => {
+        return getReviewDetailRefetchInterval(query.state.data)
       },
       staleTime: 5 * 60 * 1000,
     }

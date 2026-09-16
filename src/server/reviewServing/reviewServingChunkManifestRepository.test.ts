@@ -490,6 +490,32 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       }
     })
   }
+  const completeSupersededSnapshotChunks = (statement: string) => {
+    const scopedChunkIds = statement.includes('chunk_id IN') ? new Set(getSqlStrings(statement)) : null
+
+    rows.forEach((existing, chunkId) => {
+      const hasSupersededSnapshot =
+        existing.snapshotId === 'snapshot-retired' || existing.snapshotId === 'snapshot-failed'
+      if (
+        (scopedChunkIds === null || scopedChunkIds.has(chunkId))
+        && hasSupersededSnapshot
+        && (existing.status === 'pending' || existing.status === 'running')
+      ) {
+        rows.set(chunkId, {
+          ...existing,
+          admissionState: 'admitted',
+          completedAt: existing.completedAt ?? getClock(statements),
+          lastError: existing.lastError ?? 'superseded by retired review-serving snapshot',
+          leaseExpiresAt: null,
+          leaseOwner: null,
+          retryAfter: null,
+          retryCount: 0,
+          status: 'completed',
+          updatedAt: getClock(statements),
+        })
+      }
+    })
+  }
   const run = async (statement: string) => {
     statements.push(statement)
 
@@ -503,6 +529,14 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       && statement.includes('NOT EXISTS')
     ) {
       releaseInactiveRequestChunks(statement)
+    }
+
+    if (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && statement.includes("snapshot.snapshot_status IN ('retired', 'failed')")
+      && statement.includes("status = 'completed'")
+    ) {
+      completeSupersededSnapshotChunks(statement)
     }
 
     if (
@@ -529,13 +563,18 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       && statement.includes('last_error =')
       && statement.match(/retry_count\s*=\s*\d+/u) !== null
       && !statement.includes('NOT EXISTS')
+      && !statement.includes("snapshot.snapshot_status IN ('retired', 'failed')")
     ) {
       failChunk(statement)
     }
 
     if (
-      statement.includes("SET\n        status = 'completed'")
-      || statement.includes("SET\r\n        status = 'completed'")
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && (statement.includes("SET\n        status = 'completed'")
+        || statement.includes("SET\r\n        status = 'completed'"))
+      && statement.includes("(chunk_id || '') =")
+      && statement.includes("AND status = 'running'")
+      && statement.includes('lease_owner =')
     ) {
       completeChunk(statement)
     }
@@ -1828,6 +1867,77 @@ test('claim discovery preserves finalized chunks for inactive but present rebuil
 
   expect(releaseStatement).toBeDefined()
   expect(releaseStatement).not.toContain("request.status IN ('admitted', 'running')")
+})
+
+test('inactive request release completes nonterminal chunks for retired snapshots as superseded', async () => {
+  const retiredPending = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-retired-pending'}, []),
+    requestId: 'rebuild:retired',
+    snapshotId: 'snapshot-retired',
+    status: 'pending' as const,
+  }
+  const failedSnapshotRunning = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-failed-snapshot-running'}, []),
+    leaseExpiresAt: '2026-06-16T14:10:00.000Z',
+    leaseOwner: 'worker-1',
+    requestId: 'rebuild:failed-snapshot',
+    snapshotId: 'snapshot-failed',
+    status: 'running' as const,
+  }
+  const activePending = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-active-pending'}, []),
+    requestId: 'rebuild:active',
+    snapshotId: 'snapshot-active',
+    status: 'pending' as const,
+  }
+  const retiredQuarantined = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-retired-quarantined'}, []),
+    lastError: 'retained quarantine evidence',
+    requestId: 'rebuild:retired-quarantined',
+    retryCount: 3,
+    snapshotId: 'snapshot-retired',
+    status: 'quarantined' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([
+    retiredPending,
+    failedSnapshotRunning,
+    activePending,
+    retiredQuarantined,
+  ])
+
+  await releaseInactiveRequestRebuildChunkManifests(database)
+
+  expect(rows.get(retiredPending.chunkId)).toMatchObject({
+    lastError: 'superseded by retired review-serving snapshot',
+    requestId: 'rebuild:retired',
+    retryAfter: null,
+    retryCount: 0,
+    status: 'completed',
+  })
+  expect(rows.get(failedSnapshotRunning.chunkId)).toMatchObject({
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    requestId: 'rebuild:failed-snapshot',
+    retryAfter: null,
+    retryCount: 0,
+    status: 'completed',
+  })
+  expect(rows.get(activePending.chunkId)).toMatchObject({requestId: 'rebuild:active', status: 'pending'})
+  expect(rows.get(retiredQuarantined.chunkId)).toMatchObject({
+    lastError: 'retained quarantine evidence',
+    requestId: 'rebuild:retired-quarantined',
+    retryCount: 3,
+    status: 'quarantined',
+  })
+  const supersededStatement = statements.find((statement) => {
+    return (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && statement.includes("snapshot.snapshot_status IN ('retired', 'failed')")
+    )
+  })
+  expect(supersededStatement).toBeDefined()
+  expect(supersededStatement).toContain("status IN ('pending', 'running')")
+  expect(supersededStatement).toContain('app.review_serving_snapshot_manifest snapshot')
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {

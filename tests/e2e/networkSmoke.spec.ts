@@ -926,6 +926,12 @@ const dynamicAuditTargets: NetworkSmokeTarget[] = [
     buildPath: (seed) => `/admin/datasources/${seed.dataSourceId}/edit`,
   },
   {
+    template: '/admin/datasources/$id/changes',
+    label: 'admin data source changes',
+    requiredSeedKeys: ['dataSourceId'],
+    buildPath: (seed) => `/admin/datasources/${seed.dataSourceId}/changes`,
+  },
+  {
     template: '/admin/unexpected-answers/$projectId',
     label: 'admin unexpected answers project',
     requiredSeedKeys: ['projectId'],

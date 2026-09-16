@@ -7,6 +7,10 @@ import {getReviewIndexingStateCopy} from '../getReviewIndexingInProgressTitle.ts
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
+import {
+  getReviewArticlesIndexingRefreshSignature,
+  getReviewArticlesRefetchInterval,
+} from './reviewsArticleIndexingRefresh.ts'
 import type {ArticleWithJudgments} from './reviewsArticlesTable.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
@@ -59,6 +63,9 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
   const showReviewIndexState = createMemo(() => {
     return warningsQuery.isSuccess && !isReviewServingReadable()
   })
+  const articleIndexingRefreshSignature = createMemo(() => {
+    return getReviewArticlesIndexingRefreshSignature(warningsQuery.data)
+  })
   const articlesQuery = useQuery(() => {
     return {
       ...createArticlesUnassessedQueryOptions(
@@ -75,7 +82,23 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
         props.searchTitle,
       ),
       enabled: canLoadArticles(),
+      refetchInterval: getReviewArticlesRefetchInterval(warningsQuery.data),
     }
+  })
+  let lastArticleIndexingRefreshSignature: string | null = null
+  createEffect(() => {
+    const signature = articleIndexingRefreshSignature()
+
+    if (!signature || !canLoadArticles() || !articlesQuery.isSuccess) {
+      return
+    }
+
+    if (lastArticleIndexingRefreshSignature === signature) {
+      return
+    }
+
+    lastArticleIndexingRefreshSignature = signature
+    void articlesQuery.refetch()
   })
   createEffect(() => {
     const nextCursor = articlesQuery.data?.nextCursor

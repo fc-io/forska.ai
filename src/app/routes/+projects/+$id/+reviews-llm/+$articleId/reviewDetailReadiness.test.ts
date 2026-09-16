@@ -5,6 +5,7 @@ import {expect, test} from 'bun:test'
 import {
   getArchivedReviewDetailFromResponseError,
   getAvailableReviewDetail,
+  getReviewDetailRefetchInterval,
   getReviewDetailUnavailableMessage,
   isArchivedReviewDetail,
   isUnavailableReviewDetail,
@@ -23,6 +24,8 @@ test('review detail readiness helpers distinguish unavailable V4 detail state fr
   expect(isUnavailableReviewDetail(available)).toBe(false)
   expect(getAvailableReviewDetail(unavailable)).toBeNull()
   expect(getAvailableReviewDetail(available)).toBe(available)
+  expect(getReviewDetailRefetchInterval(unavailable)).toBe(2_000)
+  expect(getReviewDetailRefetchInterval(available)).toBe(false)
   expect(getReviewDetailUnavailableMessage(unavailable)).toContain('detail row unavailable')
 })
 
@@ -47,6 +50,7 @@ test('review detail browser routes do not render unavailable payloads as article
 
     expect(source).toContain('ReviewDetailUnavailableState')
     expect(source).toContain('ReviewDetailArchivedState')
+    expect(source).toContain('getReviewDetailRefetchInterval(query.state.data)')
     expect(source).toContain('getArchivedReviewDetailFromResponseError(response.error)')
     expect(source).toContain('isArchivedReviewDetail(articleQuery.data)')
     expect(source).toContain('availableDetail()')

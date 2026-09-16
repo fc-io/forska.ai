@@ -1,4 +1,4 @@
-import {mkdtempSync, readdirSync, rmSync} from 'node:fs'
+import {mkdtempSync, readdirSync, readFileSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -13,11 +13,13 @@ test('fresh migrations and scoped title-posting updates work on the installed en
     .sort()
 
   try {
+    const outputPath = join(root, 'fresh-migration-result.json')
     const result = globalThis.Bun.spawnSync(
       [
         process.execPath,
         '-e',
         `
+        const {writeFileSync} = await import('node:fs')
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
         const {getRemoveReviewServingTitleSearchArticleIdsStatements} = await import('./src/server/reviewServing/reviewServingProjectorWriter.ts')
@@ -40,7 +42,11 @@ test('fresh migrations and scoped title-posting updates work on the installed en
           await migrateDuckdb()
           const after = await database.queryJson('SELECT name, applied_at FROM app_schema_migration ORDER BY name')
           const postings = await database.queryJson('SELECT token, article_ids AS articleIds FROM mart.review_title_search_serving_v4 ORDER BY token')
-          console.log(JSON.stringify({before, after, postings}))
+          writeFileSync(process.env.FORSKA_FRESH_MIGRATION_TEST_OUTPUT, JSON.stringify({
+            afterMatchesBefore: JSON.stringify(after) === JSON.stringify(before),
+            beforeNames: before.map(({name}) => name),
+            postings,
+          }))
         } finally {
           await database.close({checkpointBeforeClose: false})
         }
@@ -52,6 +58,7 @@ test('fresh migrations and scoped title-posting updates work on the installed en
           ...process.env,
           DUCKDB_MEMORY_LIMIT: '512MiB',
           DUCKDB_PATH: join(root, 'fresh.duckdb'),
+          FORSKA_FRESH_MIGRATION_TEST_OUTPUT: outputPath,
           SERVER_DUCKDB_OWNER_URL: '',
           SERVER_ROLE: 'maintenance-worker',
         },
@@ -62,18 +69,14 @@ test('fresh migrations and scoped title-posting updates work on the installed en
     )
 
     expect(result.exitCode, result.stderr.toString() || result.stdout.toString()).toBe(0)
-    const output = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
-      before: Array<{name: string; applied_at: string}>
-      after: Array<{name: string; applied_at: string}>
+    const output = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      afterMatchesBefore: boolean
+      beforeNames: string[]
       postings: Array<{token: string; articleIds: string[]}>
     }
 
-    expect(
-      output.before.map(({name}) => {
-        return name
-      }),
-    ).toEqual(migrationNames)
-    expect(output.after).toEqual(output.before)
+    expect(output.beforeNames).toEqual(migrationNames)
+    expect(output.afterMatchesBefore).toBe(true)
     expect(output.postings).toEqual([
       {token: 'partial', articleIds: ['article-2']},
       {token: 'unrelated', articleIds: ['article-1']},

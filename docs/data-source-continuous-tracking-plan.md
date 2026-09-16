@@ -54,6 +54,11 @@ review workflow for that data source.
 - The existing Europe PMC fetch retry loops can sleep for long periods inside a
   single import. For continuous tracking, retry/backoff should be owned by
   durable worker state and Effect schedules, not by a stuck in-memory request.
+- The DuckDB owner is shared with foreground UI/API and review-serving work.
+  Continuous tracking must not persist every provider page through DuckDB or
+  hold a DuckDB transaction while fetching provider pages. Provider fetch
+  progress needs a lightweight durable spool, then bounded background DuckDB
+  ingest.
 - `app.article_import_route_source_record` already records
   `source_record_key`, `source_record_hash`, `raw_payload`, quarantine fields,
   and route/article linkage. This is the right foundation for detecting source
@@ -72,6 +77,9 @@ review workflow for that data source.
 - Do not replace canonical article matching or review-serving invalidation.
 - Do not store tracking state in `data_source.cursor`.
 - Do not run tracking from API-only or judge-worker roles.
+- Do not make DuckDB the per-page scratchpad for continuous provider downloads.
+  DuckDB remains the canonical committed store, but provider fetch progress
+  should land in the SQLite spool first.
 - Do not make hidden retries look like success. Failed windows should preserve
   the last error, failure count, and next retry time.
 - Do not physically delete `app.article` rows when a provider stops returning a
@@ -123,8 +131,10 @@ Rules:
 
 - `high_water_completed_at` advances only after a whole tracking window
   completes successfully.
-- `active_window_*` and `active_cursor` survive process death and are cleared
-  only when the active window is complete.
+- `active_window_*` survives process death and is cleared only when the active
+  window is committed into DuckDB. `active_cursor` may mirror coarse progress
+  for diagnostics/API responses, but page-level cursor resume state lives in the
+  SQLite tracking spool and is the restart authority.
 - Stale leases are recoverable after `lease_expires_at`.
 - Archiving or disabling a data source leaves state for diagnostics but makes it
   ineligible for new claims.
@@ -135,6 +145,63 @@ Rules:
 - `active_reconciliation_age_months` is null for manual full-range
   reconciliation and one of the configured schedule months for automatic
   age-bucket reconciliation.
+
+### SQLite data source tracking spool
+
+Add a profile-local SQLite database for provider fetch progress, for example
+`data-source-tracking-spool.sqlite` under the runtime profile directory. The
+spool is not the canonical article store; it is a durable landing zone between
+provider network fetches and bounded DuckDB ingest.
+
+Initial tables:
+
+- `tracking_spool_window`
+  - `id TEXT PRIMARY KEY`
+  - `data_source_id TEXT NOT NULL`
+  - `route TEXT NOT NULL`
+  - `run_kind TEXT NOT NULL`
+  - `window_start TEXT NOT NULL`
+  - `window_end TEXT NOT NULL`
+  - `status TEXT NOT NULL`
+  - `cursor TEXT`
+  - `failure_count INTEGER NOT NULL DEFAULT 0`
+  - `last_error TEXT`
+  - `lease_owner TEXT`
+  - `lease_expires_at TEXT`
+  - `spooled_at TEXT`
+  - `duckdb_ingested_at TEXT`
+  - `created_at TEXT NOT NULL`
+  - `updated_at TEXT NOT NULL`
+- `tracking_spool_page`
+  - `id TEXT PRIMARY KEY`
+  - `window_id TEXT NOT NULL REFERENCES tracking_spool_window(id)`
+  - `page_index INTEGER NOT NULL`
+  - `cursor_before TEXT`
+  - `cursor_after TEXT`
+  - `source_record_count INTEGER NOT NULL`
+  - `source_record_hash TEXT NOT NULL`
+  - `raw_payload_json TEXT NOT NULL`
+  - `normalized_records_json TEXT NOT NULL`
+  - `fetched_at TEXT NOT NULL`
+  - `duckdb_ingested_at TEXT`
+
+Rules:
+
+- Provider fetches write each page and its next cursor to SQLite in a short
+  SQLite transaction. They must not hold a DuckDB transaction and should not
+  touch the DuckDB owner per page.
+- A window moves to a ready/spooled status only after every provider page for
+  that window has landed in SQLite.
+- DuckDB ingest claims ready SQLite windows, reads spooled pages, and writes to
+  DuckDB in bounded background-priority batches through the shared canonical
+  article path.
+- `high_water_completed_at` advances only after the full window has been
+  committed to DuckDB, linked article counts are updated, and review-serving
+  deltas have been emitted.
+- SQLite spool rows remain until the corresponding DuckDB ingest is durable and
+  cleanup-safe. Cleanup should be bounded and keep recent failure evidence.
+- Fetching should apply backpressure when too many windows/pages are spooled but
+  not yet ingested, so the provider downloader cannot outrun DuckDB indefinitely.
 
 ### `app.data_source_reconciliation_work`
 
@@ -147,6 +214,7 @@ Add a durable queue for reconciliation chunks:
 - `age_months INTEGER`
 - `period_start TIMESTAMPTZ NOT NULL`
 - `period_end TIMESTAMPTZ NOT NULL`
+- `spool_window_id VARCHAR`
 - `cursor VARCHAR`
 - `status VARCHAR NOT NULL`
 - `failure_count INTEGER NOT NULL DEFAULT 0`
@@ -173,8 +241,9 @@ Rules:
 - Work items are idempotent by
   `(data_source_id, run_kind, age_months, period_start, period_end)` so
   scheduler retries do not duplicate them.
-- Work item `cursor`, status, failures, and lease fields make each bucket
-  restartable and timeout-safe.
+- Work item status, failures, leases, and `spool_window_id` make each bucket
+  restartable and timeout-safe. Page-level cursor state lives in the SQLite
+  spool; `cursor` is retained only as an optional coarse diagnostics mirror.
 
 ### `app.data_source_article_change_log`
 
@@ -296,16 +365,20 @@ Use the `effect` package for new non-trivial async flow:
 - `DataSourceTrackingRepository`: DuckDB reads/writes, due-source selection,
   lease claim/release, state transition, and metrics. Expose it as an Effect
   `Context` service.
+- `DataSourceTrackingSpoolRepository`: SQLite reads/writes for fetch windows,
+  page payloads, cursor resume state, ingest claims, cleanup, and spool
+  backpressure. Expose it as an Effect `Context` service.
 - `DataSourceReconciliationWorkRepository`: schedules, claims, resumes, and
   completes monthly age-bucket and manual full-range reconciliation work items.
 - `DataSourceTrackingProviderRegistry`: supported route lookup and provider
   metadata. Expose it as a `Layer`.
-- `DataSourceTrackingWorker`: an Effect service that claims due sources, runs
-  one bounded incremental window or reconciliation work chunk per claim, and
-  records success/failure.
+- `DataSourceTrackingWorker`: an Effect service that claims due sources, spools
+  one bounded incremental window or reconciliation work chunk per claim, drains
+  bounded ready SQLite windows into DuckDB, and records success/failure.
 - `DataSourceArticleChangeLogRepository`: an Effect `Context` service for
   writing and reading deleted/changed article log entries.
-- `Effect.gen`: main service flow and window import orchestration.
+- `Effect.gen`: main service flow, provider fetch spooling, and DuckDB ingest
+  orchestration.
 - `Schedule`: provider fetch retry, lease retry, and failure backoff.
 - `Effect.timeout`: network calls and page fetches.
 - `Effect.acquireRelease` or scoped finalizers: lease heartbeat/release and
@@ -322,14 +395,22 @@ Refactor the PubMed and Europe PMC PPR import code into reusable functions:
 
 1. Resolve data source and route.
 2. Claim a data-source import lease shared by manual and tracking imports.
-3. Run a specific date window with an explicit page cursor input/output.
-4. Persist page cursor after each successful page.
-5. Store articles through `storeImportedArticles`.
-6. On window success, update total linked article count and `last_import_at`.
-7. On tracking success, clear `active_cursor`, advance high water, set
-   `last_success_at`, reset failure count, and compute `next_run_after`.
-8. On failure, preserve active window/cursor, store `last_error`, increment
-   `failure_count`, and compute a durable retry time.
+3. Create or resume a SQLite spool window for the exact source-date window.
+4. Fetch provider pages outside DuckDB. After each successful page, write the
+   page payload, normalized records, `cursor_before`, and `cursor_after` to the
+   SQLite spool in a short SQLite transaction.
+5. Mark the SQLite window ready only after all pages for that source-date window
+   are spooled. Do not advance DuckDB high water at this point.
+6. Drain ready SQLite windows into DuckDB in bounded background-priority
+   transactions through `storeImportedArticles`.
+7. On DuckDB ingest success, update total linked article count and
+   `last_import_at`, mark the spool window ingested/cleanup-eligible, clear the
+   active window, advance `high_water_completed_at`, set `last_success_at`,
+   reset failure count, and compute `next_run_after`.
+8. On fetch failure, preserve the SQLite window/page cursor state, store
+   `last_error`, increment `failure_count`, and compute a durable retry time.
+9. On DuckDB ingest failure, preserve the ready SQLite window for idempotent
+   re-ingest and use the same durable failure/backoff fields.
 
 Incremental imports should keep append/upsert semantics through
 `storeImportedArticles`.
@@ -370,13 +451,13 @@ Automatic monthly age-bucket reconciliation:
   intersects the data source's configured range and is not already queued,
   running, or completed.
 - The worker claims due work items and processes each one through provider
-  `runRange`, with cursor, lease, failure, and completion state persisted on the
-  work item.
+  `runRange`, with page cursor state persisted in SQLite and lease, failure,
+  completion, and `spool_window_id` state persisted on the work item.
 - On success, mark the work item completed and update
   `last_reconciliation_completed_at`.
-- On failure or timeout, preserve the work item period/cursor and schedule
-  durable retry with the same Effect `Schedule`/backoff contract as incremental
-  work.
+- On failure or timeout, preserve the work item period plus SQLite spool cursor
+  state and schedule durable retry with the same Effect `Schedule`/backoff
+  contract as incremental work.
 - This makes automatic reconciliation cheap and predictable for long-lived data
   sources: it rechecks likely-change windows without re-downloading the whole
   historical range every month.
@@ -417,15 +498,25 @@ Server restart:
 - On startup, the worker reads persisted state. No in-memory queue is required
   for correctness.
 - Active windows with expired leases are claimable and resume from
-  `active_cursor`.
+  the SQLite spool cursor/page manifest.
 - Active reconciliation work items resume the same way as incremental imports and
-  must not restart from the beginning unless the persisted work item cursor or
-  period is invalid.
-- If the server stops after storing a page but before persisting the next cursor,
-  rerunning that page is safe because `storeImportedArticles` is idempotent.
-- If the server stops after advancing a cursor but before storing a page, the
-  implementation must order operations to avoid data loss: store first, then
-  persist the cursor that skips that page.
+  must not restart from the beginning unless the persisted work item period or
+  SQLite spool cursor manifest is invalid.
+- If the server stops while fetching, the next wake resumes from the last page
+  durably spooled in SQLite.
+- If the server stops after spooling a page but before DuckDB ingest, the page is
+  ingested later.
+- If the server stops during DuckDB ingest, the SQLite window remains ready and
+  is retried idempotently through `storeImportedArticles`.
+- If the server stops after DuckDB commit but before spool cleanup, duplicate
+  ingest must see existing records and cleanup catches up later.
+- If the server stops after storing a page payload but before persisting the next
+  cursor in SQLite, rerunning that page is safe because the DuckDB ingest path is
+  idempotent.
+- If the server stops after advancing a cursor but before storing the page
+  payload, the implementation can lose data. The fetch path must therefore store
+  page payload plus next cursor atomically in SQLite and only use that stored
+  cursor for resume.
 
 Lost connections/timeouts:
 
@@ -438,6 +529,9 @@ Lost connections/timeouts:
   work-item completion state until the claimed period completes.
 - HTTP 429 or source rate-limit responses should set a provider-aware
   `next_run_after` when the response gives a retry time.
+- DuckDB owner pressure should slow or pause DuckDB ingest, not provider fetch
+  correctness. The SQLite spool applies backpressure when pending ingest exceeds
+  a configured cap, so the downloader cannot fill disk while DuckDB is busy.
 
 Role changes and duplicate servers:
 
@@ -502,30 +596,46 @@ Client:
      claim/release, success, failure, and disable handling.
    - Add the article change log repository and response types.
    - Add migration tests and repository unit tests.
+   - Add the SQLite tracking spool schema and repository tests for window/page
+     claim, cursor resume, ingest claim, cleanup, and backpressure.
 
 2. Extract shared import execution for PubMed and Europe PMC PPR.
    - Factor current route logic into route-neutral functions that accept
-     `fromDate`, `toDate`, `cursor`, and cursor persistence callbacks.
+     `fromDate`, `toDate`, `cursor`, and page persistence callbacks.
+   - Add a tracked path that writes provider pages to SQLite spool first, then
+     lets DuckDB ingest drain ready spool windows.
    - Convert long retry/sleep loops in the tracked path to Effect
      `Schedule`/`timeout`.
    - Keep manual imports working through the existing route URLs.
 
-3. Add tracking provider adapters.
+3. Add the SQLite spool drainer and DuckDB ingester.
+   - Claim ready SQLite windows with a lease and drain them into DuckDB in
+     bounded background-priority transactions.
+   - Commit spooled records through `storeImportedArticles` and emit the normal
+     review-serving deltas.
+   - Advance `high_water_completed_at` only after the DuckDB commit path
+     completes for the full window.
+   - Add spool cleanup that preserves recent failure evidence and never deletes
+     a window before committed high water covers it.
+
+4. Add tracking provider adapters.
    - Implement day-granular Europe PMC PPR and PubMed route adapters.
    - Add tests for window selection, open-ended tracking, future `date_to`,
      finite completed ranges, and active-window resume.
    - Add tests for manual full-range reconciliation chunking and monthly
      `[3, 12, 24, 36]` age-bucket scheduling.
 
-4. Add the maintenance worker.
+5. Add the maintenance worker.
    - Mount a lightweight cron with the same role checks used by other
      maintenance loops.
    - Claim a bounded number of due tracked sources per wake.
-   - Run one bounded incremental window or reconciliation work chunk per claimed
-     source.
+   - Run one bounded incremental fetch/spool window or reconciliation work chunk
+     per claimed source.
+   - Drain a bounded number of ready SQLite spool windows per wake without
+     blocking foreground DuckDB work.
    - Record durable success/failure state through Effect finalizers.
 
-5. Add reconciliation and change detection.
+6. Add reconciliation and change detection.
    - Compare reconciliation-period source records by `source_record_key` and
      `source_record_hash`.
    - Log source/canonical changes before mutating current membership.
@@ -534,13 +644,13 @@ Client:
      selected-import/review surfaces.
    - Add manual reconciliation trigger route.
 
-6. Wire API create/edit/change-log routes.
+7. Wire API create/edit/change-log routes.
    - Extend route validation and normalized response shape.
    - Preserve immutable structured-file and Covidence rules.
    - Add route tests for supported and unsupported tracking enablement, manual
      reconciliation trigger, and paginated change-log reads.
 
-7. Wire the Data Source UI.
+8. Wire the Data Source UI.
    - Add tracking controls on create/edit.
    - Show tracking status on edit.
    - Add the manual reconciliation action.
@@ -548,13 +658,14 @@ Client:
    - Keep query invalidation/refetch behavior explicit so status updates do not
      overwrite unsaved form fields.
 
-8. Add operator visibility.
+9. Add operator visibility.
    - Log tracking successes/failures with data source id, route, window, cursor
-     state, run kind, reconciliation age bucket/range, and run id.
+     state, run kind, reconciliation age bucket/range, spool backlog, DuckDB
+     ingest status, and run id.
    - Include a focused diagnostic helper if route tests are not enough to
      inspect stuck tracked sources.
 
-9. Update `TESTS.md`.
+10. Update `TESTS.md`.
    - Add the new focused data-source tracking verification command if it is not
      already covered by an existing entry.
 
@@ -564,7 +675,7 @@ Focused implementation gates:
 
 ```bash
 bun test src/db/migrateDuckdb.test.ts src/server/routes/DataSourcesRoutes.test.ts
-bun test src/server/services/dataSourceTrackingRepository.test.ts src/server/services/dataSourceTrackingScheduler.test.ts src/server/services/dataSourceTrackedImportService.test.ts src/server/services/dataSourceArticleChangeLogRepository.test.ts
+bun test src/server/services/dataSourceTrackingRepository.test.ts src/server/services/dataSourceTrackingSpoolRepository.test.ts src/server/services/dataSourceTrackingScheduler.test.ts src/server/services/dataSourceTrackedImportService.test.ts src/server/services/dataSourceTrackingSpoolIngester.test.ts src/server/services/dataSourceArticleChangeLogRepository.test.ts
 bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.test.ts
 bun test src/server/reviewServing/importAndMetadataFanoutGuard.test.ts
 bunx vitest run 'src/app/routes/+admin/+datasources/-trackingOptions.vitest.tsx' 'src/app/routes/+admin/+datasources/+$id/+changes.vitest.tsx'
@@ -583,6 +694,11 @@ Runtime smoke before PR/merge:
 - Use a test/stubbed provider or a very narrow live window to prove one tracking
   wake advances `last_success_at`, `high_water_completed_at`, and
   `items_after_last_import`.
+- Prove provider fetches first create SQLite spool windows/pages without holding
+  a DuckDB transaction, then a separate background DuckDB ingest advances
+  committed high water.
+- Fill the SQLite spool above its configured backlog cap and confirm fetch
+  claims pause/back off instead of filling disk while DuckDB is busy.
 - Trigger a manual full reconciliation and confirm the API records a
   reconciliation run instead of an incremental run.
 - Simulate a monthly scheduler pass and confirm it creates bounded
@@ -596,6 +712,10 @@ Runtime smoke before PR/merge:
   fields changed.
 - Restart the server during an active tracked import and prove the next wake
   resumes the active window without duplicate article links.
+- Restart after SQLite spooling but before DuckDB ingest and prove the ingester
+  drains the existing spool without refetching provider pages.
+- Restart after DuckDB commit but before SQLite spool cleanup and prove re-ingest
+  is idempotent and cleanup catches up later.
 - Force a fetch timeout/failure and prove `last_error`, `failure_count`, and
   `next_run_after` are persisted while the cursor/window remain resumable.
 

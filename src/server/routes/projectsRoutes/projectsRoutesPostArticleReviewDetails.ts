@@ -10,7 +10,12 @@ import type {
 } from '../../../db/schemaTypes.ts'
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
+import {
+  detailReadyReviewServingComponents,
+  type ReviewServingProjectionComponent,
+} from '../../reviewServing/reviewServingContracts.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
+import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
@@ -60,6 +65,24 @@ type ProjectReviewConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+}
+
+const detailReadinessReviewServingRepairPriority = 1_000
+const articleDetailRepairReviewServingComponents = [
+  'posting',
+  'summary',
+  ...detailReadyReviewServingComponents,
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+const requestReviewDetailReadinessRepair = async (projectId: string) => {
+  await requestReviewServingV4Rebuild({
+    components: articleDetailRepairReviewServingComponents,
+    priority: detailReadinessReviewServingRepairPriority,
+    projectId,
+    reason: 'detailReadinessDirtyWork',
+  }).catch(() => {
+    return undefined
+  })
 }
 
 type ProjectReviewDetailJudgmentRow = {
@@ -841,6 +864,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const articleDetailResult = await readProjectReviewArticleDetail({articleId, projectId, reviewConfigHash})
 
       if (articleDetailResult.status === 'rejected') {
+        await requestReviewDetailReadinessRepair(projectId)
         return getUnavailableReviewDetail({
           articleId,
           diagnostics: articleDetailResult.diagnostics,
@@ -851,6 +875,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const [articleDetail] = articleDetailResult.rows
 
       if (!articleDetail) {
+        await requestReviewDetailReadinessRepair(projectId)
         return getUnavailableReviewDetail({articleId, reason: 'detail row unavailable'})
       }
 
@@ -887,6 +912,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       ])
 
       if (projectReviewDetailJudgmentResult === null) {
+        await requestReviewDetailReadinessRepair(projectId)
         return getUnavailableReviewDetail({articleId, reason: 'detail judgments unavailable'})
       }
 

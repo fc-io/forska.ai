@@ -9,6 +9,10 @@ import {getReviewIndexingStateCopy} from '../getReviewIndexingInProgressTitle.ts
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
+import {
+  getReviewArticlesIndexingRefreshSignature,
+  getReviewArticlesRefetchInterval,
+} from './reviewsArticleIndexingRefresh.ts'
 import {type ArticleWithJudgments, ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
 const formatThousandSeparatedNumber = (value: number) => {
@@ -65,6 +69,9 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
   const showReviewIndexState = createMemo(() => {
     return warningsQuery.isSuccess && !isReviewServingReadable()
   })
+  const articleIndexingRefreshSignature = createMemo(() => {
+    return getReviewArticlesIndexingRefreshSignature(warningsQuery.data)
+  })
 
   // Main data query - returns data immediately without waiting for count
   const articlesQuery = useQuery(() => {
@@ -85,7 +92,23 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.llmStatus,
       ),
       enabled: props.initialized() && canLoadArticles(),
+      refetchInterval: getReviewArticlesRefetchInterval(warningsQuery.data),
     }
+  })
+  let lastArticleIndexingRefreshSignature: string | null = null
+  createEffect(() => {
+    const signature = articleIndexingRefreshSignature()
+
+    if (!signature || !canLoadArticles() || !articlesQuery.isSuccess) {
+      return
+    }
+
+    if (lastArticleIndexingRefreshSignature === signature) {
+      return
+    }
+
+    lastArticleIndexingRefreshSignature = signature
+    void articlesQuery.refetch()
   })
 
   createEffect(() => {
@@ -135,6 +158,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.llmStatus,
       ),
       enabled: props.initialized() && canLoadArticles() && articlesQuery.isSuccess && !articlesQuery.isFetching,
+      refetchInterval: getReviewArticlesRefetchInterval(warningsQuery.data),
     }
   })
 

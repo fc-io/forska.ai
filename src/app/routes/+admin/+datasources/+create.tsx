@@ -1,7 +1,14 @@
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, For, Show} from 'solid-js'
+import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
+import {TrackingOptionsField} from './-trackingControls.tsx'
+import {
+  defaultTrackingReconcileScheduleMonths,
+  getTrackingAvailability,
+  isTrackingSupportedImportRoute,
+  normalizeTrackingScheduleMonths,
+} from './-trackingShared.ts'
 import {
   builtInImportRouteOptions,
   customImportRoutePlaceholder,
@@ -37,9 +44,27 @@ const AdminCreateDataSource = () => {
   const [importRoute, setImportRoute] = createSignal('')
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
+  const [trackingEnabled, setTrackingEnabled] = createSignal(false)
+  const [trackingReconcileScheduleMonths, setTrackingReconcileScheduleMonths] = createSignal<number[]>([
+    ...defaultTrackingReconcileScheduleMonths,
+  ])
   const [isSaving, setIsSaving] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
+
+  const resolvedImportRoute = () => {
+    return getResolvedImportRoute({
+      customImportRoute: importRoute(),
+      selectedBuiltInImportRoute: selectedBuiltInImportRoute(),
+    })
+  }
+
+  createEffect(() => {
+    const availability = getTrackingAvailability({dateFrom: dateFrom(), importRoute: resolvedImportRoute()})
+    if (!availability.canEnable && trackingEnabled()) {
+      setTrackingEnabled(false)
+    }
+  })
 
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
@@ -63,21 +88,39 @@ const AdminCreateDataSource = () => {
       return
     }
 
-    const resolvedImportRoute = getResolvedImportRoute({
-      customImportRoute: importRoute(),
-      selectedBuiltInImportRoute: selectedBuiltInImportRoute(),
-    })
+    const importRouteValue = resolvedImportRoute()
+    const trackingAvailability = getTrackingAvailability({dateFrom: dateFrom(), importRoute: importRouteValue})
+
+    if (trackingEnabled() && !trackingAvailability.canEnable) {
+      setError(trackingAvailability.helperText)
+      return
+    }
+
+    const payload: {
+      dateFrom?: string
+      dateTo?: string
+      description?: string
+      importRoute?: string
+      title: string
+      trackingEnabled?: boolean
+      trackingReconcileScheduleMonths?: number[]
+    } = {
+      title: title(),
+      description: description().trim() === '' ? undefined : description(),
+      importRoute: importRouteValue ?? undefined,
+      dateFrom: startDateResult.normalized ?? undefined,
+      dateTo: endDateResult.normalized ?? undefined,
+    }
+
+    if (isTrackingSupportedImportRoute(importRouteValue) && startDateResult.normalized) {
+      payload.trackingEnabled = trackingEnabled()
+      payload.trackingReconcileScheduleMonths = normalizeTrackingScheduleMonths(trackingReconcileScheduleMonths())
+    }
 
     setIsSaving(true)
 
     try {
-      const response = await apiClient.api.datasources.post({
-        title: title(),
-        description: description().trim() === '' ? undefined : description(),
-        importRoute: resolvedImportRoute ?? undefined,
-        dateFrom: startDateResult.normalized ?? undefined,
-        dateTo: endDateResult.normalized ?? undefined,
-      })
+      const response = await apiClient.api.datasources.post(payload)
 
       if (response.error || !response.data?.data) {
         throw new Error('Failed to create data source')
@@ -208,6 +251,17 @@ const AdminCreateDataSource = () => {
               </label>
             </div>
           </div>
+
+          <TrackingOptionsField
+            id="create-data-source-tracking-enabled"
+            dateFrom={dateFrom}
+            importRoute={resolvedImportRoute}
+            trackingEnabled={trackingEnabled}
+            onTrackingEnabledChange={setTrackingEnabled}
+            scheduleMonths={trackingReconcileScheduleMonths}
+            onScheduleMonthsChange={setTrackingReconcileScheduleMonths}
+            disabled={isSaving}
+          />
 
           <Show when={error()}>
             <p class="text-sm text-red-600">{error()}</p>

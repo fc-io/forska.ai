@@ -7,9 +7,10 @@ import {getRuntimeProfileDuckdbPath} from './src/utils/runtimeProfile.ts'
 
 const apiServerPort = 43101
 const appServerPort = 43100
-const syntheticDuckdbPath = join(tmpdir(), 'forska-playwright-project-edit-smoke.duckdb')
-const syntheticDuckdbTempDirectory = join(tmpdir(), 'forska-playwright-project-edit-smoke.duckdb-temp')
-const currentDuckdbTempDirectory = join(tmpdir(), 'forska-playwright-current-network-smoke.duckdb-temp')
+const playwrightRuntimeDirectory = String(process.env.FORSKA_PLAYWRIGHT_BUILD_DIR ?? '').trim() || tmpdir()
+const syntheticDuckdbPath = join(playwrightRuntimeDirectory, 'forska-playwright-project-edit-smoke.duckdb')
+const syntheticDuckdbTempDirectory = join(playwrightRuntimeDirectory, 'forska-playwright-project-edit-smoke.duckdb-temp')
+const currentDuckdbTempDirectory = join(playwrightRuntimeDirectory, 'forska-playwright-current-network-smoke.duckdb-temp')
 const networkSmokeLogDirectory =
   process.env.FORSKA_NETWORK_SMOKE_LOG_DIR
   ?? join(tmpdir(), `forska-playwright-network-smoke-runtime-logs-${process.pid}`)

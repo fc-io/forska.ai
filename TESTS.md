@@ -5,6 +5,33 @@ Run tests through `bun run ...` from the repo root.
 This file is for correctness, smoke, and regression tests. Benchmark and
 performance-measurement commands live in [PERF.md](PERF.md).
 
+## Data Source Continuous Tracking Foundation
+
+Run `bun test src/db/migrateDuckdb.dataSourceTracking.test.ts src/server/services/dataSourceTrackingRepository.test.ts src/server/services/dataSourceTrackingSpoolRepository.test.ts`.
+This covers the DuckDB tracking-state/reconciliation/change-log schema, tracking
+state success/failure transitions, idempotent age-bucket reconciliation
+scheduling, SQLite spool cursor resume, atomic page append rollback,
+ingest-claim idempotence, cleanup, failure evidence, and backlog backpressure.
+
+Run `bun test src/server/services/dataSourceTrackingProviderRegistry.test.ts src/server/services/dataSourceTrackedImportService.test.ts src/server/services/dataSourceTrackingSpoolIngester.test.ts src/server/services/dataSourceTrackingWorker.test.ts src/server/cron/dataSourceTrackingCron.test.ts`.
+This covers supported provider window selection, fetch-to-SQLite spooling,
+backpressure, bounded DuckDB background ingest, high-water advancement after
+DuckDB commit, reconciliation work claims/completion, and maintenance-role cron
+gating.
+
+Run `bun test src/server/services/articleImportReconciliationPeriod.test.ts --timeout 120000`.
+This covers period-scoped reconciliation sync and verifies source deletions do
+not clear unrelated records outside the reconciled source-date range.
+
+Run `bun test src/server/routes/DataSourcesRoutes.test.ts src/server/routes/duckdbRouteGuardrails.test.ts`.
+This covers the data source tracking API response shape, manual reconciliation
+scheduling, change-log filtering, cursor privacy, structured/Covidence
+immutability, route surface inventory, and foreground DuckDB guardrails.
+
+Run `bunx vitest run src/app/routes/+admin/+datasources/-trackingOptions.vitest.tsx src/app/routes/+admin/+datasources/+\$id/-trackingStatus.vitest.tsx src/app/routes/+admin/+datasources/+\$id/-changes.vitest.tsx`.
+This covers admin tracking controls, status/reconciliation actions, and the
+deleted/changed article log UI.
+
 ## Dirty-work completion race regression
 
 Run `bun test src/server/reviewServing/reviewServingDirtyWorkService.test.ts src/server/reviewServing/reviewServingProjectorService.test.ts src/server/reviewServing/reviewServingProjectorWriter.test.ts`.
