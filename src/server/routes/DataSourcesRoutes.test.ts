@@ -633,6 +633,27 @@ test('datasource patch rewinds tracking and invalidates stale reconciliation wor
   expect(statements).toContain("period_end > TIMESTAMPTZ '2026-03-03T00:00:00.000Z'")
 })
 
+test('datasource patch deletes queued automatic reconciliation work for removed schedule ages', async () => {
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {
+      body: JSON.stringify({trackingReconcileScheduleMonths: [3]}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    },
+    row: trackedRow,
+    url: 'http://localhost/api/datasources/datasource-tracked',
+  })) as {runStatements: string[]; status: number; transactionCallCount: number}
+  const statements = parsed.runStatements.join('\n')
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.transactionCallCount).toBe(1)
+  expect(statements).toContain('tracking_reconcile_schedule_months = CAST')
+  expect(statements).toContain('DELETE FROM app.data_source_reconciliation_work')
+  expect(statements).toContain("run_kind = 'automatic_age_bucket'")
+  expect(statements).toContain("status IN ('queued', 'running', 'failed')")
+  expect(statements).toContain('(age_months IS NULL OR age_months NOT IN (3))')
+})
+
 test('datasource patch rewinds disabled tracking state when bounds change before re-enable', async () => {
   const disabledTrackedRow = {...trackedRow, trackingEnabled: false}
   const parsed = (await runDataSourcesRoute({

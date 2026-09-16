@@ -695,6 +695,7 @@ export const createDataSourceTrackingSpoolRepository = (
           SELECT *
           FROM tracking_spool_page
           WHERE window_id = ?
+            AND duckdb_ingested_at IS NULL
             AND page_index > ?
           ORDER BY page_index ASC
           LIMIT ?
@@ -830,6 +831,78 @@ export const createDataSourceTrackingSpoolRepository = (
             UPDATE tracking_spool_page
             SET duckdb_ingested_at = ?
             WHERE window_id = ?
+          `,
+          )
+          .run(ingestedAt.toISOString(), input.windowId)
+
+        return getWindowById(database, input.windowId)
+      })()
+    },
+    markWindowPartiallyIngestedForFetchResume: (input: {
+      error?: string
+      ingestedAt?: Date
+      leaseOwner?: string | null
+      nextRetryAt?: Date | null
+      windowId: string
+    }): DataSourceTrackingSpoolWindowRecord | null => {
+      const ingestedAt = input.ingestedAt ?? new Date()
+      const error = input.error ?? 'Tracking spool window partially ingested and ready to resume fetch'
+
+      return database.transaction(() => {
+        const result = input.leaseOwner
+          ? (database
+              .query(
+                `
+            UPDATE tracking_spool_window
+            SET status = 'fetch_failed',
+                failure_count = failure_count + 1,
+                last_error = ?,
+                spooled_at = NULL,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                next_retry_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND lease_owner = ?
+          `,
+              )
+              .run(
+                error,
+                input.nextRetryAt?.toISOString() ?? null,
+                ingestedAt.toISOString(),
+                input.windowId,
+                input.leaseOwner,
+              ) as {changes?: number})
+          : (database
+              .query(
+                `
+            UPDATE tracking_spool_window
+            SET status = 'fetch_failed',
+                failure_count = failure_count + 1,
+                last_error = ?,
+                spooled_at = NULL,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                next_retry_at = ?,
+                updated_at = ?
+            WHERE id = ?
+          `,
+              )
+              .run(error, input.nextRetryAt?.toISOString() ?? null, ingestedAt.toISOString(), input.windowId) as {
+              changes?: number
+            })
+
+        if ((result.changes ?? 0) === 0) {
+          return getWindowById(database, input.windowId)
+        }
+
+        database
+          .query(
+            `
+            UPDATE tracking_spool_page
+            SET duckdb_ingested_at = ?
+            WHERE window_id = ?
+              AND duckdb_ingested_at IS NULL
           `,
           )
           .run(ingestedAt.toISOString(), input.windowId)

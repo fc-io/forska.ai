@@ -133,6 +133,85 @@ test('tracked import fetch spools provider pages into SQLite without a DuckDB de
   })
 })
 
+test('tracked import makes capped nonterminal pages ready for partial ingest', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const appendedCursors: Array<string | null> = []
+    const provider: DataSourceTrackingProvider = {
+      fetchRangePages: async () => {
+        throw new Error('not used')
+      },
+      fetchWindowPages: async ({onPage}) => {
+        for (const pageIndex of [0, 1, 2]) {
+          await onPage({
+            cursorAfter: `cursor-page-${pageIndex + 1}`,
+            cursorBefore: pageIndex === 0 ? '*' : `cursor-page-${pageIndex}`,
+            normalizedRecords: [
+              {
+                articleAuthors: ['Ada Lovelace'],
+                articleId: `pmid:${pageIndex + 1}`,
+                articleSummary: 'Abstract',
+                articleTitle: `Article ${pageIndex + 1}`,
+                importRoute: pubmedTrackedImportRoute,
+              },
+            ],
+            pageIndex,
+            rawPage: {page: pageIndex + 1},
+            sourceRecordCount: 1,
+            sourceRecordHash: `hash-page-${pageIndex + 1}`,
+          })
+          appendedCursors.push(`cursor-page-${pageIndex + 1}`)
+        }
+
+        return {fetchedTotal: 3, pageCount: 3}
+      },
+      getGranularity: () => {
+        return 'day'
+      },
+      getNextRunAfter: () => {
+        return null
+      },
+      getNextWindow: () => {
+        throw new Error('not used')
+      },
+      getReconciliationRange: () => {
+        throw new Error('not used')
+      },
+      route: pubmedTrackedImportRoute,
+    }
+    const service = createDataSourceTrackedImportService({
+      providerRegistry: createDataSourceTrackingProviderRegistry([provider]),
+      spoolRepository,
+    })
+    const windowInput: DataSourceTrackingWindow = {
+      dataSourceId: 'source-1',
+      route: pubmedTrackedImportRoute,
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+      windowStart: new Date('2026-09-15T00:00:00.000Z'),
+    }
+
+    const result = await service.fetchWindowToSpool({
+      dataSource: getDataSource(),
+      maxPendingPagesBeforeReady: 2,
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      window: windowInput,
+    })
+    const pages = spoolRepository.getWindowPages(result.window.id)
+
+    expect(result.status).toBe('spooled')
+    expect(result.window.status).toBe('ready')
+    expect(result.window.cursor).toBe('cursor-page-2')
+    expect(result.pageCount).toBe(2)
+    expect(appendedCursors).toEqual(['cursor-page-1'])
+    expect(
+      pages.map((page) => {
+        return page.cursorAfter
+      }),
+    ).toEqual(['cursor-page-1', 'cursor-page-2'])
+    expect(spoolRepository.getResumeCursor(result.window.id)).toBe('cursor-page-2')
+  })
+})
+
 test('tracked reconciliation fetch spools provider ranges through SQLite cursor resume', async () => {
   await withSpoolRepository(async (spoolRepository) => {
     const fetchCalls: Array<{cursor: string | null | undefined; fromDate: string; toDate: string}> = []

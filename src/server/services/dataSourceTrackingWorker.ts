@@ -191,6 +191,7 @@ const getClaimedSourceResult = async ({
   fetchLeaseMs,
   assertSpoolCapacity,
   leaseOwner,
+  maxPendingPages,
   now,
   providerRegistry,
   state,
@@ -200,6 +201,7 @@ const getClaimedSourceResult = async ({
   dataSource: DataSourceRecord
   fetchLeaseMs: number
   assertSpoolCapacity: () => Promise<void> | void
+  maxPendingPages: number
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
@@ -273,6 +275,7 @@ const getClaimedSourceResult = async ({
             await assertLeaseOwned()
           },
           dataSource,
+          maxPendingPagesBeforeReady: maxPendingPages,
           now,
           onPageSpooled: async ({cursor}) => {
             await assertLeaseOwned()
@@ -329,6 +332,7 @@ const getClaimedReconciliationResult = async ({
   fetchLeaseMs,
   assertSpoolCapacity,
   leaseOwner,
+  maxPendingPages,
   now,
   providerRegistry,
   reconciliationWorkRepository,
@@ -339,6 +343,7 @@ const getClaimedReconciliationResult = async ({
   dataSource: DataSourceRecord
   fetchLeaseMs: number
   assertSpoolCapacity: () => Promise<void> | void
+  maxPendingPages: number
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
@@ -379,6 +384,7 @@ const getClaimedReconciliationResult = async ({
             await assertLeaseOwned()
           },
           dataSource,
+          maxPendingPagesBeforeReady: maxPendingPages,
           now,
           onPageSpooled: async ({cursor, window}) => {
             await assertLeaseOwned()
@@ -559,6 +565,7 @@ export const createDataSourceTrackingWorker = ({
           fetchLeaseMs,
           assertSpoolCapacity,
           leaseOwner,
+          maxPendingPages,
           now,
           providerRegistry,
           state: claim,
@@ -615,6 +622,7 @@ export const createDataSourceTrackingWorker = ({
             fetchLeaseMs,
             assertSpoolCapacity,
             leaseOwner,
+            maxPendingPages,
             now,
             providerRegistry,
             reconciliationWorkRepository,

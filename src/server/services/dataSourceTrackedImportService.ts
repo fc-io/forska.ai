@@ -46,6 +46,7 @@ export type DataSourceTrackedImportService = {
       window: DataSourceTrackingSpoolWindowRecord
     }) => Promise<void> | void
     onSpoolWindowCreated?: (window: DataSourceTrackingSpoolWindowRecord) => Promise<void> | void
+    maxPendingPagesBeforeReady?: number
     work: DataSourceReconciliationWorkRecord
   }) => Promise<DataSourceTrackedImportResult>
   fetchWindowToSpool: (input: {
@@ -60,6 +61,7 @@ export type DataSourceTrackedImportService = {
       window: DataSourceTrackingSpoolWindowRecord
     }) => Promise<void> | void
     onSpoolWindowCreated?: (window: DataSourceTrackingSpoolWindowRecord) => Promise<void> | void
+    maxPendingPagesBeforeReady?: number
     window: DataSourceTrackingWindow
   }) => Promise<DataSourceTrackedImportResult>
 }
@@ -107,6 +109,12 @@ const getInclusiveRangeEnd = (periodStart: Date, periodEnd: Date) => {
   return inclusiveEnd.getTime() < startDay.getTime() ? startDay : inclusiveEnd
 }
 
+class DataSourceTrackingPartialWindowReadyError extends Error {
+  constructor() {
+    super('Tracking spool window reached the page cap and is ready for partial ingest')
+  }
+}
+
 export const createDataSourceTrackedImportService = ({
   providerRegistry = getDataSourceTrackingProviderRegistry(),
   spoolRepository = getDataSourceTrackingSpoolRepository(),
@@ -118,6 +126,7 @@ export const createDataSourceTrackedImportService = ({
     assertPageAppendAllowed,
     dataSource,
     fetchRange,
+    maxPendingPagesBeforeReady,
     now,
     onPageSpooled,
     onSpoolWindowCreated,
@@ -133,6 +142,7 @@ export const createDataSourceTrackedImportService = ({
     }) => Promise<void> | void
     dataSource: DataSourceRecord
     fetchRange: boolean
+    maxPendingPagesBeforeReady?: number
     now: Date
     onPageSpooled?: (input: {
       cursor: string | null
@@ -183,6 +193,9 @@ export const createDataSourceTrackedImportService = ({
     }
 
     const existingPages = spoolRepository.getWindowPages(spoolWindow.id)
+    const existingPendingPages = existingPages.filter((page) => {
+      return page.duckdbIngestedAt === null
+    })
     const existingTerminalPage = existingPages.at(-1)
 
     if (
@@ -211,6 +224,29 @@ export const createDataSourceTrackedImportService = ({
       return {reason: 'retry-not-due', status: 'skipped', window: spoolWindow}
     }
 
+    if (
+      maxPendingPagesBeforeReady
+      && maxPendingPagesBeforeReady > 0
+      && existingPendingPages.length >= maxPendingPagesBeforeReady
+      && spoolWindow.cursor !== null
+    ) {
+      const readyWindow = spoolRepository.markWindowReady({spooledAt: new Date(), windowId: spoolWindow.id})
+
+      if (!readyWindow) {
+        throw new Error('Tracking spool window disappeared before it could be marked ready')
+      }
+
+      return {
+        fetchedTotal: existingPendingPages.reduce((sum, page) => {
+          return sum + page.sourceRecordCount
+        }, 0),
+        pageCount: existingPendingPages.length,
+        reason: 'fetched',
+        status: 'spooled',
+        window: readyWindow,
+      }
+    }
+
     const resumeCursor = spoolRepository.getResumeCursor(spoolWindow.id)
     const existingPageCount = existingPages.length
 
@@ -234,6 +270,17 @@ export const createDataSourceTrackedImportService = ({
             windowId: spoolWindow.id,
           })
           await onPageSpooled?.({cursor: page.cursorAfter, window: spoolWindow})
+
+          if (
+            page.cursorAfter !== null
+            && maxPendingPagesBeforeReady
+            && maxPendingPagesBeforeReady > 0
+            && spoolRepository.getWindowPages(spoolWindow.id).filter((spooledPage) => {
+              return spooledPage.duckdbIngestedAt === null
+            }).length >= maxPendingPagesBeforeReady
+          ) {
+            throw new DataSourceTrackingPartialWindowReadyError()
+          }
         },
         toDate: formatUtcDay(fetchRange ? getInclusiveRangeEnd(windowStart, windowEnd) : windowEnd),
       })
@@ -251,6 +298,27 @@ export const createDataSourceTrackedImportService = ({
         window: readyWindow,
       }
     } catch (error) {
+      if (error instanceof DataSourceTrackingPartialWindowReadyError) {
+        const readyWindow = spoolRepository.markWindowReady({spooledAt: new Date(), windowId: spoolWindow.id})
+        const pendingPages = spoolRepository.getWindowPages(spoolWindow.id).filter((page) => {
+          return page.duckdbIngestedAt === null
+        })
+
+        if (!readyWindow) {
+          throw new Error('Tracking spool window disappeared before it could be marked ready')
+        }
+
+        return {
+          fetchedTotal: pendingPages.reduce((sum, page) => {
+            return sum + page.sourceRecordCount
+          }, 0),
+          pageCount: pendingPages.length,
+          reason: 'fetched',
+          status: 'spooled',
+          window: readyWindow,
+        }
+      }
+
       const failureNow = getRetryBaseNow(now)
       spoolRepository.markWindowFailed({
         error: getErrorMessage(error),
@@ -269,12 +337,14 @@ export const createDataSourceTrackedImportService = ({
     now = new Date(),
     onPageSpooled,
     onSpoolWindowCreated,
+    maxPendingPagesBeforeReady,
     window,
   }) => {
     return await fetchToSpool({
       dataSource,
       assertPageAppendAllowed,
       fetchRange: false,
+      maxPendingPagesBeforeReady,
       now,
       onPageSpooled,
       onSpoolWindowCreated,
@@ -291,12 +361,14 @@ export const createDataSourceTrackedImportService = ({
     now = new Date(),
     onPageSpooled,
     onSpoolWindowCreated,
+    maxPendingPagesBeforeReady,
     work,
   }) => {
     return await fetchToSpool({
       dataSource,
       assertPageAppendAllowed,
       fetchRange: true,
+      maxPendingPagesBeforeReady,
       now,
       onPageSpooled,
       onSpoolWindowCreated,

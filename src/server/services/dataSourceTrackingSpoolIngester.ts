@@ -224,6 +224,25 @@ const assertWindowStillMatchesDataSourceConfigWithTx = async (
   }
 }
 
+const updateTrackedDataSourceImportMetadataWithTx = async (
+  tx: ArticleImportStoreTx,
+  window: DataSourceTrackingSpoolWindowRecord,
+  dataSource: DataSourceRecord,
+  now: Date,
+) => {
+  await assertWindowStillMatchesDataSourceConfigWithTx(tx, window, dataSource)
+  await tx.run(`
+    UPDATE app.data_source
+    SET last_import_at = ${getSqlLiteral(now)},
+        cursor = NULL,
+        updated_at = ${getSqlLiteral(now)}
+    WHERE id = ${getSqlLiteral(window.dataSourceId)}
+      AND import_route = ${getSqlLiteral(window.route)}
+      AND tracking_enabled = TRUE
+      AND archived = FALSE
+  `)
+}
+
 export const createDataSourceTrackingSpoolIngester = ({
   dataSourceQueryService = getDataSourceQueryService(),
   database = getAppDatabaseService(),
@@ -304,13 +323,11 @@ export const createDataSourceTrackingSpoolIngester = ({
 
       return renewed
     }
-    const startLeaseRenewal = () => {
+    const startLeaseRenewal = (renewLeases: () => Promise<void> | void) => {
       const timer = setInterval(() => {
-        try {
-          renewWindowLease()
-        } catch (error) {
+        Promise.resolve(renewLeases()).catch((error) => {
           leaseLostError ??= error instanceof SpoolIngestLeaseLostError ? error : new SpoolIngestLeaseLostError()
-        }
+        })
       }, getLeaseRenewalIntervalMs(leaseDurationMs))
       const maybeUnrefTimer = timer as {unref?: () => void}
 
@@ -411,17 +428,60 @@ export const createDataSourceTrackingSpoolIngester = ({
 
     const transaction = database.transactionBackground ?? database.transaction
     let leaseRenewalTimer: ReturnType<typeof setInterval> | null = null
+    const sourceLeaseOwner = `${leaseOwner}:source:${window.id}`
+    const sourceLease = await trackingRepository.claimImportLease({
+      dataSourceId: window.dataSourceId,
+      leaseExpiresAt: new Date(now.getTime() + leaseDurationMs),
+      leaseOwner: sourceLeaseOwner,
+      now,
+    })
+
+    if (!sourceLease) {
+      const error = 'Data source import lease unavailable during spool ingest'
+      const nextRetryAt = new Date(now.getTime() + defaultRetryDelayMs)
+
+      spoolRepository.markWindowFailed({error, nextRetryAt, now, windowId: window.id})
+      if (window.runKind !== 'incremental') {
+        await reconciliationWorkRepository.markWorkFailedForSpoolWindow({
+          error,
+          nextRetryAt,
+          now,
+          spoolWindowId: window.id,
+        })
+      }
+
+      return {error, reason: 'lease-lost', status: 'failed', windowId: window.id}
+    }
 
     try {
-      renewWindowLease()
-      leaseRenewalTimer = startLeaseRenewal()
+      const renewSourceLease = async () => {
+        const renewalNow = new Date()
+        const renewed = await trackingRepository.renewSourceLease({
+          dataSourceId: window.dataSourceId,
+          leaseExpiresAt: new Date(renewalNow.getTime() + leaseDurationMs),
+          leaseOwner: sourceLeaseOwner,
+          now: renewalNow,
+        })
+
+        if (!renewed) {
+          leaseLostError = new SpoolIngestLeaseLostError()
+          throw leaseLostError
+        }
+      }
+      const renewIngestLeases = async () => {
+        renewWindowLease()
+        await renewSourceLease()
+      }
+      await renewIngestLeases()
+      leaseRenewalTimer = startLeaseRenewal(renewIngestLeases)
       let acceptedCount = 0
       let pageCount = 0
       let recordCount = 0
       let afterPageIndex = -1
+      const windowFetchComplete = window.cursor === null
 
       while (true) {
-        renewWindowLease()
+        await renewIngestLeases()
         const pageBatch = spoolRepository.getWindowPagesBatch({
           afterPageIndex,
           limit: defaultPageBatchSize,
@@ -466,7 +526,7 @@ export const createDataSourceTrackingSpoolIngester = ({
         afterPageIndex = pageBatch.at(-1)?.pageIndex ?? afterPageIndex
       }
 
-      if (window.runKind !== 'incremental') {
+      if (window.runKind !== 'incremental' && windowFetchComplete) {
         const sourceRecordKeyBatches = function* () {
           let afterSourceRecordKey: string | null = null
 
@@ -486,7 +546,7 @@ export const createDataSourceTrackingSpoolIngester = ({
           }
         }
 
-        renewWindowLease()
+        await renewIngestLeases()
         await transaction(async (tx) => {
           await assertWindowStillMatchesDataSourceConfigWithTx(tx, window, dataSource)
 
@@ -507,32 +567,60 @@ export const createDataSourceTrackingSpoolIngester = ({
         }, articleImportStoreWorkloadContext)
       }
 
+      await transaction(async (tx) => {
+        await updateTrackedDataSourceImportMetadataWithTx(tx, window, dataSource, new Date())
+      }, articleImportStoreWorkloadContext)
+
+      await renewIngestLeases()
       clearInterval(leaseRenewalTimer)
       leaseRenewalTimer = null
-      await transaction(async (tx) => {
-        await assertWindowStillMatchesDataSourceConfigWithTx(tx, window, dataSource)
-      }, articleImportStoreWorkloadContext)
-      renewWindowLease()
-      const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
-        dateFrom: dataSource.dateFrom,
-        dateTo: dataSource.dateTo,
-        route: window.route,
-      })
+      if (!windowFetchComplete) {
+        const partialRetryAt = new Date()
 
-      renewWindowLease()
-      await dataSourceQueryService.updateDataSourceAfterImport({
-        cursor: null,
-        id: dataSource.id,
-        importRoute: window.route,
-        importedCount,
-      })
+        if (window.runKind === 'incremental') {
+          await trackingRepository.updateTrackingState(
+            window.dataSourceId,
+            {nextRunAfter: partialRetryAt},
+            partialRetryAt,
+          )
+        } else {
+          await reconciliationWorkRepository.markWorkFailedForSpoolWindow({
+            error: 'Tracking spool window partially ingested and ready to resume fetch',
+            nextRetryAt: partialRetryAt,
+            now: partialRetryAt,
+            spoolWindowId: window.id,
+          })
+        }
 
-      renewWindowLease()
+        renewWindowLease()
+        const partialWindow = spoolRepository.markWindowPartiallyIngestedForFetchResume({
+          ingestedAt: partialRetryAt,
+          leaseOwner,
+          nextRetryAt: partialRetryAt,
+          windowId: window.id,
+        })
+
+        if (partialWindow?.status !== 'fetch_failed') {
+          throw new SpoolIngestLeaseLostError()
+        }
+
+        return {
+          acceptedCount,
+          importRunId,
+          pageCount,
+          reason: 'ingested',
+          recordCount,
+          status: 'success',
+          windowId: window.id,
+        }
+      }
+
       if (window.runKind === 'incremental') {
         await trackingRepository.recordTrackingSuccess({
           dataSourceId: window.dataSourceId,
           highWaterCompletedAt: window.windowEnd,
           importRunId,
+          leaseOwner: sourceLeaseOwner,
           nextRunAfter: provider.getNextRunAfter({
             completedWindow: {
               dataSourceId: window.dataSourceId,
@@ -602,6 +690,12 @@ export const createDataSourceTrackingSpoolIngester = ({
       }
 
       return {error: errorMessage, reason: 'store-failed', status: 'failed', windowId: window.id}
+    } finally {
+      await trackingRepository.releaseSourceLease({
+        dataSourceId: window.dataSourceId,
+        leaseOwner: sourceLeaseOwner,
+        now: new Date(),
+      })
     }
   }
 

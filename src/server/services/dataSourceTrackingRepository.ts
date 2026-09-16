@@ -1041,6 +1041,13 @@ export const createDataSourceReconciliationWorkRepository = (
 	            AND data_source.archived = FALSE
 	            AND data_source.import_route = work.route
 	            AND (
+	              work.run_kind <> 'automatic_age_bucket'
+	              OR (
+	                work.age_months IS NOT NULL
+	                AND json_contains(data_source.tracking_reconcile_schedule_months, CAST(work.age_months AS JSON))
+	              )
+	            )
+	            AND (
 	              work.status != 'failed'
 	              OR work.next_retry_at IS NULL
 	              OR work.next_retry_at <= ${getSqlLiteral(now)}
