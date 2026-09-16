@@ -407,12 +407,21 @@ export const modelsRoutes = new Elysia()
       const ensured = await ensureCodexProviderModel({
         modelName,
         name: normalizeDisplayName(body.name),
+        providerConnectionId: getTrimmedValue(body.providerConnectionId),
         version: getTrimmedValue(body.version),
       })
 
       return {data: {modelId: ensured.modelId}, error: null}
     },
-    {body: t.Object({modelName: t.String(), name: t.String(), provider: t.String(), version: t.Optional(t.String())})},
+    {
+      body: t.Object({
+        modelName: t.String(),
+        name: t.String(),
+        provider: t.String(),
+        providerConnectionId: t.Optional(t.String()),
+        version: t.Optional(t.String()),
+      }),
+    },
   )
   .use(providerConnectionsRoutes)
   .use(providerModelsRoutes)

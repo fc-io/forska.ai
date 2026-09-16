@@ -5,6 +5,7 @@ import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   createProviderConnection,
   getFirstEnabledProviderConnection,
+  getProviderConnection,
   updateProviderConnection,
 } from './providerConnectionRepository.ts'
 import {getManualProviderModelMetadata} from './providerModelMetadata.ts'
@@ -27,7 +28,19 @@ const codexProviderEnsureModelWorkloadContext: DuckdbWorkloadContext = {
   workloadClass: 'background.providerRepository',
 }
 
-const getCodexConnectionForEnsure = async () => {
+const getCodexConnectionForEnsure = async (providerConnectionId?: string | null) => {
+  const normalizedProviderConnectionId = getTrimmedValue(providerConnectionId)
+
+  if (normalizedProviderConnectionId) {
+    const explicitConnection = await getProviderConnection(normalizedProviderConnectionId)
+
+    if (!explicitConnection || explicitConnection.providerKind !== 'codex') {
+      throw new Error('Codex provider connection not found')
+    }
+
+    return explicitConnection
+  }
+
   const existing = await getFirstEnabledProviderConnection('codex')
 
   if (existing) {
@@ -61,10 +74,12 @@ const getCodexConnectionForEnsure = async () => {
 export const ensureCodexProviderModel = async ({
   modelName,
   name,
+  providerConnectionId,
   version,
 }: {
   modelName: string
   name: string
+  providerConnectionId?: string | null
   version?: string | null
 }) => {
   const normalizedModelName = getTrimmedValue(modelName)
@@ -75,7 +90,7 @@ export const ensureCodexProviderModel = async ({
 
   const normalizedVersion = getTrimmedValue(version)
   const displayName = getCodexDisplayName(name)
-  const connection = await getCodexConnectionForEnsure()
+  const connection = await getCodexConnectionForEnsure(providerConnectionId)
   const thinking = normalizedVersion ? getProviderModelThinkingOption(normalizedVersion) : null
   const [existing] = await getAppDatabaseService().queryJson<{id: string}>(
     `

@@ -198,6 +198,44 @@ const getProviderPageModelKey = ({
   return `${normalizedModelName}:${normalizedVariant}`
 }
 
+const shouldReplaceCodexStoredModel = ({
+  candidate,
+  currentProviderConnectionId,
+  existing,
+}: {
+  candidate: ProviderModel
+  currentProviderConnectionId: string
+  existing: ProviderModel | undefined
+}) => {
+  if (!existing) {
+    return true
+  }
+
+  if (existing.providerConnectionId === currentProviderConnectionId) {
+    return false
+  }
+
+  if (candidate.providerConnectionId === currentProviderConnectionId) {
+    return true
+  }
+
+  return candidate.enabled && !existing.enabled
+}
+
+const getCodexStoredModelMap = (connection: ProviderConnection): Map<string, ProviderModel> => {
+  return connection.models.reduce<Map<string, ProviderModel>>((storedModelMap, model) => {
+    const key = getProviderPageModelKey(model)
+
+    return shouldReplaceCodexStoredModel({
+      candidate: model,
+      currentProviderConnectionId: connection.id,
+      existing: storedModelMap.get(key),
+    })
+      ? storedModelMap.set(key, model)
+      : storedModelMap
+  }, new Map())
+}
+
 const isCompactVariantProvider = (provider: string | null | undefined) => {
   const normalizedProvider = getNormalizedProviderKind(provider)
 
@@ -758,11 +796,7 @@ const getProviderPageModels = ({
     return getProviderPageThinkingModels(connection.models)
   }
 
-  const storedModelMap = new Map(
-    connection.models.map((model) => {
-      return [getProviderPageModelKey(model), model]
-    }),
-  )
+  const storedModelMap = getCodexStoredModelMap(connection)
   const discoveredKeys = new Set<string>()
   const discoveredModels = discoveredCodexModels.map((model) => {
     const modelKey = getProviderPageModelKey(model)
@@ -789,7 +823,7 @@ const getProviderPageModels = ({
       version: storedModel?.version ?? model.version,
     }
   })
-  const storedOnlyModels = connection.models
+  const storedOnlyModels = Array.from(storedModelMap.values())
     .filter((model) => {
       return !discoveredKeys.has(getProviderPageModelKey(model))
     })

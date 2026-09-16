@@ -74,13 +74,13 @@ const state = {
   createProviderConnection: mock(async () => {
     return getCodexConnection()
   }),
-  createProviderModel: mock(async (input: {metadataJson: unknown}) => {
+  createProviderModel: mock(async (input: {connection?: {id: string}; metadataJson: unknown}) => {
     return {
       ...getAnthropicBaseModel(),
       id: 'codex-model-1',
       metadataJson: input.metadataJson,
       provider: 'codex',
-      providerConnectionId: 'codex-connection-1',
+      providerConnectionId: input.connection?.id ?? 'codex-connection-1',
     }
   }),
   getCodexAppDeviceLoginJob: mock((_jobId: string) => {
@@ -254,6 +254,33 @@ test('models ensure materializes Codex variants with prompt-affecting thinking m
   expect(response.status).toBe(200)
   expect(body).toEqual({data: {modelId: 'codex-model-1'}, error: null})
   expect(metadataJson?.options?.thinking).toBe('high')
+})
+
+test('models ensure materializes Codex variants under the requested provider connection', async () => {
+  state.createProviderModel.mockClear()
+  state.getFirstEnabledProviderConnection.mockClear()
+  state.getProviderConnection.mockImplementationOnce(async (id: string) => {
+    return id === 'codex-connection-2' ? {...getCodexConnection(), id: 'codex-connection-2'} : null
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/models/ensure', {
+      body: JSON.stringify({
+        modelName: 'codex-thinking',
+        name: 'Codex Thinking',
+        provider: 'codex',
+        providerConnectionId: 'codex-connection-2',
+        version: 'high',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const [createInput] = state.createProviderModel.mock.calls[0] ?? []
+
+  expect(response.status).toBe(200)
+  expect((createInput as {connection?: {id: string}} | undefined)?.connection?.id).toBe('codex-connection-2')
+  expect(state.getFirstEnabledProviderConnection).not.toHaveBeenCalled()
 })
 
 test('models ensure reconciles existing Codex variant thinking metadata', async () => {

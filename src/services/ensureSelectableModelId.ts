@@ -46,6 +46,7 @@ const ensureCodexSelectableModelId = async (selectedModel: EnsureSelectableModel
     modelName,
     name: selectedModel.name,
     provider: 'codex',
+    providerConnectionId: selectedModel.providerConnectionId ?? undefined,
     version: selectedModel.version ?? undefined,
   })
   const result = handleApiResponse<EnsureModelResponse>(
