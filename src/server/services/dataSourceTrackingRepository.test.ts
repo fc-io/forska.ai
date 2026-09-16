@@ -424,6 +424,63 @@ test('reconciliation claims require enabled current-route data sources', async (
   })
 })
 
+test('reconciliation claims require automatic age bucket work to remain configured', async () => {
+  await withTrackingDatabase(async (database) => {
+    const workRepository = createDataSourceReconciliationWorkRepository(database)
+    const sourceId = 'tracking-source-reconciliation-schedule-claim'
+    const route = '/api/datasources/import/pubmed'
+
+    await database.run(`
+      INSERT INTO app.data_source (
+        id,
+        title,
+        import_route,
+        tracking_enabled,
+        tracking_reconcile_schedule_months,
+        date_from
+      )
+      VALUES (
+        '${sourceId}',
+        'Tracked source',
+        '${route}',
+        TRUE,
+        CAST('[12]' AS JSON),
+        TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
+      )
+    `)
+    await workRepository.scheduleWork({
+      ageMonths: 3,
+      dataSourceId: sourceId,
+      now: new Date('2026-09-01T00:00:00.000Z'),
+      periodEnd: new Date('2026-07-01T00:00:00.000Z'),
+      periodStart: new Date('2026-06-01T00:00:00.000Z'),
+      route,
+      runKind: 'automatic_age_bucket',
+    })
+
+    const removedAgeClaim = await workRepository.claimNextWork({
+      leaseExpiresAt: new Date('2026-09-15T10:05:00.000Z'),
+      leaseOwner: 'worker-removed-age',
+      now: new Date('2026-09-15T10:00:00.000Z'),
+    })
+
+    await database.run(`
+      UPDATE app.data_source
+      SET tracking_reconcile_schedule_months = CAST('[3,12]' AS JSON)
+      WHERE id = '${sourceId}'
+    `)
+    const restoredAgeClaim = await workRepository.claimNextWork({
+      leaseExpiresAt: new Date('2026-09-15T10:15:00.000Z'),
+      leaseOwner: 'worker-restored-age',
+      now: new Date('2026-09-15T10:10:00.000Z'),
+    })
+
+    expect(removedAgeClaim).toBeNull()
+    expect(restoredAgeClaim?.ageMonths).toBe(3)
+    expect(restoredAgeClaim?.leaseOwner).toBe('worker-restored-age')
+  })
+})
+
 test('completed manual reconciliation work can be requested again', async () => {
   await withTrackingDatabase(async (database) => {
     const workRepository = createDataSourceReconciliationWorkRepository(database)

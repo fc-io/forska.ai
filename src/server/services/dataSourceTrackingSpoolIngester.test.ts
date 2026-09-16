@@ -100,6 +100,20 @@ const createReadyWindow = (
   return window
 }
 
+const getTrackingLeaseRepositoryStub = () => {
+  return {
+    claimImportLease: async () => {
+      return {leaseOwner: 'source-lease'}
+    },
+    releaseSourceLease: async () => {
+      return null
+    },
+    renewSourceLease: async () => {
+      return {leaseOwner: 'source-lease'}
+    },
+  }
+}
+
 test('spool ingester uses a background DuckDB transaction before advancing high water and marking spool ingested', async () => {
   await withSpoolRepository(async (spoolRepository) => {
     const order: string[] = []
@@ -125,6 +139,7 @@ test('spool ingester uses a background DuckDB transaction before advancing high 
       },
     }
     const trackingRepository = {
+      ...getTrackingLeaseRepositoryStub(),
       recordTrackingFailure: async () => {
         order.push('tracking:failure')
         return null
@@ -201,11 +216,130 @@ test('spool ingester uses a background DuckDB transaction before advancing high 
       'duckdb:transaction-background:commit',
       'duckdb:transaction-background:start',
       'duckdb:transaction-background:commit',
-      'datasource:count-linked',
-      'datasource:update-after-import',
       'tracking:success',
       'spool:mark-ingested',
     ])
+  })
+})
+
+test('spool ingester returns capped nonterminal windows to fetch retry after partial ingest', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const order: string[] = []
+    const window = spoolRepository.createOrResumeWindow({
+      dataSourceId: 'source-1',
+      route: pubmedTrackedImportRoute,
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+      windowStart: new Date('2026-09-15T00:00:00.000Z'),
+    })
+    spoolRepository.appendPage({
+      cursorAfter: 'cursor-page-1',
+      cursorBefore: '*',
+      normalizedRecordsJson: [
+        {
+          articleAuthors: ['Ada Lovelace'],
+          articleCreatedAt: '2026-09-15T00:00:00.000Z',
+          articleId: 'pmid:1',
+          articleSummary: 'Abstract',
+          articleTitle: 'Article 1',
+          articleUpdatedAt: '2026-09-15T00:00:00.000Z',
+          importRoute: pubmedTrackedImportRoute,
+        },
+      ],
+      pageIndex: 0,
+      rawPayloadJson: {page: 1},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-page-1',
+      windowId: window.id,
+    })
+    spoolRepository.markWindowReady({spooledAt: new Date('2026-09-16T09:00:00.000Z'), windowId: window.id})
+
+    const ingester = createDataSourceTrackingSpoolIngester({
+      dataSourceQueryService: {
+        countArticlesLinkedToImportRoute: async () => {
+          throw new Error('full source recount should not run')
+        },
+        getDataSourceById: async () => {
+          return getDataSource()
+        },
+        updateDataSourceAfterImport: async () => {
+          throw new Error('full data source update should not run')
+        },
+      } as never,
+      database: {
+        transactionBackground: async <T>(operation: (tx: ArticleImportStoreTx) => Promise<T>) => {
+          const result = await operation({
+            queryJson: async () => {
+              return getDataSourceFenceRows()
+            },
+            run: async () => {
+              order.push('duckdb:run')
+              return undefined
+            },
+          })
+          return result
+        },
+      } as never,
+      providerRegistry: createDataSourceTrackingProviderRegistry([
+        {
+          fetchRangePages: async () => {
+            throw new Error('not used')
+          },
+          fetchWindowPages: async () => {
+            throw new Error('not used')
+          },
+          getGranularity: () => {
+            return 'day'
+          },
+          getNextRunAfter: () => {
+            throw new Error('terminal next run should not be computed for a partial window')
+          },
+          getNextWindow: () => {
+            return {nextRunAfter: null, reason: 'complete', status: 'none'}
+          },
+          getReconciliationRange: () => {
+            return {reason: 'empty-range', status: 'none'}
+          },
+          route: pubmedTrackedImportRoute,
+        },
+      ]),
+      spoolRepository,
+      storeImportedArticlesWithTx: async (_tx, rows: ArticleImportStoreRow[]) => {
+        order.push('duckdb:store-imported-articles')
+        expect(rows).toHaveLength(1)
+        return {acceptedCount: rows.length, importRouteIds: ['route-id-1']}
+      },
+      trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
+        recordTrackingFailure: async () => {
+          throw new Error('tracking failure should not be recorded')
+        },
+        recordTrackingSuccess: async () => {
+          throw new Error('tracking success should wait for terminal fetch')
+        },
+        updateTrackingState: async () => {
+          order.push('tracking:update-next-run')
+          return null
+        },
+      } as never,
+    })
+
+    const result = await ingester.drainReadyWindows({
+      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker',
+      limit: 1,
+      now: new Date('2026-09-16T09:00:00.000Z'),
+    })
+    const updatedWindow = spoolRepository.getWindow(window.id)
+    const pages = spoolRepository.getWindowPages(window.id)
+
+    expect(result).toMatchObject([{reason: 'ingested', status: 'success', windowId: window.id}])
+    expect(updatedWindow?.status).toBe('fetch_failed')
+    expect(updatedWindow?.cursor).toBe('cursor-page-1')
+    expect(updatedWindow?.nextRetryAt).toBeInstanceOf(Date)
+    expect(pages[0]?.duckdbIngestedAt).toBeInstanceOf(Date)
+    expect(spoolRepository.getWindowPagesBatch({afterPageIndex: -1, limit: 10, windowId: window.id})).toEqual([])
+    expect(order).toEqual(['duckdb:store-imported-articles', 'duckdb:run', 'tracking:update-next-run'])
   })
 })
 
@@ -307,6 +441,7 @@ test('spool ingester uses reconciliation sync semantics and completes work after
         return {acceptedCount: input.rows.length, importRouteIds: ['route-id-1'], sourceRecordKeys: ['pmid:1']}
       },
       trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
         recordReconciliationSuccess: async (input: {dataSourceId: string; importRunId?: string | null}) => {
           order.push(`tracking:reconciliation-success:${input.dataSourceId}:${input.importRunId}`)
           return null
@@ -341,8 +476,6 @@ test('spool ingester uses reconciliation sync semantics and completes work after
       'duckdb:transaction-background:commit',
       'duckdb:transaction-background:start',
       'duckdb:transaction-background:commit',
-      'datasource:count-linked',
-      'datasource:update-after-import',
       `work:completed:${readyWindow.id}:data-source-tracking:${readyWindow.id}`,
       `tracking:reconciliation-success:source-1:data-source-tracking:${readyWindow.id}`,
       'spool:mark-ingested',
@@ -451,6 +584,7 @@ test('spool ingester stores reconciliation pages in bounded batches before final
         return {acceptedCount: input.rows.length, importRouteIds: ['route-id-1'], sourceRecordKeys: batchArticleIds}
       },
       trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
         recordReconciliationSuccess: async () => {
           return null
         },
@@ -555,6 +689,7 @@ test('spool ingester fences each page batch against mid-run configuration edits'
         return {acceptedCount: input.rows.length, importRouteIds: ['route-id-1'], sourceRecordKeys: ['pmid:1']}
       },
       trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
         recordReconciliationSuccess: async () => {
           throw new Error('stale config should not record reconciliation success')
         },
@@ -623,6 +758,51 @@ test('spool ingester rejects stale route windows before DuckDB ingest', async ()
     expect(rejectedWindow?.status).toBe('rejected')
     expect(rejectedWindow?.lastError).toContain('no longer matches data source route')
     expect(order).toEqual([])
+  })
+})
+
+test('spool ingester requires the shared source import lease before DuckDB ingest', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const order: string[] = []
+    const readyWindow = createReadyWindow(spoolRepository)
+    const ingester = createDataSourceTrackingSpoolIngester({
+      dataSourceQueryService: {
+        getDataSourceById: async () => {
+          return getDataSource()
+        },
+      } as never,
+      database: {
+        transactionBackground: async () => {
+          order.push('duckdb:transaction')
+          throw new Error('busy source lease should not reach DuckDB')
+        },
+      } as never,
+      spoolRepository,
+      trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
+        claimImportLease: async () => {
+          order.push('tracking:claim-source-lease')
+          return null
+        },
+        recordTrackingFailure: async () => {
+          order.push('tracking:failure')
+          return null
+        },
+      } as never,
+    })
+
+    const result = await ingester.drainReadyWindows({
+      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker',
+      limit: 1,
+      now: new Date('2026-09-16T09:00:00.000Z'),
+    })
+    const failedWindow = spoolRepository.getWindow(readyWindow.id)
+
+    expect(result).toMatchObject([{reason: 'lease-lost', status: 'failed'}])
+    expect(failedWindow?.status).toBe('ingest_failed')
+    expect(failedWindow?.nextRetryAt?.toISOString()).toBe('2026-09-16T09:05:00.000Z')
+    expect(order).toEqual(['tracking:claim-source-lease'])
   })
 })
 
@@ -757,6 +937,7 @@ test('spool ingester stops state updates when the ingest lease is lost after Duc
         return {acceptedCount: 1, importRouteIds: ['route-id-1']}
       },
       trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
         recordTrackingFailure: async () => {
           order.push('tracking:failure')
           return null
@@ -838,6 +1019,7 @@ test('spool ingester preserves a failed window for retry when DuckDB storage fai
         throw new Error('duckdb busy')
       },
       trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
         recordTrackingFailure: async () => {
           order.push('tracking:failure')
           return null
@@ -945,6 +1127,7 @@ test('spool ingester keeps reconciliation work retryable when DuckDB storage fai
         throw new Error('duckdb busy')
       },
       trackingRepository: {
+        ...getTrackingLeaseRepositoryStub(),
         recordReconciliationSuccess: async () => {
           order.push('tracking:reconciliation-success')
           return null

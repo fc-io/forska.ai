@@ -639,6 +639,28 @@ const deleteReconciliationWorkForStaleRoute = async (
   )
 }
 
+const deleteReconciliationWorkForRemovedScheduleMonths = async (
+  db: DataSourceTrackingDatabaseRunner,
+  params: {dataSourceId: string; scheduleMonths: number[]},
+) => {
+  const keptMonths = [...new Set(params.scheduleMonths)].map((month) => {
+    return Math.trunc(month)
+  })
+  const removedMonthPredicate =
+    keptMonths.length === 0 ? 'TRUE' : `(age_months IS NULL OR age_months NOT IN (${keptMonths.join(', ')}))`
+
+  await db.run(
+    `
+    DELETE FROM app.data_source_reconciliation_work
+    WHERE data_source_id = ${getSqlLiteral(params.dataSourceId)}
+      AND run_kind = 'automatic_age_bucket'
+      AND status IN ('queued', 'running', 'failed')
+      AND ${removedMonthPredicate}
+  `,
+    getDataSourcesWorkloadContext({operation: 'trackingReconciliationWorkInvalidateRemovedSchedule'}),
+  )
+}
+
 export const dataSourcesRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/datasources', async () => {
@@ -1019,6 +1041,13 @@ export const dataSourcesRoutes = new Elysia()
               dataSourceId: updated.id,
               dateFrom: nextDateFrom,
               dateTo: nextDateTo,
+            })
+          }
+
+          if (trackingScheduleChanged) {
+            await deleteReconciliationWorkForRemovedScheduleMonths(tx, {
+              dataSourceId: updated.id,
+              scheduleMonths: nextTrackingReconcileScheduleMonths,
             })
           }
 
