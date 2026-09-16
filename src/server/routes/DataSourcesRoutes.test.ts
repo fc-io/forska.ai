@@ -197,6 +197,7 @@ const routeHarnessState: {
   changeRows: Array<Record<string, unknown>>
   covidenceProjectLinks: Array<{importRoute: string; projectId: string}>
   covidencePromptLinks: Array<{importRoute: string; promptId: string}>
+  queryStatements: string[]
   reconciliationWorkRows: Array<Record<string, unknown>>
   row: MockQueryRow
   runStatements: string[]
@@ -205,38 +206,76 @@ const routeHarnessState: {
   changeRows: [],
   covidenceProjectLinks: [],
   covidencePromptLinks: [],
+  queryStatements: [],
   reconciliationWorkRows: [],
   row: structuredRow,
   runStatements: [],
   transactionCallCount: 0,
 }
 
+const getMockTrackingStateRow = () => {
+  return {
+    activeCursor: routeHarnessState.row.trackingActiveCursor ?? null,
+    activeReconciliationAgeMonths: routeHarnessState.row.trackingActiveReconciliationAgeMonths ?? null,
+    activeRunKind: routeHarnessState.row.trackingActiveRunKind ?? null,
+    activeWindowEnd: routeHarnessState.row.trackingActiveWindowEnd ?? null,
+    activeWindowStart: routeHarnessState.row.trackingActiveWindowStart ?? null,
+    createdAt: routeHarnessState.row.createdAt,
+    dataSourceId: routeHarnessState.row.id,
+    failureCount: routeHarnessState.row.trackingFailureCount ?? 0,
+    granularity: routeHarnessState.row.trackingGranularity ?? 'day',
+    highWaterCompletedAt: routeHarnessState.row.trackingHighWaterCompletedAt ?? null,
+    lastAttemptAt: routeHarnessState.row.trackingLastAttemptAt ?? null,
+    lastError: routeHarnessState.row.trackingLastError ?? null,
+    lastImportRunId: null,
+    lastReconciliationCompletedAt: routeHarnessState.row.trackingLastReconciliationCompletedAt ?? null,
+    lastReconciliationSchedulerAt: null,
+    lastSuccessAt: routeHarnessState.row.trackingLastSuccessAt ?? null,
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    nextRunAfter: routeHarnessState.row.trackingNextRunAfter ?? null,
+    route: routeHarnessState.row.importRoute,
+    updatedAt: routeHarnessState.row.updatedAt,
+  }
+}
+
+const queryJson = async (statement: string) => {
+  routeHarnessState.queryStatements.push(statement)
+
+  return statement.includes('INSERT INTO app.data_source_tracking_state')
+    || (statement.includes('UPDATE app.data_source_tracking_state') && statement.includes('RETURNING'))
+    ? [getMockTrackingStateRow()]
+    : statement.includes('INNER JOIN app.project_prompt')
+      ? routeHarnessState.covidencePromptLinks
+      : statement.includes('FROM app.project_import_route')
+        ? routeHarnessState.covidenceProjectLinks
+        : statement.includes('FROM app.data_source data_source')
+          ? [routeHarnessState.row]
+          : statement.includes('FROM app.data_source_reconciliation_work')
+            ? routeHarnessState.reconciliationWorkRows
+            : statement.includes('FROM app.data_source_article_change_log')
+              ? routeHarnessState.changeRows
+              : statement.includes('INSERT INTO app.data_source')
+                ? [routeHarnessState.row]
+                : statement.includes(`WHERE data_source.id = '${routeHarnessState.row.id}'`)
+                    || statement.includes(`WHERE id = '${routeHarnessState.row.id}'`)
+                  ? [routeHarnessState.row]
+                  : [routeHarnessState.row]
+}
+
+const run = async (statement: string) => {
+  routeHarnessState.runStatements.push(statement)
+}
+
 void mock.module(new URL('../services/appDatabaseService.ts', import.meta.url).href, () => {
   return {
     getAppDatabaseService: () => {
       return {
-        queryJson: async (statement: string) => {
-          return statement.includes('INNER JOIN app.project_prompt')
-            ? routeHarnessState.covidencePromptLinks
-            : statement.includes('FROM app.project_import_route')
-              ? routeHarnessState.covidenceProjectLinks
-              : statement.includes('FROM app.data_source data_source')
-                ? [routeHarnessState.row]
-                : statement.includes('FROM app.data_source_reconciliation_work')
-                  ? routeHarnessState.reconciliationWorkRows
-                  : statement.includes('FROM app.data_source_article_change_log')
-                    ? routeHarnessState.changeRows
-                    : statement.includes(`WHERE data_source.id = '${routeHarnessState.row.id}'`)
-                        || statement.includes(`WHERE id = '${routeHarnessState.row.id}'`)
-                      ? [routeHarnessState.row]
-                      : [routeHarnessState.row]
-        },
-        run: async (statement: string) => {
-          routeHarnessState.runStatements.push(statement)
-        },
-        transaction: async () => {
+        queryJson,
+        run,
+        transaction: async <T>(operation: (runner: {queryJson: typeof queryJson; run: typeof run}) => Promise<T>) => {
           routeHarnessState.transactionCallCount += 1
-          throw new Error('transaction should not be used')
+          return operation({queryJson, run})
         },
       }
     },
@@ -257,6 +296,7 @@ const runDataSourcesRoute = async (params: {
   routeHarnessState.reconciliationWorkRows = params.reconciliationWorkRows ?? []
   routeHarnessState.changeRows = params.changeRows ?? []
   routeHarnessState.row = params.row
+  routeHarnessState.queryStatements = []
   routeHarnessState.runStatements = []
   routeHarnessState.transactionCallCount = 0
 
@@ -277,6 +317,7 @@ const runDataSourcesRoute = async (params: {
 
   return {
     body,
+    queryStatements: routeHarnessState.queryStatements,
     runStatements: routeHarnessState.runStatements,
     status: response.status,
     transactionCallCount: routeHarnessState.transactionCallCount,
@@ -475,7 +516,7 @@ test('covidence datasource responses expose package config and linked project an
 })
 
 test('manual tracking reconciliation endpoint schedules full-range work', async () => {
-  const finiteTrackedRow = {...trackedRow, dateTo: '2026-03-04T00:00:00.000Z'}
+  const finiteTrackedRow = {...trackedRow, dateFrom: '2026-03-01T12:30:00.000Z', dateTo: '2026-03-04T00:00:00.000Z'}
   const workRow = {
     ageMonths: null,
     completedAt: null,
@@ -504,7 +545,6 @@ test('manual tracking reconciliation endpoint schedules full-range work', async 
     url: 'http://localhost/api/datasources/datasource-tracked/tracking/reconcile',
   })) as {
     body: {data: {dataSource: DataSourceResponseEntry; work: {id: string; runKind: string; status: string}}}
-    runStatements: string[]
     status: number
   }
 
@@ -515,7 +555,82 @@ test('manual tracking reconciliation endpoint schedules full-range work', async 
     runKind: 'manual_full_range',
     status: 'queued',
   })
-  expect(parsed.runStatements.join('\n')).toContain("TIMESTAMPTZ '2026-03-05T00:00:00.000Z'")
+  expect(readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')).toContain(
+    'const periodStart = getUtcDayStart(dateFrom)',
+  )
+})
+
+test('tracking-enabled datasource create inserts the row and tracking state in one transaction', async () => {
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {
+      body: JSON.stringify({
+        dateFrom: '2026-03-01',
+        importRoute: '/api/datasources/import/pubmed',
+        title: 'Tracked PubMed',
+        trackingEnabled: true,
+        trackingReconcileScheduleMonths: [12, 3, 12],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    },
+    row: trackedRow,
+    url: 'http://localhost/api/datasources',
+  })) as {body: DataSourceDetailResponse; queryStatements: string[]; status: number; transactionCallCount: number}
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.transactionCallCount).toBe(1)
+  expect(parsed.body.data.trackingEnabled).toBe(true)
+  expect(parsed.queryStatements.join('\n')).toContain('INSERT INTO app.data_source')
+  expect(parsed.queryStatements.join('\n')).toContain('INSERT INTO app.data_source_tracking_state')
+  expect(parsed.queryStatements.join('\n')).toContain("CAST('[3,12]' AS JSON)")
+})
+
+test('datasource create rejects reconciliation schedule months outside the safe bound', async () => {
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {
+      body: JSON.stringify({
+        dateFrom: '2026-03-01',
+        importRoute: '/api/datasources/import/pubmed',
+        title: 'Tracked PubMed',
+        trackingEnabled: true,
+        trackingReconcileScheduleMonths: [3, 100000000],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    },
+    row: trackedRow,
+    url: 'http://localhost/api/datasources',
+  })) as {body: string; status: number; transactionCallCount: number}
+
+  expect(parsed.status).toBe(500)
+  expect(parsed.body).toContain('Reconciliation schedule months must be integers between 1 and 120')
+  expect(parsed.transactionCallCount).toBe(0)
+})
+
+test('datasource patch rewinds tracking and invalidates stale reconciliation work when bounds change', async () => {
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {
+      body: JSON.stringify({
+        dateFrom: '2026-02-01',
+        dateTo: '2026-03-02',
+        trackingReconcileScheduleMonths: [3, 12, 24],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    },
+    row: trackedRow,
+    url: 'http://localhost/api/datasources/datasource-tracked',
+  })) as {runStatements: string[]; status: number; transactionCallCount: number}
+  const statements = parsed.runStatements.join('\n')
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.transactionCallCount).toBe(1)
+  expect(statements).toContain('UPDATE app.data_source_tracking_state')
+  expect(statements).toContain('high_water_completed_at = NULL')
+  expect(statements).toContain('last_reconciliation_scheduler_at = NULL')
+  expect(statements).toContain('DELETE FROM app.data_source_reconciliation_work')
+  expect(statements).toContain("period_start < TIMESTAMPTZ '2026-02-01T00:00:00.000Z'")
+  expect(statements).toContain("period_end > TIMESTAMPTZ '2026-03-03T00:00:00.000Z'")
 })
 
 test('tracking changes endpoint returns filtered source change rows', async () => {
@@ -544,18 +659,103 @@ test('tracking changes endpoint returns filtered source change rows', async () =
     row: trackedRow,
     url: 'http://localhost/api/datasources/datasource-tracked/tracking/changes?changeKind=source_record_deleted&runKind=manual_full_range',
   })) as {
-    body: {data: Array<{changeKind: string; runKind: string; sourceRecordKey: string}>; limit: number}
+    body: {
+      data: {
+        after: string | null
+        hasMore: boolean
+        items: Array<{changeKind: string; runKind: string; sourceRecordKey: string}>
+        limit: number
+        nextCursor: string | null
+      }
+    }
     status: number
   }
 
   expect(parsed.status).toBe(200)
-  expect(parsed.body.limit).toBe(50)
-  expect(parsed.body.data).toHaveLength(1)
-  expect(parsed.body.data[0]).toMatchObject({
+  expect(parsed.body.data.limit).toBe(50)
+  expect(parsed.body.data.after).toBeNull()
+  expect(parsed.body.data.nextCursor).toBeNull()
+  expect(parsed.body.data.hasMore).toBe(false)
+  expect(parsed.body.data.items).toHaveLength(1)
+  expect(parsed.body.data.items[0]).toMatchObject({
     changeKind: 'source_record_deleted',
     runKind: 'manual_full_range',
     sourceRecordKey: 'pmid:1',
   })
+})
+
+test('tracking changes endpoint returns pagination metadata and requests one lookahead row', async () => {
+  const changeRows = Array.from({length: 3}, (_, index) => {
+    return {
+      articleId: `article-${index + 1}`,
+      changeKind: 'source_record_changed',
+      changedFields: JSON.stringify({}),
+      createdAt: '2026-03-05T00:00:00.000Z',
+      dataSourceId: trackedRow.id,
+      detectedAt: '2026-03-05T00:00:00.000Z',
+      externalArticleId: `pmid:${index + 1}`,
+      id: `change-${index + 1}`,
+      importRouteId: 'import-route-1',
+      importRunId: 'import-run-1',
+      nextSnapshot: JSON.stringify({}),
+      nextSourceRecordHash: `hash-next-${index + 1}`,
+      previousSnapshot: JSON.stringify({}),
+      previousSourceRecordHash: `hash-prev-${index + 1}`,
+      route: '/api/datasources/import/pubmed',
+      runKind: 'incremental',
+      sourceRecordKey: `pmid:${index + 1}`,
+    }
+  })
+  const parsed = (await runDataSourcesRoute({
+    changeRows,
+    row: trackedRow,
+    url: 'http://localhost/api/datasources/datasource-tracked/tracking/changes?limit=2',
+  })) as {
+    body: {data: {hasMore: boolean; items: Array<{id: string}>; limit: number; nextCursor: string | null}}
+    queryStatements: string[]
+    status: number
+  }
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.body.data.items).toHaveLength(2)
+  expect(parsed.body.data.hasMore).toBe(true)
+  expect(typeof parsed.body.data.nextCursor).toBe('string')
+  expect(parsed.body.data.limit).toBe(2)
+  expect(parsed.queryStatements.join('\n')).toContain('LIMIT 3')
+  expect(parsed.queryStatements.join('\n')).not.toContain('OFFSET')
+})
+
+test('tracking changes endpoint pages by opaque cursor without offset pagination', async () => {
+  const after = Buffer.from(
+    JSON.stringify({createdAt: '2026-03-05T00:00:00.000Z', detectedAt: '2026-03-05T00:00:00.000Z', id: 'change-2'}),
+    'utf8',
+  ).toString('base64url')
+
+  const parsed = (await runDataSourcesRoute({
+    changeRows: [],
+    row: trackedRow,
+    url: `http://localhost/api/datasources/datasource-tracked/tracking/changes?limit=2&after=${after}`,
+  })) as {
+    body: {
+      data: {
+        after: string | null
+        hasMore: boolean
+        items: Array<{id: string}>
+        limit: number
+        nextCursor: string | null
+      }
+    }
+    queryStatements: string[]
+    status: number
+  }
+  const statements = parsed.queryStatements.join('\n')
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.body.data.after).toBe(after)
+  expect(parsed.body.data.nextCursor).toBeNull()
+  expect(statements).toContain("detected_at < TIMESTAMPTZ '2026-03-05T00:00:00.000Z'")
+  expect(statements).toContain("id > 'change-2'")
+  expect(statements).not.toContain('OFFSET')
 })
 
 test('structured file datasource patch rejects non-archive edits', async () => {

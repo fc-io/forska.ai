@@ -12,6 +12,7 @@ import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {
   getReviewArticlesIndexingRefreshSignature,
   getReviewArticlesRefetchInterval,
+  resetReviewArticlesCursorPagination,
 } from './reviewsArticleIndexingRefresh.ts'
 import {type ArticleWithJudgments, ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
@@ -103,11 +104,16 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
       return
     }
 
-    if (lastArticleIndexingRefreshSignature === signature) {
+    const previousSignature = lastArticleIndexingRefreshSignature
+
+    if (previousSignature === signature) {
       return
     }
 
     lastArticleIndexingRefreshSignature = signature
+    if (previousSignature !== null) {
+      resetReviewArticlesCursorPagination({setCurrentPage: props.setCurrentPage, setLoadedPages, setPageCursors})
+    }
     void articlesQuery.refetch()
   })
 

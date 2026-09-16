@@ -78,27 +78,17 @@ export const isTopologyJobCleanupComplete = (jobs: TopologyJobCleanupState[]) =>
 }
 
 export const isTopologyJudgmentWorkflowComplete = ({
-  hasIdleLocalJobStores,
   hasReconciledProjectRefreshAcks,
   totalJudgments,
   visibleProjectionCount,
 }: {
-  hasIdleLocalJobStores: boolean
   hasReconciledProjectRefreshAcks: boolean
   totalJudgments: number
   visibleProjectionCount: number
 }) => {
   if (totalJudgments !== 4) return false
 
-  if (visibleProjectionCount === 4 && hasReconciledProjectRefreshAcks) return true
-
-  // The lifecycle topology proves review-serving dispatch with the initial
-  // serving-queue wait. After canonical judgments are committed, Windows can
-  // lag on detail-serving projection even though every local job store has
-  // drained. At that point this judgment workflow smoke should proceed and
-  // keep projection lag as diagnostic evidence instead of timing out on a
-  // separate projector contract.
-  return hasIdleLocalJobStores
+  return visibleProjectionCount === 4 && hasReconciledProjectRefreshAcks
 }
 
 const startupTimeoutMs = 600_000
@@ -725,32 +715,11 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     const totalJudgments = evidence.data.judgments.reduce((count, row) => {
       return count + Number(row.count)
     }, 0)
-    const hasVisibleProjection = evidence.data.visibleProjectionCount === 4
     const hasReconciledProjectRefreshAcks = evidence.data.jobEvidence.every((job) => {
       return job.health.lastAckSeq !== null && job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
     })
-    const hasIdleLocalJobStores = evidence.data.jobEvidence.every((job) => {
-      const promptCounts = job.health.promptCounts
-
-      return (
-        job.claims.length === 0
-        && job.health.retainedRowCount === 0
-        && job.health.outboxRowCount === 0
-        && job.health.pendingCompletionAckCount === 0
-        && !job.health.hasQueueRows
-        && !job.health.hasOutboxRows
-        && !job.health.hasPendingCompletionAck
-        && promptCounts.claimed === 0
-        && promptCounts.judged === 0
-        && promptCounts.ready === 0
-        && promptCounts.running === 0
-        && promptCounts.skipped === 0
-      )
-    })
-
     if (
       isTopologyJudgmentWorkflowComplete({
-        hasIdleLocalJobStores,
         hasReconciledProjectRefreshAcks,
         totalJudgments,
         visibleProjectionCount: evidence.data.visibleProjectionCount,
@@ -761,13 +730,6 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
 
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for topology judgments: ${JSON.stringify(evidence.data)}`)
-    }
-
-    if (totalJudgments === 4 && hasVisibleProjection) {
-      await postJson<{data: {reconciledCounts: Array<{projectId: string; updatedCount: number}>}}>(
-        `${ownerBaseUrl}/api/test/judgment-workflow-topology/reconcile-project-refresh-acks`,
-        {fixtureId, token},
-      )
     }
 
     await sleep(topologyProjectorQuietWindowMs)

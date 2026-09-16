@@ -101,15 +101,15 @@ test('period reconciliation sync clears stale source records only inside the rec
       await syncImportedArticlesForReconciliationPeriodWithTx({
         importRoute,
         periodEnd: new Date('2026-08-01T00:00:00.000Z'),
-        periodStart: new Date('2026-06-01T00:00:00.000Z'),
+        periodStart: new Date('2026-05-01T00:00:00.000Z'),
         rows: [
           createRow({
-            articleCreatedAt: '2026-06-15T00:00:00.000Z',
+            articleCreatedAt: '2026-05-15T00:00:00.000Z',
             articleId: 'pmid:period-delete',
             articleTitle: 'Period Delete',
             doi: '10.1000/period-delete',
             externalArticleId: 'pmid:period-delete',
-            sourceRecordHash: 'hash-period-delete',
+            sourceRecordHash: 'hash-period-delete-initial',
             sourceRecordKey: 'pmid:period-delete',
           }),
           createRow({
@@ -120,6 +120,25 @@ test('period reconciliation sync clears stale source records only inside the rec
             externalArticleId: 'pmid:period-keep',
             sourceRecordHash: 'hash-period-keep',
             sourceRecordKey: 'pmid:period-keep',
+          }),
+        ],
+        tx,
+      })
+    })
+    await database.transaction(async (tx) => {
+      await syncImportedArticlesForReconciliationPeriodWithTx({
+        importRoute,
+        periodEnd: new Date('2026-07-01T00:00:00.000Z'),
+        periodStart: new Date('2026-06-01T00:00:00.000Z'),
+        rows: [
+          createRow({
+            articleCreatedAt: '2026-06-15T00:00:00.000Z',
+            articleId: 'pmid:period-delete',
+            articleTitle: 'Period Delete',
+            doi: '10.1000/period-delete',
+            externalArticleId: 'pmid:period-delete',
+            sourceRecordHash: 'hash-period-delete',
+            sourceRecordKey: 'pmid:period-delete',
           }),
         ],
         tx,
@@ -206,11 +225,14 @@ test('period reconciliation sync logs source record changes and restorations', a
         sourceRecordKey: 'pmid:period-change',
       }
     }
+    let runSequence = 0
     const runPeriodSync = async (params: {importRunId: string; rows: ReturnType<typeof createRow>[]}) => {
+      runSequence += 1
       await database.transaction(async (tx) => {
         await syncImportedArticlesForReconciliationPeriodWithTx({
           changeLogContext: {
             dataSourceId,
+            detectedAt: new Date(`2026-09-${String(runSequence).padStart(2, '0')}T00:00:00.000Z`),
             importRunId: params.importRunId,
             route: importRoute,
             runKind: 'automatic_age_bucket',
@@ -254,15 +276,21 @@ test('period reconciliation sync logs source record changes and restorations', a
       ORDER BY source_record_key ASC
     `)
     const changeLogRows = await database.queryJson<{
+      articleId: string | null
       changeKind: string
       changedFields: unknown
+      id: string
+      importRunId: string
       nextSourceRecordHash: string | null
       previousSourceRecordHash: string | null
       sourceRecordKey: string
     }>(`
       SELECT
+        article_id AS articleId,
         change_kind AS changeKind,
         TO_JSON(changed_fields) AS changedFields,
+        id,
+        import_run_id AS importRunId,
         next_source_record_hash AS nextSourceRecordHash,
         previous_source_record_hash AS previousSourceRecordHash,
         source_record_key AS sourceRecordKey
@@ -275,19 +303,130 @@ test('period reconciliation sync logs source record changes and restorations', a
       changeLogRows.map((row) => {
         return row.changeKind
       }),
-    ).toEqual(['source_record_changed', 'source_record_deleted', 'source_record_restored'])
+    ).toEqual(['article_added', 'source_record_changed', 'source_record_deleted', 'source_record_restored'])
     expect(changeLogRows).toMatchObject([
       {
+        importRunId: 'reconciliation-run-initial',
+        nextSourceRecordHash: 'hash-original',
+        previousSourceRecordHash: null,
+        sourceRecordKey: 'pmid:period-change',
+      },
+      {
+        importRunId: 'reconciliation-run-changed',
         nextSourceRecordHash: 'hash-changed',
         previousSourceRecordHash: 'hash-original',
         sourceRecordKey: 'pmid:period-change',
       },
-      {nextSourceRecordHash: null, previousSourceRecordHash: 'hash-changed', sourceRecordKey: 'pmid:period-change'},
       {
+        importRunId: 'reconciliation-run-deleted',
+        nextSourceRecordHash: null,
+        previousSourceRecordHash: 'hash-changed',
+        sourceRecordKey: 'pmid:period-change',
+      },
+      {
+        importRunId: 'reconciliation-run-restored',
         nextSourceRecordHash: 'hash-restored',
         previousSourceRecordHash: 'hash-changed',
         sourceRecordKey: 'pmid:period-change',
       },
     ])
+    expect(
+      new Set(
+        changeLogRows
+          .filter((row) => {
+            return row.changeKind.startsWith('source_record_')
+          })
+          .map((row) => {
+            return row.articleId
+          }),
+      ).size,
+    ).toBe(1)
+    expect(
+      changeLogRows.every((row) => {
+        return row.articleId !== null
+      }),
+    ).toBe(true)
+  })
+})
+
+test('period reconciliation change-log IDs include the reconciliation run', async () => {
+  await withMigratedDuckdb(async () => {
+    const [{getAppDatabaseService}, {syncImportedArticlesForReconciliationPeriodWithTx}] = await Promise.all([
+      import('./appDatabaseService.ts'),
+      import('./articleImportStoreService.ts'),
+    ])
+    const database = getAppDatabaseService()
+    const dataSourceId = 'datasource-period-reconciliation-run-ids'
+    const importRoute = '/api/datasources/import/pubmed'
+    const createRow = () => {
+      return {
+        articleAuthors: ['Alice Example'],
+        articleCreatedAt: new Date('2026-06-15T00:00:00.000Z'),
+        articleId: 'pmid:repeat-delete',
+        articleSummary: 'PubMed import summary',
+        articleTitle: 'Repeat deletion source record',
+        doi: '10.1000/repeat-delete',
+        externalArticleId: 'pmid:repeat-delete',
+        importRoute,
+        sourceKind: 'pubmed',
+        sourceRecordHash: 'hash-repeat-delete',
+        sourceRecordKey: 'pmid:repeat-delete',
+      }
+    }
+    let runSequence = 0
+    const runPeriodSync = async (params: {importRunId: string; rows: ReturnType<typeof createRow>[]}) => {
+      runSequence += 1
+      await database.transaction(async (tx) => {
+        await syncImportedArticlesForReconciliationPeriodWithTx({
+          changeLogContext: {
+            dataSourceId,
+            detectedAt: new Date(`2026-10-${String(runSequence).padStart(2, '0')}T00:00:00.000Z`),
+            importRunId: params.importRunId,
+            route: importRoute,
+            runKind: 'automatic_age_bucket',
+          },
+          importRoute,
+          periodEnd: new Date('2026-07-01T00:00:00.000Z'),
+          periodStart: new Date('2026-06-01T00:00:00.000Z'),
+          rows: params.rows,
+          tx,
+        })
+      })
+    }
+
+    await database.run(`
+      INSERT INTO app.data_source (id, title, import_route, tracking_enabled, date_from)
+      VALUES (
+        '${dataSourceId}',
+        'Period reconciliation repeated deletions',
+        '${importRoute}',
+        TRUE,
+        TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
+      )
+    `)
+    await runPeriodSync({importRunId: 'reconciliation-run-initial', rows: [createRow()]})
+    await runPeriodSync({importRunId: 'reconciliation-run-delete-1', rows: []})
+    await runPeriodSync({importRunId: 'reconciliation-run-restore', rows: [createRow()]})
+    await runPeriodSync({importRunId: 'reconciliation-run-delete-2', rows: []})
+
+    const deletedRows = await database.queryJson<{id: string; importRunId: string}>(`
+      SELECT id, import_run_id AS importRunId
+      FROM app.data_source_article_change_log
+      WHERE change_kind = 'source_record_deleted'
+      ORDER BY detected_at ASC, id ASC
+    `)
+
+    expect(
+      deletedRows.map((row) => {
+        return row.importRunId
+      }),
+    ).toEqual(['reconciliation-run-delete-1', 'reconciliation-run-delete-2'])
+    expect(
+      new Set(
+        deletedRows.map((row) => {
+          return row.id
+        }),
+      ).size,
+    ).toBe(2)
   })
 })

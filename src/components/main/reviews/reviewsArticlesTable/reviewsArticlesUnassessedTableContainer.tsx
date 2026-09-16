@@ -10,6 +10,7 @@ import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {
   getReviewArticlesIndexingRefreshSignature,
   getReviewArticlesRefetchInterval,
+  resetReviewArticlesCursorPagination,
 } from './reviewsArticleIndexingRefresh.ts'
 import type {ArticleWithJudgments} from './reviewsArticlesTable.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
@@ -93,11 +94,16 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
       return
     }
 
-    if (lastArticleIndexingRefreshSignature === signature) {
+    const previousSignature = lastArticleIndexingRefreshSignature
+
+    if (previousSignature === signature) {
       return
     }
 
     lastArticleIndexingRefreshSignature = signature
+    if (previousSignature !== null) {
+      resetReviewArticlesCursorPagination({setCurrentPage: props.setCurrentPage, setLoadedPages, setPageCursors})
+    }
     void articlesQuery.refetch()
   })
   createEffect(() => {
@@ -207,24 +213,27 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
             const articles = () => {
               return loadedArticles()
             }
+            const articleCountLabel = () => {
+              const totalCount = response().totalCount
+
+              if (totalCount === null) {
+                return (
+                  <span class="inline-flex items-center gap-2">
+                    <span class="text-gray-600">{`Showing 1-${articles().length} of`}</span>
+                    <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                  </span>
+                )
+              }
+
+              return totalCount > 0
+                ? `Showing 1-${Math.min(articles().length, totalCount)} of ${formatThousandSeparatedNumber(totalCount)}`
+                : '0'
+            }
 
             return (
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
-                  <h3 class="text-lg font-semibold mb-2">
-                    Articles with No Judgments (
-                    {response().totalCount === null ? (
-                      <span class="inline-flex items-center gap-2">
-                        <span class="text-gray-600">{`Showing 1-${articles().length} of`}</span>
-                        <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
-                      </span>
-                    ) : response().totalCount > 0 ? (
-                      `Showing 1-${Math.min(articles().length, response().totalCount)} of ${formatThousandSeparatedNumber(response().totalCount)}`
-                    ) : (
-                      '0'
-                    )}
-                    )
-                  </h3>
+                  <h3 class="text-lg font-semibold mb-2">Articles with No Judgments ({articleCountLabel()})</h3>
                   <p class="text-sm text-gray-600">
                     Showing articles missing at least one LLM judgment for this project's prompts
                   </p>

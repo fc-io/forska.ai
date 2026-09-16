@@ -10,6 +10,7 @@ import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {
   getReviewArticlesIndexingRefreshSignature,
   getReviewArticlesRefetchInterval,
+  resetReviewArticlesCursorPagination,
 } from './reviewsArticleIndexingRefresh.ts'
 import type {ArticleWithJudgments} from './reviewsArticlesTable.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
@@ -103,11 +104,16 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
       return
     }
 
-    if (lastArticleIndexingRefreshSignature === signature) {
+    const previousSignature = lastArticleIndexingRefreshSignature
+
+    if (previousSignature === signature) {
       return
     }
 
     lastArticleIndexingRefreshSignature = signature
+    if (previousSignature !== null) {
+      resetReviewArticlesCursorPagination({setCurrentPage: props.setCurrentPage, setLoadedPages, setPageCursors})
+    }
     void articlesQuery.refetch()
   })
   createEffect(() => {
@@ -195,23 +201,27 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
 
         <Show when={canLoadArticles() && articlesQuery.data}>
           {(response) => {
+            const articleCountLabel = () => {
+              const totalCount = response().totalCount
+
+              if (totalCount === null) {
+                return (
+                  <span class="inline-flex items-center gap-2">
+                    <span class="text-gray-600">{`Showing 1-${articlesWithDetailReadiness().length} of`}</span>
+                    <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                  </span>
+                )
+              }
+
+              return totalCount > 0
+                ? `Showing 1-${Math.min(articlesWithDetailReadiness().length, totalCount)} of ${totalCount}`
+                : '0'
+            }
+
             return (
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
-                  <h3 class="text-lg font-semibold mb-2">
-                    Articles Assessed by Both (
-                    {response().totalCount === null ? (
-                      <span class="inline-flex items-center gap-2">
-                        <span class="text-gray-600">{`Showing 1-${articlesWithDetailReadiness().length} of`}</span>
-                        <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
-                      </span>
-                    ) : response().totalCount > 0 ? (
-                      `Showing 1-${Math.min(articlesWithDetailReadiness().length, response().totalCount)} of ${response().totalCount}`
-                    ) : (
-                      '0'
-                    )}
-                    )
-                  </h3>
+                  <h3 class="text-lg font-semibold mb-2">Articles Assessed by Both ({articleCountLabel()})</h3>
                   <p class="text-sm text-gray-600">
                     Showing articles with complete LLM and human judgments for all prompts
                     {Object.keys(props.promptFilters()).some((k) => {

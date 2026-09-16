@@ -35,6 +35,7 @@ const mockState = vi.hoisted(() => {
         sourceRecordKey: 'pmid:2',
       },
     ],
+    nextCursor: null as string | null,
   }
 })
 
@@ -75,7 +76,16 @@ vi.mock('../../../../../services/apiClient.ts', () => {
               changes: {
                 get: async ({query}: {query: Record<string, number | string>}) => {
                   mockState.changesQueries.push(query)
-                  return {data: {data: {items: mockState.items, total: mockState.items.length}}}
+                  return {
+                    data: {
+                      data: {
+                        hasMore: mockState.nextCursor !== null,
+                        items: mockState.items,
+                        limit: 50,
+                        nextCursor: mockState.nextCursor,
+                      },
+                    },
+                  }
                 },
               },
               reconcile: {
@@ -139,6 +149,7 @@ beforeEach(() => {
   document.body.innerHTML = ''
   mockState.changesQueries = []
   mockState.dataSourceId = 'source-1'
+  mockState.nextCursor = null
 })
 
 afterEach(() => {
@@ -169,6 +180,27 @@ describe('data source tracking changes page', () => {
           limit: 50,
           runKind: 'manual_full_range',
         })
+      })
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+
+  test('requests the next change-history page from returned pagination metadata', async () => {
+    mockState.nextCursor = 'cursor-next-page'
+    const {container, dispose, queryClient} = await renderChangesPage()
+
+    try {
+      const nextButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => {
+        return button.textContent === 'Next'
+      })
+      expect(nextButton).toBeInstanceOf(HTMLButtonElement)
+      nextButton?.click()
+
+      await waitForCondition(() => {
+        expect(mockState.changesQueries).toContainEqual({after: 'cursor-next-page', limit: 50})
       })
     } finally {
       dispose()

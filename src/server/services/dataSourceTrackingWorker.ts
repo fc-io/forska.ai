@@ -41,7 +41,13 @@ export type DataSourceTrackingWorkerSourceResult =
   | {
       dataSourceId: string
       pageCount?: number
-      reason: 'fetched' | 'already-ingested' | 'already-ready' | 'already-ingesting' | 'retry-not-due'
+      reason:
+        | 'fetched'
+        | 'already-ingested'
+        | 'already-ready'
+        | 'already-rejected'
+        | 'already-ingesting'
+        | 'retry-not-due'
       status: 'spooled' | 'skipped'
       windowId: string
     }
@@ -53,7 +59,13 @@ export type DataSourceTrackingWorkerReconciliationResult =
   | {
       dataSourceId: string
       pageCount?: number
-      reason: 'fetched' | 'already-ingested' | 'already-ready' | 'already-ingesting' | 'retry-not-due'
+      reason:
+        | 'fetched'
+        | 'already-ingested'
+        | 'already-ready'
+        | 'already-rejected'
+        | 'already-ingesting'
+        | 'retry-not-due'
       status: 'spooled' | 'skipped'
       windowId: string
       workId: string
@@ -98,13 +110,75 @@ const defaultIngestLeaseMs = 5 * 60 * 1000
 const defaultMaxPendingPages = 20
 const defaultMaxPendingWindows = 5
 const defaultFailureRetryMs = 5 * 60 * 1000
+const defaultSpoolCleanupAgeMs = 24 * 60 * 60 * 1000
+const defaultSpoolCleanupLimit = 100
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
 }
 
+const getLeaseRenewalIntervalMs = (leaseDurationMs: number) => {
+  return Math.max(1000, Math.min(60_000, Math.floor(leaseDurationMs / 2)))
+}
+
+const withLeaseRenewal = async <T>({
+  leaseDurationMs,
+  operation,
+  renewLease,
+}: {
+  leaseDurationMs: number
+  operation: () => Promise<T>
+  renewLease: (input: {leaseExpiresAt: Date; now: Date}) => Promise<unknown>
+}) => {
+  let leaseLostError: Error | null = null
+  const renew = async () => {
+    if (leaseLostError) {
+      return
+    }
+
+    const renewalNow = new Date()
+    const renewed = await renewLease({
+      leaseExpiresAt: new Date(renewalNow.getTime() + leaseDurationMs),
+      now: renewalNow,
+    })
+
+    if (renewed === null) {
+      leaseLostError = new Error('Data source tracking lease lost')
+    }
+  }
+
+  await renew()
+
+  if (leaseLostError) {
+    throw leaseLostError
+  }
+
+  const timer = setInterval(() => {
+    void renew().catch((error) => {
+      leaseLostError ??= error instanceof Error ? error : new Error(String(error))
+    })
+  }, getLeaseRenewalIntervalMs(leaseDurationMs))
+  const maybeUnrefTimer = timer as {unref?: () => void}
+
+  maybeUnrefTimer.unref?.()
+
+  try {
+    const result = await operation()
+
+    if (leaseLostError) {
+      throw leaseLostError
+    }
+
+    return result
+  } finally {
+    clearInterval(timer)
+  }
+}
+
 const getClaimedSourceResult = async ({
   dataSource,
+  fetchLeaseMs,
+  assertSpoolCapacity,
   leaseOwner,
   now,
   providerRegistry,
@@ -113,6 +187,8 @@ const getClaimedSourceResult = async ({
   trackingRepository,
 }: {
   dataSource: DataSourceRecord
+  fetchLeaseMs: number
+  assertSpoolCapacity: () => Promise<void> | void
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
@@ -176,7 +252,28 @@ const getClaimedSourceResult = async ({
   }
 
   try {
-    const result = await trackedImportService.fetchWindowToSpool({dataSource, now, window: selection.window})
+    const result = await withLeaseRenewal({
+      leaseDurationMs: fetchLeaseMs,
+      operation: async () => {
+        return await trackedImportService.fetchWindowToSpool({
+          dataSource,
+          now,
+          onPageSpooled: async ({cursor}) => {
+            await trackingRepository.updateTrackingState(state.dataSourceId, {activeCursor: cursor}, new Date())
+            await assertSpoolCapacity()
+          },
+          window: selection.window,
+        })
+      },
+      renewLease: async ({leaseExpiresAt, now: renewalNow}) => {
+        return await trackingRepository.renewSourceLease({
+          dataSourceId: state.dataSourceId,
+          leaseExpiresAt,
+          leaseOwner,
+          now: renewalNow,
+        })
+      },
+    })
 
     await trackingRepository.releaseSourceLease({dataSourceId: state.dataSourceId, leaseOwner, now})
 
@@ -211,18 +308,24 @@ const getClaimedSourceResult = async ({
 
 const getClaimedReconciliationResult = async ({
   dataSource,
+  fetchLeaseMs,
+  assertSpoolCapacity,
   leaseOwner,
   now,
   providerRegistry,
   reconciliationWorkRepository,
+  trackingRepository,
   trackedImportService,
   work,
 }: {
   dataSource: DataSourceRecord
+  fetchLeaseMs: number
+  assertSpoolCapacity: () => Promise<void> | void
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
   reconciliationWorkRepository: DataSourceReconciliationWorkRepository
+  trackingRepository: DataSourceTrackingRepository
   trackedImportService: DataSourceTrackedImportService
   work: DataSourceReconciliationWorkRecord
 }): Promise<DataSourceTrackingWorkerReconciliationResult> => {
@@ -240,21 +343,50 @@ const getClaimedReconciliationResult = async ({
   }
 
   try {
-    const result = await trackedImportService.fetchReconciliationWorkToSpool({
-      dataSource,
-      now,
-      onPageSpooled: async ({cursor, window}) => {
-        await reconciliationWorkRepository.updateWorkSpoolProgress({cursor, id: work.id, now, spoolWindowId: window.id})
-      },
-      onSpoolWindowCreated: async (window) => {
-        await reconciliationWorkRepository.updateWorkSpoolProgress({
-          cursor: window.cursor,
-          id: work.id,
+    await trackingRepository.startTrackingWindow({
+      activeCursor: work.cursor,
+      ageMonths: work.ageMonths,
+      dataSourceId: work.dataSourceId,
+      runKind: 'reconciliation',
+      windowEnd: work.periodEnd,
+      windowStart: work.periodStart,
+    })
+    const result = await withLeaseRenewal({
+      leaseDurationMs: fetchLeaseMs,
+      operation: async () => {
+        return await trackedImportService.fetchReconciliationWorkToSpool({
+          dataSource,
           now,
-          spoolWindowId: window.id,
+          onPageSpooled: async ({cursor, window}) => {
+            await reconciliationWorkRepository.updateWorkSpoolProgress({
+              cursor,
+              id: work.id,
+              now,
+              spoolWindowId: window.id,
+            })
+            await trackingRepository.updateTrackingState(work.dataSourceId, {activeCursor: cursor}, new Date())
+            await assertSpoolCapacity()
+          },
+          onSpoolWindowCreated: async (window) => {
+            await reconciliationWorkRepository.updateWorkSpoolProgress({
+              cursor: window.cursor,
+              id: work.id,
+              now,
+              spoolWindowId: window.id,
+            })
+            await trackingRepository.updateTrackingState(work.dataSourceId, {activeCursor: window.cursor}, new Date())
+          },
+          work,
         })
       },
-      work,
+      renewLease: async ({leaseExpiresAt, now: renewalNow}) => {
+        return await reconciliationWorkRepository.renewWorkLease({
+          id: work.id,
+          leaseExpiresAt,
+          leaseOwner,
+          now: renewalNow,
+        })
+      },
     })
 
     await reconciliationWorkRepository.updateWorkSpoolProgress({
@@ -280,6 +412,12 @@ const getClaimedReconciliationResult = async ({
       id: work.id,
       leaseOwner,
       nextRetryAt: new Date(now.getTime() + defaultFailureRetryMs),
+      now,
+    })
+    await trackingRepository.recordTrackingFailure({
+      dataSourceId: work.dataSourceId,
+      error: message,
+      nextRunAfter: null,
       now,
     })
 
@@ -327,7 +465,17 @@ export const createDataSourceTrackingWorker = ({
       now,
       routes: [...supportedTrackedImportRoutes],
     })
-    const backpressureSignal = spoolRepository.getBackpressureSignal({maxPendingPages, maxPendingWindows})
+    let backpressureSignal = spoolRepository.getBackpressureSignal({maxPendingPages, maxPendingWindows})
+    const refreshBackpressureSignal = () => {
+      backpressureSignal = spoolRepository.getBackpressureSignal({maxPendingPages, maxPendingWindows})
+
+      return backpressureSignal
+    }
+    const assertSpoolCapacity = () => {
+      if (refreshBackpressureSignal().backpressureActive) {
+        throw new Error('Tracking spool backpressure is active')
+      }
+    }
     const dueSources = await trackingRepository.selectDueSources({
       limit: maxFetchSources,
       now,
@@ -338,7 +486,7 @@ export const createDataSourceTrackingWorker = ({
     let claimedSourceCount = 0
 
     for (const dueSource of dueSources) {
-      if (backpressureSignal.backpressureActive) {
+      if (refreshBackpressureSignal().backpressureActive) {
         sourceResults.push({dataSourceId: dueSource.dataSourceId, reason: 'backpressure', status: 'skipped'})
         continue
       }
@@ -374,6 +522,8 @@ export const createDataSourceTrackingWorker = ({
       sourceResults.push(
         await getClaimedSourceResult({
           dataSource,
+          fetchLeaseMs,
+          assertSpoolCapacity,
           leaseOwner,
           now,
           providerRegistry,
@@ -384,8 +534,12 @@ export const createDataSourceTrackingWorker = ({
       )
     }
 
-    if (!backpressureSignal.backpressureActive) {
+    if (!refreshBackpressureSignal().backpressureActive) {
       for (let index = 0; index < maxReconciliationWork; index += 1) {
+        if (refreshBackpressureSignal().backpressureActive) {
+          break
+        }
+
         const work = await reconciliationWorkRepository.claimNextWork({
           leaseExpiresAt: new Date(now.getTime() + fetchLeaseMs),
           leaseOwner,
@@ -418,10 +572,13 @@ export const createDataSourceTrackingWorker = ({
         reconciliationResults.push(
           await getClaimedReconciliationResult({
             dataSource,
+            fetchLeaseMs,
+            assertSpoolCapacity,
             leaseOwner,
             now,
             providerRegistry,
             reconciliationWorkRepository,
+            trackingRepository,
             trackedImportService,
             work,
           }),
@@ -435,6 +592,27 @@ export const createDataSourceTrackingWorker = ({
       limit: input.ingestLimit ?? defaultIngestLimit,
       now,
     })
+    const cleanupIngested = (
+      spoolRepository as {
+        cleanupIngested?: (input: {ingestedBefore: Date; limit: number}) => {
+          pagesDeleted: number
+          windowsDeleted: number
+        }
+      }
+    ).cleanupIngested
+
+    if (cleanupIngested) {
+      try {
+        cleanupIngested({
+          ingestedBefore: new Date(now.getTime() - defaultSpoolCleanupAgeMs),
+          limit: defaultSpoolCleanupLimit,
+        })
+      } catch (error) {
+        logger.warn('[data-source-tracking] failed to clean up ingested spool payloads', {
+          error: getErrorMessage(error),
+        })
+      }
+    }
     const ingestedWindowCount = ingestResults.filter((result) => {
       return result.status === 'success'
     }).length

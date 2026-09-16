@@ -33,12 +33,22 @@ export const AdminDataSourceTrackingChanges = () => {
   }
   const [changeKind, setChangeKind] = createSignal('')
   const [runKind, setRunKind] = createSignal('')
+  const [cursorStack, setCursorStack] = createSignal<Array<string | null>>([null])
+  const [pageIndex, setPageIndex] = createSignal(0)
+  const currentCursor = () => {
+    return cursorStack()[pageIndex()] ?? null
+  }
+  const resetPagination = () => {
+    setCursorStack([null])
+    setPageIndex(0)
+  }
 
   const changesQuery = useQuery(() => {
     return {
-      queryKey: ['datasource', dataSourceId(), 'trackingChanges', changeKind(), runKind()],
+      queryKey: ['datasource', dataSourceId(), 'trackingChanges', changeKind(), runKind(), currentCursor()],
       queryFn: () => {
         return fetchDataSourceTrackingChanges({
+          after: currentCursor(),
           changeKind: changeKind() || undefined,
           dataSourceId: dataSourceId(),
           limit: pageSize,
@@ -52,8 +62,14 @@ export const AdminDataSourceTrackingChanges = () => {
   const items = () => {
     return changesQuery.data?.items ?? []
   }
-  const total = () => {
-    return changesQuery.data?.total ?? null
+  const nextCursor = () => {
+    return changesQuery.data?.nextCursor ?? null
+  }
+  const pageStart = () => {
+    return items().length === 0 ? 0 : pageIndex() * pageSize + 1
+  }
+  const pageEnd = () => {
+    return pageIndex() * pageSize + items().length
   }
 
   return (
@@ -81,6 +97,7 @@ export const AdminDataSourceTrackingChanges = () => {
                 value={changeKind()}
                 onChange={(event) => {
                   setChangeKind(event.currentTarget.value)
+                  resetPagination()
                 }}
                 class="w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
@@ -98,6 +115,7 @@ export const AdminDataSourceTrackingChanges = () => {
                 value={runKind()}
                 onChange={(event) => {
                   setRunKind(event.currentTarget.value)
+                  resetPagination()
                 }}
                 class="w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
@@ -215,10 +233,37 @@ export const AdminDataSourceTrackingChanges = () => {
 
           <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600 shadow-sm">
             <span>
-              Showing latest {items().length}
-              <Show when={total() !== null}> of {total()}</Show>
+              Showing {pageStart()}-{pageEnd()}
             </span>
-            <span>Filtered by selected change and run kind.</span>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={pageIndex() === 0 || changesQuery.isFetching}
+                onClick={() => {
+                  setPageIndex(Math.max(0, pageIndex() - 1))
+                }}
+                class="rounded-md border border-gray-300 px-3 py-1.5 font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={nextCursor() === null || changesQuery.isFetching}
+                onClick={() => {
+                  const next = nextCursor()
+                  if (next !== null) {
+                    const nextPageIndex = pageIndex() + 1
+                    setCursorStack((stack) => {
+                      return [...stack.slice(0, nextPageIndex), next]
+                    })
+                    setPageIndex(nextPageIndex)
+                  }
+                }}
+                class="rounded-md border border-gray-300 px-3 py-1.5 font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           </div>
         </Show>
       </div>

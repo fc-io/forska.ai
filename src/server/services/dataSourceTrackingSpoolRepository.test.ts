@@ -293,3 +293,64 @@ test('tracking spool never claims fetch-failed windows for DuckDB ingest', () =>
     expect(claim).toEqual([])
   })
 })
+
+test('tracking spool renews owned ingest leases and never reclaims rejected windows', () => {
+  withSpoolRepository((repository) => {
+    const window = repository.createOrResumeWindow({
+      dataSourceId: 'source-1',
+      route: '/api/datasources/import/pubmed',
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-14T00:00:00.000Z'),
+      windowStart: new Date('2026-09-13T00:00:00.000Z'),
+    })
+
+    repository.appendPage({
+      cursorAfter: null,
+      cursorBefore: null,
+      normalizedRecordsJson: [{id: 'article-1'}],
+      pageIndex: 0,
+      rawPayloadJson: {page: 1},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-page-1',
+      windowId: window.id,
+    })
+    repository.markWindowReady({spooledAt: new Date('2026-09-15T09:00:00.000Z'), windowId: window.id})
+
+    const [claim] = repository.claimReadyWindowsForIngest({
+      leaseExpiresAt: new Date('2026-09-15T09:05:00.000Z'),
+      leaseOwner: 'ingest-worker-a',
+      limit: 1,
+      now: new Date('2026-09-15T09:00:00.000Z'),
+    })
+    const wrongOwnerRenewal = repository.renewWindowLease({
+      leaseExpiresAt: new Date('2026-09-15T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker-b',
+      now: new Date('2026-09-15T09:01:00.000Z'),
+      windowId: window.id,
+    })
+    const renewed = repository.renewWindowLease({
+      leaseExpiresAt: new Date('2026-09-15T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker-a',
+      now: new Date('2026-09-15T09:01:00.000Z'),
+      windowId: window.id,
+    })
+    const rejected = repository.markWindowRejected({
+      error: 'route changed',
+      now: new Date('2026-09-15T09:02:00.000Z'),
+      windowId: window.id,
+    })
+    const retryClaim = repository.claimReadyWindowsForIngest({
+      leaseExpiresAt: new Date('2026-09-15T10:05:00.000Z'),
+      leaseOwner: 'ingest-worker-c',
+      limit: 1,
+      now: new Date('2026-09-15T10:00:00.000Z'),
+    })
+
+    expect(claim?.leaseOwner).toBe('ingest-worker-a')
+    expect(wrongOwnerRenewal).toBeNull()
+    expect(renewed?.leaseExpiresAt?.toISOString()).toBe('2026-09-15T09:10:00.000Z')
+    expect(rejected?.status).toBe('rejected')
+    expect(rejected?.lastError).toBe('route changed')
+    expect(retryClaim).toEqual([])
+  })
+})

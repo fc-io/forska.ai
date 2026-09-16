@@ -1,7 +1,13 @@
-type ReviewDetailUnavailableData = {article: null; reason?: string | null; status: 'unavailable'}
+type ReviewDetailUnavailableData = {
+  article: null
+  diagnostics?: {manifest?: {status?: string | null} | null; rejectionReason?: string | null} | null
+  reason?: string | null
+  status: 'unavailable'
+}
 type ReviewDetailArchivedData = {article: null; code: 'PROJECT_ARCHIVED'; message?: string | null; status: 'archived'}
 
 type ReviewDetailNotReadyData = ReviewDetailArchivedData | ReviewDetailUnavailableData
+const terminalUnavailableManifestStatuses = new Set(['failed'])
 
 const isObjectRecord = (data: unknown): data is Record<string, unknown> => {
   return typeof data === 'object' && data !== null
@@ -20,6 +26,18 @@ export const isArchivedReviewDetail = (data: unknown): data is ReviewDetailArchi
   )
 }
 
+export const isTerminallyUnavailableReviewDetail = (data: unknown) => {
+  if (!isUnavailableReviewDetail(data)) {
+    return false
+  }
+
+  const manifest =
+    isObjectRecord(data.diagnostics) && isObjectRecord(data.diagnostics.manifest) ? data.diagnostics.manifest : null
+  const manifestStatus = typeof manifest?.status === 'string' ? manifest.status : null
+
+  return manifestStatus !== null && terminalUnavailableManifestStatuses.has(manifestStatus)
+}
+
 export const getArchivedReviewDetailFromResponseError = (error: unknown): ReviewDetailArchivedData | null => {
   const value = isObjectRecord(error) && isObjectRecord(error.value) ? error.value : null
 
@@ -35,7 +53,7 @@ export const getAvailableReviewDetail = <T,>(
 }
 
 export const getReviewDetailRefetchInterval = (data: unknown) => {
-  return isUnavailableReviewDetail(data) ? 2_000 : false
+  return isUnavailableReviewDetail(data) && !isTerminallyUnavailableReviewDetail(data) ? 2_000 : false
 }
 
 export const getReviewDetailUnavailableMessage = (data: ReviewDetailUnavailableData) => {

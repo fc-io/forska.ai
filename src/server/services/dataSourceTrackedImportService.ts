@@ -22,7 +22,13 @@ export type DataSourceTrackedImportResult =
       window: DataSourceTrackingSpoolWindowRecord
     }
   | {
-      reason: 'already-ingest-failed' | 'already-ingested' | 'already-ready' | 'already-ingesting' | 'retry-not-due'
+      reason:
+        | 'already-ingest-failed'
+        | 'already-ingested'
+        | 'already-ready'
+        | 'already-rejected'
+        | 'already-ingesting'
+        | 'retry-not-due'
       status: 'skipped'
       window: DataSourceTrackingSpoolWindowRecord
     }
@@ -41,6 +47,11 @@ export type DataSourceTrackedImportService = {
   fetchWindowToSpool: (input: {
     dataSource: DataSourceRecord
     now?: Date
+    onPageSpooled?: (input: {
+      cursor: string | null
+      window: DataSourceTrackingSpoolWindowRecord
+    }) => Promise<void> | void
+    onSpoolWindowCreated?: (window: DataSourceTrackingSpoolWindowRecord) => Promise<void> | void
     window: DataSourceTrackingWindow
   }) => Promise<DataSourceTrackedImportResult>
 }
@@ -147,12 +158,41 @@ export const createDataSourceTrackedImportService = ({
       return {reason: 'already-ingest-failed', status: 'skipped', window: spoolWindow}
     }
 
+    if (spoolWindow.status === 'rejected') {
+      return {reason: 'already-rejected', status: 'skipped', window: spoolWindow}
+    }
+
+    const existingPages = spoolRepository.getWindowPages(spoolWindow.id)
+    const existingTerminalPage = existingPages.at(-1)
+
+    if (
+      existingPages.length > 0
+      && existingTerminalPage?.cursorAfter === null
+      && (spoolWindow.status === 'fetching' || spoolWindow.status === 'fetch_failed')
+    ) {
+      const readyWindow = spoolRepository.markWindowReady({spooledAt: new Date(), windowId: spoolWindow.id})
+
+      if (!readyWindow) {
+        throw new Error('Tracking spool window disappeared before it could be marked ready')
+      }
+
+      return {
+        fetchedTotal: existingPages.reduce((sum, page) => {
+          return sum + page.sourceRecordCount
+        }, 0),
+        pageCount: existingPages.length,
+        reason: 'fetched',
+        status: 'spooled',
+        window: readyWindow,
+      }
+    }
+
     if (spoolWindow.status === 'fetch_failed' && spoolWindow.nextRetryAt && spoolWindow.nextRetryAt > now) {
       return {reason: 'retry-not-due', status: 'skipped', window: spoolWindow}
     }
 
     const resumeCursor = spoolRepository.getResumeCursor(spoolWindow.id)
-    const existingPageCount = spoolRepository.getWindowPages(spoolWindow.id).length
+    const existingPageCount = existingPages.length
 
     try {
       const fetchPages = fetchRange ? provider.fetchRangePages : provider.fetchWindowPages
@@ -204,12 +244,16 @@ export const createDataSourceTrackedImportService = ({
   const fetchWindowToSpool: DataSourceTrackedImportService['fetchWindowToSpool'] = async ({
     dataSource,
     now = new Date(),
+    onPageSpooled,
+    onSpoolWindowCreated,
     window,
   }) => {
     return await fetchToSpool({
       dataSource,
       fetchRange: false,
       now,
+      onPageSpooled,
+      onSpoolWindowCreated,
       route: window.route,
       runKind: window.runKind,
       windowEnd: window.windowEnd,

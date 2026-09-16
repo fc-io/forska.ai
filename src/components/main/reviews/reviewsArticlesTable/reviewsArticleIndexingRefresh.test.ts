@@ -4,6 +4,7 @@ import type {ReviewsWarningsData} from '../reviewsWarningsQuery.ts'
 import {
   getReviewArticlesIndexingRefreshSignature,
   getReviewArticlesRefetchInterval,
+  resetReviewArticlesCursorPagination,
 } from './reviewsArticleIndexingRefresh.ts'
 
 const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']> = {}): ReviewsWarningsData => {
@@ -61,5 +62,27 @@ describe('review article indexing refresh helpers', () => {
     const after = getReviewArticlesIndexingRefreshSignature(getWarningsData())
 
     expect(before).not.toBe(after)
+  })
+
+  test('resets cursor pagination state after indexing changes', () => {
+    let currentPage = 3
+    let pageCursors: Record<number, string | null> = {1: null, 2: 'cursor-2', 3: 'cursor-3'}
+    let loadedPages: Record<number, {data: string[]}> = {1: {data: ['article-1']}, 2: {data: ['article-2']}}
+
+    resetReviewArticlesCursorPagination<{data: string[]}>({
+      setCurrentPage: (page) => {
+        currentPage = page
+      },
+      setLoadedPages: (pages) => {
+        loadedPages = pages
+      },
+      setPageCursors: (cursors) => {
+        pageCursors = cursors
+      },
+    })
+
+    expect(currentPage).toBe(1)
+    expect(pageCursors).toEqual({1: null})
+    expect(loadedPages).toEqual({})
   })
 })

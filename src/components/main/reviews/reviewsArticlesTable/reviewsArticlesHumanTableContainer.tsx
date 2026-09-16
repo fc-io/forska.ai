@@ -10,6 +10,7 @@ import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {
   getReviewArticlesIndexingRefreshSignature,
   getReviewArticlesRefetchInterval,
+  resetReviewArticlesCursorPagination,
 } from './reviewsArticleIndexingRefresh.ts'
 import type {ArticleWithHumanJudgments} from './reviewsArticlesHumanTable.tsx'
 import {ReviewsArticlesHumanTable} from './reviewsArticlesHumanTable.tsx'
@@ -103,11 +104,16 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
       return
     }
 
-    if (lastArticleIndexingRefreshSignature === signature) {
+    const previousSignature = lastArticleIndexingRefreshSignature
+
+    if (previousSignature === signature) {
       return
     }
 
     lastArticleIndexingRefreshSignature = signature
+    if (previousSignature !== null) {
+      resetReviewArticlesCursorPagination({setCurrentPage: props.setCurrentPage, setLoadedPages, setPageCursors})
+    }
     void articlesQuery.refetch()
   })
   createEffect(() => {
@@ -187,6 +193,20 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
             const articles = () => {
               return loadedArticles()
             }
+            const articleCountLabel = () => {
+              const totalCount = response().totalCount
+
+              if (totalCount === null) {
+                return (
+                  <span class="inline-flex items-center gap-2">
+                    <span class="text-gray-600">{`Showing 1-${articles().length} of`}</span>
+                    <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                  </span>
+                )
+              }
+
+              return totalCount > 0 ? `Showing 1-${Math.min(articles().length, totalCount)} of ${totalCount}` : '0'
+            }
 
             return (
               <div class="space-y-4">
@@ -195,17 +215,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                     {response().humanJudgmentMode === 'summary'
                       ? 'Articles with Overall Human Answers ('
                       : 'Articles with Human Judgments ('}
-                    {response().totalCount === null ? (
-                      <span class="inline-flex items-center gap-2">
-                        <span class="text-gray-600">{`Showing 1-${articles().length} of`}</span>
-                        <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
-                      </span>
-                    ) : response().totalCount > 0 ? (
-                      `Showing 1-${Math.min(articles().length, response().totalCount)} of ${response().totalCount}`
-                    ) : (
-                      '0'
-                    )}
-                    )
+                    {articleCountLabel()})
                   </h3>
                   <p class="text-sm text-gray-600">
                     {response().humanJudgmentMode === 'summary'

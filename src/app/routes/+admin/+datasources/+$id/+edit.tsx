@@ -345,10 +345,10 @@ export const AdminEditDataSource = () => {
       importRoute: importRouteValue,
       dateFrom: startDateResult.normalized,
       dateTo: endDateResult.normalized,
+      trackingEnabled: trackingEnabled(),
     }
 
     if (isTrackingSupportedImportRoute(importRouteValue) && startDateResult.normalized) {
-      payload.trackingEnabled = trackingEnabled()
       payload.trackingReconcileScheduleMonths = normalizeTrackingScheduleMonths(trackingReconcileScheduleMonths())
     }
 

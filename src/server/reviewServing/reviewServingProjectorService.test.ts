@@ -552,6 +552,39 @@ test('wake routes search dirty work through chunked rebuilds instead of direct p
   expect(releasedClaimIds).toEqual([])
 })
 
+test('wake retains chunked dirty work when an older active rebuild is reused', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    search: [getClaim({component: 'search', dirtyWorkId: 'search-article-1', latestSourceHighWaterMark: 5})],
+  })
+  let runnerCalled = false
+
+  dependencies.requestRebuild = () => {
+    return Effect.succeed({
+      projectId: 'project-1',
+      sourceWatermarksJson: {reviewChange: 4},
+      status: 'admitted',
+    } as never)
+  }
+  dependencies.runners = {
+    search: async () => {
+      runnerCalled = true
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['search'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(runnerCalled).toBe(false)
+  expect(completedClaimIds).toEqual([])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual(['search-article-1'])
+})
+
 test('wake routes high-fanout queue dirty work through chunked rebuilds instead of direct projection', async () => {
   const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     queue: [
