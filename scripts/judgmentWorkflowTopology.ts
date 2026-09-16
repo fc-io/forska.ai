@@ -91,6 +91,33 @@ export const isTopologyJudgmentWorkflowComplete = ({
   return visibleProjectionCount === 4 && hasReconciledProjectRefreshAcks
 }
 
+export const hasTopologyReconciledProjectRefreshAcks = (
+  jobs: Array<{
+    health: {
+      hasOutboxRows: boolean
+      hasPendingCompletionAck: boolean
+      lastAckSeq: number | null
+      outboxRowCount: number
+      pendingCompletionAckCount: number
+    }
+    scanState: {lastProjectRefreshAckSeq: number | null}
+  }>,
+) => {
+  return jobs.every((job) => {
+    if (job.health.lastAckSeq !== null) {
+      return job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
+    }
+
+    return (
+      job.scanState.lastProjectRefreshAckSeq === null
+      && !job.health.hasOutboxRows
+      && !job.health.hasPendingCompletionAck
+      && job.health.outboxRowCount === 0
+      && job.health.pendingCompletionAckCount === 0
+    )
+  })
+}
+
 const startupTimeoutMs = 600_000
 const shutdownTimeoutMs = 30_000
 
@@ -715,9 +742,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     const totalJudgments = evidence.data.judgments.reduce((count, row) => {
       return count + Number(row.count)
     }, 0)
-    const hasReconciledProjectRefreshAcks = evidence.data.jobEvidence.every((job) => {
-      return job.health.lastAckSeq !== null && job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
-    })
+    const hasReconciledProjectRefreshAcks = hasTopologyReconciledProjectRefreshAcks(evidence.data.jobEvidence)
     if (
       isTopologyJudgmentWorkflowComplete({
         hasReconciledProjectRefreshAcks,
