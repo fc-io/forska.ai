@@ -1023,45 +1023,47 @@ export const createDataSourceReconciliationWorkRepository = (
       route?: string
     }): Promise<DataSourceReconciliationWorkRecord | null> => {
       const now = input.now ?? new Date()
-      const routeClause = input.route ? `AND route = ${getSqlLiteral(input.route)}` : ''
+      const routeClause = input.route ? `AND work.route = ${getSqlLiteral(input.route)}` : ''
       const [row] = await database.queryJson<DataSourceReconciliationWorkRow>(
         `
+        WITH claim AS (
+          SELECT work.id
+          FROM app.data_source_reconciliation_work work
+          INNER JOIN app.data_source data_source ON data_source.id = work.data_source_id
+          WHERE work.status IN ('queued', 'failed', 'running')
+            AND data_source.tracking_enabled = TRUE
+            AND data_source.archived = FALSE
+            AND data_source.import_route = work.route
+            AND (
+              work.run_kind <> 'automatic_age_bucket'
+              OR (
+                work.age_months IS NOT NULL
+                AND json_contains(data_source.tracking_reconcile_schedule_months, CAST(work.age_months AS JSON))
+              )
+            )
+            AND (
+              work.status != 'failed'
+              OR work.next_retry_at IS NULL
+              OR work.next_retry_at <= ${getSqlLiteral(now)}
+            )
+            AND (
+              work.status != 'running'
+              OR work.lease_owner IS NULL
+              OR work.lease_expires_at IS NULL
+              OR work.lease_expires_at <= ${getSqlLiteral(now)}
+            )
+            ${routeClause}
+          ORDER BY work.scheduled_at ASC, work.period_start ASC, work.id ASC
+          LIMIT 1
+        )
         UPDATE app.data_source_reconciliation_work
         SET status = 'running',
             lease_owner = ${getSqlLiteral(input.leaseOwner)},
             lease_expires_at = ${getSqlLiteral(input.leaseExpiresAt)},
             started_at = COALESCE(started_at, ${getSqlLiteral(now)}),
             updated_at = ${getSqlLiteral(now)}
-	        WHERE id = (
-	          SELECT work.id
-	          FROM app.data_source_reconciliation_work work
-	          INNER JOIN app.data_source data_source ON data_source.id = work.data_source_id
-	          WHERE work.status IN ('queued', 'failed', 'running')
-	            AND data_source.tracking_enabled = TRUE
-	            AND data_source.archived = FALSE
-	            AND data_source.import_route = work.route
-	            AND (
-	              work.run_kind <> 'automatic_age_bucket'
-	              OR (
-	                work.age_months IS NOT NULL
-	                AND json_contains(data_source.tracking_reconcile_schedule_months, CAST(work.age_months AS JSON))
-	              )
-	            )
-	            AND (
-	              work.status != 'failed'
-	              OR work.next_retry_at IS NULL
-	              OR work.next_retry_at <= ${getSqlLiteral(now)}
-	            )
-	            AND (
-	              work.status != 'running'
-	              OR work.lease_owner IS NULL
-	              OR work.lease_expires_at IS NULL
-	              OR work.lease_expires_at <= ${getSqlLiteral(now)}
-	            )
-	            ${routeClause ? routeClause.replaceAll('route', 'work.route') : ''}
-	          ORDER BY work.scheduled_at ASC, work.period_start ASC, work.id ASC
-	          LIMIT 1
-	        )
+        FROM claim
+        WHERE data_source_reconciliation_work.id = claim.id
 	        RETURNING ${reconciliationWorkSelectSql}
 	      `,
         trackingRepositoryWorkload('dataSourceTracking.reconciliation.claim', 1),
