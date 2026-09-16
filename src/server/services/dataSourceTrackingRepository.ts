@@ -634,6 +634,33 @@ export const createDataSourceTrackingRepository = (
 
       return row ? getTrackingStateRecordFromRow(row) : null
     },
+    claimImportLease: async (input: {
+      dataSourceId: string
+      leaseExpiresAt: Date
+      leaseOwner: string
+      now?: Date
+    }): Promise<DataSourceTrackingStateRecord | null> => {
+      const now = input.now ?? new Date()
+      const [row] = await database.queryJson<DataSourceTrackingStateRow>(
+        `
+        UPDATE app.data_source_tracking_state
+        SET lease_owner = ${getSqlLiteral(input.leaseOwner)},
+            lease_expires_at = ${getSqlLiteral(input.leaseExpiresAt)},
+            last_attempt_at = ${getSqlLiteral(now)},
+            updated_at = ${getSqlLiteral(now)}
+        WHERE data_source_id = ${getSqlLiteral(input.dataSourceId)}
+          AND (
+            lease_owner IS NULL
+            OR lease_expires_at IS NULL
+            OR lease_expires_at <= ${getSqlLiteral(now)}
+          )
+        RETURNING ${trackingStateSelectSql}
+      `,
+        trackingRepositoryWorkload('dataSourceTracking.state.claimImportLease', 1),
+      )
+
+      return row ? getTrackingStateRecordFromRow(row) : null
+    },
     createOrUpdateTrackingState: async (
       input: CreateOrUpdateTrackingStateInput,
     ): Promise<DataSourceTrackingStateRecord> => {

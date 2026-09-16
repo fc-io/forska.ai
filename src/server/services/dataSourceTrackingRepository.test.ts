@@ -123,6 +123,65 @@ test('data source tracking state advances high water only through success transi
   })
 })
 
+test('manual imports share the tracking lease with continuous tracking claims', async () => {
+  await withTrackingDatabase(async (database) => {
+    const trackingRepository = createDataSourceTrackingRepository(database)
+    const sourceId = 'tracking-source-manual-lease'
+    const route = '/api/datasources/import/pubmed'
+
+    await database.run(`
+      INSERT INTO app.data_source (id, title, import_route, tracking_enabled, date_from)
+      VALUES ('${sourceId}', 'Tracked source', '${route}', TRUE, TIMESTAMPTZ '2026-09-01T00:00:00.000Z')
+    `)
+
+    await trackingRepository.createOrUpdateTrackingState({
+      dataSourceId: sourceId,
+      granularity: 'day',
+      nextRunAfter: new Date('2026-09-15T09:00:00.000Z'),
+      route,
+    })
+
+    const manualClaim = await trackingRepository.claimImportLease({
+      dataSourceId: sourceId,
+      leaseExpiresAt: new Date('2026-09-15T10:10:00.000Z'),
+      leaseOwner: 'manual-import',
+      now: new Date('2026-09-15T10:00:00.000Z'),
+    })
+    const trackingClaimWhileManualRuns = await trackingRepository.claimDueSource({
+      dataSourceId: sourceId,
+      leaseExpiresAt: new Date('2026-09-15T10:15:00.000Z'),
+      leaseOwner: 'tracking-worker',
+      now: new Date('2026-09-15T10:01:00.000Z'),
+    })
+
+    expect(manualClaim?.leaseOwner).toBe('manual-import')
+    expect(trackingClaimWhileManualRuns).toBeNull()
+
+    await trackingRepository.releaseSourceLease({
+      dataSourceId: sourceId,
+      leaseOwner: 'manual-import',
+      now: new Date('2026-09-15T10:02:00.000Z'),
+    })
+    const trackingClaimAfterRelease = await trackingRepository.claimDueSource({
+      dataSourceId: sourceId,
+      leaseExpiresAt: new Date('2026-09-15T10:20:00.000Z'),
+      leaseOwner: 'tracking-worker',
+      now: new Date('2026-09-15T10:03:00.000Z'),
+    })
+
+    expect(trackingClaimAfterRelease?.leaseOwner).toBe('tracking-worker')
+
+    const manualClaimWhileTrackingRuns = await trackingRepository.claimImportLease({
+      dataSourceId: sourceId,
+      leaseExpiresAt: new Date('2026-09-15T10:25:00.000Z'),
+      leaseOwner: 'manual-import-2',
+      now: new Date('2026-09-15T10:04:00.000Z'),
+    })
+
+    expect(manualClaimWhileTrackingRuns).toBeNull()
+  })
+})
+
 test('data source tracking state resets window progress when the tracked route changes', async () => {
   await withTrackingDatabase(async (database) => {
     const trackingRepository = createDataSourceTrackingRepository(database)
