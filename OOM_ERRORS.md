@@ -1,5 +1,13 @@
 # OOM Errors
 
+## 2026-09-16 - Data Source Reconciliation Finalization
+
+- Error: Large continuous-tracking reconciliation windows could accumulate every spooled source-record key in memory and emit one oversized finalization predicate, risking owner OOM during stale-source deletion.
+- Context: `dataSourceTrackingSpoolIngester` finalizing automatic age-bucket or manual full-range reconciliation work from SQLite spool pages into DuckDB.
+- Cause: Page ingest had been batched, but the reconciliation membership set was still represented as one in-process array / SQL list before finalizing deleted source records.
+- Fix: Persist accepted source-record keys in the SQLite spool manifest, stream them back in bounded batches, and load those batches into a DuckDB temp relation for period-scoped finalization.
+- Verification: `bun test src/server/services/dataSourceTrackingSpoolRepository.test.ts src/server/services/dataSourceTrackingWorker.test.ts src/server/services/dataSourceTrackedImportService.test.ts src/server/services/articleImportReconciliationPeriod.test.ts scripts/judgmentWorkflowTopology.test.ts --timeout 120000`; `bun test src/server/services/dataSourceTrackingSpoolIngester.test.ts --timeout 120000`; `bun run test:judgment-workflow:topology`; current-DB smoke via `bun test scripts/runWithRuntimeProfile.test.ts -t "current-db network smoke includes read-only browser and mutation-enabled split-stack phases" --timeout 120000`.
+
 ## 2026-09-08 - Preserve committed WAL after native-query recovery failures
 
 - Error: A native `Vector::Reference` failure was followed by an extension/replay startup error; automatic WAL quarantine then reopened the last checkpoint without the newly committed `app` schema. A preflight OOM or native signal could take the same path.

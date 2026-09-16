@@ -32,6 +32,19 @@ const getDataSource = (): DataSourceRecord => {
   }
 }
 
+const getDataSourceFenceRows = (dataSource: DataSourceRecord = getDataSource()) => {
+  return [
+    {
+      archived: dataSource.archived,
+      dateFrom: dataSource.dateFrom,
+      dateTo: dataSource.dateTo,
+      importRoute: dataSource.importRoute,
+      trackingEnabled: dataSource.trackingEnabled,
+      updatedAt: dataSource.updatedAt,
+    },
+  ]
+}
+
 const withSpoolRepository = async <T>(
   operation: (repository: ReturnType<typeof createDataSourceTrackingSpoolRepository>) => Promise<T>,
 ) => {
@@ -101,7 +114,7 @@ test('spool ingester uses a background DuckDB transaction before advancing high 
         order.push('duckdb:transaction-background:start')
         const result = await operation({
           queryJson: async () => {
-            return []
+            return getDataSourceFenceRows()
           },
           run: async () => {
             return undefined
@@ -186,6 +199,8 @@ test('spool ingester uses a background DuckDB transaction before advancing high 
       'duckdb:transaction-background:start',
       'duckdb:store-imported-articles',
       'duckdb:transaction-background:commit',
+      'duckdb:transaction-background:start',
+      'duckdb:transaction-background:commit',
       'datasource:count-linked',
       'datasource:update-after-import',
       'tracking:success',
@@ -212,7 +227,7 @@ test('spool ingester uses reconciliation sync semantics and completes work after
         order.push('duckdb:transaction-background:start')
         const result = await operation({
           queryJson: async () => {
-            return []
+            return getDataSourceFenceRows()
           },
           run: async () => {
             return undefined
@@ -324,6 +339,8 @@ test('spool ingester uses reconciliation sync semantics and completes work after
       'duckdb:transaction-background:start',
       'duckdb:finalize-reconciliation-period',
       'duckdb:transaction-background:commit',
+      'duckdb:transaction-background:start',
+      'duckdb:transaction-background:commit',
       'datasource:count-linked',
       'datasource:update-after-import',
       `work:completed:${readyWindow.id}:data-source-tracking:${readyWindow.id}`,
@@ -381,7 +398,7 @@ test('spool ingester stores reconciliation pages in bounded batches before final
         transactionBackground: async <T>(operation: (tx: ArticleImportStoreTx) => Promise<T>) => {
           return await operation({
             queryJson: async () => {
-              return []
+              return getDataSourceFenceRows()
             },
             run: async () => {
               return undefined
@@ -460,6 +477,110 @@ test('spool ingester stores reconciliation pages in bounded batches before final
       {afterPageIndex: 1, limit: 1},
     ])
     expect(storedBatches).toEqual([['pmid:1'], ['pmid:2']])
+  })
+})
+
+test('spool ingester fences each page batch against mid-run configuration edits', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const readyWindow = createReadyWindow(spoolRepository, {
+      runKind: 'manual_full_range',
+      windowEnd: new Date('2026-07-01T00:00:00.000Z'),
+      windowStart: new Date('2026-06-01T00:00:00.000Z'),
+    })
+    spoolRepository.appendPage({
+      cursorAfter: null,
+      cursorBefore: 'cursor-page-1',
+      normalizedRecordsJson: [
+        {
+          articleCreatedAt: '2026-06-02T00:00:00.000Z',
+          articleId: 'pmid:2',
+          articleTitle: 'Article 2',
+          importRoute: pubmedTrackedImportRoute,
+        },
+      ],
+      pageIndex: 1,
+      rawPayloadJson: {page: 2},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-page-2',
+      windowId: readyWindow.id,
+    })
+    let transactionCount = 0
+    const storedBatches: string[][] = []
+    const ingester = createDataSourceTrackingSpoolIngester({
+      dataSourceQueryService: {
+        countArticlesLinkedToImportRoute: async () => {
+          return 0
+        },
+        getDataSourceById: async () => {
+          return getDataSource()
+        },
+        updateDataSourceAfterImport: async () => {
+          return getDataSource()
+        },
+      } as never,
+      database: {
+        transactionBackground: async <T>(operation: (tx: ArticleImportStoreTx) => Promise<T>) => {
+          transactionCount += 1
+
+          return await operation({
+            queryJson: async () => {
+              return transactionCount === 1
+                ? getDataSourceFenceRows()
+                : getDataSourceFenceRows({...getDataSource(), updatedAt: new Date('2026-09-16T10:00:00.000Z')})
+            },
+            run: async () => {
+              return undefined
+            },
+          })
+        },
+      } as never,
+      reconciliationWorkRepository: {
+        markWorkCompletedForSpoolWindow: async () => {
+          throw new Error('stale config should not complete reconciliation work')
+        },
+        markWorkFailedForSpoolWindow: async () => {
+          return null
+        },
+      } as never,
+      spoolRepository,
+      finalizeImportedArticlesForReconciliationPeriodWithTx: async () => {
+        throw new Error('stale config should not finalize reconciliation deletes')
+      },
+      storeImportedArticlesForReconciliationBatchWithTx: async (input) => {
+        storedBatches.push(
+          input.rows.map((row) => {
+            return row.articleId
+          }),
+        )
+        return {acceptedCount: input.rows.length, importRouteIds: ['route-id-1'], sourceRecordKeys: ['pmid:1']}
+      },
+      trackingRepository: {
+        recordReconciliationSuccess: async () => {
+          throw new Error('stale config should not record reconciliation success')
+        },
+        recordTrackingFailure: async () => {
+          return null
+        },
+      } as never,
+    })
+
+    const result = await ingester.drainReadyWindows({
+      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker',
+      limit: 1,
+      now: new Date('2026-09-16T09:00:00.000Z'),
+    })
+    const failedWindow = spoolRepository.getWindow(readyWindow.id)
+
+    expect(result).toMatchObject([
+      {
+        error: 'Tracked data source configuration changed during spool ingest',
+        reason: 'store-failed',
+        status: 'failed',
+      },
+    ])
+    expect(storedBatches).toEqual([['pmid:1']])
+    expect(failedWindow?.status).toBe('ingest_failed')
   })
 })
 
@@ -599,7 +720,7 @@ test('spool ingester stops state updates when the ingest lease is lost after Duc
           order.push('duckdb:transaction')
           return await operation({
             queryJson: async () => {
-              return []
+              return getDataSourceFenceRows()
             },
             run: async () => {
               return undefined
@@ -661,13 +782,14 @@ test('spool ingester stops state updates when the ingest lease is lost after Duc
 
 test('spool ingester preserves a failed window for retry when DuckDB storage fails', async () => {
   await withSpoolRepository(async (spoolRepository) => {
+    const originalDateNow = Date.now
     const order: string[] = []
     const readyWindow = createReadyWindow(spoolRepository)
     const database = {
       transactionBackground: async <T>(operation: (tx: ArticleImportStoreTx) => Promise<T>) => {
         return await operation({
           queryJson: async () => {
-            return []
+            return getDataSourceFenceRows()
           },
           run: async () => {
             return undefined
@@ -726,18 +848,27 @@ test('spool ingester preserves a failed window for retry when DuckDB storage fai
         },
       } as never,
     })
-    const result = await ingester.drainReadyWindows({
-      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
-      leaseOwner: 'ingest-worker',
-      limit: 1,
-      now: new Date('2026-09-16T09:00:00.000Z'),
-    })
+    Date.now = () => {
+      return new Date('2026-09-16T09:30:00.000Z').getTime()
+    }
+
+    const result = await ingester
+      .drainReadyWindows({
+        leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+        leaseOwner: 'ingest-worker',
+        limit: 1,
+        now: new Date('2026-09-16T09:00:00.000Z'),
+      })
+      .finally(() => {
+        Date.now = originalDateNow
+      })
     const failedWindow = spoolRepository.getWindow(readyWindow.id)
     const pages = spoolRepository.getWindowPages(readyWindow.id)
 
     expect(result).toMatchObject([{error: 'duckdb busy', reason: 'store-failed', status: 'failed'}])
     expect(failedWindow?.status).toBe('ingest_failed')
     expect(failedWindow?.lastError).toBe('duckdb busy')
+    expect(failedWindow?.nextRetryAt?.toISOString()).toBe('2026-09-16T09:35:00.000Z')
     expect(pages[0]?.duckdbIngestedAt).toBeNull()
     expect(order).toEqual(['tracking:failure'])
   })
@@ -755,7 +886,7 @@ test('spool ingester keeps reconciliation work retryable when DuckDB storage fai
       transactionBackground: async <T>(operation: (tx: ArticleImportStoreTx) => Promise<T>) => {
         return await operation({
           queryJson: async () => {
-            return []
+            return getDataSourceFenceRows()
           },
           run: async () => {
             return undefined

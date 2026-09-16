@@ -1007,25 +1007,23 @@ export const dataSourcesRoutes = new Elysia()
             trackingEnabled: updated.trackingEnabled ?? false,
           })
 
-          if (updated.trackingEnabled) {
-            await resetTrackingStateAfterConfigurationChange(tx, {
+          await resetTrackingStateAfterConfigurationChange(tx, {
+            dataSourceId: updated.id,
+            resetHighWater: startBoundaryMovedEarlier || importRouteChanged,
+            resetReconciliationScheduler: dateBoundsChanged || importRouteChanged || trackingScheduleChanged,
+            resetWindow: dateBoundsChanged || importRouteChanged,
+          })
+
+          if (dateBoundsChanged) {
+            await deleteReconciliationWorkOutsideBounds(tx, {
               dataSourceId: updated.id,
-              resetHighWater: startBoundaryMovedEarlier || importRouteChanged,
-              resetReconciliationScheduler: dateBoundsChanged || importRouteChanged || trackingScheduleChanged,
-              resetWindow: dateBoundsChanged || importRouteChanged,
+              dateFrom: nextDateFrom,
+              dateTo: nextDateTo,
             })
+          }
 
-            if (dateBoundsChanged) {
-              await deleteReconciliationWorkOutsideBounds(tx, {
-                dataSourceId: updated.id,
-                dateFrom: nextDateFrom,
-                dateTo: nextDateTo,
-              })
-            }
-
-            if (importRouteChanged) {
-              await deleteReconciliationWorkForStaleRoute(tx, {dataSourceId: updated.id, route: updated.importRoute})
-            }
+          if (importRouteChanged) {
+            await deleteReconciliationWorkForStaleRoute(tx, {dataSourceId: updated.id, route: updated.importRoute})
           }
 
           return getDataSourceRow(tx, updated.id)

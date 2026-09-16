@@ -282,6 +282,7 @@ test('data source tracking worker rechecks backpressure after each spooled page'
     leaseOwner: 'worker',
   }
   let pageSpooled = false
+  const backpressureExcludeWindowIds: Array<string | undefined> = []
   const worker = createDataSourceTrackingWorker({
     dataSourceQueryService: {
       getDataSourceById: async (id: string) => {
@@ -350,6 +351,7 @@ test('data source tracking worker rechecks backpressure after each spooled page'
     },
     spoolRepository: {
       getBackpressureSignal: (input?: {excludeWindowId?: string}) => {
+        backpressureExcludeWindowIds.push(input?.excludeWindowId)
         const ownerWindowExcluded = input?.excludeWindowId === 'window-1'
 
         return {
@@ -379,11 +381,11 @@ test('data source tracking worker rechecks backpressure after each spooled page'
         }) => Promise<void> | void
       }) => {
         calls.push('source:fetch')
-        pageSpooled = true
         await input.assertPageAppendAllowed?.({
           cursor: 'cursor-after-page',
           window: {cursor: 'cursor-after-page', id: 'window-1'},
         })
+        pageSpooled = true
         await input.onPageSpooled?.({
           cursor: 'cursor-after-page',
           window: {cursor: 'cursor-after-page', id: 'window-1'},
@@ -428,6 +430,7 @@ test('data source tracking worker rechecks backpressure after each spooled page'
   const result = await worker.wake({maxFetchSources: 2, now})
 
   expect(result.backpressureActive).toBe(true)
+  expect(backpressureExcludeWindowIds).not.toContain('window-1')
   expect(result.sourceResults).toEqual([
     {dataSourceId: 'source-1', pageCount: 1, reason: 'fetched', status: 'spooled', windowId: 'window-1'},
     {dataSourceId: 'source-2', reason: 'backpressure', status: 'skipped'},

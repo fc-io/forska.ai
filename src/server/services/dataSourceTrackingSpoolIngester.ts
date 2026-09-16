@@ -1,5 +1,6 @@
 import type {DataSourceRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
+import {getSqlLiteral} from './appQueryHelpers.ts'
 import type {ArticleImportStoreRow, ArticleImportStoreTx} from './articleImportStoreService.ts'
 import {
   articleImportStoreWorkloadContext,
@@ -70,6 +71,10 @@ const millisecondsPerDay = 24 * 60 * 60 * 1000
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
+}
+
+const getRetryBaseNow = (startedAt: Date) => {
+  return new Date(Math.max(Date.now(), startedAt.getTime()))
 }
 
 const getUtcDayStart = (date: Date) => {
@@ -156,6 +161,67 @@ const isWindowWithinDataSourceBounds = (window: DataSourceTrackingSpoolWindowRec
   }
 
   return !endExclusive || getWindowExclusiveEnd(window).getTime() <= endExclusive.getTime()
+}
+
+const getDateTimeKey = (value: unknown) => {
+  const date = getDateOrNull(value)
+
+  return date ? date.toISOString() : null
+}
+
+const assertWindowStillMatchesDataSourceConfigWithTx = async (
+  tx: ArticleImportStoreTx,
+  window: DataSourceTrackingSpoolWindowRecord,
+  dataSource: DataSourceRecord,
+) => {
+  const [row] = await tx.queryJson<{
+    archived: boolean | null
+    dateFrom: unknown
+    dateTo: unknown
+    importRoute: string | null
+    trackingEnabled: boolean | null
+    updatedAt: unknown
+  }>(`
+    SELECT
+      archived,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      import_route AS importRoute,
+      tracking_enabled AS trackingEnabled,
+      updated_at AS updatedAt
+    FROM app.data_source
+    WHERE id = ${getSqlLiteral(window.dataSourceId)}
+    LIMIT 1
+  `)
+
+  if (!row) {
+    throw new Error('Tracked data source was removed during spool ingest')
+  }
+
+  if (getDateTimeKey(row.updatedAt) !== getDateTimeKey(dataSource.updatedAt)) {
+    throw new Error('Tracked data source configuration changed during spool ingest')
+  }
+
+  if (row.importRoute !== window.route) {
+    throw new Error('Tracked data source route changed during spool ingest')
+  }
+
+  const currentDataSource: DataSourceRecord = {
+    ...dataSource,
+    archived: row.archived === true,
+    dateFrom: getDateOrNull(row.dateFrom),
+    dateTo: getDateOrNull(row.dateTo),
+    importRoute: row.importRoute,
+    trackingEnabled: row.trackingEnabled === true,
+  }
+
+  if (currentDataSource.archived || !currentDataSource.trackingEnabled) {
+    throw new Error('Tracked data source was disabled during spool ingest')
+  }
+
+  if (!isWindowWithinDataSourceBounds(window, currentDataSource)) {
+    throw new Error('Tracked data source bounds changed during spool ingest')
+  }
 }
 
 export const createDataSourceTrackingSpoolIngester = ({
@@ -368,6 +434,8 @@ export const createDataSourceTrackingSpoolIngester = ({
 
         const records = getNormalizedRecordsFromPages(pageBatch, importRunId)
         const storeResult = await transaction(async (tx) => {
+          await assertWindowStillMatchesDataSourceConfigWithTx(tx, window, dataSource)
+
           if (window.runKind === 'incremental') {
             return {...(await storeImportedArticlesWithTx(tx, records)), sourceRecordKeys: []}
           }
@@ -420,6 +488,8 @@ export const createDataSourceTrackingSpoolIngester = ({
 
         renewWindowLease()
         await transaction(async (tx) => {
+          await assertWindowStillMatchesDataSourceConfigWithTx(tx, window, dataSource)
+
           return await finalizeImportedArticlesForReconciliationPeriodWithTx({
             changeLogContext: {
               dataSourceId: window.dataSourceId,
@@ -439,6 +509,9 @@ export const createDataSourceTrackingSpoolIngester = ({
 
       clearInterval(leaseRenewalTimer)
       leaseRenewalTimer = null
+      await transaction(async (tx) => {
+        await assertWindowStillMatchesDataSourceConfigWithTx(tx, window, dataSource)
+      }, articleImportStoreWorkloadContext)
       renewWindowLease()
       const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
         dateFrom: dataSource.dateFrom,
@@ -504,25 +577,26 @@ export const createDataSourceTrackingSpoolIngester = ({
       }
 
       const errorMessage = getErrorMessage(error)
-      const nextRetryAt = new Date(now.getTime() + defaultRetryDelayMs)
+      const failureNow = getRetryBaseNow(now)
+      const nextRetryAt = new Date(failureNow.getTime() + defaultRetryDelayMs)
 
       if (error instanceof SpoolIngestLeaseLostError) {
         return {error: errorMessage, reason: 'lease-lost', status: 'failed', windowId: window.id}
       }
 
-      spoolRepository.markWindowFailed({error: errorMessage, nextRetryAt, now, windowId: window.id})
+      spoolRepository.markWindowFailed({error: errorMessage, nextRetryAt, now: failureNow, windowId: window.id})
       if (window.runKind === 'incremental') {
         await trackingRepository.recordTrackingFailure({
           dataSourceId: window.dataSourceId,
           error: errorMessage,
           nextRunAfter: nextRetryAt,
-          now,
+          now: failureNow,
         })
       } else {
         await reconciliationWorkRepository.markWorkFailedForSpoolWindow({
           error: errorMessage,
           nextRetryAt,
-          now,
+          now: failureNow,
           spoolWindowId: window.id,
         })
       }

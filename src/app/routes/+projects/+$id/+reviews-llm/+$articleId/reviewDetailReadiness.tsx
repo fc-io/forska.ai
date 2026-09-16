@@ -2,6 +2,7 @@ type ReviewDetailUnavailableData = {
   article: null
   diagnostics?: {manifest?: {status?: string | null} | null; rejectionReason?: string | null} | null
   reason?: string | null
+  repairRequested?: boolean | null
   status: 'unavailable'
 }
 type ReviewDetailArchivedData = {article: null; code: 'PROJECT_ARCHIVED'; message?: string | null; status: 'archived'}
@@ -28,6 +29,10 @@ export const isArchivedReviewDetail = (data: unknown): data is ReviewDetailArchi
 
 export const isTerminallyUnavailableReviewDetail = (data: unknown) => {
   if (!isUnavailableReviewDetail(data)) {
+    return false
+  }
+
+  if (data.repairRequested === true) {
     return false
   }
 

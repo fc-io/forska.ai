@@ -199,7 +199,7 @@ const getClaimedSourceResult = async ({
 }: {
   dataSource: DataSourceRecord
   fetchLeaseMs: number
-  assertSpoolCapacity: (input?: {windowId?: string}) => Promise<void> | void
+  assertSpoolCapacity: () => Promise<void> | void
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
@@ -267,9 +267,9 @@ const getClaimedSourceResult = async ({
       leaseDurationMs: fetchLeaseMs,
       operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchWindowToSpool({
-          assertPageAppendAllowed: async ({window}) => {
+          assertPageAppendAllowed: async () => {
             await assertLeaseOwned()
-            await assertSpoolCapacity({windowId: window.id})
+            await assertSpoolCapacity()
             await assertLeaseOwned()
           },
           dataSource,
@@ -338,7 +338,7 @@ const getClaimedReconciliationResult = async ({
 }: {
   dataSource: DataSourceRecord
   fetchLeaseMs: number
-  assertSpoolCapacity: (input?: {windowId?: string}) => Promise<void> | void
+  assertSpoolCapacity: () => Promise<void> | void
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
@@ -373,9 +373,9 @@ const getClaimedReconciliationResult = async ({
       leaseDurationMs: fetchLeaseMs,
       operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchReconciliationWorkToSpool({
-          assertPageAppendAllowed: async ({window}) => {
+          assertPageAppendAllowed: async () => {
             await assertLeaseOwned()
-            await assertSpoolCapacity({windowId: window.id})
+            await assertSpoolCapacity()
             await assertLeaseOwned()
           },
           dataSource,
@@ -498,12 +498,8 @@ export const createDataSourceTrackingWorker = ({
 
       return backpressureSignal
     }
-    const assertSpoolCapacity = (capacityInput: {windowId?: string} = {}) => {
-      const signal = spoolRepository.getBackpressureSignal({
-        excludeWindowId: capacityInput.windowId,
-        maxPendingPages,
-        maxPendingWindows,
-      })
+    const assertSpoolCapacity = () => {
+      const signal = spoolRepository.getBackpressureSignal({maxPendingPages, maxPendingWindows})
 
       backpressureSignal = signal
 

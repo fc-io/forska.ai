@@ -46,6 +46,23 @@ test('review detail readiness helpers stop polling terminal unavailable detail s
   expect(getReviewDetailRefetchInterval(terminalUnavailable)).toBe(false)
 })
 
+test('review detail readiness helpers keep polling terminal manifest when repair was requested', () => {
+  const repairUnavailable = {
+    article: null,
+    diagnostics: {
+      manifest: {detailReadiness: 'unavailable', lastError: 'projection failed', status: 'failed'},
+      rejectionReason: 'manifestStatusRejected',
+    },
+    reason: 'manifestStatusRejected',
+    repairRequested: true,
+    status: 'unavailable',
+  } as const
+
+  expect(isUnavailableReviewDetail(repairUnavailable)).toBe(true)
+  expect(isTerminallyUnavailableReviewDetail(repairUnavailable)).toBe(false)
+  expect(getReviewDetailRefetchInterval(repairUnavailable)).toBe(2_000)
+})
+
 test('review detail readiness helpers distinguish archived projects from unavailable V4 detail state', () => {
   const archived = {
     article: null,
