@@ -243,4 +243,41 @@ describe('data source edit tracking status', () => {
       container.remove()
     }
   })
+
+  test('polls persisted tracking status without overwriting unsaved form fields', async () => {
+    const {container, dispose, queryClient} = await renderEditPage()
+
+    try {
+      const titleInput = getTextInputByValue(container, 'Original title')
+      expect(titleInput).toBeInstanceOf(HTMLInputElement)
+
+      if (titleInput) {
+        titleInput.value = 'Unsaved local title'
+        titleInput.dispatchEvent(new Event('input', {bubbles: true}))
+      }
+
+      mockState.dataSource = {
+        ...(mockState.dataSource ?? buildDataSource()),
+        title: 'Server title should not hydrate form',
+        trackingState: {
+          granularity: 'day',
+          highWaterCompletedAt: '2026-01-06T00:00:00.000Z',
+          lastSuccessAt: '2026-01-06T00:00:00.000Z',
+          nextRunAfter: '2026-01-07T00:00:00.000Z',
+          pendingReconciliationCount: 7,
+        },
+      }
+
+      await queryClient.refetchQueries({queryKey: ['datasource', 'source-1', 'tracking-status']})
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('7')
+        expect(titleInput?.value).toBe('Unsaved local title')
+      })
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
 })

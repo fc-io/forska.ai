@@ -9388,6 +9388,10 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
     resolve(migrationsFolder, '0078_articleImportRouteSourceRecords.sql'),
     'utf8',
   )
+  const sourceArticleCreatedAtMigrationSql = readFileSync(
+    resolve(migrationsFolder, '0236_articleImportSourceArticleCreatedAt.sql'),
+    'utf8',
+  )
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -9518,6 +9522,8 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
     expect(importRouteColumnNames).toContain('raw_payload')
     expect(sourceRecordColumnNames).toContain('source_article_created_at')
     expect(sourceRecordMigrationSql).toContain('SET external_article_id =')
+    expect(sourceArticleCreatedAtMigrationSql).toContain('json_extract_string(raw_payload')
+    expect(sourceArticleCreatedAtMigrationSql).not.toContain('article.article_created_at')
     expect(currentUniqueColumns).toContainEqual(['article_id', 'import_route_id'])
     expect(sourceRecordUniqueColumns).toContainEqual(['import_route_id', 'source_record_key'])
     expect(indexNames).toContain('idx_app_article_import_route_article_id')

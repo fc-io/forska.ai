@@ -205,6 +205,18 @@ export const AdminEditDataSource = () => {
       staleTime: 5 * 60 * 1000,
     }
   })
+  const trackingStatusQuery = useQuery(() => {
+    return {
+      enabled: Boolean(dataSourceQuery.data),
+      queryKey: ['datasource', dataSourceId(), 'tracking-status'],
+      queryFn: () => {
+        return fetchDataSourceById(dataSourceId())
+      },
+      refetchInterval: 5000,
+      refetchOnWindowFocus: false,
+      staleTime: 0,
+    }
+  })
 
   const [title, setTitle] = createSignal('')
   const [description, setDescription] = createSignal('')
@@ -287,6 +299,28 @@ export const AdminEditDataSource = () => {
     setTrackingEnabled(data.trackingEnabled)
     setTrackingReconcileScheduleMonths(data.trackingReconcileScheduleMonths)
     setHydratedDataSourceId(data.id)
+  })
+
+  createEffect(() => {
+    const data = trackingStatusQuery.data
+
+    if (!data) return
+
+    setTrackingState(data.trackingState)
+    setPersistedTrackingEnabled(data.trackingEnabled)
+    setPersistedTrackingReconcileScheduleMonths(data.trackingReconcileScheduleMonths)
+    setPersistedImportRoute(data.importRoute)
+    queryClient.setQueryData(['datasource', dataSourceId()], (previous: AdminDataSourceDetail | undefined) => {
+      return previous
+        ? {
+            ...previous,
+            importRoute: data.importRoute,
+            trackingEnabled: data.trackingEnabled,
+            trackingReconcileScheduleMonths: data.trackingReconcileScheduleMonths,
+            trackingState: data.trackingState,
+          }
+        : data
+    })
   })
 
   createEffect(() => {

@@ -2644,6 +2644,39 @@ const clearStaleImportRouteLinks = async (
       AND app.article_import_route_source_record.source_article_created_at < ${getSqlLiteral(options.periodEnd)}
     `
     : ''
+  const survivingSourceRecordSeenClause = options.seenSourceRecordKeyTableName
+    ? `EXISTS (
+        SELECT 1
+        FROM ${options.seenSourceRecordKeyTableName} seen_source_record_key
+        WHERE seen_source_record_key.source_record_key = surviving_source_record.source_record_key
+      )`
+    : sourceRecordKeys.length === 0
+      ? 'FALSE'
+      : `surviving_source_record.source_record_key IN (${getQuotedStringList(sourceRecordKeys).join(', ')})`
+  const survivingSourceRecordOutsidePeriodClause = hasPeriodScope
+    ? `(
+        surviving_source_record.source_article_created_at IS NULL
+        OR surviving_source_record.source_article_created_at < ${getSqlLiteral(options.periodStart)}
+        OR surviving_source_record.source_article_created_at >= ${getSqlLiteral(options.periodEnd)}
+      )`
+    : 'FALSE'
+  const currentLinkSurvivingSourceRecordClause = `
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.article_import_route_source_record surviving_source_record
+        WHERE surviving_source_record.import_route_id = app.article_import_route.import_route_id
+          AND surviving_source_record.article_id = app.article_import_route.article_id
+          AND surviving_source_record.source_record_key <> app.article_import_route.source_record_key
+          AND (
+            surviving_source_record.quarantined_at IS NULL
+            OR COALESCE(surviving_source_record.quarantine_reason, '') <> 'source_record_remap'
+          )
+          AND (
+            ${survivingSourceRecordSeenClause}
+            OR ${survivingSourceRecordOutsidePeriodClause}
+          )
+      )
+    `
   const deletedRows = await tx.queryJson<DeletedArticleImportRouteLinkRow>(`
     SELECT
       article_id AS articleId,
@@ -2660,6 +2693,7 @@ const clearStaleImportRouteLinks = async (
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       ${currentLinkSourceRecordKeyClause}
       ${currentLinkPeriodClause}
+      ${currentLinkSurvivingSourceRecordClause}
   `)
   const deletedSourceRecordRows = await tx.queryJson<DeletedArticleImportRouteLinkRow>(`
     SELECT
@@ -2732,6 +2766,7 @@ const clearStaleImportRouteLinks = async (
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       ${currentLinkSourceRecordKeyClause}
       ${currentLinkPeriodClause}
+      ${currentLinkSurvivingSourceRecordClause}
   `)
 
   await deletedRecords.reduce<Promise<void>>((previousRun, record) => {

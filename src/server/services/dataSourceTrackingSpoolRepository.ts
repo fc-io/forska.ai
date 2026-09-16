@@ -293,7 +293,7 @@ export const createDataSourceTrackingSpoolRepository = (
 ) => {
   const database = options.database ?? openSpoolDatabase(options.sqlitePath ?? getDefaultDataSourceTrackingSpoolPath())
   const ownsDatabase = !options.database
-  const getBacklog = (): DataSourceTrackingSpoolBacklog => {
+  const getBacklog = (input: {excludeWindowId?: string} = {}): DataSourceTrackingSpoolBacklog => {
     const [windowCounts] = database
       .query(
         `
@@ -303,9 +303,10 @@ export const createDataSourceTrackingSpoolRepository = (
           SUM(CASE WHEN status IN ('fetch_failed', 'ingest_failed', 'rejected') THEN 1 ELSE 0 END) AS failedWindowCount,
           MIN(CASE WHEN status = 'ready' THEN spooled_at ELSE NULL END) AS oldestReadyAt
         FROM tracking_spool_window
+        WHERE (? IS NULL OR id <> ?)
       `,
       )
-      .all() as Array<{
+      .all(input.excludeWindowId ?? null, input.excludeWindowId ?? null) as Array<{
       failedWindowCount: number | null
       oldestReadyAt: string | null
       pendingWindowCount: number | null
@@ -318,10 +319,11 @@ export const createDataSourceTrackingSpoolRepository = (
         FROM tracking_spool_page page
         INNER JOIN tracking_spool_window spool_window ON spool_window.id = page.window_id
         WHERE page.duckdb_ingested_at IS NULL
+          AND (? IS NULL OR page.window_id <> ?)
           AND spool_window.status IN ('fetching', 'fetch_failed', 'ready', 'ingesting', 'ingest_failed')
       `,
       )
-      .all() as Array<{pendingPageCount: number | null}>
+      .all(input.excludeWindowId ?? null, input.excludeWindowId ?? null) as Array<{pendingPageCount: number | null}>
 
     return {
       failedWindowCount: Number(windowCounts?.failedWindowCount ?? 0),
@@ -619,16 +621,46 @@ export const createDataSourceTrackingSpoolRepository = (
     },
     getBacklog,
     getBackpressureSignal: (input: {
+      excludeWindowId?: string
       maxPendingPages: number
       maxPendingWindows: number
     }): {backlog: DataSourceTrackingSpoolBacklog; backpressureActive: boolean} => {
-      const backlog = getBacklog()
+      const backlog = getBacklog({excludeWindowId: input.excludeWindowId})
 
       return {
         backlog,
         backpressureActive:
           backlog.pendingPageCount >= input.maxPendingPages || backlog.pendingWindowCount >= input.maxPendingWindows,
       }
+    },
+    hasRetryableFetchFailedWindow: (input: {dataSourceId?: string; now: Date; windowId?: string | null}): boolean => {
+      const row = database
+        .query(
+          `
+          SELECT 1
+          FROM tracking_spool_window spool_window
+          WHERE spool_window.status = 'fetch_failed'
+            AND (? IS NULL OR spool_window.id = ?)
+            AND (? IS NULL OR spool_window.data_source_id = ?)
+            AND (spool_window.next_retry_at IS NULL OR spool_window.next_retry_at <= ?)
+            AND EXISTS (
+              SELECT 1
+              FROM tracking_spool_page page
+              WHERE page.window_id = spool_window.id
+              LIMIT 1
+            )
+          LIMIT 1
+        `,
+        )
+        .get(
+          input.windowId ?? null,
+          input.windowId ?? null,
+          input.dataSourceId ?? null,
+          input.dataSourceId ?? null,
+          input.now.toISOString(),
+        )
+
+      return Boolean(row)
     },
     getResumeCursor: (windowId: string): string | null => {
       const window = getWindowById(database, windowId)
