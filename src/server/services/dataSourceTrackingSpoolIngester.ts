@@ -2,8 +2,9 @@ import {getAppDatabaseService} from './appDatabaseService.ts'
 import type {ArticleImportStoreRow, ArticleImportStoreTx} from './articleImportStoreService.ts'
 import {
   articleImportStoreWorkloadContext,
+  finalizeImportedArticlesForReconciliationPeriodWithTx as defaultFinalizeImportedArticlesForReconciliationPeriodWithTx,
+  storeImportedArticlesForReconciliationBatchWithTx as defaultStoreImportedArticlesForReconciliationBatchWithTx,
   storeImportedArticlesWithTx as defaultStoreImportedArticlesWithTx,
-  syncImportedArticlesForReconciliationPeriodWithTx as defaultSyncImportedArticlesForReconciliationPeriodWithTx,
 } from './articleImportStoreService.ts'
 import {getDataSourceQueryService} from './dataSourceQueryService.ts'
 import {
@@ -61,6 +62,7 @@ export type DataSourceTrackingSpoolIngester = {
 
 const defaultIngestLimit = 2
 const defaultLeaseDurationMs = 5 * 60 * 1000
+const defaultPageBatchSize = 1
 const defaultRetryDelayMs = 5 * 60 * 1000
 
 const getErrorMessage = (error: unknown) => {
@@ -129,23 +131,17 @@ const getImportRunId = (window: DataSourceTrackingSpoolWindowRecord) => {
 export const createDataSourceTrackingSpoolIngester = ({
   dataSourceQueryService = getDataSourceQueryService(),
   database = getAppDatabaseService(),
+  finalizeImportedArticlesForReconciliationPeriodWithTx = defaultFinalizeImportedArticlesForReconciliationPeriodWithTx,
   providerRegistry = getDataSourceTrackingProviderRegistry(),
   reconciliationWorkRepository = createDataSourceReconciliationWorkRepository(),
   spoolRepository = getDataSourceTrackingSpoolRepository(),
+  storeImportedArticlesForReconciliationBatchWithTx = defaultStoreImportedArticlesForReconciliationBatchWithTx,
   storeImportedArticlesWithTx = defaultStoreImportedArticlesWithTx,
-  syncImportedArticlesForReconciliationPeriodWithTx = defaultSyncImportedArticlesForReconciliationPeriodWithTx,
   trackingRepository = createDataSourceTrackingRepository(),
 }: {
   dataSourceQueryService?: DataSourceQueryService
   database?: AppDatabaseService
-  providerRegistry?: DataSourceTrackingProviderRegistry
-  reconciliationWorkRepository?: DataSourceReconciliationWorkRepository
-  spoolRepository?: DataSourceTrackingSpoolRepository
-  storeImportedArticlesWithTx?: (
-    tx: ArticleImportStoreTx,
-    rows: ArticleImportStoreRow[],
-  ) => Promise<{acceptedCount: number; importRouteIds: string[]}>
-  syncImportedArticlesForReconciliationPeriodWithTx?: (input: {
+  finalizeImportedArticlesForReconciliationPeriodWithTx?: (input: {
     changeLogContext?: {
       dataSourceId: string
       detectedAt?: Date
@@ -156,9 +152,28 @@ export const createDataSourceTrackingSpoolIngester = ({
     importRoute: string
     periodEnd: Date
     periodStart: Date
+    sourceRecordKeys: string[]
+    tx: ArticleImportStoreTx
+  }) => Promise<{deletedSourceRecordCount: number; importRouteIds: string[]}>
+  providerRegistry?: DataSourceTrackingProviderRegistry
+  reconciliationWorkRepository?: DataSourceReconciliationWorkRepository
+  spoolRepository?: DataSourceTrackingSpoolRepository
+  storeImportedArticlesForReconciliationBatchWithTx?: (input: {
+    changeLogContext?: {
+      dataSourceId: string
+      detectedAt?: Date
+      importRunId: string | null
+      route: string
+      runKind: 'automatic_age_bucket' | 'manual_full_range'
+    } | null
+    importRoute: string
     rows: ArticleImportStoreRow[]
     tx: ArticleImportStoreTx
-  }) => Promise<{acceptedCount: number; deletedSourceRecordCount: number; importRouteIds: string[]}>
+  }) => Promise<{acceptedCount: number; importRouteIds: string[]; sourceRecordKeys: string[]}>
+  storeImportedArticlesWithTx?: (
+    tx: ArticleImportStoreTx,
+    rows: ArticleImportStoreRow[],
+  ) => Promise<{acceptedCount: number; importRouteIds: string[]}>
   trackingRepository?: DataSourceTrackingRepository
 } = {}): DataSourceTrackingSpoolIngester => {
   const ingestWindow = async (
@@ -286,31 +301,77 @@ export const createDataSourceTrackingSpoolIngester = ({
       return {error, reason: 'provider-missing', status: 'failed', windowId: window.id}
     }
 
-    const pages = spoolRepository.getWindowPages(window.id)
-    const records = getNormalizedRecordsFromPages(pages, importRunId)
     const transaction = database.transactionBackground ?? database.transaction
     let leaseRenewalTimer: ReturnType<typeof setInterval> | null = null
 
     try {
       renewWindowLease()
       leaseRenewalTimer = startLeaseRenewal()
-      const storeResult = await transaction(async (tx) => {
-        return window.runKind === 'incremental'
-          ? await storeImportedArticlesWithTx(tx, records)
-          : await syncImportedArticlesForReconciliationPeriodWithTx({
-              changeLogContext: {
-                dataSourceId: window.dataSourceId,
-                importRunId,
-                route: window.route,
-                runKind: window.runKind,
-              },
-              importRoute: window.route,
-              periodEnd: window.windowEnd,
-              periodStart: window.windowStart,
-              rows: records,
-              tx,
-            })
-      }, articleImportStoreWorkloadContext)
+      const sourceRecordKeys = new Set<string>()
+      let acceptedCount = 0
+      let pageCount = 0
+      let recordCount = 0
+      let afterPageIndex = -1
+
+      while (true) {
+        renewWindowLease()
+        const pageBatch = spoolRepository.getWindowPagesBatch({
+          afterPageIndex,
+          limit: defaultPageBatchSize,
+          windowId: window.id,
+        })
+
+        if (pageBatch.length === 0) {
+          break
+        }
+
+        const records = getNormalizedRecordsFromPages(pageBatch, importRunId)
+        const storeResult = await transaction(async (tx) => {
+          if (window.runKind === 'incremental') {
+            return {...(await storeImportedArticlesWithTx(tx, records)), sourceRecordKeys: []}
+          }
+
+          return await storeImportedArticlesForReconciliationBatchWithTx({
+            changeLogContext: {
+              dataSourceId: window.dataSourceId,
+              importRunId,
+              route: window.route,
+              runKind: window.runKind,
+            },
+            importRoute: window.route,
+            rows: records,
+            tx,
+          })
+        }, articleImportStoreWorkloadContext)
+
+        for (const sourceRecordKey of storeResult.sourceRecordKeys) {
+          sourceRecordKeys.add(sourceRecordKey)
+        }
+
+        acceptedCount += storeResult.acceptedCount
+        pageCount += pageBatch.length
+        recordCount += records.length
+        afterPageIndex = pageBatch.at(-1)?.pageIndex ?? afterPageIndex
+      }
+
+      if (window.runKind !== 'incremental') {
+        renewWindowLease()
+        await transaction(async (tx) => {
+          return await finalizeImportedArticlesForReconciliationPeriodWithTx({
+            changeLogContext: {
+              dataSourceId: window.dataSourceId,
+              importRunId,
+              route: window.route,
+              runKind: window.runKind,
+            },
+            importRoute: window.route,
+            periodEnd: window.windowEnd,
+            periodStart: window.windowStart,
+            sourceRecordKeys: Array.from(sourceRecordKeys),
+            tx,
+          })
+        }, articleImportStoreWorkloadContext)
+      }
 
       clearInterval(leaseRenewalTimer)
       leaseRenewalTimer = null
@@ -365,11 +426,11 @@ export const createDataSourceTrackingSpoolIngester = ({
       }
 
       return {
-        acceptedCount: storeResult.acceptedCount,
+        acceptedCount,
         importRunId,
-        pageCount: pages.length,
+        pageCount,
         reason: 'ingested',
-        recordCount: records.length,
+        recordCount,
         status: 'success',
         windowId: window.id,
       }

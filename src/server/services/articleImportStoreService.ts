@@ -2807,6 +2807,79 @@ export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows
   return {acceptedCount: state.acceptedCount, importRouteIds: state.importRouteIds}
 }
 
+export const storeImportedArticlesForReconciliationBatchWithTx = async (params: {
+  changeLogContext?: ReconciliationChangeLogContext | null
+  importRoute: string
+  rows: ArticleImportStoreRow[]
+  tx: ArticleImportStoreTx
+}) => {
+  const importRoute = params.importRoute.trim()
+  const routes = importRoute === '' ? [] : [importRoute]
+  const routeIdMap = await ensureImportRoutes(params.tx, routes)
+  const importRouteId = routeIdMap.get(importRoute)
+  const incomingRecords =
+    importRouteId && params.rows.length > 0
+      ? params.rows
+          .map((row) => {
+            return getScopedArticleImportStoreRow(getNormalizedArticleImportRow(row))
+          })
+          .filter((row) => {
+            return row.importRoute === importRoute
+          })
+      : []
+
+  if (importRouteId) {
+    await insertReconciliationSourceRecordChangeLogs({
+      context: params.changeLogContext,
+      importRouteId,
+      incomingRecords,
+      tx: params.tx,
+    })
+  }
+
+  const importRefreshState =
+    params.rows.length > 0
+      ? await storeImportedArticlesInTx(params.tx, params.rows, {changeLogContext: params.changeLogContext})
+      : {acceptedCount: 0, acceptedSourceRecords: [], importRouteIds: [] as string[]}
+
+  return {
+    acceptedCount: importRefreshState.acceptedCount,
+    importRouteIds:
+      importRouteId && !importRefreshState.importRouteIds.includes(importRouteId)
+        ? [...importRefreshState.importRouteIds, importRouteId]
+        : importRefreshState.importRouteIds,
+    sourceRecordKeys: importRouteId
+      ? getAcceptedImportRouteSourceRecordKeys(importRefreshState.acceptedSourceRecords, importRouteId)
+      : [],
+  }
+}
+
+export const finalizeImportedArticlesForReconciliationPeriodWithTx = async (params: {
+  changeLogContext?: ReconciliationChangeLogContext | null
+  importRoute: string
+  periodEnd: Date
+  periodStart: Date
+  sourceRecordKeys: string[]
+  tx: ArticleImportStoreTx
+}) => {
+  const importRoute = params.importRoute.trim()
+  const routes = importRoute === '' ? [] : [importRoute]
+  const routeIdMap = await ensureImportRoutes(params.tx, routes)
+  const importRouteId = routeIdMap.get(importRoute)
+  const staleResult = importRouteId
+    ? await clearStaleImportRouteLinks(params.tx, importRouteId, params.sourceRecordKeys, {
+        changeLogContext: params.changeLogContext,
+        periodEnd: params.periodEnd,
+        periodStart: params.periodStart,
+      })
+    : {deletedRecords: [], deletedSourceRecords: []}
+
+  return {
+    deletedSourceRecordCount: staleResult.deletedRecords.length + staleResult.deletedSourceRecords.length,
+    importRouteIds: importRouteId ? [importRouteId] : [],
+  }
+}
+
 export const syncImportedArticlesWithTx = async (params: {
   importRoute: string
   rows: ArticleImportStoreRow[]
