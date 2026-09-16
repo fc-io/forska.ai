@@ -271,17 +271,24 @@ test('spool ingester uses reconciliation sync semantics and completes work after
         },
       } as never,
       spoolRepository,
-      syncImportedArticlesForReconciliationPeriodWithTx: async (input) => {
-        order.push('duckdb:sync-reconciliation-period')
+      finalizeImportedArticlesForReconciliationPeriodWithTx: async (input) => {
+        order.push('duckdb:finalize-reconciliation-period')
         expect(input.importRoute).toBe(pubmedTrackedImportRoute)
         expect(input.periodStart.toISOString()).toBe('2026-06-01T00:00:00.000Z')
         expect(input.periodEnd.toISOString()).toBe('2026-07-01T00:00:00.000Z')
+        expect(input.sourceRecordKeys).toEqual(['pmid:1'])
+        return {deletedSourceRecordCount: 0, importRouteIds: ['route-id-1']}
+      },
+      storeImportedArticlesForReconciliationBatchWithTx: async (input) => {
+        order.push('duckdb:store-reconciliation-batch')
+        expect(input.importRoute).toBe(pubmedTrackedImportRoute)
+        expect(input.rows).toHaveLength(1)
         expect(input.changeLogContext).toMatchObject({
           dataSourceId: 'source-1',
           importRunId: `data-source-tracking:${readyWindow.id}`,
           runKind: 'automatic_age_bucket',
         })
-        return {acceptedCount: input.rows.length, deletedSourceRecordCount: 0, importRouteIds: ['route-id-1']}
+        return {acceptedCount: input.rows.length, importRouteIds: ['route-id-1'], sourceRecordKeys: ['pmid:1']}
       },
       trackingRepository: {
         recordReconciliationSuccess: async (input: {dataSourceId: string; importRunId?: string | null}) => {
@@ -311,7 +318,10 @@ test('spool ingester uses reconciliation sync semantics and completes work after
     expect(ingestedWindow?.status).toBe('ingested')
     expect(order).toEqual([
       'duckdb:transaction-background:start',
-      'duckdb:sync-reconciliation-period',
+      'duckdb:store-reconciliation-batch',
+      'duckdb:transaction-background:commit',
+      'duckdb:transaction-background:start',
+      'duckdb:finalize-reconciliation-period',
       'duckdb:transaction-background:commit',
       'datasource:count-linked',
       'datasource:update-after-import',
@@ -319,6 +329,135 @@ test('spool ingester uses reconciliation sync semantics and completes work after
       `tracking:reconciliation-success:source-1:data-source-tracking:${readyWindow.id}`,
       'spool:mark-ingested',
     ])
+  })
+})
+
+test('spool ingester stores reconciliation pages in bounded batches before finalizing deletes', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const readyWindow = createReadyWindow(spoolRepository, {
+      runKind: 'manual_full_range',
+      windowEnd: new Date('2026-07-01T00:00:00.000Z'),
+      windowStart: new Date('2026-06-01T00:00:00.000Z'),
+    })
+    spoolRepository.appendPage({
+      cursorAfter: null,
+      cursorBefore: 'cursor-page-1',
+      normalizedRecordsJson: [
+        {
+          articleCreatedAt: '2026-06-02T00:00:00.000Z',
+          articleId: 'pmid:2',
+          articleTitle: 'Article 2',
+          importRoute: pubmedTrackedImportRoute,
+        },
+      ],
+      pageIndex: 1,
+      rawPayloadJson: {page: 2},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-page-2',
+      windowId: readyWindow.id,
+    })
+    const batchCalls: Array<{afterPageIndex?: number; limit: number}> = []
+    const storedBatches: string[][] = []
+    const originalGetWindowPagesBatch = spoolRepository.getWindowPagesBatch
+    spoolRepository.getWindowPagesBatch = (input) => {
+      batchCalls.push({afterPageIndex: input.afterPageIndex, limit: input.limit})
+      return originalGetWindowPagesBatch(input)
+    }
+
+    const ingester = createDataSourceTrackingSpoolIngester({
+      dataSourceQueryService: {
+        countArticlesLinkedToImportRoute: async () => {
+          return 2
+        },
+        getDataSourceById: async () => {
+          return getDataSource()
+        },
+        updateDataSourceAfterImport: async () => {
+          return getDataSource()
+        },
+      } as never,
+      database: {
+        transactionBackground: async <T>(operation: (tx: ArticleImportStoreTx) => Promise<T>) => {
+          return await operation({
+            queryJson: async () => {
+              return []
+            },
+            run: async () => {
+              return undefined
+            },
+          })
+        },
+      } as never,
+      providerRegistry: createDataSourceTrackingProviderRegistry([
+        {
+          fetchRangePages: async () => {
+            return {fetchedTotal: 0, pageCount: 0}
+          },
+          fetchWindowPages: async () => {
+            return {fetchedTotal: 0, pageCount: 0}
+          },
+          getGranularity: () => {
+            return 'day'
+          },
+          getNextRunAfter: () => {
+            return null
+          },
+          getNextWindow: () => {
+            return {nextRunAfter: null, reason: 'complete', status: 'none'}
+          },
+          getReconciliationRange: () => {
+            return {reason: 'empty-range', status: 'none'}
+          },
+          route: pubmedTrackedImportRoute,
+        },
+      ]),
+      reconciliationWorkRepository: {
+        markWorkCompletedForSpoolWindow: async () => {
+          return null
+        },
+        markWorkFailedForSpoolWindow: async () => {
+          return null
+        },
+      } as never,
+      spoolRepository,
+      finalizeImportedArticlesForReconciliationPeriodWithTx: async (input) => {
+        expect(input.sourceRecordKeys).toEqual(['pmid:1', 'pmid:2'])
+        return {deletedSourceRecordCount: 0, importRouteIds: ['route-id-1']}
+      },
+      storeImportedArticlesForReconciliationBatchWithTx: async (input) => {
+        const batchArticleIds = input.rows.map((row) => {
+          return row.articleId
+        })
+        storedBatches.push(batchArticleIds)
+        return {acceptedCount: input.rows.length, importRouteIds: ['route-id-1'], sourceRecordKeys: batchArticleIds}
+      },
+      trackingRepository: {
+        recordReconciliationSuccess: async () => {
+          return null
+        },
+        recordTrackingFailure: async () => {
+          return null
+        },
+        recordTrackingSuccess: async () => {
+          return null
+        },
+      } as never,
+    })
+
+    const result = await ingester.drainReadyWindows({
+      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker',
+      limit: 1,
+      now: new Date('2026-09-16T09:00:00.000Z'),
+    })
+
+    expect(result).toMatchObject([{acceptedCount: 2, pageCount: 2, recordCount: 2, status: 'success'}])
+    expect(batchCalls).toEqual([
+      {afterPageIndex: -1, limit: 1},
+      {afterPageIndex: 0, limit: 1},
+      {afterPageIndex: 1, limit: 1},
+    ])
+    expect(storedBatches).toEqual([['pmid:1'], ['pmid:2']])
   })
 })
 
@@ -374,7 +513,7 @@ test('spool ingester stops state updates when the ingest lease is lost after Duc
     spoolRepository.renewWindowLease = (input) => {
       renewCallCount += 1
 
-      return renewCallCount === 1 ? originalRenewWindowLease(input) : null
+      return renewCallCount <= 2 ? originalRenewWindowLease(input) : null
     }
 
     const ingester = createDataSourceTrackingSpoolIngester({
@@ -607,7 +746,7 @@ test('spool ingester keeps reconciliation work retryable when DuckDB storage fai
         },
       } as never,
       spoolRepository,
-      syncImportedArticlesForReconciliationPeriodWithTx: async () => {
+      storeImportedArticlesForReconciliationBatchWithTx: async () => {
         throw new Error('duckdb busy')
       },
       trackingRepository: {

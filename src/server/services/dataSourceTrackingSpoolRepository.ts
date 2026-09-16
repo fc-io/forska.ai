@@ -608,6 +608,26 @@ export const createDataSourceTrackingSpoolRepository = (
 
       return rows.map(getPageRecordFromRow)
     },
+    getWindowPagesBatch: (input: {
+      afterPageIndex?: number
+      limit: number
+      windowId: string
+    }): DataSourceTrackingSpoolPageRecord[] => {
+      const rows = database
+        .query(
+          `
+          SELECT *
+          FROM tracking_spool_page
+          WHERE window_id = ?
+            AND page_index > ?
+          ORDER BY page_index ASC
+          LIMIT ?
+        `,
+        )
+        .all(input.windowId, input.afterPageIndex ?? -1, getLimitValue(input.limit)) as SpoolPageRow[]
+
+      return rows.map(getPageRecordFromRow)
+    },
     markWindowFailed: (input: {
       error: string
       nextRetryAt?: Date | null
