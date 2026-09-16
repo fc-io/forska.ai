@@ -16,6 +16,7 @@ import {runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {
   createJudgmentWorkflowTopology,
   getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit,
+  hasTopologyReconciledProjectRefreshAcks,
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
   isTopologyJudgmentWorkflowComplete,
@@ -245,6 +246,43 @@ test('topology judgment completion requires projection evidence and refresh acks
       totalJudgments: 3,
       visibleProjectionCount: 4,
     }),
+  ).toBe(false)
+})
+
+test('topology refresh ack evidence accepts only matched or inapplicable ack state', () => {
+  const inapplicableAck = {
+    health: {
+      hasOutboxRows: false,
+      hasPendingCompletionAck: false,
+      lastAckSeq: null,
+      outboxRowCount: 0,
+      pendingCompletionAckCount: 0,
+    },
+    scanState: {lastProjectRefreshAckSeq: null},
+  }
+  const matchedAck = {
+    health: {
+      ...inapplicableAck.health,
+      lastAckSeq: 12,
+    },
+    scanState: {lastProjectRefreshAckSeq: 12},
+  }
+
+  expect(hasTopologyReconciledProjectRefreshAcks([inapplicableAck, matchedAck])).toBe(true)
+  expect(
+    hasTopologyReconciledProjectRefreshAcks([
+      {...inapplicableAck, health: {...inapplicableAck.health, hasPendingCompletionAck: true}},
+    ]),
+  ).toBe(false)
+  expect(
+    hasTopologyReconciledProjectRefreshAcks([
+      {...inapplicableAck, health: {...inapplicableAck.health, lastAckSeq: 11}},
+    ]),
+  ).toBe(false)
+  expect(
+    hasTopologyReconciledProjectRefreshAcks([
+      {...inapplicableAck, scanState: {lastProjectRefreshAckSeq: 11}},
+    ]),
   ).toBe(false)
 })
 
