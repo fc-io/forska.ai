@@ -560,10 +560,13 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
       `)
       const [projection] = await getAppDatabaseService().queryJson<{count: number}>(`
         SELECT COUNT(*) AS count
-        FROM mart.review_article_judgment_detail_serving_v4
-        WHERE project_id = ${getSqlLiteral(body.projectId)}
-          AND prompt_id = ${getSqlLiteral(body.promptId)}
-          AND payload_kind = 'llm'
+        FROM (
+          SELECT DISTINCT project_id, review_config_hash, payload_kind, article_id, prompt_id
+          FROM mart.review_article_judgment_detail_serving_v4
+          WHERE project_id = ${getSqlLiteral(body.projectId)}
+            AND prompt_id = ${getSqlLiteral(body.promptId)}
+            AND payload_kind = 'llm'
+        ) projection
       `)
 
       return {data: {judgments, visibleProjectionCount: Number(projection?.count ?? 0)}, error: null}

@@ -6,7 +6,10 @@ import {Effect} from 'effect'
 
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkInput, ReviewServingDirtyWorkRecord} from './reviewServingDirtyWorkService.ts'
-import {getReviewServingDirtyWorkScopeForChange} from './reviewServingProjectorDomain.ts'
+import {
+  getReviewServingDirtyWorkScopeForChange,
+  getReviewServingSourcePartitionWatermarks,
+} from './reviewServingProjectorDomain.ts'
 import {
   intakeReviewServingProjectorDirtyWork,
   type ReviewServingProjectorServiceDependencies,
@@ -102,6 +105,8 @@ const getScope = (input: {
 test('Phase 3 intake, projector wake, writer transactions, promotion, and recovery stay integrated', async () => {
   const {database, statements} = createDatabase()
   const pending: Partial<Record<ReviewServingProjectionComponent, RunningReviewServingDirtyWorkRecord[]>> = {}
+  const claimedByComponent: Partial<Record<ReviewServingProjectionComponent, RunningReviewServingDirtyWorkRecord[]>> =
+    {}
   const upserts: ReviewServingDirtyWorkInput[] = []
   const promotions: PromoteReviewServingProjectorSnapshotInput[] = []
   const rebuildRequests: RequestReviewServingV4RebuildInput[] = []
@@ -148,6 +153,10 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
       const claimed = claims.slice(0, params.limit)
 
       pending[params.projectionComponent] = claims.slice(params.limit)
+      claimedByComponent[params.projectionComponent] = [
+        ...(claimedByComponent[params.projectionComponent] ?? []),
+        ...claimed,
+      ]
 
       return claimed
     },
@@ -168,6 +177,10 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     },
     requestRebuild: (input, rebuildDatabase) => {
       expect(rebuildDatabase).toBe(database)
+      const rebuildClaims = (input.components ?? []).flatMap((component) => {
+        return claimedByComponent[component] ?? []
+      })
+
       rebuildRequests.push(input)
 
       return Effect.succeed({
@@ -191,7 +204,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
         retryAfter: null,
         retryCount: 0,
         retryPolicyJson: null,
-        sourceWatermarksJson: null,
+        sourceWatermarksJson: {dirtySourceWatermarks: getReviewServingSourcePartitionWatermarks(rebuildClaims)},
         status: 'admitted',
         updatedAt: '2026-01-01T00:00:00.000Z',
       })
@@ -356,6 +369,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   const joined = statements.join('\n')
 
   expect(result.status).toBe('completed')
+  expect(result.releasedClaimIds).toEqual([])
   expect(searchRunner).not.toHaveBeenCalled()
   expect(rebuildRequests).toEqual([
     {components: ['search'], priority: 50, projectId: 'project-1', reason: 'searchDirtyWork'},

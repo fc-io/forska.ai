@@ -1,6 +1,18 @@
 import {expect, test} from 'bun:test'
 
-import {runReviewServingCurrentDbTabCountParity} from './checkReviewServingCurrentDbTabCountParity.ts'
+import {
+  getReviewServingTabCountParityProjectBatches,
+  runReviewServingCurrentDbTabCountParity,
+} from './checkReviewServingCurrentDbTabCountParity.ts'
+
+test('current-db tab-count parity batches project scans', () => {
+  expect(getReviewServingTabCountParityProjectBatches(['a', 'b', 'c', 'd', 'e'], 2)).toEqual([
+    ['a', 'b'],
+    ['c', 'd'],
+    ['e'],
+  ])
+  expect(getReviewServingTabCountParityProjectBatches(['a', 'b'], 0)).toEqual([['a'], ['b']])
+})
 
 test('current-db tab-count parity script closes DuckDB without forcing a checkpoint', async () => {
   const closeCalls: Array<{checkpointBeforeClose?: boolean}> = []

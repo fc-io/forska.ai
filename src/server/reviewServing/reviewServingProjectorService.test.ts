@@ -63,7 +63,7 @@ const getClaim = (input: {
 const getAdmittedRebuildRequest = (input: {projectId?: string; sourceWatermark?: number} = {}) => {
   return {
     projectId: input.projectId ?? 'project-1',
-    sourceWatermarksJson: {reviewChange: input.sourceWatermark ?? 1},
+    sourceWatermarksJson: {dirtySourceWatermarks: {reviewChange: input.sourceWatermark ?? 1}},
     status: 'admitted',
   } as never
 }

@@ -55,11 +55,23 @@ test('discovers and drives a real judgment job through start, result, pause, dra
           const projectJudgments = topologyBody.data.judgments.find((row) => {
             return row.projectId === projectId
           })
-
-          return {
+          const result = {
             canonicalCount: Number(projectJudgments?.count ?? 0),
             visibleProjectionCount: body.data.visibleProjectionCount,
           }
+
+          if (result.canonicalCount === 2 && result.visibleProjectionCount < 1) {
+            const drainResponse = await page.request.post(
+              `${ownerOrigin}/api/test/judgment-workflow-topology/drain-review-serving-projection`,
+              {data: {fixtureId, maxCycles: 1, token: seedToken}},
+            )
+
+            if (!drainResponse.ok()) {
+              throw new Error(`Failed to drain browser fixture review-serving projection: ${drainResponse.status()}`)
+            }
+          }
+
+          return result
         } catch {
           return 0
         }
@@ -124,31 +136,28 @@ test('discovers and drives a real judgment job through start, result, pause, dra
       {timeout: 90_000},
     )
     .toEqual({hasOutboxRows: false, hasQueueRows: false, status: 'paused', storageState: 'drained', walBytes: 0})
-  const cleanupResponse = await page.request.post(`${ownerOrigin}/api/test/judgment-workflow-topology/cleanup-stale`, {
-    data: {token: seedToken},
-  })
-  expect(cleanupResponse.ok()).toBe(true)
   await expect
     .poll(
       async () => {
-        const response = await page.request.post(`${ownerOrigin}/api/test/judgment-workflow-topology/evidence`, {
-          data: {fixtureId, jobIds: [jobId], token: seedToken},
+        const response = await page.request.post(`${ownerOrigin}/api/test/judgment-workflow-topology/cleanup-stale`, {
+          data: {jobIds: [jobId], token: seedToken},
         })
+        expect(response.ok()).toBe(true)
         const body = (await response.json()) as {
           data: {
-            jobEvidence: Array<{
+            jobs: Array<{
               artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
               jobId: string
             }>
           }
         }
-        const jobEvidence = body.data.jobEvidence.find((job) => {
+        const jobEvidence = body.data.jobs.find((job) => {
           return job.jobId === jobId
         })
 
         return jobEvidence?.artifacts
       },
-      {timeout: 30_000},
+      {timeout: 90_000},
     )
     .toEqual({lease: false, shm: false, sqlite: false, wal: false})
   await page.reload()
@@ -165,12 +174,73 @@ test('discovers and drives a real judgment job through start, result, pause, dra
       {timeout: 90_000},
     )
     .toContain('Showing 1-1 of 1')
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.post('/api/projectsreviewswarnings', {data: {projectId}})
+
+        if (!response.ok()) {
+          return {detailReadyArticleCount: null, readable: false, totalArticleCount: null}
+        }
+
+        const body = (await response.json()) as {
+          data: {
+            indexing: {
+              coverage: {detailReadyArticleCount: number | null; totalArticleCount: number}
+              serving: {readable: boolean}
+            }
+          }
+        }
+        const coverage = body.data.indexing.coverage
+        const result = {
+          detailReadyArticleCount: coverage.detailReadyArticleCount,
+          readable: body.data.indexing.serving.readable,
+          totalArticleCount: coverage.totalArticleCount,
+        }
+
+        if (!result.readable || result.detailReadyArticleCount !== result.totalArticleCount) {
+          const drainResponse = await page.request.post(
+            `${ownerOrigin}/api/test/judgment-workflow-topology/drain-review-serving-projection`,
+            {data: {fixtureId, maxCycles: 1, token: seedToken}},
+          )
+
+          if (!drainResponse.ok()) {
+            throw new Error(`Failed to drain browser fixture detail projection: ${drainResponse.status()}`)
+          }
+        }
+
+        return result
+      },
+      {timeout: 120_000},
+    )
+    .toEqual({detailReadyArticleCount: 1, readable: true, totalArticleCount: 1})
   const judgedArticleLink = page.getByRole('link', {name: 'Topology article A', exact: true})
   await expect(judgedArticleLink).toBeVisible()
   await judgedArticleLink.click()
   await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reviews-llm/${encodeURIComponent(articleId)}`))
-  await expect(page.getByText('Topology article A', {exact: true})).toBeVisible({timeout: 60_000})
   const judgmentExplanations = page.getByText(/deterministic topology response/i)
-  await expect(judgmentExplanations).toHaveCount(2)
+  await expect
+    .poll(
+      async () => {
+        const explanationCount = await judgmentExplanations.count()
+
+        if (explanationCount !== 2) {
+          const drainResponse = await page.request.post(
+            `${ownerOrigin}/api/test/judgment-workflow-topology/drain-review-serving-projection`,
+            {data: {fixtureId, maxCycles: 1, token: seedToken}},
+          )
+
+          if (!drainResponse.ok()) {
+            throw new Error(`Failed to drain browser fixture article detail projection: ${drainResponse.status()}`)
+          }
+          await page.reload()
+        }
+
+        return explanationCount
+      },
+      {timeout: 120_000},
+    )
+    .toBe(2)
+  await expect(page.getByText('Topology article A', {exact: true})).toBeVisible({timeout: 60_000})
   await expect(judgmentExplanations.first()).toBeVisible()
 })

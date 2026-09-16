@@ -44,6 +44,27 @@ type ProjectReport = {
 }
 
 const listModeKeys = ['llm', 'human', 'both', 'unassessed'] as const
+const defaultProjectBatchSize = 1
+
+const getPositiveIntegerEnv = (name: string, fallback: number) => {
+  const value = Number(process.env[name] ?? '')
+
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+export const getReviewServingTabCountParityProjectBatches = (
+  projectIds: readonly string[],
+  batchSize = getPositiveIntegerEnv('FORSKA_CURRENT_DB_TAB_COUNT_PARITY_PROJECT_BATCH_SIZE', defaultProjectBatchSize),
+) => {
+  const effectiveBatchSize = Math.max(1, Math.floor(batchSize))
+  const batches: string[][] = []
+
+  for (let index = 0; index < projectIds.length; index += effectiveBatchSize) {
+    batches.push(projectIds.slice(index, index + effectiveBatchSize))
+  }
+
+  return batches
+}
 
 const getNumber = (value: CountValue | undefined) => {
   return Number(value ?? 0)
@@ -410,18 +431,20 @@ const getActiveProjectIds = async () => {
   })
 }
 
-const getReport = async (): Promise<ProjectReport[]> => {
-  const projectIds = await getActiveProjectIds()
+const getReportForProjectBatch = async (projectIds: readonly string[]): Promise<ProjectReport[]> => {
+  const sourceRows = await getSourceCountRows(projectIds)
 
-  if (projectIds.length === 0) {
+  if (sourceRows.length === 0) {
     return []
   }
 
-  const [sourceRows, martRows, detailRows, cacheRows] = await Promise.all([
-    getSourceCountRows(projectIds),
-    getMartCountRows(projectIds),
-    getDetailCountRows(projectIds),
-    getCacheCountRows(projectIds),
+  const sourceProjectIds = sourceRows.map((row) => {
+    return row.projectId
+  })
+  const [martRows, detailRows, cacheRows] = await Promise.all([
+    getMartCountRows(sourceProjectIds),
+    getDetailCountRows(sourceProjectIds),
+    getCacheCountRows(sourceProjectIds),
   ])
   const detailByProject = new Map(
     detailRows.map((row) => {
@@ -460,6 +483,26 @@ const getReport = async (): Promise<ProjectReport[]> => {
       source: getComparableCounts(sourceRow),
     }
   })
+}
+
+const getReport = async (): Promise<ProjectReport[]> => {
+  const projectIds = await getActiveProjectIds()
+
+  if (projectIds.length === 0) {
+    return []
+  }
+
+  const batches = getReviewServingTabCountParityProjectBatches(projectIds)
+  const report: ProjectReport[] = []
+
+  for (const [batchIndex, batch] of batches.entries()) {
+    console.error(
+      `[review-serving] tab-count parity batch ${batchIndex + 1}/${batches.length} projects=${batch.length}`,
+    )
+    report.push(...(await getReportForProjectBatch(batch)))
+  }
+
+  return report
 }
 
 const getMismatches = (report: ProjectReport) => {

@@ -143,3 +143,60 @@ test('DuckDB data-source continuous tracking migration adds state, reconciliatio
     ).toEqual([3, 12, 24, 36])
   })
 })
+
+test('DuckDB data-source tracking migration repairs existing reconciliation work retry column', async () => {
+  const instance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await instance.connect()
+
+  try {
+    const database: DuckDBConnectionLike = {
+      queryJson: async <R>(statement: string) => {
+        return (await connection.runAndReadAll(statement)).getRowObjectsJson() as R[]
+      },
+      run: async (statement: string) => {
+        await connection.run(statement)
+      },
+    }
+
+    await database.run(readFileSync(resolve(migrationsFolder, '0000_nativeDuckdbSchema.sql'), 'utf8'))
+    await database.run(`
+      CREATE TABLE app.data_source_reconciliation_work (
+        id VARCHAR PRIMARY KEY,
+        data_source_id VARCHAR NOT NULL,
+        route VARCHAR NOT NULL,
+        run_kind VARCHAR NOT NULL,
+        age_months INTEGER,
+        period_start TIMESTAMPTZ NOT NULL,
+        period_end TIMESTAMPTZ NOT NULL,
+        spool_window_id VARCHAR,
+        cursor VARCHAR,
+        status VARCHAR NOT NULL,
+        failure_count INTEGER NOT NULL DEFAULT 0,
+        last_error VARCHAR,
+        lease_owner VARCHAR,
+        lease_expires_at TIMESTAMPTZ,
+        import_run_id VARCHAR,
+        scheduled_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      )
+    `)
+    await database.run(
+      readFileSync(resolve(migrationsFolder, '0238_dataSourceReconciliationWorkNextRetryAt.sql'), 'utf8'),
+    )
+
+    const columns = await database.queryJson<{columnName: string; dataType: string}>(`
+      SELECT column_name AS columnName, data_type AS dataType
+      FROM information_schema.columns
+      WHERE table_schema = 'app'
+        AND table_name = 'data_source_reconciliation_work'
+        AND column_name = 'next_retry_at'
+    `)
+
+    expect(columns).toEqual([{columnName: 'next_retry_at', dataType: 'TIMESTAMP WITH TIME ZONE'}])
+  } finally {
+    connection.closeSync()
+    instance.closeSync()
+  }
+})

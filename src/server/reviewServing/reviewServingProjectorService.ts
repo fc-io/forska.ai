@@ -229,6 +229,12 @@ const getNumericSourceWatermark = (watermarks: Record<string, unknown>, sourceKe
   return Number.isFinite(numericValue) ? numericValue : null
 }
 
+const getSourceWatermarkCoverageRecords = (sourceWatermarks: Record<string, unknown>) => {
+  const dirtySourceWatermarks = getObjectRecord(sourceWatermarks.dirtySourceWatermarks)
+
+  return dirtySourceWatermarks === null ? [sourceWatermarks] : [sourceWatermarks, dirtySourceWatermarks]
+}
+
 const isClaimCoveredByRebuildRequest = (claim: ReviewServingDirtyWorkClaim, request: ReviewServingRebuildRequest) => {
   if (claim.projectId === null || request.projectId !== claim.projectId) {
     return false
@@ -240,10 +246,14 @@ const isClaimCoveredByRebuildRequest = (claim: ReviewServingDirtyWorkClaim, requ
     return false
   }
 
-  return [claim.sourcePartition, ...getReviewServingSourceWatermarkKeys(claim.sourcePartition)].some((sourceKey) => {
-    const sourceWatermark = getNumericSourceWatermark(sourceWatermarks, sourceKey)
+  const coverageRecords = getSourceWatermarkCoverageRecords(sourceWatermarks)
 
-    return sourceWatermark !== null && sourceWatermark >= claim.latestSourceHighWaterMark
+  return [claim.sourcePartition, ...getReviewServingSourceWatermarkKeys(claim.sourcePartition)].some((sourceKey) => {
+    return coverageRecords.some((watermarks) => {
+      const sourceWatermark = getNumericSourceWatermark(watermarks, sourceKey)
+
+      return sourceWatermark !== null && sourceWatermark >= claim.latestSourceHighWaterMark
+    })
   })
 }
 

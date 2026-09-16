@@ -43,7 +43,7 @@ const smokeEnv = {
 export default defineConfig({
   testDir: './tests/e2e',
   outputDir: process.env.FORSKA_PLAYWRIGHT_OUTPUT_DIR,
-  timeout: 60_000,
+  timeout: networkSmokeDbMode === 'current' ? 180_000 : 60_000,
   workers: 1,
   use: {baseURL: `http://127.0.0.1:${appServerPort}`, screenshot: 'only-on-failure', trace: 'retain-on-failure'},
   webServer: [

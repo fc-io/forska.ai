@@ -1570,6 +1570,15 @@ const getReviewServingV4RebuildSourceWatermarks = (stats: ReviewServingV4Rebuild
   }
 }
 
+const getReviewServingV4RebuildRequestSourceWatermarks = (input: {
+  dirtySourceWatermarks: Record<string, number> | null
+  sourceWatermarks: ReturnType<typeof getReviewServingV4RebuildSourceWatermarks>
+}): Record<string, unknown> => {
+  return input.dirtySourceWatermarks === null || Object.keys(input.dirtySourceWatermarks).length === 0
+    ? input.sourceWatermarks
+    : {...input.sourceWatermarks, dirtySourceWatermarks: input.dirtySourceWatermarks}
+}
+
 const getNoopReviewServingV4RebuildRequest = (input: {
   components: readonly ReviewServingProjectionComponent[]
   diagnostics?: Record<string, ReviewServingIdentityValue>
@@ -1578,7 +1587,7 @@ const getNoopReviewServingV4RebuildRequest = (input: {
   priority?: number
   reason: string
   requestEstimate: ReviewServingRebuildRequestEstimate
-  sourceWatermarks: ReturnType<typeof getReviewServingV4RebuildSourceWatermarks>
+  sourceWatermarks: Record<string, unknown>
   totalEstimate: ReviewServingRebuildRequestEstimate
 }): ReviewServingRebuildRequest => {
   const now = new Date().toISOString()
@@ -2009,6 +2018,10 @@ export const requestReviewServingV4RebuildEffect = (
         })
       : null
     const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
+    const requestSourceWatermarks = getReviewServingV4RebuildRequestSourceWatermarks({
+      dirtySourceWatermarks: bootstrapSourceWatermarks,
+      sourceWatermarks,
+    })
     const bootstrap = isFreshBootstrap
       ? await runReviewServingV4RebuildStatsPhase('prepareBootstrap', () => {
           return prepareReviewServingV4Bootstrap(
@@ -2049,7 +2062,7 @@ export const requestReviewServingV4RebuildEffect = (
         priority: requestPriority,
         reason: input.reason,
         requestEstimate,
-        sourceWatermarks,
+        sourceWatermarks: requestSourceWatermarks,
         totalEstimate,
       })
     }
@@ -2075,7 +2088,7 @@ export const requestReviewServingV4RebuildEffect = (
         priority: requestPriority,
         reason: input.reason,
         requestEstimate,
-        sourceWatermarks,
+        sourceWatermarks: requestSourceWatermarks,
         totalEstimate,
       })
     }
@@ -2106,7 +2119,7 @@ export const requestReviewServingV4RebuildEffect = (
           reason: input.reason,
           requestedComponents,
           retryPolicy: {maxAttempts: 3, retryAfterMs: 60_000, terminalState: 'blocked_over_budget'},
-          sourceWatermarks,
+          sourceWatermarks: requestSourceWatermarks,
         },
         requestDatabase,
       )

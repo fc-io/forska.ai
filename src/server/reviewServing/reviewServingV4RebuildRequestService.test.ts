@@ -878,7 +878,10 @@ test('V4 rebuild request service admits large search rebuilds as executable rang
 test('V4 search dirty work bootstraps requested search when active snapshot lacks search state', async () => {
   const {database, statements} = createFakeRequestDatabase(
     {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
-    {snapshotComponents: countReadyReviewServingComponents},
+    {
+      dirtyWatermarks: [{latestSourceHighWaterMark: 10, sourcePartition: 'reviewChange:project-v4'}],
+      snapshotComponents: countReadyReviewServingComponents,
+    },
   )
 
   const request = await Effect.runPromise(
@@ -903,6 +906,7 @@ test('V4 search dirty work bootstraps requested search when active snapshot lack
 
   expect(request.status).toBe('admitted')
   expect(request.requestedComponents).toEqual(['search'])
+  expect(request.sourceWatermarksJson).toMatchObject({dirtySourceWatermarks: {reviewChange: 10}})
   expect(
     componentState?.required?.map((state) => {
       return state.component

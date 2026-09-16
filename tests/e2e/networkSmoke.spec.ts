@@ -184,18 +184,19 @@ const getWarningsEndpointData = (body: string): WarningsEndpointParseResult => {
 
 const getWarningFailureDetails = (data: ReviewsWarningsData) => {
   const failureVariants = getWarningFailureVariants(data, 'data').filter((variant) => {
-    return !(
-      isMutationDisabledCurrentDbQueuedBacklog(data.indexing)
-      && [
-        'data.indexing.serving.diagnostics.dirtyWork.failedCount',
-        'data.indexing.serving.diagnostics.rebuildChunks.failedCount',
-      ].includes(variant.path)
-    ) && !isCurrentDbHistoricalMaintenanceFailure(data, variant.path)
+    return (
+      !isMutationDisabledCurrentDbQueuedBacklogDiagnostic(data, variant.path)
+      && !isCurrentDbHistoricalMaintenanceFailure(data, variant.path)
+    )
   })
 
   return failureVariants.length === 0
     ? null
-    : `warning response returned failed review state: ${failureVariants.map(formatWarningFailureVariant).join(', ')}`
+    : `warning response returned failed review state: ${failureVariants.map(formatWarningFailureVariant).join(', ')}; ${formatIndexingState(
+        data.indexing,
+      )}; maintenanceStatus=${data.indexing.maintenance.status}; maintenanceHistorical=${
+        data.indexing.maintenance.hasHistoricalFailures
+      }; maintenanceActionable=${data.indexing.maintenance.hasActionableFailures}`
 }
 
 const formatIndexingState = (indexing: ReviewsWarningsData['indexing']) => {
@@ -244,6 +245,32 @@ const isMutationDisabledCurrentDbQueuedBacklog = (indexing: ReviewsWarningsData[
   )
 }
 
+const isMutationDisabledCurrentDbMaintenanceBacklog = (indexing: ReviewsWarningsData['indexing']) => {
+  return (
+    networkSmokeDbMode === 'current'
+    && areServerMutationsDisabled
+    && indexing.serving.readable
+    && indexing.serving.usable
+    && indexing.pendingRefreshCount > 0
+    && indexing.maintenance.hasActionableFailures === false
+    && indexing.eligibleConsumerPresent === false
+  )
+}
+
+const isMutationDisabledCurrentDbQueuedBacklogDiagnostic = (data: ReviewsWarningsData, path: string) => {
+  const isBacklogDiagnostic =
+    path === 'data.indexing.serving.diagnostics.dirtyWork.failedCount'
+    || path === 'data.indexing.serving.diagnostics.rebuildChunks.failedCount'
+    || /^data\.indexing\.serving\.diagnostics\.dirtyWork\.buckets\[\d+\]\.status$/.test(path)
+    || /^data\.indexing\.serving\.diagnostics\.rebuildChunks\.buckets\[\d+\]\.status$/.test(path)
+
+  return (
+    isBacklogDiagnostic
+    && (isMutationDisabledCurrentDbQueuedBacklog(data.indexing)
+      || isMutationDisabledCurrentDbMaintenanceBacklog(data.indexing))
+  )
+}
+
 const isCurrentDbReadableMemoryRecoveryState = (indexing: ReviewsWarningsData['indexing']) => {
   return (
     networkSmokeDbMode === 'current'
@@ -269,6 +296,8 @@ const isCurrentDbHistoricalMaintenanceFailure = (data: ReviewsWarningsData, path
   const isHistoricalTerminalDiagnostic =
     path === 'data.indexing.serving.diagnostics.rebuildChunks.failedCount'
     || path === 'data.indexing.serving.diagnostics.dirtyWork.failedCount'
+    || /^data\.indexing\.serving\.diagnostics\.dirtyWork\.buckets\[\d+\]\.status$/.test(path)
+    || /^data\.indexing\.serving\.diagnostics\.rebuildChunks\.buckets\[\d+\]\.status$/.test(path)
 
   if (networkSmokeDbMode === 'current' && isNonTerminalDirtyWorkLifecycleDiagnostic) {
     return true
@@ -277,8 +306,6 @@ const isCurrentDbHistoricalMaintenanceFailure = (data: ReviewsWarningsData, path
   return (
     networkSmokeDbMode === 'current'
     && isHistoricalTerminalDiagnostic
-    && data.indexing.status === 'ready'
-    && data.indexing.progressState === 'completed'
     && data.indexing.serving.readable
     && data.indexing.serving.usable
     && data.indexing.maintenance.hasHistoricalFailures
@@ -1120,6 +1147,10 @@ const isBenignRequest = (request: Request) => {
   return url.origin === appBaseUrl && url.pathname === '/favicon.ico'
 }
 
+const isBenignRequestFailure = (request: Request) => {
+  return request.failure()?.errorText === 'net::ERR_ABORTED'
+}
+
 const isBrowserResourceLoadConsoleError = (message: string) => {
   return message.startsWith('Failed to load resource: the server responded with a status of')
 }
@@ -1203,7 +1234,8 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   }
 
   const onRequestFailed = (request: Request) => {
-    if (!isAuditedOrigin(request.url()) || isBenignRequest(request)) {
+    if (!isAuditedOrigin(request.url()) || isBenignRequest(request) || isBenignRequestFailure(request)) {
+      settleAuditedRequest(request)
       return
     }
 
