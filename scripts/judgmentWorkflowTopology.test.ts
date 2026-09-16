@@ -210,7 +210,7 @@ test('topology cleanup completion requires central drain state and absent local 
   expect(isTopologyJobCleanupComplete([])).toBe(false)
 })
 
-test('topology judgment completion requires projection and ack evidence', () => {
+test('topology judgment completion accepts projection acks or terminal local stores', () => {
   expect(
     isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: true,
@@ -234,7 +234,16 @@ test('topology judgment completion requires projection and ack evidence', () => 
   ).toBe(false)
   expect(
     isTopologyJudgmentWorkflowComplete({
+      hasReconciledProjectRefreshAcks: false,
+      hasTerminalLocalJobStores: true,
+      totalJudgments: 4,
+      visibleProjectionCount: 2,
+    }),
+  ).toBe(true)
+  expect(
+    isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: true,
+      hasTerminalLocalJobStores: true,
       totalJudgments: 3,
       visibleProjectionCount: 4,
     }),

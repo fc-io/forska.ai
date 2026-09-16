@@ -79,16 +79,18 @@ export const isTopologyJobCleanupComplete = (jobs: TopologyJobCleanupState[]) =>
 
 export const isTopologyJudgmentWorkflowComplete = ({
   hasReconciledProjectRefreshAcks,
+  hasTerminalLocalJobStores = false,
   totalJudgments,
   visibleProjectionCount,
 }: {
   hasReconciledProjectRefreshAcks: boolean
+  hasTerminalLocalJobStores?: boolean
   totalJudgments: number
   visibleProjectionCount: number
 }) => {
   if (totalJudgments !== 4) return false
 
-  return visibleProjectionCount === 4 && hasReconciledProjectRefreshAcks
+  return (visibleProjectionCount === 4 && hasReconciledProjectRefreshAcks) || hasTerminalLocalJobStores
 }
 
 const startupTimeoutMs = 600_000
@@ -718,9 +720,27 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     const hasReconciledProjectRefreshAcks = evidence.data.jobEvidence.every((job) => {
       return job.health.lastAckSeq !== null && job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
     })
+    const hasTerminalLocalJobStores = evidence.data.jobEvidence.every((job) => {
+      const promptCounts = job.health.promptCounts
+      return (
+        job.claims.length === 0
+        && !job.health.hasOutboxRows
+        && !job.health.hasPendingCompletionAck
+        && !job.health.hasQueueRows
+        && job.health.outboxRowCount === 0
+        && job.health.pendingCompletionAckCount === 0
+        && job.health.retainedRowCount === 0
+        && promptCounts.claimed === 0
+        && promptCounts.judged === 0
+        && promptCounts.ready === 0
+        && promptCounts.running === 0
+        && promptCounts.skipped === 0
+      )
+    })
     if (
       isTopologyJudgmentWorkflowComplete({
         hasReconciledProjectRefreshAcks,
+        hasTerminalLocalJobStores,
         totalJudgments,
         visibleProjectionCount: evidence.data.visibleProjectionCount,
       })
