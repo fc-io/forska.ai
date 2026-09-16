@@ -352,3 +352,72 @@ test('tracked import marks provider failures as fetch-failed so partial pages ar
     expect(spoolRepository.getResumeCursor(partialWindow.id)).toBe('cursor-after-partial-page')
   })
 })
+
+test('tracked import recovers a terminal spooled page as ready after restart', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    let fetchCallCount = 0
+    const provider: DataSourceTrackingProvider = {
+      fetchRangePages: async () => {
+        throw new Error('not used')
+      },
+      fetchWindowPages: async () => {
+        fetchCallCount += 1
+        throw new Error('terminal page should avoid refetch')
+      },
+      getGranularity: () => {
+        return 'day'
+      },
+      getNextRunAfter: () => {
+        return null
+      },
+      getNextWindow: () => {
+        throw new Error('not used')
+      },
+      getReconciliationRange: () => {
+        throw new Error('not used')
+      },
+      route: pubmedTrackedImportRoute,
+    }
+    const windowInput: DataSourceTrackingWindow = {
+      dataSourceId: 'source-1',
+      route: pubmedTrackedImportRoute,
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+      windowStart: new Date('2026-09-15T00:00:00.000Z'),
+    }
+    const window = spoolRepository.createOrResumeWindow(windowInput)
+
+    spoolRepository.appendPage({
+      cursorAfter: null,
+      cursorBefore: 'cursor-before-terminal',
+      normalizedRecordsJson: [{articleId: 'pmid:terminal'}],
+      pageIndex: 0,
+      rawPayloadJson: {page: 'terminal'},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-terminal',
+      windowId: window.id,
+    })
+    spoolRepository.markWindowFailed({
+      error: 'process exited before ready',
+      nextRetryAt: new Date('2026-09-16T13:00:00.000Z'),
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      status: 'fetch_failed',
+      windowId: window.id,
+    })
+
+    const service = createDataSourceTrackedImportService({
+      providerRegistry: createDataSourceTrackingProviderRegistry([provider]),
+      spoolRepository,
+    })
+    const result = await service.fetchWindowToSpool({
+      dataSource: getDataSource(),
+      now: new Date('2026-09-16T12:05:00.000Z'),
+      window: windowInput,
+    })
+
+    expect(result.status).toBe('spooled')
+    expect(result.window.status).toBe('ready')
+    expect(result.pageCount).toBe(1)
+    expect(fetchCallCount).toBe(0)
+  })
+})

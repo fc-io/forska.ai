@@ -16,6 +16,7 @@ export type DataSourceTrackingSpoolWindowStatus =
   | 'ingested'
   | 'fetch_failed'
   | 'ingest_failed'
+  | 'rejected'
 
 export type DataSourceTrackingSpoolWindowRecord = {
   id: string
@@ -131,6 +132,7 @@ const getSpoolWindowStatus = (value: string): DataSourceTrackingSpoolWindowStatu
     || value === 'ingested'
     || value === 'fetch_failed'
     || value === 'ingest_failed'
+    || value === 'rejected'
   ) {
     return value
   }
@@ -289,7 +291,7 @@ export const createDataSourceTrackingSpoolRepository = (
         SELECT
           SUM(CASE WHEN status IN ('ready', 'ingesting') THEN 1 ELSE 0 END) AS pendingWindowCount,
           SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS readyWindowCount,
-          SUM(CASE WHEN status IN ('fetch_failed', 'ingest_failed') THEN 1 ELSE 0 END) AS failedWindowCount,
+          SUM(CASE WHEN status IN ('fetch_failed', 'ingest_failed', 'rejected') THEN 1 ELSE 0 END) AS failedWindowCount,
           MIN(CASE WHEN status = 'ready' THEN spooled_at ELSE NULL END) AS oldestReadyAt
         FROM tracking_spool_window
       `,
@@ -634,6 +636,31 @@ export const createDataSourceTrackingSpoolRepository = (
 
       return getWindowById(database, input.windowId)
     },
+    markWindowRejected: (input: {
+      error: string
+      now?: Date
+      windowId: string
+    }): DataSourceTrackingSpoolWindowRecord | null => {
+      const now = input.now ?? new Date()
+
+      database
+        .query(
+          `
+          UPDATE tracking_spool_window
+          SET status = 'rejected',
+              failure_count = failure_count + 1,
+              last_error = ?,
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              next_retry_at = NULL,
+              updated_at = ?
+          WHERE id = ?
+        `,
+        )
+        .run(input.error, now.toISOString(), input.windowId)
+
+      return getWindowById(database, input.windowId)
+    },
     markWindowIngested: (input: {
       ingestedAt?: Date
       leaseOwner?: string | null
@@ -711,6 +738,30 @@ export const createDataSourceTrackingSpoolRepository = (
         .run(spooledAt.toISOString(), spooledAt.toISOString(), input.windowId)
 
       return getWindowById(database, input.windowId)
+    },
+    renewWindowLease: (input: {
+      leaseExpiresAt: Date
+      leaseOwner: string
+      now?: Date
+      windowId: string
+    }): DataSourceTrackingSpoolWindowRecord | null => {
+      const now = input.now ?? new Date()
+      const result = database
+        .query(
+          `
+          UPDATE tracking_spool_window
+          SET lease_expires_at = ?,
+              updated_at = ?
+          WHERE id = ?
+            AND status = 'ingesting'
+            AND lease_owner = ?
+        `,
+        )
+        .run(input.leaseExpiresAt.toISOString(), now.toISOString(), input.windowId, input.leaseOwner) as {
+        changes?: number
+      }
+
+      return (result.changes ?? 0) > 0 ? getWindowById(database, input.windowId) : null
     },
   }
 }

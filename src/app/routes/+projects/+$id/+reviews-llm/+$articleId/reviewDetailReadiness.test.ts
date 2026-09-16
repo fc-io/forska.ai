@@ -8,6 +8,7 @@ import {
   getReviewDetailRefetchInterval,
   getReviewDetailUnavailableMessage,
   isArchivedReviewDetail,
+  isTerminallyUnavailableReviewDetail,
   isUnavailableReviewDetail,
 } from './reviewDetailReadiness'
 
@@ -17,7 +18,7 @@ const reviewDetailRouteFiles = [
 ]
 
 test('review detail readiness helpers distinguish unavailable V4 detail state from available payloads', () => {
-  const unavailable = {article: null, reason: 'detail row unavailable', status: 'unavailable'}
+  const unavailable = {article: null, reason: 'detail row unavailable', status: 'unavailable'} as const
   const available = {article: {articleTitle: 'Ready article'}, status: 'ready'}
 
   expect(isUnavailableReviewDetail(unavailable)).toBe(true)
@@ -29,13 +30,29 @@ test('review detail readiness helpers distinguish unavailable V4 detail state fr
   expect(getReviewDetailUnavailableMessage(unavailable)).toContain('detail row unavailable')
 })
 
+test('review detail readiness helpers stop polling terminal unavailable detail state', () => {
+  const terminalUnavailable = {
+    article: null,
+    diagnostics: {
+      manifest: {detailReadiness: 'unavailable', lastError: 'projection failed', status: 'failed'},
+      rejectionReason: 'manifestStatusRejected',
+    },
+    reason: 'manifestStatusRejected',
+    status: 'unavailable',
+  } as const
+
+  expect(isUnavailableReviewDetail(terminalUnavailable)).toBe(true)
+  expect(isTerminallyUnavailableReviewDetail(terminalUnavailable)).toBe(true)
+  expect(getReviewDetailRefetchInterval(terminalUnavailable)).toBe(false)
+})
+
 test('review detail readiness helpers distinguish archived projects from unavailable V4 detail state', () => {
   const archived = {
     article: null,
     code: 'PROJECT_ARCHIVED',
     message: 'Unarchive this project before reviewing articles.',
     status: 'archived',
-  }
+  } as const
   const responseError = {value: archived}
 
   expect(isArchivedReviewDetail(archived)).toBe(true)

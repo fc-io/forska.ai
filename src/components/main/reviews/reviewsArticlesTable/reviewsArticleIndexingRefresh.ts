@@ -1,5 +1,11 @@
 import type {ReviewsWarningsData} from '../reviewsWarningsQuery.ts'
 
+type CursorPaginationResetInput<LoadedPage> = {
+  setCurrentPage: (page: number) => void
+  setLoadedPages: (pages: Record<number, LoadedPage>) => void
+  setPageCursors: (cursors: Record<number, string | null>) => void
+}
+
 const activeIndexingProgressStates = new Set<ReviewsWarningsData['indexing']['progressState']>([
   'processing',
   'queued',
@@ -45,4 +51,14 @@ export const getReviewArticlesIndexingRefreshSignature = (
     coverage.rowReadyArticleCount ?? 'row-null',
     coverage.searchReadyArticleCount ?? 'search-null',
   ].join('|')
+}
+
+export const resetReviewArticlesCursorPagination = <LoadedPage>({
+  setCurrentPage,
+  setLoadedPages,
+  setPageCursors,
+}: CursorPaginationResetInput<LoadedPage>) => {
+  setCurrentPage(1)
+  setPageCursors({1: null})
+  setLoadedPages({})
 }

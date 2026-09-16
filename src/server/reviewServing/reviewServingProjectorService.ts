@@ -21,9 +21,10 @@ import {
   type ReviewServingManifestRepositoryTransaction,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
-import type {
-  ReviewServingDirtyWorkScope,
-  ReviewServingSourcePartitionWatermarks,
+import {
+  getReviewServingSourceWatermarkKeys,
+  type ReviewServingDirtyWorkScope,
+  type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
 import {
   promoteReviewServingProjectorSnapshot,
@@ -206,6 +207,57 @@ const getBlockedRebuildRequestDiagnostic = (requests: readonly ReviewServingRebu
     .join('; ')
 }
 
+const getObjectRecord = (value: unknown): Record<string, unknown> | null => {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      return getObjectRecord(parsed)
+    } catch {
+      return null
+    }
+  }
+
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+const getNumericSourceWatermark = (watermarks: Record<string, unknown>, sourceKey: string) => {
+  const value = watermarks[sourceKey]
+  const numericValue = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+
+  return Number.isFinite(numericValue) ? numericValue : null
+}
+
+const isClaimCoveredByRebuildRequest = (claim: ReviewServingDirtyWorkClaim, request: ReviewServingRebuildRequest) => {
+  const sourceWatermarks = getObjectRecord(request.sourceWatermarksJson)
+
+  if (sourceWatermarks === null) {
+    return true
+  }
+
+  if (claim.projectId === null || request.projectId !== claim.projectId) {
+    return false
+  }
+
+  return [claim.sourcePartition, ...getReviewServingSourceWatermarkKeys(claim.sourcePartition)].some((sourceKey) => {
+    const sourceWatermark = getNumericSourceWatermark(sourceWatermarks, sourceKey)
+
+    return sourceWatermark !== null && sourceWatermark >= claim.latestSourceHighWaterMark
+  })
+}
+
+const areClaimsCoveredByRebuildRequests = (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  requests: readonly ReviewServingRebuildRequest[],
+) => {
+  return claims.every((claim) => {
+    return requests.some((request) => {
+      return isClaimCoveredByRebuildRequest(claim, request)
+    })
+  })
+}
+
 const getNormalizedBudget = (input: WakeReviewServingProjectorServiceInput) => {
   const batchSize = Math.max(0, Math.floor(input.batchSize))
   const maxRowsPerWake = Math.max(0, Math.floor(input.maxRowsPerWake))
@@ -224,12 +276,14 @@ const getDirtyWorkIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   })
 }
 
-const getMissingSnapshotRepairComponents = (component: ReviewServingProjectionComponent) => {
+const getMissingSnapshotRepairComponents = (
+  component: ReviewServingProjectionComponent,
+): ReviewServingProjectionComponent[] => {
   if (component === 'summary') {
-    return [...new Set([...countReadyReviewServingComponents, 'payload', component])]
+    return [...new Set<ReviewServingProjectionComponent>([...countReadyReviewServingComponents, 'payload', component])]
   }
 
-  return [...new Set([...countReadyReviewServingComponents, component])]
+  return [...new Set<ReviewServingProjectionComponent>([...countReadyReviewServingComponents, component])]
 }
 
 const getMissingSnapshotRepairPriority = (component: ReviewServingProjectionComponent) => {
@@ -609,6 +663,12 @@ export const wakeReviewServingProjectorService = async (
             ],
             processedRows: state.processedRows + claims.length,
           }
+        }
+
+        if (!areClaimsCoveredByRebuildRequests(claims, rebuildResult.right)) {
+          await releaseDirtyWork(claimIds, database)
+
+          return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
         }
 
         await completeDirtyWork(claims, database)

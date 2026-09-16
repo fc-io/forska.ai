@@ -164,6 +164,10 @@ test('data source tracking worker claims and spools reconciliation work separate
         calls.push('reconciliation:failed')
         return null
       },
+      renewWorkLease: async () => {
+        calls.push('reconciliation:renew')
+        return work
+      },
       scheduleDueMonthlyAgeBucketWork: async () => {
         calls.push('reconciliation:schedule')
         return []
@@ -212,8 +216,20 @@ test('data source tracking worker claims and spools reconciliation work separate
       claimDueSource: async () => {
         throw new Error('incremental source claim should not run')
       },
+      recordTrackingFailure: async () => {
+        calls.push('tracking:failure')
+        return null
+      },
       selectDueSources: async () => {
         return []
+      },
+      startTrackingWindow: async () => {
+        calls.push('tracking:start')
+        return null
+      },
+      updateTrackingState: async () => {
+        calls.push('tracking:cursor')
+        return null
       },
     } as never,
   })
@@ -235,10 +251,182 @@ test('data source tracking worker claims and spools reconciliation work separate
     'reconciliation:schedule',
     'reconciliation:claim',
     'datasource:get',
+    'tracking:start',
+    'reconciliation:renew',
     'reconciliation:fetch',
     'reconciliation:progress',
+    'tracking:cursor',
     'reconciliation:progress',
+    'tracking:cursor',
     'reconciliation:progress',
+    'spool:drain',
+  ])
+})
+
+test('data source tracking worker rechecks backpressure after each spooled page', async () => {
+  const calls: string[] = []
+  const now = new Date('2026-09-16T09:00:00.000Z')
+  const activeState = {
+    ...getState(),
+    activeRunKind: 'incremental' as const,
+    activeWindowEnd: new Date('2026-09-15T00:00:00.000Z'),
+    activeWindowStart: new Date('2026-09-15T00:00:00.000Z'),
+    leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+    leaseOwner: 'worker',
+  }
+  let pageSpooled = false
+  const worker = createDataSourceTrackingWorker({
+    dataSourceQueryService: {
+      getDataSourceById: async (id: string) => {
+        calls.push(`datasource:get:${id}`)
+        return {
+          archived: false,
+          createdAt: new Date('2026-09-01T00:00:00.000Z'),
+          cursor: null,
+          dateFrom: new Date('2026-09-01T00:00:00.000Z'),
+          dateTo: null,
+          description: null,
+          id,
+          importRoute: pubmedTrackedImportRoute,
+          itemsAfterLastImport: 0,
+          lastImportAt: null,
+          title: 'Tracked source',
+          trackingEnabled: true,
+          trackingReconcileScheduleMonths: [3],
+          updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+        }
+      },
+    } as never,
+    logger: {
+      log: () => {
+        return undefined
+      },
+      warn: () => {
+        return undefined
+      },
+    },
+    providerRegistry: {
+      getProvider: () => {
+        return {
+          getNextWindow: () => {
+            return {
+              reason: 'next-window',
+              status: 'window',
+              window: {
+                dataSourceId: 'source-1',
+                route: pubmedTrackedImportRoute,
+                runKind: 'incremental',
+                windowEnd: new Date('2026-09-15T00:00:00.000Z'),
+                windowStart: new Date('2026-09-15T00:00:00.000Z'),
+              },
+            }
+          },
+          route: pubmedTrackedImportRoute,
+        }
+      },
+    } as never,
+    reconciliationWorkRepository: {
+      claimNextWork: async () => {
+        calls.push('reconciliation:claim')
+        return null
+      },
+      scheduleDueMonthlyAgeBucketWork: async () => {
+        calls.push('reconciliation:schedule')
+        return []
+      },
+    } as never,
+    spoolIngester: {
+      drainReadyWindows: async () => {
+        calls.push('spool:drain')
+        return []
+      },
+    },
+    spoolRepository: {
+      getBackpressureSignal: () => {
+        return {
+          backpressureActive: pageSpooled,
+          backlog: {
+            failedWindowCount: 0,
+            oldestReadyAt: null,
+            pendingPageCount: pageSpooled ? 20 : 0,
+            pendingWindowCount: pageSpooled ? 5 : 0,
+            readyWindowCount: pageSpooled ? 5 : 0,
+          },
+        }
+      },
+    } as never,
+    trackedImportService: {
+      fetchWindowToSpool: async (input: {
+        onPageSpooled?: (input: {
+          cursor: string | null
+          window: {cursor: string | null; id: string}
+        }) => Promise<void> | void
+      }) => {
+        calls.push('source:fetch')
+        pageSpooled = true
+        await input.onPageSpooled?.({
+          cursor: 'cursor-after-page',
+          window: {cursor: 'cursor-after-page', id: 'window-1'},
+        })
+        return {fetchedTotal: 1, pageCount: 1, reason: 'fetched', status: 'spooled', window: {id: 'window-1'}}
+      },
+    } as never,
+    trackingRepository: {
+      claimDueSource: async ({dataSourceId}: {dataSourceId: string}) => {
+        calls.push(`source:claim:${dataSourceId}`)
+        return {...getState(), dataSourceId, leaseOwner: 'worker', leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z')}
+      },
+      getTrackingState: async () => {
+        return activeState
+      },
+      recordTrackingFailure: async () => {
+        calls.push('tracking:failure')
+        return null
+      },
+      releaseSourceLease: async () => {
+        calls.push('tracking:release')
+        return null
+      },
+      renewSourceLease: async () => {
+        calls.push('tracking:renew')
+        return activeState
+      },
+      selectDueSources: async () => {
+        return [getState(), {...getState(), dataSourceId: 'source-2'}]
+      },
+      startTrackingWindow: async () => {
+        calls.push('tracking:start')
+        return activeState
+      },
+      updateTrackingState: async () => {
+        calls.push('tracking:cursor')
+        return activeState
+      },
+    } as never,
+  })
+
+  const result = await worker.wake({maxFetchSources: 2, now})
+
+  expect(result.backpressureActive).toBe(true)
+  expect(result.sourceResults).toEqual([
+    {
+      dataSourceId: 'source-1',
+      error: 'Tracking spool backpressure is active',
+      reason: 'fetch-failed',
+      status: 'failed',
+      windowId: '2026-09-15T00:00:00.000Z',
+    },
+    {dataSourceId: 'source-2', reason: 'backpressure', status: 'skipped'},
+  ])
+  expect(calls).toEqual([
+    'reconciliation:schedule',
+    'source:claim:source-1',
+    'datasource:get:source-1',
+    'tracking:start',
+    'tracking:renew',
+    'source:fetch',
+    'tracking:cursor',
+    'tracking:failure',
     'spool:drain',
   ])
 })

@@ -267,11 +267,12 @@ const heavyMaintenanceCronRoutes = shouldMountHeavyMaintenanceCrons
   ? new Elysia()
       .use((await import('./cron/fullTextJobs.ts')).fullTextJobsCron)
       .use((await import('./cron/fullTextConversionJobs.ts')).fullTextConversionJobsCron)
-      .use((await import('./cron/dataSourceTrackingCron.ts')).dataSourceTrackingCron)
       .use((await import('./cron/nvidiaSmi.ts')).nvidiaSmiCron)
   : new Elysia()
 const operationalJudgmentCronRoutes = shouldMountOperationalJudgmentCrons
-  ? new Elysia().use((await import('./cron/judgmentsJobsOperationalCron.ts')).judgmentsJobsOperationalCron)
+  ? new Elysia()
+      .use((await import('./cron/judgmentsJobsOperationalCron.ts')).judgmentsJobsOperationalCron)
+      .use((await import('./cron/dataSourceTrackingCron.ts')).dataSourceTrackingCron)
   : new Elysia()
 const judgmentImportCronRoutes = shouldMountImportOnlyJudgmentCrons
   ? new Elysia().use((await import('./cron/judgmentsJobsImportCron.ts')).judgmentsJobsImportCron)

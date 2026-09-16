@@ -5,9 +5,11 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCovidencePackageConfig} from '../services/covidenceImportService.ts'
 import {
+  createDataSourceTrackingRepository,
+  type DataSourceArticleChangeLogCursor,
+  type DataSourceTrackingDatabaseRunner,
   getDataSourceArticleChangeLogRepository,
   getDataSourceReconciliationWorkRepository,
-  getDataSourceTrackingRepository,
 } from '../services/dataSourceTrackingRepository.ts'
 import {getStructuredFileImportConfig} from '../services/structuredFileImportService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
@@ -62,6 +64,7 @@ type DataSourceImportState = {
 
 const covidencePromptLinksPerImportRouteLimit = 100
 const defaultTrackingReconcileScheduleMonths = [3, 12, 24, 36]
+const maxTrackingReconcileScheduleMonth = 120
 const supportedTrackingImportRoutes = new Set([
   '/api/datasources/import/pubmed',
   '/api/datasources/import/europe-pmc-ppr',
@@ -92,16 +95,38 @@ const getTrackingReconcileScheduleMonths = (value: unknown): number[] => {
   const months = Array.from(
     new Set(
       parsed.filter((entry): entry is number => {
-        return Number.isInteger(entry) && entry > 0
+        return Number.isInteger(entry) && entry > 0 && entry <= maxTrackingReconcileScheduleMonth
       }),
     ),
   )
 
-  return months.length > 0 ? months : defaultTrackingReconcileScheduleMonths
+  return months.length > 0
+    ? months.sort((left, right) => {
+        return left - right
+      })
+    : defaultTrackingReconcileScheduleMonths
+}
+
+const normalizeTrackingReconcileScheduleMonthsForWrite = (months?: number[]) => {
+  if (months === undefined || months.length === 0) {
+    return defaultTrackingReconcileScheduleMonths
+  }
+
+  for (const month of months) {
+    if (!Number.isInteger(month) || month <= 0 || month > maxTrackingReconcileScheduleMonth) {
+      throw new Error(
+        `Reconciliation schedule months must be integers between 1 and ${maxTrackingReconcileScheduleMonth}`,
+      )
+    }
+  }
+
+  return Array.from(new Set(months)).sort((left, right) => {
+    return left - right
+  })
 }
 
 const getTrackingReconcileScheduleMonthsSqlLiteral = (months?: number[]) => {
-  return getSqlLiteral(JSON.stringify(months ?? defaultTrackingReconcileScheduleMonths))
+  return getSqlLiteral(JSON.stringify(normalizeTrackingReconcileScheduleMonthsForWrite(months)))
 }
 
 const isTrackingSupportedRoute = (importRoute: string | null | undefined) => {
@@ -144,6 +169,19 @@ const minDate = (left: Date, right: Date) => {
   return left.getTime() <= right.getTime() ? left : right
 }
 
+const areDateBoundsEqual = (left: Date | null, right: Date | null) => {
+  return (left ? left.getTime() : null) === (right ? right.getTime() : null)
+}
+
+const areNumberListsEqual = (left: readonly number[], right: readonly number[]) => {
+  return (
+    left.length === right.length
+    && left.every((value, index) => {
+      return value === right[index]
+    })
+  )
+}
+
 const dataSourceArticleChangeKinds: DataSourceArticleChangeKind[] = [
   'article_added',
   'source_record_changed',
@@ -156,6 +194,41 @@ const dataSourceArticleChangeRunKinds: DataSourceArticleChangeRunKind[] = [
   'automatic_age_bucket',
   'manual_full_range',
 ]
+
+type TrackingChangeCursorPayload = {createdAt: string; detectedAt: string; id: string}
+
+const encodeTrackingChangeCursor = (row: {createdAt: Date; detectedAt: Date; id: string}): string => {
+  const payload: TrackingChangeCursorPayload = {
+    createdAt: row.createdAt.toISOString(),
+    detectedAt: row.detectedAt.toISOString(),
+    id: row.id,
+  }
+
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
+}
+
+const decodeTrackingChangeCursor = (value: string | undefined): DataSourceArticleChangeLogCursor | null => {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<TrackingChangeCursorPayload>
+    if (!decoded.id || !decoded.createdAt || !decoded.detectedAt) {
+      return null
+    }
+
+    const createdAt = new Date(decoded.createdAt)
+    const detectedAt = new Date(decoded.detectedAt)
+    if (Number.isNaN(createdAt.getTime()) || Number.isNaN(detectedAt.getTime())) {
+      return null
+    }
+
+    return {createdAt, detectedAt, id: decoded.id}
+  } catch {
+    return null
+  }
+}
 
 const parseEnumList = <T extends string>(value: string | undefined, allowedValues: readonly T[]): T[] | undefined => {
   if (!value) {
@@ -474,6 +547,7 @@ const updateDataSourceTx = async (tx: AppTx, params: {dataSourceId: string; upda
 }
 
 const createOrUpdateTrackingStateIfEnabled = async (params: {
+  db: DataSourceTrackingDatabaseRunner
   dataSourceId: string
   importRoute: string | null
   trackingEnabled: boolean
@@ -482,11 +556,72 @@ const createOrUpdateTrackingStateIfEnabled = async (params: {
     return
   }
 
-  await getDataSourceTrackingRepository().createOrUpdateTrackingState({
+  await createDataSourceTrackingRepository(params.db).createOrUpdateTrackingState({
     dataSourceId: params.dataSourceId,
     granularity: 'day',
     route: params.importRoute,
   })
+}
+
+const resetTrackingStateAfterConfigurationChange = async (
+  db: DataSourceTrackingDatabaseRunner,
+  params: {dataSourceId: string; resetHighWater: boolean; resetReconciliationScheduler: boolean; resetWindow: boolean},
+) => {
+  const setParts = [
+    'updated_at = current_timestamp',
+    params.resetWindow ? 'active_window_start = NULL' : null,
+    params.resetWindow ? 'active_window_end = NULL' : null,
+    params.resetWindow ? 'active_cursor = NULL' : null,
+    params.resetWindow ? 'active_run_kind = NULL' : null,
+    params.resetWindow ? 'active_reconciliation_age_months = NULL' : null,
+    params.resetWindow ? 'lease_owner = NULL' : null,
+    params.resetWindow ? 'lease_expires_at = NULL' : null,
+    params.resetHighWater ? 'high_water_completed_at = NULL' : null,
+    params.resetReconciliationScheduler ? 'last_reconciliation_scheduler_at = NULL' : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+
+  if (setParts.length <= 1) {
+    return
+  }
+
+  await db.run(
+    `
+    UPDATE app.data_source_tracking_state
+    SET ${setParts.join(', ')}
+    WHERE data_source_id = ${getSqlLiteral(params.dataSourceId)}
+  `,
+    getDataSourcesWorkloadContext({operation: 'trackingStateConfigurationReset'}),
+  )
+}
+
+const deleteReconciliationWorkOutsideBounds = async (
+  db: DataSourceTrackingDatabaseRunner,
+  params: {dataSourceId: string; dateFrom: Date | null; dateTo: Date | null},
+) => {
+  const startBoundary = params.dateFrom ? getUtcDayStart(params.dateFrom) : null
+  const endBoundaryExclusive = params.dateTo ? addUtcDays(params.dateTo, 1) : null
+  const stalePredicates = [
+    startBoundary ? `period_start < ${getSqlLiteral(startBoundary)}` : null,
+    endBoundaryExclusive ? `period_end > ${getSqlLiteral(endBoundaryExclusive)}` : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+
+  if (stalePredicates.length === 0) {
+    return
+  }
+
+  await db.run(
+    `
+    DELETE FROM app.data_source_reconciliation_work
+    WHERE data_source_id = ${getSqlLiteral(params.dataSourceId)}
+      AND status IN ('queued', 'running', 'failed')
+      AND (${stalePredicates.join(' OR ')})
+  `,
+    getDataSourcesWorkloadContext({operation: 'trackingReconciliationWorkInvalidateBounds'}),
+  )
 }
 
 export const dataSourcesRoutes = new Elysia()
@@ -688,70 +823,62 @@ export const dataSourcesRoutes = new Elysia()
       }
       const trackingEnabled = body.trackingEnabled ?? false
       const importRoute = body.importRoute ?? null
+      const trackingReconcileScheduleMonths = normalizeTrackingReconcileScheduleMonthsForWrite(
+        body.trackingReconcileScheduleMonths,
+      )
       assertTrackingCanBeEnabled({dateFrom, importRoute, trackingEnabled})
 
-      const [created] = await getAppDatabaseService().queryJson<{
-        id: string
-        title: string
-        description: string | null
-        importRoute: string | null
-        lastImportAt: unknown
-        itemsAfterLastImport: number | null
-        createdAt: unknown
-        updatedAt: unknown
-        dateFrom: unknown
-        dateTo: unknown
-        trackingEnabled: boolean | null
-        trackingReconcileScheduleMonths: unknown
-        archived: boolean
-      }>(
-        `
-        INSERT INTO app.data_source (
-          id,
-          title,
-          description,
-          import_route,
-          date_from,
-          date_to,
-          tracking_enabled,
-          tracking_reconcile_schedule_months
-        )
-        VALUES (
-          '${escapeSqlString(crypto.randomUUID())}',
-          ${getSqlLiteral(body.title)},
-          ${getSqlLiteral(body.description ?? null)},
-          ${getSqlLiteral(importRoute)},
-          ${getSqlLiteral(dateFrom)},
-          ${getSqlLiteral(dateTo)},
-          ${trackingEnabled ? 'TRUE' : 'FALSE'},
-          CAST(${getTrackingReconcileScheduleMonthsSqlLiteral(body.trackingReconcileScheduleMonths)} AS JSON)
-        )
-        RETURNING
-          id,
-          title,
-          description,
-          import_route AS importRoute,
-          last_import_at AS lastImportAt,
-          items_after_last_import AS itemsAfterLastImport,
-          created_at AS createdAt,
-          updated_at AS updatedAt,
-          date_from AS dateFrom,
-          date_to AS dateTo,
-          tracking_enabled AS trackingEnabled,
-          TO_JSON(tracking_reconcile_schedule_months) AS trackingReconcileScheduleMonths,
-          archived
-      `,
-        getDataSourcesWorkloadContext({maxResultRows: 1, operation: 'create'}),
-      )
+      const createdRow = await getAppDatabaseService().transaction(
+        async (tx) => {
+          const [created] = await tx.queryJson<{
+            id: string
+            importRoute: string | null
+            trackingEnabled: boolean | null
+          }>(
+            `
+            INSERT INTO app.data_source (
+              id,
+              title,
+              description,
+              import_route,
+              date_from,
+              date_to,
+              tracking_enabled,
+              tracking_reconcile_schedule_months
+            )
+            VALUES (
+              '${escapeSqlString(crypto.randomUUID())}',
+              ${getSqlLiteral(body.title)},
+              ${getSqlLiteral(body.description ?? null)},
+              ${getSqlLiteral(importRoute)},
+              ${getSqlLiteral(dateFrom)},
+              ${getSqlLiteral(dateTo)},
+              ${trackingEnabled ? 'TRUE' : 'FALSE'},
+              CAST(${getTrackingReconcileScheduleMonthsSqlLiteral(trackingReconcileScheduleMonths)} AS JSON)
+            )
+            RETURNING
+              id,
+              import_route AS importRoute,
+              tracking_enabled AS trackingEnabled
+          `,
+            getDataSourcesWorkloadContext({maxResultRows: 1, operation: 'create'}),
+          )
 
-      if (created) {
-        await createOrUpdateTrackingStateIfEnabled({
-          dataSourceId: created.id,
-          importRoute: created.importRoute,
-          trackingEnabled: created.trackingEnabled ?? false,
-        })
-      }
-      const createdRow = created ? await getDataSourceRow(getAppDatabaseService(), created.id) : null
+          if (!created) {
+            return null
+          }
+
+          await createOrUpdateTrackingStateIfEnabled({
+            db: tx,
+            dataSourceId: created.id,
+            importRoute: created.importRoute,
+            trackingEnabled: created.trackingEnabled ?? false,
+          })
+
+          return getDataSourceRow(tx, created.id)
+        },
+        getDataSourcesWorkloadContext({operation: 'createTransaction'}),
+      )
 
       return {
         data: createdRow
@@ -807,6 +934,28 @@ export const dataSourcesRoutes = new Elysia()
       const nextImportRoute = body.importRoute === undefined ? existing.importRoute : body.importRoute
       const nextTrackingEnabled =
         body.trackingEnabled === undefined ? Boolean(existing.trackingEnabled) : body.trackingEnabled
+      const existingDateFrom = getDateValue(existing.dateFrom)
+      const existingDateTo = getDateValue(existing.dateTo)
+      const trackingReconcileScheduleMonths =
+        body.trackingReconcileScheduleMonths === undefined
+          ? undefined
+          : normalizeTrackingReconcileScheduleMonthsForWrite(body.trackingReconcileScheduleMonths)
+      const existingTrackingReconcileScheduleMonths = getTrackingReconcileScheduleMonths(
+        existing.trackingReconcileScheduleMonths,
+      )
+      const nextTrackingReconcileScheduleMonths =
+        trackingReconcileScheduleMonths ?? existingTrackingReconcileScheduleMonths
+      const trackingScheduleChanged =
+        trackingReconcileScheduleMonths !== undefined
+        && !areNumberListsEqual(trackingReconcileScheduleMonths, existingTrackingReconcileScheduleMonths)
+      const dateBoundsChanged =
+        !areDateBoundsEqual(existingDateFrom, nextDateFrom) || !areDateBoundsEqual(existingDateTo, nextDateTo)
+      const startBoundaryMovedEarlier = Boolean(
+        existingDateFrom
+        && nextDateFrom
+        && getUtcDayStart(nextDateFrom).getTime() < getUtcDayStart(existingDateFrom).getTime(),
+      )
+      const importRouteChanged = nextImportRoute !== existing.importRoute
       assertTrackingCanBeEnabled({
         dateFrom: nextDateFrom,
         importRoute: nextImportRoute,
@@ -822,30 +971,53 @@ export const dataSourcesRoutes = new Elysia()
         parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
         body.trackingEnabled !== undefined ? `tracking_enabled = ${body.trackingEnabled ? 'TRUE' : 'FALSE'}` : null,
         body.trackingReconcileScheduleMonths !== undefined
-          ? `tracking_reconcile_schedule_months = CAST(${getTrackingReconcileScheduleMonthsSqlLiteral(body.trackingReconcileScheduleMonths)} AS JSON)`
+          ? `tracking_reconcile_schedule_months = CAST(${getTrackingReconcileScheduleMonthsSqlLiteral(nextTrackingReconcileScheduleMonths)} AS JSON)`
           : null,
       ].filter((part): part is string => {
         return part !== null
       })
 
-      const updated = await getAppDatabaseService().transaction(
+      const refreshed = await getAppDatabaseService().transaction(
         async (tx) => {
-          return updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
+          const updated = await updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
+
+          if (!updated) {
+            return null
+          }
+
+          await createOrUpdateTrackingStateIfEnabled({
+            db: tx,
+            dataSourceId: updated.id,
+            importRoute: updated.importRoute,
+            trackingEnabled: updated.trackingEnabled ?? false,
+          })
+
+          if (updated.trackingEnabled) {
+            await resetTrackingStateAfterConfigurationChange(tx, {
+              dataSourceId: updated.id,
+              resetHighWater: startBoundaryMovedEarlier || importRouteChanged,
+              resetReconciliationScheduler: dateBoundsChanged || importRouteChanged || trackingScheduleChanged,
+              resetWindow: dateBoundsChanged || importRouteChanged,
+            })
+
+            if (dateBoundsChanged) {
+              await deleteReconciliationWorkOutsideBounds(tx, {
+                dataSourceId: updated.id,
+                dateFrom: nextDateFrom,
+                dateTo: nextDateTo,
+              })
+            }
+          }
+
+          return getDataSourceRow(tx, updated.id)
         },
         getDataSourcesWorkloadContext({operation: 'updateTransaction'}),
       )
 
-      if (!updated) {
+      if (!refreshed) {
         throw new Error('Data source not found')
       }
 
-      await createOrUpdateTrackingStateIfEnabled({
-        dataSourceId: updated.id,
-        importRoute: updated.importRoute,
-        trackingEnabled: updated.trackingEnabled ?? false,
-      })
-
-      const refreshed = (await getDataSourceRow(getAppDatabaseService(), updated.id)) ?? updated
       const [normalizedUpdated] = await normalizeDataSourceRows(getAppDatabaseService(), [refreshed])
 
       return {data: normalizedUpdated}
@@ -886,11 +1058,12 @@ export const dataSourcesRoutes = new Elysia()
       throw new Error('Continuous tracking is not configured for this data source')
     }
 
+    const periodStart = getUtcDayStart(dateFrom)
     const latestClosedDay = getLatestClosedUtcDay()
     const configuredEndExclusive = dateTo ? addUtcDays(dateTo, 1) : null
     const periodEnd = configuredEndExclusive ? minDate(configuredEndExclusive, latestClosedDay) : latestClosedDay
 
-    if (periodEnd <= dateFrom) {
+    if (periodEnd <= periodStart) {
       throw new Error('No closed provider window is available for reconciliation')
     }
 
@@ -898,7 +1071,7 @@ export const dataSourcesRoutes = new Elysia()
       ageMonths: null,
       dataSourceId: existing.id,
       periodEnd,
-      periodStart: dateFrom,
+      periodStart,
       route: existing.importRoute,
       runKind: 'manual_full_range',
     })
@@ -911,17 +1084,31 @@ export const dataSourcesRoutes = new Elysia()
     '/api/datasources/:id/tracking/changes',
     async ({params, query}) => {
       const limit = parseBoundedInteger(query.limit, 50, 1, 100)
+      const after = decodeTrackingChangeCursor(query.after)
       const changes = await getDataSourceArticleChangeLogRepository().listChanges({
+        after,
         changeKinds: parseEnumList(query.changeKind, dataSourceArticleChangeKinds),
         dataSourceId: params.id,
-        limit,
+        limit: limit + 1,
         runKinds: parseEnumList(query.runKind, dataSourceArticleChangeRunKinds),
       })
+      const items = changes.slice(0, limit)
+      const hasMore = changes.length > limit
+      const lastItem = items.at(-1)
 
-      return {data: changes, limit}
+      return {
+        data: {
+          after: query.after ?? null,
+          hasMore,
+          items,
+          limit,
+          nextCursor: hasMore && lastItem ? encodeTrackingChangeCursor(lastItem) : null,
+        },
+      }
     },
     {
       query: t.Object({
+        after: t.Optional(t.String()),
         changeKind: t.Optional(t.String()),
         limit: t.Optional(t.String()),
         runKind: t.Optional(t.String()),

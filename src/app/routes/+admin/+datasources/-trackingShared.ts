@@ -1,6 +1,7 @@
 import {apiClient} from '../../../../services/apiClient.ts'
 
 export const defaultTrackingReconcileScheduleMonths = [3, 12, 24, 36] as const
+export const maxTrackingReconcileScheduleMonth = 120
 
 export const supportedTrackingImportRoutes = new Set([
   '/api/datasources/import/pubmed',
@@ -51,9 +52,16 @@ export type DataSourceTrackingChangeLogItem = {
   sourceRecordKey: string | null
 }
 
-export type DataSourceTrackingChangesResult = {items: DataSourceTrackingChangeLogItem[]; total: number | null}
+export type DataSourceTrackingChangesResult = {
+  after: string | null
+  hasMore: boolean
+  items: DataSourceTrackingChangeLogItem[]
+  limit: number
+  nextCursor: string | null
+}
 
 export type DataSourceTrackingChangesQuery = {
+  after?: string | null
   changeKind?: string
   dataSourceId: string
   limit: number
@@ -79,6 +87,10 @@ const getOptionalString = (value: unknown): string | null => {
 
 const getOptionalNumber = (value: unknown): number | null => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getOptionalBoolean = (value: unknown): boolean | null => {
+  return typeof value === 'boolean' ? value : null
 }
 
 const getTrackingApi = (dataSourceId: string) => {
@@ -116,10 +128,20 @@ const normalizeTrackingChangeLogItem = (value: unknown): DataSourceTrackingChang
 const normalizeTrackingChangesResponse = (value: unknown): DataSourceTrackingChangesResult => {
   const payload = getResponsePayload(value)
   const itemsValue = Array.isArray(payload) ? payload : isRecord(payload) ? payload.items : []
-  const totalValue = isRecord(payload) ? (payload.total ?? payload.count) : null
+  const afterValue = isRecord(payload) ? payload.after : null
+  const limitValue = isRecord(payload) ? payload.limit : null
+  const nextCursorValue = isRecord(payload) ? payload.nextCursor : null
+  const hasMoreValue = isRecord(payload) ? payload.hasMore : null
   const items = Array.isArray(itemsValue) ? itemsValue.map(normalizeTrackingChangeLogItem) : []
+  const nextCursor = getOptionalString(nextCursorValue)
 
-  return {items, total: getOptionalNumber(totalValue)}
+  return {
+    after: getOptionalString(afterValue),
+    hasMore: getOptionalBoolean(hasMoreValue) ?? nextCursor !== null,
+    items,
+    limit: getOptionalNumber(limitValue) ?? items.length,
+    nextCursor,
+  }
 }
 
 export const isTrackingSupportedImportRoute = (importRoute: string | null | undefined) => {
@@ -130,7 +152,7 @@ export const normalizeTrackingScheduleMonths = (months: readonly number[] | null
   const normalized =
     months
       ?.filter((month) => {
-        return Number.isInteger(month) && month > 0
+        return Number.isInteger(month) && month > 0 && month <= maxTrackingReconcileScheduleMonth
       })
       .filter((month, index, list) => {
         return list.indexOf(month) === index
@@ -267,6 +289,10 @@ export const fetchDataSourceTrackingChanges = async (
 
   if (query.changeKind) {
     requestQuery.changeKind = query.changeKind
+  }
+
+  if (query.after) {
+    requestQuery.after = query.after
   }
 
   if (query.runKind) {

@@ -257,6 +257,126 @@ test('data source reconciliation work scheduling is idempotent and claims one ac
   })
 })
 
+test('reconciliation claims require enabled current-route data sources', async () => {
+  await withTrackingDatabase(async (database) => {
+    const workRepository = createDataSourceReconciliationWorkRepository(database)
+    const sourceId = 'tracking-source-reconciliation-disabled'
+    const route = '/api/datasources/import/europe-pmc-ppr'
+    const otherRoute = '/api/datasources/import/pubmed'
+
+    await database.run(`
+      INSERT INTO app.data_source (id, title, import_route, tracking_enabled, archived, date_from)
+      VALUES ('${sourceId}', 'Tracked source', '${route}', TRUE, FALSE, TIMESTAMPTZ '2026-01-01T00:00:00.000Z')
+    `)
+
+    const work = await workRepository.scheduleWork({
+      ageMonths: 3,
+      dataSourceId: sourceId,
+      now: new Date('2026-09-01T00:00:00.000Z'),
+      periodEnd: new Date('2026-07-01T00:00:00.000Z'),
+      periodStart: new Date('2026-06-01T00:00:00.000Z'),
+      route,
+      runKind: 'automatic_age_bucket',
+    })
+
+    await database.run(`UPDATE app.data_source SET tracking_enabled = FALSE WHERE id = '${sourceId}'`)
+    expect(
+      await workRepository.claimNextWork({
+        leaseExpiresAt: new Date('2026-09-15T10:05:00.000Z'),
+        leaseOwner: 'worker-disabled',
+        now: new Date('2026-09-15T10:00:00.000Z'),
+      }),
+    ).toBeNull()
+
+    await database.run(`UPDATE app.data_source SET tracking_enabled = TRUE, archived = TRUE WHERE id = '${sourceId}'`)
+    expect(
+      await workRepository.claimNextWork({
+        leaseExpiresAt: new Date('2026-09-15T10:05:00.000Z'),
+        leaseOwner: 'worker-archived',
+        now: new Date('2026-09-15T10:00:00.000Z'),
+      }),
+    ).toBeNull()
+
+    await database.run(`
+      UPDATE app.data_source
+      SET archived = FALSE, import_route = '${otherRoute}'
+      WHERE id = '${sourceId}'
+    `)
+    expect(
+      await workRepository.claimNextWork({
+        leaseExpiresAt: new Date('2026-09-15T10:05:00.000Z'),
+        leaseOwner: 'worker-route',
+        now: new Date('2026-09-15T10:00:00.000Z'),
+      }),
+    ).toBeNull()
+
+    await database.run(`UPDATE app.data_source SET import_route = '${route}' WHERE id = '${sourceId}'`)
+    const claim = await workRepository.claimNextWork({
+      leaseExpiresAt: new Date('2026-09-15T10:05:00.000Z'),
+      leaseOwner: 'worker-current',
+      now: new Date('2026-09-15T10:00:00.000Z'),
+    })
+
+    expect(claim?.id).toBe(work.id)
+    expect(claim?.leaseOwner).toBe('worker-current')
+  })
+})
+
+test('completed manual reconciliation work can be requested again', async () => {
+  await withTrackingDatabase(async (database) => {
+    const workRepository = createDataSourceReconciliationWorkRepository(database)
+    const sourceId = 'tracking-source-manual-repeat'
+    const route = '/api/datasources/import/pubmed'
+    const periodStart = new Date('2026-01-01T00:00:00.000Z')
+    const periodEnd = new Date('2026-09-01T00:00:00.000Z')
+
+    await database.run(`
+      INSERT INTO app.data_source (id, title, import_route, tracking_enabled, date_from)
+      VALUES ('${sourceId}', 'Tracked source', '${route}', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00.000Z')
+    `)
+
+    const first = await workRepository.scheduleWork({
+      ageMonths: null,
+      dataSourceId: sourceId,
+      now: new Date('2026-09-15T09:00:00.000Z'),
+      periodEnd,
+      periodStart,
+      route,
+      runKind: 'manual_full_range',
+    })
+    const activeDuplicate = await workRepository.scheduleWork({
+      ageMonths: null,
+      dataSourceId: sourceId,
+      now: new Date('2026-09-15T09:01:00.000Z'),
+      periodEnd,
+      periodStart,
+      route,
+      runKind: 'manual_full_range',
+    })
+
+    expect(activeDuplicate.id).toBe(first.id)
+
+    await workRepository.markWorkCompleted({
+      id: first.id,
+      importRunId: 'manual-run-1',
+      now: new Date('2026-09-15T09:02:00.000Z'),
+    })
+
+    const second = await workRepository.scheduleWork({
+      ageMonths: null,
+      dataSourceId: sourceId,
+      now: new Date('2026-09-15T09:03:00.000Z'),
+      periodEnd,
+      periodStart,
+      route,
+      runKind: 'manual_full_range',
+    })
+
+    expect(second.id).not.toBe(first.id)
+    expect(second.status).toBe('queued')
+  })
+})
+
 test('monthly reconciliation scheduler catches up configured age buckets without duplicating work', async () => {
   await withTrackingDatabase(async (database) => {
     const trackingRepository = createDataSourceTrackingRepository(database)

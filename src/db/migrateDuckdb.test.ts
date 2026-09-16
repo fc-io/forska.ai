@@ -9383,6 +9383,7 @@ test('DuckDB migrations add canonical article identifiers and keep legacy articl
 
 test('DuckDB migrations add import-scoped source record identity and idempotency constraints', async () => {
   const duckdbPath = `/tmp/forska-import-scoped-source-record-${Date.now()}.duckdb`
+  const schemaPayloadPath = `${duckdbPath}.schema.json`
   const sourceRecordMigrationSql = readFileSync(
     resolve(migrationsFolder, '0078_articleImportRouteSourceRecords.sql'),
     'utf8',
@@ -9406,6 +9407,9 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
         const database = getAppDatabaseService()
         const importRouteColumns = await database.queryJson(
           "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'article_import_route' ORDER BY column_name"
+        )
+        const sourceRecordColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'article_import_route_source_record' ORDER BY column_name"
         )
         const importRouteConstraints = await database.queryJson(
           "SELECT constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name = 'article_import_route' ORDER BY constraint_name"
@@ -9446,7 +9450,7 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
           "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE import_route_id = 'source-record-route' AND external_article_id IS NULL AND source_record_key IS NULL AND source_record_hash IS NULL"
         )
 
-        console.log(JSON.stringify({duplicateCurrentMembershipRejected, duplicateSourceKeyRejected, importRouteColumns, importRouteConstraints, indexRows, nullableLegacyRow, sourceRecordConstraints}))
+        await Bun.write(${JSON.stringify(schemaPayloadPath)}, JSON.stringify({duplicateCurrentMembershipRejected, duplicateSourceKeyRejected, importRouteColumns, importRouteConstraints, indexRows, nullableLegacyRow, sourceRecordColumns, sourceRecordConstraints}))
         await database.close()
       `,
     ],
@@ -9469,28 +9473,23 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
       )
     }
 
-    const stdoutLines = result.stdout
-      .toString()
-      .split('\n')
-      .map((line) => {
-        return line.trim()
-      })
-      .filter((line) => {
-        return line.length > 0
-      })
-    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+    const parsed = JSON.parse(readFileSync(schemaPayloadPath, 'utf8')) as {
       duplicateCurrentMembershipRejected: boolean
       duplicateSourceKeyRejected: boolean
       importRouteColumns: Array<{columnName: string}>
       importRouteConstraints: Array<{constraintType: string; columnNames: string[]}>
       indexRows: Array<{indexName: string}>
       nullableLegacyRow: {count: number}
+      sourceRecordColumns: Array<{columnName: string}>
       sourceRecordConstraints: Array<{constraintType: string; columnNames: string[]}>
     }
     const indexNames = parsed.indexRows.map((row) => {
       return row.indexName
     })
     const importRouteColumnNames = parsed.importRouteColumns.map((column) => {
+      return column.columnName
+    })
+    const sourceRecordColumnNames = parsed.sourceRecordColumns.map((column) => {
       return column.columnName
     })
     const currentUniqueColumns = parsed.importRouteConstraints
@@ -9515,18 +9514,23 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
     expect(importRouteColumnNames).toContain('import_run_id')
     expect(importRouteColumnNames).toContain('source_record_key')
     expect(importRouteColumnNames).toContain('source_record_hash')
+    expect(importRouteColumnNames).toContain('source_article_created_at')
     expect(importRouteColumnNames).toContain('raw_payload')
+    expect(sourceRecordColumnNames).toContain('source_article_created_at')
     expect(sourceRecordMigrationSql).toContain('SET external_article_id =')
     expect(currentUniqueColumns).toContainEqual(['article_id', 'import_route_id'])
     expect(sourceRecordUniqueColumns).toContainEqual(['import_route_id', 'source_record_key'])
     expect(indexNames).toContain('idx_app_article_import_route_article_id')
     expect(indexNames).toContain('idx_app_article_import_route_external_article_id')
+    expect(indexNames).toContain('idx_app_article_import_route_source_article_created_at')
     expect(indexNames).toContain('idx_app_article_import_route_source_record_external_article_id')
+    expect(indexNames).toContain('idx_app_article_import_route_source_record_source_article_created_at')
     expect(parsed.duplicateCurrentMembershipRejected).toBe(true)
     expect(parsed.duplicateSourceKeyRejected).toBe(true)
     expect(parsed.nullableLegacyRow.count).toBe(2)
   } finally {
     removeFileIfExists(duckdbPath)
+    removeFileIfExists(schemaPayloadPath)
     removeFileIfExists(`${duckdbPath}.wal`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)

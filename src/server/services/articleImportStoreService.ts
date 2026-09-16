@@ -107,6 +107,7 @@ type ArticleImportRouteLinkRecord = {
   importRunId: string | null
   matchMetadata: unknown
   rawPayload: unknown
+  sourceArticleCreatedAt: Date | string | null
   sourceKind: string | null
   sourceRecordHash: string
   sourceRecordKey: string
@@ -139,6 +140,7 @@ type ArticleIdentifierQuarantineRecord = {
 type ExistingArticleImportRouteLink = {
   articleId: string
   importRouteId: string
+  sourceArticleCreatedAt: Date | string | null
   sourceRecordHash: string | null
   sourceRecordKey: string | null
 }
@@ -150,6 +152,7 @@ type DeletedArticleImportRouteLinkRow = {
   importRunId: string | null
   matchMetadata: unknown
   rawPayload: unknown
+  sourceArticleCreatedAt: Date | string | null
   sourceKind: string | null
   sourceRecordHash: string
   sourceRecordKey: string
@@ -169,6 +172,7 @@ type ExistingArticleImportSourceRecord = {
   legacyArticleId: string | null
   matchMetadata: unknown
   rawPayload: unknown
+  sourceArticleCreatedAt: Date | string | null
   sourceKind: string | null
   sourceRecordHash: string
   sourceRecordKey: string
@@ -668,6 +672,20 @@ const hasCanonicalArticleValueChanged = (left: unknown, right: unknown) => {
   return getStableJsonValue(left) !== getStableJsonValue(right)
 }
 
+const getTimestampValueMs = (value: Date | string | null | undefined) => {
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  const date = value instanceof Date ? value : new Date(value)
+
+  return Number.isNaN(date.getTime()) ? String(value) : date.getTime()
+}
+
+const hasTimestampValueChanged = (left: Date | string | null | undefined, right: Date | string | null | undefined) => {
+  return getTimestampValueMs(left) !== getTimestampValueMs(right)
+}
+
 const getChangedCanonicalArticleUpdateValues = (params: {
   current: ExistingCanonicalArticleRow
   rows: ScopedArticleImportStoreRow[]
@@ -681,6 +699,61 @@ const getChangedCanonicalArticleUpdateValues = (params: {
   )
 
   return Object.fromEntries(changedEntries) as Partial<CanonicalArticleUpdateValues>
+}
+
+type CanonicalArticleSnapshot = {
+  articleAuthors: string[]
+  articleCreatedAt: Date | string | null
+  articleSummary: string | null
+  articleTitle: string
+  arxivId: string | null
+  biorxivId: string | null
+  doi: string | null
+  importRoute: string | null
+  medrxivId: string | null
+  publicationStatus: PublicationStatus | null
+  pubmedId: string | null
+  sourceMetadata: unknown
+  url: string | null
+}
+
+type AppliedCanonicalArticleUpdate = {
+  articleId: string
+  changedFields: Record<string, [unknown, unknown]>
+  nextSnapshot: CanonicalArticleSnapshot
+  previousSnapshot: CanonicalArticleSnapshot
+}
+
+const getCanonicalArticleSnapshot = (row: ExistingCanonicalArticleRow): CanonicalArticleSnapshot => {
+  return {
+    articleAuthors: getStringArrayValue(row.articleAuthors),
+    articleCreatedAt: row.articleCreatedAt,
+    articleSummary: row.articleSummary,
+    articleTitle: row.articleTitle,
+    arxivId: row.arxivId,
+    biorxivId: row.biorxivId,
+    doi: row.doi,
+    importRoute: row.importRoute,
+    medrxivId: row.medrxivId,
+    publicationStatus: getPublicationStatus(row.publicationStatus),
+    pubmedId: row.pubmedId,
+    sourceMetadata: getJsonValue(row.sourceMetadata),
+    url: row.url,
+  }
+}
+
+const getCanonicalArticleChangedFields = (
+  previousSnapshot: CanonicalArticleSnapshot,
+  values: Partial<CanonicalArticleUpdateValues>,
+) => {
+  return Object.fromEntries(
+    Object.entries(values).map(([fieldName, nextValue]) => {
+      return [
+        fieldName,
+        [previousSnapshot[fieldName as keyof CanonicalArticleSnapshot] ?? null, nextValue] as [unknown, unknown],
+      ]
+    }),
+  )
 }
 
 const isSafeSqlIdentifier = (value: string) => {
@@ -769,8 +842,8 @@ const updateExistingCanonicalArticlesInTx = async (params: {
     return !blockedArticleIds.has(update.current.id)
   })
 
-  await updates.reduce<Promise<void>>((previousRun, update) => {
-    return previousRun.then(async () => {
+  return updates.reduce<Promise<AppliedCanonicalArticleUpdate[]>>((previousRun, update) => {
+    return previousRun.then(async (appliedUpdates) => {
       const assignments = Object.entries(update.values).map((entry) => {
         return `${canonicalArticleUpdateColumnMap[entry[0] as CanonicalArticleUpdateKey]} = ${getSqlLiteral(entry[1])}`
       })
@@ -792,6 +865,8 @@ const updateExistingCanonicalArticlesInTx = async (params: {
         },
       )
       const sourceUpdatedAt = new Date()
+      const previousSnapshot = getCanonicalArticleSnapshot(update.current)
+      const nextSnapshot = {...previousSnapshot, ...update.values}
 
       await params.tx.run(`
         UPDATE app.article
@@ -807,8 +882,18 @@ const updateExistingCanonicalArticlesInTx = async (params: {
         sourceOperation: 'update',
         sourceUpdatedAt,
       })
+
+      return [
+        ...appliedUpdates,
+        {
+          articleId: update.current.id,
+          changedFields: getCanonicalArticleChangedFields(previousSnapshot, update.values),
+          nextSnapshot,
+          previousSnapshot,
+        },
+      ]
     })
-  }, Promise.resolve())
+  }, Promise.resolve([]))
 }
 
 const getArticleImportRouteSourceRecordKey = (record: {importRouteId: string; sourceRecordKey: string}) => {
@@ -841,6 +926,7 @@ const currentArticleImportRouteColumns = [
   'import_run_id',
   'source_record_key',
   'source_record_hash',
+  'source_article_created_at',
   'raw_payload',
 ] as const
 
@@ -855,6 +941,7 @@ const articleImportRouteSourceRecordColumns = [
   'import_run_id',
   'source_record_key',
   'source_record_hash',
+  'source_article_created_at',
   'raw_payload',
 ] as const
 
@@ -870,6 +957,7 @@ const getArticleImportRouteLinkValue = (record: ArticleImportRouteLinkRecord) =>
     record.importRunId,
     record.sourceRecordKey,
     record.sourceRecordHash,
+    record.sourceArticleCreatedAt,
     record.rawPayload,
   ]
     .map((value) => {
@@ -936,6 +1024,7 @@ const getDataSourceArticleChangeLogId = (input: {
   route: string
   runKind: string
   sourceRecordKey: string | null
+  importRunId: string | null
 }) => {
   const digest = createHash('sha256')
     .update(
@@ -949,6 +1038,7 @@ const getDataSourceArticleChangeLogId = (input: {
         route: input.route,
         runKind: input.runKind,
         sourceRecordKey: input.sourceRecordKey,
+        importRunId: input.importRunId,
       }),
     )
     .digest('hex')
@@ -1082,12 +1172,14 @@ const insertSourceRecordDeletedChangeLogs = async (
                 route: context.route,
                 runKind: context.runKind,
                 sourceRecordKey: record.sourceRecordKey,
+                importRunId: context.importRunId,
               })
               const previousSnapshot = {
                 externalArticleId: record.externalArticleId,
                 importMetadata: record.importMetadata,
                 matchMetadata: record.matchMetadata,
                 rawPayload: record.rawPayload,
+                sourceArticleCreatedAt: record.sourceArticleCreatedAt,
                 sourceKind: record.sourceKind,
               }
 
@@ -1122,12 +1214,144 @@ const insertSourceRecordDeletedChangeLogs = async (
   }, Promise.resolve())
 }
 
+const getArticleChangeLogSourceRecordByArticleId = (records: ArticleImportRouteLinkRecord[]) => {
+  return [...records]
+    .sort((left, right) => {
+      return left.sourceRecordKey.localeCompare(right.sourceRecordKey)
+    })
+    .reduce<Map<string, ArticleImportRouteLinkRecord>>((recordsByArticleId, record) => {
+      return recordsByArticleId.has(record.articleId)
+        ? recordsByArticleId
+        : recordsByArticleId.set(record.articleId, record)
+    }, new Map())
+}
+
+const insertReconciliationCanonicalArticleChangeLogs = async (params: {
+  canonicalUpdates: AppliedCanonicalArticleUpdate[]
+  context: ReconciliationChangeLogContext | null | undefined
+  createdArticles: ExistingCanonicalArticleRow[]
+  linkRecords: ArticleImportRouteLinkRecord[]
+  tx: ArticleImportStoreTx
+}) => {
+  const canonicalUpdates = params.canonicalUpdates ?? []
+
+  if (!params.context || (params.createdArticles.length === 0 && canonicalUpdates.length === 0)) {
+    return
+  }
+
+  const sourceRecordByArticleId = getArticleChangeLogSourceRecordByArticleId(params.linkRecords)
+  const detectedAt = params.context.detectedAt ?? new Date()
+  const records = [
+    ...params.createdArticles.map((article) => {
+      const sourceRecord = sourceRecordByArticleId.get(article.id)
+
+      return {
+        articleId: article.id,
+        changeKind: 'article_added' as const,
+        changedFields: null,
+        externalArticleId: sourceRecord?.externalArticleId ?? null,
+        importRouteId: sourceRecord?.importRouteId ?? null,
+        nextSnapshot: getCanonicalArticleSnapshot(article),
+        nextSourceRecordHash: sourceRecord?.sourceRecordHash ?? null,
+        previousSnapshot: null,
+        previousSourceRecordHash: null,
+        sourceRecordKey: sourceRecord?.sourceRecordKey ?? null,
+      }
+    }),
+    ...canonicalUpdates.map((update) => {
+      const sourceRecord = sourceRecordByArticleId.get(update.articleId)
+
+      return {
+        articleId: update.articleId,
+        changeKind: 'canonical_article_changed' as const,
+        changedFields: update.changedFields,
+        externalArticleId: sourceRecord?.externalArticleId ?? null,
+        importRouteId: sourceRecord?.importRouteId ?? null,
+        nextSnapshot: update.nextSnapshot,
+        nextSourceRecordHash: sourceRecord?.sourceRecordHash ?? null,
+        previousSnapshot: update.previousSnapshot,
+        previousSourceRecordHash: null,
+        sourceRecordKey: sourceRecord?.sourceRecordKey ?? null,
+      }
+    }),
+  ]
+
+  await getValueChunks(records).reduce<Promise<void>>((previousRun, recordChunk) => {
+    return previousRun.then(() => {
+      return recordChunk.length === 0
+        ? Promise.resolve()
+        : params.tx.run(`
+          INSERT INTO app.data_source_article_change_log (
+            id,
+            data_source_id,
+            route,
+            import_route_id,
+            article_id,
+            external_article_id,
+            source_record_key,
+            change_kind,
+            previous_source_record_hash,
+            next_source_record_hash,
+            changed_fields,
+            previous_snapshot,
+            next_snapshot,
+            import_run_id,
+            run_kind,
+            detected_at,
+            created_at
+          )
+          VALUES ${recordChunk
+            .map((record) => {
+              const id = getDataSourceArticleChangeLogId({
+                articleId: record.articleId,
+                changeKind: record.changeKind,
+                dataSourceId: params.context.dataSourceId,
+                externalArticleId: record.externalArticleId,
+                nextSourceRecordHash: record.nextSourceRecordHash,
+                previousSourceRecordHash: record.previousSourceRecordHash,
+                route: params.context.route,
+                runKind: params.context.runKind,
+                sourceRecordKey: record.sourceRecordKey,
+                importRunId: params.context.importRunId,
+              })
+
+              return `(${[
+                id,
+                params.context.dataSourceId,
+                params.context.route,
+                record.importRouteId,
+                record.articleId,
+                record.externalArticleId,
+                record.sourceRecordKey,
+                record.changeKind,
+                record.previousSourceRecordHash,
+                record.nextSourceRecordHash,
+                getJsonSqlLiteralForArticleImport(record.changedFields),
+                getJsonSqlLiteralForArticleImport(record.previousSnapshot),
+                getJsonSqlLiteralForArticleImport(record.nextSnapshot),
+                params.context.importRunId,
+                params.context.runKind,
+                detectedAt,
+                detectedAt,
+              ]
+                .map((value, index) => {
+                  return index >= 10 && index <= 12 ? String(value) : getSqlLiteral(value)
+                })
+                .join(', ')})`
+            })
+            .join(', ')}
+          ON CONFLICT(id) DO NOTHING
+        `)
+    })
+  }, Promise.resolve())
+}
+
 const getSourceRecordSnapshot = (
   record:
     | ExistingArticleImportSourceRecord
     | Pick<
         ScopedArticleImportStoreRow,
-        'externalArticleId' | 'importMetadata' | 'matchMetadata' | 'rawPayload' | 'sourceKind'
+        'articleCreatedAt' | 'externalArticleId' | 'importMetadata' | 'matchMetadata' | 'rawPayload' | 'sourceKind'
       >,
 ) => {
   return {
@@ -1135,6 +1359,8 @@ const getSourceRecordSnapshot = (
     importMetadata: getJsonValue(record.importMetadata),
     matchMetadata: getJsonValue(record.matchMetadata),
     rawPayload: getJsonValue(record.rawPayload),
+    sourceArticleCreatedAt:
+      'sourceArticleCreatedAt' in record ? record.sourceArticleCreatedAt : (record.articleCreatedAt ?? null),
     sourceKind: record.sourceKind,
   }
 }
@@ -1164,6 +1390,7 @@ const insertReconciliationSourceRecordChangeLogs = async (params: {
     return existing && existing.sourceRecordHash !== record.sourceRecordHash
       ? [
           {
+            articleId: existing.articleId,
             changeKind: 'source_record_changed' as const,
             existing,
             nextHash: record.sourceRecordHash,
@@ -1190,14 +1417,17 @@ const insertReconciliationSourceRecordChangeLogs = async (params: {
           newRecords.map((record) => {
             return record.sourceRecordKey
           }),
-        ).reduce<Promise<Array<{previousSourceRecordHash: string | null; sourceRecordKey: string}>>>(
-          async (rowsPromise, sourceRecordKeyChunk) => {
-            const rows = await rowsPromise
-            const chunkRows = await params.tx.queryJson<{
-              previousSourceRecordHash: string | null
-              sourceRecordKey: string
-            }>(`
+        ).reduce<
+          Promise<Array<{articleId: string | null; previousSourceRecordHash: string | null; sourceRecordKey: string}>>
+        >(async (rowsPromise, sourceRecordKeyChunk) => {
+          const rows = await rowsPromise
+          const chunkRows = await params.tx.queryJson<{
+            articleId: string | null
+            previousSourceRecordHash: string | null
+            sourceRecordKey: string
+          }>(`
             SELECT
+              article_id AS articleId,
               previous_source_record_hash AS previousSourceRecordHash,
               source_record_key AS sourceRecordKey
             FROM app.data_source_article_change_log
@@ -1208,10 +1438,8 @@ const insertReconciliationSourceRecordChangeLogs = async (params: {
             ORDER BY detected_at DESC, created_at DESC, id ASC
           `)
 
-            return [...rows, ...chunkRows]
-          },
-          Promise.resolve([]),
-        )
+          return [...rows, ...chunkRows]
+        }, Promise.resolve([]))
   const restoredSourceRecordKeys = new Set(
     restoredRows.map((row) => {
       return row.sourceRecordKey
@@ -1223,12 +1451,22 @@ const insertReconciliationSourceRecordChangeLogs = async (params: {
     }
     return hashesByKey
   }, new Map())
+  const previousRestoredArticleIdBySourceRecordKey = restoredRows.reduce<Map<string, string | null>>(
+    (articleIdsByKey, row) => {
+      if (!articleIdsByKey.has(row.sourceRecordKey)) {
+        articleIdsByKey.set(row.sourceRecordKey, row.articleId)
+      }
+      return articleIdsByKey
+    },
+    new Map(),
+  )
   const restoredRecords = newRecords
     .filter((record) => {
       return restoredSourceRecordKeys.has(record.sourceRecordKey)
     })
     .map((record) => {
       return {
+        articleId: previousRestoredArticleIdBySourceRecordKey.get(record.sourceRecordKey) ?? null,
         changeKind: 'source_record_restored' as const,
         nextHash: record.sourceRecordHash,
         nextSnapshot: getSourceRecordSnapshot(record),
@@ -1276,6 +1514,7 @@ const insertReconciliationSourceRecordChangeLogs = async (params: {
                 route: params.context.route,
                 runKind: params.context.runKind,
                 sourceRecordKey: entry.record.sourceRecordKey,
+                importRunId: params.context.importRunId,
               })
               const changedFields = {sourceRecordHash: [entry.previousHash, entry.nextHash]}
 
@@ -1284,7 +1523,7 @@ const insertReconciliationSourceRecordChangeLogs = async (params: {
                 params.context.dataSourceId,
                 params.context.route,
                 params.importRouteId,
-                null,
+                entry.articleId,
                 entry.record.externalArticleId,
                 entry.record.sourceRecordKey,
                 entry.changeKind,
@@ -1356,6 +1595,7 @@ const getExistingArticleImportRouteSourceRecords = async (
           article.article_id AS legacyArticleId,
           TO_JSON(source_record.match_metadata) AS matchMetadata,
           TO_JSON(source_record.raw_payload) AS rawPayload,
+          source_record.source_article_created_at AS sourceArticleCreatedAt,
           source_record.source_kind AS sourceKind,
           source_record.source_record_hash AS sourceRecordHash,
           source_record.source_record_key AS sourceRecordKey
@@ -1410,6 +1650,7 @@ const getExistingArticleImportRouteLinks = async (
         SELECT
           current_link.article_id AS articleId,
           current_link.import_route_id AS importRouteId,
+          current_link.source_article_created_at AS sourceArticleCreatedAt,
           current_link.source_record_hash AS sourceRecordHash,
           current_link.source_record_key AS sourceRecordKey
         FROM app.article_import_route current_link
@@ -1502,6 +1743,7 @@ const upsertArticleImportRouteCurrentLinks = async (
       !existingLink
       || existingLink.sourceRecordKey !== record.sourceRecordKey
       || existingLink.sourceRecordHash !== record.sourceRecordHash
+      || hasTimestampValueChanged(existingLink.sourceArticleCreatedAt, record.sourceArticleCreatedAt)
     )
   })
 
@@ -1520,6 +1762,7 @@ const upsertArticleImportRouteCurrentLinks = async (
             import_run_id = excluded.import_run_id,
             source_record_key = excluded.source_record_key,
             source_record_hash = excluded.source_record_hash,
+            source_article_created_at = excluded.source_article_created_at,
             raw_payload = excluded.raw_payload,
             updated_at = now()
         `)
@@ -1561,7 +1804,11 @@ const upsertArticleImportRouteSourceRecords = async (
   const recordsToWrite = deduplicatedRecords.filter((record) => {
     const existingRecord = existingSourceRecords.get(getArticleImportRouteSourceRecordKey(record))
 
-    return !existingRecord || existingRecord.sourceRecordHash !== record.sourceRecordHash
+    return (
+      !existingRecord
+      || existingRecord.sourceRecordHash !== record.sourceRecordHash
+      || hasTimestampValueChanged(existingRecord.sourceArticleCreatedAt, record.sourceArticleCreatedAt)
+    )
   })
 
   await getValueChunks(recordsToWrite).reduce<Promise<void>>((previousRun, recordChunk) => {
@@ -1579,6 +1826,7 @@ const upsertArticleImportRouteSourceRecords = async (
             match_metadata = excluded.match_metadata,
             import_run_id = excluded.import_run_id,
             source_record_hash = excluded.source_record_hash,
+            source_article_created_at = excluded.source_article_created_at,
             raw_payload = excluded.raw_payload,
             quarantined_at = NULL,
             quarantine_reason = NULL,
@@ -1618,6 +1866,7 @@ const quarantineRemappedArticleImportSourceRecords = async (
         importRunId: string | null
         matchMetadata: unknown
         rawPayload: unknown
+        sourceArticleCreatedAt: Date | string | null
         sourceKind: string | null
         sourceRecordHash: string
         sourceRecordKey: string
@@ -1630,6 +1879,7 @@ const quarantineRemappedArticleImportSourceRecords = async (
           import_run_id AS importRunId,
           TO_JSON(match_metadata) AS matchMetadata,
           TO_JSON(raw_payload) AS rawPayload,
+          source_article_created_at AS sourceArticleCreatedAt,
           source_kind AS sourceKind,
           source_record_hash AS sourceRecordHash,
           source_record_key AS sourceRecordKey
@@ -2004,6 +2254,7 @@ const getArticleImportRouteLinkRecords = (params: {
             importRunId: record.row.importRunId,
             matchMetadata: record.row.matchMetadata,
             rawPayload: record.row.rawPayload,
+            sourceArticleCreatedAt: record.row.articleCreatedAt ?? null,
             sourceKind: record.row.sourceKind,
             sourceRecordHash: record.row.sourceRecordHash,
             sourceRecordKey: record.row.sourceRecordKey,
@@ -2153,7 +2404,11 @@ const getUnresolvedSourceRecordRemapRecords = (params: {
     .map(getArticleImportRouteRemapRecordFromSourceRecordCandidate)
 }
 
-const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
+const storeImportedArticleChunkInTx = async (
+  tx: ArticleImportStoreTx,
+  rows: ArticleImportStoreRow[],
+  options: {changeLogContext?: ReconciliationChangeLogContext | null} = {},
+) => {
   if (rows.length === 0) {
     return {acceptedCount: 0, acceptedSourceRecords: [], importRouteIds: [] as string[]}
   }
@@ -2211,11 +2466,27 @@ const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: Art
     }),
   ])
 
-  await updateExistingCanonicalArticlesInTx({articleGroups, existingArticles: existingCanonicalArticles, tx})
+  const canonicalUpdates = await updateExistingCanonicalArticlesInTx({
+    articleGroups,
+    existingArticles: existingCanonicalArticles,
+    tx,
+  })
 
   if (linkRecords.length > 0) {
     await insertArticleImportRouteLinks(tx, linkRecords)
   }
+
+  await insertReconciliationCanonicalArticleChangeLogs({
+    canonicalUpdates,
+    context: options.changeLogContext,
+    createdArticles: Array.from(existingCanonicalArticles.values()).filter((article) => {
+      return matchResult.outcomes.some((outcome) => {
+        return outcome.status === 'create' && outcome.articleId === article.id
+      })
+    }),
+    linkRecords,
+    tx,
+  })
 
   if (remappedSourceRecords.length > 0) {
     await quarantineRemappedArticleImportSourceRecords(tx, remappedSourceRecords)
@@ -2246,7 +2517,11 @@ const getMergedImportRefreshState = (states: ArticleImportRefreshState[]) => {
   }
 }
 
-const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
+const storeImportedArticlesInTx = async (
+  tx: ArticleImportStoreTx,
+  rows: ArticleImportStoreRow[],
+  options: {changeLogContext?: ReconciliationChangeLogContext | null} = {},
+) => {
   const implicitImportRunId = globalThis.crypto.randomUUID()
   const rowsWithImportRunIds = rows.map((row) => {
     return {...row, importRunId: row.importRunId ?? implicitImportRunId}
@@ -2254,7 +2529,7 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
   const states = await getValueChunks(rowsWithImportRunIds).reduce<Promise<ArticleImportRefreshState[]>>(
     async (statesPromise, rowChunk) => {
       const states = await statesPromise
-      const state = await storeImportedArticleChunkInTx(tx, rowChunk)
+      const state = await storeImportedArticleChunkInTx(tx, rowChunk, options)
 
       return [...states, state]
     },
@@ -2285,35 +2560,20 @@ const clearStaleImportRouteLinks = async (
   const hasPeriodScope = options.periodStart instanceof Date && options.periodEnd instanceof Date
   const currentLinkPeriodClause = hasPeriodScope
     ? `
-      AND EXISTS (
-        SELECT 1
-        FROM app.article scoped_article
-        WHERE scoped_article.id = app.article_import_route.article_id
-          AND scoped_article.article_created_at >= ${getSqlLiteral(options.periodStart)}
-          AND scoped_article.article_created_at < ${getSqlLiteral(options.periodEnd)}
-      )
+      AND app.article_import_route.source_article_created_at >= ${getSqlLiteral(options.periodStart)}
+      AND app.article_import_route.source_article_created_at < ${getSqlLiteral(options.periodEnd)}
     `
     : ''
   const sourceRecordPeriodClause = hasPeriodScope
     ? `
-      AND EXISTS (
-        SELECT 1
-        FROM app.article scoped_article
-        WHERE scoped_article.id = source_record.article_id
-          AND scoped_article.article_created_at >= ${getSqlLiteral(options.periodStart)}
-          AND scoped_article.article_created_at < ${getSqlLiteral(options.periodEnd)}
-      )
+      AND source_record.source_article_created_at >= ${getSqlLiteral(options.periodStart)}
+      AND source_record.source_article_created_at < ${getSqlLiteral(options.periodEnd)}
     `
     : ''
   const sourceRecordDeletePeriodClause = hasPeriodScope
     ? `
-      AND EXISTS (
-        SELECT 1
-        FROM app.article scoped_article
-        WHERE scoped_article.id = app.article_import_route_source_record.article_id
-          AND scoped_article.article_created_at >= ${getSqlLiteral(options.periodStart)}
-          AND scoped_article.article_created_at < ${getSqlLiteral(options.periodEnd)}
-      )
+      AND app.article_import_route_source_record.source_article_created_at >= ${getSqlLiteral(options.periodStart)}
+      AND app.article_import_route_source_record.source_article_created_at < ${getSqlLiteral(options.periodEnd)}
     `
     : ''
   const deletedRows = await tx.queryJson<DeletedArticleImportRouteLinkRow>(`
@@ -2324,6 +2584,7 @@ const clearStaleImportRouteLinks = async (
       import_run_id AS importRunId,
       TO_JSON(match_metadata) AS matchMetadata,
       TO_JSON(raw_payload) AS rawPayload,
+      source_article_created_at AS sourceArticleCreatedAt,
       source_kind AS sourceKind,
       source_record_hash AS sourceRecordHash,
       source_record_key AS sourceRecordKey
@@ -2340,6 +2601,7 @@ const clearStaleImportRouteLinks = async (
       source_record.import_run_id AS importRunId,
       TO_JSON(source_record.match_metadata) AS matchMetadata,
       TO_JSON(source_record.raw_payload) AS rawPayload,
+      source_record.source_article_created_at AS sourceArticleCreatedAt,
       source_record.source_kind AS sourceKind,
       source_record.source_record_hash AS sourceRecordHash,
       source_record.source_record_key AS sourceRecordKey
@@ -2518,7 +2780,7 @@ const syncImportedArticlesForReconciliationPeriodInTx = async (params: {
 
   const importRefreshState =
     params.rows.length > 0
-      ? await storeImportedArticlesInTx(params.tx, params.rows)
+      ? await storeImportedArticlesInTx(params.tx, params.rows, {changeLogContext: params.changeLogContext})
       : {acceptedCount: 0, acceptedSourceRecords: [], importRouteIds: [] as string[]}
   const staleResult = importRouteId
     ? await clearStaleImportRouteLinks(

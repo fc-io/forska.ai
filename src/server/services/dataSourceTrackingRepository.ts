@@ -166,11 +166,14 @@ export type InsertArticleChangeLogInput = {
   sourceRecordKey?: string | null
 }
 
+export type DataSourceArticleChangeLogCursor = {createdAt: Date; detectedAt: Date; id: string}
+
 const trackingRepositoryWorkload = (routeOrJobKey: string, maxResultRows?: number): DuckdbWorkloadContext => {
   return {fallbackIntent: 'reject', maxResultRows, routeOrJobKey, workloadClass: 'owner.dataSourceTrackingRepository'}
 }
 
 const defaultTrackingReconcileScheduleMonths = [3, 12, 24, 36]
+const maxTrackingReconcileScheduleMonth = 120
 const trackingStateSelectSql = `
   data_source_id AS dataSourceId,
   route,
@@ -416,7 +419,7 @@ const getTrackingReconcileScheduleMonthsSqlLiteral = (months?: number[]) => {
   const normalized = Array.from(
     new Set(
       (months ?? defaultTrackingReconcileScheduleMonths).filter((month) => {
-        return Number.isInteger(month) && month > 0
+        return Number.isInteger(month) && month > 0 && month <= maxTrackingReconcileScheduleMonth
       }),
     ),
   )
@@ -478,6 +481,10 @@ const getLeaseOwnerClause = (leaseOwner: string | null | undefined) => {
   return leaseOwner ? `AND lease_owner = ${getSqlLiteral(leaseOwner)}` : ''
 }
 
+const getManualReconciliationAttemptId = () => {
+  return `data-source-reconciliation-manual-${globalThis.crypto.randomUUID()}`
+}
+
 const millisecondsPerDay = 24 * 60 * 60 * 1000
 
 const getUtcDayStart = (date: Date) => {
@@ -514,7 +521,7 @@ const getTrackingReconcileScheduleMonths = (value: unknown) => {
           return Number(month)
         })
         .filter((month) => {
-          return Number.isInteger(month) && month > 0
+          return Number.isInteger(month) && month > 0 && month <= maxTrackingReconcileScheduleMonth
         }),
     ),
   )
@@ -826,6 +833,34 @@ export const createDataSourceTrackingRepository = (
 
       return row ? getTrackingStateRecordFromRow(row) : null
     },
+    renewSourceLease: async (input: {
+      dataSourceId: string
+      leaseExpiresAt: Date
+      leaseOwner: string
+      now?: Date
+    }): Promise<DataSourceTrackingStateRecord | null> => {
+      const now = input.now ?? new Date()
+      const [row] = await database.queryJson<DataSourceTrackingStateRow>(
+        `
+        UPDATE app.data_source_tracking_state
+        SET lease_expires_at = ${getSqlLiteral(input.leaseExpiresAt)},
+            updated_at = ${getSqlLiteral(now)}
+        WHERE data_source_id = ${getSqlLiteral(input.dataSourceId)}
+          AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+          AND EXISTS (
+            SELECT 1
+            FROM app.data_source data_source
+            WHERE data_source.id = app.data_source_tracking_state.data_source_id
+              AND data_source.tracking_enabled = TRUE
+              AND data_source.archived = FALSE
+          )
+        RETURNING ${trackingStateSelectSql}
+      `,
+        trackingRepositoryWorkload('dataSourceTracking.state.renewLease', 1),
+      )
+
+      return row ? getTrackingStateRecordFromRow(row) : null
+    },
     selectDueSources: async (input: {
       limit: number
       now?: Date
@@ -968,27 +1003,31 @@ export const createDataSourceReconciliationWorkRepository = (
             lease_expires_at = ${getSqlLiteral(input.leaseExpiresAt)},
             started_at = COALESCE(started_at, ${getSqlLiteral(now)}),
             updated_at = ${getSqlLiteral(now)}
-        WHERE id = (
-          SELECT id
-          FROM app.data_source_reconciliation_work
-          WHERE status IN ('queued', 'failed', 'running')
-            AND (
-              status != 'failed'
-              OR next_retry_at IS NULL
-              OR next_retry_at <= ${getSqlLiteral(now)}
-            )
-            AND (
-              status != 'running'
-              OR lease_owner IS NULL
-              OR lease_expires_at IS NULL
-              OR lease_expires_at <= ${getSqlLiteral(now)}
-            )
-            ${routeClause}
-          ORDER BY scheduled_at ASC, period_start ASC, id ASC
-          LIMIT 1
-        )
-        RETURNING ${reconciliationWorkSelectSql}
-      `,
+	        WHERE id = (
+	          SELECT work.id
+	          FROM app.data_source_reconciliation_work work
+	          INNER JOIN app.data_source data_source ON data_source.id = work.data_source_id
+	          WHERE work.status IN ('queued', 'failed', 'running')
+	            AND data_source.tracking_enabled = TRUE
+	            AND data_source.archived = FALSE
+	            AND data_source.import_route = work.route
+	            AND (
+	              work.status != 'failed'
+	              OR work.next_retry_at IS NULL
+	              OR work.next_retry_at <= ${getSqlLiteral(now)}
+	            )
+	            AND (
+	              work.status != 'running'
+	              OR work.lease_owner IS NULL
+	              OR work.lease_expires_at IS NULL
+	              OR work.lease_expires_at <= ${getSqlLiteral(now)}
+	            )
+	            ${routeClause ? routeClause.replaceAll('route', 'work.route') : ''}
+	          ORDER BY work.scheduled_at ASC, work.period_start ASC, work.id ASC
+	          LIMIT 1
+	        )
+	        RETURNING ${reconciliationWorkSelectSql}
+	      `,
         trackingRepositoryWorkload('dataSourceTracking.reconciliation.claim', 1),
       )
 
@@ -1123,6 +1162,36 @@ export const createDataSourceReconciliationWorkRepository = (
 
       return row ? getReconciliationWorkRecordFromRow(row) : null
     },
+    renewWorkLease: async (input: {
+      id: string
+      leaseExpiresAt: Date
+      leaseOwner: string
+      now?: Date
+    }): Promise<DataSourceReconciliationWorkRecord | null> => {
+      const now = input.now ?? new Date()
+      const [row] = await database.queryJson<DataSourceReconciliationWorkRow>(
+        `
+	        UPDATE app.data_source_reconciliation_work
+	        SET lease_expires_at = ${getSqlLiteral(input.leaseExpiresAt)},
+	            updated_at = ${getSqlLiteral(now)}
+	        WHERE id = ${getSqlLiteral(input.id)}
+	          AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+	          AND status = 'running'
+	          AND EXISTS (
+	            SELECT 1
+	            FROM app.data_source data_source
+	            WHERE data_source.id = app.data_source_reconciliation_work.data_source_id
+	              AND data_source.tracking_enabled = TRUE
+	              AND data_source.archived = FALSE
+	              AND data_source.import_route = app.data_source_reconciliation_work.route
+	          )
+	        RETURNING ${reconciliationWorkSelectSql}
+	      `,
+        trackingRepositoryWorkload('dataSourceTracking.reconciliation.renewLease', 1),
+      )
+
+      return row ? getReconciliationWorkRecordFromRow(row) : null
+    },
     scheduleDueMonthlyAgeBucketWork: async (
       input: {now?: Date; routes?: string[]} = {},
     ): Promise<DataSourceReconciliationWorkRecord[]> => {
@@ -1154,7 +1223,8 @@ export const createDataSourceReconciliationWorkRepository = (
       const scheduledWork: DataSourceReconciliationWorkRecord[] = []
 
       for (const source of sourceRows) {
-        const dateFrom = getDateValue(source.dateFrom)
+        const rawDateFrom = getDateValue(source.dateFrom)
+        const dateFrom = rawDateFrom ? getUtcDayStart(rawDateFrom) : null
 
         if (!dateFrom) {
           await database.run(
@@ -1255,13 +1325,37 @@ export const createDataSourceReconciliationWorkRepository = (
       const now = input.now ?? new Date()
       const id =
         input.id
-        ?? getDataSourceReconciliationWorkId({
-          ageMonths: input.ageMonths,
-          dataSourceId: input.dataSourceId,
-          periodEnd: input.periodEnd,
-          periodStart: input.periodStart,
-          runKind: input.runKind,
-        })
+        ?? (input.runKind === 'manual_full_range'
+          ? getManualReconciliationAttemptId()
+          : getDataSourceReconciliationWorkId({
+              ageMonths: input.ageMonths,
+              dataSourceId: input.dataSourceId,
+              periodEnd: input.periodEnd,
+              periodStart: input.periodStart,
+              runKind: input.runKind,
+            }))
+
+      if (!input.id && input.runKind === 'manual_full_range') {
+        const [activeManualWork] = await database.queryJson<DataSourceReconciliationWorkRow>(
+          `
+	          SELECT ${reconciliationWorkSelectSql}
+	          FROM app.data_source_reconciliation_work
+	          WHERE data_source_id = ${getSqlLiteral(input.dataSourceId)}
+	            AND route = ${getSqlLiteral(input.route)}
+	            AND run_kind = 'manual_full_range'
+	            AND period_start = ${getSqlLiteral(input.periodStart)}
+	            AND period_end = ${getSqlLiteral(input.periodEnd)}
+	            AND status IN ('queued', 'running', 'failed')
+	          ORDER BY scheduled_at DESC, id DESC
+	          LIMIT 1
+	        `,
+          trackingRepositoryWorkload('dataSourceTracking.reconciliation.scheduleManual.getActive', 1),
+        )
+
+        if (activeManualWork) {
+          return getReconciliationWorkRecordFromRow(activeManualWork)
+        }
+      }
 
       await database.run(
         `
@@ -1412,10 +1506,10 @@ export const createDataSourceArticleChangeLogRepository = (
       return row
     },
     listChanges: async (input: {
+      after?: DataSourceArticleChangeLogCursor | null
       changeKinds?: DataSourceArticleChangeKind[]
       dataSourceId: string
       limit: number
-      offset?: number
       runKinds?: DataSourceArticleChangeRunKind[]
     }): Promise<DataSourceArticleChangeLogRecord[]> => {
       const filters = [`data_source_id = ${getSqlLiteral(input.dataSourceId)}`]
@@ -1428,6 +1522,23 @@ export const createDataSourceArticleChangeLogRepository = (
         filters.push(`run_kind IN (${input.runKinds.map(getSqlLiteral).join(', ')})`)
       }
 
+      if (input.after) {
+        filters.push(`
+          (
+            detected_at < ${getSqlLiteral(input.after.detectedAt)}
+            OR (
+              detected_at = ${getSqlLiteral(input.after.detectedAt)}
+              AND created_at < ${getSqlLiteral(input.after.createdAt)}
+            )
+            OR (
+              detected_at = ${getSqlLiteral(input.after.detectedAt)}
+              AND created_at = ${getSqlLiteral(input.after.createdAt)}
+              AND id > ${getSqlLiteral(input.after.id)}
+            )
+          )
+        `)
+      }
+
       const rows = await database.queryJson<DataSourceArticleChangeLogRow>(
         `
         SELECT ${changeLogSelectSql}
@@ -1435,7 +1546,6 @@ export const createDataSourceArticleChangeLogRepository = (
         WHERE ${filters.join(' AND ')}
         ORDER BY detected_at DESC, created_at DESC, id ASC
         LIMIT ${Math.max(0, Math.trunc(input.limit))}
-        OFFSET ${Math.max(0, Math.trunc(input.offset ?? 0))}
       `,
         trackingRepositoryWorkload('dataSourceTracking.changeLog.list', input.limit),
       )

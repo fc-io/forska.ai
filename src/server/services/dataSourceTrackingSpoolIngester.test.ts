@@ -322,6 +322,140 @@ test('spool ingester uses reconciliation sync semantics and completes work after
   })
 })
 
+test('spool ingester rejects stale route windows before DuckDB ingest', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const order: string[] = []
+    const readyWindow = createReadyWindow(spoolRepository)
+    const ingester = createDataSourceTrackingSpoolIngester({
+      dataSourceQueryService: {
+        countArticlesLinkedToImportRoute: async () => {
+          order.push('datasource:count-linked')
+          return 0
+        },
+        getDataSourceById: async () => {
+          return {...getDataSource(), importRoute: '/api/datasources/import/europe-pmc-ppr'}
+        },
+        updateDataSourceAfterImport: async () => {
+          order.push('datasource:update-after-import')
+          return getDataSource()
+        },
+      } as never,
+      database: {
+        transactionBackground: async () => {
+          order.push('duckdb:transaction')
+          throw new Error('stale route should not reach DuckDB')
+        },
+      } as never,
+      spoolRepository,
+    })
+
+    const result = await ingester.drainReadyWindows({
+      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker',
+      limit: 1,
+      now: new Date('2026-09-16T09:00:00.000Z'),
+    })
+    const rejectedWindow = spoolRepository.getWindow(readyWindow.id)
+
+    expect(result).toMatchObject([{reason: 'stale-route', status: 'failed'}])
+    expect(rejectedWindow?.status).toBe('rejected')
+    expect(rejectedWindow?.lastError).toContain('no longer matches data source route')
+    expect(order).toEqual([])
+  })
+})
+
+test('spool ingester stops state updates when the ingest lease is lost after DuckDB commit', async () => {
+  await withSpoolRepository(async (spoolRepository) => {
+    const order: string[] = []
+    createReadyWindow(spoolRepository)
+    const originalRenewWindowLease = spoolRepository.renewWindowLease
+    let renewCallCount = 0
+
+    spoolRepository.renewWindowLease = (input) => {
+      renewCallCount += 1
+
+      return renewCallCount === 1 ? originalRenewWindowLease(input) : null
+    }
+
+    const ingester = createDataSourceTrackingSpoolIngester({
+      dataSourceQueryService: {
+        countArticlesLinkedToImportRoute: async () => {
+          order.push('datasource:count-linked')
+          return 1
+        },
+        getDataSourceById: async () => {
+          return getDataSource()
+        },
+        updateDataSourceAfterImport: async () => {
+          order.push('datasource:update-after-import')
+          return getDataSource()
+        },
+      } as never,
+      database: {
+        transactionBackground: async <T>(operation: (tx: ArticleImportStoreTx) => Promise<T>) => {
+          order.push('duckdb:transaction')
+          return await operation({
+            queryJson: async () => {
+              return []
+            },
+            run: async () => {
+              return undefined
+            },
+          })
+        },
+      } as never,
+      providerRegistry: createDataSourceTrackingProviderRegistry([
+        {
+          fetchRangePages: async () => {
+            return {fetchedTotal: 0, pageCount: 0}
+          },
+          fetchWindowPages: async () => {
+            return {fetchedTotal: 0, pageCount: 0}
+          },
+          getGranularity: () => {
+            return 'day'
+          },
+          getNextRunAfter: () => {
+            return null
+          },
+          getNextWindow: () => {
+            return {nextRunAfter: null, reason: 'complete', status: 'none'}
+          },
+          getReconciliationRange: () => {
+            return {reason: 'empty-range', status: 'none'}
+          },
+          route: pubmedTrackedImportRoute,
+        },
+      ]),
+      spoolRepository,
+      storeImportedArticlesWithTx: async () => {
+        order.push('duckdb:store-imported-articles')
+        return {acceptedCount: 1, importRouteIds: ['route-id-1']}
+      },
+      trackingRepository: {
+        recordTrackingFailure: async () => {
+          order.push('tracking:failure')
+          return null
+        },
+        recordTrackingSuccess: async () => {
+          order.push('tracking:success')
+          return null
+        },
+      } as never,
+    })
+
+    const result = await ingester.drainReadyWindows({
+      leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+      leaseOwner: 'ingest-worker',
+      limit: 1,
+      now: new Date('2026-09-16T09:00:00.000Z'),
+    })
+
+    expect(result).toMatchObject([{reason: 'lease-lost', status: 'failed'}])
+    expect(order).toEqual(['duckdb:transaction', 'duckdb:store-imported-articles'])
+  })
+})
+
 test('spool ingester preserves a failed window for retry when DuckDB storage fails', async () => {
   await withSpoolRepository(async (spoolRepository) => {
     const order: string[] = []

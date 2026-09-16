@@ -39,7 +39,13 @@ export type DataSourceTrackingSpoolIngestResult =
     }
   | {
       error: string
-      reason: 'data-source-missing' | 'provider-missing' | 'store-failed'
+      reason:
+        | 'data-source-missing'
+        | 'lease-lost'
+        | 'provider-missing'
+        | 'stale-route'
+        | 'store-failed'
+        | 'tracking-disabled'
       status: 'failed'
       windowId: string
     }
@@ -59,6 +65,16 @@ const defaultRetryDelayMs = 5 * 60 * 1000
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
+}
+
+class SpoolIngestLeaseLostError extends Error {
+  constructor() {
+    super('Tracking spool ingest lease lost')
+  }
+}
+
+const getLeaseRenewalIntervalMs = (leaseDurationMs: number) => {
+  return Math.max(1000, Math.min(60_000, Math.floor(leaseDurationMs / 2)))
 }
 
 const getDateOrNull = (value: unknown) => {
@@ -151,6 +167,60 @@ export const createDataSourceTrackingSpoolIngester = ({
     now: Date,
   ): Promise<DataSourceTrackingSpoolIngestResult> => {
     const importRunId = getImportRunId(window)
+    const leaseDurationMs = Math.max(
+      1000,
+      (window.leaseExpiresAt?.getTime() ?? now.getTime() + defaultLeaseDurationMs) - now.getTime(),
+    )
+    let leaseLostError: SpoolIngestLeaseLostError | null = null
+    const renewWindowLease = () => {
+      if (leaseLostError) {
+        throw leaseLostError
+      }
+
+      const renewalNow = new Date()
+      const renewed = spoolRepository.renewWindowLease({
+        leaseExpiresAt: new Date(renewalNow.getTime() + leaseDurationMs),
+        leaseOwner,
+        now: renewalNow,
+        windowId: window.id,
+      })
+
+      if (!renewed) {
+        leaseLostError = new SpoolIngestLeaseLostError()
+        throw leaseLostError
+      }
+
+      return renewed
+    }
+    const startLeaseRenewal = () => {
+      const timer = setInterval(() => {
+        try {
+          renewWindowLease()
+        } catch (error) {
+          leaseLostError ??= error instanceof SpoolIngestLeaseLostError ? error : new SpoolIngestLeaseLostError()
+        }
+      }, getLeaseRenewalIntervalMs(leaseDurationMs))
+      const maybeUnrefTimer = timer as {unref?: () => void}
+
+      maybeUnrefTimer.unref?.()
+
+      return timer
+    }
+    const rejectWindow = async (
+      reason: 'stale-route' | 'tracking-disabled',
+      error: string,
+    ): Promise<DataSourceTrackingSpoolIngestResult> => {
+      spoolRepository.markWindowRejected({error, now, windowId: window.id})
+      if (window.runKind !== 'incremental') {
+        await reconciliationWorkRepository.markWorkCompletedForSpoolWindow({
+          importRunId: null,
+          now,
+          spoolWindowId: window.id,
+        })
+      }
+
+      return {error, reason, status: 'failed', windowId: window.id}
+    }
     const dataSource = await dataSourceQueryService.getDataSourceById(window.dataSourceId)
 
     if (!dataSource) {
@@ -170,6 +240,22 @@ export const createDataSourceTrackingSpoolIngester = ({
         })
       }
       return {error, reason: 'data-source-missing', status: 'failed', windowId: window.id}
+    }
+
+    if (dataSource.archived || !dataSource.trackingEnabled) {
+      return await rejectWindow(
+        'tracking-disabled',
+        dataSource.archived
+          ? 'Tracked data source is archived'
+          : 'Continuous tracking is not enabled for this data source',
+      )
+    }
+
+    if (dataSource.importRoute !== window.route) {
+      return await rejectWindow(
+        'stale-route',
+        `Tracking spool route ${window.route} no longer matches data source route ${dataSource.importRoute ?? 'none'}`,
+      )
     }
 
     const provider = providerRegistry.getProvider(window.route)
@@ -203,8 +289,11 @@ export const createDataSourceTrackingSpoolIngester = ({
     const pages = spoolRepository.getWindowPages(window.id)
     const records = getNormalizedRecordsFromPages(pages, importRunId)
     const transaction = database.transactionBackground ?? database.transaction
+    let leaseRenewalTimer: ReturnType<typeof setInterval> | null = null
 
     try {
+      renewWindowLease()
+      leaseRenewalTimer = startLeaseRenewal()
       const storeResult = await transaction(async (tx) => {
         return window.runKind === 'incremental'
           ? await storeImportedArticlesWithTx(tx, records)
@@ -222,12 +311,17 @@ export const createDataSourceTrackingSpoolIngester = ({
               tx,
             })
       }, articleImportStoreWorkloadContext)
+
+      clearInterval(leaseRenewalTimer)
+      leaseRenewalTimer = null
+      renewWindowLease()
       const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
         dateFrom: dataSource.dateFrom,
         dateTo: dataSource.dateTo,
         route: window.route,
       })
 
+      renewWindowLease()
       await dataSourceQueryService.updateDataSourceAfterImport({
         cursor: null,
         id: dataSource.id,
@@ -235,6 +329,7 @@ export const createDataSourceTrackingSpoolIngester = ({
         importedCount,
       })
 
+      renewWindowLease()
       if (window.runKind === 'incremental') {
         await trackingRepository.recordTrackingSuccess({
           dataSourceId: window.dataSourceId,
@@ -258,7 +353,16 @@ export const createDataSourceTrackingSpoolIngester = ({
         await trackingRepository.recordReconciliationSuccess({dataSourceId: window.dataSourceId, importRunId, now})
       }
 
-      spoolRepository.markWindowIngested({ingestedAt: new Date(), leaseOwner, windowId: window.id})
+      renewWindowLease()
+      const ingestedWindow = spoolRepository.markWindowIngested({
+        ingestedAt: new Date(),
+        leaseOwner,
+        windowId: window.id,
+      })
+
+      if (ingestedWindow?.status !== 'ingested') {
+        throw new SpoolIngestLeaseLostError()
+      }
 
       return {
         acceptedCount: storeResult.acceptedCount,
@@ -270,8 +374,16 @@ export const createDataSourceTrackingSpoolIngester = ({
         windowId: window.id,
       }
     } catch (error) {
+      if (leaseRenewalTimer) {
+        clearInterval(leaseRenewalTimer)
+      }
+
       const errorMessage = getErrorMessage(error)
       const nextRetryAt = new Date(now.getTime() + defaultRetryDelayMs)
+
+      if (error instanceof SpoolIngestLeaseLostError) {
+        return {error: errorMessage, reason: 'lease-lost', status: 'failed', windowId: window.id}
+      }
 
       spoolRepository.markWindowFailed({error: errorMessage, nextRetryAt, now, windowId: window.id})
       if (window.runKind === 'incremental') {

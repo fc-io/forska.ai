@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, rmSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, isAbsolute, join} from 'node:path'
 
 import {afterEach, expect, test} from 'bun:test'
@@ -210,18 +210,9 @@ test('topology cleanup completion requires central drain state and absent local 
   expect(isTopologyJobCleanupComplete([])).toBe(false)
 })
 
-test('topology judgment completion accepts terminal local stores before detail projection catches up', () => {
+test('topology judgment completion requires projection and ack evidence', () => {
   expect(
     isTopologyJudgmentWorkflowComplete({
-      hasIdleLocalJobStores: true,
-      hasReconciledProjectRefreshAcks: false,
-      totalJudgments: 4,
-      visibleProjectionCount: 2,
-    }),
-  ).toBe(true)
-  expect(
-    isTopologyJudgmentWorkflowComplete({
-      hasIdleLocalJobStores: false,
       hasReconciledProjectRefreshAcks: true,
       totalJudgments: 4,
       visibleProjectionCount: 4,
@@ -229,7 +220,13 @@ test('topology judgment completion accepts terminal local stores before detail p
   ).toBe(true)
   expect(
     isTopologyJudgmentWorkflowComplete({
-      hasIdleLocalJobStores: false,
+      hasReconciledProjectRefreshAcks: false,
+      totalJudgments: 4,
+      visibleProjectionCount: 4,
+    }),
+  ).toBe(false)
+  expect(
+    isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: true,
       totalJudgments: 4,
       visibleProjectionCount: 2,
@@ -237,12 +234,17 @@ test('topology judgment completion accepts terminal local stores before detail p
   ).toBe(false)
   expect(
     isTopologyJudgmentWorkflowComplete({
-      hasIdleLocalJobStores: true,
-      hasReconciledProjectRefreshAcks: false,
+      hasReconciledProjectRefreshAcks: true,
       totalJudgments: 3,
-      visibleProjectionCount: 2,
+      visibleProjectionCount: 4,
     }),
   ).toBe(false)
+})
+
+test('topology judgment assertion does not repair project refresh ack state', () => {
+  const source = readFileSync('scripts/judgmentWorkflowTopology.ts', 'utf8')
+
+  expect(source).not.toContain('/reconcile-project-refresh-acks')
 })
 
 test('topology accepts Bun Windows SIGTERM exit status only for intentional shutdown', () => {
