@@ -436,6 +436,39 @@ test('tracking spool renews owned ingest leases and never reclaims rejected wind
   })
 })
 
+test('tracking spool rejects open windows for a reconfigured data source', () => {
+  withSpoolRepository((repository) => {
+    const sourceWindow = repository.createOrResumeWindow({
+      dataSourceId: 'source-1',
+      route: '/api/datasources/import/pubmed',
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-14T00:00:00.000Z'),
+      windowStart: new Date('2026-09-14T00:00:00.000Z'),
+    })
+    const otherWindow = repository.createOrResumeWindow({
+      dataSourceId: 'source-2',
+      route: '/api/datasources/import/pubmed',
+      runKind: 'incremental',
+      windowEnd: new Date('2026-09-14T00:00:00.000Z'),
+      windowStart: new Date('2026-09-14T00:00:00.000Z'),
+    })
+
+    repository.markWindowReady({spooledAt: new Date('2026-09-15T09:00:00.000Z'), windowId: sourceWindow.id})
+    repository.markWindowReady({spooledAt: new Date('2026-09-15T09:00:00.000Z'), windowId: otherWindow.id})
+
+    const result = repository.rejectOpenWindowsForDataSource({
+      dataSourceId: 'source-1',
+      error: 'Tracked data source configuration changed',
+      now: new Date('2026-09-15T09:01:00.000Z'),
+    })
+
+    expect(result).toEqual({windowsRejected: 1})
+    expect(repository.getWindow(sourceWindow.id)?.status).toBe('rejected')
+    expect(repository.getWindow(sourceWindow.id)?.lastError).toBe('Tracked data source configuration changed')
+    expect(repository.getWindow(otherWindow.id)?.status).toBe('ready')
+  })
+})
+
 test('tracking spool recreates rejected incremental windows for retry after re-enable', () => {
   withSpoolRepository((repository) => {
     const windowInput = {

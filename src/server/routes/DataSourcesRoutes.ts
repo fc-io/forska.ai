@@ -11,6 +11,7 @@ import {
   getDataSourceArticleChangeLogRepository,
   getDataSourceReconciliationWorkRepository,
 } from '../services/dataSourceTrackingRepository.ts'
+import {getDataSourceTrackingSpoolRepository} from '../services/dataSourceTrackingSpoolRepository.ts'
 import {getStructuredFileImportConfig} from '../services/structuredFileImportService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -18,6 +19,10 @@ import {withErrorHandler} from '../utils/routeErrorHandler'
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
 type AppQueryRunner = Pick<AppTx, 'queryJson'>
+type DataSourceTrackingSpoolRepositoryForRoutes = Pick<
+  ReturnType<typeof getDataSourceTrackingSpoolRepository>,
+  'rejectOpenWindowsForDataSource'
+>
 type DataSourceRow = {
   id: string
   title: string
@@ -69,6 +74,17 @@ const supportedTrackingImportRoutes = new Set([
   '/api/datasources/import/pubmed',
   '/api/datasources/import/europe-pmc-ppr',
 ])
+let dataSourceTrackingSpoolRepositoryForTests: DataSourceTrackingSpoolRepositoryForRoutes | null = null
+
+export const setDataSourceTrackingSpoolRepositoryForTests = (
+  repository: DataSourceTrackingSpoolRepositoryForRoutes | null,
+) => {
+  dataSourceTrackingSpoolRepositoryForTests = repository
+}
+
+const getDataSourceTrackingSpoolRepositoryForRoute = () => {
+  return dataSourceTrackingSpoolRepositoryForTests ?? getDataSourceTrackingSpoolRepository()
+}
 
 const getDataSourcesWorkloadContext = ({
   maxResultRows,
@@ -1059,6 +1075,14 @@ export const dataSourcesRoutes = new Elysia()
         },
         getDataSourcesWorkloadContext({operation: 'updateTransaction'}),
       )
+
+      if (refreshed && (dateBoundsChanged || importRouteChanged)) {
+        getDataSourceTrackingSpoolRepositoryForRoute().rejectOpenWindowsForDataSource({
+          dataSourceId: refreshed.id,
+          error: 'Tracked data source configuration changed',
+          now: new Date(),
+        })
+      }
 
       if (!refreshed) {
         throw new Error('Data source not found')

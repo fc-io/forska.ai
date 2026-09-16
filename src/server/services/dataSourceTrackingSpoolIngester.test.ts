@@ -189,11 +189,17 @@ test('spool ingester uses a background DuckDB transaction before advancing high 
         },
       ]),
       spoolRepository,
-      storeImportedArticlesWithTx: async (_tx, rows: ArticleImportStoreRow[]) => {
+      storeImportedArticlesWithTx: async (_tx, rows: ArticleImportStoreRow[], options) => {
         order.push('duckdb:store-imported-articles')
         expect(rows).toHaveLength(1)
         expect(rows[0]?.articleCreatedAt).toBeInstanceOf(Date)
         expect(rows[0]?.importRunId).toBe(`data-source-tracking:${readyWindow.id}`)
+        expect(options?.changeLogContext).toMatchObject({
+          dataSourceId: readyWindow.dataSourceId,
+          importRunId: `data-source-tracking:${readyWindow.id}`,
+          route: readyWindow.route,
+          runKind: 'incremental',
+        })
         return {acceptedCount: rows.length, importRouteIds: ['route-id-1']}
       },
       trackingRepository: trackingRepository as never,

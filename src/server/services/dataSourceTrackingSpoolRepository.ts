@@ -782,6 +782,31 @@ export const createDataSourceTrackingSpoolRepository = (
 
       return getWindowById(database, input.windowId)
     },
+    rejectOpenWindowsForDataSource: (input: {
+      dataSourceId: string
+      error: string
+      now?: Date
+    }): {windowsRejected: number} => {
+      const now = input.now ?? new Date()
+      const result = database
+        .query(
+          `
+          UPDATE tracking_spool_window
+          SET status = 'rejected',
+              failure_count = failure_count + 1,
+              last_error = ?,
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              next_retry_at = NULL,
+              updated_at = ?
+          WHERE data_source_id = ?
+            AND status IN ('fetching', 'fetch_failed', 'ready', 'ingesting', 'ingest_failed')
+        `,
+        )
+        .run(input.error, now.toISOString(), input.dataSourceId) as {changes?: number}
+
+      return {windowsRejected: result.changes ?? 0}
+    },
     markWindowIngested: (input: {
       ingestedAt?: Date
       leaseOwner?: string | null

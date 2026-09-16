@@ -289,6 +289,15 @@ export const createDataSourceTrackingSpoolIngester = ({
   storeImportedArticlesWithTx?: (
     tx: ArticleImportStoreTx,
     rows: ArticleImportStoreRow[],
+    options?: {
+      changeLogContext?: {
+        dataSourceId: string
+        detectedAt?: Date
+        importRunId: string | null
+        route: string
+        runKind: 'incremental'
+      } | null
+    },
   ) => Promise<{acceptedCount: number; importRouteIds: string[]}>
   trackingRepository?: DataSourceTrackingRepository
 } = {}): DataSourceTrackingSpoolIngester => {
@@ -497,7 +506,17 @@ export const createDataSourceTrackingSpoolIngester = ({
           await assertWindowStillMatchesDataSourceConfigWithTx(tx, window, dataSource)
 
           if (window.runKind === 'incremental') {
-            return {...(await storeImportedArticlesWithTx(tx, records)), sourceRecordKeys: []}
+            return {
+              ...(await storeImportedArticlesWithTx(tx, records, {
+                changeLogContext: {
+                  dataSourceId: window.dataSourceId,
+                  importRunId,
+                  route: window.route,
+                  runKind: 'incremental',
+                },
+              })),
+              sourceRecordKeys: [],
+            }
           }
 
           return await storeImportedArticlesForReconciliationBatchWithTx({

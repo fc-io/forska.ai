@@ -2904,8 +2904,12 @@ const syncImportedArticlesForReconciliationPeriodInTx = async (params: {
   }
 }
 
-export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
-  const state = await storeImportedArticlesInTx(tx, rows)
+export const storeImportedArticlesWithTx = async (
+  tx: ArticleImportStoreTx,
+  rows: ArticleImportStoreRow[],
+  options: {changeLogContext?: ReconciliationChangeLogContext | null} = {},
+) => {
+  const state = await storeImportedArticlesInTx(tx, rows, options)
 
   return {acceptedCount: state.acceptedCount, importRouteIds: state.importRouteIds}
 }
