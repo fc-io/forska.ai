@@ -185,3 +185,55 @@ test('getLlmMetricsSummary keeps waiting and running counts numeric when runtime
   expect(summary?.lastUpdate?.toISOString()).toBe('2026-03-25T09:07:00.073Z')
   expect(summary?.hasMetricsCompatibleRuntime).toBe(true)
 })
+
+test('getLlmMetricsSummary uses a recent active sample when the latest runtime scrape is momentarily idle', () => {
+  const summary = getLlmMetricsSummary({
+    rows: [
+      buildLlmStatusRow({
+        instanceId: 'http://localhost:30001',
+        ts: new Date('2026-03-25T09:10:00.000Z'),
+        numQueueReqs: '0',
+        numRunningReqs: '0',
+      }),
+      buildLlmStatusRow({
+        instanceId: 'http://localhost:30001',
+        ts: new Date('2026-03-25T09:09:30.000Z'),
+        numQueueReqs: '3',
+        numRunningReqs: '41',
+      }),
+    ],
+    hasMetricsCompatibleJob: true,
+    hasMetricsCompatibleRuntime: true,
+    metadata: null,
+  })
+
+  expect(summary?.waiting).toBe(3)
+  expect(summary?.running).toBe(41)
+  expect(summary?.lastUpdate?.toISOString()).toBe('2026-03-25T09:10:00.000Z')
+})
+
+test('getLlmMetricsSummary falls back to idle counts when the last active sample is outside the recent window', () => {
+  const summary = getLlmMetricsSummary({
+    rows: [
+      buildLlmStatusRow({
+        instanceId: 'http://localhost:30001',
+        ts: new Date('2026-03-25T09:10:00.000Z'),
+        numQueueReqs: '0',
+        numRunningReqs: '0',
+      }),
+      buildLlmStatusRow({
+        instanceId: 'http://localhost:30001',
+        ts: new Date('2026-03-25T09:06:59.999Z'),
+        numQueueReqs: '3',
+        numRunningReqs: '41',
+      }),
+    ],
+    hasMetricsCompatibleJob: true,
+    hasMetricsCompatibleRuntime: true,
+    metadata: null,
+  })
+
+  expect(summary?.waiting).toBe(0)
+  expect(summary?.running).toBe(0)
+  expect(summary?.lastUpdate?.toISOString()).toBe('2026-03-25T09:10:00.000Z')
+})

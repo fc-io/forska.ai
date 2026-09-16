@@ -80,6 +80,7 @@ export type LlmStatusMetadata = {
 }
 
 export const llmStatusQueryKey = ['llmstatus', 'latest50'] as const
+const llmMetricsRecentActivityWindowMs = 3 * 60 * 1000
 
 const normalizeLlmStatusTimestamp = (value: unknown): Date | null => {
   if (value instanceof Date) {
@@ -252,6 +253,17 @@ export const getLatestLlmStatusRowsByInstance = (rows: LlmStatusRow[]) => {
   return [...latestRowsByInstance.values()]
 }
 
+const groupLlmStatusRowsByInstance = (rows: LlmStatusRow[]) => {
+  return rows.reduce((rowMap, row) => {
+    const instanceRows = rowMap.get(row.instanceId) ?? []
+    return rowMap.set(row.instanceId, [...instanceRows, row])
+  }, new Map<string, LlmStatusRow[]>())
+}
+
+const getLlmStatusRowTimestampMs = (row: LlmStatusRow) => {
+  return row.ts?.getTime() ?? null
+}
+
 const getLlmStatusTimestamps = (rows: LlmStatusRow[]) => {
   return rows
     .map((row) => {
@@ -262,8 +274,54 @@ const getLlmStatusTimestamps = (rows: LlmStatusRow[]) => {
     })
 }
 
+const getLatestLlmStatusTimestampMs = (rows: LlmStatusRow[]) => {
+  return rows.reduce<number | null>((latestTimestampMs, row) => {
+    const timestampMs = getLlmStatusRowTimestampMs(row)
+    return timestampMs === null ? latestTimestampMs : Math.max(latestTimestampMs ?? timestampMs, timestampMs)
+  }, null)
+}
+
+const isLlmStatusActive = (row: LlmStatusRow) => {
+  return (
+    (normalizeLlmStatusNumber(row.numQueueReqs) ?? 0) > 0 || (normalizeLlmStatusNumber(row.numRunningReqs) ?? 0) > 0
+  )
+}
+
+const isRecentLlmStatusRow = (row: LlmStatusRow, latestTimestampMs: number | null) => {
+  const timestampMs = getLlmStatusRowTimestampMs(row)
+
+  return (
+    latestTimestampMs !== null
+    && timestampMs !== null
+    && Math.max(0, latestTimestampMs - timestampMs) <= llmMetricsRecentActivityWindowMs
+  )
+}
+
+const getLlmMetricsSummaryRow = (rows: LlmStatusRow[], latestTimestampMs: number | null) => {
+  return (
+    rows.find((row) => {
+      return isLlmStatusActive(row) && isRecentLlmStatusRow(row, latestTimestampMs)
+    })
+    ?? rows[0]
+  )
+}
+
+const getLlmMetricsSummaryRows = (rows: LlmStatusRow[]) => {
+  const latestTimestampMs = getLatestLlmStatusTimestampMs(rows)
+  const rowsByInstance = groupLlmStatusRowsByInstance(rows)
+
+  return [...rowsByInstance.values()]
+    .map((instanceRows) => {
+      return getLlmMetricsSummaryRow(instanceRows, latestTimestampMs)
+    })
+    .filter((row): row is LlmStatusRow => {
+      return row !== undefined
+    })
+}
+
 export const getLlmMetricsSummary = (response: LlmStatusResponse): LlmMetricsSummary | null => {
   const latestRows = getLatestLlmStatusRowsByInstance(response.rows)
+  const summaryRows = getLlmMetricsSummaryRows(response.rows)
 
   if (latestRows.length === 0) {
     return {
@@ -275,10 +333,10 @@ export const getLlmMetricsSummary = (response: LlmStatusResponse): LlmMetricsSum
     }
   }
 
-  const waiting = latestRows.reduce((sum, row) => {
+  const waiting = summaryRows.reduce((sum, row) => {
     return sum + (normalizeLlmStatusNumber(row.numQueueReqs) ?? 0)
   }, 0)
-  const running = latestRows.reduce((sum, row) => {
+  const running = summaryRows.reduce((sum, row) => {
     return sum + (normalizeLlmStatusNumber(row.numRunningReqs) ?? 0)
   }, 0)
   const timestamps = getLlmStatusTimestamps(latestRows)
@@ -300,12 +358,6 @@ export const getLlmMetricsSummary = (response: LlmStatusResponse): LlmMetricsSum
     hasMetricsCompatibleJob: response.hasMetricsCompatibleJob,
     hasMetricsCompatibleRuntime: response.hasMetricsCompatibleRuntime,
   }
-}
-
-const isLlmStatusActive = (row: LlmStatusRow) => {
-  return (
-    (normalizeLlmStatusNumber(row.numQueueReqs) ?? 0) > 0 || (normalizeLlmStatusNumber(row.numRunningReqs) ?? 0) > 0
-  )
 }
 
 export const getLlmStatusRefetchInterval = (rows: LlmStatusRow[]) => {
