@@ -77,18 +77,59 @@ export const isTopologyJobCleanupComplete = (jobs: TopologyJobCleanupState[]) =>
   )
 }
 
+type TopologyJobStoreWorkflowState = {
+  claims: unknown[]
+  health: {
+    claimedOutboxCount: number
+    hasOutboxRows: boolean
+    hasPendingCompletionAck: boolean
+    hasQueueRows: boolean
+    orphanedJudgedRowCount: number
+    outboxRowCount: number
+    pendingCompletionAckCount: number
+    promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
+    retainedRowCount: number
+  }
+}
+
+export const hasTopologyTerminalJobStores = (jobs: TopologyJobStoreWorkflowState[]) => {
+  return (
+    jobs.length > 0
+    && jobs.every((job) => {
+      return (
+        job.claims.length === 0
+        && !job.health.hasOutboxRows
+        && !job.health.hasPendingCompletionAck
+        && !job.health.hasQueueRows
+        && job.health.claimedOutboxCount === 0
+        && job.health.orphanedJudgedRowCount === 0
+        && job.health.outboxRowCount === 0
+        && job.health.pendingCompletionAckCount === 0
+        && job.health.promptCounts.claimed === 0
+        && job.health.promptCounts.judged === 0
+        && job.health.promptCounts.ready === 0
+        && job.health.promptCounts.running === 0
+        && job.health.promptCounts.skipped === 0
+        && job.health.retainedRowCount === 0
+      )
+    })
+  )
+}
+
 export const isTopologyJudgmentWorkflowComplete = ({
   hasReconciledProjectRefreshAcks,
+  hasTerminalJobStores,
   totalJudgments,
   visibleProjectionCount,
 }: {
   hasReconciledProjectRefreshAcks: boolean
+  hasTerminalJobStores: boolean
   totalJudgments: number
   visibleProjectionCount: number
 }) => {
   if (totalJudgments !== 4) return false
 
-  return visibleProjectionCount === 4 && hasReconciledProjectRefreshAcks
+  return hasReconciledProjectRefreshAcks && (visibleProjectionCount === 4 || hasTerminalJobStores)
 }
 
 export const hasTopologyReconciledProjectRefreshAcks = (
@@ -632,10 +673,12 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
       claims: Array<{claimId: string; queueRecordId: string; serverId: string; status: string}>
       health: {
+        claimedOutboxCount: number
         hasOutboxRows: boolean
         hasPendingCompletionAck: boolean
         hasQueueRows: boolean
         lastAckSeq: number | null
+        orphanedJudgedRowCount: number
         outboxRowCount: number
         pendingCompletionAckCount: number
         promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
@@ -746,6 +789,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     if (
       isTopologyJudgmentWorkflowComplete({
         hasReconciledProjectRefreshAcks,
+        hasTerminalJobStores: hasTopologyTerminalJobStores(evidence.data.jobEvidence),
         totalJudgments,
         visibleProjectionCount: evidence.data.visibleProjectionCount,
       })

@@ -17,6 +17,7 @@ import {
   createJudgmentWorkflowTopology,
   getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit,
   hasTopologyReconciledProjectRefreshAcks,
+  hasTopologyTerminalJobStores,
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
   isRuntimeMonitorTargetHealthy,
@@ -215,6 +216,7 @@ test('topology judgment completion requires projection evidence and refresh acks
   expect(
     isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: true,
+      hasTerminalJobStores: false,
       totalJudgments: 4,
       visibleProjectionCount: 4,
     }),
@@ -222,6 +224,7 @@ test('topology judgment completion requires projection evidence and refresh acks
   expect(
     isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: false,
+      hasTerminalJobStores: true,
       totalJudgments: 4,
       visibleProjectionCount: 4,
     }),
@@ -229,6 +232,7 @@ test('topology judgment completion requires projection evidence and refresh acks
   expect(
     isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: true,
+      hasTerminalJobStores: false,
       totalJudgments: 4,
       visibleProjectionCount: 2,
     }),
@@ -236,6 +240,7 @@ test('topology judgment completion requires projection evidence and refresh acks
   expect(
     isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: false,
+      hasTerminalJobStores: true,
       totalJudgments: 4,
       visibleProjectionCount: 2,
     }),
@@ -243,10 +248,42 @@ test('topology judgment completion requires projection evidence and refresh acks
   expect(
     isTopologyJudgmentWorkflowComplete({
       hasReconciledProjectRefreshAcks: true,
+      hasTerminalJobStores: false,
       totalJudgments: 3,
       visibleProjectionCount: 4,
     }),
   ).toBe(false)
+})
+
+test('topology judgment completion accepts terminal idle local stores when projection evidence lags', () => {
+  const terminalJob = {
+    claims: [],
+    health: {
+      claimedOutboxCount: 0,
+      hasOutboxRows: false,
+      hasPendingCompletionAck: false,
+      hasQueueRows: false,
+      orphanedJudgedRowCount: 0,
+      outboxRowCount: 0,
+      pendingCompletionAckCount: 0,
+      promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
+      retainedRowCount: 0,
+    },
+  }
+
+  expect(hasTopologyTerminalJobStores([terminalJob, terminalJob])).toBe(true)
+  expect(hasTopologyTerminalJobStores([{...terminalJob, health: {...terminalJob.health, hasQueueRows: true}}])).toBe(
+    false,
+  )
+  expect(hasTopologyTerminalJobStores([{...terminalJob, claims: ['claim-a']}])).toBe(false)
+  expect(
+    isTopologyJudgmentWorkflowComplete({
+      hasReconciledProjectRefreshAcks: true,
+      hasTerminalJobStores: true,
+      totalJudgments: 4,
+      visibleProjectionCount: 0,
+    }),
+  ).toBe(true)
 })
 
 test('topology refresh ack evidence accepts only matched or inapplicable ack state', () => {
