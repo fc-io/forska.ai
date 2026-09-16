@@ -480,14 +480,24 @@ export const createDataSourceTrackingSpoolRepository = (
             `
             SELECT id
             FROM tracking_spool_window
-            WHERE status = 'ingested'
-              AND duckdb_ingested_at IS NOT NULL
-              AND duckdb_ingested_at <= ?
-            ORDER BY duckdb_ingested_at ASC, id ASC
+            WHERE (
+                status = 'ingested'
+                AND duckdb_ingested_at IS NOT NULL
+                AND duckdb_ingested_at <= ?
+              )
+              OR (
+                status = 'rejected'
+                AND updated_at <= ?
+              )
+            ORDER BY COALESCE(duckdb_ingested_at, updated_at) ASC, id ASC
             LIMIT ?
           `,
           )
-          .all(input.ingestedBefore.toISOString(), getLimitValue(input.limit)) as Array<{id: string}>
+          .all(
+            input.ingestedBefore.toISOString(),
+            input.ingestedBefore.toISOString(),
+            getLimitValue(input.limit),
+          ) as Array<{id: string}>
         const ids = rows.map((row) => {
           return row.id
         })
@@ -661,6 +671,63 @@ export const createDataSourceTrackingSpoolRepository = (
         )
 
       return Boolean(row)
+    },
+    promoteRetryableFetchFailedWindowForIngest: (input: {
+      dataSourceId?: string
+      now: Date
+      windowId?: string | null
+    }): DataSourceTrackingSpoolWindowRecord | null => {
+      return database.transaction(() => {
+        const candidate = database
+          .query(
+            `
+            SELECT spool_window.id
+            FROM tracking_spool_window spool_window
+            WHERE spool_window.status = 'fetch_failed'
+              AND (? IS NULL OR spool_window.id = ?)
+              AND (? IS NULL OR spool_window.data_source_id = ?)
+              AND (spool_window.next_retry_at IS NULL OR spool_window.next_retry_at <= ?)
+              AND EXISTS (
+                SELECT 1
+                FROM tracking_spool_page page
+                WHERE page.window_id = spool_window.id
+                LIMIT 1
+              )
+            ORDER BY spool_window.updated_at ASC, spool_window.id ASC
+            LIMIT 1
+          `,
+          )
+          .get(
+            input.windowId ?? null,
+            input.windowId ?? null,
+            input.dataSourceId ?? null,
+            input.dataSourceId ?? null,
+            input.now.toISOString(),
+          ) as {id: string} | null
+
+        if (!candidate) {
+          return null
+        }
+
+        const result = database
+          .query(
+            `
+            UPDATE tracking_spool_window
+            SET status = 'ready',
+                spooled_at = ?,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                last_error = NULL,
+                next_retry_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'fetch_failed'
+          `,
+          )
+          .run(input.now.toISOString(), input.now.toISOString(), candidate.id) as {changes?: number}
+
+        return (result.changes ?? 0) > 0 ? getWindowById(database, candidate.id) : null
+      })()
     },
     getResumeCursor: (windowId: string): string | null => {
       const window = getWindowById(database, windowId)

@@ -96,6 +96,85 @@ test('data source tracking worker skips fetch claims under spool backpressure bu
   expect(drainCallCount).toBe(1)
 })
 
+test('data source tracking worker promotes retryable fetch-failed windows before claiming under aggregate backpressure', async () => {
+  const calls: string[] = []
+  const worker = createDataSourceTrackingWorker({
+    logger: {
+      log: () => {
+        return undefined
+      },
+      warn: () => {
+        return undefined
+      },
+    },
+    spoolIngester: {
+      drainReadyWindows: async () => {
+        calls.push('spool:drain')
+        return [
+          {
+            acceptedCount: 1,
+            importRunId: 'data-source-tracking:window-1',
+            pageCount: 10,
+            reason: 'ingested',
+            recordCount: 10,
+            status: 'success',
+            windowId: 'window-1',
+          },
+        ]
+      },
+    },
+    spoolRepository: {
+      getBackpressureSignal: () => {
+        calls.push('spool:signal')
+        return {
+          backpressureActive: true,
+          backlog: {
+            failedWindowCount: 2,
+            oldestReadyAt: null,
+            pendingPageCount: 20,
+            pendingWindowCount: 2,
+            readyWindowCount: 0,
+          },
+        }
+      },
+      hasRetryableFetchFailedWindow: () => {
+        calls.push('spool:has-fetch-failed')
+        return true
+      },
+      promoteRetryableFetchFailedWindowForIngest: () => {
+        calls.push('spool:promote-fetch-failed')
+        return {id: 'window-1', status: 'ready'}
+      },
+    } as never,
+    reconciliationWorkRepository: {
+      claimNextWork: async () => {
+        calls.push('reconciliation:claim')
+        return null
+      },
+      scheduleDueMonthlyAgeBucketWork: async () => {
+        calls.push('reconciliation:schedule')
+        return []
+      },
+    } as never,
+    trackingRepository: {
+      claimDueSource: async () => {
+        calls.push('source:claim')
+        return null
+      },
+      selectDueSources: async () => {
+        return [getState()]
+      },
+    } as never,
+  })
+
+  const result = await worker.wake({now: new Date('2026-09-16T09:00:00.000Z')})
+
+  expect(result.sourceResults).toEqual([{dataSourceId: 'source-1', reason: 'backpressure', status: 'skipped'}])
+  expect(result.ingestedWindowCount).toBe(1)
+  expect(calls).toContain('spool:promote-fetch-failed')
+  expect(calls).not.toContain('source:claim')
+})
+
 test('data source tracking worker claims and spools reconciliation work separately from incremental sources', async () => {
   const calls: string[] = []
   const now = new Date('2026-09-16T09:00:00.000Z')
