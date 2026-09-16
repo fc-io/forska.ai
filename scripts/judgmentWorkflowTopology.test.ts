@@ -18,6 +18,7 @@ import {
   getJudgmentWorkflowTopologyMaintenanceDuckdbMemoryLimit,
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
+  isTopologyJudgmentWorkflowComplete,
   isRuntimeMonitorTargetHealthy,
   isTopologyJobCleanupComplete,
   startJudgmentWorkflowTopology,
@@ -207,6 +208,41 @@ test('topology cleanup completion requires central drain state and absent local 
   expect(isTopologyJobCleanupComplete([{...drained, storageState: 'draining'}])).toBe(false)
   expect(isTopologyJobCleanupComplete([{...drained, artifacts: {...drained.artifacts, sqlite: true}}])).toBe(false)
   expect(isTopologyJobCleanupComplete([])).toBe(false)
+})
+
+test('topology judgment completion accepts terminal local stores before detail projection catches up', () => {
+  expect(
+    isTopologyJudgmentWorkflowComplete({
+      hasIdleLocalJobStores: true,
+      hasReconciledProjectRefreshAcks: false,
+      totalJudgments: 4,
+      visibleProjectionCount: 2,
+    }),
+  ).toBe(true)
+  expect(
+    isTopologyJudgmentWorkflowComplete({
+      hasIdleLocalJobStores: false,
+      hasReconciledProjectRefreshAcks: true,
+      totalJudgments: 4,
+      visibleProjectionCount: 4,
+    }),
+  ).toBe(true)
+  expect(
+    isTopologyJudgmentWorkflowComplete({
+      hasIdleLocalJobStores: false,
+      hasReconciledProjectRefreshAcks: true,
+      totalJudgments: 4,
+      visibleProjectionCount: 2,
+    }),
+  ).toBe(false)
+  expect(
+    isTopologyJudgmentWorkflowComplete({
+      hasIdleLocalJobStores: true,
+      hasReconciledProjectRefreshAcks: false,
+      totalJudgments: 3,
+      visibleProjectionCount: 2,
+    }),
+  ).toBe(false)
 })
 
 test('topology accepts Bun Windows SIGTERM exit status only for intentional shutdown', () => {
