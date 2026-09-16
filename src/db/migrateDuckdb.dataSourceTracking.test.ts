@@ -67,6 +67,13 @@ test('DuckDB data-source continuous tracking migration adds state, reconciliatio
         )
       ORDER BY table_name, constraint_type, constraint_name
     `)
+    const indexes = await database.queryJson<{indexName: string; tableName: string}>(`
+      SELECT table_name AS tableName, index_name AS indexName
+      FROM duckdb_indexes()
+      WHERE schema_name = 'app'
+        AND table_name = 'data_source_article_change_log'
+      ORDER BY index_name
+    `)
 
     await database.run(`
       INSERT INTO app.data_source (id, title)
@@ -121,6 +128,13 @@ test('DuckDB data-source continuous tracking migration adds state, reconciliatio
     expect(primaryKeys).toContainEqual(['data_source_id'])
     expect(primaryKeys).toContainEqual(['id'])
     expect(uniqueKeys).toContainEqual(['data_source_id', 'run_kind', 'age_months', 'period_start', 'period_end'])
+    expect(indexes).toEqual([
+      {
+        indexName: 'idx_data_source_article_change_log_source_record_history',
+        tableName: 'data_source_article_change_log',
+      },
+      {indexName: 'idx_data_source_article_change_log_timeline', tableName: 'data_source_article_change_log'},
+    ])
     expect(dataSource?.trackingEnabled).toBe(false)
     expect(
       typeof dataSource?.trackingReconcileScheduleMonths === 'string'

@@ -349,6 +349,143 @@ test('data source tracking worker claims and spools reconciliation work separate
   ])
 })
 
+test('data source tracking worker does not clear source lease on reconciliation fetch failure', async () => {
+  const calls: string[] = []
+  const now = new Date('2026-09-16T09:00:00.000Z')
+  const work = {
+    ageMonths: 3,
+    completedAt: null,
+    cursor: null,
+    dataSourceId: 'source-1',
+    failureCount: 0,
+    id: 'work-1',
+    importRunId: null,
+    lastError: null,
+    leaseExpiresAt: new Date('2026-09-16T09:10:00.000Z'),
+    leaseOwner: 'worker',
+    nextRetryAt: null,
+    periodEnd: new Date('2026-07-01T00:00:00.000Z'),
+    periodStart: new Date('2026-06-01T00:00:00.000Z'),
+    route: pubmedTrackedImportRoute,
+    runKind: 'automatic_age_bucket' as const,
+    scheduledAt: new Date('2026-09-01T00:00:00.000Z'),
+    spoolWindowId: null,
+    startedAt: now,
+    status: 'running' as const,
+    updatedAt: now,
+  }
+  const worker = createDataSourceTrackingWorker({
+    dataSourceQueryService: {
+      getDataSourceById: async () => {
+        calls.push('datasource:get')
+        return {
+          archived: false,
+          createdAt: new Date('2026-09-01T00:00:00.000Z'),
+          cursor: null,
+          dateFrom: new Date('2026-01-01T00:00:00.000Z'),
+          dateTo: null,
+          description: null,
+          id: 'source-1',
+          importRoute: pubmedTrackedImportRoute,
+          itemsAfterLastImport: 0,
+          lastImportAt: null,
+          title: 'Tracked source',
+          trackingEnabled: true,
+          trackingReconcileScheduleMonths: [3],
+          updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+        }
+      },
+    } as never,
+    logger: {
+      log: () => {
+        return undefined
+      },
+      warn: () => {
+        return undefined
+      },
+    },
+    providerRegistry: {
+      getProvider: () => {
+        return {route: pubmedTrackedImportRoute}
+      },
+    } as never,
+    reconciliationWorkRepository: {
+      claimNextWork: async () => {
+        calls.push('reconciliation:claim')
+        return work
+      },
+      markWorkFailed: async () => {
+        calls.push('reconciliation:failed')
+        return null
+      },
+      renewWorkLease: async () => {
+        calls.push('reconciliation:renew')
+        return work
+      },
+      scheduleDueMonthlyAgeBucketWork: async () => {
+        calls.push('reconciliation:schedule')
+        return []
+      },
+    } as never,
+    spoolIngester: {
+      drainReadyWindows: async () => {
+        calls.push('spool:drain')
+        return []
+      },
+    },
+    spoolRepository: {
+      getBackpressureSignal: () => {
+        return {
+          backpressureActive: false,
+          backlog: {
+            failedWindowCount: 0,
+            oldestReadyAt: null,
+            pendingPageCount: 0,
+            pendingWindowCount: 0,
+            readyWindowCount: 0,
+          },
+        }
+      },
+    } as never,
+    trackedImportService: {
+      fetchReconciliationWorkToSpool: async () => {
+        calls.push('reconciliation:fetch')
+        throw new Error('provider fetch failed')
+      },
+    } as never,
+    trackingRepository: {
+      claimDueSource: async () => {
+        throw new Error('incremental source claim should not run')
+      },
+      recordTrackingFailure: async () => {
+        calls.push('tracking:failure')
+        return null
+      },
+      selectDueSources: async () => {
+        return []
+      },
+      startTrackingWindow: async () => {
+        calls.push('tracking:start')
+        return null
+      },
+    } as never,
+  })
+
+  const result = await worker.wake({maxFetchSources: 0, maxReconciliationWork: 1, now})
+
+  expect(result.reconciliationResults).toEqual([
+    {
+      dataSourceId: 'source-1',
+      error: 'provider fetch failed',
+      reason: 'fetch-failed',
+      status: 'failed',
+      workId: 'work-1',
+    },
+  ])
+  expect(calls).toContain('reconciliation:failed')
+  expect(calls).not.toContain('tracking:failure')
+})
+
 test('data source tracking worker rechecks backpressure after each spooled page', async () => {
   const calls: string[] = []
   const now = new Date('2026-09-16T09:00:00.000Z')
