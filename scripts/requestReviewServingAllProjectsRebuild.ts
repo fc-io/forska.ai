@@ -1,9 +1,15 @@
+import {writeFileSync} from 'node:fs'
+
 import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
-type RequestReviewServingAllProjectsRebuildOptions = {includeArchived: boolean; projectId: string | null}
+type RequestReviewServingAllProjectsRebuildOptions = {
+  includeArchived: boolean
+  jsonOutputFile: string | null
+  projectId: string | null
+}
 type RequestReviewServingAllProjectsRebuildFailure = {error: string; projectId: string}
 type RequestReviewServingAllProjectsRebuildResult = {
   failedProjects: RequestReviewServingAllProjectsRebuildFailure[]
@@ -11,14 +17,29 @@ type RequestReviewServingAllProjectsRebuildResult = {
 }
 const workloadContext = getMaintenanceDuckdbWorkloadContext('requestReviewServingAllProjectsRebuild')
 
-const getRequestOptions = (): RequestReviewServingAllProjectsRebuildOptions => {
-  const projectIdArg = process.argv.slice(2).find((argument) => {
-    return argument.startsWith('--project-id=')
+const writeJson = (value: unknown, options: Pick<RequestReviewServingAllProjectsRebuildOptions, 'jsonOutputFile'>) => {
+  const output = `${JSON.stringify(value)}\n`
+
+  process.stdout.write(output)
+
+  if (options.jsonOutputFile !== null) {
+    writeFileSync(options.jsonOutputFile, output, 'utf8')
+  }
+}
+
+const getArgValue = (name: string) => {
+  const argument = process.argv.slice(2).find((item) => {
+    return item.startsWith(`${name}=`)
   })
 
+  return argument?.split('=')[1] ?? null
+}
+
+const getRequestOptions = (): RequestReviewServingAllProjectsRebuildOptions => {
   return {
     includeArchived: process.argv.slice(2).includes('--include-archived'),
-    projectId: projectIdArg?.split('=')[1] ?? null,
+    jsonOutputFile: getArgValue('--json-output-file') ?? getArgValue('--output-json'),
+    projectId: getArgValue('--project-id'),
   }
 }
 
@@ -101,20 +122,21 @@ const main = async () => {
 
     if (projectIds.length === 0) {
       console.log('[requestReviewServingAllProjectsRebuild] no matching projects')
-      console.log(JSON.stringify({projectCount: 0, requestedCount: 0, status: 'not_found'}))
+      writeJson({projectCount: 0, requestedCount: 0, status: 'not_found'}, options)
       return
     }
 
     const result = await requestReviewServingProjectRebuilds(projectIds)
-    console.log(
-      JSON.stringify({
+    writeJson(
+      {
         failedCount: result.failedProjects.length,
         failedProjects: result.failedProjects,
         projectCount: projectIds.length,
         requestIds: result.requestIds,
         requestedCount: result.requestIds.length,
         status: getRequestStatus(result),
-      }),
+      },
+      options,
     )
   })
 }

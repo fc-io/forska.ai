@@ -57,6 +57,7 @@ import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+data
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
 import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
 import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
+import { Route as AdminDatasourcesIdChangesRouteImport } from './routes/+admin/+datasources/+$id/+changes'
 import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
 import { Route as ProjectsIdReviewsUnassessedIndexRouteImport } from './routes/+projects/+$id/+reviews-unassessed/+index'
 import { Route as ProjectsIdReviewsLlmIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+index'
@@ -326,6 +327,12 @@ const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
   path: '/admin/datasources/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminDatasourcesIdChangesRoute =
+  AdminDatasourcesIdChangesRouteImport.update({
+    id: '/admin/datasources/$id/changes',
+    path: '/admin/datasources/$id/changes',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
   id: '/projects/$id/reviews/',
   path: '/projects/$id/reviews/',
@@ -472,6 +479,7 @@ export interface FileRoutesByFullPath {
   '/projects/$id/reviews-llm/': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed/': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
+  '/admin/datasources/$id/changes': typeof AdminDatasourcesIdChangesRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/admin/unexpected-answers/$projectId/$promptId/': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
@@ -537,6 +545,7 @@ export interface FileRoutesByTo {
   '/projects/$id/reviews-llm': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews': typeof ProjectsIdReviewsIndexRoute
+  '/admin/datasources/$id/changes': typeof AdminDatasourcesIdChangesRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/admin/unexpected-answers/$projectId/$promptId': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
@@ -603,6 +612,7 @@ export interface FileRoutesById {
   '/projects/$id/reviews-llm/': typeof ProjectsIdReviewsLlmIndexRoute
   '/projects/$id/reviews-unassessed/': typeof ProjectsIdReviewsUnassessedIndexRoute
   '/projects/$id/reviews/': typeof ProjectsIdReviewsIndexRoute
+  '/admin/datasources/$id/changes': typeof AdminDatasourcesIdChangesRoute
   '/admin/datasources/$id/edit': typeof AdminDatasourcesIdEditRoute
   '/admin/jobs/$id/unassessed_articles': typeof AdminJobsIdUnassessed_articlesRoute
   '/admin/unexpected-answers/$projectId/$promptId/': typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
@@ -670,6 +680,7 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews-llm/'
     | '/projects/$id/reviews-unassessed/'
     | '/projects/$id/reviews/'
+    | '/admin/datasources/$id/changes'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/admin/unexpected-answers/$projectId/$promptId/'
@@ -735,6 +746,7 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews-llm'
     | '/projects/$id/reviews-unassessed'
     | '/projects/$id/reviews'
+    | '/admin/datasources/$id/changes'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/admin/unexpected-answers/$projectId/$promptId'
@@ -800,6 +812,7 @@ export interface FileRouteTypes {
     | '/projects/$id/reviews-llm/'
     | '/projects/$id/reviews-unassessed/'
     | '/projects/$id/reviews/'
+    | '/admin/datasources/$id/changes'
     | '/admin/datasources/$id/edit'
     | '/admin/jobs/$id/unassessed_articles'
     | '/admin/unexpected-answers/$projectId/$promptId/'
@@ -866,6 +879,7 @@ export interface RootRouteChildren {
   ProjectsIdReviewsLlmIndexRoute: typeof ProjectsIdReviewsLlmIndexRoute
   ProjectsIdReviewsUnassessedIndexRoute: typeof ProjectsIdReviewsUnassessedIndexRoute
   ProjectsIdReviewsIndexRoute: typeof ProjectsIdReviewsIndexRoute
+  AdminDatasourcesIdChangesRoute: typeof AdminDatasourcesIdChangesRoute
   AdminDatasourcesIdEditRoute: typeof AdminDatasourcesIdEditRoute
   AdminJobsIdUnassessed_articlesRoute: typeof AdminJobsIdUnassessed_articlesRoute
   AdminUnexpectedAnswersProjectIdPromptIdIndexRoute: typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRoute
@@ -1213,6 +1227,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/datasources/$id/changes': {
+      id: '/admin/datasources/$id/changes'
+      path: '/admin/datasources/$id/changes'
+      fullPath: '/admin/datasources/$id/changes'
+      preLoaderRoute: typeof AdminDatasourcesIdChangesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id/reviews/': {
       id: '/projects/$id/reviews/'
       path: '/projects/$id/reviews'
@@ -1383,6 +1404,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdReviewsLlmIndexRoute: ProjectsIdReviewsLlmIndexRoute,
   ProjectsIdReviewsUnassessedIndexRoute: ProjectsIdReviewsUnassessedIndexRoute,
   ProjectsIdReviewsIndexRoute: ProjectsIdReviewsIndexRoute,
+  AdminDatasourcesIdChangesRoute: AdminDatasourcesIdChangesRoute,
   AdminDatasourcesIdEditRoute: AdminDatasourcesIdEditRoute,
   AdminJobsIdUnassessed_articlesRoute: AdminJobsIdUnassessed_articlesRoute,
   AdminUnexpectedAnswersProjectIdPromptIdIndexRoute:

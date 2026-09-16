@@ -1,6 +1,6 @@
 import type {DataSourceRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {escapeSqlString, getDateValue, getTimestampLiteral} from './appQueryHelpers.ts'
+import {escapeSqlString, getDateValue, getJsonValue, getTimestampLiteral} from './appQueryHelpers.ts'
 
 type DataSourceRow = {
   id: string
@@ -12,9 +12,27 @@ type DataSourceRow = {
   cursor: string | null
   dateFrom: unknown
   dateTo: unknown
+  trackingEnabled: boolean | null
+  trackingReconcileScheduleMonths: unknown
   archived: boolean | null
   createdAt: unknown
   updatedAt: unknown
+}
+
+const defaultTrackingReconcileScheduleMonths = [3, 12, 24, 36]
+
+const getTrackingReconcileScheduleMonths = (value: unknown): number[] => {
+  const parsed = getJsonValue(value)
+
+  if (!Array.isArray(parsed)) {
+    return defaultTrackingReconcileScheduleMonths
+  }
+
+  const months = parsed.filter((entry): entry is number => {
+    return Number.isInteger(entry) && entry > 0
+  })
+
+  return months.length > 0 ? months : defaultTrackingReconcileScheduleMonths
 }
 
 const getDataSourceValue = (row: DataSourceRow): DataSourceRecord => {
@@ -28,6 +46,8 @@ const getDataSourceValue = (row: DataSourceRow): DataSourceRecord => {
     cursor: row.cursor,
     dateFrom: getDateValue(row.dateFrom),
     dateTo: getDateValue(row.dateTo),
+    trackingEnabled: row.trackingEnabled ?? false,
+    trackingReconcileScheduleMonths: getTrackingReconcileScheduleMonths(row.trackingReconcileScheduleMonths),
     archived: row.archived ?? false,
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
     updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
@@ -46,6 +66,8 @@ const getDataSourceById = async (id: string): Promise<DataSourceRecord | null> =
       cursor,
       date_from AS dateFrom,
       date_to AS dateTo,
+      tracking_enabled AS trackingEnabled,
+      TO_JSON(tracking_reconcile_schedule_months) AS trackingReconcileScheduleMonths,
       archived,
       created_at AS createdAt,
       updated_at AS updatedAt
@@ -133,6 +155,8 @@ const updateDataSourceAfterImport = async (params: {
       cursor,
       date_from AS dateFrom,
       date_to AS dateTo,
+      tracking_enabled AS trackingEnabled,
+      TO_JSON(tracking_reconcile_schedule_months) AS trackingReconcileScheduleMonths,
       archived,
       created_at AS createdAt,
       updated_at AS updatedAt

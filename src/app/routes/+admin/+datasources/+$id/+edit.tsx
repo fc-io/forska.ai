@@ -1,8 +1,17 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
+import {TrackingOptionsField, TrackingStatusPanel} from '../-trackingControls.tsx'
+import {
+  type DataSourceTrackingState,
+  defaultTrackingReconcileScheduleMonths,
+  getTrackingAvailability,
+  isTrackingSupportedImportRoute,
+  normalizeTrackingScheduleMonths,
+  runFullDataSourceTrackingReconciliation,
+} from '../-trackingShared.ts'
 import {
   builtInImportRouteOptions,
   customImportRoutePlaceholder,
@@ -50,6 +59,9 @@ type AdminDataSourceDetail = {
   linkedPromptIds: string[]
   reimportable: boolean
   structuredFileConfig: StructuredFileConfig | null
+  trackingEnabled: boolean
+  trackingReconcileScheduleMonths: number[]
+  trackingState: DataSourceTrackingState | null
 }
 
 const covidenceModeLabels = {full_text: 'Full-text screening', title_abstract: 'Title / abstract screening'} as const
@@ -101,6 +113,9 @@ const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> =
     linkedPromptIds: entry.linkedPromptIds ?? [],
     reimportable: entry.reimportable ?? false,
     structuredFileConfig: entry.structuredFileConfig ?? null,
+    trackingEnabled: Boolean(entry.trackingEnabled),
+    trackingReconcileScheduleMonths: normalizeTrackingScheduleMonths(entry.trackingReconcileScheduleMonths),
+    trackingState: (entry.trackingState ?? null) as DataSourceTrackingState | null,
   }
 }
 
@@ -112,6 +127,8 @@ const updateDataSource = async (
     importRoute: string | null
     dateFrom: string | null
     dateTo: string | null
+    trackingEnabled: boolean
+    trackingReconcileScheduleMonths: number[]
   }>,
 ): Promise<AdminDataSourceDetail> => {
   const response = await apiClient.api.datasources({id}).patch(payload)
@@ -144,6 +161,9 @@ const updateDataSource = async (
     linkedPromptIds: entry.linkedPromptIds ?? [],
     reimportable: entry.reimportable ?? false,
     structuredFileConfig: entry.structuredFileConfig ?? null,
+    trackingEnabled: Boolean(entry.trackingEnabled),
+    trackingReconcileScheduleMonths: normalizeTrackingScheduleMonths(entry.trackingReconcileScheduleMonths),
+    trackingState: (entry.trackingState ?? null) as DataSourceTrackingState | null,
   }
 }
 
@@ -165,9 +185,10 @@ const archiveDataSource = async (id: string): Promise<void> => {
   }
 }
 
-const AdminEditDataSource = () => {
+export const AdminEditDataSource = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const dataSourceId = () => {
     return (params() as {id: string}).id
   }
@@ -191,9 +212,21 @@ const AdminEditDataSource = () => {
   const [importRoute, setImportRoute] = createSignal('')
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
+  const [trackingEnabled, setTrackingEnabled] = createSignal(false)
+  const [trackingReconcileScheduleMonths, setTrackingReconcileScheduleMonths] = createSignal<number[]>([
+    ...defaultTrackingReconcileScheduleMonths,
+  ])
+  const [trackingState, setTrackingState] = createSignal<DataSourceTrackingState | null>(null)
+  const [persistedTrackingEnabled, setPersistedTrackingEnabled] = createSignal(false)
+  const [persistedTrackingReconcileScheduleMonths, setPersistedTrackingReconcileScheduleMonths] = createSignal<
+    number[]
+  >([...defaultTrackingReconcileScheduleMonths])
+  const [persistedImportRoute, setPersistedImportRoute] = createSignal<string | null>(null)
+  const [hydratedDataSourceId, setHydratedDataSourceId] = createSignal<string | null>(null)
   const [isSaving, setIsSaving] = createSignal(false)
   const [isArchiving, setIsArchiving] = createSignal(false)
   const [isReimporting, setIsReimporting] = createSignal(false)
+  const [isRunningFullReconciliation, setIsRunningFullReconciliation] = createSignal(false)
   const [showArchiveConfirm, setShowArchiveConfirm] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
@@ -225,9 +258,25 @@ const AdminEditDataSource = () => {
     return value ? new Date(value).toISOString().slice(0, 10) : ''
   }
 
+  const resolvedImportRoute = () => {
+    return getResolvedImportRoute({
+      customImportRoute: importRoute(),
+      selectedBuiltInImportRoute: selectedBuiltInImportRoute(),
+    })
+  }
+
   createEffect(() => {
     const data = dataSourceQuery.data
     if (!data) return
+
+    setTrackingState(data.trackingState)
+    setPersistedTrackingEnabled(data.trackingEnabled)
+    setPersistedTrackingReconcileScheduleMonths(data.trackingReconcileScheduleMonths)
+    setPersistedImportRoute(data.importRoute)
+
+    if (hydratedDataSourceId() === data.id) {
+      return
+    }
 
     setTitle(data.title)
     setDescription(data.description ?? '')
@@ -235,6 +284,16 @@ const AdminEditDataSource = () => {
     setImportRoute(getCustomImportRouteValue(data.importRoute))
     setDateFrom(formatDateForInput(data.dateFrom))
     setDateTo(formatDateForInput(data.dateTo))
+    setTrackingEnabled(data.trackingEnabled)
+    setTrackingReconcileScheduleMonths(data.trackingReconcileScheduleMonths)
+    setHydratedDataSourceId(data.id)
+  })
+
+  createEffect(() => {
+    const availability = getTrackingAvailability({dateFrom: dateFrom(), importRoute: resolvedImportRoute()})
+    if (!availability.canEnable && trackingEnabled()) {
+      setTrackingEnabled(false)
+    }
   })
 
   const handleSubmit = (event: Event) => {
@@ -263,17 +322,34 @@ const AdminEditDataSource = () => {
       return
     }
 
-    const resolvedImportRoute = getResolvedImportRoute({
-      customImportRoute: importRoute(),
-      selectedBuiltInImportRoute: selectedBuiltInImportRoute(),
-    })
+    const importRouteValue = resolvedImportRoute()
+    const trackingAvailability = getTrackingAvailability({dateFrom: dateFrom(), importRoute: importRouteValue})
 
-    const payload = {
+    if (trackingEnabled() && !trackingAvailability.canEnable) {
+      setError(trackingAvailability.helperText)
+      setIsSaving(false)
+      return
+    }
+
+    const payload: Partial<{
+      title: string
+      description: string | null
+      importRoute: string | null
+      dateFrom: string | null
+      dateTo: string | null
+      trackingEnabled: boolean
+      trackingReconcileScheduleMonths: number[]
+    }> = {
       title: title(),
       description: description().trim() === '' ? null : description(),
-      importRoute: resolvedImportRoute,
+      importRoute: importRouteValue,
       dateFrom: startDateResult.normalized,
       dateTo: endDateResult.normalized,
+    }
+
+    if (isTrackingSupportedImportRoute(importRouteValue) && startDateResult.normalized) {
+      payload.trackingEnabled = trackingEnabled()
+      payload.trackingReconcileScheduleMonths = normalizeTrackingScheduleMonths(trackingReconcileScheduleMonths())
     }
 
     void updateDataSource(dataSourceId(), payload)
@@ -284,6 +360,13 @@ const AdminEditDataSource = () => {
         setImportRoute(getCustomImportRouteValue(response.importRoute))
         setDateFrom(formatDateForInput(response.dateFrom))
         setDateTo(formatDateForInput(response.dateTo))
+        setTrackingEnabled(response.trackingEnabled)
+        setTrackingReconcileScheduleMonths(response.trackingReconcileScheduleMonths)
+        setTrackingState(response.trackingState)
+        setPersistedTrackingEnabled(response.trackingEnabled)
+        setPersistedTrackingReconcileScheduleMonths(response.trackingReconcileScheduleMonths)
+        setPersistedImportRoute(response.importRoute)
+        queryClient.setQueryData(['datasource', dataSourceId()], response)
         setSuccessMessage('Data source updated successfully.')
         setIsSaving(false)
       })
@@ -327,6 +410,44 @@ const AdminEditDataSource = () => {
           reimportError instanceof Error ? reimportError.message : 'Failed to reimport Covidence data source'
         setError(message)
         setIsReimporting(false)
+      })
+  }
+
+  const refreshTrackingStatus = async () => {
+    const response = await fetchDataSourceById(dataSourceId())
+    setTrackingState(response.trackingState)
+    setPersistedTrackingEnabled(response.trackingEnabled)
+    setPersistedTrackingReconcileScheduleMonths(response.trackingReconcileScheduleMonths)
+    setPersistedImportRoute(response.importRoute)
+    queryClient.setQueryData(['datasource', dataSourceId()], (previous: AdminDataSourceDetail | undefined) => {
+      return previous
+        ? {
+            ...previous,
+            importRoute: response.importRoute,
+            trackingEnabled: response.trackingEnabled,
+            trackingReconcileScheduleMonths: response.trackingReconcileScheduleMonths,
+            trackingState: response.trackingState,
+          }
+        : response
+    })
+  }
+
+  const handleRunFullReconciliation = () => {
+    setError(null)
+    setSuccessMessage(null)
+    setIsRunningFullReconciliation(true)
+
+    void runFullDataSourceTrackingReconciliation(dataSourceId())
+      .then(async () => {
+        setSuccessMessage('Full reconciliation queued.')
+        await refreshTrackingStatus()
+      })
+      .catch((reconcileError) => {
+        const message = reconcileError instanceof Error ? reconcileError.message : 'Failed to start full reconciliation'
+        setError(message)
+      })
+      .finally(() => {
+        setIsRunningFullReconciliation(false)
       })
   }
 
@@ -585,6 +706,36 @@ const AdminEditDataSource = () => {
                   </label>
                 </div>
               </div>
+            </Show>
+
+            <Show when={!isImmutableDataSource(dataSourceQuery.data)}>
+              <TrackingOptionsField
+                id="edit-data-source-tracking-enabled"
+                dateFrom={dateFrom}
+                importRoute={resolvedImportRoute}
+                trackingEnabled={trackingEnabled}
+                onTrackingEnabledChange={setTrackingEnabled}
+                scheduleMonths={trackingReconcileScheduleMonths}
+                onScheduleMonthsChange={setTrackingReconcileScheduleMonths}
+                disabled={isSaving}
+              />
+            </Show>
+
+            <Show
+              when={
+                isTrackingSupportedImportRoute(dataSourceQuery.data?.importRoute)
+                || Boolean(dataSourceQuery.data?.trackingEnabled)
+              }
+            >
+              <TrackingStatusPanel
+                dataSourceId={dataSourceId}
+                importRoute={persistedImportRoute}
+                trackingEnabled={persistedTrackingEnabled}
+                scheduleMonths={persistedTrackingReconcileScheduleMonths}
+                trackingState={trackingState}
+                isRunningFullReconciliation={isRunningFullReconciliation}
+                onRunFullReconciliation={handleRunFullReconciliation}
+              />
             </Show>
 
             <Show when={error()}>

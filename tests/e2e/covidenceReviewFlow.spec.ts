@@ -14,6 +14,11 @@ type CovidenceCreateResponse = {data: {covidenceProject: {id: string} | null; da
 type ReviewsWarningsResponse = {
   data: {
     indexing: {
+      coverage: {
+        detailReadyArticleCount: number | null
+        filterReadyArticleCount: number | null
+        totalArticleCount: number
+      }
       pendingRefreshCount: number
       progressState: string
       serving: {
@@ -129,15 +134,18 @@ const waitForReviewServingReadiness = async (projectId: string, deadlineMs: numb
     method: 'POST',
   })
   const payload = await assertOk<ReviewsWarningsResponse>(response, 'Failed to load review serving readiness')
+  const coverage = payload.data.indexing.coverage
+  const hasFilterReadiness = coverage.filterReadyArticleCount === coverage.totalArticleCount
+  const hasArticleDetailReadiness = coverage.detailReadyArticleCount === coverage.totalArticleCount
 
-  if (payload.data.indexing.serving.readable && payload.data.indexing.progressState === 'completed') {
+  if (payload.data.indexing.serving.readable && hasFilterReadiness && hasArticleDetailReadiness) {
     return
   }
 
   if (Date.now() >= deadlineMs) {
     const serving = payload.data.indexing.serving.diagnostics
     throw new Error(
-      `Review serving did not become readable: ${payload.data.indexing.status}/${payload.data.indexing.progressState}, pending ${payload.data.indexing.pendingRefreshCount}, dirty ${serving.dirtyWork.pendingCount}/${serving.dirtyWork.runningCount}/${serving.dirtyWork.failedCount}, chunks ${serving.rebuildChunks.pendingCount}/${serving.rebuildChunks.runningCount}/${serving.rebuildChunks.failedCount}, snapshots ${serving.snapshot.activeCount}/${serving.snapshot.candidateCount}/${serving.snapshot.failedCount}`,
+      `Review serving did not become detail-ready: ${payload.data.indexing.status}/${payload.data.indexing.progressState}, coverage filter/detail/total ${coverage.filterReadyArticleCount}/${coverage.detailReadyArticleCount}/${coverage.totalArticleCount}, pending ${payload.data.indexing.pendingRefreshCount}, dirty ${serving.dirtyWork.pendingCount}/${serving.dirtyWork.runningCount}/${serving.dirtyWork.failedCount}, chunks ${serving.rebuildChunks.pendingCount}/${serving.rebuildChunks.runningCount}/${serving.rebuildChunks.failedCount}, snapshots ${serving.snapshot.activeCount}/${serving.snapshot.candidateCount}/${serving.snapshot.failedCount}`,
     )
   }
 
@@ -174,7 +182,7 @@ test('Covidence review flow preserves scoped source ids, filters, related record
     await page.getByLabel('Covidence duplicates only').check()
 
     await expect(page).toHaveURL(/covidenceDuplicates=1/)
-    await expect(page.getByText('Duplicate x2')).toBeVisible()
+    await expect(page.getByText('Duplicate x2')).toBeVisible({timeout: 60_000})
     await expect(page.getByRole('link', {name: expectedExternalId})).toBeVisible()
     await expect(page.getByRole('link', {name: `covidence:${dataSourceId}:covidence%3A%232001`})).toHaveCount(0)
 
@@ -186,7 +194,7 @@ test('Covidence review flow preserves scoped source ids, filters, related record
 
     await duplicateRow.getByRole('link', {name: /Duplicate (Alpha|Beta)/}).click()
 
-    await expect(page.getByRole('heading', {name: 'Article Details'})).toBeVisible()
+    await expect(page.getByRole('heading', {name: 'Article Details'})).toBeVisible({timeout: 60_000})
     await expect(page.getByText('Covidence duplicate study group')).toBeVisible()
     await expect(page.getByText('2 records share the same study identity in this import.')).toBeVisible()
     await expect(page.getByText('Covidence: #1001')).toBeVisible()

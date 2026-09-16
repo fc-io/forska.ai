@@ -263,6 +263,7 @@ const bootstrapOptionalComponents = [
   'judgmentInputContent',
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
+const bootstrapOptionalComponentSet = new Set<ReviewServingProjectionComponent>(bootstrapOptionalComponents)
 const fullProjectBootstrapComponents = [] as const satisfies readonly ReviewServingProjectionComponent[]
 const reusableBootstrapSnapshotStatuses = new Set(['active', 'candidate'] as const)
 const reusableBootstrapManifestStatuses = new Set(['active', 'candidate'] as const)
@@ -586,6 +587,17 @@ const getReviewServingV4BootstrapComponents = ({
         : pageFirstOnly
           ? pageFirstReviewServingV4RebuildComponents
           : defaultReviewServingV4RebuildComponents),
+    ]),
+  ]
+}
+
+const getOptionalDirtyWorkBootstrapComponents = (components: readonly ReviewServingProjectionComponent[]) => {
+  return [
+    ...new Set([
+      ...countReadyReviewServingComponents,
+      ...components.flatMap((component): readonly ReviewServingProjectionComponent[] => {
+        return component === 'summary' ? ['payload', component] : [component]
+      }),
     ]),
   ]
 }
@@ -1895,14 +1907,20 @@ export const requestReviewServingV4RebuildEffect = (
     const shouldUsePageFirstBootstrapDependencies =
       input.reason === 'missingReviewServingSnapshot'
       && (input.pageFirstOnly === true || (!hasExplicitComponents && input.pageFirstOnly !== false))
-    const isFilterReadinessEnrichment = input.reason === 'filterReadinessEnrichment'
     const requestedComponents =
       input.components
       ?? (shouldUsePageFirstBootstrapDependencies
         ? pageFirstReviewServingV4RebuildComponents
         : defaultReviewServingV4RebuildComponents)
-    const shouldReuseActiveRequest =
-      input.reason === 'missingReviewServingSnapshot' || input.reason === 'filterReadinessEnrichment'
+    const isRequestedOptionalDirtyWorkBootstrap =
+      input.reason.endsWith('DirtyWork')
+      && requestedComponents.length > 0
+      && requestedComponents.every((component) => {
+        return bootstrapOptionalComponentSet.has(component)
+      })
+    const isRequestedComponentBootstrap =
+      input.reason === 'filterReadinessEnrichment' || isRequestedOptionalDirtyWorkBootstrap
+    const shouldReuseActiveRequest = input.reason === 'missingReviewServingSnapshot' || isRequestedComponentBootstrap
     const activeRequest = shouldReuseActiveRequest
       ? await getActiveReviewServingRebuildRequestForProject(
           {projectId: input.projectId, reason: input.reason, requestedComponents, reviewConfigHash},
@@ -1938,12 +1956,14 @@ export const requestReviewServingV4RebuildEffect = (
       !hasQueuedSnapshot
       || (input.reason === 'missingReviewServingSnapshot'
         && (!hasActiveSnapshot || shouldUsePageFirstBootstrapDependencies))
-      || isFilterReadinessEnrichment
+      || isRequestedComponentBootstrap
     const components = isFreshBootstrap
       ? getReviewServingV4BootstrapComponents({
-          components: requestedComponents,
+          components: isRequestedOptionalDirtyWorkBootstrap
+            ? getOptionalDirtyWorkBootstrapComponents(requestedComponents)
+            : requestedComponents,
           pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
-          requestedOnly: isFilterReadinessEnrichment,
+          requestedOnly: isRequestedComponentBootstrap,
         })
       : requestedComponents
     const estimateStats = isFreshBootstrap ? {...stats, snapshotCount: 1} : stats
@@ -1959,7 +1979,7 @@ export const requestReviewServingV4RebuildEffect = (
       articleRangeBootstrapComponents,
     )
     const shouldPresplitBootstrap =
-      isFreshBootstrap && (input.reason === 'missingReviewServingSnapshot' || isFilterReadinessEnrichment)
+      isFreshBootstrap && (input.reason === 'missingReviewServingSnapshot' || isRequestedComponentBootstrap)
     const bootstrapChunkCount = shouldPresplitBootstrap
       ? getReviewServingV4BootstrapChunkCount({
           articleCount: getSafeCount(stats.scopedArticleCount),
@@ -1989,7 +2009,7 @@ export const requestReviewServingV4RebuildEffect = (
               articleRanges: bootstrapArticleRanges,
               components,
               pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
-              requestedOnly: isFilterReadinessEnrichment,
+              requestedOnly: isRequestedComponentBootstrap,
               projectId: input.projectId,
               reviewConfigHash,
               sourceWatermarks: bootstrapSourceWatermarks ?? {},
@@ -2077,7 +2097,7 @@ export const requestReviewServingV4RebuildEffect = (
           priority: input.priority,
           projectId: input.projectId,
           reason: input.reason,
-          requestedComponents: components,
+          requestedComponents,
           retryPolicy: {maxAttempts: 3, retryAfterMs: 60_000, terminalState: 'blocked_over_budget'},
           sourceWatermarks,
         },

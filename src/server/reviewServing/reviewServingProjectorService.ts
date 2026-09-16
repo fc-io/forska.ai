@@ -102,6 +102,13 @@ const highFanoutDirtyWorkRebuildComponents = new Set<ReviewServingProjectionComp
   'selectedImport',
   'summary',
 ])
+const optionalDirtyWorkBootstrapComponents = new Set<ReviewServingProjectionComponent>([
+  'payload',
+  'posting',
+  'summary',
+  'judgmentInputContent',
+  'search',
+])
 
 export type IntakeReviewServingProjectorDirtyWorkInput = {
   identityResolver: ReviewServingProjectorIdentityResolver
@@ -286,6 +293,10 @@ const isSearchDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
   return claim.projectionComponent === 'search' && claim.projectId !== null
 }
 
+const isOptionalDirtyWorkBootstrapClaim = (claim: ReviewServingDirtyWorkClaim) => {
+  return claim.projectId !== null && optionalDirtyWorkBootstrapComponents.has(claim.projectionComponent)
+}
+
 const isHighFanoutDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
   return (
     claim.projectId !== null
@@ -299,6 +310,10 @@ const getChunkedDirtyWorkProjectIds = (
   claims: readonly ReviewServingDirtyWorkClaim[],
 ) => {
   if (component === 'search' && claims.some(isSearchDirtyWorkClaim)) {
+    return getClaimProjectIds(claims)
+  }
+
+  if (optionalDirtyWorkBootstrapComponents.has(component) && claims.some(isOptionalDirtyWorkBootstrapClaim)) {
     return getClaimProjectIds(claims)
   }
 

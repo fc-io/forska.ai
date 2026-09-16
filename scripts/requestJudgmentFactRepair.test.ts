@@ -1,3 +1,4 @@
+import {existsSync, readFileSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {afterAll, expect, setDefaultTimeout, test} from 'bun:test'
@@ -10,8 +11,16 @@ const projectRoot = process.cwd()
 const testDirectory = createScriptTestDirectory('requestJudgmentFactRepair')
 
 afterAll(testDirectory.cleanup)
+const getCliChildBaseEnv = () => {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => {
+      return key !== 'NODE_ENV' && !key.startsWith('BUN_')
+    }),
+  ) as NodeJS.ProcessEnv
+}
+
 const defaultEnv = {
-  ...process.env,
+  ...getCliChildBaseEnv(),
   DUCKDB_TEMP_DIRECTORY: join(testDirectory.path, 'duckdb-temp'),
   API_SERVER_PORT: '39106',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -21,7 +30,7 @@ const defaultEnv = {
   VITE_PORT: '39916',
 }
 
-const getLastJsonLine = (output: string) => {
+const getLastJsonLine = (output: string, label = 'output') => {
   const [lastLine = ''] = output
     .trim()
     .split(/\r?\n/)
@@ -34,10 +43,42 @@ const getLastJsonLine = (output: string) => {
     .slice(-1)
 
   if (lastLine === '') {
-    throw new Error(`Expected JSON output but received: ${output}`)
+    throw new Error(`Expected JSON ${label} but received: ${output}`)
   }
 
   return lastLine
+}
+
+const getSpawnOutput = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => {
+  return `${result.stdout.toString()}\n${result.stderr.toString()}`
+}
+
+const getSpawnDiagnostic = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => {
+  return JSON.stringify({
+    exitCode: result.exitCode,
+    signalCode: result.signalCode,
+    stderr: result.stderr.toString(),
+    stdout: result.stdout.toString(),
+    success: result.success,
+  })
+}
+
+const runRepairScript = (duckdbPath: string, args: string[]) => {
+  const outputPath = join(testDirectory.path, `request-judgment-fact-repair-output-${Date.now()}-${Math.random()}.json`)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      'scripts/requestJudgmentFactRepair.ts',
+      ...args,
+      `--json-output-file=${outputPath}`,
+    ],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}, stderr: 'pipe', stdout: 'pipe'},
+  )
+
+  return {
+    output: existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : getSpawnOutput(result),
+    result,
+  }
 }
 
 const runDatabaseMutation = (duckdbPath: string, sql: string) => {
@@ -53,7 +94,7 @@ const runDatabaseMutation = (duckdbPath: string, sql: string) => {
         await database.close()
       `,
     ],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}, stderr: 'pipe', stdout: 'pipe'},
   )
 
   if (result.exitCode !== 0) {
@@ -144,7 +185,7 @@ const seedDatabase = (duckdbPath: string) => {
         await database.close()
       `,
     ],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}, stderr: 'pipe', stdout: 'pipe'},
   )
 
   if (result.exitCode !== 0) {
@@ -153,42 +194,47 @@ const seedDatabase = (duckdbPath: string) => {
 }
 
 const runQuery = (duckdbPath: string, sql: string): unknown => {
+  const outputPath = join(testDirectory.path, `request-judgment-fact-repair-query-${Date.now()}-${Math.random()}.json`)
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
+        const {writeFileSync} = await import('node:fs')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
         const database = getAppDatabaseService()
         const rows = await database.queryJson(${JSON.stringify(sql)})
-        console.log(JSON.stringify(rows))
+        const output = JSON.stringify(rows)
+        writeFileSync(${JSON.stringify(outputPath)}, output + '\\n', 'utf8')
+        console.log(output)
         await database.close()
       `,
     ],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}, stderr: 'pipe', stdout: 'pipe'},
   )
 
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
   }
 
-  return JSON.parse(getLastJsonLine(result.stdout.toString())) as unknown
+  const output = existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : result.stdout.toString()
+
+  return JSON.parse(getLastJsonLine(output)) as unknown
 }
 
 test('requestJudgmentFactRepair schedules V4 repair work without legacy mart rebuild state', () => {
   const duckdbPath = join(testDirectory.path, `request-judgment-fact-repair-${Date.now()}.duckdb`)
   seedDatabase(duckdbPath)
 
-  const runScript = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/requestJudgmentFactRepair.ts', '--project-id=judgment-fact-repair-project'],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
-  )
+  const runScript = runRepairScript(duckdbPath, ['--project-id=judgment-fact-repair-project'])
 
-  if (runScript.exitCode !== 0) {
-    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'request judgment fact repair failed')
+  if (runScript.result.exitCode !== 0) {
+    throw new Error(
+      runScript.output || `request judgment fact repair failed ${getSpawnDiagnostic(runScript.result)}`,
+    )
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+  const result = JSON.parse(getLastJsonLine(runScript.output, 'requestJudgmentFactRepair output')) as {
     projectIds: string[]
     requestIds: string[]
     requestedCount: number
@@ -204,6 +250,13 @@ test('requestJudgmentFactRepair schedules V4 repair work without legacy mart reb
     requestedComponentsJson: string
     status: string
   }>
+  const requestChunkComponents = runQuery(
+    duckdbPath,
+    `SELECT DISTINCT projection_component AS component
+     FROM app.review_rebuild_chunk_manifest
+     WHERE request_id = '${result.requestIds[0]}'
+     ORDER BY component ASC`,
+  ) as Array<{component: string}>
   const [largeRebuildState] = runQuery(
     duckdbPath,
     "SELECT CAST(COUNT(*) AS INTEGER) AS count FROM app.project_mart_large_rebuild_state WHERE project_id = 'judgment-fact-repair-project' AND refresh_token > 0",
@@ -225,10 +278,23 @@ test('requestJudgmentFactRepair schedules V4 repair work without legacy mart reb
     'posting',
     'summary',
     'payload',
-    'projectScope',
-    'selectedImport',
+  ])
+  expect(
+    requestChunkComponents.map((row) => {
+      return row.component
+    }),
+  ).toEqual([
     'display',
+    'humanStatus',
+    'judgmentInputContent',
+    'llmStatus',
+    'payload',
+    'posting',
+    'projectScope',
+    'queue',
     'search',
+    'selectedImport',
+    'summary',
   ])
   expect(largeRebuildState).toEqual({count: 0})
 })
@@ -244,16 +310,15 @@ test('requestJudgmentFactRepair continues all-active repairs after an empty proj
     `,
   )
 
-  const runScript = globalThis.Bun.spawnSync(['bun', 'scripts/requestJudgmentFactRepair.ts', '--all-active-projects'], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-  })
+  const runScript = runRepairScript(duckdbPath, ['--all-active-projects'])
 
-  if (runScript.exitCode !== 0) {
-    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'request all-active repair failed')
+  if (runScript.result.exitCode !== 0) {
+    throw new Error(
+      runScript.output || `request all-active repair failed ${getSpawnDiagnostic(runScript.result)}`,
+    )
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+  const result = JSON.parse(getLastJsonLine(runScript.output, 'requestJudgmentFactRepair output')) as {
     failedCount: number
     failedProjects: Array<{error: string; projectId: string}>
     projectIds: string[]

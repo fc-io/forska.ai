@@ -333,7 +333,10 @@ const getFullRebuildPostingContributionRowsStatement = (
         scoped_serving AS (
           SELECT
             serving.article_id,
-            list_mode_key.list_mode_key
+            list_mode_key.list_mode_key,
+            list_mode_state.llm_status,
+            list_mode_state.human_status,
+            list_mode_state.llm_has_judgment
           FROM scoped_article scoped
           INNER JOIN mart.review_article_serving_base_v4 serving
             ON serving.project_id = ${getSqlLiteral(input.projectId)}
@@ -349,16 +352,6 @@ const getFullRebuildPostingContributionRowsStatement = (
         ),
         project_settings AS (
           SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
-        ),
-        enabled_prompt_count AS (
-          SELECT COUNT(*) AS prompt_count
-          FROM app.project_prompt project_prompt
-          INNER JOIN app.prompt prompt
-            ON prompt.id = project_prompt.prompt_id
-          WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
-            AND project_prompt.enabled
-            AND NOT project_prompt.archived
-            AND COALESCE(prompt.archived, FALSE) = FALSE
         ),
         enabled_prompt AS (
           SELECT
@@ -389,76 +382,30 @@ const getFullRebuildPostingContributionRowsStatement = (
             AND detail.payload_kind IN ('llm', 'human')
             AND detail.article_id = scoped.article_id
         ),
-        article_judgment_status AS (
-          SELECT
-            scoped.article_id,
-            COUNT(detail.prompt_id) FILTER (
-              WHERE detail.payload_kind = 'llm'
-                AND detail.is_answered IS TRUE
-            ) AS llm_answered_prompt_count,
-            COUNT(detail.prompt_id) FILTER (
-              WHERE detail.payload_kind = 'llm'
-                AND detail.is_answered IS TRUE
-                AND detail.placeholder_kind IS NULL
-            ) AS llm_answered_non_placeholder_prompt_count,
-            COUNT(detail.prompt_id) FILTER (
-              WHERE detail.payload_kind = 'human'
-                AND detail.prompt_id <> 'summary'
-                AND detail.is_answered IS TRUE
-            ) AS human_answered_prompt_count,
-            COUNT(detail.prompt_id) FILTER (
-              WHERE detail.payload_kind = 'human'
-                AND detail.prompt_id = 'summary'
-                AND detail.is_answered IS TRUE
-            ) AS human_answered_summary_count
-          FROM scoped_article scoped
-          LEFT JOIN judgment_detail_source detail
-            ON detail.article_id = scoped.article_id
-          GROUP BY scoped.article_id
-        ),
         serving_status_postings AS (
           SELECT
             serving.article_id AS articleId,
             serving.list_mode_key AS listModeKey,
             FALSE AS tombstone,
             'llmStatus' AS filterKind,
-            CASE
-              WHEN enabled_prompt_count.prompt_count = 0 THEN NULL
-              WHEN enabled_prompt_count.prompt_count = article_judgment_status.llm_answered_prompt_count THEN 'answered'
-              ELSE 'unanswered'
-            END AS filterValue
+            serving.llm_status AS filterValue
           FROM scoped_serving serving
-          INNER JOIN article_judgment_status
-            ON article_judgment_status.article_id = serving.article_id
-          CROSS JOIN enabled_prompt_count
           UNION ALL
           SELECT
             serving.article_id AS articleId,
             serving.list_mode_key AS listModeKey,
             FALSE AS tombstone,
             'llmHasJudgment' AS filterKind,
-            CAST(article_judgment_status.llm_answered_non_placeholder_prompt_count > 0 AS VARCHAR) AS filterValue
+            CAST(serving.llm_has_judgment AS VARCHAR) AS filterValue
           FROM scoped_serving serving
-          INNER JOIN article_judgment_status
-            ON article_judgment_status.article_id = serving.article_id
           UNION ALL
           SELECT
             serving.article_id AS articleId,
             serving.list_mode_key AS listModeKey,
             FALSE AS tombstone,
             'humanStatus' AS filterKind,
-            CASE
-              WHEN project_settings.human_judgment_mode = 'summary' AND article_judgment_status.human_answered_summary_count > 0 THEN 'answered'
-              WHEN project_settings.human_judgment_mode = 'summary' THEN 'unanswered'
-              WHEN enabled_prompt_count.prompt_count = 0 THEN NULL
-              WHEN enabled_prompt_count.prompt_count = article_judgment_status.human_answered_prompt_count THEN 'answered'
-              ELSE 'unanswered'
-            END AS filterValue
+            serving.human_status AS filterValue
           FROM scoped_serving serving
-          INNER JOIN article_judgment_status
-            ON article_judgment_status.article_id = serving.article_id
-          CROSS JOIN enabled_prompt_count
-          CROSS JOIN project_settings
         ),
         llm_detail AS (
           SELECT

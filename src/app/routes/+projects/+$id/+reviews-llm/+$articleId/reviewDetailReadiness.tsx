@@ -34,6 +34,10 @@ export const getAvailableReviewDetail = <T,>(
     : null
 }
 
+export const getReviewDetailRefetchInterval = (data: unknown) => {
+  return isUnavailableReviewDetail(data) ? 2_000 : false
+}
+
 export const getReviewDetailUnavailableMessage = (data: ReviewDetailUnavailableData) => {
   const reason = typeof data.reason === 'string' && data.reason.trim().length > 0 ? data.reason.trim() : null
   return reason

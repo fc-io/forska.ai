@@ -359,6 +359,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(searchRunner).not.toHaveBeenCalled()
   expect(rebuildRequests).toEqual([
     {components: ['search'], priority: 50, projectId: 'project-1', reason: 'searchDirtyWork'},
+    {components: ['summary'], priority: 50, projectId: 'project-1', reason: 'summaryDirtyWork'},
   ])
   expect(
     result.runs.find((run) => {
@@ -395,12 +396,8 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
       promoted: false,
       snapshotId: 'snapshot-invalid',
     },
-    {promoted: true, snapshotId: 'snapshot-ready'},
   ])
-  expect(promotions).toEqual([
-    {projectId: 'project-1', snapshotId: 'snapshot-invalid'},
-    {projectId: 'project-1', snapshotId: 'snapshot-ready'},
-  ])
+  expect(promotions).toEqual([{projectId: 'project-1', snapshotId: 'snapshot-invalid'}])
   expect(joined).toContain('BEGIN review-serving-writer')
   expect(joined).toContain('COMMIT review-serving-writer')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_base_v4')
@@ -410,7 +407,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(joined).toContain('INSERT INTO mart.review_selected_article_import_staging_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).not.toContain('_patch_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 

@@ -1,3 +1,5 @@
+import {writeFileSync} from 'node:fs'
+
 import {
   defaultJudgmentRepairV4RebuildComponents,
   requestReviewServingV4Rebuild,
@@ -6,12 +8,22 @@ import {getAppDatabaseService} from '../src/server/services/appDatabaseService.t
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
-type CliOptions = {allActiveProjects: boolean; projectId: string | null; reason: string}
+type CliOptions = {allActiveProjects: boolean; jsonOutputFile: string | null; projectId: string | null; reason: string}
 type RepairProjectFailure = {error: string; projectId: string}
 type RepairProjectResult = {failedProjects: RepairProjectFailure[]; requestIds: string[]}
 
 const defaultReason = 'requestJudgmentFactRepair'
 const workloadContext = getMaintenanceDuckdbWorkloadContext('requestJudgmentFactRepair')
+
+const writeJson = (value: unknown, options: Pick<CliOptions, 'jsonOutputFile'>) => {
+  const output = `${JSON.stringify(value)}\n`
+
+  process.stdout.write(output)
+
+  if (options.jsonOutputFile !== null) {
+    writeFileSync(options.jsonOutputFile, output, 'utf8')
+  }
+}
 
 const quoteSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
@@ -30,6 +42,7 @@ const getArgValue = (names: string[]) => {
 const getCliOptions = (): CliOptions => {
   return {
     allActiveProjects: process.argv.slice(2).includes('--all-active-projects'),
+    jsonOutputFile: getArgValue(['--json-output-file', '--output-json']) ?? null,
     projectId: getArgValue(['--projectId', '--project-id']) ?? null,
     reason: getArgValue(['--reason']) ?? defaultReason,
   }
@@ -128,30 +141,29 @@ const main = async () => {
       console.error(
         'Phase 5B retired the implicit mart.judgment_fact duplicate scan. Use --project-id=<project-id> or --all-active-projects to enqueue V4 repair work.',
       )
-      console.log(
-        JSON.stringify({
+      writeJson(
+        {
           projectIds,
           reason: options.reason,
           requestIds: [],
           requestedCount: 0,
           status: 'requires_project_selection',
-        }),
+        },
+        options,
       )
       process.exitCode = 1
       return
     }
 
     if (projectIds.length === 0) {
-      console.log(
-        JSON.stringify({projectIds, reason: options.reason, requestIds: [], requestedCount: 0, status: 'not_found'}),
-      )
+      writeJson({projectIds, reason: options.reason, requestIds: [], requestedCount: 0, status: 'not_found'}, options)
       return
     }
 
     const result = await requestProjectRepairs({projectIds, reason: options.reason})
 
-    console.log(
-      JSON.stringify({
+    writeJson(
+      {
         failedCount: result.failedProjects.length,
         failedProjects: result.failedProjects,
         projectIds,
@@ -159,7 +171,8 @@ const main = async () => {
         requestIds: result.requestIds,
         requestedCount: result.requestIds.length,
         status: getRequestStatus(result),
-      }),
+      },
+      options,
     )
   })
 }
