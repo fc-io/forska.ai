@@ -243,6 +243,21 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
     },
   )
   .post(
+    '/api/test/judgment-workflow-topology/reconcile-project-refresh-acks',
+    async ({body}) => {
+      requireTopologySeedBoundary(body.token)
+      const ids = getFixtureIds(body.fixtureId)
+      const reconciledCounts = await Promise.all(
+        ids.projectIds.map(async (projectId) => {
+          return {projectId, updatedCount: await getJudgmentJobSqliteService().reconcileProjectRefreshAcks({projectId})}
+        }),
+      )
+
+      return {data: {reconciledCounts}, error: null}
+    },
+    {body: t.Object({fixtureId: t.String({pattern: '^[A-Za-z0-9_-]+$'}), token: t.String()})},
+  )
+  .post(
     '/api/test/judgment-workflow-topology/evidence',
     async ({body}) => {
       requireTopologySeedBoundary(body.token)

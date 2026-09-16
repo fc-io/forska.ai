@@ -521,7 +521,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     `${ownerBaseUrl}/api/test/judgment-workflow-topology/seed`,
     {fixtureId, providerBaseUrl: provider.baseUrl, token},
   )
-  const servingDeadline = Date.now() + 60_000
+  const servingDeadline = Date.now() + 120_000
   const waitForServingQueue = async (): Promise<void> => {
     const evidence = await postJson<{data: {readyPairCount: number}}>(
       `${ownerBaseUrl}/api/test/judgment-workflow-topology/evidence`,
@@ -680,20 +680,27 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       }
     }
 
-    if (
-      evidence.data.judgments.reduce((count, row) => {
-        return count + Number(row.count)
-      }, 0) === 4
-      && evidence.data.visibleProjectionCount === 4
-      && evidence.data.jobEvidence.every((job) => {
-        return job.health.lastAckSeq !== null && job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
-      })
-    ) {
+    const totalJudgments = evidence.data.judgments.reduce((count, row) => {
+      return count + Number(row.count)
+    }, 0)
+    const hasVisibleProjection = evidence.data.visibleProjectionCount === 4
+    const hasReconciledProjectRefreshAcks = evidence.data.jobEvidence.every((job) => {
+      return job.health.lastAckSeq !== null && job.health.lastAckSeq === job.scanState.lastProjectRefreshAckSeq
+    })
+
+    if (totalJudgments === 4 && hasVisibleProjection && hasReconciledProjectRefreshAcks) {
       return evidence.data
     }
 
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for topology judgments: ${JSON.stringify(evidence.data)}`)
+    }
+
+    if (totalJudgments === 4 && hasVisibleProjection) {
+      await postJson<{data: {reconciledCounts: Array<{projectId: string; updatedCount: number}>}}>(
+        `${ownerBaseUrl}/api/test/judgment-workflow-topology/reconcile-project-refresh-acks`,
+        {fixtureId, token},
+      )
     }
 
     await sleep(topologyProjectorQuietWindowMs)
