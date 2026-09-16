@@ -785,6 +785,34 @@ const readProjectReviewArticleDetail = async (input: {
   })
 }
 
+const hasArticleProjectMembership = async (input: {articleId: string; projectId: string}) => {
+  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(
+    `
+    SELECT scoped_article.article_id AS articleId
+    FROM (
+      SELECT air.article_id
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      WHERE pir.project_id = ${getSqlLiteral(input.projectId)}
+        AND air.article_id = ${getSqlLiteral(input.articleId)}
+      UNION
+      SELECT pa.article_id
+      FROM app.project_article pa
+      WHERE pa.project_id = ${getSqlLiteral(input.projectId)}
+        AND pa.article_id = ${getSqlLiteral(input.articleId)}
+    ) scoped_article
+    LIMIT 1
+  `,
+    getProjectReviewDetailsWorkloadContext({
+      maxResultRows: 1,
+      operation: 'articleProjectMembership',
+      projectId: input.projectId,
+    }),
+  )
+
+  return rows.length > 0
+}
+
 const getArticleRecordFromServing = (input: {
   articleId: string
   detail: ServingArticleDetailRow
@@ -878,6 +906,12 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const [articleDetail] = articleDetailResult.rows
 
       if (!articleDetail) {
+        const isProjectArticle = await hasArticleProjectMembership({articleId, projectId})
+
+        if (!isProjectArticle) {
+          return getUnavailableReviewDetail({articleId, reason: 'article not in project scope'})
+        }
+
         await requestReviewDetailReadinessRepair(projectId)
         return getUnavailableReviewDetail({articleId, reason: 'detail row unavailable', repairRequested: true})
       }

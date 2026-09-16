@@ -443,6 +443,24 @@ test('project review details returns unavailable when V4 article detail is unava
   ])
 })
 
+test('project review details treats absent out-of-scope detail rows as terminal', async () => {
+  reviewServingRowsRef.current = async () => {
+    return {rows: [], status: 'accepted'}
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {article: null; reason: string; repairRequested: boolean; status: string}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    article: null,
+    reason: 'article not in project scope',
+    repairRequested: false,
+    status: 'unavailable',
+  })
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([])
+})
+
 test('project review details does not fall back to app judgments when V4 judgment detail is unavailable', async () => {
   reviewServingRowsRef.current = async (request) => {
     return request.contractKey === 'review.detail.row'

@@ -199,6 +199,7 @@ const routeHarnessState: {
   covidencePromptLinks: Array<{importRoute: string; promptId: string}>
   queryStatements: string[]
   reconciliationWorkRows: Array<Record<string, unknown>>
+  rejectedSpoolWindows: Array<{dataSourceId: string; error: string}>
   row: MockQueryRow
   runStatements: string[]
   transactionCallCount: number
@@ -208,6 +209,7 @@ const routeHarnessState: {
   covidencePromptLinks: [],
   queryStatements: [],
   reconciliationWorkRows: [],
+  rejectedSpoolWindows: [],
   row: structuredRow,
   runStatements: [],
   transactionCallCount: 0,
@@ -297,13 +299,20 @@ const runDataSourcesRoute = async (params: {
   routeHarnessState.changeRows = params.changeRows ?? []
   routeHarnessState.row = params.row
   routeHarnessState.queryStatements = []
+  routeHarnessState.rejectedSpoolWindows = []
   routeHarnessState.runStatements = []
   routeHarnessState.transactionCallCount = 0
 
   const {Elysia} = await import('elysia')
-  const {dataSourcesRoutes} = (await import(
+  const {dataSourcesRoutes, setDataSourceTrackingSpoolRepositoryForTests} = (await import(
     './DataSourcesRoutes.ts?test=' + Date.now()
   )) as typeof import('./DataSourcesRoutes.ts')
+  setDataSourceTrackingSpoolRepositoryForTests({
+    rejectOpenWindowsForDataSource: (input) => {
+      routeHarnessState.rejectedSpoolWindows.push({dataSourceId: input.dataSourceId, error: input.error})
+      return {windowsRejected: 1}
+    },
+  })
   const app = new Elysia().use(dataSourcesRoutes)
   const response = await app.handle(new Request(params.url, params.requestInit))
   const responseText = await response.text()
@@ -318,6 +327,7 @@ const runDataSourcesRoute = async (params: {
   return {
     body,
     queryStatements: routeHarnessState.queryStatements,
+    rejectedSpoolWindows: routeHarnessState.rejectedSpoolWindows,
     runStatements: routeHarnessState.runStatements,
     status: response.status,
     transactionCallCount: routeHarnessState.transactionCallCount,
@@ -620,7 +630,12 @@ test('datasource patch rewinds tracking and invalidates stale reconciliation wor
     },
     row: trackedRow,
     url: 'http://localhost/api/datasources/datasource-tracked',
-  })) as {runStatements: string[]; status: number; transactionCallCount: number}
+  })) as {
+    rejectedSpoolWindows: Array<{dataSourceId: string; error: string}>
+    runStatements: string[]
+    status: number
+    transactionCallCount: number
+  }
   const statements = parsed.runStatements.join('\n')
 
   expect(parsed.status).toBe(200)
@@ -631,6 +646,9 @@ test('datasource patch rewinds tracking and invalidates stale reconciliation wor
   expect(statements).toContain('DELETE FROM app.data_source_reconciliation_work')
   expect(statements).toContain("period_start < TIMESTAMPTZ '2026-02-01T00:00:00.000Z'")
   expect(statements).toContain("period_end > TIMESTAMPTZ '2026-03-03T00:00:00.000Z'")
+  expect(parsed.rejectedSpoolWindows).toEqual([
+    {dataSourceId: 'datasource-tracked', error: 'Tracked data source configuration changed'},
+  ])
 })
 
 test('datasource patch deletes queued automatic reconciliation work for removed schedule ages', async () => {

@@ -9523,6 +9523,7 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
     expect(sourceRecordColumnNames).toContain('source_article_created_at')
     expect(sourceRecordMigrationSql).toContain('SET external_article_id =')
     expect(sourceArticleCreatedAtMigrationSql).toContain('json_extract_string(raw_payload')
+    expect(sourceArticleCreatedAtMigrationSql).toContain('$.firstPublicationDate')
     expect(sourceArticleCreatedAtMigrationSql).not.toContain('article.article_created_at')
     expect(currentUniqueColumns).toContainEqual(['article_id', 'import_route_id'])
     expect(sourceRecordUniqueColumns).toContainEqual(['import_route_id', 'source_record_key'])
