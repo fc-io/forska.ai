@@ -201,6 +201,77 @@ test('period reconciliation sync clears stale source records only inside the rec
   })
 })
 
+test('period reconciliation retains current membership when another source record survives outside the period', async () => {
+  await withMigratedDuckdb(async () => {
+    const [{getAppDatabaseService}, {syncImportedArticlesForReconciliationPeriodWithTx}] = await Promise.all([
+      import('./appDatabaseService.ts'),
+      import('./articleImportStoreService.ts'),
+    ])
+    const database = getAppDatabaseService()
+    const importRoute = '/api/datasources/import/pubmed'
+    const createRow = (params: {articleCreatedAt: string; sourceRecordHash: string; sourceRecordKey: string}) => {
+      return {
+        articleAuthors: ['Alice Example'],
+        articleCreatedAt: new Date(params.articleCreatedAt),
+        articleId: 'pmid:multi-source',
+        articleSummary: 'PubMed import summary',
+        articleTitle: 'Multi Source',
+        doi: '10.1000/multi-source',
+        externalArticleId: 'pmid:multi-source',
+        importRoute,
+        sourceKind: 'pubmed',
+        sourceRecordHash: params.sourceRecordHash,
+        sourceRecordKey: params.sourceRecordKey,
+      }
+    }
+
+    await database.transaction(async (tx) => {
+      await syncImportedArticlesForReconciliationPeriodWithTx({
+        importRoute,
+        periodEnd: new Date('2026-08-01T00:00:00.000Z'),
+        periodStart: new Date('2026-05-01T00:00:00.000Z'),
+        rows: [
+          createRow({
+            articleCreatedAt: '2026-05-15T00:00:00.000Z',
+            sourceRecordHash: 'hash-survivor-outside-period',
+            sourceRecordKey: 'pmid:multi-survivor',
+          }),
+          createRow({
+            articleCreatedAt: '2026-06-15T00:00:00.000Z',
+            sourceRecordHash: 'hash-current-in-period',
+            sourceRecordKey: 'pmid:multi-current',
+          }),
+        ],
+        tx,
+      })
+    })
+    await database.transaction(async (tx) => {
+      await syncImportedArticlesForReconciliationPeriodWithTx({
+        importRoute,
+        periodEnd: new Date('2026-07-01T00:00:00.000Z'),
+        periodStart: new Date('2026-06-01T00:00:00.000Z'),
+        rows: [],
+        tx,
+      })
+    })
+
+    const currentLinkRows = await database.queryJson<{sourceRecordKey: string}>(`
+      SELECT source_record_key AS sourceRecordKey
+      FROM app.article_import_route
+      WHERE external_article_id = 'pmid:multi-source'
+    `)
+    const sourceRecordRows = await database.queryJson<{sourceRecordKey: string}>(`
+      SELECT source_record_key AS sourceRecordKey
+      FROM app.article_import_route_source_record
+      WHERE external_article_id = 'pmid:multi-source'
+      ORDER BY source_record_key ASC
+    `)
+
+    expect(currentLinkRows).toEqual([{sourceRecordKey: 'pmid:multi-current'}])
+    expect(sourceRecordRows).toEqual([{sourceRecordKey: 'pmid:multi-survivor'}])
+  })
+})
+
 test('period reconciliation sync logs source record changes and restorations', async () => {
   await withMigratedDuckdb(async () => {
     const [{getAppDatabaseService}, {syncImportedArticlesForReconciliationPeriodWithTx}] = await Promise.all([

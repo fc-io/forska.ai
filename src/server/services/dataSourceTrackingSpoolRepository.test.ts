@@ -226,10 +226,30 @@ test('tracking spool counts fetching pages toward backpressure', () => {
     })
 
     const signal = repository.getBackpressureSignal({maxPendingPages: 1, maxPendingWindows: 10})
+    const ownerWindowSignal = repository.getBackpressureSignal({
+      excludeWindowId: window.id,
+      maxPendingPages: 1,
+      maxPendingWindows: 10,
+    })
 
     expect(signal.backpressureActive).toBe(true)
     expect(signal.backlog.pendingPageCount).toBe(1)
     expect(signal.backlog.pendingWindowCount).toBe(1)
+    expect(ownerWindowSignal.backpressureActive).toBe(false)
+    expect(ownerWindowSignal.backlog.pendingPageCount).toBe(0)
+    expect(ownerWindowSignal.backlog.pendingWindowCount).toBe(0)
+
+    const failed = repository.markWindowFailed({
+      error: 'provider page cap reached',
+      nextRetryAt: new Date('2026-09-15T09:00:00.000Z'),
+      status: 'fetch_failed',
+      windowId: window.id,
+    })
+
+    expect(failed?.status).toBe('fetch_failed')
+    expect(
+      repository.hasRetryableFetchFailedWindow({dataSourceId: 'source-1', now: new Date('2026-09-15T09:00:00.000Z')}),
+    ).toBe(true)
   })
 })
 

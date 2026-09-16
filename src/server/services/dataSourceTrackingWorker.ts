@@ -199,7 +199,7 @@ const getClaimedSourceResult = async ({
 }: {
   dataSource: DataSourceRecord
   fetchLeaseMs: number
-  assertSpoolCapacity: () => Promise<void> | void
+  assertSpoolCapacity: (input?: {windowId?: string}) => Promise<void> | void
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
@@ -267,9 +267,9 @@ const getClaimedSourceResult = async ({
       leaseDurationMs: fetchLeaseMs,
       operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchWindowToSpool({
-          assertPageAppendAllowed: async () => {
+          assertPageAppendAllowed: async ({window}) => {
             await assertLeaseOwned()
-            await assertSpoolCapacity()
+            await assertSpoolCapacity({windowId: window.id})
             await assertLeaseOwned()
           },
           dataSource,
@@ -338,7 +338,7 @@ const getClaimedReconciliationResult = async ({
 }: {
   dataSource: DataSourceRecord
   fetchLeaseMs: number
-  assertSpoolCapacity: () => Promise<void> | void
+  assertSpoolCapacity: (input?: {windowId?: string}) => Promise<void> | void
   leaseOwner: string
   now: Date
   providerRegistry: DataSourceTrackingProviderRegistry
@@ -373,9 +373,9 @@ const getClaimedReconciliationResult = async ({
       leaseDurationMs: fetchLeaseMs,
       operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchReconciliationWorkToSpool({
-          assertPageAppendAllowed: async () => {
+          assertPageAppendAllowed: async ({window}) => {
             await assertLeaseOwned()
-            await assertSpoolCapacity()
+            await assertSpoolCapacity({windowId: window.id})
             await assertLeaseOwned()
           },
           dataSource,
@@ -498,8 +498,16 @@ export const createDataSourceTrackingWorker = ({
 
       return backpressureSignal
     }
-    const assertSpoolCapacity = () => {
-      if (refreshBackpressureSignal().backpressureActive) {
+    const assertSpoolCapacity = (capacityInput: {windowId?: string} = {}) => {
+      const signal = spoolRepository.getBackpressureSignal({
+        excludeWindowId: capacityInput.windowId,
+        maxPendingPages,
+        maxPendingWindows,
+      })
+
+      backpressureSignal = signal
+
+      if (signal.backpressureActive) {
         throw new Error('Tracking spool backpressure is active')
       }
     }
@@ -513,7 +521,10 @@ export const createDataSourceTrackingWorker = ({
     let claimedSourceCount = 0
 
     for (const dueSource of dueSources) {
-      if (refreshBackpressureSignal().backpressureActive) {
+      if (
+        refreshBackpressureSignal().backpressureActive
+        && !spoolRepository.hasRetryableFetchFailedWindow({dataSourceId: dueSource.dataSourceId, now})
+      ) {
         sourceResults.push({dataSourceId: dueSource.dataSourceId, reason: 'backpressure', status: 'skipped'})
         continue
       }
@@ -561,9 +572,15 @@ export const createDataSourceTrackingWorker = ({
       )
     }
 
-    if (!refreshBackpressureSignal().backpressureActive) {
+    const canClaimReconciliationWork = () => {
+      const signal = refreshBackpressureSignal()
+
+      return !signal.backpressureActive || spoolRepository.hasRetryableFetchFailedWindow({now})
+    }
+
+    if (canClaimReconciliationWork()) {
       for (let index = 0; index < maxReconciliationWork; index += 1) {
-        if (refreshBackpressureSignal().backpressureActive) {
+        if (!canClaimReconciliationWork()) {
           break
         }
 

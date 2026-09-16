@@ -62,6 +62,9 @@ test('data source tracking worker skips fetch claims under spool backpressure bu
           },
         }
       },
+      hasRetryableFetchFailedWindow: () => {
+        return false
+      },
     } as never,
     reconciliationWorkRepository: {
       claimNextWork: async () => {
@@ -346,17 +349,22 @@ test('data source tracking worker rechecks backpressure after each spooled page'
       },
     },
     spoolRepository: {
-      getBackpressureSignal: () => {
+      getBackpressureSignal: (input?: {excludeWindowId?: string}) => {
+        const ownerWindowExcluded = input?.excludeWindowId === 'window-1'
+
         return {
-          backpressureActive: pageSpooled,
+          backpressureActive: pageSpooled && !ownerWindowExcluded,
           backlog: {
             failedWindowCount: 0,
             oldestReadyAt: null,
-            pendingPageCount: pageSpooled ? 20 : 0,
-            pendingWindowCount: pageSpooled ? 5 : 0,
-            readyWindowCount: pageSpooled ? 5 : 0,
+            pendingPageCount: pageSpooled && !ownerWindowExcluded ? 20 : 0,
+            pendingWindowCount: pageSpooled && !ownerWindowExcluded ? 5 : 0,
+            readyWindowCount: pageSpooled && !ownerWindowExcluded ? 5 : 0,
           },
         }
+      },
+      hasRetryableFetchFailedWindow: () => {
+        return false
       },
     } as never,
     trackedImportService: {
@@ -421,13 +429,7 @@ test('data source tracking worker rechecks backpressure after each spooled page'
 
   expect(result.backpressureActive).toBe(true)
   expect(result.sourceResults).toEqual([
-    {
-      dataSourceId: 'source-1',
-      error: 'Tracking spool backpressure is active',
-      reason: 'fetch-failed',
-      status: 'failed',
-      windowId: '2026-09-15T00:00:00.000Z',
-    },
+    {dataSourceId: 'source-1', pageCount: 1, reason: 'fetched', status: 'spooled', windowId: 'window-1'},
     {dataSourceId: 'source-2', reason: 'backpressure', status: 'skipped'},
   ])
   expect(calls).toEqual([
@@ -438,7 +440,11 @@ test('data source tracking worker rechecks backpressure after each spooled page'
     'tracking:renew',
     'source:fetch',
     'tracking:renew',
-    'tracking:failure',
+    'tracking:renew',
+    'tracking:renew',
+    'tracking:cursor',
+    'tracking:renew',
+    'tracking:release',
     'spool:drain',
   ])
 })
