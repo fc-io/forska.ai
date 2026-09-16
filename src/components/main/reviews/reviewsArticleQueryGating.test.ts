@@ -57,6 +57,21 @@ test('review article tables render current query rows before pagination cache ef
   expect(missingCurrentQueryFallback).toEqual([])
 })
 
+test('review article queries refresh while review-serving indexing is converging', () => {
+  const missingIndexingRefresh = reviewArticleContainerFiles.filter((path) => {
+    const source = readSource(path)
+
+    return (
+      !source.includes("from './reviewsArticleIndexingRefresh.ts'")
+      || !source.includes('getReviewArticlesRefetchInterval(warningsQuery.data)')
+      || !source.includes('getReviewArticlesIndexingRefreshSignature(warningsQuery.data)')
+      || !source.includes('articlesQuery.refetch()')
+    )
+  })
+
+  expect(missingIndexingRefresh).toEqual([])
+})
+
 test('LLM review prompt controls load immediately from server-owned definitions', () => {
   const source = readSource('src/components/main/reviews/reviewsFilterControls.tsx')
 

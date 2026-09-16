@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto'
 
-import type {PublicationStatus} from '../../db/schemaTypes.ts'
+import type {DataSourceArticleChangeRunKind, PublicationStatus} from '../../db/schemaTypes.ts'
 import {
   type ArticleIdentifierConflict,
   type ArticleIdentifierInput,
@@ -154,10 +154,22 @@ type DeletedArticleImportRouteLinkRow = {
   sourceRecordHash: string
   sourceRecordKey: string
 }
+type ReconciliationChangeLogContext = {
+  dataSourceId: string
+  detectedAt?: Date
+  importRunId: string | null
+  route: string
+  runKind: DataSourceArticleChangeRunKind
+}
 type ExistingArticleImportSourceRecord = {
   articleId: string
+  externalArticleId: string | null
   importRouteId: string
+  importMetadata: unknown
   legacyArticleId: string | null
+  matchMetadata: unknown
+  rawPayload: unknown
+  sourceKind: string | null
   sourceRecordHash: string
   sourceRecordKey: string
 }
@@ -914,6 +926,40 @@ const getArticleImportRouteCurrentLinkMutationKey = (
   ].join('|')
 }
 
+const getDataSourceArticleChangeLogId = (input: {
+  articleId: string | null
+  changeKind: string
+  dataSourceId: string
+  externalArticleId: string | null
+  nextSourceRecordHash: string | null
+  previousSourceRecordHash: string | null
+  route: string
+  runKind: string
+  sourceRecordKey: string | null
+}) => {
+  const digest = createHash('sha256')
+    .update(
+      JSON.stringify({
+        articleId: input.articleId,
+        changeKind: input.changeKind,
+        dataSourceId: input.dataSourceId,
+        externalArticleId: input.externalArticleId,
+        nextSourceRecordHash: input.nextSourceRecordHash,
+        previousSourceRecordHash: input.previousSourceRecordHash,
+        route: input.route,
+        runKind: input.runKind,
+        sourceRecordKey: input.sourceRecordKey,
+      }),
+    )
+    .digest('hex')
+
+  return `data-source-change-${digest.slice(0, 32)}`
+}
+
+const getJsonSqlLiteralForArticleImport = (value: unknown): string => {
+  return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
+}
+
 const getArticleImportRouteLinkHotFieldInput = (
   record: ArticleImportRouteLinkRecord,
   tombstone = false,
@@ -988,6 +1034,282 @@ const appendImportRouteArticleDelta = async (params: {
   })
 }
 
+const insertSourceRecordDeletedChangeLogs = async (
+  tx: ArticleImportStoreTx,
+  records: DeletedArticleImportRouteLink[],
+  context: ReconciliationChangeLogContext | null | undefined,
+) => {
+  if (!context || records.length === 0) {
+    return
+  }
+
+  const detectedAt = context.detectedAt ?? new Date()
+  const deduplicatedRecords = getDeduplicatedSourceRecords(records)
+
+  await getValueChunks(deduplicatedRecords).reduce<Promise<void>>((previousRun, recordChunk) => {
+    return previousRun.then(() => {
+      return recordChunk.length === 0
+        ? Promise.resolve()
+        : tx.run(`
+          INSERT INTO app.data_source_article_change_log (
+            id,
+            data_source_id,
+            route,
+            import_route_id,
+            article_id,
+            external_article_id,
+            source_record_key,
+            change_kind,
+            previous_source_record_hash,
+            next_source_record_hash,
+            changed_fields,
+            previous_snapshot,
+            next_snapshot,
+            import_run_id,
+            run_kind,
+            detected_at,
+            created_at
+          )
+          VALUES ${recordChunk
+            .map((record) => {
+              const id = getDataSourceArticleChangeLogId({
+                articleId: record.articleId,
+                changeKind: 'source_record_deleted',
+                dataSourceId: context.dataSourceId,
+                externalArticleId: record.externalArticleId,
+                nextSourceRecordHash: null,
+                previousSourceRecordHash: record.sourceRecordHash,
+                route: context.route,
+                runKind: context.runKind,
+                sourceRecordKey: record.sourceRecordKey,
+              })
+              const previousSnapshot = {
+                externalArticleId: record.externalArticleId,
+                importMetadata: record.importMetadata,
+                matchMetadata: record.matchMetadata,
+                rawPayload: record.rawPayload,
+                sourceKind: record.sourceKind,
+              }
+
+              return `(${[
+                id,
+                context.dataSourceId,
+                context.route,
+                record.importRouteId,
+                record.articleId,
+                record.externalArticleId,
+                record.sourceRecordKey,
+                'source_record_deleted',
+                record.sourceRecordHash,
+                null,
+                getJsonSqlLiteralForArticleImport(null),
+                getJsonSqlLiteralForArticleImport(previousSnapshot),
+                getJsonSqlLiteralForArticleImport(null),
+                context.importRunId,
+                context.runKind,
+                detectedAt,
+                detectedAt,
+              ]
+                .map((value, index) => {
+                  return index >= 10 && index <= 12 ? String(value) : getSqlLiteral(value)
+                })
+                .join(', ')})`
+            })
+            .join(', ')}
+          ON CONFLICT(id) DO NOTHING
+        `)
+    })
+  }, Promise.resolve())
+}
+
+const getSourceRecordSnapshot = (
+  record:
+    | ExistingArticleImportSourceRecord
+    | Pick<
+        ScopedArticleImportStoreRow,
+        'externalArticleId' | 'importMetadata' | 'matchMetadata' | 'rawPayload' | 'sourceKind'
+      >,
+) => {
+  return {
+    externalArticleId: record.externalArticleId,
+    importMetadata: getJsonValue(record.importMetadata),
+    matchMetadata: getJsonValue(record.matchMetadata),
+    rawPayload: getJsonValue(record.rawPayload),
+    sourceKind: record.sourceKind,
+  }
+}
+
+const insertReconciliationSourceRecordChangeLogs = async (params: {
+  context: ReconciliationChangeLogContext | null | undefined
+  importRouteId: string
+  incomingRecords: ScopedArticleImportStoreRow[]
+  tx: ArticleImportStoreTx
+}) => {
+  if (!params.context || params.incomingRecords.length === 0) {
+    return
+  }
+
+  const incomingLookups = params.incomingRecords.map((record) => {
+    return {importRouteId: params.importRouteId, sourceRecordKey: record.sourceRecordKey}
+  })
+  const existingSourceRecords = await getExistingArticleImportRouteSourceRecords(params.tx, incomingLookups)
+  const changedRecords = params.incomingRecords.flatMap((record) => {
+    const existing = existingSourceRecords.get(
+      getArticleImportRouteSourceRecordKey({
+        importRouteId: params.importRouteId,
+        sourceRecordKey: record.sourceRecordKey,
+      }),
+    )
+
+    return existing && existing.sourceRecordHash !== record.sourceRecordHash
+      ? [
+          {
+            changeKind: 'source_record_changed' as const,
+            existing,
+            nextHash: record.sourceRecordHash,
+            nextSnapshot: getSourceRecordSnapshot(record),
+            previousHash: existing.sourceRecordHash,
+            previousSnapshot: getSourceRecordSnapshot(existing),
+            record,
+          },
+        ]
+      : []
+  })
+  const newRecords = params.incomingRecords.filter((record) => {
+    return !existingSourceRecords.has(
+      getArticleImportRouteSourceRecordKey({
+        importRouteId: params.importRouteId,
+        sourceRecordKey: record.sourceRecordKey,
+      }),
+    )
+  })
+  const restoredRows =
+    newRecords.length === 0
+      ? []
+      : await getValueChunks(
+          newRecords.map((record) => {
+            return record.sourceRecordKey
+          }),
+        ).reduce<Promise<Array<{previousSourceRecordHash: string | null; sourceRecordKey: string}>>>(
+          async (rowsPromise, sourceRecordKeyChunk) => {
+            const rows = await rowsPromise
+            const chunkRows = await params.tx.queryJson<{
+              previousSourceRecordHash: string | null
+              sourceRecordKey: string
+            }>(`
+            SELECT
+              previous_source_record_hash AS previousSourceRecordHash,
+              source_record_key AS sourceRecordKey
+            FROM app.data_source_article_change_log
+            WHERE data_source_id = ${getSqlLiteral(params.context.dataSourceId)}
+              AND route = ${getSqlLiteral(params.context.route)}
+              AND change_kind = 'source_record_deleted'
+              AND source_record_key IN (${getQuotedStringList(sourceRecordKeyChunk).join(', ')})
+            ORDER BY detected_at DESC, created_at DESC, id ASC
+          `)
+
+            return [...rows, ...chunkRows]
+          },
+          Promise.resolve([]),
+        )
+  const restoredSourceRecordKeys = new Set(
+    restoredRows.map((row) => {
+      return row.sourceRecordKey
+    }),
+  )
+  const previousRestoredHashBySourceRecordKey = restoredRows.reduce<Map<string, string | null>>((hashesByKey, row) => {
+    if (!hashesByKey.has(row.sourceRecordKey)) {
+      hashesByKey.set(row.sourceRecordKey, row.previousSourceRecordHash)
+    }
+    return hashesByKey
+  }, new Map())
+  const restoredRecords = newRecords
+    .filter((record) => {
+      return restoredSourceRecordKeys.has(record.sourceRecordKey)
+    })
+    .map((record) => {
+      return {
+        changeKind: 'source_record_restored' as const,
+        nextHash: record.sourceRecordHash,
+        nextSnapshot: getSourceRecordSnapshot(record),
+        previousHash: previousRestoredHashBySourceRecordKey.get(record.sourceRecordKey) ?? null,
+        previousSnapshot: null,
+        record,
+      }
+    })
+  const detectedAt = params.context.detectedAt ?? new Date()
+  const logRecords = [...changedRecords, ...restoredRecords]
+
+  await getValueChunks(logRecords).reduce<Promise<void>>((previousRun, recordChunk) => {
+    return previousRun.then(() => {
+      return recordChunk.length === 0
+        ? Promise.resolve()
+        : params.tx.run(`
+          INSERT INTO app.data_source_article_change_log (
+            id,
+            data_source_id,
+            route,
+            import_route_id,
+            article_id,
+            external_article_id,
+            source_record_key,
+            change_kind,
+            previous_source_record_hash,
+            next_source_record_hash,
+            changed_fields,
+            previous_snapshot,
+            next_snapshot,
+            import_run_id,
+            run_kind,
+            detected_at,
+            created_at
+          )
+          VALUES ${recordChunk
+            .map((entry) => {
+              const id = getDataSourceArticleChangeLogId({
+                articleId: null,
+                changeKind: entry.changeKind,
+                dataSourceId: params.context.dataSourceId,
+                externalArticleId: entry.record.externalArticleId,
+                nextSourceRecordHash: entry.nextHash,
+                previousSourceRecordHash: entry.previousHash,
+                route: params.context.route,
+                runKind: params.context.runKind,
+                sourceRecordKey: entry.record.sourceRecordKey,
+              })
+              const changedFields = {sourceRecordHash: [entry.previousHash, entry.nextHash]}
+
+              return `(${[
+                id,
+                params.context.dataSourceId,
+                params.context.route,
+                params.importRouteId,
+                null,
+                entry.record.externalArticleId,
+                entry.record.sourceRecordKey,
+                entry.changeKind,
+                entry.previousHash,
+                entry.nextHash,
+                getJsonSqlLiteralForArticleImport(changedFields),
+                getJsonSqlLiteralForArticleImport(entry.previousSnapshot),
+                getJsonSqlLiteralForArticleImport(entry.nextSnapshot),
+                params.context.importRunId,
+                params.context.runKind,
+                detectedAt,
+                detectedAt,
+              ]
+                .map((value, index) => {
+                  return index >= 10 && index <= 12 ? String(value) : getSqlLiteral(value)
+                })
+                .join(', ')})`
+            })
+            .join(', ')}
+          ON CONFLICT(id) DO NOTHING
+        `)
+    })
+  }, Promise.resolve())
+}
+
 const upsertReviewImportArticleHotFields = async (
   tx: ArticleImportStoreTx,
   records: ArticleImportRouteLinkRecord[],
@@ -1028,8 +1350,13 @@ const getExistingArticleImportRouteSourceRecords = async (
       const chunkRows = await tx.queryJson<ExistingArticleImportSourceRecord>(`
         SELECT
           source_record.article_id AS articleId,
+          source_record.external_article_id AS externalArticleId,
           source_record.import_route_id AS importRouteId,
+          TO_JSON(source_record.import_metadata) AS importMetadata,
           article.article_id AS legacyArticleId,
+          TO_JSON(source_record.match_metadata) AS matchMetadata,
+          TO_JSON(source_record.raw_payload) AS rawPayload,
+          source_record.source_kind AS sourceKind,
           source_record.source_record_hash AS sourceRecordHash,
           source_record.source_record_key AS sourceRecordKey
         FROM app.article_import_route_source_record source_record
@@ -1941,6 +2268,11 @@ const clearStaleImportRouteLinks = async (
   tx: ArticleImportStoreTx,
   importRouteId: string,
   sourceRecordKeys: string[],
+  options: {
+    changeLogContext?: ReconciliationChangeLogContext | null
+    periodEnd?: Date | null
+    periodStart?: Date | null
+  } = {},
 ) => {
   const sourceRecordKeyClause =
     sourceRecordKeys.length === 0
@@ -1950,6 +2282,40 @@ const clearStaleImportRouteLinks = async (
     sourceRecordKeys.length === 0
       ? ''
       : `AND (source_record_key IS NULL OR source_record_key NOT IN (${getQuotedStringList(sourceRecordKeys).join(', ')}))`
+  const hasPeriodScope = options.periodStart instanceof Date && options.periodEnd instanceof Date
+  const currentLinkPeriodClause = hasPeriodScope
+    ? `
+      AND EXISTS (
+        SELECT 1
+        FROM app.article scoped_article
+        WHERE scoped_article.id = app.article_import_route.article_id
+          AND scoped_article.article_created_at >= ${getSqlLiteral(options.periodStart)}
+          AND scoped_article.article_created_at < ${getSqlLiteral(options.periodEnd)}
+      )
+    `
+    : ''
+  const sourceRecordPeriodClause = hasPeriodScope
+    ? `
+      AND EXISTS (
+        SELECT 1
+        FROM app.article scoped_article
+        WHERE scoped_article.id = source_record.article_id
+          AND scoped_article.article_created_at >= ${getSqlLiteral(options.periodStart)}
+          AND scoped_article.article_created_at < ${getSqlLiteral(options.periodEnd)}
+      )
+    `
+    : ''
+  const sourceRecordDeletePeriodClause = hasPeriodScope
+    ? `
+      AND EXISTS (
+        SELECT 1
+        FROM app.article scoped_article
+        WHERE scoped_article.id = app.article_import_route_source_record.article_id
+          AND scoped_article.article_created_at >= ${getSqlLiteral(options.periodStart)}
+          AND scoped_article.article_created_at < ${getSqlLiteral(options.periodEnd)}
+      )
+    `
+    : ''
   const deletedRows = await tx.queryJson<DeletedArticleImportRouteLinkRow>(`
     SELECT
       article_id AS articleId,
@@ -1964,6 +2330,7 @@ const clearStaleImportRouteLinks = async (
     FROM app.article_import_route
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       ${currentLinkSourceRecordKeyClause}
+      ${currentLinkPeriodClause}
   `)
   const deletedSourceRecordRows = await tx.queryJson<DeletedArticleImportRouteLinkRow>(`
     SELECT
@@ -1980,6 +2347,7 @@ const clearStaleImportRouteLinks = async (
     WHERE source_record.import_route_id = ${getSqlLiteral(importRouteId)}
       AND (source_record.quarantined_at IS NULL OR COALESCE(source_record.quarantine_reason, '') <> 'source_record_remap')
       ${sourceRecordKeyClause}
+      ${sourceRecordPeriodClause}
       AND NOT EXISTS (
         SELECT 1
         FROM app.article_import_route current_link
@@ -2019,17 +2387,21 @@ const clearStaleImportRouteLinks = async (
       }
     })
 
+  await insertSourceRecordDeletedChangeLogs(tx, [...deletedRecords, ...deletedSourceRecords], options.changeLogContext)
+
   await tx.run(`
     DELETE FROM app.article_import_route_source_record
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       AND (quarantined_at IS NULL OR COALESCE(quarantine_reason, '') <> 'source_record_remap')
       ${sourceRecordKeyClause}
+      ${sourceRecordDeletePeriodClause}
   `)
 
   await tx.run(`
     DELETE FROM app.article_import_route
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       ${currentLinkSourceRecordKeyClause}
+      ${currentLinkPeriodClause}
   `)
 
   await deletedRecords.reduce<Promise<void>>((previousRun, record) => {
@@ -2061,6 +2433,8 @@ const clearStaleImportRouteLinks = async (
       })
     })
   }, Promise.resolve())
+
+  return {deletedRecords, deletedSourceRecords}
 }
 
 const getAcceptedImportRouteSourceRecordKeys = (
@@ -2110,6 +2484,61 @@ const syncImportedArticlesInTx = async (params: {
   }
 }
 
+const syncImportedArticlesForReconciliationPeriodInTx = async (params: {
+  changeLogContext?: ReconciliationChangeLogContext | null
+  importRoute: string
+  periodEnd: Date
+  periodStart: Date
+  rows: ArticleImportStoreRow[]
+  tx: ArticleImportStoreTx
+}) => {
+  const importRoute = params.importRoute.trim()
+  const routes = importRoute === '' ? [] : [importRoute]
+  const routeIdMap = await ensureImportRoutes(params.tx, routes)
+  const importRouteId = routeIdMap.get(importRoute)
+  const incomingRecords =
+    importRouteId && params.rows.length > 0
+      ? params.rows
+          .map((row) => {
+            return getScopedArticleImportStoreRow(getNormalizedArticleImportRow(row))
+          })
+          .filter((row) => {
+            return row.importRoute === importRoute
+          })
+      : []
+
+  if (importRouteId) {
+    await insertReconciliationSourceRecordChangeLogs({
+      context: params.changeLogContext,
+      importRouteId,
+      incomingRecords,
+      tx: params.tx,
+    })
+  }
+
+  const importRefreshState =
+    params.rows.length > 0
+      ? await storeImportedArticlesInTx(params.tx, params.rows)
+      : {acceptedCount: 0, acceptedSourceRecords: [], importRouteIds: [] as string[]}
+  const staleResult = importRouteId
+    ? await clearStaleImportRouteLinks(
+        params.tx,
+        importRouteId,
+        getAcceptedImportRouteSourceRecordKeys(importRefreshState.acceptedSourceRecords, importRouteId),
+        {changeLogContext: params.changeLogContext, periodEnd: params.periodEnd, periodStart: params.periodStart},
+      )
+    : {deletedRecords: [], deletedSourceRecords: []}
+
+  return {
+    acceptedCount: importRefreshState.acceptedCount,
+    deletedSourceRecordCount: staleResult.deletedRecords.length + staleResult.deletedSourceRecords.length,
+    importRouteIds:
+      importRouteId && !importRefreshState.importRouteIds.includes(importRouteId)
+        ? [...importRefreshState.importRouteIds, importRouteId]
+        : importRefreshState.importRouteIds,
+  }
+}
+
 export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   const state = await storeImportedArticlesInTx(tx, rows)
 
@@ -2122,6 +2551,17 @@ export const syncImportedArticlesWithTx = async (params: {
   tx: ArticleImportStoreTx
 }) => {
   return await syncImportedArticlesInTx(params)
+}
+
+export const syncImportedArticlesForReconciliationPeriodWithTx = async (params: {
+  changeLogContext?: ReconciliationChangeLogContext | null
+  importRoute: string
+  periodEnd: Date
+  periodStart: Date
+  rows: ArticleImportStoreRow[]
+  tx: ArticleImportStoreTx
+}) => {
+  return await syncImportedArticlesForReconciliationPeriodInTx(params)
 }
 
 export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {

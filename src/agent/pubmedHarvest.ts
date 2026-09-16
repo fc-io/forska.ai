@@ -1,10 +1,16 @@
+import {createHash} from 'node:crypto'
+
 import {type} from 'arktype'
 
+import type {ArticleImportStoreRow} from '../server/services/articleImportStoreService.ts'
 import {normalizeDoiIdentifier} from '../utils/articleIdentifierNormalization.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {pubmedHarvestGetIdParams} from './pubmedHarvest/pubmedHarvestGetIdParams.ts'
-import {pubmedWorkflowStoreEntries} from './pubmedWorkflowStoreEntries.ts'
+import {
+  type DatabaseEntry as PubmedWorkflowDatabaseEntry,
+  pubmedWorkflowStoreEntries,
+} from './pubmedWorkflowStoreEntries.ts'
 
 const EuropePmcAuthor = type({
   'fullName?': 'string',
@@ -60,6 +66,22 @@ const EuropePmcResponse = type({
   'request?': EuropePmcRequest,
 })
 type HarvestOptions = {cursor?: string | null; onCursorUpdate?: (cursor: string | null) => Promise<void>}
+export type PubmedHarvestPage = {
+  cursorBefore: string
+  cursorAfter: string | null
+  pageIndex: number
+  rawPage: unknown
+  rawItems: (typeof EuropePmcItem.infer)[]
+  workflowEntries: PubmedWorkflowDatabaseEntry[]
+  normalizedRecords: ArticleImportStoreRow[]
+  sourceRecordCount: number
+  sourceRecordHash: string
+  hitCount: number
+  fetchedCount: number
+  importedCount: number
+}
+type PubmedHarvestPageCallback = (page: PubmedHarvestPage) => Promise<void> | void
+type PubmedHarvestPagesInput = InputData & {cursor?: string | null; onPage: PubmedHarvestPageCallback}
 
 const toIsoDate = (y?: number | string, m?: number | string, d?: number | string): string => {
   const toInt = (v: unknown): number | undefined => {
@@ -219,7 +241,7 @@ const fetchEuropePmc = async (
   query: string,
   pageSize: number,
   cursorMark?: string,
-): Promise<{items: (typeof EuropePmcItem.infer)[]; nextCursor?: string; hitCount: number}> => {
+): Promise<{items: (typeof EuropePmcItem.infer)[]; nextCursor?: string; hitCount: number; rawPage: unknown}> => {
   const url = new URL('https://www.ebi.ac.uk/europepmc/webservices/rest/search')
   url.searchParams.set('query', query)
   url.searchParams.set('format', 'json')
@@ -246,7 +268,7 @@ const fetchEuropePmc = async (
     return items.length
   })()
   const nextCursor = parsed.nextCursorMark
-  return {items, nextCursor, hitCount}
+  return {items, nextCursor, hitCount, rawPage: json}
 }
 
 const toDatabaseEntry = (it: typeof EuropePmcItem.infer, importRoute: string) => {
@@ -273,55 +295,75 @@ const toDatabaseEntry = (it: typeof EuropePmcItem.infer, importRoute: string) =>
 
 export const pubmedHarvestToDatabaseEntry = toDatabaseEntry
 
-const harvestPage = async (
-  query: string,
-  importRoute: string,
-  pageSize: number,
-  maxResults: number,
-  cursorMark?: string,
-  importedCount = 0,
-  fetchedCount = 0,
-  onCursorUpdate?: (cursor: string | null) => Promise<void>,
-): Promise<number> => {
-  const isInitialRun = cursorMark === '*'
-  const baseImportedCount = isInitialRun ? 0 : importedCount
-  const baseFetchedCount = isInitialRun ? 0 : fetchedCount
+const isObjectRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)
+}
 
-  const {items, nextCursor, hitCount} = await fetchEuropePmc(query, pageSize, cursorMark)
-  if (onCursorUpdate) {
-    await onCursorUpdate(nextCursor ?? null)
+const getStableJsonValue = (value: unknown): string => {
+  return value instanceof Date
+    ? JSON.stringify(value.toISOString())
+    : Array.isArray(value)
+      ? `[${value
+          .map((entry) => {
+            return getStableJsonValue(entry)
+          })
+          .join(',')}]`
+      : isObjectRecord(value)
+        ? `{${Object.keys(value)
+            .sort((left, right) => {
+              return left.localeCompare(right)
+            })
+            .map((key) => {
+              return `${JSON.stringify(key)}:${getStableJsonValue(value[key])}`
+            })
+            .join(',')}}`
+        : (JSON.stringify(value) ?? 'null')
+}
+
+const getSourceRecordHash = (value: unknown): string => {
+  return createHash('sha256').update(getStableJsonValue(value)).digest('hex')
+}
+
+const getSourceRecordHashPayload = (row: ArticleImportStoreRow, rawPayload: unknown) => {
+  return (
+    rawPayload ?? {
+      articleAuthors: row.articleAuthors,
+      articleId: row.articleId,
+      articleSummary: row.articleSummary,
+      articleTitle: row.articleTitle,
+      articleUpdatedAt: row.articleUpdatedAt,
+      doi: row.doi,
+      publicationStatus: row.publicationStatus,
+      pubmedId: row.pubmedId,
+      sourceMetadata: row.sourceMetadata,
+      url: row.url,
+    }
+  )
+}
+
+const toArticleImportStoreRow = (entry: PubmedWorkflowDatabaseEntry): ArticleImportStoreRow => {
+  const row: ArticleImportStoreRow = {
+    articleId: entry.article_id,
+    articleTitle: entry.article_title,
+    articleSummary: entry.article_summary,
+    articleAuthors: entry.article_authors,
+    articleUpdatedAt: new Date(entry.article_updated_at),
+    articleCreatedAt: new Date(entry.article_created_at),
+    articleVersion: Number.parseInt(entry.article_version, 10),
+    doi: entry.doi,
+    pubmedId: entry.pubmed_id,
+    originalData: entry.original_data,
+    importRoute: entry.import_route,
   }
-  const remaining = Math.max(0, maxResults - baseImportedCount)
-  const slice = items.slice(0, remaining)
-  const hasAnyId = (it: typeof EuropePmcItem.infer) => {
-    const hasPmid = (typeof it.pmid === 'number' || typeof it.pmid === 'string') && String(it.pmid).length > 0
-    const hasId = (typeof it.id === 'number' || typeof it.id === 'string') && String(it.id).length > 0
-    return hasPmid || hasId
+  const rawPayload = row.originalData ?? null
+
+  return {
+    ...row,
+    externalArticleId: row.articleId,
+    rawPayload,
+    sourceRecordKey: row.articleId,
+    sourceRecordHash: getSourceRecordHash(getSourceRecordHashPayload(row, rawPayload)),
   }
-  const entries = slice.filter(hasAnyId).map((it) => {
-    return toDatabaseEntry(it, importRoute)
-  })
-  if (entries.length > 0) {
-    await pubmedWorkflowStoreEntries(entries)
-  }
-  const newImportedCount = baseImportedCount + entries.length
-  const newFetchedCount = baseFetchedCount + items.length
-  const doneByLimit = newImportedCount >= maxResults
-  const noMoreByCursor = !nextCursor || nextCursor === cursorMark
-  const doneByExhaustion = newImportedCount >= hitCount
-  return doneByLimit || noMoreByCursor || doneByExhaustion
-    ? newFetchedCount
-    : (await sleep(100),
-      harvestPage(
-        query,
-        importRoute,
-        pageSize,
-        maxResults,
-        nextCursor,
-        newImportedCount,
-        newFetchedCount,
-        onCursorUpdate,
-      ))
 }
 
 const getStartCursor = (cursor?: string | null) => {
@@ -329,23 +371,86 @@ const getStartCursor = (cursor?: string | null) => {
   return normalized ? normalized : '*'
 }
 
-const pubmedHarvest = async (input: InputData & HarvestOptions): Promise<void> => {
-  console.log('Europe PMC harvest start', input)
+export const fetchPubmedHarvestPages = async (
+  input: PubmedHarvestPagesInput,
+): Promise<{fetchedTotal: number; pageCount: number}> => {
   const idParams = pubmedHarvestGetIdParams(input)
   const sp = idParams.searchParams
   const query = buildQuery(sp.mindate, sp.maxdate)
   const pageSize = 1000
-  const startCursor = getStartCursor(input.cursor)
-  const fetchedTotal = await harvestPage(
-    query,
-    input.importRoute,
-    pageSize,
-    Number.POSITIVE_INFINITY,
-    startCursor,
-    0,
-    0,
-    input.onCursorUpdate,
-  )
+  const maxResults = Number.POSITIVE_INFINITY
+  let cursorMark = getStartCursor(input.cursor)
+  let importedCount = 0
+  let fetchedCount = 0
+  let pageIndex = 0
+
+  while (true) {
+    const isInitialRun = cursorMark === '*'
+    const baseImportedCount = isInitialRun ? 0 : importedCount
+    const baseFetchedCount = isInitialRun ? 0 : fetchedCount
+    const {items, nextCursor, hitCount, rawPage} = await fetchEuropePmc(query, pageSize, cursorMark)
+    const remaining = Math.max(0, maxResults - baseImportedCount)
+    const slice = items.slice(0, remaining)
+    const hasAnyId = (it: typeof EuropePmcItem.infer) => {
+      const hasPmid = (typeof it.pmid === 'number' || typeof it.pmid === 'string') && String(it.pmid).length > 0
+      const hasId = (typeof it.id === 'number' || typeof it.id === 'string') && String(it.id).length > 0
+      return hasPmid || hasId
+    }
+    const workflowEntries = slice.filter(hasAnyId).map((it) => {
+      return toDatabaseEntry(it, input.importRoute)
+    })
+    const normalizedRecords = workflowEntries.map((entry) => {
+      return toArticleImportStoreRow(entry)
+    })
+    const newImportedCount = baseImportedCount + workflowEntries.length
+    const newFetchedCount = baseFetchedCount + items.length
+    const cursorAfter = nextCursor ?? null
+
+    await input.onPage({
+      cursorBefore: cursorMark,
+      cursorAfter,
+      pageIndex,
+      rawPage,
+      rawItems: items,
+      workflowEntries,
+      normalizedRecords,
+      sourceRecordCount: normalizedRecords.length,
+      sourceRecordHash: getSourceRecordHash(rawPage),
+      hitCount,
+      fetchedCount: newFetchedCount,
+      importedCount: newImportedCount,
+    })
+
+    const doneByLimit = newImportedCount >= maxResults
+    const doneByExhaustion = newImportedCount >= hitCount
+    if (doneByLimit || !nextCursor || nextCursor === cursorMark || doneByExhaustion) {
+      return {fetchedTotal: newFetchedCount, pageCount: pageIndex + 1}
+    }
+
+    await sleep(100)
+    cursorMark = nextCursor
+    importedCount = newImportedCount
+    fetchedCount = newFetchedCount
+    pageIndex += 1
+  }
+}
+
+const pubmedHarvest = async (input: InputData & HarvestOptions): Promise<void> => {
+  console.log('Europe PMC harvest start', input)
+  const {fetchedTotal} = await fetchPubmedHarvestPages({
+    fromDate: input.fromDate,
+    toDate: input.toDate,
+    importRoute: input.importRoute,
+    cursor: input.cursor,
+    onPage: async (page) => {
+      if (input.onCursorUpdate) {
+        await input.onCursorUpdate(page.cursorAfter)
+      }
+      if (page.workflowEntries.length > 0) {
+        await pubmedWorkflowStoreEntries(page.workflowEntries)
+      }
+    },
+  })
   console.log(`Europe PMC harvest complete. Fetched ${fetchedTotal} articles.`)
 }
 

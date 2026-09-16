@@ -1,3 +1,4 @@
+import {existsSync, readFileSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {expect, setDefaultTimeout, test} from 'bun:test'
@@ -11,16 +12,38 @@ import {
 
 setDefaultTimeout(120_000)
 
+const getCommandOutputPath = (name: string) => {
+  return join(projectRoot, '.tmp', `${name}-${Date.now()}-${Math.random()}.json`)
+}
+
+const getCommandOutput = (outputPath: string, result: ReturnType<typeof globalThis.Bun.spawnSync>) => {
+  return existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : result.stdout.toString()
+}
+
+const runAllProjectsRebuildScript = (duckdbPath: string, args: string[] = []) => {
+  const outputPath = getCommandOutputPath('request-review-serving-all-projects-rebuild-output')
+  const result = globalThis.Bun.spawnSync(
+    ['bun', 'scripts/requestReviewServingAllProjectsRebuild.ts', ...args, `--json-output-file=${outputPath}`],
+    {cwd: projectRoot, env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath}},
+  )
+
+  return {output: getCommandOutput(outputPath, result), result}
+}
+
 const runQuery = (duckdbPath: string, sql: string): unknown => {
+  const outputPath = getCommandOutputPath('request-review-serving-all-projects-rebuild-query')
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
+        const {writeFileSync} = await import('node:fs')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
         const database = getAppDatabaseService()
         const rows = await database.queryJson(${JSON.stringify(sql)})
-        console.log(JSON.stringify(rows))
+        const output = JSON.stringify(rows)
+        writeFileSync(${JSON.stringify(outputPath)}, output + '\\n', 'utf8')
+        console.log(output)
         await database.close()
       `,
     ],
@@ -31,7 +54,7 @@ const runQuery = (duckdbPath: string, sql: string): unknown => {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
   }
 
-  return JSON.parse(getLastJsonLine(result.stdout.toString())) as unknown
+  return JSON.parse(getLastJsonLine(getCommandOutput(outputPath, result))) as unknown
 }
 
 test('requestReviewServingAllProjectsRebuild CLI requests active project rebuilds', () => {
@@ -44,18 +67,18 @@ test('requestReviewServingAllProjectsRebuild CLI requests active project rebuild
     ],
   })
 
-  const result = globalThis.Bun.spawnSync(['bun', 'scripts/requestReviewServingAllProjectsRebuild.ts'], {
-    cwd: projectRoot,
-    env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath},
-  })
+  const runScript = runAllProjectsRebuildScript(duckdbPath)
 
-  if (result.exitCode !== 0) {
+  if (runScript.result.exitCode !== 0) {
     throw new Error(
-      result.stderr.toString() || result.stdout.toString() || 'request review serving all projects rebuild failed',
+      runScript.output
+        || runScript.result.stderr.toString()
+        || runScript.result.stdout.toString()
+        || 'request review serving all projects rebuild failed',
     )
   }
 
-  const response = JSON.parse(getLastJsonLine(result.stdout.toString())) as {
+  const response = JSON.parse(getLastJsonLine(runScript.output)) as {
     failedCount: number
     failedProjects: Array<{error: string; projectId: string}>
     projectCount: number
@@ -101,18 +124,18 @@ test('requestReviewServingAllProjectsRebuild CLI continues after an empty active
     ],
   })
 
-  const result = globalThis.Bun.spawnSync(['bun', 'scripts/requestReviewServingAllProjectsRebuild.ts'], {
-    cwd: projectRoot,
-    env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath},
-  })
+  const runScript = runAllProjectsRebuildScript(duckdbPath)
 
-  if (result.exitCode !== 0) {
+  if (runScript.result.exitCode !== 0) {
     throw new Error(
-      result.stderr.toString() || result.stdout.toString() || 'request review serving all projects rebuild failed',
+      runScript.output
+        || runScript.result.stderr.toString()
+        || runScript.result.stdout.toString()
+        || 'request review serving all projects rebuild failed',
     )
   }
 
-  const response = JSON.parse(getLastJsonLine(result.stdout.toString())) as {
+  const response = JSON.parse(getLastJsonLine(runScript.output)) as {
     failedCount: number
     failedProjects: Array<{error: string; projectId: string}>
     projectCount: number

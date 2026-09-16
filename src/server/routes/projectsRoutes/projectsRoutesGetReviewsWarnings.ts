@@ -52,6 +52,16 @@ const reviewServingProgressClockSkewToleranceMs = 10_000
 const foregroundReviewServingRepairPriority = 1_000
 const stalledForegroundReviewServingRepairPriority = 10_000
 const filterEnrichmentReviewServingRepairPriority = 500
+const detailEnrichmentReviewServingRepairPriority = 500
+const warningFilterEnrichmentReviewServingComponents = [
+  ...filterReadyReviewServingComponents,
+  'queue',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+const warningDetailEnrichmentReviewServingComponents = [
+  'posting',
+  'summary',
+  ...detailReadyReviewServingComponents,
+] as const satisfies readonly ReviewServingProjectionComponent[]
 const getReviewWarningsWorkloadContext = (projectId: string, operation: string): DuckdbWorkloadContext => {
   return {
     fallbackIntent: 'serveStale',
@@ -612,6 +622,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         )
     const shouldPrioritizeMissingSnapshotRepair =
       !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
+    const hasUnreadableActiveWarningSnapshot =
+      warningSnapshot.status === 'rejected'
+      && warningSnapshot.reason === 'missingRequiredComponentState'
+      && warningSnapshot.diagnostics.manifest.status === 'active'
     const expiredRebuildChunkLeaseCount = Math.min(
       servingDiagnostics.rebuildChunks.runningCount,
       servingDiagnostics.rebuildChunks.expiredLeaseCount,
@@ -672,12 +686,14 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         || hasStalePendingCandidateActivationWork
         || hasActiveEnrichmentMissingSnapshotRepair
         || hasLegacyRequiredBootstrapEnrichmentCandidate
-        || shouldSeedCurrentConfigMissingSnapshot)
+        || shouldSeedCurrentConfigMissingSnapshot
+        || hasUnreadableActiveWarningSnapshot)
       && (!hasRecentProgress
         || hasActiveEnrichmentMissingSnapshotRepair
         || hasLegacyRequiredBootstrapEnrichmentCandidate
-        || shouldSeedCurrentConfigMissingSnapshot)
-      && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork)
+        || shouldSeedCurrentConfigMissingSnapshot
+        || hasUnreadableActiveWarningSnapshot)
+      && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork || hasUnreadableActiveWarningSnapshot)
 
     if (shouldRequestForegroundRepair) {
       const priority = hasRecentProgress
@@ -701,10 +717,28 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
 
     if (shouldRequestFilterEnrichment) {
       await requestReviewServingV4Rebuild({
-        components: filterReadyReviewServingComponents,
+        components: warningFilterEnrichmentReviewServingComponents,
         priority: filterEnrichmentReviewServingRepairPriority,
         projectId,
         reason: 'filterReadinessEnrichment',
+      }).catch(() => {
+        return undefined
+      })
+    }
+
+    const shouldRequestDetailEnrichment =
+      !isServerMutationWorkDisabled
+      && !reviewServingProjectorPaused
+      && hasReadableReviewServingRows
+      && coverage.filterReadyArticleCount !== null
+      && coverage.detailReadyArticleCount === null
+
+    if (shouldRequestDetailEnrichment) {
+      await requestReviewServingV4Rebuild({
+        components: warningDetailEnrichmentReviewServingComponents,
+        priority: detailEnrichmentReviewServingRepairPriority,
+        projectId,
+        reason: 'detailReadinessDirtyWork',
       }).catch(() => {
         return undefined
       })

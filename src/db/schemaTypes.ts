@@ -50,6 +50,17 @@ export type ProjectTransferImportState =
   | 'expired'
 export type ProjectTransferExportState = 'queued' | 'assembling' | 'packaging' | 'ready' | 'failed' | 'expired'
 export type ProjectTransferSessionState = ProjectTransferImportState | ProjectTransferExportState
+export type DataSourceTrackingGranularity = 'day' | 'hour' | 'minute' | 'cursor'
+export type DataSourceTrackingRunKind = 'incremental' | 'reconciliation'
+export type DataSourceReconciliationRunKind = 'automatic_age_bucket' | 'manual_full_range'
+export type DataSourceReconciliationWorkStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type DataSourceArticleChangeKind =
+  | 'article_added'
+  | 'source_record_changed'
+  | 'canonical_article_changed'
+  | 'source_record_deleted'
+  | 'source_record_restored'
+export type DataSourceArticleChangeRunKind = 'incremental' | DataSourceReconciliationRunKind
 
 export type UserRecord = {
   id: string
@@ -154,7 +165,76 @@ export type DataSourceRecord = {
   cursor: string | null
   dateFrom: Date | null
   dateTo: Date | null
+  trackingEnabled: boolean
+  trackingReconcileScheduleMonths: number[]
   archived: boolean
+}
+
+export type DataSourceTrackingStateRecord = {
+  dataSourceId: string
+  route: string
+  granularity: DataSourceTrackingGranularity
+  highWaterCompletedAt: Date | null
+  activeWindowStart: Date | null
+  activeWindowEnd: Date | null
+  activeCursor: string | null
+  lastAttemptAt: Date | null
+  lastSuccessAt: Date | null
+  nextRunAfter: Date | null
+  lastReconciliationSchedulerAt: Date | null
+  lastReconciliationCompletedAt: Date | null
+  failureCount: number
+  lastError: string | null
+  activeRunKind: DataSourceTrackingRunKind | null
+  activeReconciliationAgeMonths: number | null
+  leaseOwner: string | null
+  leaseExpiresAt: Date | null
+  lastImportRunId: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type DataSourceReconciliationWorkRecord = {
+  id: string
+  dataSourceId: string
+  route: string
+  runKind: DataSourceReconciliationRunKind
+  ageMonths: number | null
+  periodStart: Date
+  periodEnd: Date
+  spoolWindowId: string | null
+  cursor: string | null
+  status: DataSourceReconciliationWorkStatus
+  failureCount: number
+  lastError: string | null
+  nextRetryAt: Date | null
+  leaseOwner: string | null
+  leaseExpiresAt: Date | null
+  importRunId: string | null
+  scheduledAt: Date
+  startedAt: Date | null
+  completedAt: Date | null
+  updatedAt: Date
+}
+
+export type DataSourceArticleChangeLogRecord = {
+  id: string
+  dataSourceId: string
+  route: string
+  importRouteId: string | null
+  articleId: string | null
+  externalArticleId: string | null
+  sourceRecordKey: string | null
+  changeKind: DataSourceArticleChangeKind
+  previousSourceRecordHash: string | null
+  nextSourceRecordHash: string | null
+  changedFields: unknown
+  previousSnapshot: unknown
+  nextSnapshot: unknown
+  importRunId: string | null
+  runKind: DataSourceArticleChangeRunKind
+  detectedAt: Date
+  createdAt: Date
 }
 
 export type ImportRouteRecord = {

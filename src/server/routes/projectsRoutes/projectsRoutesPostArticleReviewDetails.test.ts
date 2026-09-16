@@ -6,6 +6,10 @@ import {Elysia} from 'elysia'
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).href
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).href
 const reviewServingReaderModulePath = new URL('../../reviewServing/reviewServingReader.ts', import.meta.url).href
+const reviewServingV4RebuildRequestServiceModulePath = new URL(
+  '../../reviewServing/reviewServingV4RebuildRequestService.ts',
+  import.meta.url,
+).href
 const reviewServingProjectConfigIdentityModulePath = new URL(
   '../../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
@@ -42,6 +46,10 @@ const reviewServingRowsRef = {
   > => {
     return {rows: [], status: 'accepted'}
   },
+}
+
+const reviewServingV4RebuildRequestsRef = {
+  current: [] as Array<{components?: readonly string[]; priority?: number; projectId: string; reason: string}>,
 }
 
 const assertProjectIsActiveRef = {
@@ -86,6 +94,20 @@ const registerModuleMocks = () => {
     }
   })
 
+  void mock.module(reviewServingV4RebuildRequestServiceModulePath, () => {
+    return {
+      requestReviewServingV4Rebuild: async (input: {
+        components?: readonly string[]
+        priority?: number
+        projectId: string
+        reason: string
+      }) => {
+        reviewServingV4RebuildRequestsRef.current.push(input)
+        return {requestId: 'request-1', status: 'admitted'}
+      },
+    }
+  })
+
   void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
     return {
       getCurrentReviewConfigHash: async () => {
@@ -123,6 +145,7 @@ afterEach(() => {
 })
 
 beforeEach(() => {
+  reviewServingV4RebuildRequestsRef.current = []
   projectReviewConfigRef.current = async () => {
     return {
       humanJudgmentMode: 'prompt',
@@ -405,6 +428,14 @@ test('project review details returns unavailable when V4 article detail is unava
 
   expect(response.status).toBe(200)
   expect(body).toMatchObject({article: null, reason: 'snapshot unavailable', status: 'unavailable'})
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([
+    {
+      components: ['posting', 'summary', 'payload'],
+      priority: 1000,
+      projectId: 'project-1',
+      reason: 'detailReadinessDirtyWork',
+    },
+  ])
 })
 
 test('project review details does not fall back to app judgments when V4 judgment detail is unavailable', async () => {
@@ -421,6 +452,14 @@ test('project review details does not fall back to app judgments when V4 judgmen
 
   expect(response.status).toBe(200)
   expect(body).toMatchObject({judgments: [], reason: 'detail judgments unavailable', status: 'unavailable'})
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([
+    {
+      components: ['posting', 'summary', 'payload'],
+      priority: 1000,
+      projectId: 'project-1',
+      reason: 'detailReadinessDirtyWork',
+    },
+  ])
 })
 
 test('legacy judgment fallback does not cap visible project judgment history', () => {

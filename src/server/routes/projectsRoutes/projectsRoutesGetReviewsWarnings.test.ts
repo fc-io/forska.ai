@@ -106,6 +106,7 @@ type ReviewsWarningsResponse = {
             terminalQuarantinedCount?: number
           }
           quarantine: {quarantinedOutboxCount: number; retryableOutboxCount: number; unresolvedOutboxCount: number}
+          snapshot?: {activeCount?: number}
         }
         readable: boolean
         usable: boolean
@@ -497,6 +498,26 @@ const getReviewRebuildRequestCount = async (projectId: string, reason = 'missing
   `)
 
   return Number(row?.count ?? 0)
+}
+
+const getReviewRebuildRequestComponents = async (projectId: string, reason: string) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const {getAppDatabaseService} = await import('../../services/appDatabaseService.ts')
+  const [row] = await getAppDatabaseService().queryJson<{components: string}>(`
+    SELECT requested_components_json::VARCHAR AS components
+    FROM app.review_rebuild_request
+    WHERE project_id = '${projectId}'
+      AND reason = '${reason}'
+      AND status = 'admitted'
+      AND admission_state = 'admitted'
+    ORDER BY created_at DESC
+    LIMIT 1
+  `)
+
+  return row === undefined ? [] : (JSON.parse(row.components) as string[])
 }
 
 const insertActiveReviewServingManifest = async (input: {
@@ -2106,11 +2127,70 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('refreshing')
   expect(await getReviewRebuildRequestCount(projectId, 'filterReadinessEnrichment')).toBe(1)
+  expect(await getReviewRebuildRequestComponents(projectId, 'filterReadinessEnrichment')).toEqual([
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'humanStatus',
+    'posting',
+    'summary',
+    'queue',
+  ])
 
   const {response: secondResponse} = await postWarningsRequest(projectId)
 
   expect(secondResponse.status).toBe(200)
   expect(await getReviewRebuildRequestCount(projectId, 'filterReadinessEnrichment')).toBe(1)
+})
+
+test('reviews warnings request detail enrichment when filter-ready serving lacks payload detail', async () => {
+  const projectId = 'project-filter-ready-detail-missing-warning'
+  const articleId = `article-${projectId}`
+  const reviewConfigHash = getFixtureReviewConfigHash(projectId)
+  const snapshotId = 'snapshot-filter-ready-detail-missing-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, articleId)
+  await insertActiveReviewServingManifest({
+    components: [
+      'projectScope',
+      'selectedImport',
+      'display',
+      'llmStatus',
+      'humanStatus',
+      'queue',
+      'posting',
+      'summary',
+    ],
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+  })
+  await insertReviewArticleServingBaseRow({articleId, projectId, reviewConfigHash, snapshotId})
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.coverage).toMatchObject({
+    detailReadyArticleCount: null,
+    filterReadyArticleCount: 1,
+    totalArticleCount: 1,
+  })
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(await getReviewRebuildRequestCount(projectId, 'detailReadinessDirtyWork')).toBe(1)
+  expect(await getReviewRebuildRequestComponents(projectId, 'detailReadinessDirtyWork')).toEqual([
+    'posting',
+    'summary',
+    'payload',
+  ])
+
+  const {response: secondResponse} = await postWarningsRequest(projectId)
+
+  expect(secondResponse.status).toBe(200)
+  expect(await getReviewRebuildRequestCount(projectId, 'detailReadinessDirtyWork')).toBe(1)
 })
 
 test('reviews warnings exposes component readiness for details and search readiness', async () => {
@@ -2272,6 +2352,35 @@ test('reviews warnings request bounded V4 repair when fresh idle serving is miss
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('stale')
+})
+
+test('reviews warnings repair unreadable active snapshots with no visible work', async () => {
+  const projectId = 'project-unreadable-active-serving-bootstrap-warning'
+  const snapshotId = 'snapshot-unreadable-active-serving-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+  await insertActiveReviewServingManifest({
+    components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.serving.diagnostics.snapshot.activeCount).toBe(1)
+  expect(body.data.indexing.serving.readable).toBe(false)
+  expect(body.data.indexing.status).toBe('stale')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
+
+  const {response: secondResponse} = await postWarningsRequest(projectId)
+
+  expect(secondResponse.status).toBe(200)
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
 })
 
 test('reviews warnings do not enqueue foreground V4 repair when server mutation work is disabled', async () => {

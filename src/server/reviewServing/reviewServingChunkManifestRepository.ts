@@ -452,6 +452,7 @@ const getWriteOutputValidationResult = (value: unknown) => {
 
 const releasableInactiveRequestRebuildChunkStatusSql =
   "('pending', 'completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
+const supersededSnapshotRebuildChunkStatusSql = "('pending', 'running')"
 const preservedRebuildChunkStatusSql = "('completed', 'running', 'failed')"
 const activeRebuildChunkPreservePredicate = `
   app.review_rebuild_chunk_manifest.status IN ${preservedRebuildChunkStatusSql}
@@ -662,6 +663,29 @@ export const releaseInactiveRequestRebuildChunkManifests = async (
       status IN ${releasableInactiveRequestRebuildChunkStatusSql}
       AND request_id IS NOT NULL
       AND ${inactiveRequestPredicate}
+  `)
+
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'completed',
+        admission_state = 'admitted',
+        retry_after = NULL,
+        retry_count = 0,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = COALESCE(last_error, 'superseded by retired review-serving snapshot'),
+        completed_at = COALESCE(completed_at, current_timestamp),
+        updated_at = current_timestamp
+    WHERE ${uniqueChunkIds === null ? '' : `chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')}) AND`}
+      status IN ${supersededSnapshotRebuildChunkStatusSql}
+      AND snapshot_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id IS NOT DISTINCT FROM app.review_rebuild_chunk_manifest.project_id
+          AND snapshot.snapshot_id IS NOT DISTINCT FROM app.review_rebuild_chunk_manifest.snapshot_id
+          AND snapshot.snapshot_status IN ('retired', 'failed')
+      )
   `)
 }
 

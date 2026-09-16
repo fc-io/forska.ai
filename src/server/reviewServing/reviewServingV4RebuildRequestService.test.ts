@@ -875,6 +875,99 @@ test('V4 rebuild request service admits large search rebuilds as executable rang
   expect(searchChunkInserts[0]).not.toContain('input_row_budget_split')
 })
 
+test('V4 search dirty work bootstraps requested search when active snapshot lacks search state', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
+    {snapshotComponents: countReadyReviewServingComponents},
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['search'], priority: 50, projectId: 'project-v4', reason: 'searchDirtyWork'},
+      database,
+    ),
+  )
+
+  const snapshotInsert =
+    statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+    }) ?? ''
+  const componentState = getJsonObjectsFromSql(snapshotInsert).find((entry) => {
+    return 'optional' in entry && 'required' in entry
+  }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
+  const chunkInsertSql = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+    .join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.requestedComponents).toEqual(['search'])
+  expect(
+    componentState?.required?.map((state) => {
+      return state.component
+    }),
+  ).toEqual([...countReadyReviewServingComponents])
+  expect(
+    componentState?.optional?.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['search'])
+  expect(chunkInsertSql).toContain("'search'")
+  expect(chunkInsertSql).toContain("'projectScope'")
+  expect(chunkInsertSql).toContain("'selectedImport'")
+  expect(chunkInsertSql).toContain('freshReviewServingSnapshot')
+})
+
+for (const component of ['payload', 'posting', 'summary'] as const) {
+  test(`V4 ${component} dirty work bootstraps requested optional component when active snapshot lacks it`, async () => {
+    const {database, statements} = createFakeRequestDatabase(
+      {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
+      {snapshotComponents: countReadyReviewServingComponents},
+    )
+
+    const request = await Effect.runPromise(
+      requestReviewServingV4RebuildEffect(
+        {components: [component], priority: 50, projectId: 'project-v4', reason: `${component}DirtyWork`},
+        database,
+      ),
+    )
+
+    const snapshotInsert =
+      statements.find((statement) => {
+        return statement.includes('INSERT INTO app.review_serving_snapshot_manifest')
+      }) ?? ''
+    const componentState = getJsonObjectsFromSql(snapshotInsert).find((entry) => {
+      return 'optional' in entry && 'required' in entry
+    }) as {optional?: Array<{component?: string}>; required?: Array<{component?: string}>} | undefined
+    const chunkInsertSql = statements
+      .filter((statement) => {
+        return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+      })
+      .join('\n')
+
+    expect(request.status).toBe('admitted')
+    expect(request.requestedComponents).toEqual([component])
+    expect(
+      componentState?.required?.map((state) => {
+        return state.component
+      }),
+    ).toEqual([...countReadyReviewServingComponents])
+    expect(
+      componentState?.optional?.map((state) => {
+        return state.component
+      }),
+    ).toEqual(component === 'summary' ? ['payload', 'summary'] : [component])
+    expect(chunkInsertSql).toContain(`'${component}'`)
+    expect(chunkInsertSql).toContain("'projectScope'")
+    expect(chunkInsertSql).toContain("'selectedImport'")
+    if (component === 'summary') {
+      expect(chunkInsertSql).toContain("'payload'")
+    }
+    expect(chunkInsertSql).toContain('freshReviewServingSnapshot')
+  })
+}
+
 test('V4 rebuild request service bootstraps explicit chunks when a project has no snapshot yet', async () => {
   const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
 
@@ -1544,10 +1637,7 @@ test('V4 foreground missing snapshot rebuild does not reuse an active full enric
     ),
   )
   const pageFirstRequest = await Effect.runPromise(
-    requestReviewServingV4RebuildEffect(
-      {priority: 10_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
-      database,
-    ),
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
   )
   const rebuildRequestInsertCount = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_request')
@@ -1561,7 +1651,7 @@ test('V4 foreground missing snapshot rebuild does not reuse an active full enric
 
   expect(fullRequest.requestedComponents).toEqual([...fakeRebuildComponents])
   expect(pageFirstRequest.requestId).not.toBe(fullRequest.requestId)
-  expect(pageFirstRequest.priority).toBe(10_000)
+  expect(pageFirstRequest.priority).toBe(20_000)
   expect(pageFirstRequest.requestedComponents).toEqual([...countReadyReviewServingComponents])
   expect(pageFirstChunkInsertSql).not.toContain("'posting'")
   expect(pageFirstChunkInsertSql).not.toContain("'summary'")
@@ -1619,7 +1709,7 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   )
   const boostedRequest = await Effect.runPromise(
     requestReviewServingV4RebuildEffect(
-      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      {priority: 30_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
       database,
     ),
   )
@@ -1628,10 +1718,10 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   }).length
 
   expect(boostedRequest.requestId).toBe(firstRequest.requestId)
-  expect(boostedRequest.priority).toBe(1_000)
+  expect(boostedRequest.priority).toBe(30_000)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain('UPDATE app.review_rebuild_request')
-  expect(statements.join('\n')).toContain('WHEN priority < 1000 THEN 1000')
+  expect(statements.join('\n')).toContain('WHEN priority < 30000 THEN 30000')
 })
 
 test('V4 missing snapshot rebuild requests do not reuse active work for a different review config', async () => {

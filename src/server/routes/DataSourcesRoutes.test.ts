@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs'
 
-import {expect, test} from 'bun:test'
+import {expect, mock, test} from 'bun:test'
 
 type StructuredFileConfigResponse = {
   assetPath: string
@@ -41,6 +41,25 @@ type DataSourceResponseEntry = {
   reimportable: boolean
   structuredFileConfig: StructuredFileConfigResponse | null
   title: string
+  trackingEnabled: boolean
+  trackingReconcileScheduleMonths: number[]
+  trackingState: null | {
+    activeCursor: string | null
+    activeReconciliationAgeMonths: number | null
+    activeRunKind: string | null
+    activeWindowEnd: string | null
+    activeWindowStart: string | null
+    failureCount: number
+    granularity: string
+    highWaterCompletedAt: string | null
+    lastAttemptAt: string | null
+    lastError: string | null
+    lastReconciliationCompletedAt: string | null
+    lastSuccessAt: string | null
+    nextRunAfter: string | null
+    pendingReconciliationCount: number
+  }
+  trackingSupported: boolean
   updatedAt: string
 }
 
@@ -50,8 +69,8 @@ type MockQueryRow = {
   archived: boolean
   createdAt: string
   cursor: string | null
-  dateFrom: null
-  dateTo: null
+  dateFrom: null | string
+  dateTo: null | string
   description: string
   id: string
   importRoute: string
@@ -59,6 +78,22 @@ type MockQueryRow = {
   lastImportAt: string
   title: string
   updatedAt: string
+  trackingActiveCursor?: string | null
+  trackingActiveReconciliationAgeMonths?: number | null
+  trackingActiveRunKind?: string | null
+  trackingActiveWindowEnd?: string | null
+  trackingActiveWindowStart?: string | null
+  trackingEnabled?: boolean
+  trackingFailureCount?: number | null
+  trackingGranularity?: string | null
+  trackingHighWaterCompletedAt?: string | null
+  trackingLastAttemptAt?: string | null
+  trackingLastError?: string | null
+  trackingLastReconciliationCompletedAt?: string | null
+  trackingLastSuccessAt?: string | null
+  trackingNextRunAfter?: string | null
+  trackingPendingReconciliationCount?: number | null
+  trackingReconcileScheduleMonths?: unknown
 }
 
 const structuredFileConfig: StructuredFileConfigResponse = {
@@ -127,69 +162,125 @@ const covidenceRow: MockQueryRow = {
   updatedAt: '2026-02-02T00:00:00.000Z',
 }
 
-const getLastJsonLine = (stdout: string) => {
-  return (
-    stdout
-      .split('\n')
-      .map((line) => {
-        return line.trim()
-      })
-      .filter((line) => {
-        return line !== ''
-      })
-      .at(-1) ?? ''
-  )
+const trackedRow: MockQueryRow = {
+  archived: false,
+  createdAt: '2026-03-01T00:00:00.000Z',
+  cursor: null,
+  dateFrom: '2026-03-01T00:00:00.000Z',
+  dateTo: null,
+  description: 'Tracked PubMed source',
+  id: 'datasource-tracked',
+  importRoute: '/api/datasources/import/pubmed',
+  itemsAfterLastImport: 7,
+  lastImportAt: '2026-03-03T00:00:00.000Z',
+  title: 'Tracked PubMed',
+  trackingActiveCursor: 'cursor-after-page',
+  trackingActiveReconciliationAgeMonths: null,
+  trackingActiveRunKind: 'incremental',
+  trackingActiveWindowEnd: '2026-03-03T00:00:00.000Z',
+  trackingActiveWindowStart: '2026-03-02T00:00:00.000Z',
+  trackingEnabled: true,
+  trackingFailureCount: 1,
+  trackingGranularity: 'day',
+  trackingHighWaterCompletedAt: '2026-03-02T00:00:00.000Z',
+  trackingLastAttemptAt: '2026-03-03T01:00:00.000Z',
+  trackingLastError: 'provider timeout',
+  trackingLastReconciliationCompletedAt: '2026-03-02T02:00:00.000Z',
+  trackingLastSuccessAt: '2026-03-03T00:00:00.000Z',
+  trackingNextRunAfter: '2026-03-04T00:00:00.000Z',
+  trackingPendingReconciliationCount: 2,
+  trackingReconcileScheduleMonths: [3, 12],
+  updatedAt: '2026-03-03T00:00:00.000Z',
 }
 
-const runDataSourcesRoute = (params: {
+const routeHarnessState: {
+  changeRows: Array<Record<string, unknown>>
+  covidenceProjectLinks: Array<{importRoute: string; projectId: string}>
+  covidencePromptLinks: Array<{importRoute: string; promptId: string}>
+  reconciliationWorkRows: Array<Record<string, unknown>>
+  row: MockQueryRow
+  runStatements: string[]
+  transactionCallCount: number
+} = {
+  changeRows: [],
+  covidenceProjectLinks: [],
+  covidencePromptLinks: [],
+  reconciliationWorkRows: [],
+  row: structuredRow,
+  runStatements: [],
+  transactionCallCount: 0,
+}
+
+void mock.module(new URL('../services/appDatabaseService.ts', import.meta.url).href, () => {
+  return {
+    getAppDatabaseService: () => {
+      return {
+        queryJson: async (statement: string) => {
+          return statement.includes('INNER JOIN app.project_prompt')
+            ? routeHarnessState.covidencePromptLinks
+            : statement.includes('FROM app.project_import_route')
+              ? routeHarnessState.covidenceProjectLinks
+              : statement.includes('FROM app.data_source data_source')
+                ? [routeHarnessState.row]
+                : statement.includes('FROM app.data_source_reconciliation_work')
+                  ? routeHarnessState.reconciliationWorkRows
+                  : statement.includes('FROM app.data_source_article_change_log')
+                    ? routeHarnessState.changeRows
+                    : statement.includes(`WHERE data_source.id = '${routeHarnessState.row.id}'`)
+                        || statement.includes(`WHERE id = '${routeHarnessState.row.id}'`)
+                      ? [routeHarnessState.row]
+                      : [routeHarnessState.row]
+        },
+        run: async (statement: string) => {
+          routeHarnessState.runStatements.push(statement)
+        },
+        transaction: async () => {
+          routeHarnessState.transactionCallCount += 1
+          throw new Error('transaction should not be used')
+        },
+      }
+    },
+  }
+})
+
+const runDataSourcesRoute = async (params: {
+  changeRows?: Array<Record<string, unknown>>
   covidenceProjectLinks?: Array<{importRoute: string; projectId: string}>
   covidencePromptLinks?: Array<{importRoute: string; promptId: string}>
+  reconciliationWorkRows?: Array<Record<string, unknown>>
+  requestInit?: RequestInit
   row: MockQueryRow
   url: string
 }) => {
-  return globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {mock} = await import('bun:test')
-        const {Elysia} = await import('elysia')
+  routeHarnessState.covidenceProjectLinks = params.covidenceProjectLinks ?? []
+  routeHarnessState.covidencePromptLinks = params.covidencePromptLinks ?? []
+  routeHarnessState.reconciliationWorkRows = params.reconciliationWorkRows ?? []
+  routeHarnessState.changeRows = params.changeRows ?? []
+  routeHarnessState.row = params.row
+  routeHarnessState.runStatements = []
+  routeHarnessState.transactionCallCount = 0
 
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
-        const row = ${JSON.stringify(params.row)}
-        const covidenceProjectLinks = ${JSON.stringify(params.covidenceProjectLinks ?? [])}
-        const covidencePromptLinks = ${JSON.stringify(params.covidencePromptLinks ?? [])}
+  const {Elysia} = await import('elysia')
+  const {dataSourcesRoutes} = (await import(
+    './DataSourcesRoutes.ts?test=' + Date.now()
+  )) as typeof import('./DataSourcesRoutes.ts')
+  const app = new Elysia().use(dataSourcesRoutes)
+  const response = await app.handle(new Request(params.url, params.requestInit))
+  const responseText = await response.text()
+  let body: unknown = responseText
 
-        void mock.module(appDatabaseServiceModulePath, () => {
-          return {
-            getAppDatabaseService: () => {
-              return {
-                queryJson: async (statement) => {
-                  return statement.includes('INNER JOIN app.project_prompt')
-                    ? covidencePromptLinks
-                    : statement.includes('FROM app.project_import_route')
-                      ? covidenceProjectLinks
-                      : statement.includes("WHERE id = '" + row.id + "'")
-                        ? [row]
-                        : [row]
-                },
-                run: async () => {},
-                transaction: async () => {
-                  throw new Error('transaction should not be used in these GET tests')
-                },
-              }
-            },
-          }
-        })
+  try {
+    body = responseText ? JSON.parse(responseText) : null
+  } catch {
+    body = responseText
+  }
 
-        const {dataSourcesRoutes} = await import('./src/server/routes/DataSourcesRoutes.ts?test=' + Date.now())
-        const app = new Elysia().use(dataSourcesRoutes)
-        const response = await app.handle(new Request(${JSON.stringify(params.url)}))
-        console.log(JSON.stringify({body: await response.json(), status: response.status}))
-      `,
-    ],
-    {cwd: process.cwd(), env: process.env},
-  )
+  return {
+    body,
+    runStatements: routeHarnessState.runStatements,
+    status: response.status,
+    transactionCallCount: routeHarnessState.transactionCallCount,
+  }
 }
 
 test('covidence project link lookup returns one bounded row per import route', () => {
@@ -235,20 +326,14 @@ test('active datasource list keeps the unpaginated product contract explicit', (
     routeText.indexOf(".get('/api/datasources/archived'"),
   )
 
-  expect(listActiveRoute).toContain('ORDER BY created_at DESC')
+  expect(listActiveRoute).toContain('ORDER BY data_source.created_at DESC')
   expect(listActiveRoute).toContain("getDataSourcesWorkloadContext({operation: 'listActive'})")
   expect(listActiveRoute).not.toContain('maxResultRows')
   expect(listActiveRoute).not.toContain('LIMIT')
 })
 
-test('datasource list responses omit raw cursor while including structured file config', () => {
-  const runRoute = runDataSourcesRoute({row: structuredRow, url: 'http://localhost/api/datasources'})
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Datasource list route test failed')
-  }
-
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+test('datasource list responses omit raw cursor while including structured file config', async () => {
+  const parsed = (await runDataSourcesRoute({row: structuredRow, url: 'http://localhost/api/datasources'})) as {
     body: DataSourceListResponse
     status: number
   }
@@ -274,6 +359,10 @@ test('datasource list responses omit raw cursor while including structured file 
         reimportable: false,
         structuredFileConfig,
         title: 'Created datasource',
+        trackingEnabled: false,
+        trackingReconcileScheduleMonths: [3, 12, 24, 36],
+        trackingState: null,
+        trackingSupported: false,
         updatedAt: '2026-01-02T00:00:00.000Z',
       },
     ],
@@ -281,17 +370,11 @@ test('datasource list responses omit raw cursor while including structured file 
   expect(Object.hasOwn(parsed.body.data[0] as object, 'cursor')).toBe(false)
 })
 
-test('datasource detail responses omit raw cursor while including structured file config', () => {
-  const runRoute = runDataSourcesRoute({row: structuredRow, url: 'http://localhost/api/datasources/datasource-1'})
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Datasource detail route test failed')
-  }
-
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-    body: DataSourceDetailResponse
-    status: number
-  }
+test('datasource detail responses omit raw cursor while including structured file config', async () => {
+  const parsed = (await runDataSourcesRoute({
+    row: structuredRow,
+    url: 'http://localhost/api/datasources/datasource-1',
+  })) as {body: DataSourceDetailResponse; status: number}
 
   expect(parsed.status).toBe(200)
   expect(parsed.body).toEqual({
@@ -312,14 +395,47 @@ test('datasource detail responses omit raw cursor while including structured fil
       reimportable: false,
       structuredFileConfig,
       title: 'Created datasource',
+      trackingEnabled: false,
+      trackingReconcileScheduleMonths: [3, 12, 24, 36],
+      trackingState: null,
+      trackingSupported: false,
       updatedAt: '2026-01-02T00:00:00.000Z',
     },
   })
   expect(Object.hasOwn(parsed.body.data, 'cursor')).toBe(false)
 })
 
-test('covidence datasource responses expose package config and linked project and prompt ids', () => {
-  const runRoute = runDataSourcesRoute({
+test('tracked datasource responses include compact tracking state without exposing cursor', async () => {
+  const parsed = (await runDataSourcesRoute({
+    row: trackedRow,
+    url: 'http://localhost/api/datasources/datasource-tracked',
+  })) as {body: DataSourceDetailResponse; status: number}
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.body.data.trackingEnabled).toBe(true)
+  expect(parsed.body.data.trackingSupported).toBe(true)
+  expect(parsed.body.data.trackingReconcileScheduleMonths).toEqual([3, 12])
+  expect(parsed.body.data.trackingState).toEqual({
+    activeCursor: 'cursor-after-page',
+    activeReconciliationAgeMonths: null,
+    activeRunKind: 'incremental',
+    activeWindowEnd: '2026-03-03T00:00:00.000Z',
+    activeWindowStart: '2026-03-02T00:00:00.000Z',
+    failureCount: 1,
+    granularity: 'day',
+    highWaterCompletedAt: '2026-03-02T00:00:00.000Z',
+    lastAttemptAt: '2026-03-03T01:00:00.000Z',
+    lastError: 'provider timeout',
+    lastReconciliationCompletedAt: '2026-03-02T02:00:00.000Z',
+    lastSuccessAt: '2026-03-03T00:00:00.000Z',
+    nextRunAfter: '2026-03-04T00:00:00.000Z',
+    pendingReconciliationCount: 2,
+  })
+  expect(Object.hasOwn(parsed.body.data, 'cursor')).toBe(false)
+})
+
+test('covidence datasource responses expose package config and linked project and prompt ids', async () => {
+  const parsed = (await runDataSourcesRoute({
     covidenceProjectLinks: [{importRoute: 'covidence:datasource-2', projectId: 'project-covidence-1'}],
     covidencePromptLinks: [
       {importRoute: 'covidence:datasource-2', promptId: 'prompt-covidence-1'},
@@ -327,18 +443,7 @@ test('covidence datasource responses expose package config and linked project an
     ],
     row: covidenceRow,
     url: 'http://localhost/api/datasources/datasource-2',
-  })
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(
-      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Covidence datasource route test failed',
-    )
-  }
-
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-    body: DataSourceDetailResponse
-    status: number
-  }
+  })) as {body: DataSourceDetailResponse; status: number}
 
   expect(parsed.status).toBe(200)
   expect(parsed.body).toEqual({
@@ -359,124 +464,126 @@ test('covidence datasource responses expose package config and linked project an
       reimportable: true,
       structuredFileConfig: null,
       title: 'Covidence datasource',
+      trackingEnabled: false,
+      trackingReconcileScheduleMonths: [3, 12, 24, 36],
+      trackingState: null,
+      trackingSupported: false,
       updatedAt: '2026-02-02T00:00:00.000Z',
     },
   })
   expect(Object.hasOwn(parsed.body.data, 'cursor')).toBe(false)
 })
 
-test('structured file datasource patch rejects non-archive edits', () => {
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {mock} = await import('bun:test')
-        const {Elysia} = await import('elysia')
-
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
-        const row = ${JSON.stringify(structuredRow)}
-        const state = {transactionCallCount: 0}
-
-        void mock.module(appDatabaseServiceModulePath, () => {
-          return {
-            getAppDatabaseService: () => {
-              return {
-                queryJson: async () => [row],
-                run: async () => {},
-                transaction: async () => {
-                  state.transactionCallCount += 1
-                  throw new Error('transaction should not be used')
-                },
-              }
-            },
-          }
-        })
-
-        const {dataSourcesRoutes} = await import('./src/server/routes/DataSourcesRoutes.ts?test=' + Date.now())
-        const app = new Elysia().use(dataSourcesRoutes)
-        const response = await app.handle(
-          new Request('http://localhost/api/datasources/datasource-1', {
-            method: 'PATCH',
-            headers: {'content-type': 'application/json'},
-            body: JSON.stringify({title: 'Edited title'}),
-          }),
-        )
-        console.log(JSON.stringify({body: await response.text(), status: response.status, transactionCallCount: state.transactionCallCount}))
-      `,
-    ],
-    {cwd: process.cwd(), env: process.env},
-  )
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(
-      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Datasource patch rejection test failed',
-    )
+test('manual tracking reconciliation endpoint schedules full-range work', async () => {
+  const finiteTrackedRow = {...trackedRow, dateTo: '2026-03-04T00:00:00.000Z'}
+  const workRow = {
+    ageMonths: null,
+    completedAt: null,
+    cursor: null,
+    dataSourceId: trackedRow.id,
+    failureCount: 0,
+    id: 'manual-reconciliation-work-1',
+    importRunId: null,
+    lastError: null,
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    periodEnd: '2026-03-05T00:00:00.000Z',
+    periodStart: '2026-03-01T00:00:00.000Z',
+    route: '/api/datasources/import/pubmed',
+    runKind: 'manual_full_range',
+    scheduledAt: '2026-03-05T00:00:00.000Z',
+    spoolWindowId: null,
+    startedAt: null,
+    status: 'queued',
+    updatedAt: '2026-03-05T00:00:00.000Z',
   }
-
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-    body: string
+  const parsed = (await runDataSourcesRoute({
+    reconciliationWorkRows: [workRow],
+    requestInit: {method: 'POST'},
+    row: finiteTrackedRow,
+    url: 'http://localhost/api/datasources/datasource-tracked/tracking/reconcile',
+  })) as {
+    body: {data: {dataSource: DataSourceResponseEntry; work: {id: string; runKind: string; status: string}}}
+    runStatements: string[]
     status: number
-    transactionCallCount: number
   }
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.body.data.dataSource.trackingEnabled).toBe(true)
+  expect(parsed.body.data.work).toMatchObject({
+    id: 'manual-reconciliation-work-1',
+    runKind: 'manual_full_range',
+    status: 'queued',
+  })
+  expect(parsed.runStatements.join('\n')).toContain("TIMESTAMPTZ '2026-03-05T00:00:00.000Z'")
+})
+
+test('tracking changes endpoint returns filtered source change rows', async () => {
+  const parsed = (await runDataSourcesRoute({
+    changeRows: [
+      {
+        articleId: 'article-1',
+        changeKind: 'source_record_deleted',
+        changedFields: JSON.stringify({status: ['active', 'deleted']}),
+        createdAt: '2026-03-05T00:00:00.000Z',
+        dataSourceId: trackedRow.id,
+        detectedAt: '2026-03-05T00:00:00.000Z',
+        externalArticleId: 'pmid:1',
+        id: 'change-1',
+        importRouteId: 'import-route-1',
+        importRunId: 'manual-reconciliation-work-1',
+        nextSnapshot: JSON.stringify({}),
+        nextSourceRecordHash: null,
+        previousSnapshot: JSON.stringify({title: 'Old title'}),
+        previousSourceRecordHash: 'hash-old',
+        route: '/api/datasources/import/pubmed',
+        runKind: 'manual_full_range',
+        sourceRecordKey: 'pmid:1',
+      },
+    ],
+    row: trackedRow,
+    url: 'http://localhost/api/datasources/datasource-tracked/tracking/changes?changeKind=source_record_deleted&runKind=manual_full_range',
+  })) as {
+    body: {data: Array<{changeKind: string; runKind: string; sourceRecordKey: string}>; limit: number}
+    status: number
+  }
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.body.limit).toBe(50)
+  expect(parsed.body.data).toHaveLength(1)
+  expect(parsed.body.data[0]).toMatchObject({
+    changeKind: 'source_record_deleted',
+    runKind: 'manual_full_range',
+    sourceRecordKey: 'pmid:1',
+  })
+})
+
+test('structured file datasource patch rejects non-archive edits', async () => {
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {
+      body: JSON.stringify({title: 'Edited title'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    },
+    row: structuredRow,
+    url: 'http://localhost/api/datasources/datasource-1',
+  })) as {body: string; status: number; transactionCallCount: number}
 
   expect(parsed.status).toBe(500)
   expect(parsed.body).toContain('Imported XML/JSON data sources are immutable and can only be archived')
   expect(parsed.transactionCallCount).toBe(0)
 })
 
-test('covidence datasource patch rejects non-archive edits', () => {
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {mock} = await import('bun:test')
-        const {Elysia} = await import('elysia')
-
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
-        const row = ${JSON.stringify(covidenceRow)}
-        const state = {transactionCallCount: 0}
-
-        void mock.module(appDatabaseServiceModulePath, () => {
-          return {
-            getAppDatabaseService: () => {
-              return {
-                queryJson: async () => [row],
-                run: async () => {},
-                transaction: async () => {
-                  state.transactionCallCount += 1
-                  throw new Error('transaction should not be used')
-                },
-              }
-            },
-          }
-        })
-
-        const {dataSourcesRoutes} = await import('./src/server/routes/DataSourcesRoutes.ts?test=' + Date.now())
-        const app = new Elysia().use(dataSourcesRoutes)
-        const response = await app.handle(
-          new Request('http://localhost/api/datasources/datasource-2', {
-            method: 'PATCH',
-            headers: {'content-type': 'application/json'},
-            body: JSON.stringify({title: 'Edited title'}),
-          }),
-        )
-        console.log(JSON.stringify({body: await response.text(), status: response.status, transactionCallCount: state.transactionCallCount}))
-      `,
-    ],
-    {cwd: process.cwd(), env: process.env},
-  )
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Covidence patch rejection test failed')
-  }
-
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-    body: string
-    status: number
-    transactionCallCount: number
-  }
+test('covidence datasource patch rejects non-archive edits', async () => {
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {
+      body: JSON.stringify({title: 'Edited title'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    },
+    row: covidenceRow,
+    url: 'http://localhost/api/datasources/datasource-2',
+  })) as {body: string; status: number; transactionCallCount: number}
 
   expect(parsed.status).toBe(500)
   expect(parsed.body).toContain('Imported XML/JSON data sources are immutable and can only be archived')
