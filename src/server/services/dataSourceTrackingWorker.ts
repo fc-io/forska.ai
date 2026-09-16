@@ -200,7 +200,7 @@ const getClaimedSourceResult = async ({
 }: {
   dataSource: DataSourceRecord
   fetchLeaseMs: number
-  assertSpoolCapacity: () => Promise<void> | void
+  assertSpoolCapacity: (input?: {window?: {id: string}}) => Promise<void> | void
   maxPendingPages: number
   leaseOwner: string
   now: Date
@@ -269,9 +269,9 @@ const getClaimedSourceResult = async ({
       leaseDurationMs: fetchLeaseMs,
       operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchWindowToSpool({
-          assertPageAppendAllowed: async () => {
+          assertPageAppendAllowed: async ({window}) => {
             await assertLeaseOwned()
-            await assertSpoolCapacity()
+            await assertSpoolCapacity({window})
             await assertLeaseOwned()
           },
           dataSource,
@@ -342,7 +342,7 @@ const getClaimedReconciliationResult = async ({
 }: {
   dataSource: DataSourceRecord
   fetchLeaseMs: number
-  assertSpoolCapacity: () => Promise<void> | void
+  assertSpoolCapacity: (input?: {window?: {id: string}}) => Promise<void> | void
   maxPendingPages: number
   leaseOwner: string
   now: Date
@@ -378,9 +378,9 @@ const getClaimedReconciliationResult = async ({
       leaseDurationMs: fetchLeaseMs,
       operation: async ({assertLeaseOwned}) => {
         return await trackedImportService.fetchReconciliationWorkToSpool({
-          assertPageAppendAllowed: async () => {
+          assertPageAppendAllowed: async ({window}) => {
             await assertLeaseOwned()
-            await assertSpoolCapacity()
+            await assertSpoolCapacity({window})
             await assertLeaseOwned()
           },
           dataSource,
@@ -504,6 +504,25 @@ export const createDataSourceTrackingWorker = ({
 
       return backpressureSignal
     }
+    const promoteRetryableFetchFailedWindowForIngest = (input?: {dataSourceId?: string; windowId?: string | null}) => {
+      const promote = (
+        spoolRepository as {
+          promoteRetryableFetchFailedWindowForIngest?: (promoteInput: {
+            dataSourceId?: string
+            now: Date
+            windowId?: string | null
+          }) => unknown
+        }
+      ).promoteRetryableFetchFailedWindowForIngest
+
+      const promoted = promote?.({dataSourceId: input?.dataSourceId, now, windowId: input?.windowId ?? null})
+
+      if (promoted) {
+        refreshBackpressureSignal()
+      }
+
+      return Boolean(promoted)
+    }
     const assertSpoolCapacity = () => {
       const signal = spoolRepository.getBackpressureSignal({maxPendingPages, maxPendingWindows})
 
@@ -523,12 +542,13 @@ export const createDataSourceTrackingWorker = ({
     let claimedSourceCount = 0
 
     for (const dueSource of dueSources) {
-      if (
-        refreshBackpressureSignal().backpressureActive
-        && !spoolRepository.hasRetryableFetchFailedWindow({dataSourceId: dueSource.dataSourceId, now})
-      ) {
-        sourceResults.push({dataSourceId: dueSource.dataSourceId, reason: 'backpressure', status: 'skipped'})
-        continue
+      if (refreshBackpressureSignal().backpressureActive) {
+        const promoted = promoteRetryableFetchFailedWindowForIngest({dataSourceId: dueSource.dataSourceId})
+
+        if (promoted || !spoolRepository.hasRetryableFetchFailedWindow({dataSourceId: dueSource.dataSourceId, now})) {
+          sourceResults.push({dataSourceId: dueSource.dataSourceId, reason: 'backpressure', status: 'skipped'})
+          continue
+        }
       }
 
       const claim = await trackingRepository.claimDueSource({
@@ -578,7 +598,13 @@ export const createDataSourceTrackingWorker = ({
     const canClaimReconciliationWork = () => {
       const signal = refreshBackpressureSignal()
 
-      return !signal.backpressureActive || spoolRepository.hasRetryableFetchFailedWindow({now})
+      if (!signal.backpressureActive) {
+        return true
+      }
+
+      const promoted = promoteRetryableFetchFailedWindowForIngest()
+
+      return !promoted && spoolRepository.hasRetryableFetchFailedWindow({now})
     }
 
     if (canClaimReconciliationWork()) {

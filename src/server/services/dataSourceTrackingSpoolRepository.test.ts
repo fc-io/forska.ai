@@ -152,6 +152,42 @@ test('tracking spool ingest claims are idempotent until lease expiry and cleanup
   })
 })
 
+test('tracking spool cleanup removes aged rejected payloads', () => {
+  withSpoolRepository((repository) => {
+    const window = repository.createOrResumeWindow({
+      dataSourceId: 'source-1',
+      route: '/api/datasources/import/europe-pmc-ppr',
+      runKind: 'automatic_age_bucket',
+      windowEnd: new Date('2026-07-01T00:00:00.000Z'),
+      windowStart: new Date('2026-06-01T00:00:00.000Z'),
+    })
+
+    repository.appendPage({
+      cursorAfter: 'cursor-after-page-1',
+      cursorBefore: null,
+      normalizedRecordsJson: [{id: 'article-1'}],
+      pageIndex: 0,
+      rawPayloadJson: {page: 1},
+      sourceRecordCount: 1,
+      sourceRecordHash: 'hash-page-1',
+      windowId: window.id,
+    })
+    repository.markWindowRejected({
+      error: 'Tracked data source configuration changed',
+      now: new Date('2026-09-15T09:00:00.000Z'),
+      windowId: window.id,
+    })
+
+    const earlyCleanup = repository.cleanupIngested({ingestedBefore: new Date('2026-09-15T08:59:00.000Z'), limit: 10})
+    const cleanup = repository.cleanupIngested({ingestedBefore: new Date('2026-09-15T09:01:00.000Z'), limit: 10})
+
+    expect(earlyCleanup).toEqual({pagesDeleted: 0, windowsDeleted: 0})
+    expect(cleanup).toEqual({pagesDeleted: 1, windowsDeleted: 1})
+    expect(repository.getWindow(window.id)).toBeNull()
+    expect(repository.getWindowPages(window.id)).toEqual([])
+  })
+})
+
 test('tracking spool reports backlog backpressure and preserves failed-window backoff evidence', () => {
   withSpoolRepository((repository) => {
     const firstWindow = repository.createOrResumeWindow({
@@ -250,6 +286,22 @@ test('tracking spool counts fetching pages toward backpressure', () => {
     expect(
       repository.hasRetryableFetchFailedWindow({dataSourceId: 'source-1', now: new Date('2026-09-15T09:00:00.000Z')}),
     ).toBe(true)
+
+    const promoted = repository.promoteRetryableFetchFailedWindowForIngest({
+      dataSourceId: 'source-1',
+      now: new Date('2026-09-15T09:00:00.000Z'),
+    })
+
+    expect(promoted?.id).toBe(window.id)
+    expect(promoted?.status).toBe('ready')
+    expect(
+      repository.claimReadyWindowsForIngest({
+        leaseExpiresAt: new Date('2026-09-15T09:05:00.000Z'),
+        leaseOwner: 'ingest-worker-a',
+        limit: 10,
+        now: new Date('2026-09-15T09:00:01.000Z'),
+      }),
+    ).toHaveLength(1)
   })
 })
 

@@ -255,7 +255,7 @@ test('topology judgment completion requires projection evidence and refresh acks
   ).toBe(false)
 })
 
-test('topology judgment completion accepts terminal idle local stores when projection evidence lags', () => {
+test('topology judgment completion still requires visible projection evidence when local stores are terminal', () => {
   const terminalJob = {
     claims: [],
     health: {
@@ -283,7 +283,7 @@ test('topology judgment completion accepts terminal idle local stores when proje
       totalJudgments: 4,
       visibleProjectionCount: 0,
     }),
-  ).toBe(true)
+  ).toBe(false)
 })
 
 test('topology refresh ack evidence accepts only matched or inapplicable ack state', () => {

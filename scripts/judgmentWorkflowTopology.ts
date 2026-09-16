@@ -118,7 +118,6 @@ export const hasTopologyTerminalJobStores = (jobs: TopologyJobStoreWorkflowState
 
 export const isTopologyJudgmentWorkflowComplete = ({
   hasReconciledProjectRefreshAcks,
-  hasTerminalJobStores,
   totalJudgments,
   visibleProjectionCount,
 }: {
@@ -129,7 +128,7 @@ export const isTopologyJudgmentWorkflowComplete = ({
 }) => {
   if (totalJudgments !== 4) return false
 
-  return hasReconciledProjectRefreshAcks && (visibleProjectionCount === 4 || hasTerminalJobStores)
+  return hasReconciledProjectRefreshAcks && visibleProjectionCount === 4
 }
 
 export const hasTopologyReconciledProjectRefreshAcks = (
