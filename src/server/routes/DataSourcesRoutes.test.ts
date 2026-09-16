@@ -633,6 +633,28 @@ test('datasource patch rewinds tracking and invalidates stale reconciliation wor
   expect(statements).toContain("period_end > TIMESTAMPTZ '2026-03-03T00:00:00.000Z'")
 })
 
+test('datasource patch rewinds disabled tracking state when bounds change before re-enable', async () => {
+  const disabledTrackedRow = {...trackedRow, trackingEnabled: false}
+  const parsed = (await runDataSourcesRoute({
+    requestInit: {
+      body: JSON.stringify({dateFrom: '2026-02-01'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    },
+    row: disabledTrackedRow,
+    url: 'http://localhost/api/datasources/datasource-tracked',
+  })) as {runStatements: string[]; status: number; transactionCallCount: number}
+  const statements = parsed.runStatements.join('\n')
+
+  expect(parsed.status).toBe(200)
+  expect(parsed.transactionCallCount).toBe(1)
+  expect(statements).toContain('UPDATE app.data_source_tracking_state')
+  expect(statements).toContain('high_water_completed_at = NULL')
+  expect(statements).toContain('active_window_start = NULL')
+  expect(statements).toContain('DELETE FROM app.data_source_reconciliation_work')
+  expect(statements).toContain("period_start < TIMESTAMPTZ '2026-02-01T00:00:00.000Z'")
+})
+
 test('tracking changes endpoint returns filtered source change rows', async () => {
   const parsed = (await runDataSourcesRoute({
     changeRows: [

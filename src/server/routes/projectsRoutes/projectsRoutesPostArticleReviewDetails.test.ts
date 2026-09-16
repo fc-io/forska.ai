@@ -424,10 +424,15 @@ test('project review details returns unavailable when V4 article detail is unava
   }
 
   const response = await postReviewDetailsRequest()
-  const body = (await response.json()) as {article: null; reason: string; status: string}
+  const body = (await response.json()) as {article: null; reason: string; repairRequested: boolean; status: string}
 
   expect(response.status).toBe(200)
-  expect(body).toMatchObject({article: null, reason: 'snapshot unavailable', status: 'unavailable'})
+  expect(body).toMatchObject({
+    article: null,
+    reason: 'snapshot unavailable',
+    repairRequested: true,
+    status: 'unavailable',
+  })
   expect(reviewServingV4RebuildRequestsRef.current).toEqual([
     {
       components: ['posting', 'summary', 'payload'],
@@ -448,10 +453,20 @@ test('project review details does not fall back to app judgments when V4 judgmen
   }
 
   const response = await postReviewDetailsRequest()
-  const body = (await response.json()) as {judgments: unknown[]; reason: string; status: string}
+  const body = (await response.json()) as {
+    judgments: unknown[]
+    reason: string
+    repairRequested: boolean
+    status: string
+  }
 
   expect(response.status).toBe(200)
-  expect(body).toMatchObject({judgments: [], reason: 'detail judgments unavailable', status: 'unavailable'})
+  expect(body).toMatchObject({
+    judgments: [],
+    reason: 'detail judgments unavailable',
+    repairRequested: true,
+    status: 'unavailable',
+  })
   expect(reviewServingV4RebuildRequestsRef.current).toEqual([
     {
       components: ['posting', 'summary', 'payload'],

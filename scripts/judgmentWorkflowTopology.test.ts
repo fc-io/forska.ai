@@ -19,9 +19,9 @@ import {
   hasTopologyReconciledProjectRefreshAcks,
   isExpectedTopologyShutdownExitCode,
   isExpectedTopologySupervisorLockMetadata,
-  isTopologyJudgmentWorkflowComplete,
   isRuntimeMonitorTargetHealthy,
   isTopologyJobCleanupComplete,
+  isTopologyJudgmentWorkflowComplete,
   startJudgmentWorkflowTopology,
   topologyLongRunningProcessStdio,
   topologyProjectorQuietWindowMs,
@@ -260,13 +260,7 @@ test('topology refresh ack evidence accepts only matched or inapplicable ack sta
     },
     scanState: {lastProjectRefreshAckSeq: null},
   }
-  const matchedAck = {
-    health: {
-      ...inapplicableAck.health,
-      lastAckSeq: 12,
-    },
-    scanState: {lastProjectRefreshAckSeq: 12},
-  }
+  const matchedAck = {health: {...inapplicableAck.health, lastAckSeq: 12}, scanState: {lastProjectRefreshAckSeq: 12}}
 
   expect(hasTopologyReconciledProjectRefreshAcks([inapplicableAck, matchedAck])).toBe(true)
   expect(
@@ -280,9 +274,7 @@ test('topology refresh ack evidence accepts only matched or inapplicable ack sta
     ]),
   ).toBe(false)
   expect(
-    hasTopologyReconciledProjectRefreshAcks([
-      {...inapplicableAck, scanState: {lastProjectRefreshAckSeq: 11}},
-    ]),
+    hasTopologyReconciledProjectRefreshAcks([{...inapplicableAck, scanState: {lastProjectRefreshAckSeq: 11}}]),
   ).toBe(false)
 })
 
