@@ -20,6 +20,7 @@ import {
 } from './reviewServingDirtyWorkService.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
+  failSupersededCandidateReviewServingSnapshotManifests,
   getActiveReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingProjectionIdentityManifestInput,
@@ -944,6 +945,10 @@ export const activateReviewServingProjectorSnapshot = async (
         AND snapshot_status = 'candidate'
     `)
   await markActivatedProjectionManifests(refreshedCandidate, database)
+  await failSupersededCandidateReviewServingSnapshotManifests(
+    {projectId: input.projectId, promotedSnapshotId: input.snapshotId},
+    database,
+  )
 
   const dirtyWorkCompletion = await completeReviewServingDirtyWorkCoveredByRebuild(
     await getPromotedReviewServingSnapshotDirtyWorkCoverages(refreshedCandidate, database),

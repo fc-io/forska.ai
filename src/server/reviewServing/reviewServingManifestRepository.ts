@@ -677,6 +677,251 @@ export const markCandidateReviewServingSnapshotManifestFailed = async (
   `)
 }
 
+export type ReviewServingCandidateSnapshotSupersessionRow = {
+  createdAt: string | null
+  hasInFlightRebuild: boolean
+  isOlderThanReference: boolean
+  lastError: string | null
+  referenceSnapshotId: string
+  reviewConfigHash: string | null
+  snapshotId: string
+}
+
+type CandidateSnapshotSupersessionRow = {
+  createdAt: string | null
+  hasInFlightRebuild: boolean | number | string | null
+  isOlderThanReference: boolean | number | string | null
+  lastError: string | null
+  referenceSnapshotId: string
+  reviewConfigHash: string | null
+  snapshotId: string
+}
+
+const nonTerminalReviewServingRebuildRequestStatuses = [
+  'pending_admission',
+  'admitted',
+  'running',
+  'blocked_over_budget',
+  'quarantined',
+] as const
+const inFlightReviewServingRebuildChunkStatuses = ['pending', 'running'] as const
+
+const getSqlBoolean = (value: boolean | number | string | null | undefined) => {
+  return value === true || value === 1 || value === 'true' || value === 't' || value === '1'
+}
+
+const getCandidateSnapshotSupersessionRowFromRow = (
+  row: CandidateSnapshotSupersessionRow,
+): ReviewServingCandidateSnapshotSupersessionRow => {
+  return {
+    createdAt: row.createdAt === null || row.createdAt === undefined ? null : String(row.createdAt),
+    hasInFlightRebuild: getSqlBoolean(row.hasInFlightRebuild),
+    isOlderThanReference: getSqlBoolean(row.isOlderThanReference),
+    lastError: row.lastError ?? null,
+    referenceSnapshotId: row.referenceSnapshotId,
+    reviewConfigHash: row.reviewConfigHash ?? null,
+    snapshotId: row.snapshotId,
+  }
+}
+
+/**
+ * Lists candidate snapshots for a project next to a reference snapshot that shares the same
+ * review config hash. The reference is either an explicit snapshot (typically one that was just
+ * promoted) or, when omitted, every active snapshot of the project.
+ *
+ * `hasInFlightRebuild` is true when any rebuild chunk targeting the candidate snapshot is still
+ * pending/running or belongs to a non-terminal rebuild request. Such candidates are still being
+ * built (the V4 rebuild service reuses them as bootstrap seeds) and must never be failed
+ * automatically. `isOlderThanReference` compares the candidate row creation time with the
+ * reference activation (or creation) time.
+ */
+export const getCandidateReviewServingSnapshotSupersessionRows = async (
+  input: {projectId: string; referenceSnapshotId?: string | null; snapshotId?: string | null},
+  database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
+): Promise<ReviewServingCandidateSnapshotSupersessionRow[]> => {
+  const referencePredicate =
+    input.referenceSnapshotId === null || input.referenceSnapshotId === undefined
+      ? `snapshot_status = 'active'`
+      : `snapshot_id = ${getSqlLiteral(input.referenceSnapshotId)}`
+  const candidatePredicate =
+    input.snapshotId === null || input.snapshotId === undefined
+      ? ''
+      : `AND candidate.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
+  const nonTerminalRequestStatusSql = nonTerminalReviewServingRebuildRequestStatuses.map(getSqlLiteral).join(', ')
+  const inFlightChunkStatusSql = inFlightReviewServingRebuildChunkStatuses.map(getSqlLiteral).join(', ')
+  const rows = await database.queryJson<CandidateSnapshotSupersessionRow>(`
+    WITH reference_snapshot AS (
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        COALESCE(activated_at, created_at) AS reference_at
+      FROM app.review_serving_snapshot_manifest
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND ${referencePredicate}
+    )
+    SELECT
+      candidate.snapshot_id AS snapshotId,
+      candidate.review_config_hash AS reviewConfigHash,
+      CAST(candidate.created_at AS VARCHAR) AS createdAt,
+      candidate.last_error AS lastError,
+      reference.snapshot_id AS referenceSnapshotId,
+      CAST(COALESCE(candidate.created_at < reference.reference_at, FALSE) AS BOOLEAN) AS isOlderThanReference,
+      CAST(EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        LEFT JOIN app.review_rebuild_request request
+          ON chunk.request_id IS NOT NULL
+          AND (request.request_id || '') = chunk.request_id
+        WHERE chunk.project_id IS NOT DISTINCT FROM candidate.project_id
+          AND chunk.snapshot_id IS NOT DISTINCT FROM candidate.snapshot_id
+          AND (
+            chunk.status IN (${inFlightChunkStatusSql})
+            OR request.status IN (${nonTerminalRequestStatusSql})
+          )
+      ) AS BOOLEAN) AS hasInFlightRebuild
+    FROM app.review_serving_snapshot_manifest candidate
+    INNER JOIN reference_snapshot reference
+      ON reference.project_id = candidate.project_id
+      AND reference.review_config_hash IS NOT DISTINCT FROM candidate.review_config_hash
+      AND reference.snapshot_id <> candidate.snapshot_id
+    WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
+      AND candidate.snapshot_status = 'candidate'
+      ${candidatePredicate}
+    ORDER BY candidate.created_at ASC NULLS FIRST, candidate.snapshot_id ASC
+  `)
+
+  return rows.map(getCandidateSnapshotSupersessionRowFromRow)
+}
+
+export const isSupersededCandidateReviewServingSnapshot = (row: ReviewServingCandidateSnapshotSupersessionRow) => {
+  return !row.hasInFlightRebuild && row.isOlderThanReference
+}
+
+export const getSupersededCandidateReviewServingSnapshotLastError = (referenceSnapshotId: string) => {
+  return `superseded by snapshot ${referenceSnapshotId}`
+}
+
+/**
+ * Marks candidate snapshots that were superseded by the given (just promoted) snapshot as failed.
+ * Only candidates created before the promoted snapshot and without any in-flight rebuild are
+ * touched; a newer candidate that is still being built keeps its status.
+ */
+export const failSupersededCandidateReviewServingSnapshotManifests = async (
+  input: {projectId: string; promotedSnapshotId: string},
+  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+) => {
+  const rows = await getCandidateReviewServingSnapshotSupersessionRows(
+    {projectId: input.projectId, referenceSnapshotId: input.promotedSnapshotId},
+    database,
+  )
+  const supersededSnapshotIds = [
+    ...new Set(
+      rows.filter(isSupersededCandidateReviewServingSnapshot).map((row) => {
+        return row.snapshotId
+      }),
+    ),
+  ]
+  const skippedInFlightSnapshotIds = [
+    ...new Set(
+      rows
+        .filter((row) => {
+          return row.hasInFlightRebuild
+        })
+        .map((row) => {
+          return row.snapshotId
+        }),
+    ),
+  ]
+
+  await supersededSnapshotIds.reduce<Promise<void>>(async (previous, snapshotId) => {
+    await previous
+    await markCandidateReviewServingSnapshotManifestFailed(
+      {
+        lastError: getSupersededCandidateReviewServingSnapshotLastError(input.promotedSnapshotId),
+        projectId: input.projectId,
+        snapshotId,
+      },
+      database,
+    )
+  }, Promise.resolve())
+
+  return {skippedInFlightSnapshotIds, supersededSnapshotIds}
+}
+
+export type FailStaleCandidateReviewServingSnapshotManifestsResult = {
+  applied: boolean
+  failedSnapshotIds: string[]
+  projectId: string
+  skipped: Array<{reasons: string[]; referenceSnapshotId: string; snapshotId: string}>
+  snapshotId: string | null
+  staleCandidates: ReviewServingCandidateSnapshotSupersessionRow[]
+  status: 'applied' | 'dry_run'
+}
+
+/**
+ * Operator recovery for candidate snapshots that were left behind (for example after a rebuild
+ * request failed validation before the candidate was marked failed). Stale means: still
+ * `candidate`, older than the active snapshot with the same review config hash, and not referenced
+ * by any in-flight rebuild chunk or non-terminal rebuild request. Dry-run only reports.
+ */
+export const failStaleCandidateReviewServingSnapshotManifests = async (
+  input: {apply?: boolean; projectId: string; snapshotId?: string | null},
+  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+): Promise<FailStaleCandidateReviewServingSnapshotManifestsResult> => {
+  const apply = input.apply === true
+  const snapshotId = input.snapshotId ?? null
+  const rows = await getCandidateReviewServingSnapshotSupersessionRows(
+    {projectId: input.projectId, referenceSnapshotId: null, snapshotId},
+    database,
+  )
+  const staleCandidates = rows.filter(isSupersededCandidateReviewServingSnapshot)
+  const skipped = rows
+    .filter((row) => {
+      return !isSupersededCandidateReviewServingSnapshot(row)
+    })
+    .map((row) => {
+      return {
+        reasons: [
+          ...(row.hasInFlightRebuild ? ['referenced_by_in_flight_rebuild'] : []),
+          ...(row.isOlderThanReference ? [] : ['not_older_than_active_snapshot']),
+        ],
+        referenceSnapshotId: row.referenceSnapshotId,
+        snapshotId: row.snapshotId,
+      }
+    })
+  const failedSnapshotIds = apply
+    ? await staleCandidates.reduce<Promise<string[]>>(async (previous, row) => {
+        const failed = await previous
+
+        if (failed.includes(row.snapshotId)) {
+          return failed
+        }
+
+        await markCandidateReviewServingSnapshotManifestFailed(
+          {
+            lastError: `${getSupersededCandidateReviewServingSnapshotLastError(row.referenceSnapshotId)} (operator failStaleReviewServingCandidateSnapshots)`,
+            projectId: input.projectId,
+            snapshotId: row.snapshotId,
+          },
+          database,
+        )
+
+        return [...failed, row.snapshotId]
+      }, Promise.resolve([]))
+    : []
+
+  return {
+    applied: apply,
+    failedSnapshotIds,
+    projectId: input.projectId,
+    skipped,
+    snapshotId,
+    staleCandidates,
+    status: apply ? 'applied' : 'dry_run',
+  }
+}
+
 export const getActiveReviewServingSnapshotManifest = async (
   input: {
     componentStateMode?: ReviewServingSnapshotComponentStateMode
