@@ -10,6 +10,20 @@ export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]; nextCursor:
 
 const getPromptsLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const getPromptsComponent = 'judgmentsJobsCronGetPrompts'
+const judgmentJobMetadataTimeoutMs = 2_000
+
+const getJudgmentJobMetadataWorkloadContext = (input: {jobId: string; projectId: string; routeSuffix: string}) => {
+  return {
+    allowsTempSpill: false,
+    fallbackIntent: 'reject' as const,
+    maxResultRows: 1,
+    projectId: input.projectId,
+    routeOrJobKey: `judgmentQueue.${input.jobId}.${input.routeSuffix}`,
+    timeoutMs: judgmentJobMetadataTimeoutMs,
+    timeoutScope: 'execution' as const,
+    workloadClass: 'judgmentJobMetadata',
+  }
+}
 
 const getUnassessedPairsCursor = (cursor: JobCursor | null) => {
   return cursor ? {...cursor, priorityBucket: Number(cursor.priorityBucket ?? 0)} : null
@@ -35,15 +49,7 @@ export const judgmentsJobsCronGetPrompts = async (
       WHERE id = '${escapeSqlString(projectId)}'
       LIMIT 1
     `,
-      {
-        allowsTempSpill: false,
-        fallbackIntent: 'reject',
-        maxResultRows: 1,
-        projectId,
-        routeOrJobKey: `judgmentQueue.${jobId}.project`,
-        timeoutMs: 2_000,
-        workloadClass: 'judgmentJobMetadata',
-      },
+      getJudgmentJobMetadataWorkloadContext({jobId, projectId, routeSuffix: 'project'}),
     ),
     getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{count: number}>(
       `
@@ -52,15 +58,7 @@ export const judgmentsJobsCronGetPrompts = async (
       WHERE project_id = '${escapeSqlString(projectId)}'
         AND enabled = TRUE
     `,
-      {
-        allowsTempSpill: false,
-        fallbackIntent: 'reject',
-        maxResultRows: 1,
-        projectId,
-        routeOrJobKey: `judgmentQueue.${jobId}.enabledPromptCount`,
-        timeoutMs: 2_000,
-        workloadClass: 'judgmentJobMetadata',
-      },
+      getJudgmentJobMetadataWorkloadContext({jobId, projectId, routeSuffix: 'enabledPromptCount'}),
     ),
   ])
 

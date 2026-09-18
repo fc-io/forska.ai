@@ -11,6 +11,7 @@ import {
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
 } from './providerAdmissionLease.ts'
+import type {CleanupStaleBudget} from './judgmentsJobsCleanupStale.ts'
 
 setDefaultTimeout(120_000)
 
@@ -25,6 +26,14 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
 let judgmentsJobsCleanupStale: ((options?: Record<string, number>) => Promise<unknown>) | null = null
+let reconcileProviderAdmissionLeasesForDurableCloseout:
+  | ((options?: {
+      budget?: CleanupStaleBudget
+      maxExpiredLeaseDeletes?: number
+      maxProviderKeys?: number
+      maxProjectionCloseoutProbes?: number
+    }) => Promise<{limited: boolean; rowsChanged: number}>)
+  | null = null
 let runStartupJudgmentRolloutCleanup: ((input: {claimedBy: string}) => Promise<unknown>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
@@ -103,6 +112,7 @@ beforeAll(async () => {
     return database.close()
   }
   judgmentsJobsCleanupStale = cleanupModule.judgmentsJobsCleanupStale
+  reconcileProviderAdmissionLeasesForDurableCloseout = cleanupModule.reconcileProviderAdmissionLeasesForDurableCloseout
   runStartupJudgmentRolloutCleanup = rolloutCleanupModule.runStartupJudgmentRolloutCleanup
   queryDatabase = <T>(statement: string) => {
     return database.queryJson<T>(statement)
@@ -1400,6 +1410,153 @@ test('cleanupStale releases request leases through projected closeouts only', as
     {leaseIdentity: projectedProbeLeaseIdentity, leaseKind: 'probe', providerKey: projectedProviderKey},
     {leaseIdentity: unprojectedRequestLeaseIdentity, leaseKind: 'request', providerKey: unprojectedProviderKey},
   ])
+})
+
+test('cleanupStale skips projected closeout proof scan when remaining budget is too small', async () => {
+  if (!queryDatabase || !reconcileProviderAdmissionLeasesForDurableCloseout || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const timestamp = Date.now()
+  const projectedProviderKey = `cleanup-stale-budget-projected-provider-${timestamp}`
+  const projectedRequestAttemptId = `cleanup-stale-budget-projected-attempt-${timestamp}`
+  const projectedRequestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity(projectedRequestAttemptId)
+  const projectedTokenUseId = `cleanup-stale-budget-projected-token-use-${timestamp}`
+  const projectedDurableCloseoutRefJson = JSON.stringify({
+    id: projectedTokenUseId,
+    kind: 'token_use',
+    requestAttemptId: projectedRequestAttemptId,
+  })
+  const expiredProviderKey = `cleanup-stale-budget-expired-provider-${timestamp}`
+  const expiredRequestAttemptId = `cleanup-stale-budget-expired-attempt-${timestamp}`
+  const expiredRequestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity(expiredRequestAttemptId)
+  const nowMs = Date.now()
+  const budget: CleanupStaleBudget = {
+    deadlineMs: nowMs + 1,
+    maxDrainingJobs: 0,
+    maxDuckdbSteps: 16,
+    maxRepairActions: 0,
+    maxSqliteJobActions: 0,
+    maxSqliteRetentionBatches: 0,
+    maxSqliteRetentionRows: 0,
+    maxSqliteRowsPerJob: 0,
+    now: new Date(nowMs),
+    serverJobId: 'cleanup-stale-budget-test',
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_admission_lease (
+      provider_key,
+      lease_kind,
+      lease_identity,
+      request_attempt_id,
+      endpoint_availability_key,
+      probe_attempt_id,
+      holder_token,
+      acquired_at,
+      heartbeat_at,
+      expires_at
+    ) VALUES
+      (
+        ${getSqlLiteral(projectedProviderKey)},
+        'request',
+        ${getSqlLiteral(projectedRequestLeaseIdentity)},
+        ${getSqlLiteral(projectedRequestAttemptId)},
+        NULL,
+        NULL,
+        'projected-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
+      ),
+      (
+        ${getSqlLiteral(expiredProviderKey)},
+        'request',
+        ${getSqlLiteral(expiredRequestLeaseIdentity)},
+        ${getSqlLiteral(expiredRequestAttemptId)},
+        NULL,
+        NULL,
+        'expired-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:01.000Z'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.request_attempt_closeout (
+      token_use_id,
+      token_use_created_at,
+      request_attempt_id,
+      provider_key,
+      closeout_kind,
+      durable_closeout_kind,
+      durable_closeout_id,
+      durable_closeout_ref_json,
+      closed_at
+    ) VALUES (
+      ${getSqlLiteral(projectedTokenUseId)},
+      TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+      ${getSqlLiteral(projectedRequestAttemptId)},
+      ${getSqlLiteral(projectedProviderKey)},
+      'token_use',
+      'token_use',
+      ${getSqlLiteral(projectedTokenUseId)},
+      CAST(${getSqlLiteral(projectedDurableCloseoutRefJson)} AS JSON),
+      TIMESTAMPTZ '2026-05-04T10:00:01.000Z'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.request_attempt_closeout (
+      token_use_id,
+      token_use_created_at,
+      request_attempt_id,
+      provider_key,
+      closeout_kind,
+      durable_closeout_kind,
+      durable_closeout_id,
+      durable_closeout_ref_json,
+      closed_at
+    )
+    SELECT
+      'cleanup-stale-budget-noise-token-use-' || i::VARCHAR,
+      TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+      'cleanup-stale-budget-noise-attempt-' || i::VARCHAR,
+      'cleanup-stale-budget-noise-provider',
+      'token_use',
+      'token_use',
+      'cleanup-stale-budget-noise-token-use-' || i::VARCHAR,
+      CAST('{"kind":"token_use","id":"cleanup-stale-budget-noise","requestAttemptId":"cleanup-stale-budget-noise"}' AS JSON),
+      TIMESTAMPTZ '2026-05-04T10:00:01.000Z'
+    FROM range(0, 10001) AS noise(i)
+  `)
+
+  const result = await reconcileProviderAdmissionLeasesForDurableCloseout({
+    budget,
+    maxExpiredLeaseDeletes: 10,
+    maxProviderKeys: 1000,
+    maxProjectionCloseoutProbes: 500,
+  })
+  const rows = await queryDatabase<{leaseIdentity: string; providerKey: string}>(`
+    SELECT
+      provider_key AS providerKey,
+      lease_identity AS leaseIdentity
+    FROM app.provider_admission_lease
+    WHERE provider_key IN (${getSqlLiteral(projectedProviderKey)}, ${getSqlLiteral(expiredProviderKey)})
+    ORDER BY provider_key ASC, lease_identity ASC
+  `)
+
+  expect(result.limited).toBe(true)
+  expect(rows).toEqual([{leaseIdentity: projectedRequestLeaseIdentity, providerKey: projectedProviderKey}])
+
+  await runDatabase(`
+    DELETE FROM app.provider_admission_lease
+    WHERE provider_key IN (${getSqlLiteral(projectedProviderKey)}, ${getSqlLiteral(expiredProviderKey)})
+  `)
+  await runDatabase(`
+    DELETE FROM app.request_attempt_closeout
+    WHERE request_attempt_id = ${getSqlLiteral(projectedRequestAttemptId)}
+      OR request_attempt_id LIKE 'cleanup-stale-budget-noise-attempt-%'
+  `)
 })
 
 test('startup rollout cleanup skips historical token-use backfill and releases projected request leases', async () => {

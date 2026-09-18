@@ -2,6 +2,7 @@ import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
+import {judgmentBacklogControllerConstants} from './judgmentBacklogController.ts'
 import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
 import type {JobCursor} from './judgmentJobSqliteService.ts'
 import {
@@ -35,9 +36,9 @@ const addToQueueWarningLogger = createRateLimitedLogger({sink: 'both', windowMs:
 const addToQueueComponent = 'judgmentsJobsAddToQueue'
 const sqliteScanOverscanMultiplier = 1
 const sqliteScanMaxWindowsPerTick = 1
-const sqliteScanMaxWindowSize = 128
+const sqliteScanMaxWindowSize = 512
 const sqliteScanExhaustedCooldownMs = 60_000
-const defaultServingQueueReadTimeoutMs = 5_000
+const defaultServingQueueReadTimeoutMs = 15_000
 const servingQueueReadTimeoutCooldownMs = 30_000
 const sqliteActiveBacklogRefillLowWatermarkRatio = 1
 const sqliteActiveBacklogRefillLowWatermarkMinimumTarget = 32
@@ -46,13 +47,21 @@ const servingQueueReadTimeoutCooldownUntilByJobId = new Map<string, number>()
 
 type AddToQueueBucket = {addToQueueMaxBatchSize: number; jobs: Job[]; label: string; readyTargetPerJob: number}
 
-const getReadyTargetMultiplier = () => {
+const getReadyTargetMultiplier = (minimumMultiplier = 1) => {
   const readyTargetMultiplier = Math.max(1, inferenceRuntimeConfig.judgmentsReadyTargetMultiplier)
-  return readyTargetMultiplier
+  return Math.max(minimumMultiplier, readyTargetMultiplier)
 }
 
-const getBucketReadyTargetPerJob = ({jobCount, maxInflight}: {jobCount: number; maxInflight: number}) => {
-  const readyTargetTotal = Math.max(1, maxInflight) * getReadyTargetMultiplier()
+const getBucketReadyTargetPerJob = ({
+  jobCount,
+  maxInflight,
+  minimumMultiplier = 1,
+}: {
+  jobCount: number
+  maxInflight: number
+  minimumMultiplier?: number
+}) => {
+  const readyTargetTotal = Math.max(1, maxInflight) * getReadyTargetMultiplier(minimumMultiplier)
   const normalizedJobCount = Math.max(1, jobCount)
   return Math.max(1, Math.ceil(readyTargetTotal / normalizedJobCount))
 }
@@ -84,13 +93,28 @@ const getAddToQueueBucketLabel = (job: Job, providerKey: string): string => {
   return providerKey.includes(':') ? providerKey : `${isCodexJob(job) ? 'codex' : 'provider'}:${providerKey}`
 }
 
+const getPositiveJobLimit = (value: number | null | undefined): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : null
+}
+
+const getConfiguredJobMaxInflight = (job: Job): number | null => {
+  return getPositiveJobLimit(job.providerLimit) ?? getPositiveJobLimit(job.maxInflightRequests)
+}
+
+const getAddToQueueBucketMinimumReadyTargetMultiplier = (job: Job): number => {
+  return getConfiguredJobMaxInflight(job) !== null && !isCodexJob(job)
+    ? judgmentBacklogControllerConstants.promptBacklogMaximumEffectiveCapacityMultiplier
+    : 1
+}
+
 const getAddToQueueBucketMaxInflight = (jobs: Job[]): number => {
   const [firstJob] = jobs
+  const configuredMaxInflight = firstJob ? getConfiguredJobMaxInflight(firstJob) : null
 
   return !firstJob
     ? 1
-    : firstJob.maxInflightRequests != null
-      ? firstJob.maxInflightRequests
+    : configuredMaxInflight !== null
+      ? configuredMaxInflight
       : isCodexJob(firstJob)
         ? getCodexMaxInflight()
         : getJudgmentsCapacity(jobs.length).maxInflight
@@ -115,6 +139,7 @@ const getAddToQueueBuckets = (jobs: Job[]): AddToQueueBucket[] => {
             readyTargetPerJob: getBucketReadyTargetPerJob({
               jobCount: bucketJobs.length,
               maxInflight: getAddToQueueBucketMaxInflight(bucketJobs),
+              minimumMultiplier: getAddToQueueBucketMinimumReadyTargetMultiplier(firstJob),
             }),
           },
         ]

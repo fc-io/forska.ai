@@ -45,11 +45,16 @@ type JudgmentJobServingActiveScope = JudgmentJobServingScope & {
   projectScopeIdentity: string
   selectedImportSnapshotId: string
 }
+type JudgmentJobServingScopeResolution = {
+  hasServingScopeRows: boolean
+  scope: JudgmentJobServingActiveScope | null
+}
 
 const getJudgmentJobQueueWorkloadContext = (
   routeOrJobKey: string,
   projectId: string,
   maxResultRows = 1_000,
+  timeoutMs = 5_000,
 ): DuckdbWorkloadContext => {
   return {
     allowsTempSpill: false,
@@ -57,10 +62,12 @@ const getJudgmentJobQueueWorkloadContext = (
     maxResultRows,
     projectId,
     routeOrJobKey,
-    timeoutMs: 5_000,
+    timeoutMs,
     workloadClass: 'judgmentJobServingQueue',
   }
 }
+
+const currentProjectTableFallbackTimeoutMs = 15_000
 
 const getDateValue = (value: unknown) => {
   return value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : null
@@ -259,24 +266,32 @@ const getServingScopeRows = (
   )
 }
 
+const getDispatchReadyServingScopeFromRows = (
+  rows: readonly JudgmentJobServingScopeRow[],
+  routeOrJobKey: string,
+  database: AppReadOnlyDatabaseService,
+) => {
+  return getFirstDispatchReadyServingScope(rows, routeOrJobKey, database)
+}
+
 const getDispatchReadyServingScope = async (
   projectId: string,
   routeOrJobKey: string,
   reviewConfigHash: string | null,
   database: AppReadOnlyDatabaseService,
 ): Promise<JudgmentJobServingActiveScope | null> => {
-  return getFirstDispatchReadyServingScope(
+  return getDispatchReadyServingScopeFromRows(
     await getServingScopeRows({projectId, reviewConfigHash, routeOrJobKey}, database),
     routeOrJobKey,
     database,
   )
 }
 
-const getActiveServingScope = async (
+const getActiveServingScopeResolution = async (
   projectId: string,
   routeOrJobKey: string,
   database: AppReadOnlyDatabaseService,
-): Promise<JudgmentJobServingActiveScope | null> => {
+): Promise<JudgmentJobServingScopeResolution> => {
   const currentReviewConfigHash = await getCurrentReviewServingReviewConfigHash(
     projectId,
     database,
@@ -284,12 +299,28 @@ const getActiveServingScope = async (
   )
 
   if (currentReviewConfigHash === null) {
-    return null
+    return {hasServingScopeRows: false, scope: null}
   }
 
-  const currentScope = await getDispatchReadyServingScope(projectId, routeOrJobKey, currentReviewConfigHash, database)
+  const currentRows = await getServingScopeRows({projectId, reviewConfigHash: currentReviewConfigHash, routeOrJobKey}, database)
+  const currentScope = await getDispatchReadyServingScopeFromRows(currentRows, routeOrJobKey, database)
 
-  return currentScope ?? getDispatchReadyServingScope(projectId, routeOrJobKey, null, database)
+  if (currentScope !== null) {
+    return {hasServingScopeRows: true, scope: currentScope}
+  }
+
+  const fallbackRows = await getServingScopeRows({projectId, reviewConfigHash: null, routeOrJobKey}, database)
+  const fallbackScope = await getDispatchReadyServingScopeFromRows(fallbackRows, routeOrJobKey, database)
+
+  return {hasServingScopeRows: currentRows.length > 0 || fallbackRows.length > 0, scope: fallbackScope}
+}
+
+const getActiveServingScope = async (
+  projectId: string,
+  routeOrJobKey: string,
+  database: AppReadOnlyDatabaseService,
+): Promise<JudgmentJobServingActiveScope | null> => {
+  return (await getActiveServingScopeResolution(projectId, routeOrJobKey, database)).scope
 }
 
 const getCursorPredicate = (cursor: UnassessedPairsCursor | null, promptIdExpression = 'queue.prompt_id') => {
@@ -333,6 +364,162 @@ const getDatePredicate = (column: string, from: Date | null | undefined, to: Dat
       : ''
 
   return `${fromPredicate}\n${toPredicate}`
+}
+
+const getJudgmentJobUnassessedPairsFromCurrentProjectTables = async (
+  params: {
+    cursor: UnassessedPairsCursor | null
+    jobId: string
+    projectId: string
+  },
+  database: AppReadOnlyDatabaseService,
+  limit: number,
+): Promise<UnassessedPairsResult> => {
+  const rows = await database.queryJson<JudgmentJobServingPromptRow>(
+    `
+    WITH current_project AS (
+      SELECT
+        job.id AS job_id,
+        project.id AS project_id,
+        project.model_id,
+        project.use_title,
+        project.use_abstract,
+        project.use_fulltext,
+        project.use_fulltext_no_images,
+        COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode,
+        project.date_from,
+        project.date_to
+      FROM app.judgment_job job
+      INNER JOIN app.project project
+        ON project.id = job.project_id
+      WHERE job.id = ${getSqlLiteral(params.jobId)}
+        AND job.project_id = ${getSqlLiteral(params.projectId)}
+        AND project.archived = FALSE
+    ),
+    enabled_prompt AS (
+      SELECT
+        prompt.id AS prompt_id
+      FROM app.project_prompt project_prompt
+      INNER JOIN app.prompt prompt
+        ON prompt.id = project_prompt.prompt_id
+      INNER JOIN current_project
+        ON current_project.project_id = project_prompt.project_id
+      WHERE project_prompt.enabled = TRUE
+        AND NOT project_prompt.archived
+        AND COALESCE(prompt.archived, FALSE) = FALSE
+        AND current_project.human_judgment_mode <> 'summary'
+    ),
+    scope_article_id AS (
+      SELECT DISTINCT article_route.article_id
+      FROM current_project
+      INNER JOIN app.project_import_route project_route
+        ON project_route.project_id = current_project.project_id
+      INNER JOIN app.article_import_route article_route
+        ON article_route.import_route_id = project_route.import_route_id
+      UNION
+      SELECT DISTINCT project_article.article_id
+      FROM current_project
+      INNER JOIN app.project_article project_article
+        ON project_article.project_id = current_project.project_id
+    ),
+    scoped_article AS (
+      SELECT
+        article.id AS article_id,
+        COALESCE(
+          article.article_updated_at,
+          article.article_created_at,
+          TIMESTAMPTZ ${getSqlLiteral('1970-01-01T00:00:00.000Z')}
+        ) AS activity_sort_at
+      FROM scope_article_id scope
+      INNER JOIN app.article article
+        ON article.id = scope.article_id
+      CROSS JOIN current_project
+      WHERE (current_project.date_from IS NULL OR article.article_created_at >= current_project.date_from)
+        AND (
+          current_project.date_to IS NULL
+          OR (
+            current_project.date_to = date_trunc('day', current_project.date_to)
+            AND article.article_created_at < current_project.date_to + INTERVAL 1 DAY
+          )
+          OR (
+            current_project.date_to != date_trunc('day', current_project.date_to)
+            AND article.article_created_at <= current_project.date_to
+          )
+        )
+    ),
+    candidate_pair AS (
+      SELECT
+        scoped.article_id,
+        prompt.prompt_id,
+        scoped.activity_sort_at
+      FROM scoped_article scoped
+      CROSS JOIN enabled_prompt prompt
+    ),
+    latest_judgment AS (
+      SELECT
+        judgment.article_id,
+        judgment.prompt_id,
+        judgment.created_at,
+        judgment.is_answered,
+        judgment.answered_original,
+        judgment.answered_original_as_array,
+        ${['row', 'number'].join('_')}() OVER (
+          PARTITION BY judgment.article_id, judgment.prompt_id
+          ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
+        ) AS judgment_rank
+      FROM app.judgment judgment
+      INNER JOIN candidate_pair pair
+        ON pair.article_id = judgment.article_id
+        AND pair.prompt_id = judgment.prompt_id
+      CROSS JOIN current_project
+      WHERE judgment.model_id = current_project.model_id
+        AND judgment.use_title = current_project.use_title
+        AND judgment.use_abstract = current_project.use_abstract
+        AND judgment.use_fulltext = current_project.use_fulltext
+        AND judgment.use_fulltext_no_images = current_project.use_fulltext_no_images
+        AND judgment.deleted_at IS NULL
+    ),
+    filtered_queue AS (
+      SELECT
+        pair.article_id,
+        pair.prompt_id,
+        CASE WHEN judgment.created_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
+        COALESCE(judgment.created_at, pair.activity_sort_at) AS activity_sort_at
+      FROM candidate_pair pair
+      LEFT JOIN latest_judgment judgment
+        ON judgment.article_id = pair.article_id
+        AND judgment.prompt_id = pair.prompt_id
+        AND judgment.judgment_rank = 1
+      WHERE NOT (
+        COALESCE(judgment.is_answered, FALSE)
+        OR judgment.answered_original IS NOT NULL
+        OR COALESCE(LENGTH(judgment.answered_original_as_array), 0) > 0
+      )
+    )
+    SELECT
+      queue.article_id AS articleId,
+      queue.prompt_id AS promptId,
+      queue.priority_bucket AS priorityBucket,
+      queue.activity_sort_at AS activitySortAt
+    FROM filtered_queue queue
+    WHERE TRUE
+      ${getCursorPredicate(params.cursor)}
+    ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC
+    LIMIT ${limit + 1}
+  `,
+    getJudgmentJobQueueWorkloadContext(
+      `judgmentQueue.${params.jobId}.unassessedPairsCurrentProjectTables`,
+      params.projectId,
+      limit + 1,
+      currentProjectTableFallbackTimeoutMs,
+    ),
+  )
+  const limitedRows = rows.slice(0, limit)
+  const promptEntries = limitedRows.flatMap<PromptQueueEntry>((row) => {
+    return row.promptId === null ? [] : [{articleId: row.articleId, promptId: row.promptId}]
+  })
+
+  return {nextCursor: getNextCursor(limitedRows, rows.length > limit), promptEntries}
 }
 
 const getCurrentPromptJoin = (promptIdExpression = 'queue.prompt_id', projectIdExpression = 'queue.project_id') => {
@@ -555,10 +742,17 @@ export const getJudgmentJobUnassessedPairsFromServing = async (params: {
 }): Promise<UnassessedPairsResult> => {
   const limit = Math.max(0, Math.min(5_000, Math.trunc(params.numberOfPromptsToGet)))
   const database = getJudgeWorkerReadOnlyAppDatabaseService()
-  const scope = await getActiveServingScope(params.projectId, `judgmentQueue.${params.jobId}.unassessedPairs`, database)
+  const scopeResolution = await getActiveServingScopeResolution(
+    params.projectId,
+    `judgmentQueue.${params.jobId}.unassessedPairs`,
+    database,
+  )
+  const scope = scopeResolution.scope
 
   if (scope === null || limit === 0) {
-    return {nextCursor: null, promptEntries: []}
+    return !scopeResolution.hasServingScopeRows && limit > 0
+      ? getJudgmentJobUnassessedPairsFromCurrentProjectTables(params, database, limit)
+      : {nextCursor: null, promptEntries: []}
   }
 
   const rows = await database.queryJson<JudgmentJobServingPromptRow>(

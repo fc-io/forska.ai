@@ -120,6 +120,7 @@ type MockRunningJob = {
   maxInflightRequests: number | null
   modelProvider: string
   projectId: string
+  providerLimit?: number | null
   providerConnectionId: string | null
 }
 
@@ -180,6 +181,7 @@ const registerSharedMocks = (
     inferenceConfig = {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 1, judgmentsReadyTargetMultiplier: 1},
     projectDirtyToken = null,
     projectLastCompletedDirtyToken = null,
+    queryWorkloadContexts = [],
     runningJobs = [getRunningJob()],
   }: {
     jobConfigRow?: MockJobConfigRow
@@ -200,6 +202,7 @@ const registerSharedMocks = (
     }
     projectDirtyToken?: number | null
     projectLastCompletedDirtyToken?: number | null
+    queryWorkloadContexts?: unknown[]
     runningJobs?: MockRunningJob[]
   } = {},
 ) => {
@@ -209,7 +212,9 @@ const registerSharedMocks = (
     return {
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {
-          queryJson: async <T>(statement: string): Promise<T[]> => {
+          queryJson: async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
+            queryWorkloadContexts.push(workloadContext)
+
             return statement.includes('app.project_mart_refresh_state pmrs')
               ? [{dirtyToken: projectDirtyToken, lastCompletedDirtyToken: projectLastCompletedDirtyToken} as T]
               : statement.includes('FROM app.judgment_human_summary')
@@ -267,6 +272,77 @@ const registerSharedMocks = (
 
 afterEach(() => {
   mock.restore()
+})
+
+test('sizes provider refill from effective cap with a ready reservoir above active dispatch', async () => {
+  const getPromptsCalls = {count: 0}
+  const requestedPromptCounts: number[] = []
+  const readyDeficits: number[] = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (_jobId, _entries, _serverJobId, readyDeficit) => {
+      readyDeficits.push(readyDeficit)
+      return 1
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getHealthSnapshot: async () => {
+      return {
+        orphanedJudgedRowCount: 0,
+        promptCounts: {claimed: 0, judged: 0, ready: 250, running: 0, skipped: 0},
+      }
+    },
+    getReadyCount: async () => {
+      return 250
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async (_projectId, _jobId, numberOfPromptsToGet) => {
+      requestedPromptCounts.push(numberOfPromptsToGet)
+
+      return {nextCursor: null, promptEntries: [{articleId: 'article-1', promptId: 'prompt-1'}]}
+    },
+    inferenceConfig: {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 1000, judgmentsReadyTargetMultiplier: 2},
+    runningJobs: [
+      getRunningJob({
+        maxInflightRequests: null,
+        modelProvider: 'sglang',
+        providerLimit: 200,
+      }),
+    ],
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?effective-provider-cap=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(requestedPromptCounts).toEqual([512])
+  expect(readyDeficits).toEqual([550])
 })
 
 test('skips timed-out serving queue reads without marking the scan exhausted', async () => {
@@ -711,7 +787,7 @@ test('skips OLAP refill when active SQLite backlog is at target', async () => {
       return entries
     },
     getHealthSnapshot: async () => {
-      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 100, judged: 0, ready: 0, running: 0, skipped: 0}}
+      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 400, judged: 0, ready: 0, running: 0, skipped: 0}}
     },
     getReadyCount: async () => {
       return 0
@@ -773,7 +849,7 @@ test('refills OLAP when active SQLite backlog is below target', async () => {
       return entries
     },
     getHealthSnapshot: async () => {
-      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 90, judged: 0, ready: 0, running: 0, skipped: 0}}
+      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 390, judged: 0, ready: 0, running: 0, skipped: 0}}
     },
     getReadyCount: async () => {
       return 0
@@ -821,7 +897,7 @@ test('refills OLAP when active SQLite backlog is below target', async () => {
   expect(readyDeficits).toEqual([10])
 })
 
-test('caps each OLAP refill window to keep owner handoff responsive', async () => {
+test('caps each OLAP refill window while allowing one tick to fill provider-sized reservoirs', async () => {
   const getPromptsCalls = {count: 0}
   const requestedWindowSizes: number[] = []
   const sqliteService: MockSqliteService = {
@@ -884,7 +960,7 @@ test('caps each OLAP refill window to keep owner handoff responsive', async () =
   await module.judgmentsJobsAddToQueue('server-1')
 
   expect(getPromptsCalls.count).toBe(1)
-  expect(requestedWindowSizes).toEqual([128])
+  expect(requestedWindowSizes).toEqual([512])
 })
 
 test('splits saved codex provider caps across jobs on the same connection', async () => {

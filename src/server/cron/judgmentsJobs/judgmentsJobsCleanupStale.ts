@@ -129,6 +129,8 @@ const cleanupStaleGlobalCandidateMinimumBudgetMs = 10_000
 const cleanupStaleGlobalCandidateMinimumRemainingMs = 1_000
 const cleanupStaleMissingLocalCandidateScanWindowMultiplier = 4
 const cleanupStaleRecoverableOomCandidateScanWindowMultiplier = 4
+const cleanupStaleProjectedCloseoutProbeMinimumRemainingMs = 10_000
+const cleanupStaleProjectedCloseoutProbeLargeTableRows = 10_000
 const cleanupStaleNullQuarantinedAtCursorDate = new Date('9999-12-31T23:59:59.999Z')
 const cleanupStaleCandidateSelectorTimeoutResult = Symbol('cleanupStaleCandidateSelectorTimeoutResult')
 
@@ -549,6 +551,43 @@ const getDuckdbProjectedTerminalRequestAttemptCloseouts = async (
   return getUniqueRequestAttemptCloseouts(rows)
 }
 
+const getProjectedCloseoutRowCount = async (budget?: CleanupStaleBudget): Promise<number> => {
+  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{count: number | string | bigint}>(
+    `
+    SELECT COUNT(*) AS count
+    FROM app.request_attempt_closeout
+  `,
+    getCleanupStaleDuckdbWorkloadContext('projectedCloseoutRowCount', 1, budget),
+  )
+
+  return Number(row?.count ?? 0)
+}
+
+const shouldProbeProjectedCloseouts = async ({
+  budget,
+  maxProjectionCloseoutProbes,
+}: {
+  budget?: CleanupStaleBudget
+  maxProjectionCloseoutProbes: number
+}): Promise<boolean> => {
+  if (maxProjectionCloseoutProbes <= 0) {
+    return false
+  }
+
+  if (
+    budget === undefined
+    || getCleanupBudgetRemainingMs(budget) >= cleanupStaleProjectedCloseoutProbeMinimumRemainingMs
+  ) {
+    return true
+  }
+
+  try {
+    return (await getProjectedCloseoutRowCount(budget)) <= cleanupStaleProjectedCloseoutProbeLargeTableRows
+  } catch {
+    return false
+  }
+}
+
 const getSqliteTerminalRequestAttemptCloseouts = async ({
   jobIds,
   maxCloseouts,
@@ -615,8 +654,11 @@ export const reconcileProviderAdmissionLeasesForDurableCloseout = async ({
   maxProjectionCloseoutProbes?: number
   maxSqliteCloseouts?: number
 } = {}): Promise<{limited: boolean; rowsChanged: number}> => {
+  const shouldProbeProjection = await shouldProbeProjectedCloseouts({budget, maxProjectionCloseoutProbes})
   const [projectionCloseouts, sqliteCloseoutSelection] = await Promise.all([
-    getDuckdbProjectedTerminalRequestAttemptCloseouts(maxProjectionCloseoutProbes, budget),
+    shouldProbeProjection
+      ? getDuckdbProjectedTerminalRequestAttemptCloseouts(maxProjectionCloseoutProbes, budget)
+      : Promise.resolve([]),
     getSqliteTerminalRequestAttemptCloseouts({jobIds, maxCloseouts: maxSqliteCloseouts}),
   ])
 
@@ -628,7 +670,8 @@ export const reconcileProviderAdmissionLeasesForDurableCloseout = async ({
 
   return {
     limited:
-      projectionCloseouts.length >= maxProjectionCloseoutProbes
+      !shouldProbeProjection
+      || projectionCloseouts.length >= maxProjectionCloseoutProbes
       || sqliteCloseoutSelection.limited
       || reconciliationResult.expiredLeaseCount >= maxExpiredLeaseDeletes,
     rowsChanged:
