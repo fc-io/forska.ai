@@ -1,10 +1,15 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
+  failStaleCandidateReviewServingSnapshotManifests,
+  failSupersededCandidateReviewServingSnapshotManifests,
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   getActiveReviewServingSnapshotManifest,
+  getCandidateReviewServingSnapshotSupersessionRows,
   getLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
@@ -21,6 +26,7 @@ import {promoteReviewServingProjectorSnapshot} from './reviewServingProjectorWri
 type FakeProjectionRow = ReviewServingProjectionIdentityManifest
 type FakeSnapshotRow = Omit<ReviewServingSnapshotManifest, 'status'> & {
   activatedAt: string | null
+  createdAt?: string
   status: ReviewServingSnapshotManifest['status']
   updatedAt: string
 }
@@ -167,7 +173,11 @@ const getNotEqualLiteral = (statement: string, columnName: string) => {
 
 const createFakeManifestDatabase = (
   initialSnapshots: FakeSnapshotRow[] = [],
-  options: {chunkAvailabilityRows?: FakeChunkAvailabilityRow[]; selectedImportSnapshotStatus?: string} = {},
+  options: {
+    chunkAvailabilityRows?: FakeChunkAvailabilityRow[]
+    inFlightSnapshotIds?: string[]
+    selectedImportSnapshotStatus?: string
+  } = {},
 ) => {
   const projections = new Map<string, FakeProjectionRow>()
   const projectionPhysicalRows = new Map<string, number>()
@@ -251,6 +261,7 @@ const createFakeManifestDatabase = (
         decodeSqlValue(values[5] ?? null) ?? '{"optional":[],"required":[]}',
       ) as FakeSnapshotRow['componentState'],
       composedIdentity: JSON.parse(decodeSqlValue(values[4] ?? null) ?? '{}') as FakeSnapshotRow['composedIdentity'],
+      createdAt: getClock(),
       lastError: null,
       lastKnownGoodSnapshotId: decodeSqlValue(values[11] ?? null),
       optionalComponents: JSON.parse(
@@ -337,6 +348,57 @@ const createFakeManifestDatabase = (
   }
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('AS hasInFlightRebuild')) {
+      const projectId = getWhereLiteral(statement, 'project_id') ?? ''
+      const referenceIsActive = statement.includes("snapshot_status = 'active'")
+      const referenceSnapshotId = referenceIsActive ? null : getWhereLiteral(statement, 'snapshot_id')
+      const candidateSnapshotId =
+        statement.match(/candidate\.snapshot_id\s*=\s*'((?:''|[^'])*)'/u)?.[1]?.replaceAll("''", "'") ?? null
+      const getCreatedAtMs = (snapshot: FakeSnapshotRow) => {
+        return Date.parse(snapshot.createdAt ?? snapshot.updatedAt)
+      }
+      const references = [...snapshots.values()].filter((snapshot) => {
+        return (
+          snapshot.projectId === projectId
+          && (referenceIsActive ? snapshot.status === 'active' : snapshot.snapshotId === referenceSnapshotId)
+        )
+      })
+
+      return [...snapshots.values()]
+        .filter((snapshot) => {
+          return (
+            snapshot.projectId === projectId
+            && snapshot.status === 'candidate'
+            && (candidateSnapshotId === null || snapshot.snapshotId === candidateSnapshotId)
+          )
+        })
+        .sort((left, right) => {
+          return getCreatedAtMs(left) - getCreatedAtMs(right) || left.snapshotId.localeCompare(right.snapshotId)
+        })
+        .flatMap((candidate) => {
+          return references
+            .filter((reference) => {
+              return (
+                reference.reviewConfigHash === candidate.reviewConfigHash
+                && reference.snapshotId !== candidate.snapshotId
+              )
+            })
+            .map((reference) => {
+              const referenceAtMs = Date.parse(reference.activatedAt ?? reference.createdAt ?? reference.updatedAt)
+
+              return {
+                createdAt: candidate.createdAt ?? candidate.updatedAt,
+                hasInFlightRebuild: (options.inFlightSnapshotIds ?? []).includes(candidate.snapshotId),
+                isOlderThanReference: getCreatedAtMs(candidate) < referenceAtMs,
+                lastError: candidate.lastError,
+                referenceSnapshotId: reference.snapshotId,
+                reviewConfigHash: candidate.reviewConfigHash,
+                snapshotId: candidate.snapshotId,
+              }
+            })
+        }) as T[]
+    }
 
     if (statement.includes('FROM app.review_selected_import_snapshot')) {
       return [{status: options.selectedImportSnapshotStatus ?? 'completed'}] as T[]
@@ -1183,4 +1245,381 @@ test('retire obsolete manifests updates status without deleting snapshot rows', 
   expect(snapshots.size).toBe(2)
   expect(snapshots.get('project-1:snapshot-failed')?.status).toBe('retired')
   expect(snapshots.get('project-1:snapshot-kept')?.status).toBe('failed')
+})
+
+test('promotion fails older candidate snapshots superseded by the promoted snapshot', async () => {
+  const activeSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    createdAt: '2026-06-16T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const staleCandidate: FakeSnapshotRow = {
+    ...activeSnapshot,
+    activatedAt: null,
+    createdAt: '2026-06-16T09:30:00.000Z',
+    snapshotId: 'snapshot-stale-validation-failed',
+    status: 'candidate',
+    updatedAt: '2026-06-16T09:30:00.000Z',
+  }
+  const inFlightCandidate: FakeSnapshotRow = {
+    ...staleCandidate,
+    createdAt: '2026-06-16T09:45:00.000Z',
+    snapshotId: 'snapshot-in-flight',
+    updatedAt: '2026-06-16T09:45:00.000Z',
+  }
+  const otherConfigCandidate: FakeSnapshotRow = {
+    ...staleCandidate,
+    reviewConfigHash: 'review-config-other',
+    snapshotId: 'snapshot-other-config',
+  }
+  const {database, snapshots, statements} = createFakeManifestDatabase(
+    [activeSnapshot, staleCandidate, inFlightCandidate, otherConfigCandidate],
+    {
+      chunkAvailabilityRows: [
+        {
+          completedChunkCount: 2,
+          component: 'display',
+          maxChunkUpdatedAt: '2026-06-16T10:05:00.000Z',
+          outputBaseGeneration: 1,
+          projectionIdentity: 'display:identity-1',
+          requestCreatedAt: '2026-06-16T10:05:00.000Z',
+          requestId: 'request-current-completed',
+          requestStatus: 'completed',
+          requestUpdatedAt: '2026-06-16T10:05:00.000Z',
+          totalChunkCount: 2,
+        },
+      ],
+      inFlightSnapshotIds: ['snapshot-in-flight'],
+    },
+  )
+
+  await createCandidateReviewServingSnapshotManifest(
+    {...baseSnapshotInput, lastKnownGoodSnapshotId: 'snapshot-active', snapshotId: 'snapshot-next'},
+    database,
+  )
+  await upsertReviewServingProjectionIdentityManifest(
+    {
+      baseGeneration: 1,
+      definitionVersion: 'display-v1',
+      inputDigest: 'display-digest-1',
+      inputWatermark: 10,
+      inputWatermarks: {reviewChange: 10},
+      patchWatermark: 3,
+      projectId: 'project-1',
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      reviewConfigHash: 'review-config-1',
+      status: 'candidate',
+    },
+    database,
+  )
+
+  const statementCountBeforePromotion = statements.length
+  const promotionResult = await promoteReviewServingProjectorSnapshot(
+    {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-next'},
+    database,
+  )
+  const promotionStatements = statements.slice(statementCountBeforePromotion)
+  const supersedeQuery = promotionStatements.find((statement) => {
+    return statement.includes('AS hasInFlightRebuild')
+  })
+
+  expect(promotionResult).toEqual({promoted: true, snapshotId: 'snapshot-next'})
+  expect(snapshots.get('project-1:snapshot-next')?.status).toBe('active')
+  expect(snapshots.get('project-1:snapshot-active')?.status).toBe('retired')
+  expect(snapshots.get('project-1:snapshot-stale-validation-failed')).toMatchObject({
+    lastError: 'superseded by snapshot snapshot-next',
+    status: 'failed',
+  })
+  expect(snapshots.get('project-1:snapshot-in-flight')).toMatchObject({lastError: null, status: 'candidate'})
+  expect(snapshots.get('project-1:snapshot-other-config')).toMatchObject({lastError: null, status: 'candidate'})
+  expect(supersedeQuery).toContain("snapshot_id = 'snapshot-next'")
+  expect(supersedeQuery).toContain('COALESCE(activated_at, created_at) AS reference_at')
+  expect(supersedeQuery).toContain('FROM app.review_rebuild_chunk_manifest chunk')
+  expect(supersedeQuery).toContain("chunk.status IN ('pending', 'running')")
+  expect(supersedeQuery).toContain(
+    "request.status IN ('pending_admission', 'admitted', 'running', 'blocked_over_budget', 'quarantined')",
+  )
+
+  const failedStatements = promotionStatements.filter((statement) => {
+    return statement.includes("snapshot_status = 'failed'")
+  })
+  expect(failedStatements).toHaveLength(1)
+  expect(failedStatements[0]).toContain("snapshot_id = 'snapshot-stale-validation-failed'")
+  expect(failedStatements[0]).toContain("AND snapshot_status = 'candidate'")
+})
+
+test('superseded candidate failure reports skipped in-flight candidates without touching them', async () => {
+  const promotedSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    createdAt: '2026-06-16T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-promoted',
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const staleCandidate: FakeSnapshotRow = {
+    ...promotedSnapshot,
+    activatedAt: null,
+    createdAt: '2026-06-16T09:00:00.000Z',
+    snapshotId: 'snapshot-stale',
+    status: 'candidate',
+  }
+  const inFlightCandidate: FakeSnapshotRow = {...staleCandidate, snapshotId: 'snapshot-in-flight'}
+  const newerCandidate: FakeSnapshotRow = {
+    ...staleCandidate,
+    createdAt: '2026-06-16T11:00:00.000Z',
+    snapshotId: 'snapshot-newer',
+  }
+  const {database, snapshots} = createFakeManifestDatabase(
+    [promotedSnapshot, staleCandidate, inFlightCandidate, newerCandidate],
+    {inFlightSnapshotIds: ['snapshot-in-flight']},
+  )
+
+  const result = await failSupersededCandidateReviewServingSnapshotManifests(
+    {projectId: 'project-1', promotedSnapshotId: 'snapshot-promoted'},
+    database,
+  )
+
+  expect(result).toEqual({
+    skippedInFlightSnapshotIds: ['snapshot-in-flight'],
+    supersededSnapshotIds: ['snapshot-stale'],
+  })
+  expect(snapshots.get('project-1:snapshot-stale')).toMatchObject({
+    lastError: 'superseded by snapshot snapshot-promoted',
+    status: 'failed',
+  })
+  expect(snapshots.get('project-1:snapshot-in-flight')?.status).toBe('candidate')
+  expect(snapshots.get('project-1:snapshot-newer')?.status).toBe('candidate')
+  expect(snapshots.get('project-1:snapshot-promoted')?.status).toBe('active')
+})
+
+test('stale candidate recovery is dry-run by default and only fails stale non-in-flight candidates on apply', async () => {
+  const activeSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-08-25T10:00:00.000Z',
+    createdAt: '2026-08-25T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-08-25T10:00:00.000Z',
+    validationResult: null,
+  }
+  const staleCandidate: FakeSnapshotRow = {
+    ...activeSnapshot,
+    activatedAt: null,
+    createdAt: '2026-08-20T10:00:00.000Z',
+    snapshotId: 'snapshot-stale',
+    status: 'candidate',
+    updatedAt: '2026-08-20T10:00:00.000Z',
+  }
+  const secondStaleCandidate: FakeSnapshotRow = {...staleCandidate, snapshotId: 'snapshot-stale-2'}
+  const inFlightCandidate: FakeSnapshotRow = {...staleCandidate, snapshotId: 'snapshot-in-flight'}
+  const newerCandidate: FakeSnapshotRow = {
+    ...staleCandidate,
+    createdAt: '2026-08-30T10:00:00.000Z',
+    snapshotId: 'snapshot-newer',
+  }
+  const {database, snapshots, statements} = createFakeManifestDatabase(
+    [activeSnapshot, staleCandidate, secondStaleCandidate, inFlightCandidate, newerCandidate],
+    {inFlightSnapshotIds: ['snapshot-in-flight']},
+  )
+
+  const dryRun = await failStaleCandidateReviewServingSnapshotManifests({projectId: 'project-1'}, database)
+
+  expect(dryRun.status).toBe('dry_run')
+  expect(dryRun.applied).toBe(false)
+  expect(dryRun.failedSnapshotIds).toEqual([])
+  expect(
+    dryRun.staleCandidates.map((row) => {
+      return row.snapshotId
+    }),
+  ).toEqual(['snapshot-stale', 'snapshot-stale-2'])
+  expect(dryRun.skipped).toEqual([
+    {
+      reasons: ['referenced_by_in_flight_rebuild'],
+      referenceSnapshotId: 'snapshot-active',
+      snapshotId: 'snapshot-in-flight',
+    },
+    {reasons: ['not_older_than_active_snapshot'], referenceSnapshotId: 'snapshot-active', snapshotId: 'snapshot-newer'},
+  ])
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_serving_snapshot_manifest')
+  expect(snapshots.get('project-1:snapshot-stale')?.status).toBe('candidate')
+
+  const scopedApply = await failStaleCandidateReviewServingSnapshotManifests(
+    {apply: true, projectId: 'project-1', snapshotId: 'snapshot-stale'},
+    database,
+  )
+
+  expect(scopedApply.status).toBe('applied')
+  expect(scopedApply.failedSnapshotIds).toEqual(['snapshot-stale'])
+  expect(scopedApply.skipped).toEqual([])
+  expect(snapshots.get('project-1:snapshot-stale')).toMatchObject({
+    lastError: 'superseded by snapshot snapshot-active (operator failStaleReviewServingCandidateSnapshots)',
+    status: 'failed',
+  })
+  expect(snapshots.get('project-1:snapshot-stale-2')?.status).toBe('candidate')
+
+  const apply = await failStaleCandidateReviewServingSnapshotManifests({apply: true, projectId: 'project-1'}, database)
+
+  expect(apply.failedSnapshotIds).toEqual(['snapshot-stale-2'])
+  expect(snapshots.get('project-1:snapshot-stale-2')?.status).toBe('failed')
+  expect(snapshots.get('project-1:snapshot-in-flight')?.status).toBe('candidate')
+  expect(snapshots.get('project-1:snapshot-newer')?.status).toBe('candidate')
+  expect(snapshots.get('project-1:snapshot-active')?.status).toBe('active')
+})
+
+test('candidate supersession rows resolve in-flight and age predicates against DuckDB', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.review_serving_snapshot_manifest (
+        project_id VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        snapshot_status VARCHAR NOT NULL DEFAULT 'candidate',
+        review_config_hash VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        activated_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        last_error VARCHAR
+      );
+      CREATE TABLE app.review_rebuild_chunk_manifest (
+        chunk_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR,
+        snapshot_id VARCHAR,
+        request_id VARCHAR,
+        status VARCHAR NOT NULL DEFAULT 'pending'
+      );
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR NOT NULL,
+        status VARCHAR NOT NULL
+      );
+      INSERT INTO app.review_serving_snapshot_manifest (
+        project_id, snapshot_id, snapshot_status, review_config_hash, created_at, updated_at, activated_at
+      )
+      VALUES
+        ('project-1', 'snapshot-active', 'active', 'config-1', TIMESTAMPTZ '2026-08-25T10:00:00Z', TIMESTAMPTZ '2026-08-25T10:00:00Z', TIMESTAMPTZ '2026-08-25T10:00:00Z'),
+        ('project-1', 'snapshot-stale-failed-request', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-20T10:00:00Z', TIMESTAMPTZ '2026-08-20T10:00:00Z', NULL),
+        ('project-1', 'snapshot-stale-no-request', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-21T10:00:00Z', TIMESTAMPTZ '2026-08-21T10:00:00Z', NULL),
+        ('project-1', 'snapshot-in-flight-request', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-22T10:00:00Z', TIMESTAMPTZ '2026-08-22T10:00:00Z', NULL),
+        ('project-1', 'snapshot-in-flight-requestless-chunk', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-23T10:00:00Z', TIMESTAMPTZ '2026-08-23T10:00:00Z', NULL),
+        ('project-1', 'snapshot-newer', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-30T10:00:00Z', TIMESTAMPTZ '2026-08-30T10:00:00Z', NULL),
+        ('project-1', 'snapshot-other-config', 'candidate', 'config-2', TIMESTAMPTZ '2026-08-20T10:00:00Z', TIMESTAMPTZ '2026-08-20T10:00:00Z', NULL),
+        ('project-1', 'snapshot-retired', 'retired', 'config-1', TIMESTAMPTZ '2026-08-10T10:00:00Z', TIMESTAMPTZ '2026-08-10T10:00:00Z', TIMESTAMPTZ '2026-08-10T10:00:00Z'),
+        ('project-2', 'snapshot-other-project', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-20T10:00:00Z', TIMESTAMPTZ '2026-08-20T10:00:00Z', NULL);
+      INSERT INTO app.review_rebuild_request (request_id, project_id, status)
+      VALUES
+        ('request-failed', 'project-1', 'failed'),
+        ('request-running', 'project-1', 'running');
+      INSERT INTO app.review_rebuild_chunk_manifest (chunk_id, project_id, snapshot_id, request_id, status)
+      VALUES
+        ('chunk-failed-1', 'project-1', 'snapshot-stale-failed-request', 'request-failed', 'completed'),
+        ('chunk-failed-2', 'project-1', 'snapshot-stale-failed-request', 'request-failed', 'completed'),
+        ('chunk-running-1', 'project-1', 'snapshot-in-flight-request', 'request-running', 'completed'),
+        ('chunk-running-2', 'project-1', 'snapshot-in-flight-request', 'request-running', 'pending'),
+        ('chunk-requestless', 'project-1', 'snapshot-in-flight-requestless-chunk', NULL, 'running');
+    `)
+
+    const rows = await getCandidateReviewServingSnapshotSupersessionRows({projectId: 'project-1'}, database)
+
+    expect(
+      rows.map((row) => {
+        return [row.snapshotId, row.referenceSnapshotId, row.isOlderThanReference, row.hasInFlightRebuild]
+      }),
+    ).toEqual([
+      ['snapshot-stale-failed-request', 'snapshot-active', true, false],
+      ['snapshot-stale-no-request', 'snapshot-active', true, false],
+      ['snapshot-in-flight-request', 'snapshot-active', true, true],
+      ['snapshot-in-flight-requestless-chunk', 'snapshot-active', true, true],
+      ['snapshot-newer', 'snapshot-active', false, false],
+    ])
+    expect(rows[0]?.createdAt).toContain('2026-08-20')
+
+    const scopedRows = await getCandidateReviewServingSnapshotSupersessionRows(
+      {projectId: 'project-1', referenceSnapshotId: 'snapshot-active', snapshotId: 'snapshot-stale-no-request'},
+      database,
+    )
+
+    expect(
+      scopedRows.map((row) => {
+        return row.snapshotId
+      }),
+    ).toEqual(['snapshot-stale-no-request'])
+
+    const result = await failStaleCandidateReviewServingSnapshotManifests(
+      {apply: true, projectId: 'project-1'},
+      database,
+    )
+    const statuses = await database.queryJson<{lastError: string | null; snapshotId: string; status: string}>(`
+      SELECT snapshot_id AS snapshotId, snapshot_status AS status, last_error AS lastError
+      FROM app.review_serving_snapshot_manifest
+      WHERE project_id = 'project-1'
+      ORDER BY snapshot_id
+    `)
+
+    expect(result.failedSnapshotIds).toEqual(['snapshot-stale-failed-request', 'snapshot-stale-no-request'])
+    expect(statuses).toEqual([
+      {lastError: null, snapshotId: 'snapshot-active', status: 'active'},
+      {lastError: null, snapshotId: 'snapshot-in-flight-request', status: 'candidate'},
+      {lastError: null, snapshotId: 'snapshot-in-flight-requestless-chunk', status: 'candidate'},
+      {lastError: null, snapshotId: 'snapshot-newer', status: 'candidate'},
+      {lastError: null, snapshotId: 'snapshot-other-config', status: 'candidate'},
+      {lastError: null, snapshotId: 'snapshot-retired', status: 'retired'},
+      {
+        lastError: 'superseded by snapshot snapshot-active (operator failStaleReviewServingCandidateSnapshots)',
+        snapshotId: 'snapshot-stale-failed-request',
+        status: 'failed',
+      },
+      {
+        lastError: 'superseded by snapshot snapshot-active (operator failStaleReviewServingCandidateSnapshots)',
+        snapshotId: 'snapshot-stale-no-request',
+        status: 'failed',
+      },
+    ])
+
+    const failedAtRows = await database.queryJson<{failedAtCount: number | string}>(`
+      SELECT CAST(COUNT(*) FILTER (WHERE failed_at IS NOT NULL) AS INTEGER) AS failedAtCount
+      FROM app.review_serving_snapshot_manifest
+      WHERE snapshot_status = 'failed'
+    `)
+
+    expect(Number(failedAtRows[0]?.failedAtCount)).toBe(2)
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })

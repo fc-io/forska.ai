@@ -9312,3 +9312,241 @@ test('selected import bootstrap rebuild chunk writes article range and completed
   expect(joined).not.toContain("serving.article_id >= 'article-050'")
   expect(joined).toContain("checksum = 'checksum-selected-import-range'")
 })
+
+test('worker marks a candidate snapshot failed when request finalization rejects its promotion', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const requestId = 'rebuild-invalid-candidate-finalize'
+  const snapshotId = 'snapshot-invalid-candidate'
+  const invalidChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 7,
+    projectionComponent: 'display' as const,
+    projectionIdentity: 'display:project-1',
+    requestId,
+    snapshotId,
+  }
+  const invalidChunk = {
+    ...chunkManifest,
+    ...invalidChunkInput,
+    chunkId: 'chunk-invalid-candidate-finalize',
+    requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+  const componentState = {
+    optional: [],
+    required: [
+      {
+        baseGeneration: '7',
+        component: 'display',
+        patchWatermark: '0',
+        projectionIdentity: 'display:project-1',
+        requirement: 'required',
+      },
+    ],
+  }
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return invalidChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return invalidChunkInput
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate', 'active'")) {
+      return [] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate'")) {
+      return [
+        {
+          hasPostingRebuildChunks: false,
+          hasSummaryRebuildChunks: false,
+          projectId: 'project-1',
+          reviewConfigHash: 'review-config-1',
+          snapshotId,
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_selected_import_snapshot')) {
+      return [{status: 'pending'}] as T[]
+    }
+
+    if (
+      statement.includes('FROM app.review_serving_snapshot_manifest')
+      && statement.includes(`snapshot_id = '${snapshotId}'`)
+    ) {
+      return [
+        {
+          componentStateJson: componentState,
+          composedIdentityJson: {requestKind: 'v4-review-serving-rebuild'},
+          lastError: null,
+          lastKnownGoodSnapshotId: null,
+          optionalComponentsJson: [],
+          projectId: 'project-1',
+          requiredComponentsJson: ['display'],
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId,
+          snapshotStatus: 'candidate',
+          sourceWatermarksJson: {reviewChange: 1},
+          validationResultJson: null,
+        },
+      ] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const requestFailureIndex = statements.findIndex((statement) => {
+    return (
+      statement.includes('UPDATE app.review_rebuild_request')
+      && statement.includes("status = 'failed'")
+      && statement.includes(`request_id = '${requestId}'`)
+    )
+  })
+  const candidateFailureIndex = statements.findIndex((statement) => {
+    return (
+      statement.includes('UPDATE app.review_serving_snapshot_manifest')
+      && statement.includes("snapshot_status = 'failed'")
+    )
+  })
+  const requestFailure = statements[requestFailureIndex] ?? ''
+  const candidateFailure = statements[candidateFailureIndex] ?? ''
+
+  expect(result.chunk).toMatchObject({chunkId: invalidChunk.chunkId, requestId, status: 'completed'})
+  expect(requestFailure).toContain(`request_id = '${requestId}'`)
+  expect(requestFailure).toContain("last_error = 'selected import snapshot is not completed'")
+  expect(candidateFailure).toContain(`snapshot_id = '${snapshotId}'`)
+  expect(candidateFailure).toContain("AND snapshot_status = 'candidate'")
+  expect(candidateFailure).toContain("last_error = 'selected import snapshot is not completed'")
+  expect(candidateFailure).toContain('failed_at = current_timestamp')
+  expect(candidateFailureIndex).toBeGreaterThan(requestFailureIndex)
+  expect(statements.join('\n')).not.toContain("snapshot_status = 'active',")
+})
+
+test('worker does not mark candidate snapshots failed when request finalization promotes them', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const requestId = 'rebuild-valid-candidate-finalize'
+  const snapshotId = 'snapshot-valid-candidate'
+  const validChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 7,
+    projectionComponent: 'display' as const,
+    projectionIdentity: 'display:project-1',
+    requestId,
+    snapshotId,
+  }
+  const validChunk = {
+    ...chunkManifest,
+    ...validChunkInput,
+    chunkId: 'chunk-valid-candidate-finalize',
+    requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return validChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return validChunkInput
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate', 'active'")) {
+      return [] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate'")) {
+      return [
+        {
+          hasPostingRebuildChunks: false,
+          hasSummaryRebuildChunks: false,
+          projectId: 'project-1',
+          reviewConfigHash: 'review-config-1',
+          snapshotId,
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_selected_import_snapshot')) {
+      return [{status: 'completed'}] as T[]
+    }
+
+    if (
+      statement.includes('FROM app.review_serving_snapshot_manifest')
+      && statement.includes(`snapshot_id = '${snapshotId}'`)
+    ) {
+      return [
+        {
+          componentStateJson: {optional: [], required: []},
+          composedIdentityJson: {requestKind: 'v4-review-serving-rebuild'},
+          lastError: null,
+          lastKnownGoodSnapshotId: null,
+          optionalComponentsJson: [],
+          projectId: 'project-1',
+          requiredComponentsJson: [],
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId,
+          snapshotStatus: 'candidate',
+          sourceWatermarksJson: {},
+          validationResultJson: null,
+        },
+      ] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: validChunk.chunkId, requestId, status: 'completed'})
+  expect(joined).toContain("snapshot_status = 'active',")
+  expect(joined).toContain('AS hasInFlightRebuild')
+  expect(joined).not.toContain("snapshot_status = 'failed'")
+  expect(joined).toContain("status = 'completed'")
+})
