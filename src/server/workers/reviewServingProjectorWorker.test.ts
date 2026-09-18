@@ -5494,7 +5494,7 @@ test('worker loop reports its last cleanup timestamp so bounded restarts do not 
       getNextChunk: async () => {
         return null
       },
-    }
+    } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
     harness.dependencies.sleep = async (delayMs: number) => {
       clockMs += delayMs
 

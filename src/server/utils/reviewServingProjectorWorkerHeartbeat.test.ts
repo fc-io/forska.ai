@@ -377,9 +377,13 @@ test('review serving projector worker hard RSS restart cap adds bounded restart 
 
 test('review serving projector worker heartbeat only recycles DuckDB after native-heavy projector work', () => {
   expect(shouldRecycleDuckdbAfterReviewServingProjectorRun(undefined)).toBe(false)
-  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({reason: 'aborted'})).toBe(false)
-  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({reason: 'completedChunkLimit'})).toBe(true)
-  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({reason: 'nativeHeavyChunkCompleted'})).toBe(true)
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({lastCleanupAtMs: null, reason: 'aborted'})).toBe(false)
+  expect(
+    shouldRecycleDuckdbAfterReviewServingProjectorRun({lastCleanupAtMs: null, reason: 'completedChunkLimit'}),
+  ).toBe(true)
+  expect(
+    shouldRecycleDuckdbAfterReviewServingProjectorRun({lastCleanupAtMs: null, reason: 'nativeHeavyChunkCompleted'}),
+  ).toBe(true)
 })
 
 test('review serving projector worker heartbeat keeps soft RSS pressure below the hard recycle cap', () => {
