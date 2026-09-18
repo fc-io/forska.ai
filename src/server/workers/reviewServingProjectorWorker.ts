@@ -71,6 +71,7 @@ import {
   createCandidateReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
+  markCandidateReviewServingSnapshotManifestFailed,
   type ReviewServingSnapshotManifest,
 } from '../reviewServing/reviewServingManifestRepository.ts'
 import {
@@ -6362,7 +6363,12 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   })
 
   const promotions = await promotionRows.reduce<
-    Promise<Awaited<ReturnType<typeof promoteReviewServingProjectorSnapshot>>[]>
+    Promise<
+      Array<{
+        promotion: Awaited<ReturnType<typeof promoteReviewServingProjectorSnapshot>>
+        row: RebuildRequestSnapshotPromotionRow
+      }>
+    >
   >(async (previousPromotions, row) => {
     const previous = await previousPromotions
     await refreshRebuildRequestCandidateSnapshot({projectId: row.projectId, snapshotId: row.snapshotId}, database)
@@ -6371,20 +6377,32 @@ const finalizeCompletedReviewServingRebuildRequest = async (
       database,
     )
 
-    return [...previous, promotion]
+    return [...previous, {promotion, row}]
   }, Promise.resolve([]))
-  const failedPromotion = promotions.find((promotion) => {
-    return !promotion.promoted
+  const failedPromotions = promotions.flatMap(({promotion, row}) => {
+    return promotion.promoted ? [] : [{error: promotion.error, row}]
   })
+  const failedPromotion = failedPromotions[0]
 
   await markCompletedRebuildRequestFinalized(
     {
-      lastError: failedPromotion?.promoted === false ? failedPromotion.error : null,
+      lastError: failedPromotion?.error ?? null,
       requestId: chunk.requestId,
       status: failedPromotion === undefined ? 'completed' : 'failed',
     },
     database,
   )
+
+  // The rebuild request is terminal now; a candidate snapshot that failed validation can never be
+  // promoted by this request, so mark it failed instead of leaving it as a stuck candidate that
+  // retention ignores and the warnings route reports as operator_intervention_required.
+  await failedPromotions.reduce<Promise<void>>(async (previous, failed) => {
+    await previous
+    await markCandidateReviewServingSnapshotManifestFailed(
+      {lastError: failed.error, projectId: failed.row.projectId, snapshotId: failed.row.snapshotId},
+      database,
+    )
+  }, Promise.resolve())
 }
 
 const finalizeCompletedReviewServingRebuildRequestOnce = async (input: {
