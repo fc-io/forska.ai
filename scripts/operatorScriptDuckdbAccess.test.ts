@@ -186,6 +186,27 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/releaseFailedRequestlessReviewServingRebuildChunks.ts',
   },
+  'db:duck:fail-stale-review-serving-candidate-snapshots': {
+    commandIncludes: [
+      'FORSKA_RUNTIME_PROFILE=primary',
+      'DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"',
+      'SERVER_ROLE=maintenance-worker',
+      'SERVER_DUCKDB_OWNER_URL=',
+    ],
+    description: 'V4 stale candidate snapshot recovery',
+    mustContain: [
+      'withDuckdbMaintenanceAccess',
+      "getMaintenanceDuckdbWorkloadContext('failStaleReviewServingCandidateSnapshots')",
+      'failStaleCandidateReviewServingSnapshotManifests',
+      'requiredApplyAcknowledgement',
+      '--apply',
+      '--project-id',
+      '--snapshot-id',
+      'fail-stale-review-serving-candidate-snapshots-no-cleanup-authorized',
+      "mode = 'fail_stale_candidate_snapshots'",
+    ],
+    path: 'scripts/failStaleReviewServingCandidateSnapshots.ts',
+  },
   'db:duck:terminalize-review-serving-rebuild-request': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'V4 rebuild request terminalization',
