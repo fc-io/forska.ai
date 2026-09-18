@@ -4620,7 +4620,7 @@ test('bounded worker drains request-associated native-heavy chunks up to the com
     harness.dependencies,
   )
 
-  expect(result).toEqual({reason: 'completedChunkLimit'})
+  expect(result).toMatchObject({reason: 'completedChunkLimit'})
   expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 2))
   expect(harness.recycledChunks).toEqual(summaryChunks.slice(0, 2))
   expect(harness.garbageCollectedChunks).toEqual(summaryChunks.slice(0, 2))
@@ -4682,7 +4682,7 @@ test('bounded worker does not starve native-heavy chunks while soft RSS pressure
     harness.dependencies,
   )
 
-  expect(result).toEqual({reason: 'completedChunkLimit'})
+  expect(result).toMatchObject({reason: 'completedChunkLimit'})
   expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 2))
   expect(harness.recycledChunks).toEqual(summaryChunks.slice(0, 2))
   expect(harness.garbageCollectedChunks).toEqual(summaryChunks.slice(0, 2))
@@ -4734,7 +4734,7 @@ test('bounded worker reports a native-heavy lifecycle boundary when request chun
     harness.dependencies,
   )
 
-  expect(result).toEqual({reason: 'nativeHeavyChunkCompleted'})
+  expect(result).toMatchObject({reason: 'nativeHeavyChunkCompleted'})
   expect(harness.runChunkInputs).toEqual([summaryChunk])
   expect(harness.recycledChunks).toEqual([summaryChunk])
   expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
@@ -4785,7 +4785,7 @@ test('bounded worker yields for recycle when search chunks reach RSS cap', async
     harness.dependencies,
   )
 
-  expect(result).toEqual({reason: 'nativeHeavyChunkCompleted'})
+  expect(result).toMatchObject({reason: 'nativeHeavyChunkCompleted'})
   expect(harness.runChunkInputs).toEqual([searchChunk])
   expect(harness.recycledChunks).toEqual([])
   expect(harness.garbageCollectedChunks).toEqual([])
@@ -5467,6 +5467,82 @@ test('worker backs off failed wakes and stops cleanly when aborted during sleep'
 
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerErrorBackoffMs])
   expect(harness.claimInputs).toHaveLength(1)
+})
+
+test('worker loop reports its last cleanup timestamp so bounded restarts do not starve cleanup', async () => {
+  // Reproduces the low-memory production shape: cleanupIntervalMs === maxRunMs, the loop is aborted
+  // at exactly maxRunMs, and the heartbeat restarts it after a short delay.
+  const cleanupIntervalMs = 60_000
+  const maxRunMs = 60_000
+  const pollIntervalMs = 2_000
+  const restartDelayMs = 5_000
+  const firstLoopStartAtMs = 1_000_000
+  const previousRetentionCleanupEnabled = process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+  let clockMs = firstLoopStartAtMs
+  delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+
+  const runBoundedLoop = async (lastCleanupAtMs: number | null) => {
+    const harness = createWorkerHarness()
+    const controller = new AbortController()
+    const loopStartedAtMs = clockMs
+
+    harness.dependencies.nowMs = () => {
+      return clockMs
+    }
+    harness.dependencies.rebuildChunkService = {
+      ...harness.dependencies.rebuildChunkService,
+      getNextChunk: async () => {
+        return null
+      },
+    }
+    harness.dependencies.sleep = async (delayMs: number) => {
+      clockMs += delayMs
+
+      if (clockMs - loopStartedAtMs >= maxRunMs) {
+        controller.abort()
+      }
+    }
+
+    const result = await runReviewServingProjectorWorker(
+      {cleanupIntervalMs, lastCleanupAtMs, pollIntervalMs, signal: controller.signal, workerId: 'worker-1'},
+      harness.dependencies,
+    )
+
+    return {cleanupRuns: harness.dirtyWorkRetentionCleanupInputs.length, loopStartedAtMs, result}
+  }
+
+  try {
+    // Loop 1 is seeded with its own start time. Cleanup becomes eligible exactly when the loop is
+    // aborted, so it never runs inside this loop, but the timestamp is reported back unchanged.
+    const firstLoop = await runBoundedLoop(firstLoopStartAtMs)
+
+    expect(firstLoop.cleanupRuns).toBe(0)
+    expect(firstLoop.result).toEqual({lastCleanupAtMs: firstLoopStartAtMs, reason: 'aborted'})
+
+    clockMs += restartDelayMs
+
+    // Pre-fix heartbeat behaviour: reseeding with the new loop's start time starves cleanup again.
+    const reseededLoop = await runBoundedLoop(clockMs)
+
+    expect(reseededLoop.cleanupRuns).toBe(0)
+    expect(reseededLoop.result).toEqual({lastCleanupAtMs: reseededLoop.loopStartedAtMs, reason: 'aborted'})
+
+    clockMs += restartDelayMs
+
+    // Fixed heartbeat behaviour: carrying the previous loop's timestamp makes the first cycle of the
+    // restarted loop eligible, cleanup runs once, and the new timestamp is reported for the next loop.
+    const carriedLoop = await runBoundedLoop(firstLoop.result.lastCleanupAtMs)
+
+    expect(carriedLoop.cleanupRuns).toBe(1)
+    expect(carriedLoop.result).toEqual({lastCleanupAtMs: carriedLoop.loopStartedAtMs, reason: 'aborted'})
+    expect(carriedLoop.result.lastCleanupAtMs).toBeGreaterThan(firstLoopStartAtMs)
+  } finally {
+    if (previousRetentionCleanupEnabled === undefined) {
+      delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+    } else {
+      process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED = previousRetentionCleanupEnabled
+    }
+  }
 })
 
 test('worker yields after completed request chunks so progress readers can run', async () => {

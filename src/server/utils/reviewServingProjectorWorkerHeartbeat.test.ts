@@ -552,6 +552,100 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
   expect(result.events).not.toContainEqual(['recycle'])
 })
 
+test('review serving projector worker heartbeat carries the last cleanup timestamp across bounded restarts', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+        const startedAtMs = Date.now()
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              const runIndex = events.length
+              events.push(['run', runIndex, options.lastCleanupAtMs])
+
+              return new Promise((resolve) => {
+                options.signal.addEventListener('abort', () => {
+                  // Pretend cleanup ran during this loop at a synthetic, recognisable timestamp.
+                  resolve({lastCleanupAtMs: 1_000 + runIndex, reason: 'aborted'})
+                }, {once: true})
+              })
+            },
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?cleanup=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxRunMs: 5,
+          pollIntervalMs: 1,
+          restartDelayMs: 1,
+        })
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 75)
+        })
+        stop()
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+
+        console.log(JSON.stringify({events, startedAtMs}))
+      `,
+    ],
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: '6400MiB'})},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat cleanup carry-over test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<[string, number, number | null]>
+    startedAtMs: number
+  }
+  const runEvents = result.events.filter((event) => {
+    return event[0] === 'run'
+  })
+
+  expect(runEvents.length).toBeGreaterThanOrEqual(3)
+  // The first loop is seeded with the heartbeat start time (not null), so startup does not trigger
+  // an immediate cleanup.
+  expect(runEvents[0]?.[2]).toBeGreaterThanOrEqual(result.startedAtMs)
+  // Every restarted loop receives the timestamp reported by the loop before it instead of Date.now().
+  expect(
+    runEvents.slice(1).map((event) => {
+      return event[2]
+    }),
+  ).toEqual(
+    runEvents.slice(1).map((_event, index) => {
+      return 1_000 + index
+    }),
+  )
+})
+
 test('review serving projector worker heartbeat skips high-RSS recycle while foreground DuckDB work is active', () => {
   const runScript = runBunEval(
     `
