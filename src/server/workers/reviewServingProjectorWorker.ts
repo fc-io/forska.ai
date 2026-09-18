@@ -311,10 +311,14 @@ type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycle
   pollIntervalMs?: number
 }
 
-type ReviewServingProjectorWorkerRunResult =
-  | {reason: 'aborted'}
-  | {reason: 'completedChunkLimit'}
-  | {reason: 'nativeHeavyChunkCompleted'}
+type ReviewServingProjectorWorkerRunResult = {
+  /**
+   * Last successful cleanup timestamp observed by this loop. The heartbeat carries it into the next
+   * bounded loop so cleanup eligibility survives loop restarts instead of resetting on every start.
+   */
+  lastCleanupAtMs: number | null
+  reason: 'aborted' | 'completedChunkLimit' | 'nativeHeavyChunkCompleted'
+}
 
 const getMaxCompletedRebuildChunksPerRun = (value: number | null | undefined) => {
   return value === null ? 0 : getPositiveInteger(value, getDefaultMaxCompletedRebuildChunksPerRun())
@@ -9639,7 +9643,7 @@ export const runReviewServingProjectorWorker = async (
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
 ): Promise<ReviewServingProjectorWorkerRunResult> => {
   if (options.signal?.aborted) {
-    return {reason: 'aborted'}
+    return {lastCleanupAtMs: options.lastCleanupAtMs ?? null, reason: 'aborted'}
   }
 
   const cycleResult = await runReviewServingProjectorWorkerOnce(options, dependencies)
@@ -9648,19 +9652,20 @@ export const runReviewServingProjectorWorker = async (
   const completedRebuildChunksInRun =
     (options.completedRebuildChunksInRun ?? 0) + getReviewServingProjectorWorkerCompletedChunkRunCharge(cycleResult)
   const maxCompletedRebuildChunksPerRun = getMaxCompletedRebuildChunksPerRun(options.maxCompletedRebuildChunksPerRun)
+  const lastCleanupAtMs = cycleResult.nextCleanupAtMs
 
   if (options.signal?.aborted) {
-    return {reason: 'aborted'}
+    return {lastCleanupAtMs, reason: 'aborted'}
   }
 
   if (
     shouldRestartAfterCompletedRebuildChunk(cycleResult.chunk, {dependencies, maxCompletedRebuildChunksPerRun, options})
   ) {
-    return {reason: 'nativeHeavyChunkCompleted'}
+    return {lastCleanupAtMs, reason: 'nativeHeavyChunkCompleted'}
   }
 
   if (maxCompletedRebuildChunksPerRun > 0 && completedRebuildChunksInRun >= maxCompletedRebuildChunksPerRun) {
-    return {reason: 'completedChunkLimit'}
+    return {lastCleanupAtMs, reason: 'completedChunkLimit'}
   }
 
   const delayMs =
@@ -9675,14 +9680,14 @@ export const runReviewServingProjectorWorker = async (
     ...options,
     completedRebuildChunksInRun,
     ...getNextForegroundRebuildDrainOptions({chunk: cycleResult.chunk, dependencies, nowMs, options}),
-    lastCleanupAtMs: cycleResult.nextCleanupAtMs,
+    lastCleanupAtMs,
     previousRssBytes: getReviewServingProjectorWorkerMemoryUsage(dependencies).rss,
   }
 
   return delayMs > 0
     ? dependencies.sleep(delayMs).then(() => {
         if (options.signal?.aborted) {
-          return {reason: 'aborted' as const}
+          return {lastCleanupAtMs, reason: 'aborted' as const}
         }
 
         return runReviewServingProjectorWorker(nextOptions, dependencies)

@@ -252,6 +252,10 @@ export const startReviewServingProjectorWorkerHeartbeat = (
   let stopped = false
   let activeLoopController: AbortController | null = null
   let restartTimer: ReturnType<typeof setTimeout> | null = null
+  // Seeded once per heartbeat, then carried across bounded loop restarts. Seeding per loop start
+  // starved cleanup whenever cleanupIntervalMs >= maxRunMs (low-memory mode: both 60s), because the
+  // loop was aborted at the exact instant cleanup became eligible and the next loop reset the clock.
+  let lastCleanupAtMs: number | null = Date.now()
 
   reviewServingProjectorWorkerLogger.log(
     'review-serving-projector-worker:loop-start',
@@ -334,7 +338,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     }
 
     void runReviewServingProjectorWorker({
-      lastCleanupAtMs: Date.now(),
+      lastCleanupAtMs,
       pollIntervalMs: options.pollIntervalMs,
       rebuildChunkBatchMaxRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options),
       rebuildChunkBatchSoftRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(options),
@@ -349,6 +353,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       signal: loopController.signal,
     })
       .then(async (result) => {
+        lastCleanupAtMs = result?.lastCleanupAtMs ?? null
+
         if (shouldRecycleDuckdbAfterReviewServingProjectorRun(result)) {
           await recycleDuckdbBeforeReviewServingProjectorRestart(options)
           scheduleRestart(restartDelayMs, true)
