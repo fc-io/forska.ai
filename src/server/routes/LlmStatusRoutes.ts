@@ -1,4 +1,4 @@
-import {Elysia} from 'elysia'
+import {Elysia, t} from 'elysia'
 
 import {
   type CronRuntimeClassState,
@@ -390,26 +390,39 @@ const refreshLlmStatus = async () => {
   return pendingLlmStatusRefresh
 }
 
+const isFreshReadRequested = (value: string | undefined) => {
+  return value === '1' || value === 'true'
+}
+
 export const __resetLlmStatusCacheForTests = () => {
   cachedLlmStatus = null
   pendingLlmStatusRefresh = null
 }
 
-export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get('/api/llmstatus', async () => {
-  if (cachedLlmStatus !== null) {
-    void refreshLlmStatus().catch(() => {})
-    return refreshLlmStatusMetadata(cachedLlmStatus)
-  }
+export const llmStatusRoutes = new Elysia().use(withErrorHandler()).get(
+  '/api/llmstatus',
+  async ({query}) => {
+    const shouldReadFresh = isFreshReadRequested(query.fresh)
 
-  const status = await withTimeout(refreshLlmStatus(), llmStatusForegroundBudgetMs)
+    if (cachedLlmStatus !== null && !shouldReadFresh) {
+      void refreshLlmStatus().catch(() => {})
+      return refreshLlmStatusMetadata(cachedLlmStatus)
+    }
 
-  return (
-    status
-    ?? buildLlmStatusResponse({
-      data: [],
-      hasMetricsCompatibleJob: false,
-      hasMetricsCompatibleRuntime: false,
-      tableExists: null,
-    })
-  )
-})
+    const status = await withTimeout(refreshLlmStatus(), llmStatusForegroundBudgetMs)
+
+    if (status !== null) {
+      return status
+    }
+
+    return cachedLlmStatus !== null
+      ? refreshLlmStatusMetadata(cachedLlmStatus)
+      : buildLlmStatusResponse({
+          data: [],
+          hasMetricsCompatibleJob: false,
+          hasMetricsCompatibleRuntime: false,
+          tableExists: null,
+        })
+  },
+  {query: t.Object({fresh: t.Optional(t.String())})},
+)

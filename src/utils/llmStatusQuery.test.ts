@@ -13,13 +13,15 @@ let llmStatusResponse: {
     metadata?: Record<string, unknown>
   }
 } = {data: {data: []}}
+let llmStatusGetCalls: unknown[] = []
 
 void mock.module(apiClientModulePath, () => {
   return {
     apiClient: {
       api: {
         llmstatus: {
-          get: async () => {
+          get: async (args?: unknown) => {
+            llmStatusGetCalls.push(args)
             return llmStatusResponse
           },
         },
@@ -65,6 +67,7 @@ const buildLlmStatusRow = ({
 }
 
 test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () => {
+  llmStatusGetCalls = []
   llmStatusResponse = {
     data: {
       data: [
@@ -151,6 +154,19 @@ test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () =
     lastTickAt: new Date('2026-03-25T09:07:00.000Z'),
     source: 'reported',
   })
+  expect(llmStatusGetCalls[0]).toBeUndefined()
+})
+
+test('fetchLlmStatus requests a fresh route read when fresh is true', async () => {
+  llmStatusGetCalls = []
+  llmStatusResponse = {
+    data: {data: [], hasMetricsCompatibleJob: false, hasMetricsCompatibleRuntime: true, metadata: {isStale: false}},
+  }
+
+  const response = await fetchLlmStatus({fresh: true})
+
+  expect(llmStatusGetCalls[0]).toEqual({query: {fresh: '1'}})
+  expect(response.hasMetricsCompatibleRuntime).toBe(true)
 })
 
 test('getLlmMetricsSummary keeps waiting and running counts numeric when runtime rows contain strings', () => {

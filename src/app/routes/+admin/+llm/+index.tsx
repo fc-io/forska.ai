@@ -42,10 +42,13 @@ const AdminLlm = () => {
   const statusQuery = useQuery(() => {
     return {
       queryKey: llmStatusQueryKey,
-      queryFn: fetchLlmStatus,
+      queryFn: () => {
+        return fetchLlmStatus({fresh: true})
+      },
       refetchInterval: (query) => {
         return getLlmStatusRefetchInterval(query.state.data?.rows ?? [])
       },
+      refetchOnMount: 'always',
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
     }

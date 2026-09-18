@@ -204,8 +204,10 @@ export type LlmStatusResponse = {
   metadata: LlmStatusMetadata | null
 }
 
-export const fetchLlmStatus = async (): Promise<LlmStatusResponse> => {
-  const response = await apiClient.api.llmstatus.get()
+export const fetchLlmStatus = async (options: {fresh?: boolean} = {}): Promise<LlmStatusResponse> => {
+  const response = options.fresh
+    ? await apiClient.api.llmstatus.get({query: {fresh: '1'}})
+    : await apiClient.api.llmstatus.get()
 
   if (response.error) {
     throw new Error('Failed to fetch LLM status')
@@ -301,8 +303,7 @@ const getLlmMetricsSummaryRow = (rows: LlmStatusRow[], latestTimestampMs: number
   return (
     rows.find((row) => {
       return isLlmStatusActive(row) && isRecentLlmStatusRow(row, latestTimestampMs)
-    })
-    ?? rows[0]
+    }) ?? rows[0]
   )
 }
 
