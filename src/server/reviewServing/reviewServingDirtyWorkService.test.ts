@@ -2374,6 +2374,35 @@ test('retention cleanup repairs compact lane columns before dirty work drain', a
   expect(repairUpdate).not.toContain('dirty_work_id IN')
 })
 
+test('default retention cleanup repairs lane columns with a bounded per-cycle limit', async () => {
+  const {database, dirtyWork, statements} = createFakeDirtyWorkDatabase({barrier: null})
+
+  const created = await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  const existing = dirtyWork.get(created.dirtyWorkId)
+
+  if (existing !== undefined) {
+    dirtyWork.set(created.dirtyWorkId, {...existing, projectionComponent: null, projectionIdentity: null})
+  }
+
+  // The worker calls cleanup with no params; lane repair must run with the default limit.
+  const result = await cleanupReviewServingDirtyWorkRetention({}, database)
+  const repaired = dirtyWork.get(created.dirtyWorkId)
+  const repairSelect = statements.findLast((statement) => {
+    return (
+      statement.includes('SELECT rowid AS storageRowId')
+      && statement.includes('(projection_component IS NULL OR projection_identity IS NULL)')
+    )
+  })
+
+  expect(result.repairedLaneColumnCount).toBe(1)
+  expect(repaired).toMatchObject({projectionComponent: 'display', projectionIdentity: 'display:identity-1'})
+  expect(repairSelect).toContain('LIMIT 256')
+
+  const explicitZero = await cleanupReviewServingDirtyWorkRetention({laneRepairLimit: 0}, database)
+
+  expect(explicitZero.repairedLaneColumnCount).toBe(0)
+})
+
 test('retention cleanup coalesces superseded high-water dirty work by exact selected ids', async () => {
   const {database, dirtyWork, statements} = createFakeDirtyWorkDatabase({barrier: null})
   const oldHighWater = await upsertDisplayWork(
