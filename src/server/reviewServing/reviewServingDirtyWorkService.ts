@@ -237,6 +237,9 @@ const getNormalizedLimit = (params: {limit: number; maxWakeCount?: number}) => {
   return Math.min(limit, maxWakeCount)
 }
 
+const defaultLaneRepairLimit = 256
+const defaultLaneStateRepairLimit = 256
+
 const getNormalizedCleanupLimit = (value: number | undefined, fallback: number) => {
   return Math.max(0, Math.floor(value ?? fallback))
 }
@@ -2001,8 +2004,11 @@ export const cleanupReviewServingDirtyWorkRetention = async (
   const acknowledgementDeleteLimit = getNormalizedCleanupLimit(params.acknowledgementDeleteLimit, 0)
   const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, 0)
   const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(params.dirtyWorkDeleteLimit, 0)
-  const laneRepairLimit = getNormalizedCleanupLimit(params.laneRepairLimit, 0)
-  const laneStateRepairLimit = getNormalizedCleanupLimit(params.laneStateRepairLimit, 256)
+  // Lane column repair backfills projection_component/projection_identity from projection_key for
+  // legacy rows. It must run by default (the worker calls cleanup with {}), bounded per cycle like
+  // lane state repair; a 0 default meant production rows were never repaired.
+  const laneRepairLimit = getNormalizedCleanupLimit(params.laneRepairLimit, defaultLaneRepairLimit)
+  const laneStateRepairLimit = getNormalizedCleanupLimit(params.laneStateRepairLimit, defaultLaneStateRepairLimit)
 
   return database.transaction(async (tx) => {
     const repairedLaneColumnCount = await repairReviewServingDirtyWorkLaneColumns({limit: laneRepairLimit}, tx)
