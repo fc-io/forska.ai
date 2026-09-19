@@ -399,10 +399,25 @@ const waitForProcessIdsExit = async (pids: number[], deadlineMs = Date.now() + s
 const stopProcessTree = async ({pid, processName}: {pid: number; processName: string}) => {
   const descendantPids = getDescendantProcessIds(pid)
   const capturedPids = [...descendantPids, pid]
+  const shutdownDeadlineMs = Date.now() + shutdownTimeoutMs
 
-  killProcessIds([...descendantPids, pid], 'SIGTERM')
+  killProcessIds([pid], 'SIGTERM')
 
-  const survivingPids = await waitForProcessIdsExit(capturedPids)
+  const survivingDescendantPids =
+    (await waitForProcessIdsExit([pid], shutdownDeadlineMs)).length > 0
+      ? descendantPids
+      : [...getDescendantProcessIds(pid), ...descendantPids].filter((descendantPid) => {
+          return isProcessAlive(descendantPid)
+        })
+
+  if (survivingDescendantPids.length > 0) {
+    console.error(
+      `[server:stack] ${processName} left pids=${[...new Set(survivingDescendantPids)].join(',')} running after its own shutdown; sending SIGTERM`,
+    )
+    killProcessIds(survivingDescendantPids, 'SIGTERM')
+  }
+
+  const survivingPids = await waitForProcessIdsExit(capturedPids, shutdownDeadlineMs)
 
   if (survivingPids.length === 0) {
     return

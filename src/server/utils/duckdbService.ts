@@ -3486,13 +3486,20 @@ const isDuckdbWalReplayFailure = (error: unknown) => {
   return message.includes('.duckdb.wal') || message.includes('replaying wal file')
 }
 
+const duckdbStartupChildSignalGuardSource = `
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      process.on(signal, () => {})
+    }
+`
+
 const getDuckdbStartupPreflightScript = () => {
   return `
     const databasePath = JSON.parse(process.argv[1])
     const options = JSON.parse(process.argv[2])
     const tableRepairSpecs = JSON.parse(process.argv[3])
     const activeRepairSpecPath = JSON.parse(process.argv[4])
-    const {writeFileSync} = await import('node:fs')
+    ${duckdbStartupChildSignalGuardSource}
+    const {unlinkSync, writeFileSync} = await import('node:fs')
     const {DuckDBInstance} = await import('@duckdb/node-api')
     const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
@@ -3822,6 +3829,12 @@ const getDuckdbStartupPreflightScript = () => {
           }
         }
       }
+
+      if (typeof activeRepairSpecPath === 'string' && activeRepairSpecPath.length > 0) {
+        try {
+          unlinkSync(activeRepairSpecPath)
+        } catch {}
+      }
     } finally {
       try {
         connection?.closeSync()
@@ -3909,10 +3922,16 @@ const getDuckdbStartupPreflightRepairSpecs = (markerPath: string) => {
   }
 }
 
+const duckdbStartupPreflightRetryableRepairMarkerPhases = new Set([
+  'custom-mutation-probe',
+  'generic-delete-insert-probe',
+  'obsolete-repaired-pk-index-drop',
+])
+
 const shouldRetryDuckdbStartupPreflightForActiveRepairMarker = (marker: DuckdbStartupPreflightRepairMarker | null) => {
   const phase = typeof marker?.phase === 'string' ? marker.phase : null
 
-  return phase === 'custom-mutation-probe' || phase === 'generic-delete-insert-probe'
+  return phase !== null && duckdbStartupPreflightRetryableRepairMarkerPhases.has(phase)
 }
 
 const shouldRecheckDuckdbStartupRepairMarkerForPendingMigration = (
@@ -4042,6 +4061,7 @@ const getDuckdbIndexedTableRepairScript = () => {
     const repairId = JSON.parse(process.argv[4])
     const criticalProtectedTableSpecs = JSON.parse(process.argv[5])
     const preservedDatabasePath = JSON.parse(process.argv[6])
+    ${duckdbStartupChildSignalGuardSource}
     const {DuckDBInstance} = await import('@duckdb/node-api')
     const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
@@ -4731,6 +4751,7 @@ const getDuckdbStartupPreflightError = (
     stderr: 'pipe',
     stdin: childProcessInput.stdin,
     stdout: 'pipe',
+    killSignal: 'SIGKILL',
     timeout: duckdbStartupWalPreflightTimeoutMs,
   })
 
@@ -4787,6 +4808,7 @@ const getDuckdbStartupFileLockProbeScript = () => {
   return `
     const databasePath = JSON.parse(process.argv[1])
     const options = JSON.parse(process.argv[2])
+    ${duckdbStartupChildSignalGuardSource}
     const {DuckDBInstance} = await import('@duckdb/node-api')
     const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
@@ -4799,6 +4821,7 @@ const getDuckdbStartupWalCheckpointScript = () => {
   return `
     const databasePath = JSON.parse(process.argv[1])
     const options = JSON.parse(process.argv[2])
+    ${duckdbStartupChildSignalGuardSource}
     const {DuckDBInstance} = await import('@duckdb/node-api')
     const createInitializedDuckdbInstance = ${createInitializedDuckdbInstance.toString()}
 
@@ -4898,6 +4921,7 @@ const checkpointDuckdbStartupWalReplay = async (runtimeConfig: DuckdbRuntimeConf
     stderr: 'pipe',
     stdin: childProcessInput.stdin,
     stdout: 'pipe',
+    killSignal: 'SIGKILL',
     timeout: duckdbStartupWalCheckpointTimeoutMs,
   })
 

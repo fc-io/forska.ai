@@ -25,6 +25,7 @@ import {loadEnv} from '../src/server/utils/env.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {withAbortSignalTimeout} from '../src/utils/withAbortSignalTimeout.ts'
 import {getDevServerWatchFingerprint} from './devServerWatchFingerprint.ts'
+import {waitForDevServerWatchRestartGate} from './devServerWatchRestartGate.ts'
 import {
   processLockMalformedRetryIntervalMs,
   processLockMalformedStaleAfterMs,
@@ -34,6 +35,8 @@ import {
 
 const watchedPaths = ['src', 'package.json', 'tsconfig.json']
 const restartDelayMs = 150
+const restartGatePollIntervalMs = 1_000
+const restartGateTimeoutMs = 90_000
 const stackShutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
 const healthProbeTimeoutMs = 1_500
@@ -779,6 +782,33 @@ const stopServer = async () => {
   await waitForStackLockRelease()
 }
 
+const waitForRunningStackBeforeRestart = async () => {
+  const stackLock = await readServerStackLock()
+
+  if (stackLock === null) {
+    return
+  }
+
+  await waitForDevServerWatchRestartGate(
+    {
+      isMaintenanceReady: async () => {
+        const response = await fetchJson<{data?: {ready?: boolean}}>(
+          `http://127.0.0.1:${stackLock.maintenancePort}${runtimeReadyPath}`,
+        )
+
+        return response?.data?.ready === true
+      },
+      isStackAlive: () => {
+        return isProcessAlive(stackLock.pid)
+      },
+      log,
+      now: Date.now,
+      wait: waitFor,
+    },
+    {pollIntervalMs: restartGatePollIntervalMs, timeoutMs: restartGateTimeoutMs},
+  )
+}
+
 const restartServerOnce = async () => {
   const nextFingerprint = await getDevServerWatchFingerprint(watchedPaths)
 
@@ -789,6 +819,12 @@ const restartServerOnce = async () => {
 
   watchedPathFingerprint = nextFingerprint
   log('change detected, restarting')
+  await waitForRunningStackBeforeRestart()
+
+  if (shuttingDown) {
+    return
+  }
+
   await stopServer()
 
   if (shuttingDown) {
