@@ -179,6 +179,13 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
       ['projectId', 'changedReviewConfigFields', 'sourceHighWaterMark'],
       'componentRebuild',
     ],
+    [
+      'project.searchTokenizer.updated',
+      'search',
+      [],
+      ['projectId', 'tokenizerVersion', 'sourceHighWaterMark'],
+      'componentRebuild',
+    ],
   ])
 })
 

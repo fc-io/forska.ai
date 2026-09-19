@@ -197,6 +197,14 @@ export const reviewServingInvalidationRegistry: Record<ReviewServingChangeKind, 
     requiredKeys: ['projectId', 'changedReviewConfigFields', 'sourceHighWaterMark'],
     updateMode: 'componentRebuild',
   }),
+  'project.searchTokenizer.updated': rule({
+    affectedComponents: ['search'],
+    changeKind: 'project.searchTokenizer.updated',
+    downstreamDependents: [],
+    firstAffectedComponent: 'search',
+    requiredKeys: ['projectId', 'tokenizerVersion', 'sourceHighWaterMark'],
+    updateMode: 'componentRebuild',
+  }),
   'projectScope.article.added': rule({
     affectedComponents: [
       'projectScope',

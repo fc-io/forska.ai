@@ -112,7 +112,7 @@ test('title search projection writes compact token postings and search-only comp
   expect(inserts.join('\n')).toContain('article_ids')
   expect(inserts.join('\n')).not.toContain('regexp_split_to_array')
   expect(joined).toContain("'search'")
-  expect(joined).toContain('title-token-v1:article.searchText.updated')
+  expect(joined).toContain('title-token-v2:article.searchText.updated')
   expect(joined).not.toContain("'judgmentInputContent'")
   expect(joined).not.toContain("'selectedImport'")
 })
@@ -303,4 +303,36 @@ test('search availability distinguishes ready indexing unavailable and async sta
       optionalSearchStatePresent: false,
     }),
   ).toBe('async')
+})
+
+test('title search projection indexes CJK titles as characters plus bigrams', async () => {
+  const {database, statements} = createTitleSearchDatabase({
+    rows: [{articleId: 'article-1', articleTitle: 'COVID-19 医院', tombstone: false}],
+  })
+
+  const result = await projectReviewServingTitleSearchRows(
+    {
+      baseGeneration: 2,
+      claims: [searchClaim()],
+      definitionVersion: 'search-v4-test',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      projectionIdentity: 'search:identity-1',
+      searchIdentity: 'search:identity-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const inserts = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
+    })
+    .join('\n')
+
+  expect(result).toEqual({patchWatermark: 9, searchRowCount: 5})
+  expect(inserts).toContain("'covid'")
+  expect(inserts).toContain("'19'")
+  expect(inserts).toContain("'医'")
+  expect(inserts).toContain("'院'")
+  expect(inserts).toContain("'医院'")
 })

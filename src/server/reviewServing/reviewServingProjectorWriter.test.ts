@@ -351,7 +351,8 @@ test('title search rebuild range append executes against compact DuckDB token po
         );
         INSERT INTO mart.project_scope_article VALUES
           ('project-1', 'article-1', 'Alpha Beta', TRUE, FALSE),
-          ('project-1', 'article-2', 'Beta Gamma', TRUE, FALSE);
+          ('project-1', 'article-2', 'Beta Gamma', TRUE, FALSE),
+          ('project-1', 'article-3', 'Ünï 医院', TRUE, FALSE);
         INSERT INTO mart.review_title_search_serving_v4 VALUES
           ('project-1', 'search:identity-1', 'scope:identity-1', 'snapshot-1', 'beta', ['article-0']);
       `)
@@ -360,7 +361,7 @@ test('title search rebuild range append executes against compact DuckDB token po
       {
         ranges: [
           {
-            articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
+            articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-3'",
             articleTitleSql: 'scope.article_title',
             projectId: 'project-1',
             projectScopeIdentity: 'scope:identity-1',
@@ -388,12 +389,25 @@ test('title search rebuild range append executes against compact DuckDB token po
         left.token.localeCompare(right.token) || left.articleIds.join(',').localeCompare(right.articleIds.join(','))
       )
     })
-    expect(rows).toEqual([
-      {articleIds: ['article-1'], token: 'alpha'},
-      {articleIds: ['article-0'], token: 'beta'},
-      {articleIds: ['article-1', 'article-2'], token: 'beta'},
-      {articleIds: ['article-2'], token: 'gamma'},
-    ])
+    const sortRows = (input: Array<{articleIds: string[]; token: string}>) => {
+      return [...input].sort((left, right) => {
+        return (
+          left.token.localeCompare(right.token) || left.articleIds.join(',').localeCompare(right.articleIds.join(','))
+        )
+      })
+    }
+    expect(rows).toEqual(
+      sortRows([
+        {articleIds: ['article-1'], token: 'alpha'},
+        {articleIds: ['article-0'], token: 'beta'},
+        {articleIds: ['article-1', 'article-2'], token: 'beta'},
+        {articleIds: ['article-2'], token: 'gamma'},
+        {articleIds: ['article-3'], token: 'uni'},
+        {articleIds: ['article-3'], token: '医'},
+        {articleIds: ['article-3'], token: '院'},
+        {articleIds: ['article-3'], token: '医院'},
+      ]),
+    )
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()

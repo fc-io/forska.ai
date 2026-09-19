@@ -77,6 +77,7 @@ export const reviewServingChangeKinds = [
   'judgment.human.updated',
   'prompt.config.updated',
   'project.reviewConfig.updated',
+  'project.searchTokenizer.updated',
 ] as const
 
 export type ReviewServingChangeKind = (typeof reviewServingChangeKinds)[number]

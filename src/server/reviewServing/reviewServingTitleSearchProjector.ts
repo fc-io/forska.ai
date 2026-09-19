@@ -18,6 +18,12 @@ import {
   writeReviewServingTitleSearchRebuildRows,
 } from './reviewServingProjectorWriter.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
+import {
+  getReviewServingTitleSearchTokens,
+  reviewServingTitleSearchTokenizerVersion,
+} from './reviewServingTitleSearchTokenizer.ts'
+
+export {getReviewServingTitleSearchTokens}
 
 export type ReviewServingTitleSearchProjectorDatabase = ReviewServingProjectorWriterDatabase
 
@@ -61,7 +67,7 @@ type SelectedImportTitleSqlInput = {
 }
 
 const titleSearchProjectorName = 'title-search-projector'
-const titleSearchTokenizerVersion = 'title-token-v1'
+const titleSearchTokenizerVersion = reviewServingTitleSearchTokenizerVersion
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -213,25 +219,6 @@ const getSelectedImportTitleJoinSql = (input: SelectedImportTitleSqlInput) => {
         ELSE selected_base.source_record_key
       END
       AND NOT selected_hot.tombstone`
-}
-
-const getNormalizedTitleToken = (value: string) => {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-}
-
-export const getReviewServingTitleSearchTokens = (title: string | null) => {
-  return [
-    ...new Set(
-      getNormalizedTitleToken(title ?? '')
-        .split(/[^a-z0-9]+/)
-        .filter((token) => {
-          return token.length > 0
-        }),
-    ),
-  ]
 }
 
 const getTitleSearchRows = async (

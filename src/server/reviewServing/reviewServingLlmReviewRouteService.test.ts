@@ -504,6 +504,24 @@ test('LLM review route tokenizes title search like the title search projector an
   expect(sql).toContain('search_filtered_article_ids AS')
 })
 
+test('LLM review route tokenizes CJK title searches into characters and bigrams instead of dropping them', async () => {
+  const reader = createReaderDatabase()
+  const result = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, search: '医院 heart'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result).toEqual({totalCount: 1, totalPages: 1})
+  expect(sql).toContain("unnest(['医', '院', '医院', 'heart']::VARCHAR[])")
+  expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
+  expect(sql).toContain('search_filtered_article_ids AS')
+})
+
 test('LLM review filtered count route serves a cached signature without dynamic foreground scans', async () => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {

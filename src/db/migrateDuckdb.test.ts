@@ -10536,3 +10536,245 @@ test('migrateDuckdb skips post-migration checkpoint under low-memory DuckDB prof
     mock.restore()
   }
 })
+
+test('DuckDB migration queues a search-only re-index delta for every served project after the tokenizer upgrade', async () => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), 'forska-title-search-tokenizer-reindex-'))
+  const duckdbPath = join(tempDirectory, 'fixture.duckdb')
+  const verificationPath = join(tempDirectory, 'verification.json')
+  const targetMigrationFile = '0239_requestReviewTitleSearchTokenizerV2Reindex.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [
+          {writeFileSync},
+          {migrateDuckdb},
+          {getAppDatabaseService},
+          {resetDuckdbServiceForTests},
+          {resetServerRuntimeRoleForTests},
+        ] = await Promise.all([
+          import('node:fs'),
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_serving_snapshot_manifest (
+            project_id VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            snapshot_status VARCHAR NOT NULL DEFAULT 'candidate',
+            PRIMARY KEY(project_id, snapshot_id)
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_change_delta (
+            delta_id VARCHAR PRIMARY KEY,
+            change_kind VARCHAR NOT NULL,
+            source_table VARCHAR NOT NULL,
+            source_row_id VARCHAR NOT NULL,
+            source_operation VARCHAR NOT NULL,
+            source_partition VARCHAR NOT NULL,
+            source_high_water_mark BIGINT NOT NULL,
+            source_updated_at TIMESTAMPTZ,
+            idempotency_key VARCHAR NOT NULL UNIQUE,
+            payload_version INTEGER NOT NULL,
+            project_id VARCHAR,
+            article_id VARCHAR,
+            prompt_id VARCHAR,
+            model_id VARCHAR,
+            use_title BOOLEAN,
+            use_abstract BOOLEAN,
+            use_fulltext BOOLEAN,
+            use_fulltext_no_images BOOLEAN,
+            judgment_id VARCHAR,
+            human_judgment_key VARCHAR,
+            config_field_set VARCHAR,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            payload_json JSON,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            reconciled_at TIMESTAMPTZ,
+            CHECK (source_high_water_mark >= 0),
+            CHECK (payload_version >= 1)
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_delta_reconciliation_cursor (
+            source_partition VARCHAR PRIMARY KEY,
+            source_high_water_mark BIGINT NOT NULL DEFAULT 0,
+            last_reconciled_delta_id VARCHAR,
+            status VARCHAR NOT NULL DEFAULT 'ready',
+            lease_owner VARCHAR,
+            lease_expires_at TIMESTAMPTZ,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_error VARCHAR,
+            quarantined_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_serving_snapshot_manifest VALUES
+            ('project-active', 'snapshot-active-1', 'active'),
+            ('project-active', 'snapshot-active-0', 'retired'),
+            ('project-candidate', 'snapshot-candidate-1', 'candidate'),
+            ('project-retired', 'snapshot-retired-1', 'retired')
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_delta_reconciliation_cursor (source_partition, source_high_water_mark)
+          VALUES ('projectReviewConfig:project-active', 5)
+        \`)
+
+        await migrateDuckdb()
+
+        const deltaRows = await database.queryJson(\`
+          SELECT
+            change_kind AS changeKind,
+            source_table AS sourceTable,
+            source_row_id AS sourceRowId,
+            source_operation AS sourceOperation,
+            source_partition AS sourcePartition,
+            CAST(source_high_water_mark AS INTEGER) AS sourceHighWaterMark,
+            idempotency_key AS idempotencyKey,
+            payload_version AS payloadVersion,
+            project_id AS projectId,
+            tombstone,
+            CAST(payload_json AS VARCHAR) AS payloadJson,
+            reconciled_at IS NULL AS pending
+          FROM app.review_change_delta
+          ORDER BY project_id ASC
+        \`)
+        const cursorRows = await database.queryJson(\`
+          SELECT source_partition AS sourcePartition, CAST(source_high_water_mark AS INTEGER) AS sourceHighWaterMark
+          FROM app.review_delta_reconciliation_cursor
+          ORDER BY source_partition ASC
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '${targetMigrationFile}'"
+        )
+
+        const verification = JSON.stringify({cursorRows, deltaRows, migrationRows})
+        writeFileSync(process.env.VERIFY_OUTPUT_PATH, verification)
+        console.log(verification)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VERIFY_OUTPUT_PATH: verificationPath,
+        VITE_PORT: '39994',
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const verificationJson = existsSync(verificationPath) ? readFileSync(verificationPath, 'utf8') : null
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    if (verificationJson === null && stdoutLines.length === 0) {
+      throw new Error(
+        [
+          'Failed to parse title search tokenizer re-index migration verification JSON',
+          `stdout:\n${result.stdout.toString()}`,
+          `stderr:\n${result.stderr.toString()}`,
+        ].join('\n'),
+      )
+    }
+    const parsed = JSON.parse(verificationJson ?? stdoutLines.at(-1) ?? '{}') as {
+      cursorRows: {sourceHighWaterMark: number; sourcePartition: string}[]
+      deltaRows: {
+        changeKind: string
+        idempotencyKey: string
+        payloadJson: string
+        payloadVersion: number
+        pending: boolean
+        projectId: string
+        sourceHighWaterMark: number
+        sourceOperation: string
+        sourcePartition: string
+        sourceRowId: string
+        sourceTable: string
+        tombstone: boolean
+      }[]
+      migrationRows: {name: string}[]
+    }
+
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+    expect(parsed.cursorRows).toEqual([
+      {sourceHighWaterMark: 6, sourcePartition: 'projectReviewConfig:project-active'},
+      {sourceHighWaterMark: 1, sourcePartition: 'projectReviewConfig:project-candidate'},
+    ])
+    expect(
+      parsed.deltaRows.map((row) => {
+        return {...row, payloadJson: JSON.parse(row.payloadJson) as unknown}
+      }),
+    ).toEqual([
+      {
+        changeKind: 'project.searchTokenizer.updated',
+        idempotencyKey: 'review-serving-delta:title-search-tokenizer-reindex:title-token-v2:project-active',
+        payloadJson: {projectId: 'project-active', tokenizerVersion: 'title-token-v2'},
+        payloadVersion: 1,
+        pending: true,
+        projectId: 'project-active',
+        sourceHighWaterMark: 6,
+        sourceOperation: 'update',
+        sourcePartition: 'projectReviewConfig:project-active',
+        sourceRowId: 'project-active',
+        sourceTable: 'app.project',
+        tombstone: false,
+      },
+      {
+        changeKind: 'project.searchTokenizer.updated',
+        idempotencyKey: 'review-serving-delta:title-search-tokenizer-reindex:title-token-v2:project-candidate',
+        payloadJson: {projectId: 'project-candidate', tokenizerVersion: 'title-token-v2'},
+        payloadVersion: 1,
+        pending: true,
+        projectId: 'project-candidate',
+        sourceHighWaterMark: 1,
+        sourceOperation: 'update',
+        sourcePartition: 'projectReviewConfig:project-candidate',
+        sourceRowId: 'project-candidate',
+        sourceTable: 'app.project',
+        tombstone: false,
+      },
+    ])
+  } finally {
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})

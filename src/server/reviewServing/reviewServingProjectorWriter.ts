@@ -41,6 +41,11 @@ import {
   getPromotedReviewServingSnapshotDirtyWorkCoverages,
   validateReviewServingCandidateSnapshotManifest,
 } from './reviewServingSnapshotPromotionService.ts'
+import {
+  getReviewServingTitleSearchNormalizedTitleSql,
+  getReviewServingTitleSearchSegmentsSql,
+  getReviewServingTitleSearchSegmentTokensSql,
+} from './reviewServingTitleSearchTokenizer.ts'
 
 export type ReviewServingProjectorWriterDatabase = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -976,7 +981,7 @@ const getReviewServingTitleSearchRebuildRowsCteSql = (input: WriteReviewServingT
     WITH source_rows AS (
       SELECT
         scope.article_id,
-        lower(strip_accents(COALESCE(${input.articleTitleSql}, ''))) AS normalized_title
+        ${getReviewServingTitleSearchNormalizedTitleSql(input.articleTitleSql)} AS normalized_title
       FROM mart.project_scope_article scope
       ${input.selectedImportJoinSql}
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
@@ -988,12 +993,19 @@ const getReviewServingTitleSearchRebuildRowsCteSql = (input: WriteReviewServingT
         ANY_VALUE(normalized_title) AS normalized_title
       FROM source_rows
       GROUP BY article_id
+    ), segmented_source AS (
+      SELECT
+        source.article_id,
+        segment_rows.segment
+      FROM source
+      CROSS JOIN unnest(${getReviewServingTitleSearchSegmentsSql('source.normalized_title')}) AS segment_rows(segment)
+      WHERE segment_rows.segment <> ''
     ), tokenized_source AS (
       SELECT DISTINCT
-        source.article_id,
+        segmented_source.article_id,
         token_rows.token
-      FROM source
-      CROSS JOIN unnest(regexp_split_to_array(source.normalized_title, '[^a-z0-9]+')) AS token_rows(token)
+      FROM segmented_source
+      CROSS JOIN unnest(${getReviewServingTitleSearchSegmentTokensSql('segmented_source.segment')}) AS token_rows(token)
       WHERE token_rows.token <> ''
     ), tokenized AS (
       SELECT

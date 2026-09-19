@@ -413,3 +413,40 @@ test('delta projection identity is stable across per-mutation values', async () 
   expect(projectionKeys).toHaveLength(10)
   expect(projectionKeys.slice(0, 5)).toEqual(projectionKeys.slice(5))
 })
+
+test('delta intake converts search tokenizer upgrades into project-scoped search-only dirty work', async () => {
+  const {database, statements} = createFakeIntakeDatabase([
+    createReviewChangeDelta({
+      changeKind: 'project.searchTokenizer.updated',
+      deltaId: 'delta-tokenizer',
+      payloadJson: {projectId: 'project-1', tokenizerVersion: 'title-token-v2'},
+      projectId: 'project-1',
+      sourceHighWaterMark: 12,
+      sourcePartition: 'projectReviewConfig:project-1',
+    }),
+  ])
+
+  const result = await intakeReviewChangeDeltasToDirtyWork(
+    {
+      endSourceHighWaterMark: 12,
+      limit: 10,
+      sourcePartition: 'projectReviewConfig:project-1',
+      startSourceHighWaterMark: 1,
+    },
+    database,
+  )
+  const dirtyInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
+  })
+
+  expect(result).toMatchObject({dirtyWorkCount: 1, maxSourceHighWaterMark: 12, status: 'converted'})
+  expect(
+    dirtyInserts.map(parseProjectionKey).map((key) => {
+      return key.projectionComponent
+    }),
+  ).toEqual(['search'])
+  expect(dirtyInserts.map(getDirtyKind)).toEqual(['project.searchTokenizer.updated'])
+  expect(dirtyInserts[0]).toContain("'project'")
+  expect(dirtyInserts[0]).not.toContain('llmStatus')
+  expect(dirtyInserts[0]).not.toContain('display')
+})
