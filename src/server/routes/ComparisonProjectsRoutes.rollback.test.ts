@@ -731,6 +731,12 @@ const servingArticleDifferenceFilterPredicates = {
   'human-vs-llm-true-conflict': 'article.passes_difference_filter_human_vs_llm_true_conflict',
   'llm-vs-llm': 'article.passes_difference_filter_llm_vs_llm',
   'llm-vs-llm-true-difference': 'article.passes_difference_filter_llm_vs_llm_true_difference',
+  'resolution-vs-human': "article.has_human_answered_yes AND LOWER(TRIM(conflict_resolution.answer_value)) <> 'yes'",
+  'resolution-vs-human-true-conflict':
+    "LOWER(TRIM(conflict_resolution.answer_value)) IN ('yes', 'maybe') AND article.has_human_answered_no",
+  'resolution-vs-llm': "article.has_llm_answered_yes AND LOWER(TRIM(conflict_resolution.answer_value)) <> 'yes'",
+  'resolution-vs-llm-true-conflict':
+    "LOWER(TRIM(conflict_resolution.answer_value)) IN ('yes', 'maybe') AND article.has_llm_answered_no",
 } satisfies Record<ComparisonProjectDifferenceFilter, string>
 
 const hasServingCellValue = (value: string | null | undefined) => {

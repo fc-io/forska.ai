@@ -8,6 +8,7 @@ import {
   type ComparisonProjectDifferenceFilter,
   getComparisonProjectHasAnyConflict,
   getComparisonProjectHasDifferenceFilterMatch,
+  getIsComparisonProjectConflictResolutionDifferenceFilter,
 } from '../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
@@ -165,6 +166,32 @@ const comparisonProjectServingRowFilterPredicates = {
   'multiple-answers': 'article.passes_row_filter_multiple_answers',
 } satisfies Record<ComparisonProjectRowFilter, string>
 
+const comparisonProjectServingConflictResolutionAnswerSql = 'LOWER(TRIM(conflict_resolution.answer_value))'
+const comparisonProjectServingHasConflictResolutionSql =
+  "article.has_conflict AND NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL"
+
+const getComparisonProjectServingConflictResolutionDifferenceSql = (
+  kind: ComparisonProjectDifferenceColumn['kind'],
+) => {
+  return `(${comparisonProjectServingHasConflictResolutionSql}
+        AND (
+          (article.has_${kind}_answered_yes AND ${comparisonProjectServingConflictResolutionAnswerSql} <> 'yes')
+          OR (article.has_${kind}_answered_no AND ${comparisonProjectServingConflictResolutionAnswerSql} <> 'no')
+          OR (article.has_${kind}_answered_maybe AND ${comparisonProjectServingConflictResolutionAnswerSql} <> 'maybe')
+        ))`
+}
+
+const getComparisonProjectServingConflictResolutionTrueConflictSql = (
+  kind: ComparisonProjectDifferenceColumn['kind'],
+) => {
+  return `(${comparisonProjectServingHasConflictResolutionSql}
+        AND (
+          (${comparisonProjectServingConflictResolutionAnswerSql} IN ('yes', 'maybe') AND article.has_${kind}_answered_no)
+          OR (${comparisonProjectServingConflictResolutionAnswerSql} = 'no'
+            AND (article.has_${kind}_answered_yes OR article.has_${kind}_answered_maybe))
+        ))`
+}
+
 const comparisonProjectServingDifferenceFilterPredicates = {
   all: 'article.passes_difference_filter_all',
   'any-disagreement': 'article.passes_difference_filter_any_disagreement',
@@ -173,6 +200,10 @@ const comparisonProjectServingDifferenceFilterPredicates = {
   'human-vs-llm-true-conflict': 'article.passes_difference_filter_human_vs_llm_true_conflict',
   'llm-vs-llm': 'article.passes_difference_filter_llm_vs_llm',
   'llm-vs-llm-true-difference': 'article.passes_difference_filter_llm_vs_llm_true_difference',
+  'resolution-vs-human': getComparisonProjectServingConflictResolutionDifferenceSql('human'),
+  'resolution-vs-human-true-conflict': getComparisonProjectServingConflictResolutionTrueConflictSql('human'),
+  'resolution-vs-llm': getComparisonProjectServingConflictResolutionDifferenceSql('llm'),
+  'resolution-vs-llm-true-conflict': getComparisonProjectServingConflictResolutionTrueConflictSql('llm'),
 } satisfies Record<ComparisonProjectDifferenceFilter, string>
 
 export const getComparisonProjectContentKey = (settings: {
@@ -322,10 +353,21 @@ const getComparisonProjectServingArticleCategoryFilterPredicateSql = (
     : `${articleAlias}.article_category = ${getSqlLiteral(articleCategoryFilter)}`
 }
 
+const getComparisonProjectServingRequiresConflictResolution = (
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter | null | undefined,
+  differenceFilter: ComparisonProjectDifferenceFilter,
+) => {
+  return (
+    (Boolean(conflictResolutionFilter) && conflictResolutionFilter !== 'all')
+    || getIsComparisonProjectConflictResolutionDifferenceFilter(differenceFilter)
+  )
+}
+
 const getComparisonProjectServingConflictResolutionJoinSql = (
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilter | null | undefined,
+  differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
-  return conflictResolutionFilter && conflictResolutionFilter !== 'all'
+  return getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, differenceFilter)
     ? `
     LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution
       ON conflict_resolution.comparison_project_id = article.comparison_project_id
@@ -468,7 +510,10 @@ export const getComparisonProjectServingMemberSql = (params: {
     params.articleCategoryFilter ?? defaultComparisonProjectArticleCategoryFilter,
     'article',
   )
-  const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(params.conflictResolutionFilter)
+  const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(
+    params.conflictResolutionFilter,
+    params.differenceFilter,
+  )
   const conflictResolutionFilterPredicate = getComparisonProjectServingConflictResolutionFilterPredicateSql(
     params.conflictResolutionFilter,
   )
@@ -578,7 +623,10 @@ export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
     params.articleCategoryFilter ?? defaultComparisonProjectArticleCategoryFilter,
     'article',
   )
-  const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(params.conflictResolutionFilter)
+  const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(
+    params.conflictResolutionFilter,
+    params.differenceFilter,
+  )
   const conflictResolutionFilterPredicate = getComparisonProjectServingConflictResolutionFilterPredicateSql(
     params.conflictResolutionFilter,
   )
@@ -651,9 +699,9 @@ export const getComparisonProjectServingJudgmentCount = async (
   const limit = getPositiveInteger(params.limit)
   const conflictResolutionFilter = params.conflictResolutionFilter ?? 'all'
   const [row] = await params.queryRunner.queryJson<{totalCount: unknown}>(
-    conflictResolutionFilter === 'all'
-      ? getComparisonProjectServingJudgmentCountSql(params)
-      : getComparisonProjectServingJudgmentFilteredCountSql({...params, conflictResolutionFilter}),
+    getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, params.differenceFilter)
+      ? getComparisonProjectServingJudgmentFilteredCountSql({...params, conflictResolutionFilter})
+      : getComparisonProjectServingJudgmentCountSql(params),
   )
   const totalCount = getComparisonProjectServingCount(row?.totalCount)
 

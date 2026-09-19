@@ -112,8 +112,15 @@ const CompareProjectExportPage = () => {
 
     return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
   })
+  const showConflictResolutionFilter = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return Boolean(comparisonProject?.allowConflictResolution && isSummaryMode())
+  })
   const availableDifferenceFilters = createMemo(() => {
-    return getAvailableComparisonProjectDifferenceFilters(orderedColumns())
+    return getAvailableComparisonProjectDifferenceFilters(orderedColumns(), {
+      hasConflictResolution: showConflictResolutionFilter(),
+    })
   })
   const differenceFilterOptions = createMemo(() => {
     return getSelectableComparisonProjectDifferenceFilters(availableDifferenceFilters(), differenceFilter()).map(
@@ -124,11 +131,6 @@ const CompareProjectExportPage = () => {
   })
   const conflictResolutionOptions = createMemo(() => {
     return getComparisonProjectSummaryConflictResolutionOptions(comparisonProjectQuery.data?.prompts ?? [])
-  })
-  const showConflictResolutionFilter = createMemo(() => {
-    const comparisonProject = comparisonProjectQuery.data
-
-    return Boolean(comparisonProject?.allowConflictResolution && isSummaryMode())
   })
   const conflictResolutionFilterOptions = createMemo(() => {
     return getComparisonProjectConflictResolutionFilterOptions(conflictResolutionOptions())

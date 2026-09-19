@@ -6,11 +6,27 @@ export const comparisonProjectDifferenceFilters = [
   'llm-vs-llm',
   'llm-vs-llm-true-difference',
   'any-disagreement',
+  'resolution-vs-llm',
+  'resolution-vs-llm-true-conflict',
+  'resolution-vs-human',
+  'resolution-vs-human-true-conflict',
 ] as const
 
 export type ComparisonProjectDifferenceFilter = (typeof comparisonProjectDifferenceFilters)[number]
 
 export type ComparisonProjectDifferenceColumn = {id: string; kind: 'llm' | 'human'; promptId: string}
+
+export type ComparisonProjectDifferenceFilterAvailability = {hasConflictResolution?: boolean}
+
+const comparisonProjectConflictResolutionDifferenceFilters = [
+  'resolution-vs-llm',
+  'resolution-vs-llm-true-conflict',
+  'resolution-vs-human',
+  'resolution-vs-human-true-conflict',
+] as const satisfies readonly ComparisonProjectDifferenceFilter[]
+
+export type ComparisonProjectConflictResolutionDifferenceFilter =
+  (typeof comparisonProjectConflictResolutionDifferenceFilters)[number]
 
 type PromptColumnCounts = {humanCount: number; llmCount: number}
 type PromptAnswerBuckets = {
@@ -26,6 +42,39 @@ type PromptAnswerBuckets = {
 }
 
 type BinaryDecision = 'exclude' | 'include'
+type ComparisonProjectDifferenceKind = ComparisonProjectDifferenceColumn['kind']
+type ComparisonProjectDifferenceFilterMatcher = (
+  promptAnswerBuckets: Map<string, PromptAnswerBuckets>,
+  conflictResolution: string | null,
+) => boolean
+
+const comparisonProjectDifferenceFilterLabels = {
+  all: 'All rows',
+  'any-disagreement': 'Any disagreement',
+  'human-vs-llm': 'Human vs LLM conflict',
+  'human-vs-llm-overlap': 'Human and LLM judged',
+  'human-vs-llm-true-conflict': 'Human vs LLM true conflict',
+  'llm-vs-llm': 'LLM vs LLM differences',
+  'llm-vs-llm-true-difference': 'LLM vs LLM true differences',
+  'resolution-vs-human': 'Conflict resolution vs human conflict',
+  'resolution-vs-human-true-conflict': 'Conflict resolution vs human true conflict',
+  'resolution-vs-llm': 'Conflict resolution vs LLM conflict',
+  'resolution-vs-llm-true-conflict': 'Conflict resolution vs LLM true conflict',
+} satisfies Record<ComparisonProjectDifferenceFilter, string>
+
+export const getIsComparisonProjectConflictResolutionDifferenceFilter = (
+  differenceFilter: ComparisonProjectDifferenceFilter,
+): differenceFilter is ComparisonProjectConflictResolutionDifferenceFilter => {
+  return comparisonProjectConflictResolutionDifferenceFilters.includes(
+    differenceFilter as ComparisonProjectConflictResolutionDifferenceFilter,
+  )
+}
+
+export const comparisonProjectPrecomputedDifferenceFilters = comparisonProjectDifferenceFilters.filter(
+  (differenceFilter) => {
+    return !getIsComparisonProjectConflictResolutionDifferenceFilter(differenceFilter)
+  },
+)
 
 const getPromptColumnCounts = (columns: readonly ComparisonProjectDifferenceColumn[]) => {
   return columns.reduce<Map<string, PromptColumnCounts>>((countMap, column) => {
@@ -53,6 +102,12 @@ const getNormalizedAnswers = (value: string | null | undefined) => {
         }),
     ),
   )
+}
+
+const getNormalizedConflictResolution = (conflictResolution: string | null | undefined) => {
+  const normalizedConflictResolution = (conflictResolution ?? '').trim().toLowerCase()
+
+  return normalizedConflictResolution === '' ? null : normalizedConflictResolution
 }
 
 const getBinaryDecision = (answer: string): BinaryDecision | null => {
@@ -128,6 +183,14 @@ const getPromptAnswerBuckets = (
   }, new Map<string, PromptAnswerBuckets>())
 }
 
+const getKindAnswers = (answerBuckets: PromptAnswerBuckets, kind: ComparisonProjectDifferenceKind) => {
+  return kind === 'human' ? answerBuckets.humanAnswers : answerBuckets.llmAnswers
+}
+
+const getKindBinaryDecisions = (answerBuckets: PromptAnswerBuckets, kind: ComparisonProjectDifferenceKind) => {
+  return kind === 'human' ? answerBuckets.humanBinaryDecisions : answerBuckets.llmBinaryDecisions
+}
+
 const getHasHumanVsLlmDifference = (promptAnswerBuckets: Map<string, PromptAnswerBuckets>) => {
   return Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
     return (
@@ -172,8 +235,64 @@ const getHasAnyDisagreement = (promptAnswerBuckets: Map<string, PromptAnswerBuck
   })
 }
 
+const getHasConflictResolutionVsKindDifference = (
+  promptAnswerBuckets: Map<string, PromptAnswerBuckets>,
+  kind: ComparisonProjectDifferenceKind,
+  conflictResolution: string | null,
+) => {
+  return (
+    conflictResolution !== null
+    && getHasAnyDisagreement(promptAnswerBuckets)
+    && Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
+      return Array.from(getKindAnswers(answerBuckets, kind)).some((answer) => {
+        return answer !== conflictResolution
+      })
+    })
+  )
+}
+
+const getHasConflictResolutionVsKindTrueConflict = (
+  promptAnswerBuckets: Map<string, PromptAnswerBuckets>,
+  kind: ComparisonProjectDifferenceKind,
+  conflictResolution: string | null,
+) => {
+  const conflictResolutionDecision = conflictResolution === null ? null : getBinaryDecision(conflictResolution)
+
+  return (
+    conflictResolutionDecision !== null
+    && getHasAnyDisagreement(promptAnswerBuckets)
+    && Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
+      return Array.from(getKindBinaryDecisions(answerBuckets, kind)).some((decision) => {
+        return decision !== conflictResolutionDecision
+      })
+    })
+  )
+}
+
+const comparisonProjectDifferenceFilterMatchers = {
+  'any-disagreement': getHasAnyDisagreement,
+  'human-vs-llm': getHasHumanVsLlmDifference,
+  'human-vs-llm-overlap': getHasHumanVsLlmOverlap,
+  'human-vs-llm-true-conflict': getHasHumanVsLlmTrueConflict,
+  'llm-vs-llm': getHasLlmVsLlmDifference,
+  'llm-vs-llm-true-difference': getHasLlmVsLlmTrueDifference,
+  'resolution-vs-human': (promptAnswerBuckets, conflictResolution) => {
+    return getHasConflictResolutionVsKindDifference(promptAnswerBuckets, 'human', conflictResolution)
+  },
+  'resolution-vs-human-true-conflict': (promptAnswerBuckets, conflictResolution) => {
+    return getHasConflictResolutionVsKindTrueConflict(promptAnswerBuckets, 'human', conflictResolution)
+  },
+  'resolution-vs-llm': (promptAnswerBuckets, conflictResolution) => {
+    return getHasConflictResolutionVsKindDifference(promptAnswerBuckets, 'llm', conflictResolution)
+  },
+  'resolution-vs-llm-true-conflict': (promptAnswerBuckets, conflictResolution) => {
+    return getHasConflictResolutionVsKindTrueConflict(promptAnswerBuckets, 'llm', conflictResolution)
+  },
+} satisfies Record<Exclude<ComparisonProjectDifferenceFilter, 'all'>, ComparisonProjectDifferenceFilterMatcher>
+
 export const getAvailableComparisonProjectDifferenceFilters = (
   columns: readonly ComparisonProjectDifferenceColumn[],
+  availability: ComparisonProjectDifferenceFilterAvailability = {},
 ): ComparisonProjectDifferenceFilter[] => {
   const promptColumnCounts = getPromptColumnCounts(columns)
   const hasHumanVsLlmComparison = Array.from(promptColumnCounts.values()).some((columnCounts) => {
@@ -182,6 +301,13 @@ export const getAvailableComparisonProjectDifferenceFilters = (
   const hasLlmVsLlmComparison = Array.from(promptColumnCounts.values()).some((columnCounts) => {
     return columnCounts.llmCount > 1
   })
+  const hasLlmColumns = Array.from(promptColumnCounts.values()).some((columnCounts) => {
+    return columnCounts.llmCount > 0
+  })
+  const hasHumanColumns = Array.from(promptColumnCounts.values()).some((columnCounts) => {
+    return columnCounts.humanCount > 0
+  })
+  const hasConflictResolution = availability.hasConflictResolution ?? false
 
   return [
     'all',
@@ -191,6 +317,12 @@ export const getAvailableComparisonProjectDifferenceFilters = (
     ...(hasLlmVsLlmComparison ? (['llm-vs-llm'] as const) : []),
     ...(hasLlmVsLlmComparison ? (['llm-vs-llm-true-difference'] as const) : []),
     ...(hasHumanVsLlmComparison && hasLlmVsLlmComparison ? (['any-disagreement'] as const) : []),
+    ...(hasConflictResolution && hasLlmColumns
+      ? (['resolution-vs-llm', 'resolution-vs-llm-true-conflict'] as const)
+      : []),
+    ...(hasConflictResolution && hasHumanColumns
+      ? (['resolution-vs-human', 'resolution-vs-human-true-conflict'] as const)
+      : []),
   ]
 }
 
@@ -206,26 +338,15 @@ export const getSelectableComparisonProjectDifferenceFilters = (
 }
 
 export const getComparisonProjectDifferenceFilterLabel = (differenceFilter: ComparisonProjectDifferenceFilter) => {
-  return differenceFilter === 'all'
-    ? 'All rows'
-    : differenceFilter === 'human-vs-llm-overlap'
-      ? 'Human and LLM judged'
-      : differenceFilter === 'human-vs-llm'
-        ? 'Human vs LLM conflict'
-        : differenceFilter === 'human-vs-llm-true-conflict'
-          ? 'Human vs LLM true conflict'
-          : differenceFilter === 'llm-vs-llm'
-            ? 'LLM vs LLM differences'
-            : differenceFilter === 'llm-vs-llm-true-difference'
-              ? 'LLM vs LLM true differences'
-              : 'Any disagreement'
+  return comparisonProjectDifferenceFilterLabels[differenceFilter]
 }
 
 export const getNormalizedComparisonProjectDifferenceFilter = (
   differenceFilter: ComparisonProjectDifferenceFilter,
   columns: readonly ComparisonProjectDifferenceColumn[],
+  availability: ComparisonProjectDifferenceFilterAvailability = {},
 ) => {
-  const availableFilters = getAvailableComparisonProjectDifferenceFilters(columns)
+  const availableFilters = getAvailableComparisonProjectDifferenceFilters(columns, availability)
 
   return availableFilters.includes(differenceFilter) ? differenceFilter : 'all'
 }
@@ -234,8 +355,11 @@ export const getComparisonProjectHasDifferenceFilterMatch = (
   cells: Record<string, string | null>,
   columns: readonly ComparisonProjectDifferenceColumn[],
   differenceFilter: ComparisonProjectDifferenceFilter,
+  conflictResolution?: string | null,
 ) => {
-  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, columns)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, columns, {
+    hasConflictResolution: conflictResolution !== undefined,
+  })
 
   if (normalizedDifferenceFilter === 'all') {
     return true
@@ -243,17 +367,10 @@ export const getComparisonProjectHasDifferenceFilterMatch = (
 
   const promptAnswerBuckets = getPromptAnswerBuckets(cells, columns)
 
-  return normalizedDifferenceFilter === 'human-vs-llm'
-    ? getHasHumanVsLlmDifference(promptAnswerBuckets)
-    : normalizedDifferenceFilter === 'human-vs-llm-overlap'
-      ? getHasHumanVsLlmOverlap(promptAnswerBuckets)
-      : normalizedDifferenceFilter === 'human-vs-llm-true-conflict'
-        ? getHasHumanVsLlmTrueConflict(promptAnswerBuckets)
-        : normalizedDifferenceFilter === 'llm-vs-llm'
-          ? getHasLlmVsLlmDifference(promptAnswerBuckets)
-          : normalizedDifferenceFilter === 'llm-vs-llm-true-difference'
-            ? getHasLlmVsLlmTrueDifference(promptAnswerBuckets)
-            : getHasAnyDisagreement(promptAnswerBuckets)
+  return comparisonProjectDifferenceFilterMatchers[normalizedDifferenceFilter](
+    promptAnswerBuckets,
+    getNormalizedConflictResolution(conflictResolution),
+  )
 }
 
 export const getComparisonProjectHasAnyConflict = (

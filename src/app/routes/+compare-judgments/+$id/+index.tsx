@@ -295,8 +295,20 @@ const CompareProjectJudgmentsPage = () => {
       },
     )
   })
+  const isSummaryMode = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
+  })
+  const showConflictResolutionFilter = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return Boolean(comparisonProject?.allowConflictResolution && isSummaryMode())
+  })
   const availableDifferenceFilters = createMemo(() => {
-    return getAvailableComparisonProjectDifferenceFilters(orderedColumns())
+    return getAvailableComparisonProjectDifferenceFilters(orderedColumns(), {
+      hasConflictResolution: showConflictResolutionFilter(),
+    })
   })
   const getCurrentJudgmentsPageQueryKey = () => {
     return [
@@ -402,16 +414,6 @@ const CompareProjectJudgmentsPage = () => {
       : (comparisonProject?.prompts ?? []).map((prompt) => {
           return {label: getConflictResolutionPromptLabel(prompt), value: prompt.id}
         })
-  })
-  const isSummaryMode = createMemo(() => {
-    const comparisonProject = comparisonProjectQuery.data
-
-    return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
-  })
-  const showConflictResolutionFilter = createMemo(() => {
-    const comparisonProject = comparisonProjectQuery.data
-
-    return Boolean(comparisonProject?.allowConflictResolution && isSummaryMode())
   })
   const conflictResolutionFilterOptions = createMemo(() => {
     return getComparisonProjectConflictResolutionFilterOptions(conflictResolutionOptions())

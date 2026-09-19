@@ -52,7 +52,7 @@ describe('CompareProjectExportFilters', () => {
 
     try {
       expect(container.textContent).not.toContain('Language')
-      expect(container.textContent).not.toContain('Chinese articles')
+      expect(container.textContent).not.toContain('Non-Chinese')
     } finally {
       dispose()
     }
@@ -63,12 +63,12 @@ describe('CompareProjectExportFilters', () => {
 
     try {
       expect(container.textContent).toContain('Language')
-      expect(container.textContent).toContain('Chinese articles')
+      expect(container.textContent).toContain('Non-Chinese')
       expect(
         Array.from(container.querySelectorAll('select')[3]?.options ?? []).map((option) => {
           return option.textContent
         }),
-      ).toEqual(['All', 'Chinese articles', 'Non-Chinese articles'])
+      ).toEqual(['All', 'Chinese', 'Non-Chinese'])
     } finally {
       dispose()
     }

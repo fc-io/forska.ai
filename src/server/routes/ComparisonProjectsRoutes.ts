@@ -17,6 +17,8 @@ import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectC
 import {
   type ComparisonProjectDifferenceColumn,
   type ComparisonProjectDifferenceFilter,
+  type ComparisonProjectDifferenceFilterAvailability,
+  comparisonProjectDifferenceFilters,
   getComparisonProjectDifferenceFilterLabel,
   getNormalizedComparisonProjectDifferenceFilter,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
@@ -701,6 +703,12 @@ const getRequestedComparisonProjectDifferenceFilter = (params: {
   return params.differenceFilter ?? (params.showOnlyModelDifferences ? 'llm-vs-llm' : 'all')
 }
 
+const comparisonProjectDifferenceFilterBodySchema = t.Union(
+  comparisonProjectDifferenceFilters.map((differenceFilter) => {
+    return t.Literal(differenceFilter)
+  }),
+)
+
 const getNormalizedComparisonProjectConflictResolutionFilter = (
   scope: ComparisonProjectScope,
   value: string | null | undefined,
@@ -959,6 +967,12 @@ const getComparisonProjectContentVariants = (settings: {
 
 const getIsSummaryMode = (scope: Pick<ComparisonProjectScope, 'compareWithHumans' | 'humanJudgmentMode'>) => {
   return scope.compareWithHumans && scope.humanJudgmentMode === 'summary'
+}
+
+const getComparisonProjectDifferenceFilterAvailability = (
+  scope: Pick<ComparisonProjectScope, 'allowConflictResolution' | 'compareWithHumans' | 'humanJudgmentMode'>,
+): ComparisonProjectDifferenceFilterAvailability => {
+  return {hasConflictResolution: scope.allowConflictResolution && getIsSummaryMode(scope)}
 }
 
 const getModelSelectionId = (modelRow: {
@@ -4179,7 +4193,11 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
   const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
   const comparisonProjectLiteral = getSqlLiteral(scope.id)
   const activeGenerationLiteral = getSqlLiteral(scope.activeGeneration)
-  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(
+    differenceFilter,
+    scope.columns,
+    getComparisonProjectDifferenceFilterAvailability(scope),
+  )
   const sourceRows: ComparisonProjectConflictResolutionTransferSourceRow[] = []
   const appendSourceRowsForArticleIds = async (articleIds: string[]) => {
     if (articleIds.length === 0) {
@@ -4397,7 +4415,11 @@ const getComparisonProjectExportResponse = (
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
   const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
-  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(
+    differenceFilter,
+    orderedColumns,
+    getComparisonProjectDifferenceFilterAvailability(scope),
+  )
   const includeConflictResolution = scope.allowConflictResolution
   const headers = getComparisonProjectExportHeaders(orderedColumns, includeConflictResolution)
   const filename = getComparisonProjectExportFilename(scope)
@@ -4846,7 +4868,11 @@ const getComparisonProjectPdfExportResponse = async (
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
   const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
-  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(
+    differenceFilter,
+    orderedColumns,
+    getComparisonProjectDifferenceFilterAvailability(scope),
+  )
   const filename = getComparisonProjectPdfExportFilename(scope)
   const pdf = new SimplePdfDocument()
   const totalCountResult = await getComparisonProjectJudgmentsCount(
@@ -4992,7 +5018,11 @@ const getComparisonProjectJudgmentsPage = async (
     }
   }
 
-  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(
+    differenceFilter,
+    scope.columns,
+    getComparisonProjectDifferenceFilterAvailability(scope),
+  )
   const pageResult = await getComparisonProjectServingJudgmentRowsPage({
     comparisonProjectId: scope.id,
     articleCategoryFilter,
@@ -5039,7 +5069,11 @@ const getComparisonProjectJudgmentsCount = async (
     }
   }
 
-  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(
+    differenceFilter,
+    scope.columns,
+    getComparisonProjectDifferenceFilterAvailability(scope),
+  )
   const countResult = await getComparisonProjectServingJudgmentCount({
     comparisonProjectId: scope.id,
     articleCategoryFilter,
@@ -5824,17 +5858,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter: t.Optional(t.String()),
         articleCategoryFilter: t.Optional(t.String()),
         conflictResolutionFilter: t.Optional(t.String()),
-        differenceFilter: t.Optional(
-          t.Union([
-            t.Literal('all'),
-            t.Literal('human-vs-llm-overlap'),
-            t.Literal('human-vs-llm'),
-            t.Literal('human-vs-llm-true-conflict'),
-            t.Literal('llm-vs-llm'),
-            t.Literal('llm-vs-llm-true-difference'),
-            t.Literal('any-disagreement'),
-          ]),
-        ),
+        differenceFilter: t.Optional(comparisonProjectDifferenceFilterBodySchema),
         showOnlyModelDifferences: t.Optional(t.Boolean()),
       }),
     },
@@ -5876,17 +5900,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter: t.Optional(t.String()),
         articleCategoryFilter: t.Optional(t.String()),
         conflictResolutionFilter: t.Optional(t.String()),
-        differenceFilter: t.Optional(
-          t.Union([
-            t.Literal('all'),
-            t.Literal('human-vs-llm-overlap'),
-            t.Literal('human-vs-llm'),
-            t.Literal('human-vs-llm-true-conflict'),
-            t.Literal('llm-vs-llm'),
-            t.Literal('llm-vs-llm-true-difference'),
-            t.Literal('any-disagreement'),
-          ]),
-        ),
+        differenceFilter: t.Optional(comparisonProjectDifferenceFilterBodySchema),
       }),
     },
   )
@@ -5971,17 +5985,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter: t.Optional(t.String()),
         articleCategoryFilter: t.Optional(t.String()),
         conflictResolutionFilter: t.Optional(t.String()),
-        differenceFilter: t.Optional(
-          t.Union([
-            t.Literal('all'),
-            t.Literal('human-vs-llm-overlap'),
-            t.Literal('human-vs-llm'),
-            t.Literal('human-vs-llm-true-conflict'),
-            t.Literal('llm-vs-llm'),
-            t.Literal('llm-vs-llm-true-difference'),
-            t.Literal('any-disagreement'),
-          ]),
-        ),
+        differenceFilter: t.Optional(comparisonProjectDifferenceFilterBodySchema),
       }),
     },
   )
@@ -6104,17 +6108,7 @@ export const comparisonProjectsRoutes = new Elysia()
         articleCategoryFilter: t.Optional(t.String()),
         conflictResolutionFilter: t.Optional(t.String()),
         format: t.Optional(t.Union([t.Literal('csv'), t.Literal('pdf')])),
-        differenceFilter: t.Optional(
-          t.Union([
-            t.Literal('all'),
-            t.Literal('human-vs-llm-overlap'),
-            t.Literal('human-vs-llm'),
-            t.Literal('human-vs-llm-true-conflict'),
-            t.Literal('llm-vs-llm'),
-            t.Literal('llm-vs-llm-true-difference'),
-            t.Literal('any-disagreement'),
-          ]),
-        ),
+        differenceFilter: t.Optional(comparisonProjectDifferenceFilterBodySchema),
       }),
     },
   )

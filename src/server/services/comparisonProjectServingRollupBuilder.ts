@@ -4,7 +4,7 @@ import {
 } from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {
   type ComparisonProjectDifferenceFilter,
-  comparisonProjectDifferenceFilters,
+  comparisonProjectPrecomputedDifferenceFilters,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
 import {type ComparisonProjectRowFilter, comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
@@ -832,7 +832,9 @@ const getComparisonProjectFilterValuesCteSql = (params: {
   rowFilter?: ComparisonProjectRowFilter
 }) => {
   const rowFilters = params.rowFilter ? [params.rowFilter] : comparisonProjectRowFilters
-  const differenceFilters = params.differenceFilter ? [params.differenceFilter] : comparisonProjectDifferenceFilters
+  const differenceFilters = params.differenceFilter
+    ? [params.differenceFilter]
+    : comparisonProjectPrecomputedDifferenceFilters
   const articleCategoryFilters = params.articleCategoryFilter
     ? [params.articleCategoryFilter]
     : comparisonProjectArticleCategoryFilters
@@ -1096,7 +1098,7 @@ const insertComparisonProjectFilterMembers = (
 
 const getComparisonProjectFilterStatsInsertStatements = (params: ComparisonProjectServingRollupBuilderParams) => {
   return comparisonProjectRowFilters.flatMap((rowFilter) => {
-    return comparisonProjectDifferenceFilters.map((differenceFilter) => {
+    return comparisonProjectPrecomputedDifferenceFilters.map((differenceFilter) => {
       return getComparisonProjectFilterStatsInsertSql({...params, differenceFilter, rowFilter})
     })
   })

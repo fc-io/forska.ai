@@ -40,6 +40,39 @@ test('available difference filters hide non-applicable options', () => {
   ])
 })
 
+test('conflict-resolution difference filters require resolution support', () => {
+  const columns = [
+    {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
+    {id: 'human:summary', kind: 'human', promptId: 'summary'},
+  ] as const
+
+  expect(getAvailableComparisonProjectDifferenceFilters(columns, {hasConflictResolution: false})).toEqual([
+    'all',
+    'human-vs-llm-overlap',
+    'human-vs-llm',
+    'human-vs-llm-true-conflict',
+  ])
+  expect(getAvailableComparisonProjectDifferenceFilters(columns, {hasConflictResolution: true})).toEqual([
+    'all',
+    'human-vs-llm-overlap',
+    'human-vs-llm',
+    'human-vs-llm-true-conflict',
+    'resolution-vs-llm',
+    'resolution-vs-llm-true-conflict',
+    'resolution-vs-human',
+    'resolution-vs-human-true-conflict',
+  ])
+  expect(
+    getAvailableComparisonProjectDifferenceFilters([{id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'}], {
+      hasConflictResolution: true,
+    }),
+  ).toEqual(['all', 'resolution-vs-llm', 'resolution-vs-llm-true-conflict'])
+  expect(getNormalizedComparisonProjectDifferenceFilter('resolution-vs-llm', columns)).toBe('all')
+  expect(
+    getNormalizedComparisonProjectDifferenceFilter('resolution-vs-llm', columns, {hasConflictResolution: true}),
+  ).toBe('resolution-vs-llm')
+})
+
 test('difference filter labels stay user-facing', () => {
   expect(getComparisonProjectDifferenceFilterLabel('all')).toBe('All rows')
   expect(getComparisonProjectDifferenceFilterLabel('human-vs-llm-overlap')).toBe('Human and LLM judged')
@@ -48,6 +81,52 @@ test('difference filter labels stay user-facing', () => {
   expect(getComparisonProjectDifferenceFilterLabel('llm-vs-llm')).toBe('LLM vs LLM differences')
   expect(getComparisonProjectDifferenceFilterLabel('llm-vs-llm-true-difference')).toBe('LLM vs LLM true differences')
   expect(getComparisonProjectDifferenceFilterLabel('any-disagreement')).toBe('Any disagreement')
+  expect(getComparisonProjectDifferenceFilterLabel('resolution-vs-llm')).toBe('Conflict resolution vs LLM conflict')
+  expect(getComparisonProjectDifferenceFilterLabel('resolution-vs-llm-true-conflict')).toBe(
+    'Conflict resolution vs LLM true conflict',
+  )
+  expect(getComparisonProjectDifferenceFilterLabel('resolution-vs-human')).toBe('Conflict resolution vs human conflict')
+  expect(getComparisonProjectDifferenceFilterLabel('resolution-vs-human-true-conflict')).toBe(
+    'Conflict resolution vs human true conflict',
+  )
+})
+
+test('conflict-resolution difference matching compares the resolution against each side', () => {
+  const columns = [
+    {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
+    {id: 'llm:model-2:summary', kind: 'llm', promptId: 'summary'},
+    {id: 'human:summary', kind: 'human', promptId: 'summary'},
+  ] as const
+  const cells = {'human:summary': 'no', 'llm:model-1:summary': 'yes', 'llm:model-2:summary': 'maybe'}
+
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', 'Yes')).toBe(true)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm-true-conflict', 'Yes')).toBe(
+    false,
+  )
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm-true-conflict', 'No')).toBe(
+    true,
+  )
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-human', 'No')).toBe(false)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-human', 'Maybe')).toBe(true)
+  expect(
+    getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-human-true-conflict', 'Maybe'),
+  ).toBe(true)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', null)).toBe(false)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', '  ')).toBe(false)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm')).toBe(true)
+})
+
+test('conflict-resolution difference matching ignores rows without a conflict', () => {
+  const columns = [
+    {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
+    {id: 'human:summary', kind: 'human', promptId: 'summary'},
+  ] as const
+  const cells = {'human:summary': 'yes', 'llm:model-1:summary': 'yes'}
+
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', 'no')).toBe(false)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-human-true-conflict', 'no')).toBe(
+    false,
+  )
 })
 
 test('selectable difference filters keep the current selection renderable', () => {

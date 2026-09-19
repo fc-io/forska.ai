@@ -20,9 +20,9 @@ export const getComparisonProjectArticleCategoryFilterLabel = (
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
 ) => {
   return articleCategoryFilter === 'chinese'
-    ? 'Chinese articles'
+    ? 'Chinese'
     : articleCategoryFilter === 'non_chinese'
-      ? 'Non-Chinese articles'
+      ? 'Non-Chinese'
       : 'All'
 }
 

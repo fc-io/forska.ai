@@ -237,6 +237,43 @@ test('serving member sql can filter summary conflict-resolution rows', () => {
   expect(yesSql).toContain("article.has_conflict AND conflict_resolution.answer_value = 'yes'")
 })
 
+test('serving member sql compares conflict resolutions against llm and human answers', () => {
+  const llmSql = getComparisonProjectServingMemberSql({
+    comparisonProjectId: 'comparison-project-1',
+    cursor: null,
+    differenceFilter: 'resolution-vs-llm',
+    limit: 25,
+    rowFilter: 'all',
+  })
+  const humanTrueConflictSql = getComparisonProjectServingMemberSql({
+    comparisonProjectId: 'comparison-project-1',
+    cursor: null,
+    differenceFilter: 'resolution-vs-human-true-conflict',
+    limit: 25,
+    rowFilter: 'all',
+  })
+  const allSql = getComparisonProjectServingMemberSql({
+    comparisonProjectId: 'comparison-project-1',
+    cursor: null,
+    differenceFilter: 'all',
+    limit: 25,
+    rowFilter: 'all',
+  })
+
+  expect(llmSql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+  expect(llmSql).toContain("article.has_conflict AND NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL")
+  expect(llmSql).toContain("article.has_llm_answered_yes AND LOWER(TRIM(conflict_resolution.answer_value)) <> 'yes'")
+  expect(llmSql).toContain("article.has_llm_answered_no AND LOWER(TRIM(conflict_resolution.answer_value)) <> 'no'")
+  expect(llmSql).not.toContain('has_human_answered')
+  expect(humanTrueConflictSql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+  expect(humanTrueConflictSql).toContain(
+    "LOWER(TRIM(conflict_resolution.answer_value)) IN ('yes', 'maybe') AND article.has_human_answered_no",
+  )
+  expect(humanTrueConflictSql).toContain('article.has_human_answered_yes OR article.has_human_answered_maybe')
+  expect(humanTrueConflictSql).not.toContain('has_llm_answered')
+  expect(allSql).not.toContain('conflict_resolution')
+})
+
 test('serving hydration sql scopes articles and cells to returned article ids', () => {
   const articleSql = getComparisonProjectServingArticlesSql({
     articleIds: ['article-1', 'article-2'],
@@ -326,6 +363,32 @@ test('serving judgment count returns pages from stats and zero for missing stats
   expect(statements[0]).toContain('FROM mart.comparison_filter_stats stats')
   expect(statements[0]).not.toContain('comparison_filter_member')
   expect(statements[0]).not.toContain('comparison_article_serving')
+})
+
+test('serving judgment count scans serving rows for conflict-resolution difference filters', async () => {
+  const statements: string[] = []
+  const count = await getComparisonProjectServingJudgmentCount({
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: 'resolution-vs-llm-true-conflict',
+    limit: 25,
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return [{totalCount: 7}] as T[]
+      },
+    },
+    rowFilter: 'all',
+  })
+
+  expect(count).toEqual({totalCount: 7, totalPages: 1})
+  expect(statements[0]).toContain('SELECT COUNT(*) AS totalCount')
+  expect(statements[0]).toContain('FROM mart.comparison_article_serving article')
+  expect(statements[0]).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+  expect(statements[0]).toContain(
+    "LOWER(TRIM(conflict_resolution.answer_value)) IN ('yes', 'maybe') AND article.has_llm_answered_no",
+  )
+  expect(statements[0]).not.toContain('FROM mart.comparison_filter_stats stats')
 })
 
 test('serving judgment rows return next cursor and hydrate page rows only', async () => {
