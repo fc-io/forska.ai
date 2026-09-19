@@ -422,10 +422,10 @@ export type ComparisonProjectStats = {
   servingUpdatedAt: Date | string | null
 }
 export type ComparisonProjectRowsRequestFilters = {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
-  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter
-  rowFilter?: ComparisonProjectRowFilter
-  differenceFilter?: ComparisonProjectDifferenceFilter
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter[]
+  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter[]
+  rowFilter?: ComparisonProjectRowFilter[]
+  differenceFilter?: ComparisonProjectDifferenceFilter[]
 }
 export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequestFilters & {
   cursor?: string | null
@@ -849,19 +849,19 @@ export const fetchComparisonProjectEditFormData = async (comparisonProjectId: st
 export const fetchComparisonProjectJudgmentsPage = async (
   comparisonProjectId: string,
   limit: number,
-  rowFilter?: ComparisonProjectRowFilter,
-  differenceFilter?: ComparisonProjectDifferenceFilter,
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter,
-  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter,
+  rowFilters: readonly ComparisonProjectRowFilter[],
+  differenceFilters: readonly ComparisonProjectDifferenceFilter[],
+  articleCategoryFilters: readonly ComparisonProjectArticleCategoryFilter[],
+  conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[],
   cursor?: string | null,
 ) => {
   const body: ComparisonProjectJudgmentsPageRequest = {
-    articleCategoryFilter,
-    conflictResolutionFilter,
+    articleCategoryFilter: [...articleCategoryFilters],
+    conflictResolutionFilter: [...conflictResolutionFilters],
     cursor,
     limit: String(limit),
-    rowFilter,
-    differenceFilter,
+    rowFilter: [...rowFilters],
+    differenceFilter: [...differenceFilters],
   }
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post(body)
 
@@ -871,17 +871,17 @@ export const fetchComparisonProjectJudgmentsPage = async (
 export const fetchComparisonProjectJudgmentsCount = async (
   comparisonProjectId: string,
   limit: number,
-  rowFilter?: ComparisonProjectRowFilter,
-  differenceFilter?: ComparisonProjectDifferenceFilter,
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter,
-  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter,
+  rowFilters: readonly ComparisonProjectRowFilter[],
+  differenceFilters: readonly ComparisonProjectDifferenceFilter[],
+  articleCategoryFilters: readonly ComparisonProjectArticleCategoryFilter[],
+  conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[],
 ) => {
   const body: ComparisonProjectJudgmentsCountRequest = {
-    articleCategoryFilter,
-    conflictResolutionFilter,
+    articleCategoryFilter: [...articleCategoryFilters],
+    conflictResolutionFilter: [...conflictResolutionFilters],
     limit: String(limit),
-    rowFilter,
-    differenceFilter,
+    rowFilter: [...rowFilters],
+    differenceFilter: [...differenceFilters],
   }
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.count.post(body)
 

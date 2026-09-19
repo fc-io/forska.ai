@@ -1,3 +1,5 @@
+import {getComparisonProjectCanonicalFilterSelection} from './comparisonProjectFilterSelection.ts'
+
 export const comparisonProjectDifferenceFilters = [
   'all',
   'human-vs-llm-overlap',
@@ -328,17 +330,28 @@ export const getAvailableComparisonProjectDifferenceFilters = (
 
 export const getSelectableComparisonProjectDifferenceFilters = (
   availableFilters: readonly ComparisonProjectDifferenceFilter[],
-  selectedFilter: ComparisonProjectDifferenceFilter,
+  selectedFilters: readonly ComparisonProjectDifferenceFilter[],
 ) => {
   const availableFilterSet = new Set(availableFilters)
 
   return comparisonProjectDifferenceFilters.filter((differenceFilter) => {
-    return differenceFilter === selectedFilter || availableFilterSet.has(differenceFilter)
+    return (
+      differenceFilter !== 'all'
+      && (selectedFilters.includes(differenceFilter) || availableFilterSet.has(differenceFilter))
+    )
   })
 }
 
 export const getComparisonProjectDifferenceFilterLabel = (differenceFilter: ComparisonProjectDifferenceFilter) => {
   return comparisonProjectDifferenceFilterLabels[differenceFilter]
+}
+
+export const getComparisonProjectDifferenceFiltersLabel = (
+  differenceFilters: readonly ComparisonProjectDifferenceFilter[],
+) => {
+  return differenceFilters.length === 0
+    ? getComparisonProjectDifferenceFilterLabel('all')
+    : differenceFilters.map(getComparisonProjectDifferenceFilterLabel).join(' + ')
 }
 
 export const getNormalizedComparisonProjectDifferenceFilter = (
@@ -349,6 +362,22 @@ export const getNormalizedComparisonProjectDifferenceFilter = (
   const availableFilters = getAvailableComparisonProjectDifferenceFilters(columns, availability)
 
   return availableFilters.includes(differenceFilter) ? differenceFilter : 'all'
+}
+
+export const getComparisonProjectDifferenceFilterSelection = (value: unknown): ComparisonProjectDifferenceFilter[] => {
+  return getComparisonProjectCanonicalFilterSelection(value, comparisonProjectDifferenceFilters)
+}
+
+export const getNormalizedComparisonProjectDifferenceFilters = (
+  value: unknown,
+  columns: readonly ComparisonProjectDifferenceColumn[],
+  availability: ComparisonProjectDifferenceFilterAvailability = {},
+): ComparisonProjectDifferenceFilter[] => {
+  const availableFilters = new Set(getAvailableComparisonProjectDifferenceFilters(columns, availability))
+
+  return getComparisonProjectDifferenceFilterSelection(value).filter((differenceFilter) => {
+    return availableFilters.has(differenceFilter)
+  })
 }
 
 export const getComparisonProjectHasDifferenceFilterMatch = (

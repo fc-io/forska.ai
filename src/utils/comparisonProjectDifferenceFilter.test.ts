@@ -3,8 +3,11 @@ import {expect, test} from 'bun:test'
 import {
   getAvailableComparisonProjectDifferenceFilters,
   getComparisonProjectDifferenceFilterLabel,
+  getComparisonProjectDifferenceFilterSelection,
+  getComparisonProjectDifferenceFiltersLabel,
   getComparisonProjectHasDifferenceFilterMatch,
   getNormalizedComparisonProjectDifferenceFilter,
+  getNormalizedComparisonProjectDifferenceFilters,
   getSelectableComparisonProjectDifferenceFilters,
 } from './comparisonProjectDifferenceFilter.ts'
 
@@ -129,17 +132,39 @@ test('conflict-resolution difference matching ignores rows without a conflict', 
   )
 })
 
-test('selectable difference filters keep the current selection renderable', () => {
-  expect(getSelectableComparisonProjectDifferenceFilters(['all'] as const, 'human-vs-llm-overlap')).toEqual([
-    'all',
+test('selectable difference filters keep the current selection renderable and omit all', () => {
+  expect(getSelectableComparisonProjectDifferenceFilters(['all'] as const, ['human-vs-llm-overlap'])).toEqual([
     'human-vs-llm-overlap',
   ])
   expect(
-    getSelectableComparisonProjectDifferenceFilters(
-      ['all', 'llm-vs-llm', 'llm-vs-llm-true-difference'] as const,
+    getSelectableComparisonProjectDifferenceFilters(['all', 'llm-vs-llm', 'llm-vs-llm-true-difference'] as const, [
       'llm-vs-llm',
-    ),
-  ).toEqual(['all', 'llm-vs-llm', 'llm-vs-llm-true-difference'])
+    ]),
+  ).toEqual(['llm-vs-llm', 'llm-vs-llm-true-difference'])
+})
+
+test('difference filter multi selections normalize against availability', () => {
+  const columns = [
+    {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
+    {id: 'human:summary', kind: 'human', promptId: 'summary'},
+  ] as const
+
+  expect(getComparisonProjectDifferenceFilterSelection('llm-vs-llm,all,human-vs-llm,bogus,human-vs-llm')).toEqual([
+    'human-vs-llm',
+    'llm-vs-llm',
+  ])
+  expect(
+    getNormalizedComparisonProjectDifferenceFilters(['llm-vs-llm', 'human-vs-llm', 'resolution-vs-llm'], columns),
+  ).toEqual(['human-vs-llm'])
+  expect(
+    getNormalizedComparisonProjectDifferenceFilters(['resolution-vs-llm', 'human-vs-llm'], columns, {
+      hasConflictResolution: true,
+    }),
+  ).toEqual(['human-vs-llm', 'resolution-vs-llm'])
+  expect(getComparisonProjectDifferenceFiltersLabel([])).toBe('All rows')
+  expect(getComparisonProjectDifferenceFiltersLabel(['human-vs-llm', 'resolution-vs-llm'])).toBe(
+    'Human vs LLM conflict + Conflict resolution vs LLM conflict',
+  )
 })
 
 test('difference matching supports prompt and summary comparisons', () => {

@@ -1,9 +1,9 @@
-import * as Select from '@kobalte/core/select'
 import {useQuery} from '@tanstack/solid-query'
 import type {Setter} from 'solid-js'
 import {createEffect, createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+import {MultiSelect} from '../../ui/multi-select.tsx'
 import {
   getPromptFilterControls,
   getPromptFilterLabel,
@@ -233,142 +233,14 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                               <label class="font-medium text-sm truncate" title={promptTitle}>
                                 {promptLabel}:
                               </label>
-                              <Select.Root<{value: string; label: string}>
-                                multiple
-                                value={options().filter((option) => {
-                                  return current().includes(option.value)
-                                })}
-                                onChange={(vals) => {
-                                  const values = vals.map((value) => {
-                                    return value.value
-                                  })
-                                  return setPromptMulti(promptFilter.promptId, values.length ? values : null)
-                                }}
+                              <MultiSelect
+                                ariaLabel={promptLabel}
                                 options={options()}
-                                optionValue="value"
-                                optionTextValue="label"
-                                placeholder="All"
-                                itemComponent={(itemProps) => {
-                                  return (
-                                    <Select.Item
-                                      item={itemProps.item}
-                                      class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-gray-900 outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-gray-100 data-[disabled]:opacity-50"
-                                    >
-                                      <Select.ItemLabel class="truncate">
-                                        {itemProps.item.rawValue.label}
-                                      </Select.ItemLabel>
-                                      <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          viewBox="0 0 24 24"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          stroke-width="3"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"
-                                          class="size-3"
-                                        >
-                                          <path d="M5 12l5 5l10 -10" />
-                                        </svg>
-                                      </Select.ItemIndicator>
-                                    </Select.Item>
-                                  )
+                                values={current()}
+                                onChange={(values) => {
+                                  setPromptMulti(promptFilter.promptId, values.length ? values : null)
                                 }}
-                              >
-                                <Select.Trigger
-                                  class="group min-h-11 w-full rounded-md border border-input bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
-                                  aria-label={promptLabel}
-                                >
-                                  <div class="flex flex-wrap gap-2 grow">
-                                    <Show when={current().length > 0} fallback={<span class="text-gray-500">All</span>}>
-                                      <For each={current()}>
-                                        {(val) => {
-                                          const displayLabel =
-                                            options().find((option) => {
-                                              return option.value === val
-                                            })?.label ?? val
-                                          return (
-                                            <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
-                                              <span class="truncate max-w-[10rem]" title={displayLabel}>
-                                                {displayLabel}
-                                              </span>
-                                              <button
-                                                type="button"
-                                                class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
-                                                aria-label={`Remove ${displayLabel}`}
-                                                onClick={() => {
-                                                  const next = current().filter((v) => {
-                                                    return v !== val
-                                                  })
-                                                  setPromptMulti(promptFilter.promptId, next.length ? next : null)
-                                                }}
-                                              >
-                                                <svg
-                                                  xmlns="http://www.w3.org/2000/svg"
-                                                  viewBox="0 0 24 24"
-                                                  fill="none"
-                                                  stroke="currentColor"
-                                                  stroke-width="2"
-                                                  stroke-linecap="round"
-                                                  stroke-linejoin="round"
-                                                  class="size-3"
-                                                >
-                                                  <path d="M18 6L6 18" />
-                                                  <path d="M6 6l12 12" />
-                                                </svg>
-                                              </button>
-                                            </span>
-                                          )
-                                        }}
-                                      </For>
-                                    </Show>
-                                  </div>
-                                  <div class="ml-auto flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      class="inline-flex size-6 items-center justify-center rounded hover:bg-muted-foreground/10"
-                                      title="Clear selection"
-                                      aria-label="Clear selection"
-                                      onClick={() => {
-                                        return setPromptMulti(promptFilter.promptId, null)
-                                      }}
-                                    >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        class="size-4 opacity-70"
-                                      >
-                                        <path d="M18 6L6 18" />
-                                        <path d="M6 6l12 12" />
-                                      </svg>
-                                    </button>
-                                    <Select.Icon>
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        class="size-4 opacity-60"
-                                      >
-                                        <path d="M6 9l6 6l6 -6" />
-                                      </svg>
-                                    </Select.Icon>
-                                  </div>
-                                </Select.Trigger>
-                                <Select.Portal>
-                                  <Select.Content class="z-50 min-w-56 rounded-md border border-input bg-white p-1 text-gray-900 shadow-xl outline-none">
-                                    <Select.Listbox class="max-h-60 overflow-auto outline-none" />
-                                  </Select.Content>
-                                </Select.Portal>
-                              </Select.Root>
+                              />
                             </div>
                           )
                         }}

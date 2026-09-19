@@ -1,6 +1,12 @@
+import {getComparisonProjectCanonicalFilterSelection} from './comparisonProjectFilterSelection.ts'
+
 export const comparisonProjectArticleCategoryFilters = ['all', 'chinese', 'non_chinese'] as const
 
 export type ComparisonProjectArticleCategoryFilter = (typeof comparisonProjectArticleCategoryFilters)[number]
+
+export const comparisonProjectArticleCategories = ['chinese', 'non_chinese'] as const
+
+export type ComparisonProjectArticleCategory = (typeof comparisonProjectArticleCategories)[number]
 
 export const defaultComparisonProjectArticleCategoryFilter: ComparisonProjectArticleCategoryFilter = 'all'
 
@@ -16,6 +22,12 @@ export const getNormalizedComparisonProjectArticleCategoryFilter = (
   return getIsComparisonProjectArticleCategoryFilter(value) ? value : defaultComparisonProjectArticleCategoryFilter
 }
 
+export const getNormalizedComparisonProjectArticleCategoryFilters = (
+  value: unknown,
+): ComparisonProjectArticleCategory[] => {
+  return getComparisonProjectCanonicalFilterSelection(value, comparisonProjectArticleCategories)
+}
+
 export const getComparisonProjectArticleCategoryFilterLabel = (
   articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
 ) => {
@@ -24,6 +36,20 @@ export const getComparisonProjectArticleCategoryFilterLabel = (
     : articleCategoryFilter === 'non_chinese'
       ? 'Non-Chinese'
       : 'All'
+}
+
+export const getComparisonProjectArticleCategoryFiltersLabel = (
+  articleCategoryFilters: readonly ComparisonProjectArticleCategory[],
+) => {
+  return articleCategoryFilters.length === 0
+    ? getComparisonProjectArticleCategoryFilterLabel('all')
+    : articleCategoryFilters.map(getComparisonProjectArticleCategoryFilterLabel).join(' + ')
+}
+
+export const getComparisonProjectArticleCategoryFilterOptions = () => {
+  return comparisonProjectArticleCategories.map((articleCategory) => {
+    return {label: getComparisonProjectArticleCategoryFilterLabel(articleCategory), value: articleCategory}
+  })
 }
 
 export type ComparisonProjectArticleCategoryBreakdown = {articleCount: number; category: 'chinese' | 'non_chinese'}

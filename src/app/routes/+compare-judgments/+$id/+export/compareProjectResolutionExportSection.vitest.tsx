@@ -81,10 +81,10 @@ describe('CompareProjectResolutionExportSection', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const exportRequest = {
-      articleCategoryFilter: 'chinese' as const,
-      conflictResolutionFilter: 'yes' as const,
-      differenceFilter: 'human-vs-llm' as const,
-      rowFilter: 'multiple-answers' as const,
+      articleCategoryFilter: ['chinese' as const],
+      conflictResolutionFilter: ['yes'],
+      differenceFilter: ['human-vs-llm' as const],
+      rowFilter: ['multiple-answers' as const],
     }
     const dispose = render(() => {
       return (
@@ -128,12 +128,7 @@ describe('CompareProjectResolutionExportSection', () => {
         <CompareProjectResolutionExportSection
           allowConflictResolution={false}
           comparisonProjectId="comparison-project-1"
-          exportRequest={{
-            articleCategoryFilter: 'all',
-            conflictResolutionFilter: 'all',
-            differenceFilter: 'all',
-            rowFilter: 'all',
-          }}
+          exportRequest={{articleCategoryFilter: [], conflictResolutionFilter: [], differenceFilter: [], rowFilter: []}}
         />
       )
     }, container)

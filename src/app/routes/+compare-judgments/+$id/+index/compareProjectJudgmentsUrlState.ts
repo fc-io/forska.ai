@@ -1,36 +1,34 @@
 import {
-  type ComparisonProjectArticleCategoryFilter,
-  defaultComparisonProjectArticleCategoryFilter,
-  getNormalizedComparisonProjectArticleCategoryFilter,
+  type ComparisonProjectArticleCategory,
+  getNormalizedComparisonProjectArticleCategoryFilters,
 } from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {
   type ComparisonProjectConflictResolutionFilter,
-  defaultComparisonProjectConflictResolutionFilter,
-  getNormalizedComparisonProjectConflictResolutionFilter,
+  getNormalizedComparisonProjectConflictResolutionFilters,
 } from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {
   type ComparisonProjectDifferenceFilter,
-  comparisonProjectDifferenceFilters,
+  getComparisonProjectDifferenceFilterSelection,
 } from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
+import {getComparisonProjectFilterSelectionSearchParam} from '../../../../../utils/comparisonProjectFilterSelection.ts'
 import {
   type ComparisonProjectRowFilter,
-  comparisonProjectRowFilters,
-  defaultComparisonProjectRowFilter,
+  getNormalizedComparisonProjectRowFilters,
 } from '../../../../../utils/comparisonProjectRowFilter.ts'
 
 export const compareProjectJudgmentsPageLimitOptions = [25, 50, 100]
 
 export type CompareProjectJudgmentsUrlState = {
-  articleCategoryFilter: ComparisonProjectArticleCategoryFilter
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter
+  articleCategoryFilters: ComparisonProjectArticleCategory[]
+  conflictResolutionFilters: ComparisonProjectConflictResolutionFilter[]
   pageLimit: number
-  rowFilter: ComparisonProjectRowFilter
-  differenceFilter: ComparisonProjectDifferenceFilter
+  rowFilters: ComparisonProjectRowFilter[]
+  differenceFilters: ComparisonProjectDifferenceFilter[]
 }
 
 type CompareProjectJudgmentsDifferenceFilterMetadataState = {
   availableDifferenceFilters: readonly ComparisonProjectDifferenceFilter[]
-  differenceFilter: ComparisonProjectDifferenceFilter
+  differenceFilters: readonly ComparisonProjectDifferenceFilter[]
   hasLoadedMetadata: boolean
 }
 
@@ -40,11 +38,11 @@ type CompareProjectJudgmentsPageQueryState = CompareProjectJudgmentsDifferenceFi
 
 export const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
   return {
-    articleCategoryFilter: defaultComparisonProjectArticleCategoryFilter,
-    conflictResolutionFilter: defaultComparisonProjectConflictResolutionFilter,
+    articleCategoryFilters: [],
+    conflictResolutionFilters: [],
     pageLimit: 50,
-    rowFilter: defaultComparisonProjectRowFilter,
-    differenceFilter: 'all',
+    rowFilters: [],
+    differenceFilters: [],
   }
 }
 
@@ -66,34 +64,26 @@ const getIsActiveLegacySearchParamValue = (value: unknown): boolean => {
         || normalizedValue === 'on'
 }
 
-const getIsComparisonProjectRowFilter = (value: unknown): value is ComparisonProjectRowFilter => {
-  return comparisonProjectRowFilters.includes(value as ComparisonProjectRowFilter)
+const getHasSearchParamValue = (value: unknown) => {
+  return Array.isArray(value) ? value.length > 0 : typeof value === 'string' && value.trim() !== ''
 }
 
-const getLegacyRowFilterSearchParamValue = (search: Record<string, unknown>): ComparisonProjectRowFilter => {
-  return getIsActiveLegacySearchParamValue(search.showOnlyFullyAnsweredPrompts)
-    ? 'fully-answered'
-    : getIsActiveLegacySearchParamValue(search.showAllRows)
-      ? 'all'
-      : defaultComparisonProjectRowFilter
+const getLegacyRowFilterSearchParamValues = (search: Record<string, unknown>): ComparisonProjectRowFilter[] => {
+  return getIsActiveLegacySearchParamValue(search.showOnlyFullyAnsweredPrompts) ? ['fully-answered'] : []
 }
 
-const getRowFilterSearchParamValue = (search: Record<string, unknown>): ComparisonProjectRowFilter => {
-  return getIsComparisonProjectRowFilter(search.rowFilter)
-    ? search.rowFilter
-    : getLegacyRowFilterSearchParamValue(search)
+const getRowFilterSearchParamValues = (search: Record<string, unknown>): ComparisonProjectRowFilter[] => {
+  return getHasSearchParamValue(search.rowFilter)
+    ? getNormalizedComparisonProjectRowFilters(search.rowFilter)
+    : getLegacyRowFilterSearchParamValues(search)
 }
 
-const getIsComparisonProjectDifferenceFilter = (value: unknown): value is ComparisonProjectDifferenceFilter => {
-  return comparisonProjectDifferenceFilters.includes(value as ComparisonProjectDifferenceFilter)
-}
-
-const getDifferenceFilterSearchParamValue = (search: Record<string, unknown>): ComparisonProjectDifferenceFilter => {
-  return getIsComparisonProjectDifferenceFilter(search.differenceFilter)
-    ? search.differenceFilter
+const getDifferenceFilterSearchParamValues = (search: Record<string, unknown>): ComparisonProjectDifferenceFilter[] => {
+  return getHasSearchParamValue(search.differenceFilter)
+    ? getComparisonProjectDifferenceFilterSelection(search.differenceFilter)
     : getIsActiveLegacySearchParamValue(search.showOnlyModelDifferences)
-      ? 'llm-vs-llm'
-      : 'all'
+      ? ['llm-vs-llm']
+      : []
 }
 
 export const getInitialCompareProjectJudgmentsUrlState = (
@@ -106,10 +96,10 @@ export const getInitialCompareProjectJudgmentsUrlState = (
     pageLimit: compareProjectJudgmentsPageLimitOptions.includes(parsedPageLimit)
       ? parsedPageLimit
       : defaultState.pageLimit,
-    rowFilter: getRowFilterSearchParamValue(search),
-    differenceFilter: getDifferenceFilterSearchParamValue(search),
-    articleCategoryFilter: getNormalizedComparisonProjectArticleCategoryFilter(search.articleCategoryFilter),
-    conflictResolutionFilter: getNormalizedComparisonProjectConflictResolutionFilter(search.conflictResolutionFilter),
+    rowFilters: getRowFilterSearchParamValues(search),
+    differenceFilters: getDifferenceFilterSearchParamValues(search),
+    articleCategoryFilters: getNormalizedComparisonProjectArticleCategoryFilters(search.articleCategoryFilter),
+    conflictResolutionFilters: getNormalizedComparisonProjectConflictResolutionFilters(search.conflictResolutionFilter),
   }
 }
 
@@ -123,29 +113,31 @@ export const getCompareProjectJudgmentsSearchParams = (
     searchParams.limit = String(state.pageLimit)
   }
 
-  if (state.rowFilter !== defaultState.rowFilter) {
-    searchParams.rowFilter = state.rowFilter
+  if (state.rowFilters.length > 0) {
+    searchParams.rowFilter = getComparisonProjectFilterSelectionSearchParam(state.rowFilters)
   }
 
-  if (state.differenceFilter !== defaultState.differenceFilter) {
-    searchParams.differenceFilter = state.differenceFilter
+  if (state.differenceFilters.length > 0) {
+    searchParams.differenceFilter = getComparisonProjectFilterSelectionSearchParam(state.differenceFilters)
   }
 
-  if (state.articleCategoryFilter !== defaultState.articleCategoryFilter) {
-    searchParams.articleCategoryFilter = state.articleCategoryFilter
+  if (state.articleCategoryFilters.length > 0) {
+    searchParams.articleCategoryFilter = getComparisonProjectFilterSelectionSearchParam(state.articleCategoryFilters)
   }
 
-  if (state.conflictResolutionFilter !== defaultState.conflictResolutionFilter) {
-    searchParams.conflictResolutionFilter = state.conflictResolutionFilter
+  if (state.conflictResolutionFilters.length > 0) {
+    searchParams.conflictResolutionFilter = getComparisonProjectFilterSelectionSearchParam(
+      state.conflictResolutionFilters,
+    )
   }
 
   return searchParams
 }
 
-export const getCompareProjectJudgmentsConfirmedDifferenceFilter = (
+export const getCompareProjectJudgmentsConfirmedDifferenceFilters = (
   state: CompareProjectJudgmentsDifferenceFilterMetadataState,
-): ComparisonProjectDifferenceFilter => {
-  return state.differenceFilter
+): readonly ComparisonProjectDifferenceFilter[] => {
+  return state.differenceFilters
 }
 
 export const getCanFetchCompareProjectJudgmentsPage = (state: CompareProjectJudgmentsPageQueryState) => {

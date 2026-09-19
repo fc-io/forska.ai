@@ -17,11 +17,11 @@ test('compare export URL state starts from active compare page search params', (
   })
 
   expect(state).toEqual({
-    articleCategoryFilter: 'non_chinese',
-    conflictResolutionFilter: 'maybe',
-    differenceFilter: 'human-vs-llm',
+    articleCategoryFilters: ['non_chinese'],
+    conflictResolutionFilters: ['maybe'],
+    differenceFilters: ['human-vs-llm'],
     pageLimit: 100,
-    rowFilter: 'fully-answered',
+    rowFilters: ['fully-answered'],
   })
   expect(getCompareProjectExportSearchParams(state)).toEqual({
     articleCategoryFilter: 'non_chinese',
@@ -32,8 +32,9 @@ test('compare export URL state starts from active compare page search params', (
   })
 })
 
-test('compare export request body sends only export filters', () => {
+test('compare export request body sends filter selections as arrays', () => {
   const state = getInitialCompareProjectExportUrlState({
+    conflictResolutionFilter: 'yes,not-set',
     differenceFilter: 'llm-vs-llm',
     limit: '25',
     page: '2',
@@ -41,10 +42,10 @@ test('compare export request body sends only export filters', () => {
   })
 
   expect(getCompareProjectExportRequestBody(state)).toEqual({
-    articleCategoryFilter: 'all',
-    conflictResolutionFilter: 'all',
-    differenceFilter: 'llm-vs-llm',
-    rowFilter: 'all',
+    articleCategoryFilter: [],
+    conflictResolutionFilter: ['yes', 'not-set'],
+    differenceFilter: ['llm-vs-llm'],
+    rowFilter: [],
   })
 })
 
@@ -54,16 +55,16 @@ test('compare export URL state normalizes legacy compare filters to canonical pa
     showOnlyModelDifferences: '1',
   })
 
-  expect(state.rowFilter).toBe('fully-answered')
-  expect(state.differenceFilter).toBe('llm-vs-llm')
+  expect(state.rowFilters).toEqual(['fully-answered'])
+  expect(state.differenceFilters).toEqual(['llm-vs-llm'])
   expect(getCompareProjectExportSearchParams(state)).toEqual({
     differenceFilter: 'llm-vs-llm',
     rowFilter: 'fully-answered',
   })
   expect(getCompareProjectExportRequestBody(state)).toEqual({
-    articleCategoryFilter: 'all',
-    conflictResolutionFilter: 'all',
-    differenceFilter: 'llm-vs-llm',
-    rowFilter: 'fully-answered',
+    articleCategoryFilter: [],
+    conflictResolutionFilter: [],
+    differenceFilter: ['llm-vs-llm'],
+    rowFilter: ['fully-answered'],
   })
 })

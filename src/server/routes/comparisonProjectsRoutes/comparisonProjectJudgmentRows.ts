@@ -10,6 +10,7 @@ import {
   getComparisonProjectHasDifferenceFilterMatch,
   getIsComparisonProjectConflictResolutionDifferenceFilter,
 } from '../../../utils/comparisonProjectDifferenceFilter.ts'
+import type {ComparisonProjectFilterSelection} from '../../../utils/comparisonProjectFilterSelection.ts'
 import {
   type ComparisonProjectRowFilter,
   getComparisonProjectPassesRowFilter,
@@ -120,15 +121,23 @@ type ForEachComparisonProjectJudgmentRowBatchParams = {
   rowFilter: ComparisonProjectRowFilter
 }
 
+export type ComparisonProjectArticleCategoryFilterSelection =
+  ComparisonProjectFilterSelection<ComparisonProjectArticleCategoryFilter>
+export type ComparisonProjectConflictResolutionFilterSelection =
+  ComparisonProjectFilterSelection<ComparisonProjectConflictResolutionFilter>
+export type ComparisonProjectDifferenceFilterSelection =
+  ComparisonProjectFilterSelection<ComparisonProjectDifferenceFilter>
+export type ComparisonProjectRowFilterSelection = ComparisonProjectFilterSelection<ComparisonProjectRowFilter>
+
 type ComparisonProjectServingJudgmentRowsParams = {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
   comparisonProjectId: string
-  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter
+  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
   cursor?: string | null
-  differenceFilter: ComparisonProjectDifferenceFilter
+  differenceFilter: ComparisonProjectDifferenceFilterSelection
   limit: number
   queryRunner: ComparisonProjectScopedArticleQueryRunner
-  rowFilter: ComparisonProjectRowFilter
+  rowFilter: ComparisonProjectRowFilterSelection
 }
 
 type ForEachComparisonProjectServingJudgmentRowBatchParams = ComparisonProjectServingJudgmentRowsParams & {
@@ -140,13 +149,13 @@ type ForEachComparisonProjectServingJudgmentArticleIdBatchParams = ComparisonPro
 }
 
 type ComparisonProjectServingJudgmentCountParams = {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
   comparisonProjectId: string
-  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter
-  differenceFilter: ComparisonProjectDifferenceFilter
+  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
+  differenceFilter: ComparisonProjectDifferenceFilterSelection
   limit: number
   queryRunner: ComparisonProjectScopedArticleQueryRunner
-  rowFilter: ComparisonProjectRowFilter
+  rowFilter: ComparisonProjectRowFilterSelection
 }
 
 export type ComparisonProjectServingJudgmentRowsPage = {nextCursor: string | null; rows: ComparisonProjectJudgmentRow[]}
@@ -334,38 +343,76 @@ const getComparisonProjectServingCursorWhereSql = (cursor: ComparisonProjectServ
     : ''
 }
 
-const getComparisonProjectServingRowFilterPredicateSql = (rowFilter: ComparisonProjectRowFilter) => {
-  return comparisonProjectServingRowFilterPredicates[rowFilter]
+export const getComparisonProjectFilterSelectionList = <T extends string>(
+  selection: ComparisonProjectFilterSelection<T>,
+): T[] => {
+  const values = selection === null || selection === undefined ? [] : Array.isArray(selection) ? selection : [selection]
+
+  return Array.from(
+    new Set(
+      (values as readonly T[]).filter((value) => {
+        return value !== 'all'
+      }),
+    ),
+  )
+}
+
+const getComparisonProjectServingOrPredicateSql = (predicates: readonly string[], allPredicate: string) => {
+  return predicates.length === 0
+    ? allPredicate
+    : predicates.length === 1
+      ? (predicates[0] ?? allPredicate)
+      : `(${predicates.join(' OR ')})`
+}
+
+const getComparisonProjectServingRowFilterPredicateSql = (rowFilter: ComparisonProjectRowFilterSelection) => {
+  return getComparisonProjectServingOrPredicateSql(
+    getComparisonProjectFilterSelectionList(rowFilter).map((value) => {
+      return comparisonProjectServingRowFilterPredicates[value]
+    }),
+    comparisonProjectServingRowFilterPredicates.all,
+  )
 }
 
 const getComparisonProjectServingDifferenceFilterPredicateSql = (
-  differenceFilter: ComparisonProjectDifferenceFilter,
+  differenceFilter: ComparisonProjectDifferenceFilterSelection,
 ) => {
-  return comparisonProjectServingDifferenceFilterPredicates[differenceFilter]
+  return getComparisonProjectServingOrPredicateSql(
+    getComparisonProjectFilterSelectionList(differenceFilter).map((value) => {
+      return comparisonProjectServingDifferenceFilterPredicates[value]
+    }),
+    comparisonProjectServingDifferenceFilterPredicates.all,
+  )
 }
 
 const getComparisonProjectServingArticleCategoryFilterPredicateSql = (
-  articleCategoryFilter: ComparisonProjectArticleCategoryFilter,
+  articleCategoryFilter: ComparisonProjectArticleCategoryFilterSelection,
   articleAlias: string,
 ) => {
-  return articleCategoryFilter === 'all'
+  const articleCategories = getComparisonProjectFilterSelectionList(articleCategoryFilter)
+
+  return articleCategories.length === 0
     ? 'TRUE'
-    : `${articleAlias}.article_category = ${getSqlLiteral(articleCategoryFilter)}`
+    : articleCategories.length === 1
+      ? `${articleAlias}.article_category = ${getSqlLiteral(articleCategories[0] ?? '')}`
+      : `${articleAlias}.article_category IN (${getInClause(articleCategories)})`
 }
 
 const getComparisonProjectServingRequiresConflictResolution = (
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter | null | undefined,
-  differenceFilter: ComparisonProjectDifferenceFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
+  differenceFilter: ComparisonProjectDifferenceFilterSelection,
 ) => {
   return (
-    (Boolean(conflictResolutionFilter) && conflictResolutionFilter !== 'all')
-    || getIsComparisonProjectConflictResolutionDifferenceFilter(differenceFilter)
+    getComparisonProjectFilterSelectionList(conflictResolutionFilter).length > 0
+    || getComparisonProjectFilterSelectionList(differenceFilter).some(
+      getIsComparisonProjectConflictResolutionDifferenceFilter,
+    )
   )
 }
 
 const getComparisonProjectServingConflictResolutionJoinSql = (
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter | null | undefined,
-  differenceFilter: ComparisonProjectDifferenceFilter,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
+  differenceFilter: ComparisonProjectDifferenceFilterSelection,
 ) => {
   return getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, differenceFilter)
     ? `
@@ -375,16 +422,34 @@ const getComparisonProjectServingConflictResolutionJoinSql = (
     : ''
 }
 
+const getComparisonProjectServingConflictResolutionAnswerPredicateSql = (answerValues: readonly string[]) => {
+  return answerValues.length === 0
+    ? null
+    : answerValues.length === 1
+      ? `conflict_resolution.answer_value = ${getSqlLiteral(answerValues[0] ?? '')}`
+      : `conflict_resolution.answer_value IN (${getInClause([...answerValues])})`
+}
+
 const getComparisonProjectServingConflictResolutionFilterPredicateSql = (
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter | null | undefined,
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
 ) => {
-  if (!conflictResolutionFilter || conflictResolutionFilter === 'all') {
+  const conflictResolutionFilters = getComparisonProjectFilterSelectionList(conflictResolutionFilter)
+
+  if (conflictResolutionFilters.length === 0) {
     return 'TRUE'
   }
 
-  return conflictResolutionFilter === 'not-set'
-    ? 'article.has_conflict AND conflict_resolution.article_id IS NULL'
-    : `article.has_conflict AND conflict_resolution.answer_value = ${getSqlLiteral(conflictResolutionFilter)}`
+  const answerPredicate = getComparisonProjectServingConflictResolutionAnswerPredicateSql(
+    conflictResolutionFilters.filter((value) => {
+      return value !== 'not-set'
+    }),
+  )
+  const predicates = [
+    conflictResolutionFilters.includes('not-set') ? 'conflict_resolution.article_id IS NULL' : null,
+    answerPredicate,
+  ].filter(isDefined)
+
+  return `article.has_conflict AND ${getComparisonProjectServingOrPredicateSql(predicates, 'TRUE')}`
 }
 
 const getRowsByArticleId = <T extends {articleId: string}>(rows: readonly T[]) => {
@@ -494,13 +559,13 @@ export const getComparisonProjectScopedArticleBatch = async (params: {
 }
 
 export const getComparisonProjectServingMemberSql = (params: {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
   comparisonProjectId: string
-  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter
+  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
   cursor?: string | null
-  differenceFilter: ComparisonProjectDifferenceFilter
+  differenceFilter: ComparisonProjectDifferenceFilterSelection
   limit: number
-  rowFilter: ComparisonProjectRowFilter
+  rowFilter: ComparisonProjectRowFilterSelection
 }) => {
   const cursor = getComparisonProjectServingPageCursor(params.cursor)
   const limit = getPositiveInteger(params.limit)
@@ -611,11 +676,11 @@ export const getComparisonProjectServingJudgmentCountSql = (params: {
 }
 
 export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
+  articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
   comparisonProjectId: string
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilter
-  differenceFilter: ComparisonProjectDifferenceFilter
-  rowFilter: ComparisonProjectRowFilter
+  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection
+  differenceFilter: ComparisonProjectDifferenceFilterSelection
+  rowFilter: ComparisonProjectRowFilterSelection
 }) => {
   const rowFilterPredicate = getComparisonProjectServingRowFilterPredicateSql(params.rowFilter)
   const differenceFilterPredicate = getComparisonProjectServingDifferenceFilterPredicateSql(params.differenceFilter)
@@ -697,11 +762,24 @@ export const getComparisonProjectServingJudgmentCount = async (
   params: ComparisonProjectServingJudgmentCountParams,
 ): Promise<ComparisonProjectServingJudgmentCount> => {
   const limit = getPositiveInteger(params.limit)
-  const conflictResolutionFilter = params.conflictResolutionFilter ?? 'all'
+  const conflictResolutionFilter = params.conflictResolutionFilter ?? []
+  const rowFilters = getComparisonProjectFilterSelectionList(params.rowFilter)
+  const differenceFilters = getComparisonProjectFilterSelectionList(params.differenceFilter)
+  const articleCategoryFilters = getComparisonProjectFilterSelectionList(params.articleCategoryFilter)
+  const canUsePrecomputedStats =
+    rowFilters.length <= 1
+    && differenceFilters.length <= 1
+    && articleCategoryFilters.length <= 1
+    && !getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, params.differenceFilter)
   const [row] = await params.queryRunner.queryJson<{totalCount: unknown}>(
-    getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, params.differenceFilter)
-      ? getComparisonProjectServingJudgmentFilteredCountSql({...params, conflictResolutionFilter})
-      : getComparisonProjectServingJudgmentCountSql(params),
+    canUsePrecomputedStats
+      ? getComparisonProjectServingJudgmentCountSql({
+          articleCategoryFilter: articleCategoryFilters[0] ?? defaultComparisonProjectArticleCategoryFilter,
+          comparisonProjectId: params.comparisonProjectId,
+          differenceFilter: differenceFilters[0] ?? 'all',
+          rowFilter: rowFilters[0] ?? 'all',
+        })
+      : getComparisonProjectServingJudgmentFilteredCountSql({...params, conflictResolutionFilter}),
   )
   const totalCount = getComparisonProjectServingCount(row?.totalCount)
 

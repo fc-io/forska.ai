@@ -3,7 +3,9 @@ import {expect, test} from 'bun:test'
 import {
   getComparisonProjectPassesRowFilter,
   getComparisonProjectRowFilterLabel,
+  getComparisonProjectRowFiltersLabel,
   getNormalizedComparisonProjectRowFilter,
+  getNormalizedComparisonProjectRowFilters,
   getSelectableComparisonProjectRowFilters,
 } from './comparisonProjectRowFilter.ts'
 
@@ -44,8 +46,23 @@ test('rowFilter labels use model name for one unambiguous LLM source', () => {
 test('selectable rowFilters hide unavailable answer sources', () => {
   const llmOnlyColumns = [{kind: 'llm', modelLabel: 'Model 1'}] as const
 
-  expect(getSelectableComparisonProjectRowFilters(llmOnlyColumns, 'all')).not.toContain('human-answered-yes')
-  expect(getSelectableComparisonProjectRowFilters(llmOnlyColumns, 'human-answered-yes')).toContain('human-answered-yes')
+  expect(getSelectableComparisonProjectRowFilters(llmOnlyColumns, [])).not.toContain('human-answered-yes')
+  expect(getSelectableComparisonProjectRowFilters(llmOnlyColumns, [])).not.toContain('all')
+  expect(getSelectableComparisonProjectRowFilters(llmOnlyColumns, ['human-answered-yes'])).toContain(
+    'human-answered-yes',
+  )
+})
+
+test('rowFilter multi selections normalize to canonical order without all', () => {
+  expect(getNormalizedComparisonProjectRowFilters('llm-answered-no,all,fully-answered,bogus')).toEqual([
+    'fully-answered',
+    'llm-answered-no',
+  ])
+  expect(getNormalizedComparisonProjectRowFilters(['all'])).toEqual([])
+  expect(getComparisonProjectRowFiltersLabel([], false)).toBe('All rows')
+  expect(getComparisonProjectRowFiltersLabel(['fully-answered', 'llm-answered-yes'], false)).toBe(
+    'Rows where all shown columns are answered + LLM has answered yes',
+  )
 })
 
 test('rowFilter evaluation keeps prompt and summary sparse row semantics separate', () => {

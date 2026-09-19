@@ -1,3 +1,5 @@
+import {getComparisonProjectCanonicalFilterSelection} from './comparisonProjectFilterSelection.ts'
+
 export const comparisonProjectAnswerRowFilters = [
   'llm-answered-yes',
   'llm-answered-no',
@@ -143,9 +145,13 @@ export const getNormalizedComparisonProjectRowFilter = (value: unknown): Compari
     : defaultComparisonProjectRowFilter
 }
 
+export const getNormalizedComparisonProjectRowFilters = (value: unknown): ComparisonProjectRowFilter[] => {
+  return getComparisonProjectCanonicalFilterSelection(value, comparisonProjectRowFilters)
+}
+
 export const getSelectableComparisonProjectRowFilters = (
   columns: readonly ComparisonProjectRowFilterLabelColumn[],
-  currentRowFilter: ComparisonProjectRowFilter,
+  currentRowFilters: readonly ComparisonProjectRowFilter[],
 ) => {
   const hasHumanColumns = columns.some((column) => {
     return column.kind === 'human'
@@ -158,8 +164,22 @@ export const getSelectableComparisonProjectRowFilters = (
     const config = getIsAnswerRowFilter(rowFilter) ? answerRowFilterConfig[rowFilter] : null
     const isAvailable = !config || (config.kind === 'human' ? hasHumanColumns : hasLlmColumns)
 
-    return isAvailable || rowFilter === currentRowFilter
+    return rowFilter !== 'all' && (isAvailable || currentRowFilters.includes(rowFilter))
   })
+}
+
+export const getComparisonProjectRowFiltersLabel = (
+  rowFilters: readonly ComparisonProjectRowFilter[],
+  isSummaryMode: boolean,
+  context?: ComparisonProjectRowFilterLabelContext,
+) => {
+  return rowFilters.length === 0
+    ? getComparisonProjectRowFilterLabel('all', isSummaryMode, context)
+    : rowFilters
+        .map((rowFilter) => {
+          return getComparisonProjectRowFilterLabel(rowFilter, isSummaryMode, context)
+        })
+        .join(' + ')
 }
 
 export const getComparisonProjectRowFilterLabel = (

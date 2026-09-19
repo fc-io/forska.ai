@@ -274,6 +274,93 @@ test('serving member sql compares conflict resolutions against llm and human ans
   expect(allSql).not.toContain('conflict_resolution')
 })
 
+test('serving member sql ORs multi-value row, difference, language and resolution selections', () => {
+  const sql = getComparisonProjectServingMemberSql({
+    articleCategoryFilter: ['chinese', 'non_chinese'],
+    comparisonProjectId: 'comparison-project-1',
+    conflictResolutionFilter: ['not-set', 'yes', 'maybe'],
+    cursor: null,
+    differenceFilter: ['human-vs-llm', 'resolution-vs-llm-true-conflict'],
+    limit: 25,
+    rowFilter: ['llm-answered-yes', 'llm-answered-maybe'],
+  })
+
+  expect(sql).toContain('(article.has_llm_answered_yes OR article.has_llm_answered_maybe)')
+  expect(sql).toContain("article.article_category IN ('chinese', 'non_chinese')")
+  expect(sql).toContain('(article.passes_difference_filter_human_vs_llm OR (article.has_conflict')
+  expect(sql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
+  expect(sql).toContain(
+    "article.has_conflict AND (conflict_resolution.article_id IS NULL OR conflict_resolution.answer_value IN ('yes', 'maybe'))",
+  )
+})
+
+test('serving member sql treats empty and all-only selections as unfiltered', () => {
+  const sql = getComparisonProjectServingMemberSql({
+    articleCategoryFilter: [],
+    comparisonProjectId: 'comparison-project-1',
+    conflictResolutionFilter: [],
+    cursor: null,
+    differenceFilter: ['all'],
+    limit: 25,
+    rowFilter: [],
+  })
+
+  expect(sql).toContain('article.passes_row_filter_all')
+  expect(sql).toContain('article.passes_difference_filter_all')
+  expect(sql).not.toContain('article.article_category')
+  expect(sql).not.toContain('conflict_resolution')
+})
+
+test('serving judgment count scans serving rows for multi-value selections', async () => {
+  const statements: string[] = []
+  const count = await getComparisonProjectServingJudgmentCount({
+    articleCategoryFilter: ['chinese'],
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: ['human-vs-llm', 'llm-vs-llm'],
+    limit: 25,
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return [{totalCount: 3}] as T[]
+      },
+    },
+    rowFilter: ['fully-answered'],
+  })
+
+  expect(count).toEqual({totalCount: 3, totalPages: 1})
+  expect(statements[0]).toContain('SELECT COUNT(*) AS totalCount')
+  expect(statements[0]).toContain(
+    '(article.passes_difference_filter_human_vs_llm OR article.passes_difference_filter_llm_vs_llm)',
+  )
+  expect(statements[0]).not.toContain('FROM mart.comparison_filter_stats stats')
+})
+
+test('serving judgment count reads precomputed stats for single-value array selections', async () => {
+  const statements: string[] = []
+
+  await getComparisonProjectServingJudgmentCount({
+    articleCategoryFilter: ['non_chinese'],
+    comparisonProjectId: 'comparison-project-1',
+    conflictResolutionFilter: [],
+    differenceFilter: [],
+    limit: 25,
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return [{totalCount: 9}] as T[]
+      },
+    },
+    rowFilter: ['fully-answered'],
+  })
+
+  expect(statements[0]).toContain('FROM mart.comparison_filter_stats stats')
+  expect(statements[0]).toContain("stats.row_filter = 'fully-answered'")
+  expect(statements[0]).toContain("stats.difference_filter = 'all'")
+  expect(statements[0]).toContain("stats.article_category_filter = 'non_chinese'")
+})
+
 test('serving hydration sql scopes articles and cells to returned article ids', () => {
   const articleSql = getComparisonProjectServingArticlesSql({
     articleIds: ['article-1', 'article-2'],

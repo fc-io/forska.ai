@@ -11,35 +11,40 @@ const renderFilters = (showArticleCategoryFilter: boolean) => {
   const dispose = render(() => {
     return (
       <CompareProjectExportFilters
-        articleCategoryFilter="all"
-        conflictResolutionFilter="all"
+        articleCategoryFilters={['non_chinese']}
+        conflictResolutionFilters={['not-set', 'yes']}
         conflictResolutionFilterOptions={[
-          {label: 'All', value: 'all'},
           {label: 'Not set', value: 'not-set'},
           {label: 'yes', value: 'yes'},
           {label: 'no', value: 'no'},
           {label: 'maybe', value: 'maybe'},
         ]}
-        differenceFilter="all"
+        differenceFilters={[]}
         differenceFilterDisabled={false}
-        differenceFilterOptions={[{label: 'All rows', value: 'all'}]}
+        differenceFilterOptions={[{label: 'Human vs LLM conflict', value: 'human-vs-llm'}]}
         isExportingCsv={false}
         isExportingPdf={false}
-        isSummaryMode={false}
+        rowFilterOptions={[{label: 'Rows with more than 1 answered prompt', value: 'multiple-answers'}]}
         showArticleCategoryFilter={showArticleCategoryFilter}
         showConflictResolutionFilter={true}
-        onArticleCategoryFilterChange={vi.fn()}
-        onConflictResolutionFilterChange={vi.fn()}
-        onDifferenceFilterChange={vi.fn()}
+        onArticleCategoryFiltersChange={vi.fn()}
+        onConflictResolutionFiltersChange={vi.fn()}
+        onDifferenceFiltersChange={vi.fn()}
         onExportCsv={vi.fn()}
         onExportPdf={vi.fn()}
-        onRowFilterChange={vi.fn()}
-        rowFilter="all"
+        onRowFiltersChange={vi.fn()}
+        rowFilters={[]}
       />
     )
   }, container)
 
   return {container, dispose}
+}
+
+const getTriggerLabels = (container: HTMLElement) => {
+  return Array.from(container.querySelectorAll('label')).map((label) => {
+    return label.querySelector('span')?.textContent
+  })
 }
 
 describe('CompareProjectExportFilters', () => {
@@ -53,22 +58,19 @@ describe('CompareProjectExportFilters', () => {
     try {
       expect(container.textContent).not.toContain('Language')
       expect(container.textContent).not.toContain('Non-Chinese')
+      expect(container.querySelector('[aria-label="Language"]')).toBeNull()
     } finally {
       dispose()
     }
   })
 
-  test('shows the article category selector when the project has Chinese articles', () => {
+  test('shows the article category selector with its selected chips when the project has Chinese articles', () => {
     const {container, dispose} = renderFilters(true)
 
     try {
       expect(container.textContent).toContain('Language')
-      expect(container.textContent).toContain('Non-Chinese')
-      expect(
-        Array.from(container.querySelectorAll('select')[3]?.options ?? []).map((option) => {
-          return option.textContent
-        }),
-      ).toEqual(['All', 'Chinese', 'Non-Chinese'])
+      expect(container.querySelector('[aria-label="Language"]')).not.toBeNull()
+      expect(container.querySelector('[aria-label="Language"]')?.textContent).toContain('Non-Chinese')
     } finally {
       dispose()
     }
@@ -78,16 +80,15 @@ describe('CompareProjectExportFilters', () => {
     const {container, dispose} = renderFilters(true)
 
     try {
-      const labels = Array.from(container.querySelectorAll('label')).map((label) => {
-        return label.querySelector('span')?.textContent
-      })
-
-      expect(labels.slice(0, 4)).toEqual(['Row filter', 'Difference filter', 'Conflict resolutions', 'Language'])
-      expect(
-        Array.from(container.querySelectorAll('select')[2]?.options ?? []).map((option) => {
-          return option.textContent
-        }),
-      ).toEqual(['All', 'Not set', 'yes', 'no', 'maybe'])
+      expect(getTriggerLabels(container).slice(0, 4)).toEqual([
+        'Row filter',
+        'Difference filter',
+        'Conflict resolutions',
+        'Language',
+      ])
+      expect(container.querySelector('[aria-label="Conflict resolutions"]')?.textContent).toContain('Not set')
+      expect(container.querySelector('[aria-label="Conflict resolutions"]')?.textContent).toContain('yes')
+      expect(container.querySelector('[aria-label="Row filter"]')?.textContent).toContain('All rows')
     } finally {
       dispose()
     }

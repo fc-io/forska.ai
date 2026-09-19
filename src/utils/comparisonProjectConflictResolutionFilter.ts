@@ -1,3 +1,5 @@
+import {getComparisonProjectFilterSelectionValues} from './comparisonProjectFilterSelection.ts'
+
 export type ComparisonProjectConflictResolutionFilter = string
 
 export type ComparisonProjectConflictResolutionFilterOption = {
@@ -16,6 +18,12 @@ export const getNormalizedComparisonProjectConflictResolutionFilter = (
     : defaultComparisonProjectConflictResolutionFilter
 }
 
+export const getNormalizedComparisonProjectConflictResolutionFilters = (
+  value: unknown,
+): ComparisonProjectConflictResolutionFilter[] => {
+  return getComparisonProjectFilterSelectionValues(value)
+}
+
 export const getComparisonProjectConflictResolutionFilterLabel = (
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilter,
 ) => {
@@ -30,7 +38,6 @@ export const getComparisonProjectConflictResolutionFilterOptions = (
   resolutionOptions: readonly {label: string; value: string}[],
 ): ComparisonProjectConflictResolutionFilterOption[] => {
   return [
-    {label: 'All', value: 'all'},
     {label: 'Not set', value: 'not-set'},
     ...resolutionOptions.map((option) => {
       return {label: option.label, value: option.value}
