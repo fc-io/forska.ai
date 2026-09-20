@@ -4,6 +4,7 @@ import {expect, test} from 'bun:test'
 import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
+  cleanupStaleCandidateReviewServingSnapshotManifests,
   createCandidateReviewServingSnapshotManifest,
   failStaleCandidateReviewServingSnapshotManifests,
   failSupersededCandidateReviewServingSnapshotManifests,
@@ -12,6 +13,7 @@ import {
   getCandidateReviewServingSnapshotSupersessionRows,
   getLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
+  getReviewServingProjectsWithMultipleQueuedSnapshots,
   getReviewServingSnapshotManifest,
   markCandidateReviewServingSnapshotManifestFailed,
   retireObsoleteReviewServingSnapshotManifests,
@@ -1618,6 +1620,236 @@ test('candidate supersession rows resolve in-flight and age predicates against D
     `)
 
     expect(Number(failedAtRows[0]?.failedAtCount)).toBe(2)
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('stale candidate recovery honours the apply limit and a caller-provided source', async () => {
+  const activeSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-08-25T10:00:00.000Z',
+    createdAt: '2026-08-25T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-08-25T10:00:00.000Z',
+    validationResult: null,
+  }
+  const staleCandidate: FakeSnapshotRow = {
+    ...activeSnapshot,
+    activatedAt: null,
+    createdAt: '2026-08-20T10:00:00.000Z',
+    snapshotId: 'snapshot-stale',
+    status: 'candidate',
+    updatedAt: '2026-08-20T10:00:00.000Z',
+  }
+  const secondStaleCandidate: FakeSnapshotRow = {
+    ...staleCandidate,
+    createdAt: '2026-08-21T10:00:00.000Z',
+    snapshotId: 'snapshot-stale-2',
+  }
+  const {database, snapshots} = createFakeManifestDatabase([activeSnapshot, staleCandidate, secondStaleCandidate])
+
+  const zeroLimit = await failStaleCandidateReviewServingSnapshotManifests(
+    {apply: true, limit: 0, projectId: 'project-1', source: 'worker staleCandidateCleanup'},
+    database,
+  )
+
+  expect(zeroLimit.failedSnapshotIds).toEqual([])
+  expect(
+    zeroLimit.staleCandidates.map((row) => {
+      return row.snapshotId
+    }),
+  ).toEqual(['snapshot-stale', 'snapshot-stale-2'])
+  expect(snapshots.get('project-1:snapshot-stale')?.status).toBe('candidate')
+
+  const oneLimit = await failStaleCandidateReviewServingSnapshotManifests(
+    {apply: true, limit: 1, projectId: 'project-1', source: 'worker staleCandidateCleanup'},
+    database,
+  )
+
+  expect(oneLimit.failedSnapshotIds).toEqual(['snapshot-stale'])
+  expect(oneLimit.staleCandidates).toHaveLength(2)
+  expect(snapshots.get('project-1:snapshot-stale')).toMatchObject({
+    lastError: 'superseded by snapshot snapshot-active (worker staleCandidateCleanup)',
+    status: 'failed',
+  })
+  expect(snapshots.get('project-1:snapshot-stale-2')?.status).toBe('candidate')
+
+  const defaultSource = await failStaleCandidateReviewServingSnapshotManifests(
+    {apply: true, projectId: 'project-1'},
+    database,
+  )
+
+  expect(defaultSource.failedSnapshotIds).toEqual(['snapshot-stale-2'])
+  expect(snapshots.get('project-1:snapshot-stale-2')).toMatchObject({
+    lastError: 'superseded by snapshot snapshot-active (operator failStaleReviewServingCandidateSnapshots)',
+    status: 'failed',
+  })
+})
+
+test('worker stale candidate cleanup scopes to projects with multiple queued snapshots and honours its bounds', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+  const getStatuses = () => {
+    return database.queryJson<{lastError: string | null; snapshotId: string; status: string}>(`
+      SELECT snapshot_id AS snapshotId, snapshot_status AS status, last_error AS lastError
+      FROM app.review_serving_snapshot_manifest
+      ORDER BY project_id, snapshot_id
+    `)
+  }
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.review_serving_snapshot_manifest (
+        project_id VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        snapshot_status VARCHAR NOT NULL DEFAULT 'candidate',
+        review_config_hash VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        activated_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        last_error VARCHAR
+      );
+      CREATE TABLE app.review_rebuild_chunk_manifest (
+        chunk_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR,
+        snapshot_id VARCHAR,
+        request_id VARCHAR,
+        status VARCHAR NOT NULL DEFAULT 'pending'
+      );
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR NOT NULL,
+        status VARCHAR NOT NULL
+      );
+      INSERT INTO app.review_serving_snapshot_manifest (
+        project_id, snapshot_id, snapshot_status, review_config_hash, created_at, updated_at, activated_at
+      )
+      VALUES
+        ('project-1', 'p1-active', 'active', 'config-1', TIMESTAMPTZ '2026-08-25T10:00:00Z', TIMESTAMPTZ '2026-08-25T10:00:00Z', TIMESTAMPTZ '2026-08-25T10:00:00Z'),
+        ('project-1', 'p1-stale-old', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-20T10:00:00Z', TIMESTAMPTZ '2026-08-20T10:00:00Z', NULL),
+        ('project-1', 'p1-in-flight', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-21T10:00:00Z', TIMESTAMPTZ '2026-08-21T10:00:00Z', NULL),
+        ('project-1', 'p1-stale-mid', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-22T10:00:00Z', TIMESTAMPTZ '2026-08-22T10:00:00Z', NULL),
+        ('project-1', 'p1-equal', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-25T10:00:00Z', TIMESTAMPTZ '2026-08-25T10:00:00Z', NULL),
+        ('project-1', 'p1-newer', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-30T10:00:00Z', TIMESTAMPTZ '2026-08-30T10:00:00Z', NULL),
+        ('project-1', 'p1-other-config', 'candidate', 'config-2', TIMESTAMPTZ '2026-08-01T10:00:00Z', TIMESTAMPTZ '2026-08-01T10:00:00Z', NULL),
+        ('project-2', 'p2-candidate-only', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-01T10:00:00Z', TIMESTAMPTZ '2026-08-01T10:00:00Z', NULL),
+        ('project-3', 'p3-active-only', 'active', 'config-1', TIMESTAMPTZ '2026-08-01T10:00:00Z', TIMESTAMPTZ '2026-08-01T10:00:00Z', TIMESTAMPTZ '2026-08-01T10:00:00Z'),
+        ('project-4', 'p4-active', 'active', 'config-1', TIMESTAMPTZ '2026-09-01T10:00:00Z', TIMESTAMPTZ '2026-09-01T10:00:00Z', TIMESTAMPTZ '2026-09-01T10:00:00Z'),
+        ('project-4', 'p4-stale', 'candidate', 'config-1', TIMESTAMPTZ '2026-08-28T10:00:00Z', TIMESTAMPTZ '2026-08-28T10:00:00Z', NULL);
+      INSERT INTO app.review_rebuild_request (request_id, project_id, status)
+      VALUES ('request-blocked', 'project-1', 'blocked_over_budget');
+      INSERT INTO app.review_rebuild_chunk_manifest (chunk_id, project_id, snapshot_id, request_id, status)
+      VALUES ('chunk-pending', 'project-1', 'p1-in-flight', 'request-blocked', 'pending');
+    `)
+
+    expect(await getReviewServingProjectsWithMultipleQueuedSnapshots({limit: 10}, database)).toEqual([
+      {activeSnapshotCount: 1, projectId: 'project-1', queuedSnapshotCount: 6, reviewConfigHash: 'config-1'},
+      {activeSnapshotCount: 1, projectId: 'project-4', queuedSnapshotCount: 2, reviewConfigHash: 'config-1'},
+    ])
+    expect(await getReviewServingProjectsWithMultipleQueuedSnapshots({limit: 1}, database)).toEqual([
+      {activeSnapshotCount: 1, projectId: 'project-1', queuedSnapshotCount: 6, reviewConfigHash: 'config-1'},
+    ])
+
+    const boundedBySnapshots = await cleanupStaleCandidateReviewServingSnapshotManifests(
+      {maxSnapshots: 1, source: 'worker staleCandidateCleanup'},
+      database,
+    )
+
+    expect(boundedBySnapshots).toEqual({
+      failedSnapshots: [{projectId: 'project-1', referenceSnapshotId: 'p1-active', snapshotId: 'p1-stale-old'}],
+      projectIds: ['project-1', 'project-4'],
+      remainingStaleCandidateCount: 1,
+      skippedSnapshotCount: 3,
+    })
+    expect(await getStatuses()).toEqual([
+      {lastError: null, snapshotId: 'p1-active', status: 'active'},
+      {lastError: null, snapshotId: 'p1-equal', status: 'candidate'},
+      {lastError: null, snapshotId: 'p1-in-flight', status: 'candidate'},
+      {lastError: null, snapshotId: 'p1-newer', status: 'candidate'},
+      {lastError: null, snapshotId: 'p1-other-config', status: 'candidate'},
+      {lastError: null, snapshotId: 'p1-stale-mid', status: 'candidate'},
+      {
+        lastError: 'superseded by snapshot p1-active (worker staleCandidateCleanup)',
+        snapshotId: 'p1-stale-old',
+        status: 'failed',
+      },
+      {lastError: null, snapshotId: 'p2-candidate-only', status: 'candidate'},
+      {lastError: null, snapshotId: 'p3-active-only', status: 'active'},
+      {lastError: null, snapshotId: 'p4-active', status: 'active'},
+      {lastError: null, snapshotId: 'p4-stale', status: 'candidate'},
+    ])
+
+    const boundedByProjects = await cleanupStaleCandidateReviewServingSnapshotManifests(
+      {maxProjects: 1, source: 'worker staleCandidateCleanup'},
+      database,
+    )
+
+    expect(boundedByProjects).toEqual({
+      failedSnapshots: [{projectId: 'project-1', referenceSnapshotId: 'p1-active', snapshotId: 'p1-stale-mid'}],
+      projectIds: ['project-1'],
+      remainingStaleCandidateCount: 0,
+      skippedSnapshotCount: 3,
+    })
+    expect(
+      (await getStatuses()).find((row) => {
+        return row.snapshotId === 'p4-stale'
+      })?.status,
+    ).toBe('candidate')
+
+    const unbounded = await cleanupStaleCandidateReviewServingSnapshotManifests(
+      {source: 'worker staleCandidateCleanup'},
+      database,
+    )
+
+    expect(unbounded).toEqual({
+      failedSnapshots: [{projectId: 'project-4', referenceSnapshotId: 'p4-active', snapshotId: 'p4-stale'}],
+      projectIds: ['project-1', 'project-4'],
+      remainingStaleCandidateCount: 0,
+      skippedSnapshotCount: 3,
+    })
+    expect(
+      (await getStatuses()).filter((row) => {
+        return row.status === 'failed'
+      }),
+    ).toEqual([
+      {
+        lastError: 'superseded by snapshot p1-active (worker staleCandidateCleanup)',
+        snapshotId: 'p1-stale-mid',
+        status: 'failed',
+      },
+      {
+        lastError: 'superseded by snapshot p1-active (worker staleCandidateCleanup)',
+        snapshotId: 'p1-stale-old',
+        status: 'failed',
+      },
+      {
+        lastError: 'superseded by snapshot p4-active (worker staleCandidateCleanup)',
+        snapshotId: 'p4-stale',
+        status: 'failed',
+      },
+    ])
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()

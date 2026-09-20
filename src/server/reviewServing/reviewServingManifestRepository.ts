@@ -859,23 +859,35 @@ export type FailStaleCandidateReviewServingSnapshotManifestsResult = {
   status: 'applied' | 'dry_run'
 }
 
+export const operatorStaleCandidateReviewServingSnapshotSource = 'operator failStaleReviewServingCandidateSnapshots'
+
+const getStaleCandidateApplyLimit = (limit: number | null | undefined, staleCandidateCount: number) => {
+  return limit === null || limit === undefined || !Number.isFinite(limit)
+    ? staleCandidateCount
+    : Math.max(0, Math.min(staleCandidateCount, Math.trunc(limit)))
+}
+
 /**
- * Operator recovery for candidate snapshots that were left behind (for example after a rebuild
- * request failed validation before the candidate was marked failed). Stale means: still
- * `candidate`, older than the active snapshot with the same review config hash, and not referenced
- * by any in-flight rebuild chunk or non-terminal rebuild request. Dry-run only reports.
+ * Recovery for candidate snapshots that were left behind (for example after a rebuild request
+ * failed validation before the candidate was marked failed). Stale means: still `candidate`, older
+ * than the active snapshot with the same review config hash, and not referenced by any in-flight
+ * rebuild chunk or non-terminal rebuild request. Dry-run only reports. `limit` bounds how many
+ * stale candidates are failed per call (oldest first); `source` is appended to the last_error so
+ * operators can tell the operator script apart from the projector worker cleanup.
  */
 export const failStaleCandidateReviewServingSnapshotManifests = async (
-  input: {apply?: boolean; projectId: string; snapshotId?: string | null},
+  input: {apply?: boolean; limit?: number | null; projectId: string; snapshotId?: string | null; source?: string},
   database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
 ): Promise<FailStaleCandidateReviewServingSnapshotManifestsResult> => {
   const apply = input.apply === true
   const snapshotId = input.snapshotId ?? null
+  const source = input.source ?? operatorStaleCandidateReviewServingSnapshotSource
   const rows = await getCandidateReviewServingSnapshotSupersessionRows(
     {projectId: input.projectId, referenceSnapshotId: null, snapshotId},
     database,
   )
   const staleCandidates = rows.filter(isSupersededCandidateReviewServingSnapshot)
+  const applyCandidates = staleCandidates.slice(0, getStaleCandidateApplyLimit(input.limit, staleCandidates.length))
   const skipped = rows
     .filter((row) => {
       return !isSupersededCandidateReviewServingSnapshot(row)
@@ -891,7 +903,7 @@ export const failStaleCandidateReviewServingSnapshotManifests = async (
       }
     })
   const failedSnapshotIds = apply
-    ? await staleCandidates.reduce<Promise<string[]>>(async (previous, row) => {
+    ? await applyCandidates.reduce<Promise<string[]>>(async (previous, row) => {
         const failed = await previous
 
         if (failed.includes(row.snapshotId)) {
@@ -900,7 +912,7 @@ export const failStaleCandidateReviewServingSnapshotManifests = async (
 
         await markCandidateReviewServingSnapshotManifestFailed(
           {
-            lastError: `${getSupersededCandidateReviewServingSnapshotLastError(row.referenceSnapshotId)} (operator failStaleReviewServingCandidateSnapshots)`,
+            lastError: `${getSupersededCandidateReviewServingSnapshotLastError(row.referenceSnapshotId)} (${source})`,
             projectId: input.projectId,
             snapshotId: row.snapshotId,
           },
@@ -920,6 +932,138 @@ export const failStaleCandidateReviewServingSnapshotManifests = async (
     staleCandidates,
     status: apply ? 'applied' : 'dry_run',
   }
+}
+
+export type ReviewServingQueuedSnapshotProjectRow = {
+  activeSnapshotCount: number
+  projectId: string
+  queuedSnapshotCount: number
+  reviewConfigHash: string | null
+}
+
+type QueuedSnapshotProjectRow = {
+  activeSnapshotCount: number | string
+  projectId: string
+  queuedSnapshotCount: number | string
+  reviewConfigHash: string | null
+}
+
+/**
+ * Projects (per review config hash) that currently queue more than one candidate/active snapshot
+ * next to an active one. Those are the only places a stale candidate can exist, so the worker
+ * cleanup scopes its per-project supersession scan to them.
+ */
+export const getReviewServingProjectsWithMultipleQueuedSnapshots = async (
+  input: {limit: number},
+  database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
+): Promise<ReviewServingQueuedSnapshotProjectRow[]> => {
+  const limit = Math.max(1, Math.trunc(input.limit))
+  const rows = await database.queryJson<QueuedSnapshotProjectRow>(`
+    SELECT
+      project_id AS projectId,
+      review_config_hash AS reviewConfigHash,
+      CAST(COUNT(DISTINCT snapshot_id) AS INTEGER) AS queuedSnapshotCount,
+      CAST(COUNT(DISTINCT snapshot_id) FILTER (WHERE snapshot_status = 'active') AS INTEGER) AS activeSnapshotCount
+    FROM app.review_serving_snapshot_manifest
+    WHERE snapshot_status IN ('candidate', 'active')
+    GROUP BY project_id, review_config_hash
+    HAVING COUNT(DISTINCT snapshot_id) > 1
+      AND COUNT(DISTINCT snapshot_id) FILTER (WHERE snapshot_status = 'active') > 0
+    ORDER BY MIN(updated_at) ASC NULLS FIRST, project_id ASC, review_config_hash ASC NULLS FIRST
+    LIMIT ${getSqlLiteral(limit)}
+  `)
+
+  return rows.map((row) => {
+    return {
+      activeSnapshotCount: Number(row.activeSnapshotCount ?? 0),
+      projectId: row.projectId,
+      queuedSnapshotCount: Number(row.queuedSnapshotCount ?? 0),
+      reviewConfigHash: row.reviewConfigHash ?? null,
+    }
+  })
+}
+
+export type CleanupStaleCandidateReviewServingSnapshotManifestsParams = {
+  maxProjects?: number
+  maxSnapshots?: number
+  source: string
+}
+
+export type CleanupStaleCandidateReviewServingSnapshotManifestsResult = {
+  failedSnapshots: Array<{projectId: string; referenceSnapshotId: string | null; snapshotId: string}>
+  projectIds: string[]
+  remainingStaleCandidateCount: number
+  skippedSnapshotCount: number
+}
+
+export const defaultStaleCandidateCleanupProjectLimit = 10
+export const defaultStaleCandidateCleanupSnapshotLimit = 25
+
+const getUniqueProjectIds = (rows: readonly ReviewServingQueuedSnapshotProjectRow[]) => {
+  return [
+    ...new Set(
+      rows.map((row) => {
+        return row.projectId
+      }),
+    ),
+  ]
+}
+
+const getBoundedCleanupLimit = (value: number | undefined, fallback: number) => {
+  return value === undefined || !Number.isFinite(value) || value < 1 ? fallback : Math.trunc(value)
+}
+
+/**
+ * Bounded, automatic variant of `failStaleCandidateReviewServingSnapshotManifests` for the
+ * projector worker cleanup cycle: only projects with more than one queued snapshot for the same
+ * review config hash are scanned, at most `maxProjects` projects and `maxSnapshots` candidates
+ * are touched per call, and each project is applied in its own transaction. The same safety rules
+ * apply: the active snapshot and candidates referenced by pending/running chunks or non-terminal
+ * requests are never touched.
+ */
+export const cleanupStaleCandidateReviewServingSnapshotManifests = async (
+  params: CleanupStaleCandidateReviewServingSnapshotManifestsParams,
+  database: ReviewServingManifestRepositoryDatabase = getAppDatabaseService(),
+): Promise<CleanupStaleCandidateReviewServingSnapshotManifestsResult> => {
+  const maxProjects = getBoundedCleanupLimit(params.maxProjects, defaultStaleCandidateCleanupProjectLimit)
+  const maxSnapshots = getBoundedCleanupLimit(params.maxSnapshots, defaultStaleCandidateCleanupSnapshotLimit)
+  const projectRows = await getReviewServingProjectsWithMultipleQueuedSnapshots({limit: maxProjects}, database)
+  const projectIds = getUniqueProjectIds(projectRows)
+
+  return projectIds.reduce<Promise<CleanupStaleCandidateReviewServingSnapshotManifestsResult>>(
+    async (previous, projectId) => {
+      const result = await previous
+      const remainingSnapshotBudget = maxSnapshots - result.failedSnapshots.length
+
+      if (remainingSnapshotBudget <= 0) {
+        return result
+      }
+
+      const applied = await database.transaction((tx) => {
+        return failStaleCandidateReviewServingSnapshotManifests(
+          {apply: true, limit: remainingSnapshotBudget, projectId, source: params.source},
+          tx,
+        )
+      })
+      const failedSnapshots = applied.failedSnapshotIds.map((snapshotId) => {
+        const referenceSnapshotId =
+          applied.staleCandidates.find((row) => {
+            return row.snapshotId === snapshotId
+          })?.referenceSnapshotId ?? null
+
+        return {projectId, referenceSnapshotId, snapshotId}
+      })
+
+      return {
+        failedSnapshots: [...result.failedSnapshots, ...failedSnapshots],
+        projectIds: result.projectIds,
+        remainingStaleCandidateCount:
+          result.remainingStaleCandidateCount + applied.staleCandidates.length - applied.failedSnapshotIds.length,
+        skippedSnapshotCount: result.skippedSnapshotCount + applied.skipped.length,
+      }
+    },
+    Promise.resolve({failedSnapshots: [], projectIds, remainingStaleCandidateCount: 0, skippedSnapshotCount: 0}),
+  )
 }
 
 export const getActiveReviewServingSnapshotManifest = async (
