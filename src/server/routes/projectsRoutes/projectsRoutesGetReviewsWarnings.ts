@@ -26,6 +26,7 @@ import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {isReviewServingProjectorPaused} from '../../utils/reviewServingProjectorPause.ts'
 import {shouldDisableServerMutationWork} from '../../utils/serverMutationMode.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
+import {createReviewsWarningsPayloadMemo, type ReviewsWarningsPayloadMemoMode} from './reviewsWarningsPayloadMemo.ts'
 
 type ReviewsIndexingBlockedReason =
   | 'duckdb_exclusive_work_active'
@@ -570,315 +571,366 @@ const isUsableReviewServingWarningSnapshot = (status: string) => {
   return status === 'active' || status === 'retired'
 }
 
+const getReviewsWarningsPayload = async (input: {
+  includeDiagnosticDetails: boolean
+  projectId: string
+  reviewConfigHash: string | null
+}) => {
+  const {includeDiagnosticDetails, projectId, reviewConfigHash} = input
+  const routeDiagnosticWorkloadContext = getReviewWarningsWorkloadContext(projectId, 'servingDiagnostics')
+  const warningSnapshot = await readReviewServingRows({
+    allowStale: true,
+    contractKey: 'review.warning.snapshot',
+    estimatedResultRows: 1,
+    includeDiagnosticDetails,
+    limit: 1,
+    metadataOnly: true,
+    projectId,
+    routeDiagnosticWorkloadContext,
+    reviewConfigHash,
+  })
+  const {enabledPromptCount, hasAnyArticlesInScope, totalArticleCount} = await getReviewWarningsScopeState(projectId)
+  const coverageManifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest({
+    componentStateMode: 'available',
+    projectId,
+    reviewConfigHash,
+    workloadContext: getReviewWarningsWorkloadContext(projectId, 'coverageManifest'),
+  })
+  const coverage = await getReviewsWarningsCoverage({
+    manifest: coverageManifest,
+    projectId,
+    reviewConfigHash,
+    totalArticleCount,
+  })
+  const servingDiagnostics =
+    warningSnapshot.diagnostics.diagnostics
+    ?? (await getReviewServingDiagnostics({
+      includeDetails: includeDiagnosticDetails,
+      projectId,
+      reviewConfigHash,
+      workloadContext: routeDiagnosticWorkloadContext,
+    }))
+  const hasReviewServingRows =
+    warningSnapshot.status === 'accepted'
+    && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
+  const hasReadableReviewServingRows = hasReviewServingRows
+  const pendingCandidateSnapshotActivationCount = hasReadableReviewServingRows
+    ? 0
+    : getNonNegativeDifference(
+        servingDiagnostics.snapshot.candidateCount,
+        servingDiagnostics.snapshot.invalidCandidateCount,
+      )
+  const shouldPrioritizeMissingSnapshotRepair =
+    !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
+  const hasUnreadableActiveWarningSnapshot =
+    warningSnapshot.status === 'rejected'
+    && warningSnapshot.reason === 'missingRequiredComponentState'
+    && warningSnapshot.diagnostics.manifest.status === 'active'
+  const expiredRebuildChunkLeaseCount = Math.min(
+    servingDiagnostics.rebuildChunks.runningCount,
+    servingDiagnostics.rebuildChunks.expiredLeaseCount,
+  )
+  const lastProgressedAt = getLatestTimestamp(
+    servingDiagnostics.dirtyWork.updatedAt,
+    servingDiagnostics.rebuildChunks.updatedAt,
+    servingDiagnostics.snapshot.activeUpdatedAt,
+  )
+  const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
+  const reviewServingProjectorPaused = isReviewServingProjectorPaused()
+  const activeDuckdbExclusiveWork = getActiveDuckdbExclusiveWorkSnapshot()
+  const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.claimableCount
+  const totalQueuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
+  const inFlightRebuildChunkCount = getNonNegativeDifference(
+    servingDiagnostics.rebuildChunks.runningCount,
+    expiredRebuildChunkLeaseCount,
+  )
+
+  const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
+  const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
+  const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
+  const hasCurrentConfigSnapshot =
+    servingDiagnostics.snapshot.activeCount > 0 || servingDiagnostics.snapshot.candidateCount > 0
+  const shouldSeedCurrentConfigMissingSnapshot = shouldPrioritizeMissingSnapshotRepair && !hasCurrentConfigSnapshot
+  const shouldAttemptCandidatePromotion =
+    !isServerMutationWorkDisabled
+    && !reviewServingProjectorPaused
+    && shouldPrioritizeMissingSnapshotRepair
+    && servingDiagnostics.snapshot.candidateCount > 0
+  if (shouldAttemptCandidatePromotion) {
+    const candidateSnapshotId = await getLatestCandidateSnapshotId({projectId, reviewConfigHash})
+    if (candidateSnapshotId !== null) {
+      await promoteReviewServingProjectorSnapshot({projectId, reviewConfigHash, snapshotId: candidateSnapshotId}).catch(
+        () => {
+          return undefined
+        },
+      )
+    }
+  }
+  const hasLegacyRequiredBootstrapEnrichmentCandidate = shouldPrioritizeMissingSnapshotRepair
+    ? await getHasLegacyRequiredBootstrapEnrichmentCandidate({projectId, reviewConfigHash})
+    : false
+  const hasActiveEnrichmentMissingSnapshotRepair = shouldPrioritizeMissingSnapshotRepair
+    ? await getHasActiveEnrichmentMissingSnapshotRepair({projectId, reviewConfigHash})
+    : false
+  const hasStalePendingCandidateActivationWork =
+    pendingCandidateSnapshotActivationCount > 0
+    && !hasRecentProgress
+    && servingDiagnostics.rebuildChunks.claimableCount > 0
+  const shouldRequestForegroundRepair =
+    !isServerMutationWorkDisabled
+    && !reviewServingProjectorPaused
+    && shouldPrioritizeMissingSnapshotRepair
+    && (pendingCandidateSnapshotActivationCount === 0
+      || hasStalePendingCandidateActivationWork
+      || hasActiveEnrichmentMissingSnapshotRepair
+      || hasLegacyRequiredBootstrapEnrichmentCandidate
+      || shouldSeedCurrentConfigMissingSnapshot
+      || hasUnreadableActiveWarningSnapshot)
+    && (!hasRecentProgress
+      || hasActiveEnrichmentMissingSnapshotRepair
+      || hasLegacyRequiredBootstrapEnrichmentCandidate
+      || shouldSeedCurrentConfigMissingSnapshot
+      || hasUnreadableActiveWarningSnapshot)
+    && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork || hasUnreadableActiveWarningSnapshot)
+
+  if (shouldRequestForegroundRepair) {
+    const priority = hasRecentProgress
+      ? foregroundReviewServingRepairPriority
+      : stalledForegroundReviewServingRepairPriority
+    await requestReviewServingV4Rebuild({
+      pageFirstOnly: true,
+      priority,
+      projectId,
+      reason: 'missingReviewServingSnapshot',
+    }).catch(() => {
+      return undefined
+    })
+  }
+
+  const shouldRequestFilterEnrichment =
+    !isServerMutationWorkDisabled
+    && !reviewServingProjectorPaused
+    && hasReadableReviewServingRows
+    && coverage.filterReadyArticleCount === null
+
+  if (shouldRequestFilterEnrichment) {
+    await requestReviewServingV4Rebuild({
+      components: warningFilterEnrichmentReviewServingComponents,
+      priority: filterEnrichmentReviewServingRepairPriority,
+      projectId,
+      reason: 'filterReadinessEnrichment',
+    }).catch(() => {
+      return undefined
+    })
+  }
+
+  const shouldRequestDetailEnrichment =
+    !isServerMutationWorkDisabled
+    && !reviewServingProjectorPaused
+    && hasReadableReviewServingRows
+    && coverage.filterReadyArticleCount !== null
+    && coverage.detailReadyArticleCount === null
+
+  if (shouldRequestDetailEnrichment) {
+    await requestReviewServingV4Rebuild({
+      components: warningDetailEnrichmentReviewServingComponents,
+      priority: detailEnrichmentReviewServingRepairPriority,
+      projectId,
+      reason: 'detailReadinessDirtyWork',
+    }).catch(() => {
+      return undefined
+    })
+  }
+
+  const pendingRebuildChunkCount = totalQueuedRebuildChunkCount + inFlightRebuildChunkCount
+  const terminalRebuildChunkCount =
+    servingDiagnostics.rebuildChunks.blockedOverBudgetCount
+    + servingDiagnostics.rebuildChunks.failedCount
+    + servingDiagnostics.rebuildChunks.quarantinedCount
+  const terminalDirtyWorkCount = servingDiagnostics.dirtyWork.failedCount
+  const terminalQuarantineCount = servingDiagnostics.quarantine.quarantinedOutboxCount
+  const pendingDirtyWorkCount =
+    servingDiagnostics.dirtyWork.pendingCount
+    + servingDiagnostics.dirtyWork.runningCount
+    + servingDiagnostics.quarantine.retryableOutboxCount
+  const queuedRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
+  const inFlightRefreshCount = inFlightRebuildChunkCount + servingDiagnostics.dirtyWork.runningCount
+  const pendingRefreshCount = pendingRebuildChunkCount + pendingDirtyWorkCount + pendingCandidateSnapshotActivationCount
+  const claimableRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
+  const eligibleConsumerCount =
+    claimableRefreshCount > 0
+    && !isServerMutationWorkDisabled
+    && !reviewServingProjectorPaused
+    && activeDuckdbExclusiveWork === null
+      ? 1
+      : 0
+  const hasBlockedCandidateSnapshot =
+    servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
+  const hasLiveRefreshWork = pendingRefreshCount > 0 || inFlightRefreshCount > 0 || claimableRefreshCount > 0
+  const hasHistoricalMaintenanceFailures =
+    terminalRebuildChunkCount + terminalDirtyWorkCount + terminalQuarantineCount > 0
+  const hasActionableMaintenanceFailures =
+    hasHistoricalMaintenanceFailures && (!hasReviewServingRows || (terminalQuarantineCount > 0 && hasLiveRefreshWork))
+  const hasBlockedLiveMaintenanceWork =
+    hasLiveRefreshWork
+    && (reviewServingProjectorPaused
+      || isServerMutationWorkDisabled
+      || activeDuckdbExclusiveWork !== null
+      || hasBlockedCandidateSnapshot
+      || terminalQuarantineCount > 0)
+  const maintenanceStatus = getReviewsIndexingMaintenanceStatus({
+    hasActionableFailures: hasActionableMaintenanceFailures,
+    hasBlockedLiveWork: hasBlockedLiveMaintenanceWork,
+    hasLiveRefreshWork,
+  })
+  const baseIndexingStatus = getReviewsIndexingStatus({
+    enabledPromptCount,
+    hasActionableFailures: hasActionableMaintenanceFailures,
+    hasAnyArticlesInScope,
+    hasBlockedCandidateSnapshot,
+    hasReviewServingRows,
+    isReviewServingProjectorPaused: reviewServingProjectorPaused,
+    isServerMutationWorkDisabled,
+    pendingRefreshCount,
+    runningRefreshCount: inFlightRefreshCount,
+  })
+  const shouldBlockForDuckdbExclusiveWork =
+    activeDuckdbExclusiveWork !== null
+    && enabledPromptCount > 0
+    && hasAnyArticlesInScope
+    && (pendingRefreshCount > 0 || !hasReviewServingRows)
+  const indexingStatus = shouldBlockForDuckdbExclusiveWork ? 'blocked' : baseIndexingStatus
+  const hasRecentVisibleProgress =
+    pendingRefreshCount > 0 && inFlightRefreshCount === 0 && eligibleConsumerCount > 0 && hasRecentProgress
+  const progressState = getReviewsIndexingProgressState({
+    claimableRefreshCount,
+    hasRecentProgress: hasRecentVisibleProgress,
+    inFlightRefreshCount,
+    status: indexingStatus,
+  })
+  const blockedReason: ReviewsIndexingBlockedReason = shouldBlockForDuckdbExclusiveWork
+    ? 'duckdb_exclusive_work_active'
+    : indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
+      ? 'quarantine_barrier'
+      : indexingStatus === 'blocked' && hasBlockedCandidateSnapshot
+        ? 'operator_intervention_required'
+        : indexingStatus === 'blocked' && reviewServingProjectorPaused
+          ? 'paused_by_policy'
+          : indexingStatus === 'blocked' && isServerMutationWorkDisabled
+            ? 'waiting_for_maintenance_worker'
+            : null
+  return {
+    data: {
+      projectId,
+      enabledPromptCount,
+      scope: {hasAnyArticlesInScope},
+      indexing: {
+        activeConsumerCount: inFlightRefreshCount > 0 || hasRecentVisibleProgress ? 1 : 0,
+        activeWorkCount: inFlightRefreshCount,
+        articleRefreshesPerMinute: null,
+        blockedReason,
+        cleanup: {inFlightGenerationCleanupCount: 0, lastProgressedAt: null},
+        coverage,
+        eligibleConsumerCount,
+        eligibleConsumerPresent: eligibleConsumerCount > 0,
+        inFlightArticleRefreshCount: 0,
+        inFlightProjectRefreshCount: inFlightRefreshCount,
+        inFlightRefreshCount,
+        lastProgressedAt,
+        lastProcessedAt: servingDiagnostics.snapshot.activeUpdatedAt,
+        lastStartedAt: null,
+        maintenance: {
+          hasActionableFailures: hasActionableMaintenanceFailures,
+          hasHistoricalFailures: hasHistoricalMaintenanceFailures,
+          status: maintenanceStatus,
+          terminalDirtyWorkCount,
+          terminalQuarantineCount,
+          terminalRebuildChunkCount,
+        },
+        oldestQueuedAt: getOldestTimestamp(
+          servingDiagnostics.dirtyWork.oldestQueuedAt,
+          servingDiagnostics.rebuildChunks.oldestQueuedAt,
+        ),
+        pendingArticleRefreshCount: 0,
+        pendingProjectRefreshCount: pendingRefreshCount,
+        pendingRefreshCount,
+        projectRefreshesPerMinute: null,
+        queuedArticleRefreshCount: 0,
+        queuedProjectRefreshCount: queuedRefreshCount,
+        queuedRefreshCount,
+        quarantinedArticleRefreshCount: 0,
+        quarantinedArticles: [],
+        progressState,
+        recoveryContext: null,
+        recoveryMode: 'none',
+        requiredConsumerRole: 'maintenance-worker',
+        retryAfterAt: null,
+        search: servingDiagnostics.search,
+        serving: {
+          diagnostics: servingDiagnostics,
+          manifest: warningSnapshot.diagnostics.manifest,
+          readable: hasReadableReviewServingRows,
+          usable: hasReviewServingRows,
+        },
+        status: indexingStatus,
+      },
+    },
+  }
+}
+
+type ReviewsWarningsPayload = Awaited<ReturnType<typeof getReviewsWarningsPayload>>
+
+const reviewsWarningsPayloadMemoTtlMs = 10_000
+const reviewsWarningsPayloadMemo = createReviewsWarningsPayloadMemo<ReviewsWarningsPayload>({
+  ttlMs: reviewsWarningsPayloadMemoTtlMs,
+})
+
+export const resetReviewsWarningsPayloadMemoForTests = () => {
+  reviewsWarningsPayloadMemo.clear()
+}
+
+const getReviewsWarningsPayloadMemoKey = (projectId: string, reviewConfigHash: string | null) => {
+  return `${projectId} ${reviewConfigHash ?? ''}`
+}
+
+const getReviewsWarningsPayloadMemoMode = (body: {
+  fresh?: boolean
+  includeDiagnosticDetails?: boolean
+}): ReviewsWarningsPayloadMemoMode => {
+  if (body.includeDiagnosticDetails === true) {
+    return 'bypass'
+  }
+
+  return body.fresh === true ? 'refresh' : 'memo'
+}
+
 export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
     const projectId = body.projectId
     await assertProjectIsActive(projectId, getReviewWarningsWorkloadContext(projectId, 'projectAccess'))
-    const routeDiagnosticWorkloadContext = getReviewWarningsWorkloadContext(projectId, 'servingDiagnostics')
     const reviewConfigHash = await getCurrentReviewConfigHash(projectId, {
       database: getApiReadOnlyAppDatabaseService(),
       workloadContext: getReviewWarningsWorkloadContext(projectId, 'reviewConfigHash'),
     })
-    const warningSnapshot = await readReviewServingRows({
-      allowStale: true,
-      contractKey: 'review.warning.snapshot',
-      estimatedResultRows: 1,
-      limit: 1,
-      metadataOnly: true,
-      projectId,
-      routeDiagnosticWorkloadContext,
-      reviewConfigHash,
-    })
-    const {enabledPromptCount, hasAnyArticlesInScope, totalArticleCount} = await getReviewWarningsScopeState(projectId)
-    const coverageManifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest({
-      componentStateMode: 'available',
-      projectId,
-      reviewConfigHash,
-      workloadContext: getReviewWarningsWorkloadContext(projectId, 'coverageManifest'),
-    })
-    const coverage = await getReviewsWarningsCoverage({
-      manifest: coverageManifest,
-      projectId,
-      reviewConfigHash,
-      totalArticleCount,
-    })
-    const servingDiagnostics =
-      warningSnapshot.diagnostics.diagnostics
-      ?? (await getReviewServingDiagnostics({
-        projectId,
-        reviewConfigHash,
-        workloadContext: routeDiagnosticWorkloadContext,
-      }))
-    const hasReviewServingRows =
-      warningSnapshot.status === 'accepted'
-      && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
-    const hasReadableReviewServingRows = hasReviewServingRows
-    const pendingCandidateSnapshotActivationCount = hasReadableReviewServingRows
-      ? 0
-      : getNonNegativeDifference(
-          servingDiagnostics.snapshot.candidateCount,
-          servingDiagnostics.snapshot.invalidCandidateCount,
-        )
-    const shouldPrioritizeMissingSnapshotRepair =
-      !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
-    const hasUnreadableActiveWarningSnapshot =
-      warningSnapshot.status === 'rejected'
-      && warningSnapshot.reason === 'missingRequiredComponentState'
-      && warningSnapshot.diagnostics.manifest.status === 'active'
-    const expiredRebuildChunkLeaseCount = Math.min(
-      servingDiagnostics.rebuildChunks.runningCount,
-      servingDiagnostics.rebuildChunks.expiredLeaseCount,
-    )
-    const lastProgressedAt = getLatestTimestamp(
-      servingDiagnostics.dirtyWork.updatedAt,
-      servingDiagnostics.rebuildChunks.updatedAt,
-      servingDiagnostics.snapshot.activeUpdatedAt,
-    )
-    const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
-    const reviewServingProjectorPaused = isReviewServingProjectorPaused()
-    const activeDuckdbExclusiveWork = getActiveDuckdbExclusiveWorkSnapshot()
-    const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.claimableCount
-    const totalQueuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
-    const inFlightRebuildChunkCount = getNonNegativeDifference(
-      servingDiagnostics.rebuildChunks.runningCount,
-      expiredRebuildChunkLeaseCount,
-    )
 
-    const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
-    const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
-    const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
-    const hasCurrentConfigSnapshot =
-      servingDiagnostics.snapshot.activeCount > 0 || servingDiagnostics.snapshot.candidateCount > 0
-    const shouldSeedCurrentConfigMissingSnapshot = shouldPrioritizeMissingSnapshotRepair && !hasCurrentConfigSnapshot
-    const shouldAttemptCandidatePromotion =
-      !isServerMutationWorkDisabled
-      && !reviewServingProjectorPaused
-      && shouldPrioritizeMissingSnapshotRepair
-      && servingDiagnostics.snapshot.candidateCount > 0
-    if (shouldAttemptCandidatePromotion) {
-      const candidateSnapshotId = await getLatestCandidateSnapshotId({projectId, reviewConfigHash})
-      if (candidateSnapshotId !== null) {
-        await promoteReviewServingProjectorSnapshot({
+    return reviewsWarningsPayloadMemo.read({
+      compute: () => {
+        return getReviewsWarningsPayload({
+          includeDiagnosticDetails: body.includeDiagnosticDetails === true,
           projectId,
           reviewConfigHash,
-          snapshotId: candidateSnapshotId,
-        }).catch(() => {
-          return undefined
         })
-      }
-    }
-    const hasLegacyRequiredBootstrapEnrichmentCandidate = shouldPrioritizeMissingSnapshotRepair
-      ? await getHasLegacyRequiredBootstrapEnrichmentCandidate({projectId, reviewConfigHash})
-      : false
-    const hasActiveEnrichmentMissingSnapshotRepair = shouldPrioritizeMissingSnapshotRepair
-      ? await getHasActiveEnrichmentMissingSnapshotRepair({projectId, reviewConfigHash})
-      : false
-    const hasStalePendingCandidateActivationWork =
-      pendingCandidateSnapshotActivationCount > 0
-      && !hasRecentProgress
-      && servingDiagnostics.rebuildChunks.claimableCount > 0
-    const shouldRequestForegroundRepair =
-      !isServerMutationWorkDisabled
-      && !reviewServingProjectorPaused
-      && shouldPrioritizeMissingSnapshotRepair
-      && (pendingCandidateSnapshotActivationCount === 0
-        || hasStalePendingCandidateActivationWork
-        || hasActiveEnrichmentMissingSnapshotRepair
-        || hasLegacyRequiredBootstrapEnrichmentCandidate
-        || shouldSeedCurrentConfigMissingSnapshot
-        || hasUnreadableActiveWarningSnapshot)
-      && (!hasRecentProgress
-        || hasActiveEnrichmentMissingSnapshotRepair
-        || hasLegacyRequiredBootstrapEnrichmentCandidate
-        || shouldSeedCurrentConfigMissingSnapshot
-        || hasUnreadableActiveWarningSnapshot)
-      && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork || hasUnreadableActiveWarningSnapshot)
-
-    if (shouldRequestForegroundRepair) {
-      const priority = hasRecentProgress
-        ? foregroundReviewServingRepairPriority
-        : stalledForegroundReviewServingRepairPriority
-      await requestReviewServingV4Rebuild({
-        pageFirstOnly: true,
-        priority,
-        projectId,
-        reason: 'missingReviewServingSnapshot',
-      }).catch(() => {
-        return undefined
-      })
-    }
-
-    const shouldRequestFilterEnrichment =
-      !isServerMutationWorkDisabled
-      && !reviewServingProjectorPaused
-      && hasReadableReviewServingRows
-      && coverage.filterReadyArticleCount === null
-
-    if (shouldRequestFilterEnrichment) {
-      await requestReviewServingV4Rebuild({
-        components: warningFilterEnrichmentReviewServingComponents,
-        priority: filterEnrichmentReviewServingRepairPriority,
-        projectId,
-        reason: 'filterReadinessEnrichment',
-      }).catch(() => {
-        return undefined
-      })
-    }
-
-    const shouldRequestDetailEnrichment =
-      !isServerMutationWorkDisabled
-      && !reviewServingProjectorPaused
-      && hasReadableReviewServingRows
-      && coverage.filterReadyArticleCount !== null
-      && coverage.detailReadyArticleCount === null
-
-    if (shouldRequestDetailEnrichment) {
-      await requestReviewServingV4Rebuild({
-        components: warningDetailEnrichmentReviewServingComponents,
-        priority: detailEnrichmentReviewServingRepairPriority,
-        projectId,
-        reason: 'detailReadinessDirtyWork',
-      }).catch(() => {
-        return undefined
-      })
-    }
-
-    const pendingRebuildChunkCount = totalQueuedRebuildChunkCount + inFlightRebuildChunkCount
-    const terminalRebuildChunkCount =
-      servingDiagnostics.rebuildChunks.blockedOverBudgetCount
-      + servingDiagnostics.rebuildChunks.failedCount
-      + servingDiagnostics.rebuildChunks.quarantinedCount
-    const terminalDirtyWorkCount = servingDiagnostics.dirtyWork.failedCount
-    const terminalQuarantineCount = servingDiagnostics.quarantine.quarantinedOutboxCount
-    const pendingDirtyWorkCount =
-      servingDiagnostics.dirtyWork.pendingCount
-      + servingDiagnostics.dirtyWork.runningCount
-      + servingDiagnostics.quarantine.retryableOutboxCount
-    const queuedRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
-    const inFlightRefreshCount = inFlightRebuildChunkCount + servingDiagnostics.dirtyWork.runningCount
-    const pendingRefreshCount =
-      pendingRebuildChunkCount + pendingDirtyWorkCount + pendingCandidateSnapshotActivationCount
-    const claimableRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
-    const eligibleConsumerCount =
-      claimableRefreshCount > 0
-      && !isServerMutationWorkDisabled
-      && !reviewServingProjectorPaused
-      && activeDuckdbExclusiveWork === null
-        ? 1
-        : 0
-    const hasBlockedCandidateSnapshot =
-      servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
-    const hasLiveRefreshWork = pendingRefreshCount > 0 || inFlightRefreshCount > 0 || claimableRefreshCount > 0
-    const hasHistoricalMaintenanceFailures =
-      terminalRebuildChunkCount + terminalDirtyWorkCount + terminalQuarantineCount > 0
-    const hasActionableMaintenanceFailures =
-      hasHistoricalMaintenanceFailures && (!hasReviewServingRows || (terminalQuarantineCount > 0 && hasLiveRefreshWork))
-    const hasBlockedLiveMaintenanceWork =
-      hasLiveRefreshWork
-      && (reviewServingProjectorPaused
-        || isServerMutationWorkDisabled
-        || activeDuckdbExclusiveWork !== null
-        || hasBlockedCandidateSnapshot
-        || terminalQuarantineCount > 0)
-    const maintenanceStatus = getReviewsIndexingMaintenanceStatus({
-      hasActionableFailures: hasActionableMaintenanceFailures,
-      hasBlockedLiveWork: hasBlockedLiveMaintenanceWork,
-      hasLiveRefreshWork,
-    })
-    const baseIndexingStatus = getReviewsIndexingStatus({
-      enabledPromptCount,
-      hasActionableFailures: hasActionableMaintenanceFailures,
-      hasAnyArticlesInScope,
-      hasBlockedCandidateSnapshot,
-      hasReviewServingRows,
-      isReviewServingProjectorPaused: reviewServingProjectorPaused,
-      isServerMutationWorkDisabled,
-      pendingRefreshCount,
-      runningRefreshCount: inFlightRefreshCount,
-    })
-    const shouldBlockForDuckdbExclusiveWork =
-      activeDuckdbExclusiveWork !== null
-      && enabledPromptCount > 0
-      && hasAnyArticlesInScope
-      && (pendingRefreshCount > 0 || !hasReviewServingRows)
-    const indexingStatus = shouldBlockForDuckdbExclusiveWork ? 'blocked' : baseIndexingStatus
-    const hasRecentVisibleProgress =
-      pendingRefreshCount > 0 && inFlightRefreshCount === 0 && eligibleConsumerCount > 0 && hasRecentProgress
-    const progressState = getReviewsIndexingProgressState({
-      claimableRefreshCount,
-      hasRecentProgress: hasRecentVisibleProgress,
-      inFlightRefreshCount,
-      status: indexingStatus,
-    })
-    const blockedReason: ReviewsIndexingBlockedReason = shouldBlockForDuckdbExclusiveWork
-      ? 'duckdb_exclusive_work_active'
-      : indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
-        ? 'quarantine_barrier'
-        : indexingStatus === 'blocked' && hasBlockedCandidateSnapshot
-          ? 'operator_intervention_required'
-          : indexingStatus === 'blocked' && reviewServingProjectorPaused
-            ? 'paused_by_policy'
-            : indexingStatus === 'blocked' && isServerMutationWorkDisabled
-              ? 'waiting_for_maintenance_worker'
-              : null
-    return {
-      data: {
-        projectId,
-        enabledPromptCount,
-        scope: {hasAnyArticlesInScope},
-        indexing: {
-          activeConsumerCount: inFlightRefreshCount > 0 || hasRecentVisibleProgress ? 1 : 0,
-          activeWorkCount: inFlightRefreshCount,
-          articleRefreshesPerMinute: null,
-          blockedReason,
-          cleanup: {inFlightGenerationCleanupCount: 0, lastProgressedAt: null},
-          coverage,
-          eligibleConsumerCount,
-          eligibleConsumerPresent: eligibleConsumerCount > 0,
-          inFlightArticleRefreshCount: 0,
-          inFlightProjectRefreshCount: inFlightRefreshCount,
-          inFlightRefreshCount,
-          lastProgressedAt,
-          lastProcessedAt: servingDiagnostics.snapshot.activeUpdatedAt,
-          lastStartedAt: null,
-          maintenance: {
-            hasActionableFailures: hasActionableMaintenanceFailures,
-            hasHistoricalFailures: hasHistoricalMaintenanceFailures,
-            status: maintenanceStatus,
-            terminalDirtyWorkCount,
-            terminalQuarantineCount,
-            terminalRebuildChunkCount,
-          },
-          oldestQueuedAt: getOldestTimestamp(
-            servingDiagnostics.dirtyWork.oldestQueuedAt,
-            servingDiagnostics.rebuildChunks.oldestQueuedAt,
-          ),
-          pendingArticleRefreshCount: 0,
-          pendingProjectRefreshCount: pendingRefreshCount,
-          pendingRefreshCount,
-          projectRefreshesPerMinute: null,
-          queuedArticleRefreshCount: 0,
-          queuedProjectRefreshCount: queuedRefreshCount,
-          queuedRefreshCount,
-          quarantinedArticleRefreshCount: 0,
-          quarantinedArticles: [],
-          progressState,
-          recoveryContext: null,
-          recoveryMode: 'none',
-          requiredConsumerRole: 'maintenance-worker',
-          retryAfterAt: null,
-          search: servingDiagnostics.search,
-          serving: {
-            diagnostics: servingDiagnostics,
-            manifest: warningSnapshot.diagnostics.manifest,
-            readable: hasReadableReviewServingRows,
-            usable: hasReviewServingRows,
-          },
-          status: indexingStatus,
-        },
       },
-    }
+      key: getReviewsWarningsPayloadMemoKey(projectId, reviewConfigHash),
+      mode: getReviewsWarningsPayloadMemoMode(body),
+    })
   },
-  {body: t.Object({projectId: t.String()})},
+  {
+    body: t.Object({
+      fresh: t.Optional(t.Boolean()),
+      includeDiagnosticDetails: t.Optional(t.Boolean()),
+      projectId: t.String(),
+    }),
+  },
 )

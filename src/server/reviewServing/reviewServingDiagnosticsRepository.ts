@@ -17,6 +17,7 @@ export type ReviewServingDiagnosticsDatabase = {
 }
 
 export type ReviewServingDiagnosticsInput = {
+  includeDetails?: boolean
   now?: Date | string
   projectId: string
   reviewConfigHash?: string | null
@@ -66,12 +67,14 @@ export type ReviewServingDiagnosticsDirtySourceLag = {
   sourcePartition: string
 }
 
-export type ReviewServingDiagnosticsDirtyWorkState = ReviewServingDiagnosticsCountState & {
-  blockedByRebuildCount: number
+export type ReviewServingDiagnosticsDirtyWorkDetails = {
   buckets: ReviewServingDiagnosticsDirtyWorkBucket[]
   lifecycleReasonCounts: ReviewServingDiagnosticsDirtyWorkLifecycleReasonCount[]
   sourcePartitionLags: ReviewServingDiagnosticsDirtySourceLag[]
 }
+
+export type ReviewServingDiagnosticsDirtyWorkState = ReviewServingDiagnosticsCountState
+  & Partial<ReviewServingDiagnosticsDirtyWorkDetails> & {blockedByRebuildCount: number}
 
 export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnosticsCountState & {
   blockedQueuedCount: number
@@ -104,6 +107,13 @@ export type ReviewServingDiagnosticsQuarantineBarrier = {
   status: string
 }
 
+export type ReviewServingDiagnosticsInvalidCandidateReasons = {
+  invalidOptionalStateCount: number
+  invalidRequiredStateCount: number
+  missingRequiredCount: number
+  selectedImportIncompleteCount: number
+}
+
 export type ReviewServingDiagnostics = {
   dirtyWork: ReviewServingDiagnosticsDirtyWorkState
   maintenance: {
@@ -114,7 +124,7 @@ export type ReviewServingDiagnostics = {
   }
   projectId: string
   quarantine: {
-    oldestBarrier: ReviewServingDiagnosticsQuarantineBarrier | null
+    oldestBarrier?: ReviewServingDiagnosticsQuarantineBarrier | null
     quarantinedCursorCount: number
     quarantinedOutboxCount: number
     retryableOutboxCount: number
@@ -128,12 +138,7 @@ export type ReviewServingDiagnostics = {
     activeSnapshotId: string | null
     activeUpdatedAt: string | null
     candidateCount: number
-    invalidCandidateReasons: {
-      invalidOptionalStateCount: number
-      invalidRequiredStateCount: number
-      missingRequiredCount: number
-      selectedImportIncompleteCount: number
-    }
+    invalidCandidateReasons?: ReviewServingDiagnosticsInvalidCandidateReasons
     invalidCandidateCount: number
     failedCount: number
     lastKnownGoodSnapshotId: string | null
@@ -161,18 +166,18 @@ type DiagnosticsSummaryRow = {
   activeSnapshotUpdatedAt: string | null
   dirtyWorkBlockedByRebuildCount: number
   dirtyWorkCompletedCount: number
-  dirtyWorkBucketsJson: unknown
+  dirtyWorkBucketsJson?: unknown
   dirtyWorkFailedCount: number
-  dirtyWorkLifecycleReasonCountsJson: unknown
+  dirtyWorkLifecycleReasonCountsJson?: unknown
   dirtyWorkOldestQueuedAt: string | null
   dirtyWorkPendingCount: number
-  dirtyWorkSourcePartitionLagsJson: unknown
+  dirtyWorkSourcePartitionLagsJson?: unknown
   dirtyWorkRunningCount: number
   dirtyWorkUpdatedAt: string | null
-  oldestBarrierOutboxId: string | null
-  oldestBarrierSourceHighWaterMark: number | null
-  oldestBarrierSourcePartition: string | null
-  oldestBarrierStatus: string | null
+  oldestBarrierOutboxId?: string | null
+  oldestBarrierSourceHighWaterMark?: number | null
+  oldestBarrierSourcePartition?: string | null
+  oldestBarrierStatus?: string | null
   quarantinedCursorCount: number
   quarantinedOutboxCount: number
   rebuildChunkBlockedOverBudgetCount: number
@@ -194,12 +199,12 @@ type DiagnosticsSummaryRow = {
   snapshotActiveCount: number
   snapshotCandidateCount: number
   snapshotFailedCount: number
-  snapshotInvalidOptionalStateCandidateCount: number
-  snapshotInvalidRequiredStateCandidateCount: number
+  snapshotInvalidOptionalStateCandidateCount?: number
+  snapshotInvalidRequiredStateCandidateCount?: number
   snapshotInvalidCandidateCount: number
-  snapshotMissingRequiredCandidateCount: number
+  snapshotMissingRequiredCandidateCount?: number
   snapshotRetiredCount: number
-  snapshotSelectedImportIncompleteCandidateCount: number
+  snapshotSelectedImportIncompleteCandidateCount?: number
   unresolvedOutboxCount: number
 }
 
@@ -263,9 +268,8 @@ const emptyCountState: ReviewServingDiagnosticsCountState = {
   runningCount: 0,
   updatedAt: null,
 }
-const emptyDirtyWorkState: ReviewServingDiagnosticsDirtyWorkState = {
-  ...emptyCountState,
-  blockedByRebuildCount: 0,
+const emptyDirtyWorkState: ReviewServingDiagnosticsDirtyWorkState = {...emptyCountState, blockedByRebuildCount: 0}
+const emptyDirtyWorkDetails: ReviewServingDiagnosticsDirtyWorkDetails = {
   buckets: [],
   lifecycleReasonCounts: [],
   sourcePartitionLags: [],
@@ -546,6 +550,7 @@ const getSearchDiagnostics = (activeSnapshot: ActiveSnapshotRow | undefined): Re
 }
 
 const getQuarantineDiagnostics = (input: {
+  includeDetails: boolean
   oldestBarrier: ReviewServingDiagnosticsQuarantineBarrier | undefined
   quarantineState: QuarantineStateRow | undefined
   quarantinedCursorCount: QuarantinedCursorCountRow | undefined
@@ -553,7 +558,7 @@ const getQuarantineDiagnostics = (input: {
   const quarantineState = input.quarantineState ?? emptyQuarantineState
 
   return {
-    oldestBarrier: input.oldestBarrier ?? null,
+    ...(input.includeDetails ? {oldestBarrier: input.oldestBarrier ?? null} : {}),
     quarantinedCursorCount: Number(input.quarantinedCursorCount?.quarantinedCursorCount ?? 0),
     quarantinedOutboxCount: Number(quarantineState.quarantinedOutboxCount),
     retryableOutboxCount: Number(quarantineState.retryableOutboxCount),
@@ -561,10 +566,187 @@ const getQuarantineDiagnostics = (input: {
   }
 }
 
+const invalidCandidateReasonCountsSql = `
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM selected_import_incomplete_candidate) AS INTEGER) AS selectedImportIncompleteCandidateCount,
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM missing_required_candidate) AS INTEGER) AS missingRequiredCandidateCount,
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM invalid_required_state_candidate) AS INTEGER) AS invalidRequiredStateCandidateCount,
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM invalid_optional_state_candidate) AS INTEGER) AS invalidOptionalStateCandidateCount,`
+
+const getDirtyWorkDetailCtesSql = (projectId: string) => {
+  return `, dirty_work_bucket AS (
+        SELECT
+          project_id AS projectId,
+          projection_component AS projectionComponent,
+          projection_identity AS projectionIdentity,
+          source_partition AS sourcePartition,
+          status,
+          CAST(NULL AS VARCHAR) AS lifecycleReason,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NOT NULL OR dirty_range_end IS NOT NULL) AS BIGINT) AS pointRowCount,
+          CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NULL AND dirty_range_end IS NULL) AS BIGINT) AS highWaterRowCount,
+          MIN(created_at) AS oldestQueuedAt,
+          MIN(latest_source_high_water_mark) AS latestSourceHighWaterMarkMin,
+          MAX(latest_source_high_water_mark) AS latestSourceHighWaterMarkMax
+        FROM app.review_serving_dirty_work_claim_state
+        WHERE project_id = ${getSqlLiteral(projectId)}
+        GROUP BY
+          project_id,
+          projectionComponent,
+          projectionIdentity,
+          source_partition,
+          status
+      ), dirty_work_lifecycle_reason AS (
+        SELECT
+          status,
+          CAST(NULL AS VARCHAR) AS lifecycleReason,
+          CAST(COUNT(*) AS BIGINT) AS rowCount
+        FROM app.review_serving_dirty_work_claim_state
+        WHERE project_id = ${getSqlLiteral(projectId)}
+        GROUP BY status
+      ), judgment_job_source AS (
+        SELECT
+          job.id AS jobId,
+          job.project_id AS projectId,
+          cursor.source_partition AS sourcePartition,
+          cursor.source_high_water_mark AS importedSourceHighWaterMark
+        FROM app.judgment_job job
+        INNER JOIN app.review_delta_reconciliation_cursor cursor
+          ON cursor.source_partition = 'judgmentSqliteOutboxImport:' || job.id
+        WHERE job.project_id = ${getSqlLiteral(projectId)}
+          AND job.storage_state IN ('active', 'draining')
+      ), judgment_job_llm_status_claim AS (
+        SELECT
+          state.project_id AS projectId,
+          state.source_partition AS sourcePartition,
+          COALESCE(MAX(state.latest_source_high_water_mark) FILTER (WHERE state.status = 'completed'), 0) AS llmStatusCompletedHighWaterMark,
+          CAST(COUNT(*) FILTER (WHERE state.status = 'pending') AS INTEGER) AS llmStatusPendingCount,
+          CAST(COUNT(*) FILTER (WHERE state.status = 'running') AS INTEGER) AS llmStatusRunningCount,
+          CAST(COUNT(*) FILTER (WHERE state.status = 'failed') AS INTEGER) AS llmStatusFailedCount
+        FROM app.review_serving_dirty_work_claim_state state
+        INNER JOIN judgment_job_source source
+          ON source.projectId = state.project_id
+          AND source.sourcePartition = state.source_partition
+        WHERE state.projection_component = 'llmStatus'
+        GROUP BY state.project_id, state.source_partition
+      ), judgment_job_dirty_source_lag AS (
+        SELECT
+          source.jobId,
+          source.projectId,
+          source.sourcePartition,
+          source.importedSourceHighWaterMark,
+          GREATEST(
+            COALESCE(completed.source_high_water_mark, 0),
+            COALESCE(claim.llmStatusCompletedHighWaterMark, 0)
+          ) AS dirtySourceHighWaterMark,
+          COALESCE(claim.llmStatusCompletedHighWaterMark, 0) AS llmStatusCompletedHighWaterMark,
+          COALESCE(claim.llmStatusPendingCount, 0) AS llmStatusPendingCount,
+          COALESCE(claim.llmStatusRunningCount, 0) AS llmStatusRunningCount,
+          COALESCE(claim.llmStatusFailedCount, 0) AS llmStatusFailedCount,
+          GREATEST(
+            0,
+            source.importedSourceHighWaterMark - GREATEST(
+              COALESCE(completed.source_high_water_mark, 0),
+              COALESCE(claim.llmStatusCompletedHighWaterMark, 0)
+            )
+          ) AS dirtyHighWaterLag
+        FROM judgment_job_source source
+        LEFT JOIN judgment_job_llm_status_claim claim
+          ON claim.projectId = source.projectId
+          AND claim.sourcePartition = source.sourcePartition
+        LEFT JOIN app.review_serving_project_dirty_source_watermark completed
+          ON completed.project_id = source.projectId
+          AND completed.source_partition = source.sourcePartition
+      )`
+}
+
+const getOldestBarrierCteSql = (partitions: readonly string[]) => {
+  return `, oldest_barrier AS (
+        SELECT
+          outbox_id AS outboxId,
+          source_partition AS sourcePartition,
+          source_high_water_mark AS sourceHighWaterMark,
+          status
+        FROM app.review_source_change_outbox
+        WHERE source_partition IN (${getSqlStringList(partitions)})
+          AND status NOT IN (${getOutboxTerminalStatusList()})
+        ORDER BY source_high_water_mark ASC, created_at ASC, outbox_id ASC
+        LIMIT 1
+      )`
+}
+
+const dirtyWorkDetailSelectSql = `
+        snapshot_status_counts.selectedImportIncompleteCandidateCount AS snapshotSelectedImportIncompleteCandidateCount,
+        snapshot_status_counts.missingRequiredCandidateCount AS snapshotMissingRequiredCandidateCount,
+        snapshot_status_counts.invalidRequiredStateCandidateCount AS snapshotInvalidRequiredStateCandidateCount,
+        snapshot_status_counts.invalidOptionalStateCandidateCount AS snapshotInvalidOptionalStateCandidateCount,
+        COALESCE((
+          SELECT to_json(LIST(STRUCT_PACK(
+            projectId := projectId,
+            projectionComponent := projectionComponent,
+            projectionIdentity := projectionIdentity,
+            sourcePartition := sourcePartition,
+            status := status,
+            lifecycleReason := lifecycleReason,
+            rowCount := rowCount,
+            pointRowCount := pointRowCount,
+            highWaterRowCount := highWaterRowCount,
+            oldestQueuedAt := oldestQueuedAt,
+            latestSourceHighWaterMarkMin := latestSourceHighWaterMarkMin,
+            latestSourceHighWaterMarkMax := latestSourceHighWaterMarkMax
+          )))
+          FROM (
+            SELECT *
+            FROM dirty_work_bucket
+            ORDER BY rowCount DESC, projectId ASC NULLS LAST, projectionComponent ASC NULLS LAST, sourcePartition ASC, status ASC
+            LIMIT ${dirtyWorkDiagnosticsBucketLimit}
+          )
+        ), '[]') AS dirtyWorkBucketsJson,
+        COALESCE((
+          SELECT to_json(LIST(STRUCT_PACK(
+            status := status,
+            lifecycleReason := lifecycleReason,
+            rowCount := rowCount
+          )))
+          FROM (
+            SELECT *
+            FROM dirty_work_lifecycle_reason
+            ORDER BY rowCount DESC, status ASC, lifecycleReason ASC NULLS LAST
+          )
+        ), '[]') AS dirtyWorkLifecycleReasonCountsJson,
+        COALESCE((
+          SELECT to_json(LIST(STRUCT_PACK(
+            jobId := jobId,
+            projectId := projectId,
+            sourcePartition := sourcePartition,
+            importedSourceHighWaterMark := importedSourceHighWaterMark,
+            dirtySourceHighWaterMark := dirtySourceHighWaterMark,
+            dirtyHighWaterLag := dirtyHighWaterLag,
+            llmStatusCompletedHighWaterMark := llmStatusCompletedHighWaterMark,
+            llmStatusPendingCount := llmStatusPendingCount,
+            llmStatusRunningCount := llmStatusRunningCount,
+            llmStatusFailedCount := llmStatusFailedCount
+          )))
+          FROM (
+            SELECT *
+            FROM judgment_job_dirty_source_lag
+            WHERE dirtyHighWaterLag > 0
+              OR llmStatusPendingCount + llmStatusRunningCount + llmStatusFailedCount > 0
+            ORDER BY dirtyHighWaterLag DESC, importedSourceHighWaterMark DESC, sourcePartition ASC
+            LIMIT ${dirtyWorkDiagnosticsBucketLimit}
+          )
+        ), '[]') AS dirtyWorkSourcePartitionLagsJson,`
+
+const oldestBarrierSelectSql = `
+        oldest_barrier.outboxId AS oldestBarrierOutboxId,
+        oldest_barrier.sourcePartition AS oldestBarrierSourcePartition,
+        oldest_barrier.sourceHighWaterMark AS oldestBarrierSourceHighWaterMark,
+        oldest_barrier.status AS oldestBarrierStatus,`
+
 const getDiagnosticsSummaryRowsEffect = (
   input: ReviewServingDiagnosticsInput,
   database: ReviewServingDiagnosticsDatabase,
 ) => {
+  const includeDetails = input.includeDetails === true
   const now = input.now ?? new Date()
   const retryableDirtyWorkPredicate = `updated_at <= ${getDiagnosticsTimestampLiteral(now)} - INTERVAL '${defaultReviewServingDirtyWorkStaleClaimSeconds} seconds'`
   const queuedDirtyWorkPredicate = `
@@ -682,10 +864,7 @@ const getDiagnosticsSummaryRowsEffect = (
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS INTEGER) AS candidateCount,
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'failed') AS INTEGER) AS failedCount,
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'retired') AS INTEGER) AS retiredCount,
-          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM selected_import_incomplete_candidate) AS INTEGER) AS selectedImportIncompleteCandidateCount,
-          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM missing_required_candidate) AS INTEGER) AS missingRequiredCandidateCount,
-          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM invalid_required_state_candidate) AS INTEGER) AS invalidRequiredStateCandidateCount,
-          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM invalid_optional_state_candidate) AS INTEGER) AS invalidOptionalStateCandidateCount,
+          ${includeDetails ? invalidCandidateReasonCountsSql : ''}
           CAST(COUNT(*) FILTER (
             WHERE snapshot_status = 'candidate'
               AND snapshot.snapshot_id IN (SELECT snapshot_id FROM invalid_candidate)
@@ -710,90 +889,7 @@ const getDiagnosticsSummaryRowsEffect = (
           MAX(updated_at) FILTER (WHERE status IN ('failed', 'running', 'completed')) AS updatedAt
         FROM app.review_serving_dirty_work
         WHERE project_id = ${getSqlLiteral(input.projectId)}
-      ), dirty_work_bucket AS (
-        SELECT
-          project_id AS projectId,
-          projection_component AS projectionComponent,
-          projection_identity AS projectionIdentity,
-          source_partition AS sourcePartition,
-          status,
-          CAST(NULL AS VARCHAR) AS lifecycleReason,
-          CAST(COUNT(*) AS BIGINT) AS rowCount,
-          CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NOT NULL OR dirty_range_end IS NOT NULL) AS BIGINT) AS pointRowCount,
-          CAST(COUNT(*) FILTER (WHERE dirty_range_start IS NULL AND dirty_range_end IS NULL) AS BIGINT) AS highWaterRowCount,
-          MIN(created_at) AS oldestQueuedAt,
-          MIN(latest_source_high_water_mark) AS latestSourceHighWaterMarkMin,
-          MAX(latest_source_high_water_mark) AS latestSourceHighWaterMarkMax
-        FROM app.review_serving_dirty_work_claim_state
-        WHERE project_id = ${getSqlLiteral(input.projectId)}
-        GROUP BY
-          project_id,
-          projectionComponent,
-          projectionIdentity,
-          source_partition,
-          status
-      ), dirty_work_lifecycle_reason AS (
-        SELECT
-          status,
-          CAST(NULL AS VARCHAR) AS lifecycleReason,
-          CAST(COUNT(*) AS BIGINT) AS rowCount
-        FROM app.review_serving_dirty_work_claim_state
-        WHERE project_id = ${getSqlLiteral(input.projectId)}
-        GROUP BY status
-      ), judgment_job_source AS (
-        SELECT
-          job.id AS jobId,
-          job.project_id AS projectId,
-          cursor.source_partition AS sourcePartition,
-          cursor.source_high_water_mark AS importedSourceHighWaterMark
-        FROM app.judgment_job job
-        INNER JOIN app.review_delta_reconciliation_cursor cursor
-          ON cursor.source_partition = 'judgmentSqliteOutboxImport:' || job.id
-        WHERE job.project_id = ${getSqlLiteral(input.projectId)}
-          AND job.storage_state IN ('active', 'draining')
-      ), judgment_job_llm_status_claim AS (
-        SELECT
-          state.project_id AS projectId,
-          state.source_partition AS sourcePartition,
-          COALESCE(MAX(state.latest_source_high_water_mark) FILTER (WHERE state.status = 'completed'), 0) AS llmStatusCompletedHighWaterMark,
-          CAST(COUNT(*) FILTER (WHERE state.status = 'pending') AS INTEGER) AS llmStatusPendingCount,
-          CAST(COUNT(*) FILTER (WHERE state.status = 'running') AS INTEGER) AS llmStatusRunningCount,
-          CAST(COUNT(*) FILTER (WHERE state.status = 'failed') AS INTEGER) AS llmStatusFailedCount
-        FROM app.review_serving_dirty_work_claim_state state
-        INNER JOIN judgment_job_source source
-          ON source.projectId = state.project_id
-          AND source.sourcePartition = state.source_partition
-        WHERE state.projection_component = 'llmStatus'
-        GROUP BY state.project_id, state.source_partition
-      ), judgment_job_dirty_source_lag AS (
-        SELECT
-          source.jobId,
-          source.projectId,
-          source.sourcePartition,
-          source.importedSourceHighWaterMark,
-          GREATEST(
-            COALESCE(completed.source_high_water_mark, 0),
-            COALESCE(claim.llmStatusCompletedHighWaterMark, 0)
-          ) AS dirtySourceHighWaterMark,
-          COALESCE(claim.llmStatusCompletedHighWaterMark, 0) AS llmStatusCompletedHighWaterMark,
-          COALESCE(claim.llmStatusPendingCount, 0) AS llmStatusPendingCount,
-          COALESCE(claim.llmStatusRunningCount, 0) AS llmStatusRunningCount,
-          COALESCE(claim.llmStatusFailedCount, 0) AS llmStatusFailedCount,
-          GREATEST(
-            0,
-            source.importedSourceHighWaterMark - GREATEST(
-              COALESCE(completed.source_high_water_mark, 0),
-              COALESCE(claim.llmStatusCompletedHighWaterMark, 0)
-            )
-          ) AS dirtyHighWaterLag
-        FROM judgment_job_source source
-        LEFT JOIN judgment_job_llm_status_claim claim
-          ON claim.projectId = source.projectId
-          AND claim.sourcePartition = source.sourcePartition
-        LEFT JOIN app.review_serving_project_dirty_source_watermark completed
-          ON completed.project_id = source.projectId
-          AND completed.source_partition = source.sourcePartition
-      ), live_rebuild_chunk AS (
+      )${includeDetails ? getDirtyWorkDetailCtesSql(input.projectId) : ''}, live_rebuild_chunk AS (
         SELECT chunk.*
         FROM app.review_rebuild_chunk_manifest chunk
         WHERE chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
@@ -932,18 +1028,7 @@ const getDiagnosticsSummaryRowsEffect = (
           CAST(COUNT(*) FILTER (WHERE status NOT IN (${getOutboxTerminalStatusList()}) AND status <> 'quarantined') AS INTEGER) AS retryableOutboxCount
         FROM app.review_source_change_outbox
         WHERE source_partition IN (${getSqlStringList(partitions)})
-      ), oldest_barrier AS (
-        SELECT
-          outbox_id AS outboxId,
-          source_partition AS sourcePartition,
-          source_high_water_mark AS sourceHighWaterMark,
-          status
-        FROM app.review_source_change_outbox
-        WHERE source_partition IN (${getSqlStringList(partitions)})
-          AND status NOT IN (${getOutboxTerminalStatusList()})
-        ORDER BY source_high_water_mark ASC, created_at ASC, outbox_id ASC
-        LIMIT 1
-      ), quarantined_cursor AS (
+      )${includeDetails ? getOldestBarrierCteSql(partitions) : ''}, quarantined_cursor AS (
         SELECT CAST(COUNT(*) AS INTEGER) AS quarantinedCursorCount
         FROM app.review_delta_reconciliation_cursor
         WHERE source_partition IN (${getSqlStringList(partitions)})
@@ -960,66 +1045,7 @@ const getDiagnosticsSummaryRowsEffect = (
         snapshot_status_counts.failedCount AS snapshotFailedCount,
         snapshot_status_counts.retiredCount AS snapshotRetiredCount,
         snapshot_status_counts.invalidCandidateCount AS snapshotInvalidCandidateCount,
-        snapshot_status_counts.selectedImportIncompleteCandidateCount AS snapshotSelectedImportIncompleteCandidateCount,
-        snapshot_status_counts.missingRequiredCandidateCount AS snapshotMissingRequiredCandidateCount,
-        snapshot_status_counts.invalidRequiredStateCandidateCount AS snapshotInvalidRequiredStateCandidateCount,
-        snapshot_status_counts.invalidOptionalStateCandidateCount AS snapshotInvalidOptionalStateCandidateCount,
-        COALESCE((
-          SELECT to_json(LIST(STRUCT_PACK(
-            projectId := projectId,
-            projectionComponent := projectionComponent,
-            projectionIdentity := projectionIdentity,
-            sourcePartition := sourcePartition,
-            status := status,
-            lifecycleReason := lifecycleReason,
-            rowCount := rowCount,
-            pointRowCount := pointRowCount,
-            highWaterRowCount := highWaterRowCount,
-            oldestQueuedAt := oldestQueuedAt,
-            latestSourceHighWaterMarkMin := latestSourceHighWaterMarkMin,
-            latestSourceHighWaterMarkMax := latestSourceHighWaterMarkMax
-          )))
-          FROM (
-            SELECT *
-            FROM dirty_work_bucket
-            ORDER BY rowCount DESC, projectId ASC NULLS LAST, projectionComponent ASC NULLS LAST, sourcePartition ASC, status ASC
-            LIMIT ${dirtyWorkDiagnosticsBucketLimit}
-          )
-        ), '[]') AS dirtyWorkBucketsJson,
-        COALESCE((
-          SELECT to_json(LIST(STRUCT_PACK(
-            status := status,
-            lifecycleReason := lifecycleReason,
-            rowCount := rowCount
-          )))
-          FROM (
-            SELECT *
-            FROM dirty_work_lifecycle_reason
-            ORDER BY rowCount DESC, status ASC, lifecycleReason ASC NULLS LAST
-          )
-        ), '[]') AS dirtyWorkLifecycleReasonCountsJson,
-        COALESCE((
-          SELECT to_json(LIST(STRUCT_PACK(
-            jobId := jobId,
-            projectId := projectId,
-            sourcePartition := sourcePartition,
-            importedSourceHighWaterMark := importedSourceHighWaterMark,
-            dirtySourceHighWaterMark := dirtySourceHighWaterMark,
-            dirtyHighWaterLag := dirtyHighWaterLag,
-            llmStatusCompletedHighWaterMark := llmStatusCompletedHighWaterMark,
-            llmStatusPendingCount := llmStatusPendingCount,
-            llmStatusRunningCount := llmStatusRunningCount,
-            llmStatusFailedCount := llmStatusFailedCount
-          )))
-          FROM (
-            SELECT *
-            FROM judgment_job_dirty_source_lag
-            WHERE dirtyHighWaterLag > 0
-              OR llmStatusPendingCount + llmStatusRunningCount + llmStatusFailedCount > 0
-            ORDER BY dirtyHighWaterLag DESC, importedSourceHighWaterMark DESC, sourcePartition ASC
-            LIMIT ${dirtyWorkDiagnosticsBucketLimit}
-          )
-        ), '[]') AS dirtyWorkSourcePartitionLagsJson,
+        ${includeDetails ? dirtyWorkDetailSelectSql : ''}
         dirty_work.pendingCount AS dirtyWorkPendingCount,
         dirty_work.runningCount AS dirtyWorkRunningCount,
         dirty_work.blockedByRebuildCount AS dirtyWorkBlockedByRebuildCount,
@@ -1066,10 +1092,7 @@ const getDiagnosticsSummaryRowsEffect = (
         quarantine_state.unresolvedOutboxCount AS unresolvedOutboxCount,
         quarantine_state.quarantinedOutboxCount AS quarantinedOutboxCount,
         quarantine_state.retryableOutboxCount AS retryableOutboxCount,
-        oldest_barrier.outboxId AS oldestBarrierOutboxId,
-        oldest_barrier.sourcePartition AS oldestBarrierSourcePartition,
-        oldest_barrier.sourceHighWaterMark AS oldestBarrierSourceHighWaterMark,
-        oldest_barrier.status AS oldestBarrierStatus,
+        ${includeDetails ? oldestBarrierSelectSql : ''}
         quarantined_cursor.quarantinedCursorCount AS quarantinedCursorCount
       FROM snapshot_status_counts
       CROSS JOIN dirty_work
@@ -1077,7 +1100,7 @@ const getDiagnosticsSummaryRowsEffect = (
       CROSS JOIN quarantine_state
       CROSS JOIN quarantined_cursor
       LEFT JOIN active_snapshot ON TRUE
-      LEFT JOIN oldest_barrier ON TRUE
+      ${includeDetails ? 'LEFT JOIN oldest_barrier ON TRUE' : ''}
     `,
     input.workloadContext,
   )
@@ -1101,20 +1124,39 @@ const getDiagnosticsCountState = (
   }
 }
 
-const getDiagnosticsDirtyWorkState = (
+const getDiagnosticsDirtyWorkDetails = (
   row: DiagnosticsSummaryRow | undefined,
-): ReviewServingDiagnosticsDirtyWorkState => {
-  if (row === undefined) {
-    return emptyDirtyWorkState
+  includeDetails: boolean,
+): Partial<ReviewServingDiagnosticsDirtyWorkDetails> => {
+  if (!includeDetails) {
+    return {}
   }
 
-  return {
-    ...getDiagnosticsCountState(row, 'dirtyWork'),
-    blockedByRebuildCount: Number(row.dirtyWorkBlockedByRebuildCount ?? 0),
-    buckets: getTypedJsonArray(row.dirtyWorkBucketsJson, getDirtyWorkBucket),
-    lifecycleReasonCounts: getTypedJsonArray(row.dirtyWorkLifecycleReasonCountsJson, getDirtyWorkLifecycleReasonCount),
-    sourcePartitionLags: getTypedJsonArray(row.dirtyWorkSourcePartitionLagsJson, getDirtySourceLag),
-  }
+  return row === undefined
+    ? emptyDirtyWorkDetails
+    : {
+        buckets: getTypedJsonArray(row.dirtyWorkBucketsJson, getDirtyWorkBucket),
+        lifecycleReasonCounts: getTypedJsonArray(
+          row.dirtyWorkLifecycleReasonCountsJson,
+          getDirtyWorkLifecycleReasonCount,
+        ),
+        sourcePartitionLags: getTypedJsonArray(row.dirtyWorkSourcePartitionLagsJson, getDirtySourceLag),
+      }
+}
+
+const getDiagnosticsDirtyWorkState = (
+  row: DiagnosticsSummaryRow | undefined,
+  includeDetails: boolean,
+): ReviewServingDiagnosticsDirtyWorkState => {
+  const details = getDiagnosticsDirtyWorkDetails(row, includeDetails)
+
+  return row === undefined
+    ? {...emptyDirtyWorkState, ...details}
+    : {
+        ...getDiagnosticsCountState(row, 'dirtyWork'),
+        blockedByRebuildCount: Number(row.dirtyWorkBlockedByRebuildCount ?? 0),
+        ...details,
+      }
 }
 
 const getDiagnosticsRebuildChunkState = (row: DiagnosticsSummaryRow | undefined) => {
@@ -1145,7 +1187,21 @@ const getDiagnosticsActiveSnapshot = (row: DiagnosticsSummaryRow | undefined): A
       }
 }
 
-const getDiagnosticsSnapshot = (row: DiagnosticsSummaryRow | undefined): ReviewServingDiagnostics['snapshot'] => {
+const getDiagnosticsInvalidCandidateReasons = (
+  row: DiagnosticsSummaryRow | undefined,
+): ReviewServingDiagnosticsInvalidCandidateReasons => {
+  return {
+    invalidOptionalStateCount: Number(row?.snapshotInvalidOptionalStateCandidateCount ?? 0),
+    invalidRequiredStateCount: Number(row?.snapshotInvalidRequiredStateCandidateCount ?? 0),
+    missingRequiredCount: Number(row?.snapshotMissingRequiredCandidateCount ?? 0),
+    selectedImportIncompleteCount: Number(row?.snapshotSelectedImportIncompleteCandidateCount ?? 0),
+  }
+}
+
+const getDiagnosticsSnapshot = (
+  row: DiagnosticsSummaryRow | undefined,
+  includeDetails: boolean,
+): ReviewServingDiagnostics['snapshot'] => {
   const activeSnapshot = getDiagnosticsActiveSnapshot(row)
 
   return {
@@ -1153,12 +1209,7 @@ const getDiagnosticsSnapshot = (row: DiagnosticsSummaryRow | undefined): ReviewS
     activeSnapshotId: activeSnapshot?.snapshotId ?? null,
     activeUpdatedAt: activeSnapshot?.updatedAt ?? null,
     candidateCount: Number(row?.snapshotCandidateCount ?? 0),
-    invalidCandidateReasons: {
-      invalidOptionalStateCount: Number(row?.snapshotInvalidOptionalStateCandidateCount ?? 0),
-      invalidRequiredStateCount: Number(row?.snapshotInvalidRequiredStateCandidateCount ?? 0),
-      missingRequiredCount: Number(row?.snapshotMissingRequiredCandidateCount ?? 0),
-      selectedImportIncompleteCount: Number(row?.snapshotSelectedImportIncompleteCandidateCount ?? 0),
-    },
+    ...(includeDetails ? {invalidCandidateReasons: getDiagnosticsInvalidCandidateReasons(row)} : {}),
     invalidCandidateCount: Number(row?.snapshotInvalidCandidateCount ?? 0),
     failedCount: Number(row?.snapshotFailedCount ?? 0),
     lastKnownGoodSnapshotId: activeSnapshot?.lastKnownGoodSnapshotId ?? null,
@@ -1167,18 +1218,22 @@ const getDiagnosticsSnapshot = (row: DiagnosticsSummaryRow | undefined): ReviewS
 }
 
 const getDiagnosticsOldestBarrier = (row: DiagnosticsSummaryRow | undefined): OldestBarrierRow | undefined => {
-  return row === undefined || row.oldestBarrierOutboxId === null
+  return row === undefined || row.oldestBarrierOutboxId === null || row.oldestBarrierOutboxId === undefined
     ? undefined
     : {
         outboxId: row.oldestBarrierOutboxId,
-        sourceHighWaterMark: row.oldestBarrierSourceHighWaterMark,
-        sourcePartition: row.oldestBarrierSourcePartition,
-        status: row.oldestBarrierStatus,
+        sourceHighWaterMark: row.oldestBarrierSourceHighWaterMark ?? null,
+        sourcePartition: row.oldestBarrierSourcePartition ?? null,
+        status: row.oldestBarrierStatus ?? null,
       }
 }
 
-const getDiagnosticsQuarantine = (row: DiagnosticsSummaryRow | undefined): ReviewServingDiagnostics['quarantine'] => {
+const getDiagnosticsQuarantine = (
+  row: DiagnosticsSummaryRow | undefined,
+  includeDetails: boolean,
+): ReviewServingDiagnostics['quarantine'] => {
   return getQuarantineDiagnostics({
+    includeDetails,
     oldestBarrier: getDiagnosticsOldestBarrier(row) as ReviewServingDiagnosticsQuarantineBarrier | undefined,
     quarantineState:
       row === undefined
@@ -1198,9 +1253,10 @@ export const getReviewServingDiagnosticsEffect = (
   database: ReviewServingDiagnosticsDatabase = getDiagnosticsDatabase(),
 ) => {
   return Effect.gen(function* () {
+    const includeDetails = input.includeDetails === true
     const [summaryRow] = yield* getDiagnosticsSummaryRowsEffect(input, database)
     const activeSnapshot = getDiagnosticsActiveSnapshot(summaryRow)
-    const dirtyWork = getDiagnosticsDirtyWorkState(summaryRow)
+    const dirtyWork = getDiagnosticsDirtyWorkState(summaryRow, includeDetails)
     const rebuildChunks = getDiagnosticsRebuildChunkState(summaryRow)
     const searchDiagnostics = getSearchDiagnostics(activeSnapshot)
 
@@ -1213,7 +1269,7 @@ export const getReviewServingDiagnosticsEffect = (
         requiredConsumerRole: 'maintenance-worker' as const,
       },
       projectId: input.projectId,
-      quarantine: getDiagnosticsQuarantine(summaryRow),
+      quarantine: getDiagnosticsQuarantine(summaryRow, includeDetails),
       rebuildChunks,
       reviewConfigHash: input.reviewConfigHash ?? null,
       search: {
@@ -1223,7 +1279,7 @@ export const getReviewServingDiagnosticsEffect = (
             ? 'indexing'
             : searchDiagnostics.availability,
       },
-      snapshot: getDiagnosticsSnapshot(summaryRow),
+      snapshot: getDiagnosticsSnapshot(summaryRow, includeDetails),
     }
   })
 }

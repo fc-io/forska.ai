@@ -84,6 +84,13 @@ type ReviewsWarningsResponse = {
       }
       serving: {
         diagnostics: {
+          dirtyWork: {
+            buckets?: unknown[]
+            lifecycleReasonCounts?: unknown[]
+            pendingCount: number
+            runningCount: number
+            sourcePartitionLags?: unknown[]
+          }
           rebuildChunks: {
             blockedQueuedCount?: number
             claimableCount?: number
@@ -105,8 +112,13 @@ type ReviewsWarningsResponse = {
             quarantinedCount?: number
             terminalQuarantinedCount?: number
           }
-          quarantine: {quarantinedOutboxCount: number; retryableOutboxCount: number; unresolvedOutboxCount: number}
-          snapshot?: {activeCount?: number}
+          quarantine: {
+            oldestBarrier?: unknown
+            quarantinedOutboxCount: number
+            retryableOutboxCount: number
+            unresolvedOutboxCount: number
+          }
+          snapshot?: {activeCount?: number; invalidCandidateReasons?: unknown}
         }
         readable: boolean
         usable: boolean
@@ -145,6 +157,7 @@ type ReviewRebuildRequestStatus = 'admitted' | 'blocked_over_budget' | 'complete
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
+let resetWarningsPayloadMemo: (() => void) | null = null
 
 const insertProjectFixture = async (projectId: string) => {
   if (!runDatabase) {
@@ -619,16 +632,29 @@ const getFixtureReviewConfigHash = (projectId: string) => {
   })
 }
 
-const postWarningsRequest = async (projectId: string) => {
+const postWarningsRequest = async (
+  projectId: string,
+  options: {fresh?: boolean; includeDiagnosticDetails?: boolean; reuseMemo?: boolean} = {},
+) => {
   if (!app) {
     throw new Error('Test app not initialized')
+  }
+
+  if (options.reuseMemo !== true) {
+    resetWarningsPayloadMemo?.()
   }
 
   const response = await app.handle(
     new Request('http://localhost/api/projectsreviewswarnings', {
       method: 'POST',
       headers: {'content-type': 'application/json'},
-      body: JSON.stringify({projectId}),
+      body: JSON.stringify({
+        projectId,
+        ...(options.fresh === undefined ? {} : {fresh: options.fresh}),
+        ...(options.includeDiagnosticDetails === undefined
+          ? {}
+          : {includeDiagnosticDetails: options.includeDiagnosticDetails}),
+      }),
     }),
   )
 
@@ -675,7 +701,7 @@ beforeAll(async () => {
     {getAppDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
-    {projectsRoutesGetReviewsWarnings},
+    {projectsRoutesGetReviewsWarnings, resetReviewsWarningsPayloadMemoForTests},
   ] = await Promise.all([
     import('../../../db/migrateDuckdb.ts'),
     import('../../services/appDatabaseService.ts'),
@@ -699,6 +725,7 @@ beforeAll(async () => {
   runDatabase = (statement: string) => {
     return database.run(statement)
   }
+  resetWarningsPayloadMemo = resetReviewsWarningsPayloadMemoForTests
   app = new Elysia().use(projectsRoutesGetReviewsWarnings)
 })
 
@@ -3438,6 +3465,92 @@ test('reviews warnings route classifies foreground DuckDB read workload context'
       return metric.workloadClass === 'unclassified'
     }),
   ).toBe(false)
+})
+
+test('reviews warnings omit diagnostic detail lists unless the request opts in', async () => {
+  const projectId = 'project-diagnostic-details-opt-in-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-diagnostic-details-opt-in-warning',
+  })
+  await insertReviewSourceChangeOutbox(projectId, 'pending')
+
+  const {body: defaultBody, response: defaultResponse} = await postWarningsRequest(projectId)
+  const {body: detailedBody, response: detailedResponse} = await postWarningsRequest(projectId, {
+    includeDiagnosticDetails: true,
+  })
+
+  expect(defaultResponse.status).toBe(200)
+  expect(detailedResponse.status).toBe(200)
+  expect(defaultBody.data.indexing.serving.diagnostics.dirtyWork).not.toHaveProperty('buckets')
+  expect(defaultBody.data.indexing.serving.diagnostics.dirtyWork).not.toHaveProperty('lifecycleReasonCounts')
+  expect(defaultBody.data.indexing.serving.diagnostics.dirtyWork).not.toHaveProperty('sourcePartitionLags')
+  expect(defaultBody.data.indexing.serving.diagnostics.quarantine).not.toHaveProperty('oldestBarrier')
+  expect(defaultBody.data.indexing.serving.diagnostics.snapshot).not.toHaveProperty('invalidCandidateReasons')
+  expect(defaultBody.data.indexing.serving.diagnostics.quarantine.retryableOutboxCount).toBe(1)
+  expect(Array.isArray(defaultBody.data.indexing.serving.diagnostics.rebuildChunks.components)).toBe(true)
+  expect(defaultBody.data.indexing.serving.diagnostics.dirtyWork.pendingCount).toBe(0)
+  expect(detailedBody.data.indexing.serving.diagnostics.dirtyWork.buckets).toEqual([])
+  expect(detailedBody.data.indexing.serving.diagnostics.dirtyWork.lifecycleReasonCounts).toEqual([])
+  expect(detailedBody.data.indexing.serving.diagnostics.dirtyWork.sourcePartitionLags).toEqual([])
+  expect(detailedBody.data.indexing.serving.diagnostics.quarantine.oldestBarrier).toMatchObject({
+    outboxId: `outbox-${projectId}`,
+    status: 'pending',
+  })
+  expect(
+    Object.keys(
+      (detailedBody.data.indexing.serving.diagnostics.snapshot?.invalidCandidateReasons ?? {}) as Record<
+        string,
+        number
+      >,
+    ).sort(),
+  ).toEqual([
+    'invalidOptionalStateCount',
+    'invalidRequiredStateCount',
+    'missingRequiredCount',
+    'selectedImportIncompleteCount',
+  ])
+})
+
+test('reviews warnings memoize the default payload per project until fresh or details are requested', async () => {
+  const projectId = 'project-memoized-default-payload-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-memoized-default-payload-warning',
+  })
+
+  const {body: firstBody} = await postWarningsRequest(projectId)
+
+  await insertReviewSourceChangeOutbox(projectId, 'pending')
+
+  const {body: memoizedBody} = await postWarningsRequest(projectId, {reuseMemo: true})
+  const {body: detailedBody} = await postWarningsRequest(projectId, {includeDiagnosticDetails: true, reuseMemo: true})
+  const {body: stillMemoizedBody} = await postWarningsRequest(projectId, {reuseMemo: true})
+  const {body: freshBody} = await postWarningsRequest(projectId, {fresh: true, reuseMemo: true})
+  const {body: refreshedMemoBody} = await postWarningsRequest(projectId, {reuseMemo: true})
+
+  expect(firstBody.data.indexing.serving.diagnostics.quarantine.retryableOutboxCount).toBe(0)
+  expect(memoizedBody).toEqual(firstBody)
+  expect(detailedBody.data.indexing.serving.diagnostics.quarantine.retryableOutboxCount).toBe(1)
+  expect(detailedBody.data.indexing.serving.diagnostics.quarantine.oldestBarrier).toMatchObject({
+    outboxId: `outbox-${projectId}`,
+  })
+  expect(stillMemoizedBody).toEqual(firstBody)
+  expect(freshBody.data.indexing.serving.diagnostics.quarantine.retryableOutboxCount).toBe(1)
+  expect(freshBody.data.indexing.serving.diagnostics.quarantine).not.toHaveProperty('oldestBarrier')
+  expect(refreshedMemoBody).toEqual(freshBody)
 })
 
 test('reviews warnings route reuses reader diagnostics instead of duplicate current-db fanout', async () => {
