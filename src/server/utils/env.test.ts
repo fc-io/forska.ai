@@ -5,6 +5,7 @@ import {expect, test} from 'bun:test'
 import {
   getDefaultReviewServingRebuildChunkBatchMaxRssBytes,
   getDefaultReviewServingRebuildChunkBatchSize,
+  getDefaultReviewServingSearchRebuildChunkBatchSize,
   loadEnv,
 } from './env.ts'
 
@@ -21,6 +22,9 @@ test('uses local dev port defaults without env files', () => {
     getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
   )
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(2)
+  expect(resolvedEnv.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).toBe(
+    getDefaultReviewServingSearchRebuildChunkBatchSize(resolvedEnv.DUCKDB_MEMORY_LIMIT),
+  )
   expect(resolvedEnv.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED).toBe(false)
   expect(resolvedEnv.FORSKA_RUNTIME_PROFILE).toBe('local')
   expect(resolvedEnv.LOG_DIR).toBe(resolve(process.cwd(), 'logs', 'runtime', 'local'))
@@ -33,11 +37,32 @@ test('preserves explicit review serving rebuild chunk batch overrides', () => {
     envValues: {
       FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '0',
       FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: '1',
+      FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: '4',
     },
   })
 
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).toBe(0)
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(1)
+  expect(resolvedEnv.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).toBe(4)
+})
+
+test('tiers the default search rebuild chunk batch size by DuckDB memory limit boundaries', () => {
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize(null)).toBe(8)
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize('')).toBe(8)
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize('6400MiB')).toBe(8)
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize('8192MiB')).toBe(8)
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize('8193MiB')).toBe(16)
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize('12288MiB')).toBe(16)
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize('12289MiB')).toBe(32)
+  expect(getDefaultReviewServingSearchRebuildChunkBatchSize('20GB')).toBe(32)
+
+  const lowMemoryEnv = loadEnv({
+    envValues: {DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: ''},
+  })
+  const elevatedMemoryEnv = loadEnv({envValues: {DUCKDB_MEMORY_LIMIT: '16GB'}})
+
+  expect(lowMemoryEnv.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).toBe(8)
+  expect(elevatedMemoryEnv.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).toBe(32)
 })
 
 test('scales default review serving rebuild chunk batch size with DuckDB memory headroom', () => {

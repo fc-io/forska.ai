@@ -20,6 +20,7 @@ type ReviewServingProjectorWorkerHeartbeatOptions = {
   rebuildChunkBatchSoftRssBytes?: number
   rebuildChunkBatchSize?: number
   restartDelayMs?: number
+  searchRebuildChunkBatchSize?: number
 }
 
 const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
@@ -273,6 +274,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         options.rebuildChunkBatchSize
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
         ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
+      searchRebuildChunkBatchSize:
+        options.searchRebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE,
       maxCompletedRebuildChunksPerRun: getReviewServingProjectorWorkerMaxCompletedChunksPerRun(options),
       batchSize: options.batchSize ?? null,
       maxRowsPerWake: options.maxRowsPerWake ?? null,
@@ -346,6 +349,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         options.rebuildChunkBatchSize
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
         ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
+      searchRebuildChunkBatchSize:
+        options.searchRebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE ?? undefined,
       batchSize: options.batchSize,
       maxCompletedRebuildChunksPerRun,
       maxRowsPerWake: options.maxRowsPerWake,

@@ -137,6 +137,7 @@ import {
   recoverDuckdbServiceAfterFatalError,
   waitForDuckdbForegroundQueue,
 } from '../utils/duckdbService.ts'
+import {getDefaultReviewServingSearchRebuildChunkBatchSize} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']> & {
@@ -307,6 +308,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   rebuildChunkBatchSoftRssBytes?: number
   rebuildChunkBatchSize?: number
   rebuildProjectId?: string | null
+  searchRebuildChunkBatchSize?: number
   signal?: AbortSignal
   workerId?: string
 }
@@ -325,8 +327,11 @@ type ReviewServingProjectorWorkerRunResult = {
   reason: 'aborted' | 'completedChunkLimit' | 'nativeHeavyChunkCompleted'
 }
 
-const getMaxCompletedRebuildChunksPerRun = (value: number | null | undefined) => {
-  return value === null ? 0 : getPositiveInteger(value, getDefaultMaxCompletedRebuildChunksPerRun())
+const getMaxCompletedRebuildChunksPerRun = (
+  value: number | null | undefined,
+  duckdbMemoryLimit: string | null | undefined = process.env.DUCKDB_MEMORY_LIMIT,
+) => {
+  return value === null ? 0 : getPositiveInteger(value, getDefaultMaxCompletedRebuildChunksPerRun(duckdbMemoryLimit))
 }
 
 type ReviewServingProjectorWorkerChunkResult =
@@ -461,7 +466,6 @@ const defaultReviewServingProjectorWorkerRisingRssPressureBytes = 256 * 1024 ** 
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
 const foregroundHumanStatusRebuildChunkBatchSize = 4
 const foregroundLlmStatusRebuildChunkBatchSize = 8
-const foregroundSearchRebuildChunkBatchSize = 4
 const foregroundStatusRebuildDrainBatchBudget = 16
 const foregroundStatusReviewServingProjectorWorkerProgressYieldMs = 100
 const lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs = 25
@@ -5352,12 +5356,31 @@ const getNonNegativeInteger = (value: number | null | undefined, fallback: numbe
   return value !== null && value !== undefined && Number.isInteger(value) && value >= 0 ? Math.trunc(value) : fallback
 }
 
-const getDefaultMaxCompletedRebuildChunksPerRun = () => {
-  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+const getDefaultMaxCompletedRebuildChunksPerRun = (duckdbMemoryLimit: string | null | undefined) => {
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(duckdbMemoryLimit)
 
   return duckdbLimitMiB !== null && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
     ? lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun
     : 0
+}
+
+export const getReviewServingProjectorWorkerSearchRebuildChunkBatchSize = (input: {
+  duckdbMemoryLimit?: string | null
+  maxCompletedRebuildChunksPerRun?: number | null
+  searchRebuildChunkBatchSize?: number | null
+}) => {
+  const duckdbMemoryLimit =
+    input.duckdbMemoryLimit === undefined ? process.env.DUCKDB_MEMORY_LIMIT : input.duckdbMemoryLimit
+  const batchSize = getPositiveInteger(
+    input.searchRebuildChunkBatchSize,
+    getDefaultReviewServingSearchRebuildChunkBatchSize(duckdbMemoryLimit),
+  )
+  const maxCompletedRebuildChunksPerRun = getMaxCompletedRebuildChunksPerRun(
+    input.maxCompletedRebuildChunksPerRun,
+    duckdbMemoryLimit,
+  )
+
+  return maxCompletedRebuildChunksPerRun > 0 ? Math.min(batchSize, maxCompletedRebuildChunksPerRun) : batchSize
 }
 
 const getReviewServingProjectorWorkerMemoryUsage = (
@@ -7162,11 +7185,17 @@ const isForegroundBatchableRebuildChunk = (
   return isForegroundBatchableStatusRebuildChunk(chunk) || isForegroundBatchableRangeRebuildChunk(chunk)
 }
 
-const getForegroundRebuildChunkBatchSize = (chunk: {
-  estimatedInputRows?: number | null
-  estimatedOutputRows?: number | null
-  projectionComponent: ReviewServingProjectionComponent
-}) => {
+const getForegroundRebuildChunkBatchSize = (
+  chunk: {
+    estimatedInputRows?: number | null
+    estimatedOutputRows?: number | null
+    projectionComponent: ReviewServingProjectionComponent
+  },
+  options: Pick<
+    ReviewServingProjectorWorkerCycleOptions,
+    'maxCompletedRebuildChunksPerRun' | 'searchRebuildChunkBatchSize'
+  >,
+) => {
   if (chunk.projectionComponent === 'humanStatus') {
     return foregroundHumanStatusRebuildChunkBatchSize
   }
@@ -7195,7 +7224,7 @@ const getForegroundRebuildChunkBatchSize = (chunk: {
     const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
 
     return estimatedRows !== null && estimatedRows <= searchArticleRangeRebuildRuntimeRowLimit
-      ? foregroundSearchRebuildChunkBatchSize
+      ? getReviewServingProjectorWorkerSearchRebuildChunkBatchSize(options)
       : 1
   }
 
@@ -7274,7 +7303,10 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
   }
 
   if (firstClaimedChunk?.projectionComponent === 'search') {
-    return Math.min(getForegroundRebuildChunkBatchSize(firstClaimedChunk), remainingCompletedChunkRunBudget)
+    return Math.min(
+      getForegroundRebuildChunkBatchSize(firstClaimedChunk, input.options),
+      remainingCompletedChunkRunBudget,
+    )
   }
 
   if (
@@ -7286,7 +7318,10 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
   }
 
   if (firstClaimedChunk !== undefined && isForegroundBatchableRebuildChunk(firstClaimedChunk)) {
-    return Math.min(getForegroundRebuildChunkBatchSize(firstClaimedChunk), remainingCompletedChunkRunBudget)
+    return Math.min(
+      getForegroundRebuildChunkBatchSize(firstClaimedChunk, input.options),
+      remainingCompletedChunkRunBudget,
+    )
   }
 
   return Math.min(input.batchSize, remainingCompletedChunkRunBudget)
