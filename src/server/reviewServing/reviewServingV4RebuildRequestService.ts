@@ -1229,7 +1229,7 @@ const getReviewServingV4BootstrapArticleRanges = async (
   })
 }
 
-const getReviewServingV4BootstrapSourceWatermarks = async (
+const getReviewServingV4DirtySourceWatermarks = async (
   input: {projectId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
@@ -2115,14 +2115,12 @@ export const requestReviewServingV4RebuildEffect = (
           )
         })
       : []
-    const bootstrapSourceWatermarks = isFreshBootstrap
-      ? await runReviewServingV4RebuildStatsPhase('bootstrapSourceWatermarks', () => {
-          return getReviewServingV4BootstrapSourceWatermarks(input, requestDatabase)
-        })
-      : null
+    const dirtySourceWatermarks = await runReviewServingV4RebuildStatsPhase('dirtySourceWatermarks', () => {
+      return getReviewServingV4DirtySourceWatermarks(input, requestDatabase)
+    })
     const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
     const requestSourceWatermarks = getReviewServingV4RebuildRequestSourceWatermarks({
-      dirtySourceWatermarks: bootstrapSourceWatermarks,
+      dirtySourceWatermarks,
       sourceWatermarks,
     })
     const bootstrap = isFreshBootstrap
@@ -2135,7 +2133,7 @@ export const requestReviewServingV4RebuildEffect = (
               requestedOnly: isRequestedComponentBootstrap,
               projectId: input.projectId,
               reviewConfigHash,
-              sourceWatermarks: bootstrapSourceWatermarks ?? {},
+              sourceWatermarks: dirtySourceWatermarks,
             },
             requestDatabase,
           )
