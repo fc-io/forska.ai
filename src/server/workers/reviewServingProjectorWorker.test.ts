@@ -20,6 +20,7 @@ import {
   lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   type ReviewServingProjectorWorkerDependencies,
+  reviewServingProjectorWorkerStaleCandidateCleanupSource,
   type ReviewServingProjectorWorkerTimingBucket,
   runReviewServingProjectorWorker,
   runReviewServingProjectorWorkerClaimedRebuildChunk,
@@ -128,11 +129,19 @@ const removeFileIfExists = (filePath: string) => {
   }
 }
 
+const fakeStaleCandidateCleanupResult = {
+  failedSnapshots: [{projectId: 'project-1', referenceSnapshotId: 'snapshot-active', snapshotId: 'snapshot-stale'}],
+  projectIds: ['project-1'],
+  remainingStaleCandidateCount: 0,
+  skippedSnapshotCount: 1,
+}
+
 const createWorkerHarness = (input?: {
   chunkComplete?: boolean
   cleanupTargets?: Array<{batchSize: number; now: Date | string; projectId: string; reviewConfigHash?: string | null}>
   nowMs?: number
   runChunkThrows?: boolean
+  staleCandidateCleanupThrows?: boolean
   wakeStatus?: 'blocked' | 'completed' | 'failed' | 'partial'
 }) => {
   const events: string[] = []
@@ -174,6 +183,7 @@ const createWorkerHarness = (input?: {
   const wakeInputs: unknown[] = []
   const claimInputs: unknown[] = []
   const dirtyWorkRetentionCleanupInputs: unknown[] = []
+  const staleCandidateCleanupInputs: unknown[] = []
   const cleanupTargetInputs: unknown[] = []
   const cleanupInputs: unknown[] = []
   const failedChunks: unknown[] = []
@@ -210,6 +220,15 @@ const createWorkerHarness = (input?: {
         nextCleanupTableIndex: 1,
         retentionScope: cleanupInput.projectId,
       }
+    },
+    cleanupStaleCandidateSnapshots: async (cleanupInput) => {
+      staleCandidateCleanupInputs.push(cleanupInput)
+
+      if (input?.staleCandidateCleanupThrows) {
+        throw new Error('stale candidate cleanup failed')
+      }
+
+      return fakeStaleCandidateCleanupResult
     },
     getCleanupTargets: async (databaseInput) => {
       cleanupTargetInputs.push(databaseInput)
@@ -292,6 +311,7 @@ const createWorkerHarness = (input?: {
     recycledChunks,
     runChunkInputs,
     runStatements,
+    staleCandidateCleanupInputs,
     wakeInputs,
     workloadContexts,
   }
@@ -5385,6 +5405,7 @@ test('worker schedules dirty-work cleanup after its cleanup interval and skips r
     expect(skippedHarness.cleanupTargetInputs).toEqual([])
     expect(skippedHarness.cleanupInputs).toEqual([])
     expect(skippedHarness.dirtyWorkRetentionCleanupInputs).toEqual([])
+    expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
     expect(completed.cleanup).toEqual({
       dirtyWorkRetentionCleanup: {
         compactedAcknowledgements: [],
@@ -5394,11 +5415,16 @@ test('worker schedules dirty-work cleanup after its cleanup interval and skips r
       },
       retentionCleanups: [],
       retentionScopes: [],
+      staleCandidateCleanup: {...fakeStaleCandidateCleanupResult, status: 'completed'},
       status: 'completed',
     })
     expect(completedHarness.cleanupTargetInputs).toEqual([])
     expect(completedHarness.cleanupInputs).toEqual([])
     expect(completedHarness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
+    expect(completedHarness.staleCandidateCleanupInputs).toEqual([
+      {source: reviewServingProjectorWorkerStaleCandidateCleanupSource},
+    ])
+    expect(reviewServingProjectorWorkerStaleCandidateCleanupSource).toBe('worker staleCandidateCleanup')
     expect(completed.nextCleanupAtMs).toBe(62_000)
     expect(dirtyWorkOnly.cleanup.status).toBe('completed')
     expect(dirtyWorkOnly.cleanup.retentionCleanups).toEqual([])
@@ -5444,12 +5470,63 @@ test('worker runs retention cleanup when the review-serving retention cleanup ga
         },
       ],
       retentionScopes: ['project-1'],
+      staleCandidateCleanup: {...fakeStaleCandidateCleanupResult, status: 'completed'},
       status: 'completed',
     })
     expect(completedHarness.cleanupTargetInputs).toHaveLength(1)
     expect(completedHarness.cleanupInputs).toEqual([cleanupTarget])
     expect(completedHarness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
+    expect(completedHarness.staleCandidateCleanupInputs).toEqual([
+      {source: reviewServingProjectorWorkerStaleCandidateCleanupSource},
+    ])
     expect(completed.nextCleanupAtMs).toBe(62_000)
+  } finally {
+    if (previousRetentionCleanupEnabled === undefined) {
+      delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+    } else {
+      process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED = previousRetentionCleanupEnabled
+    }
+  }
+})
+
+test('worker contains stale candidate cleanup failures and still completes the rest of its cleanup cycle', async () => {
+  const harness = createWorkerHarness({cleanupTargets: [], nowMs: 62_000, staleCandidateCleanupThrows: true})
+  const skippedHarness = createWorkerHarness({cleanupTargets: [], nowMs: 60_999, staleCandidateCleanupThrows: true})
+  const previousRetentionCleanupEnabled = process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+  delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+
+  try {
+    const result = await runReviewServingProjectorWorkerOnce(
+      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
+      harness.dependencies,
+    )
+    const skipped = await runReviewServingProjectorWorkerOnce(
+      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
+      skippedHarness.dependencies,
+    )
+
+    expect(result.cleanup).toEqual({
+      dirtyWorkRetentionCleanup: {
+        compactedAcknowledgements: [],
+        compactedLaneCount: 2,
+        deletedAcknowledgementCount: 3,
+        deletedDirtyWorkCount: 5,
+      },
+      retentionCleanups: [],
+      retentionScopes: [],
+      staleCandidateCleanup: {error: 'stale candidate cleanup failed', status: 'failed'},
+      status: 'completed',
+    })
+    expect(harness.staleCandidateCleanupInputs).toEqual([{source: 'worker staleCandidateCleanup'}])
+    expect(result.nextCleanupAtMs).toBe(62_000)
+    expect(skipped.cleanup).toEqual({
+      dirtyWorkRetentionCleanup: null,
+      retentionCleanups: [],
+      retentionScopes: [],
+      staleCandidateCleanup: null,
+      status: 'skipped',
+    })
+    expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
   } finally {
     if (previousRetentionCleanupEnabled === undefined) {
       delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED

@@ -69,6 +69,8 @@ import {
   projectReviewServingLlmStatusRanges,
 } from '../reviewServing/reviewServingLlmStatusProjector.ts'
 import {
+  cleanupStaleCandidateReviewServingSnapshotManifests,
+  type CleanupStaleCandidateReviewServingSnapshotManifestsResult,
   createCandidateReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
@@ -214,6 +216,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
 type ReviewServingProjectorWorkerDependencies = {
   cleanupDirtyWorkRetention?: typeof cleanupReviewServingDirtyWorkRetention
   cleanupRetentionState?: typeof cleanupReviewServingRetentionState
+  cleanupStaleCandidateSnapshots?: typeof cleanupStaleCandidateReviewServingSnapshotManifests
   getCleanupTargets?: (
     database: ReviewServingRetentionServiceDatabase,
   ) => Promise<readonly ReviewServingProjectorWorkerCleanupTarget[]>
@@ -249,6 +252,7 @@ const reviewServingProjectorWorkerTimingLogger = createRateLimitedLogger({
   windowMs: 60_000,
 })
 const reviewServingRetentionCleanupEnabledEnv = 'FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED'
+const reviewServingProjectorWorkerStaleCandidateCleanupSource = 'worker staleCandidateCleanup'
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -336,17 +340,23 @@ type ReviewServingProjectorWorkerChunkResult =
   | {chunkId: string; requestId: string | null; status: 'failed'}
   | {chunkId: string; requestId: string | null; status: 'skipped'}
 
+type ReviewServingProjectorWorkerStaleCandidateCleanupResult =
+  | (CleanupStaleCandidateReviewServingSnapshotManifestsResult & {status: 'completed'})
+  | {error: string; status: 'failed'}
+
 type ReviewServingProjectorWorkerCleanupResult =
   | {
       dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
       retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
       retentionScopes: readonly string[]
+      staleCandidateCleanup: ReviewServingProjectorWorkerStaleCandidateCleanupResult | null
       status: 'completed'
     }
   | {
       dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
       retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
       retentionScopes: readonly string[]
+      staleCandidateCleanup: ReviewServingProjectorWorkerStaleCandidateCleanupResult | null
       status: 'skipped'
     }
 
@@ -5258,6 +5268,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   collectGarbageAfterCompletedRebuildChunk,
   cleanupDirtyWorkRetention: cleanupReviewServingDirtyWorkRetention,
   cleanupRetentionState: cleanupReviewServingRetentionState,
+  cleanupStaleCandidateSnapshots: cleanupStaleCandidateReviewServingSnapshotManifests,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
   getAppendQueueDepth: () => {
     return getDuckdbAppendRuntimeMetrics().queueDepth
@@ -7051,6 +7062,7 @@ const logReviewServingProjectorWorkerCycle = (result: ReviewServingProjectorWork
       chunkStatus: result.chunk.status,
       cleanupRetentionCleanups: result.cleanup.retentionCleanups,
       cleanupRetentionScopes: result.cleanup.retentionScopes,
+      cleanupStaleCandidateCleanup: result.cleanup.staleCandidateCleanup,
       cleanupStatus: result.cleanup.status,
       dirtyWorkRetentionCleanup: result.cleanup.dirtyWorkRetentionCleanup,
       component: 'reviewServingProjectorWorker',
@@ -9196,6 +9208,59 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
 }
 
+const logReviewServingProjectorWorkerStaleCandidateCleanup = (
+  result: CleanupStaleCandidateReviewServingSnapshotManifestsResult,
+) => {
+  reviewServingProjectorWorkerCycleLogger.log(
+    'review-serving-projector-worker:stale-candidate-cleanup',
+    '[reviewServingProjectorWorker] failed stale candidate snapshots superseded by an active snapshot',
+    {
+      component: 'reviewServingProjectorWorker',
+      event: 'staleCandidateCleanup',
+      failedSnapshots: result.failedSnapshots,
+      projectIds: result.projectIds,
+      remainingStaleCandidateCount: result.remainingStaleCandidateCount,
+      skippedSnapshotCount: result.skippedSnapshotCount,
+      source: reviewServingProjectorWorkerStaleCandidateCleanupSource,
+    },
+  )
+}
+
+const runReviewServingProjectorWorkerStaleCandidateCleanup = async ({
+  database,
+  dependencies,
+}: {
+  database: ReviewServingRetentionServiceDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+}): Promise<ReviewServingProjectorWorkerStaleCandidateCleanupResult | null> => {
+  const cleanupStaleCandidateSnapshots = dependencies.cleanupStaleCandidateSnapshots
+
+  if (cleanupStaleCandidateSnapshots === undefined) {
+    return null
+  }
+
+  try {
+    const result = await cleanupStaleCandidateSnapshots(
+      {source: reviewServingProjectorWorkerStaleCandidateCleanupSource},
+      database,
+    )
+
+    if (result.failedSnapshots.length > 0) {
+      logReviewServingProjectorWorkerStaleCandidateCleanup(result)
+    }
+
+    return {...result, status: 'completed'}
+  } catch (error) {
+    reviewServingProjectorWorkerCycleLogger.warn(
+      'review-serving-projector-worker:stale-candidate-cleanup:failed',
+      '[reviewServingProjectorWorker] stale candidate snapshot cleanup failed',
+      {component: 'reviewServingProjectorWorker', error, event: 'staleCandidateCleanupFailed'},
+    )
+
+    return {error: getErrorText(error), status: 'failed'}
+  }
+}
+
 const runReviewServingProjectorWorkerCleanup = async ({
   database,
   dependencies,
@@ -9213,10 +9278,19 @@ const runReviewServingProjectorWorkerCleanup = async ({
   const lastCleanupAtMs = options.lastCleanupAtMs ?? null
 
   if (!shouldRunCleanup({cleanupIntervalMs, lastCleanupAtMs, nowMs})) {
-    return {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped'}
+    return {
+      dirtyWorkRetentionCleanup: null,
+      retentionCleanups: [],
+      retentionScopes: [],
+      staleCandidateCleanup: null,
+      status: 'skipped',
+    }
   }
 
   const dirtyWorkRetentionCleanup = (await dependencies.cleanupDirtyWorkRetention?.({}, database)) ?? null
+  const staleCandidateCleanup = await runReviewServingProjectorWorkerStaleCandidateCleanup({database, dependencies})
+  const maintenanceStatus =
+    dirtyWorkRetentionCleanup === null && staleCandidateCleanup === null ? 'skipped' : 'completed'
   const cleanupRetentionState = dependencies.cleanupRetentionState
 
   if (!isReviewServingRetentionCleanupEnabled()) {
@@ -9224,7 +9298,8 @@ const runReviewServingProjectorWorkerCleanup = async ({
       dirtyWorkRetentionCleanup,
       retentionCleanups: [],
       retentionScopes: [],
-      status: dirtyWorkRetentionCleanup === null ? 'skipped' : 'completed',
+      staleCandidateCleanup,
+      status: maintenanceStatus,
     }
   }
 
@@ -9235,7 +9310,8 @@ const runReviewServingProjectorWorkerCleanup = async ({
       dirtyWorkRetentionCleanup,
       retentionCleanups: [],
       retentionScopes: [],
-      status: dirtyWorkRetentionCleanup === null ? 'skipped' : 'completed',
+      staleCandidateCleanup,
+      status: maintenanceStatus,
     }
   }
 
@@ -9252,7 +9328,7 @@ const runReviewServingProjectorWorkerCleanup = async ({
     return cleanup.retentionScope
   })
 
-  return {dirtyWorkRetentionCleanup, retentionCleanups, retentionScopes, status: 'completed'}
+  return {dirtyWorkRetentionCleanup, retentionCleanups, retentionScopes, staleCandidateCleanup, status: 'completed'}
 }
 
 const getDeltaIntakePartitions = async (
@@ -9462,6 +9538,7 @@ export const runReviewServingProjectorWorkerCycle = async (
       dirtyWorkRetentionCleanup: null,
       retentionCleanups: [],
       retentionScopes: [],
+      staleCandidateCleanup: null,
       status: 'skipped' as const,
     }
     const deltaIntake = getIdleReviewServingProjectorWorkerDeltaIntakeResult()
@@ -9568,7 +9645,13 @@ export const runReviewServingProjectorWorkerCycle = async (
         return runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
       })
   const cleanup = shouldSkipBackgroundMaintenance
-    ? {dirtyWorkRetentionCleanup: null, retentionCleanups: [], retentionScopes: [], status: 'skipped' as const}
+    ? {
+        dirtyWorkRetentionCleanup: null,
+        retentionCleanups: [],
+        retentionScopes: [],
+        staleCandidateCleanup: null,
+        status: 'skipped' as const,
+      }
     : await runReviewServingProjectorWorkerCyclePhase('retentionCleanup', () => {
         return runReviewServingProjectorWorkerCleanup({database, dependencies, options})
       })
@@ -9714,6 +9797,7 @@ export {
   defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
   lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
+  reviewServingProjectorWorkerStaleCandidateCleanupSource,
   summarizeReviewServingProjectorWorkerTimingBucket,
 }
 
