@@ -120,6 +120,7 @@ type FakeRequestDatabaseOptions = {
   evenArticleRanges?: boolean
   legacyRequiredEnrichmentCandidate?: boolean
   reusableBootstrapSourceSnapshotId?: string
+  reusableManifestSourceWatermarks?: Record<string, number>
   snapshotComponents?: readonly ReviewServingProjectionComponent[]
   staleBootstrapComponents?: readonly ReviewServingProjectionComponent[]
 }
@@ -419,7 +420,8 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   let effectiveStats = {...stats, activeSnapshotCount: Math.min(stats.activeSnapshotCount, stats.snapshotCount)}
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
-  const reusableBootstrapSourceWatermarks = getFakeBootstrapSourceWatermarks(options)
+  const reusableBootstrapSourceWatermarks =
+    options.reusableManifestSourceWatermarks ?? getFakeBootstrapSourceWatermarks(options)
   const completedBootstrapComponentSet = new Set(options.completedBootstrapComponents ?? [])
   const activeNoChunkBootstrapComponentSet = new Set(options.activeBootstrapComponentsWithoutChunks ?? [])
   const reusableBootstrapComponentSet = new Set([
@@ -1384,6 +1386,170 @@ test('V4 bootstrap rebuild clones isolated unchanged component rows from an acti
         reusedComponents: ['projectScope', 'selectedImport', 'queue', 'summary', 'payload', 'search'],
         reuseMode: 'componentGeneration',
         sameSnapshotComponents: [],
+      },
+    },
+  })
+})
+
+const judgmentImportDirtyWatermarks = [
+  {latestSourceHighWaterMark: 1, sourcePartition: 'reviewChange:project-v4'},
+  {latestSourceHighWaterMark: 2, sourcePartition: 'judgmentSqliteOutboxImport:job-a'},
+] as const satisfies readonly FakeDirtyWatermark[]
+
+const getChunkInsertSql = (statements: readonly string[]) => {
+  return statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+    .join('\n')
+}
+
+test('V4 payload dirty-work bootstrap rebuilds the requested payload instead of cloning it from the active snapshot', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
+    {
+      completedBootstrapComponents: [...countReadyReviewServingComponents, 'payload'],
+      dirtyWatermarks: judgmentImportDirtyWatermarks,
+      reusableBootstrapSourceSnapshotId: 'snapshot:active-reusable',
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['payload'], priority: 50, projectId: 'project-v4', reason: 'payloadDirtyWork'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.requestedComponents).toEqual(['payload'])
+  expect(request.sourceWatermarksJson).toMatchObject({
+    dirtySourceWatermarks: {judgmentSqliteOutboxImport: 2, reviewChange: 1},
+  })
+  expect(getChunkInsertSql(statements)).toContain("'payload'")
+  expect(joined).not.toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME')
+  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4 BY NAME')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        clonedComponents: ['queue'],
+        crossSnapshotComponents: ['projectScope', 'selectedImport', 'queue'],
+        rebuiltComponents: ['display', 'llmStatus', 'humanStatus', 'payload'],
+        reusedComponents: ['projectScope', 'selectedImport', 'queue'],
+        sameSnapshotComponents: [],
+      },
+    },
+  })
+})
+
+test('V4 payload dirty-work bootstrap still reuses payload chunks completed for the same target snapshot', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
+    {
+      completedBootstrapComponents: [...countReadyReviewServingComponents, 'payload'],
+      dirtyWatermarks: judgmentImportDirtyWatermarks,
+      staleBootstrapComponents: ['display'],
+    },
+  )
+  const sameSnapshotComponents = [...countReadyReviewServingComponents, 'payload'].filter((component) => {
+    return component !== 'display'
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['payload'], priority: 50, projectId: 'project-v4', reason: 'payloadDirtyWork'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+  const chunkInsertSql = getChunkInsertSql(statements)
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInsertSql).toContain("'display'")
+  expect(chunkInsertSql).not.toContain("'payload'")
+  expect(joined).not.toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        clonedComponents: [],
+        crossSnapshotComponents: [],
+        rebuiltComponents: ['display'],
+        reusedComponents: sameSnapshotComponents,
+        sameSnapshotComponents,
+      },
+    },
+  })
+})
+
+test('V4 summary dirty-work bootstrap rebuilds cloneable payload and queue whose manifests predate the judgment import watermark', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
+    {
+      completedBootstrapComponents: [...countReadyReviewServingComponents, 'payload', 'summary'],
+      dirtyWatermarks: judgmentImportDirtyWatermarks,
+      reusableBootstrapSourceSnapshotId: 'snapshot:active-reusable',
+      reusableManifestSourceWatermarks: {reviewChange: 1},
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], priority: 50, projectId: 'project-v4', reason: 'summaryDirtyWork'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+  const chunkInsertSql = getChunkInsertSql(statements)
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInsertSql).toContain("'payload'")
+  expect(chunkInsertSql).toContain("'queue'")
+  expect(chunkInsertSql).toContain("'summary'")
+  expect(joined).not.toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME')
+  expect(joined).not.toContain('INSERT INTO mart.review_unassessed_queue_serving_v4 BY NAME')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        clonedComponents: [],
+        rebuiltComponents: ['display', 'llmStatus', 'humanStatus', 'queue', 'payload', 'summary'],
+        reusedComponents: ['projectScope', 'selectedImport'],
+      },
+    },
+  })
+})
+
+test('V4 summary dirty-work bootstrap keeps cloning payload and queue whose manifests already cover the judgment import watermark', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
+    {
+      completedBootstrapComponents: [...countReadyReviewServingComponents, 'payload', 'summary'],
+      dirtyWatermarks: judgmentImportDirtyWatermarks,
+      reusableBootstrapSourceSnapshotId: 'snapshot:active-reusable',
+      reusableManifestSourceWatermarks: {judgmentSqliteOutboxImport: 2, reviewChange: 1},
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], priority: 50, projectId: 'project-v4', reason: 'summaryDirtyWork'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+  const chunkInsertSql = getChunkInsertSql(statements)
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInsertSql).toContain("'summary'")
+  expect(chunkInsertSql).not.toContain("'payload'")
+  expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME')
+  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4 BY NAME')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        clonedComponents: ['queue', 'payload'],
+        rebuiltComponents: ['display', 'llmStatus', 'humanStatus', 'summary'],
+        reusedComponents: ['projectScope', 'selectedImport', 'queue', 'payload'],
       },
     },
   })
