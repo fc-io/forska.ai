@@ -4,6 +4,7 @@ import type {JSX} from 'solid-js'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {invalidateReviewsWarningsQueries} from '../../../../components/main/reviews/reviewsWarningsQuery.ts'
 import {RuntimeModelNotice} from '../../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
@@ -721,6 +722,7 @@ const EditProject = (): JSX.Element => {
     )
     void queryClient.invalidateQueries({queryKey: ['project', projectId]})
     void queryClient.invalidateQueries({queryKey: ['projects']})
+    void invalidateReviewsWarningsQueries(queryClient)
     return result
   }
 

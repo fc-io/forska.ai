@@ -3553,6 +3553,38 @@ test('reviews warnings memoize the default payload per project until fresh or de
   expect(refreshedMemoBody).toEqual(freshBody)
 })
 
+test('reviews warnings memo entries are keyed by the project row update time', async () => {
+  const projectId = 'project-memo-keyed-by-project-update-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-memo-keyed-by-project-update-warning',
+  })
+
+  const {body: firstBody} = await postWarningsRequest(projectId)
+
+  await insertReviewSourceChangeOutbox(projectId, 'pending')
+
+  const {body: memoizedBody} = await postWarningsRequest(projectId, {reuseMemo: true})
+
+  await runDatabase?.(`
+    UPDATE app.project
+    SET updated_at = TIMESTAMPTZ '2030-01-01T00:00:00.000Z'
+    WHERE id = '${projectId}'
+  `)
+
+  const {body: afterProjectUpdateBody} = await postWarningsRequest(projectId, {reuseMemo: true})
+
+  expect(firstBody.data.indexing.serving.diagnostics.quarantine.retryableOutboxCount).toBe(0)
+  expect(memoizedBody).toEqual(firstBody)
+  expect(afterProjectUpdateBody.data.indexing.serving.diagnostics.quarantine.retryableOutboxCount).toBe(1)
+})
+
 test('reviews warnings route reuses reader diagnostics instead of duplicate current-db fanout', async () => {
   const source = await globalThis.Bun.file(new URL('./projectsRoutesGetReviewsWarnings.ts', import.meta.url)).text()
 
