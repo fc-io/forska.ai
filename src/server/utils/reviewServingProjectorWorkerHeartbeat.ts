@@ -381,6 +381,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       })
       .catch((error) => {
         logReviewServingProjectorWorkerError(error)
+        lastAdmittedWakeAtMs = Date.now()
 
         if (stopped || controller.signal.aborted) {
           return

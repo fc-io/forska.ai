@@ -61,8 +61,10 @@ export type ReviewServingProjectorWakeBlockedReason =
   | 'appendQueue'
   | 'budget'
   | 'exclusiveWork'
+  | 'failedChunk'
   | 'foregroundQueue'
   | 'projectTransfer'
+  | 'terminalChunk'
 
 export type ReviewServingProjectorQueueState = {
   activeImportCount?: number
@@ -173,7 +175,7 @@ export type WakeReviewServingProjectorServiceResult = {
   promotions: readonly PromoteReviewServingProjectorSnapshotResult[]
   releasedClaimIds: readonly string[]
   runs: readonly ReviewServingProjectorComponentRun[]
-  status: 'blocked' | 'completed' | 'failed' | 'partial'
+  status: 'blocked' | 'completed' | 'failed' | 'idle' | 'partial'
 }
 
 type WakeReviewServingProjectorState = {
@@ -562,7 +564,7 @@ const getWakeStatus = (input: {
     return 'partial'
   }
 
-  return input.runCount > 0 ? 'completed' : 'blocked'
+  return input.runCount > 0 ? 'completed' : 'idle'
 }
 
 export const getReviewServingProjectorComponentRunPlan = (scope: ReviewServingDirtyWorkScope) => {
