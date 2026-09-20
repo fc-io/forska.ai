@@ -216,7 +216,12 @@ const createDiagnosticsDatabase = () => {
 test('review serving diagnostics summarize snapshot search dirty work chunks and quarantine state', async () => {
   const {database, statements} = createDiagnosticsDatabase()
   const diagnostics = await getReviewServingDiagnostics(
-    {now: '2026-06-18T10:05:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    {
+      includeDetails: true,
+      now: '2026-06-18T10:05:00.000Z',
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+    },
     database,
   )
 
@@ -381,6 +386,76 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('AS terminalQuarantinedCount')
   expect(statements.join('\n')).toContain('app.review_source_change_outbox')
   expect(statements.join('\n')).toContain('app.review_delta_reconciliation_cursor')
+})
+
+test('review serving diagnostics omit detail lists and their scans unless details are requested', async () => {
+  const {database, statements} = createDiagnosticsDatabase()
+  const diagnostics = await getReviewServingDiagnostics(
+    {now: '2026-06-18T10:05:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const statement = statements[0] ?? ''
+
+  expect(statements).toHaveLength(1)
+  expect(diagnostics.dirtyWork).toEqual({
+    blockedByRebuildCount: 2,
+    completedCount: 5,
+    failedCount: 1,
+    oldestQueuedAt: '2026-06-18T09:00:00.000Z',
+    pendingCount: 3,
+    runningCount: 2,
+    updatedAt: '2026-06-18T10:01:00.000Z',
+  })
+  expect(diagnostics.quarantine).toEqual({
+    quarantinedCursorCount: 1,
+    quarantinedOutboxCount: 1,
+    retryableOutboxCount: 2,
+    unresolvedOutboxCount: 3,
+  })
+  expect(diagnostics.snapshot).not.toHaveProperty('invalidCandidateReasons')
+  expect(diagnostics.snapshot.invalidCandidateCount).toBe(1)
+  expect(diagnostics.rebuildChunks.components).toHaveLength(1)
+  expect(diagnostics.rebuildChunks.pendingCount).toBe(5)
+  expect(statement).not.toContain('app.review_serving_dirty_work_claim_state')
+  expect(statement).not.toContain('dirty_work_bucket AS')
+  expect(statement).not.toContain('dirty_work_lifecycle_reason AS')
+  expect(statement).not.toContain('judgment_job_source AS')
+  expect(statement).not.toContain('judgment_job_dirty_source_lag AS')
+  expect(statement).not.toContain('oldest_barrier AS')
+  expect(statement).not.toContain('AS dirtyWorkBucketsJson')
+  expect(statement).not.toContain('AS dirtyWorkSourcePartitionLagsJson')
+  expect(statement).not.toContain('AS oldestBarrierOutboxId')
+  expect(statement).not.toContain('selectedImportIncompleteCandidateCount')
+  expect(statement).toContain('invalid_candidate AS')
+  expect(statement).toContain('AS invalidCandidateCount')
+  expect(statement).toContain('AS rebuildChunkComponentsJson')
+  expect(statement).toContain('app.review_serving_dirty_work\n')
+  expect(statement).toContain('app.review_rebuild_chunk_manifest')
+  expect(statement).toContain('app.review_source_change_outbox')
+  expect(statement).toContain('app.review_delta_reconciliation_cursor')
+})
+
+test('review serving diagnostics keep detail lists when details are requested', async () => {
+  const {database, statements} = createDiagnosticsDatabase()
+  const diagnostics = await getReviewServingDiagnostics(
+    {includeDetails: true, now: '2026-06-18T10:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+  const statement = statements[0] ?? ''
+
+  expect(statements).toHaveLength(1)
+  expect(diagnostics.dirtyWork.buckets).toHaveLength(1)
+  expect(diagnostics.dirtyWork.lifecycleReasonCounts).toHaveLength(2)
+  expect(diagnostics.dirtyWork.sourcePartitionLags).toHaveLength(1)
+  expect(diagnostics.quarantine.oldestBarrier).toMatchObject({outboxId: 'outbox-1'})
+  expect(diagnostics.snapshot.invalidCandidateReasons).toEqual({
+    invalidOptionalStateCount: 1,
+    invalidRequiredStateCount: 1,
+    missingRequiredCount: 1,
+    selectedImportIncompleteCount: 1,
+  })
+  expect(statement).toContain('app.review_serving_dirty_work_claim_state')
+  expect(statement).toContain('LEFT JOIN oldest_barrier ON TRUE')
 })
 
 test('review serving diagnostics query sequentially instead of fanning out owner reads', async () => {
