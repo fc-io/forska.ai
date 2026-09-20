@@ -77,7 +77,7 @@ export const projectsRoutesGetReviewsHealth = new Elysia().post(
     const hasAnyArticlesInScope =
       enabledPromptCount === 0 || hasCuratedArticles ? hasCuratedArticles : await getHasRouteArticles(projectId)
     const [servingDiagnostics, healthSnapshot] = await Promise.all([
-      getReviewServingDiagnostics({projectId, reviewConfigHash}),
+      getReviewServingDiagnostics({includeDetails: true, projectId, reviewConfigHash}),
       readReviewServingRows({
         allowStale: true,
         contractKey: 'review.health.snapshot',

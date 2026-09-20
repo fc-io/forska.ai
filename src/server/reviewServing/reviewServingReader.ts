@@ -76,6 +76,7 @@ export type ReviewServingReaderRequest = {
   filterOptionIdentity?: string | null
   filters?: ReviewServingReaderFilterInput
   filterValue?: string | null
+  includeDiagnosticDetails?: boolean
   jobFilterSignature?: string | null
   jobState?: ReviewServingBulkState | null
   limit: number
@@ -1202,6 +1203,7 @@ export const readReviewServingRows = async <T>(
   const diagnostics = hasText(request.projectId)
     ? await getReviewServingDiagnostics(
         {
+          includeDetails: request.includeDiagnosticDetails === true,
           projectId: request.projectId as string,
           reviewConfigHash: request.reviewConfigHash,
           workloadContext: request.routeDiagnosticWorkloadContext,

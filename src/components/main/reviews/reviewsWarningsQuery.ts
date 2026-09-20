@@ -106,6 +106,16 @@ export type ReviewServingStatusData = {
   snapshot: {lastProgressedAt: string | null; readable: boolean | null}
 }
 
+export const reviewsWarningsPollingIntervalMs = 30_000
+
+const reviewsWarningsPollingOptions = {
+  refetchInterval: reviewsWarningsPollingIntervalMs,
+  refetchOnMount: true,
+  refetchOnReconnect: true,
+  refetchOnWindowFocus: true,
+  staleTime: reviewsWarningsPollingIntervalMs,
+} as const
+
 export const createReviewsWarningsQueryOptions = (projectId: string) => {
   return {
     queryKey: ['project-reviews-warnings', projectId],
@@ -115,9 +125,7 @@ export const createReviewsWarningsQueryOptions = (projectId: string) => {
 
       return data.data as unknown as ReviewsWarningsData
     },
-    refetchInterval: 5000,
-    refetchOnWindowFocus: false,
-    staleTime: 5000,
+    ...reviewsWarningsPollingOptions,
   }
 }
 
@@ -130,8 +138,6 @@ export const createReviewServingStatusQueryOptions = () => {
       const body = (await response.json()) as {data: ReviewServingStatusData}
       return body.data
     },
-    refetchInterval: 5000,
-    refetchOnWindowFocus: false,
-    staleTime: 5000,
+    ...reviewsWarningsPollingOptions,
   }
 }
