@@ -39,6 +39,7 @@ import {
   cleanupReviewServingDirtyWorkRetention,
   type CleanupReviewServingDirtyWorkRetentionResult,
   completeReviewServingDirtyWorkClaims,
+  getReviewServingDirtyWorkActiveProjectPredicate,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
 } from '../reviewServing/reviewServingDirtyWorkService.ts'
@@ -6611,7 +6612,7 @@ const runReviewServingProjectorWorkerCyclePhase = async <T>(phase: string, opera
 }
 
 const getBlockedReviewServingProjectorWakeResult = (): WakeReviewServingProjectorServiceResult => {
-  return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+  return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
 }
 
 const combineReviewServingProjectorWakeResults = (
@@ -6639,6 +6640,7 @@ const combineReviewServingProjectorWakeResults = (
           : 'blocked'
 
   return {
+    blockedRebuilds: [...first.blockedRebuilds, ...second.blockedRebuilds],
     failures: [...first.failures, ...second.failures],
     promotions: [...first.promotions, ...second.promotions],
     releasedClaimIds: [...first.releasedClaimIds, ...second.releasedClaimIds],
@@ -9310,6 +9312,7 @@ const getHasPendingJobDrivenLlmStatusDirtyWork = async (input: {
     WHERE state.projection_component = 'llmStatus'
       AND state.status = 'pending'
       AND job.storage_state IN ('active', 'draining')
+      AND ${getReviewServingDirtyWorkActiveProjectPredicate('state.project_id')}
       ${projectPredicate}
     LIMIT 1
   `)

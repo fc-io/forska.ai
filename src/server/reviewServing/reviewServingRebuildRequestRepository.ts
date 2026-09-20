@@ -1418,32 +1418,28 @@ export const releaseFailedRequestlessReviewServingRebuildChunks = async (
   })
 }
 
-export const getActiveReviewServingRebuildRequestForProject = async (
-  input: {
-    projectId: string
-    reason?: string
-    requestedComponents?: readonly ReviewServingProjectionComponent[]
-    reviewConfigHash?: string | null
-  },
-  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+const getRequestReasonFilterSql = (reason: string | undefined) => {
+  return reason === undefined ? '' : `\n      AND reason = ${getSqlLiteral(reason)}`
+}
+
+const getRequestedComponentsFilterSql = (
+  requestedComponents: readonly ReviewServingProjectionComponent[] | undefined,
 ) => {
-  const reasonFilter = input.reason === undefined ? '' : `\n      AND reason = ${getSqlLiteral(input.reason)}`
-  const requestedComponents =
-    input.requestedComponents === undefined ? null : getNormalizedComponents(input.requestedComponents)
-  const requestedComponentsFilter =
-    requestedComponents === null
-      ? ''
-      : requestedComponents.length === 0
-        ? '\n      AND FALSE'
-        : `\n      AND json_array_length(requested_components_json) = ${getSqlLiteral(requestedComponents.length)}
+  const normalizedComponents = requestedComponents === undefined ? null : getNormalizedComponents(requestedComponents)
+
+  return normalizedComponents === null
+    ? ''
+    : normalizedComponents.length === 0
+      ? '\n      AND FALSE'
+      : `\n      AND json_array_length(requested_components_json) = ${getSqlLiteral(normalizedComponents.length)}
       AND NOT EXISTS (
         SELECT 1
         FROM json_each(requested_components_json) requested_component
-        WHERE json_extract_string(requested_component.value, '$') NOT IN (${getSqlStringList(requestedComponents)})
+        WHERE json_extract_string(requested_component.value, '$') NOT IN (${getSqlStringList(normalizedComponents)})
       )
       AND NOT EXISTS (
         SELECT 1
-        FROM (${requestedComponents
+        FROM (${normalizedComponents
           .map((component) => {
             return `SELECT ${getSqlLiteral(component)} AS component`
           })
@@ -1454,6 +1450,57 @@ export const getActiveReviewServingRebuildRequestForProject = async (
           WHERE json_extract_string(requested_component.value, '$') = expected_requested_component.component
         )
       )`
+}
+
+const getRequestTimestampLiteral = (value: Date | string) => {
+  return value instanceof Date ? getSqlLiteral(value) : `TIMESTAMPTZ ${getSqlLiteral(value)}`
+}
+
+export const getBlockedOverBudgetReviewServingRebuildRequestForProject = async (
+  input: {
+    blockedWithinMs: number
+    now?: Date | string
+    projectId: string
+    reason?: string
+    requestedComponents?: readonly ReviewServingProjectionComponent[]
+    reviewConfigHash?: string | null
+  },
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  const blockedWithinMs = Math.max(0, Math.floor(input.blockedWithinMs))
+  const reviewConfigHashFilter =
+    input.reviewConfigHash === undefined
+      ? ''
+      : `\n      AND json_extract_string(identity_json, '$.reviewConfigHash') IS NOT DISTINCT FROM ${getSqlLiteral(
+          input.reviewConfigHash,
+        )}`
+  const [row] = await database.queryJson<ReviewServingRebuildRequestRow>(`
+    ${getRequestSelectSql()}
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      ${getRequestReasonFilterSql(input.reason)}
+      ${getRequestedComponentsFilterSql(input.requestedComponents)}
+      ${reviewConfigHashFilter}
+      AND status = 'blocked_over_budget'
+      AND admission_state = 'blocked_over_budget'
+      AND updated_at > ${getRequestTimestampLiteral(input.now ?? new Date())} - INTERVAL '${blockedWithinMs} milliseconds'
+    ORDER BY updated_at DESC, request_id ASC
+    LIMIT 1
+  `)
+
+  return row === undefined ? null : getRequestFromRow(row)
+}
+
+export const getActiveReviewServingRebuildRequestForProject = async (
+  input: {
+    projectId: string
+    reason?: string
+    requestedComponents?: readonly ReviewServingProjectionComponent[]
+    reviewConfigHash?: string | null
+  },
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  const reasonFilter = getRequestReasonFilterSql(input.reason)
+  const requestedComponentsFilter = getRequestedComponentsFilterSql(input.requestedComponents)
   const reviewConfigHashFilter =
     input.reviewConfigHash === undefined
       ? ''

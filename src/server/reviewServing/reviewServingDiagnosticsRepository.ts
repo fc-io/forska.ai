@@ -67,6 +67,7 @@ export type ReviewServingDiagnosticsDirtySourceLag = {
 }
 
 export type ReviewServingDiagnosticsDirtyWorkState = ReviewServingDiagnosticsCountState & {
+  blockedByRebuildCount: number
   buckets: ReviewServingDiagnosticsDirtyWorkBucket[]
   lifecycleReasonCounts: ReviewServingDiagnosticsDirtyWorkLifecycleReasonCount[]
   sourcePartitionLags: ReviewServingDiagnosticsDirtySourceLag[]
@@ -158,6 +159,7 @@ type DiagnosticsSummaryRow = {
   activeSnapshotOptionalComponentsJson: unknown
   activeSnapshotSnapshotId: string | null
   activeSnapshotUpdatedAt: string | null
+  dirtyWorkBlockedByRebuildCount: number
   dirtyWorkCompletedCount: number
   dirtyWorkBucketsJson: unknown
   dirtyWorkFailedCount: number
@@ -263,6 +265,7 @@ const emptyCountState: ReviewServingDiagnosticsCountState = {
 }
 const emptyDirtyWorkState: ReviewServingDiagnosticsDirtyWorkState = {
   ...emptyCountState,
+  blockedByRebuildCount: 0,
   buckets: [],
   lifecycleReasonCounts: [],
   sourcePartitionLags: [],
@@ -564,6 +567,11 @@ const getDiagnosticsSummaryRowsEffect = (
 ) => {
   const now = input.now ?? new Date()
   const retryableDirtyWorkPredicate = `updated_at <= ${getDiagnosticsTimestampLiteral(now)} - INTERVAL '${defaultReviewServingDirtyWorkStaleClaimSeconds} seconds'`
+  const queuedDirtyWorkPredicate = `
+    status = 'pending'
+    OR status = 'blocked_by_rebuild'
+    OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
+  `
   const staleLeasePredicate = `
     visible_chunk.status = 'running'
     AND (
@@ -688,15 +696,16 @@ const getDiagnosticsSummaryRowsEffect = (
       ), dirty_work AS (
         SELECT
           CAST(COUNT(*) FILTER (
-            WHERE status = 'pending' OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
+            WHERE ${queuedDirtyWorkPredicate}
           ) AS INTEGER) AS pendingCount,
           CAST(COUNT(*) FILTER (
             WHERE status IN ('failed', 'running') AND NOT (${retryableDirtyWorkPredicate})
           ) AS INTEGER) AS runningCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'blocked_by_rebuild') AS INTEGER) AS blockedByRebuildCount,
           CAST(0 AS INTEGER) AS failedCount,
           CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
           MIN(created_at) FILTER (
-            WHERE status = 'pending' OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
+            WHERE ${queuedDirtyWorkPredicate}
           ) AS oldestQueuedAt,
           MAX(updated_at) FILTER (WHERE status IN ('failed', 'running', 'completed')) AS updatedAt
         FROM app.review_serving_dirty_work
@@ -1013,6 +1022,7 @@ const getDiagnosticsSummaryRowsEffect = (
         ), '[]') AS dirtyWorkSourcePartitionLagsJson,
         dirty_work.pendingCount AS dirtyWorkPendingCount,
         dirty_work.runningCount AS dirtyWorkRunningCount,
+        dirty_work.blockedByRebuildCount AS dirtyWorkBlockedByRebuildCount,
         dirty_work.failedCount AS dirtyWorkFailedCount,
         dirty_work.completedCount AS dirtyWorkCompletedCount,
         dirty_work.oldestQueuedAt AS dirtyWorkOldestQueuedAt,
@@ -1100,6 +1110,7 @@ const getDiagnosticsDirtyWorkState = (
 
   return {
     ...getDiagnosticsCountState(row, 'dirtyWork'),
+    blockedByRebuildCount: Number(row.dirtyWorkBlockedByRebuildCount ?? 0),
     buckets: getTypedJsonArray(row.dirtyWorkBucketsJson, getDirtyWorkBucket),
     lifecycleReasonCounts: getTypedJsonArray(row.dirtyWorkLifecycleReasonCountsJson, getDirtyWorkLifecycleReasonCount),
     sourcePartitionLags: getTypedJsonArray(row.dirtyWorkSourcePartitionLagsJson, getDirtySourceLag),
