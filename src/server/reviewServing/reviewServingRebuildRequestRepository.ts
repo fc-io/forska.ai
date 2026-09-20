@@ -54,6 +54,7 @@ export type ReviewServingRebuildRequestEstimate = {
 }
 
 export type ReviewServingRebuildRequestInput = {
+  articleRangeChunkCount?: number
   budget?: ReviewServingRebuildRequestBudget
   chunks?: readonly ReviewServingRebuildChunkManifestInput[]
   diagnostics?: unknown
@@ -258,7 +259,9 @@ const getNormalizedComponents = (components: readonly ReviewServingProjectionCom
   })
 }
 
-export const getReviewServingRebuildRequestId = (input: Omit<ReviewServingRebuildRequestInput, 'chunks'>) => {
+export const getReviewServingRebuildRequestId = (
+  input: Omit<ReviewServingRebuildRequestInput, 'articleRangeChunkCount' | 'chunks'>,
+) => {
   return `rebuild:${createHash('sha256')
     .update(
       getStableReviewServingJson({
@@ -291,6 +294,18 @@ const getOverBudgetReason = (
   })
 
   return exceeded[0] ?? null
+}
+
+const getRefusedArticleRangeSplitOverBudgetReason = (input: {
+  nonSplittableComponents: readonly ReviewServingProjectionComponent[]
+  overBudgetReason: string | null
+  requestedArticleRangeChunkCount: number
+}) => {
+  return input.overBudgetReason === null
+    || input.requestedArticleRangeChunkCount <= 1
+    || input.nonSplittableComponents.length === 0
+    ? input.overBudgetReason
+    : `${input.overBudgetReason}; cannot split ${input.nonSplittableComponents.join(', ')} into article-range chunks`
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -509,7 +524,43 @@ const getDefaultRebuildPresplitBucketCount = (input: {
     : 1
 }
 
+export const getNonSplittableDefaultRebuildComponents = (
+  requestedComponents: readonly ReviewServingProjectionComponent[],
+) => {
+  return requestedComponents.filter((component) => {
+    return defaultRebuildNonPresplittableComponents.has(component)
+  })
+}
+
+const getNormalizedArticleRangeChunkCount = (value: number | undefined) => {
+  return Number.isFinite(value) && value !== undefined && value > 1 ? Math.trunc(value) : 1
+}
+
+const getDefaultRebuildArticleRangeSplit = (input: {
+  articleRangeChunkCount: number | undefined
+  requestedComponents: readonly ReviewServingProjectionComponent[]
+}) => {
+  const requestedChunkCount = getNormalizedArticleRangeChunkCount(input.articleRangeChunkCount)
+  const nonSplittableComponents = getNonSplittableDefaultRebuildComponents(input.requestedComponents)
+
+  return {
+    chunkCount: nonSplittableComponents.length === 0 ? requestedChunkCount : 1,
+    nonSplittableComponents,
+    requestedChunkCount,
+  }
+}
+
+const getDefaultRebuildChunkCount = (input: {
+  articleRangeChunkCount: number
+  component: ReviewServingProjectionComponent
+  estimate: ReviewServingRebuildRequestEstimate | undefined
+  requestedComponents: readonly ReviewServingProjectionComponent[]
+}) => {
+  return Math.max(getDefaultRebuildPresplitBucketCount(input), input.articleRangeChunkCount)
+}
+
 const getDefaultRebuildChunkPlanningDiagnostics = (input: {
+  articleRangeChunkCount: number
   chunkCount: number
   component: ReviewServingProjectionComponent
   estimate: ReviewServingRebuildRequestEstimate | undefined
@@ -519,6 +570,7 @@ const getDefaultRebuildChunkPlanningDiagnostics = (input: {
     ? undefined
     : {
         admissionPlan: {
+          articleRangeChunkCount: input.articleRangeChunkCount,
           chunkCount: input.chunkCount,
           coalescingCandidate: defaultRebuildCoalescingCandidateComponents.has(input.component),
           component: input.component,
@@ -602,7 +654,7 @@ const getDefaultRebuildArticleRanges = async (
   })
 }
 
-const getChunkEstimate = (input: {
+export const getReviewServingRebuildChunkEstimate = (input: {
   chunkCount: number
   estimate: ReviewServingRebuildRequestEstimate | undefined
 }): ReviewServingRebuildRequestEstimate => {
@@ -845,6 +897,7 @@ const assertDefaultRebuildExpansionComplete = (input: {
 
 const getDefaultReviewServingRebuildChunks = async (
   input: {
+    articleRangeChunkCount: number
     estimate: ReviewServingRebuildRequestEstimate | undefined
     projectId: string
     requestedComponents: readonly ReviewServingProjectionComponent[]
@@ -886,7 +939,8 @@ const getDefaultReviewServingRebuildChunks = async (
       throw new Error(`Review rebuild request for ${input.projectId} skipped requested rebuild manifest`)
     }
 
-    const chunkCount = getDefaultRebuildPresplitBucketCount({
+    const chunkCount = getDefaultRebuildChunkCount({
+      articleRangeChunkCount: input.articleRangeChunkCount,
       component: state.projectionComponent,
       estimate: input.estimate,
       requestedComponents: input.requestedComponents,
@@ -895,7 +949,10 @@ const getDefaultReviewServingRebuildChunks = async (
       chunkCount === 1
         ? [{...articleBounds, scopedArticleCount: 0}]
         : await getDefaultRebuildArticleRanges({chunkCount, projectId: input.projectId}, database)
-    const chunkEstimate = getChunkEstimate({chunkCount: articleRanges.length, estimate: input.estimate})
+    const chunkEstimate = getReviewServingRebuildChunkEstimate({
+      chunkCount: articleRanges.length,
+      estimate: input.estimate,
+    })
 
     const stateChunks = articleRanges.map((articleRange) => {
       return {
@@ -903,6 +960,7 @@ const getDefaultReviewServingRebuildChunks = async (
         chunkEndKey: articleRange.chunkEndKey,
         chunkStartKey: articleRange.chunkStartKey,
         diagnosticsJson: getDefaultRebuildChunkPlanningDiagnostics({
+          articleRangeChunkCount: input.articleRangeChunkCount,
           chunkCount,
           component: state.projectionComponent,
           estimate: input.estimate,
@@ -1867,14 +1925,27 @@ export const createReviewServingRebuildRequestEffect = (
       const nowSql = getSqlLiteral(new Date())
 
       return database.transaction(async (tx) => {
+        const articleRangeSplit = getDefaultRebuildArticleRangeSplit({
+          articleRangeChunkCount: input.articleRangeChunkCount,
+          requestedComponents,
+        })
         const chunks =
           input.chunks
           ?? (await getDefaultReviewServingRebuildChunks(
-            {estimate: input.estimate, projectId: input.projectId, requestedComponents},
+            {
+              articleRangeChunkCount: articleRangeSplit.chunkCount,
+              estimate: input.estimate,
+              projectId: input.projectId,
+              requestedComponents,
+            },
             tx,
           ))
         const admissionEstimate = getChunkedAdmissionEstimate({chunks, estimate: input.estimate})
-        const overBudgetReason = getOverBudgetReason(admissionEstimate, input.budget)
+        const overBudgetReason = getRefusedArticleRangeSplitOverBudgetReason({
+          nonSplittableComponents: articleRangeSplit.nonSplittableComponents,
+          overBudgetReason: getOverBudgetReason(admissionEstimate, input.budget),
+          requestedArticleRangeChunkCount: articleRangeSplit.requestedChunkCount,
+        })
         const admissionState: ReviewServingRebuildRequestAdmissionState =
           overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
         const status: ReviewServingRebuildRequestStatus = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
@@ -1991,9 +2062,7 @@ export const createReviewServingRebuildRequestEffect = (
           await tx.run(requestInsertSql)
         }
 
-        if (input.chunks !== undefined) {
-          await deleteObsoleteReviewServingRebuildChunks({chunks, requestId}, tx)
-        }
+        await deleteObsoleteReviewServingRebuildChunks({chunks, requestId}, tx)
 
         const chunkBudgetFields = {
           admissionState: chunkAdmissionState,

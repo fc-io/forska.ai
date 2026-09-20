@@ -117,6 +117,7 @@ type FakeRequestDatabaseOptions = {
   completedBootstrapComponents?: readonly ReviewServingProjectionComponent[]
   coveredDirtyWorkRows?: readonly FakeDirtyWorkRow[]
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
+  evenArticleRanges?: boolean
   legacyRequiredEnrichmentCandidate?: boolean
   reusableBootstrapSourceSnapshotId?: string
   snapshotComponents?: readonly ReviewServingProjectionComponent[]
@@ -394,15 +395,23 @@ const getFakeReusableBootstrapComponentStateJson = (
   }
 }
 
-const getFakeArticleRanges = (chunkCount: number, stats: FakeStats) => {
+const getFakeArticleRanges = (chunkCount: number, stats: FakeStats, evenArticleRanges = false) => {
   return Array.from({length: chunkCount}, (_, index) => {
-    return {
-      chunkEndKey: `article-${String(index).padStart(3, '0')}-z`,
-      chunkStartKey: `article-${String(index).padStart(3, '0')}-a`,
-      humanJudgmentCount: index === 0 ? stats.humanJudgmentCount : 0,
-      scopedArticleCount: 1,
-      summaryHumanJudgmentCount: index === 0 ? stats.summaryHumanJudgmentCount : 0,
-    }
+    return evenArticleRanges
+      ? {
+          chunkEndKey: `article-${String(index).padStart(3, '0')}-z`,
+          chunkStartKey: `article-${String(index).padStart(3, '0')}-a`,
+          humanJudgmentCount: Math.ceil(stats.humanJudgmentCount / chunkCount),
+          scopedArticleCount: Math.ceil(stats.scopedArticleCount / chunkCount),
+          summaryHumanJudgmentCount: Math.ceil(stats.summaryHumanJudgmentCount / chunkCount),
+        }
+      : {
+          chunkEndKey: `article-${String(index).padStart(3, '0')}-z`,
+          chunkStartKey: `article-${String(index).padStart(3, '0')}-a`,
+          humanJudgmentCount: index === 0 ? stats.humanJudgmentCount : 0,
+          scopedArticleCount: 1,
+          summaryHumanJudgmentCount: index === 0 ? stats.summaryHumanJudgmentCount : 0,
+        }
   })
 }
 
@@ -571,7 +580,11 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     if (statement.includes('NTILE(')) {
       const chunkCount = Number(statement.match(/NTILE\((\d+)\)/u)?.[1] ?? 1)
 
-      return (effectiveStats.scopedArticleCount === 0 ? [] : getFakeArticleRanges(chunkCount, effectiveStats)) as T[]
+      return (
+        effectiveStats.scopedArticleCount === 0
+          ? []
+          : getFakeArticleRanges(chunkCount, effectiveStats, options.evenArticleRanges === true)
+      ) as T[]
     }
 
     if (statement.includes('WITH project_settings')) {
@@ -849,9 +862,26 @@ test('V4 rebuild request service estimates admission budget from project data', 
     ),
   )
   const joined = statements.join('\n')
+  const payloadChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'payload'")
+  })
 
-  expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toContain('input rows')
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: true,
+        chunkCount: 2,
+        chunkEstimate: {estimatedInputRows: 200_000, estimatedOutputRows: 200_000},
+        mode: 'defaultArticleRange',
+        nonSplittableComponents: [],
+        overBudgetReason: 'input rows: estimated 400000 > max 250000',
+      },
+      childAdmissionEstimate: {estimatedInputRows: 400_000},
+    },
+  })
+  expect(payloadChunkInserts).toHaveLength(2)
   expect(request.sourceWatermarksJson).toMatchObject({
     modelExecution: {
       identityDigest: 'model-execution-digest-v1',
@@ -1680,7 +1710,7 @@ test('V4 rebuild requests reuse a recent blocked over-budget request instead of 
     summaryHumanJudgmentCount: 1_000,
   })
   const input = {
-    components: ['summary', 'payload'] as const,
+    components: ['display', 'payload'] as const,
     projectId: 'project-v4',
     reason: 'requestReviewServingLargeRebuild',
     reuseBlockedRequestWithinMs: 3_600_000,
@@ -2250,7 +2280,7 @@ test('V4 missing snapshot bootstrap bounds large project-scope request estimates
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {
-  const {database} = createFakeRequestDatabase({
+  const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     humanJudgmentCount: 0,
     judgmentCount: 0,
@@ -2265,9 +2295,27 @@ test('V4 rebuild request service accounts for list-mode fan-out in admission bud
       database,
     ),
   )
+  const displayChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'display'")
+  })
 
   expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('input rows: estimated 400000 > max 250000')
+  expect(request.overBudgetReason).toBe(
+    'input rows: estimated 400000 > max 250000; cannot split display into article-range chunks',
+  )
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: false,
+        chunkCount: 2,
+        mode: 'defaultArticleRange',
+        nonSplittableComponents: ['display'],
+        overBudgetReason: 'input rows: estimated 400000 > max 250000',
+      },
+    },
+  })
+  expect(statements.join('\n')).not.toContain('NTILE(')
+  expect(displayChunkInserts).toHaveLength(1)
 })
 
 test('V4 rebuild request service estimates status rebuild rows from written list modes', async () => {
@@ -2449,7 +2497,12 @@ test('V4 rebuild request service includes placeholder detail rows in payload byt
   )
 
   expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('payload bytes: estimated 71680000 > max 67108864')
+  expect(request.overBudgetReason).toBe(
+    'payload bytes: estimated 71680000 > max 67108864; cannot split judgmentInputContent into article-range chunks',
+  )
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {admissionSplit: {applied: false, chunkCount: 2, nonSplittableComponents: ['judgmentInputContent']}},
+  })
 })
 
 const getQueuedSnapshotAdmissionStats = (snapshotCount: number) => {
@@ -2657,4 +2710,247 @@ test('V4 rebuild request service model watermarks make changed execution identit
   )
 
   expect(firstRequest.requestId).not.toBe(secondRequest.requestId)
+})
+
+const countChunkInserts = (statements: readonly string[], component: ReviewServingProjectionComponent) => {
+  return statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes(`'${component}'`)
+  }).length
+}
+
+const getFreshDirtyWorkBootstrapStats = (input: {
+  humanJudgmentCount: number
+  promptCount: number
+  scopedArticleCount: number
+}) => {
+  return {
+    ...baseStats,
+    activeSnapshotCount: 0,
+    enabledPromptCount: input.promptCount,
+    humanJudgmentCount: input.humanJudgmentCount,
+    judgmentCount: 0,
+    promptCount: input.promptCount,
+    scopedArticleCount: input.scopedArticleCount,
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+    summaryHumanJudgmentCount: 0,
+  }
+}
+
+const requestFreshSelectedImportDirtyWorkBootstrap = async (stats: FakeStats) => {
+  const {database, statements} = createFakeRequestDatabase(stats, {evenArticleRanges: true})
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['selectedImport'], projectId: 'project-v4', reason: 'selectedImportDirtyWork'},
+      database,
+    ),
+  )
+
+  return {request, statements}
+}
+
+test('V4 fresh dirty-work bootstrap keeps a single chunk when the estimate equals the input-row budget', async () => {
+  const {request, statements} = await requestFreshSelectedImportDirtyWorkBootstrap(
+    getFreshDirtyWorkBootstrapStats({humanJudgmentCount: 5, promptCount: 1, scopedArticleCount: 6_410}),
+  )
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.reason).toBe('selectedImportDirtyWork')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: null,
+      bootstrapChunkCount: 1,
+      bootstrapSnapshot: true,
+      childAdmissionEstimate: {estimatedInputRows: 250_000},
+      coldBootstrap: false,
+      totalEstimate: {estimatedInputRows: 250_000},
+    },
+  })
+  expect(statements.join('\n')).toContain('NTILE(1)')
+  expect(countChunkInserts(statements, 'selectedImport')).toBe(1)
+  expect(countChunkInserts(statements, 'display')).toBe(1)
+})
+
+test('V4 fresh dirty-work bootstrap presplits into two chunks when the estimate exceeds the budget by one row', async () => {
+  const {request, statements} = await requestFreshSelectedImportDirtyWorkBootstrap(
+    getFreshDirtyWorkBootstrapStats({humanJudgmentCount: 25, promptCount: 1, scopedArticleCount: 6_409}),
+  )
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: true,
+        chunkCount: 2,
+        chunkEstimate: {estimatedInputRows: 125_021, estimatedSnapshotCount: 1},
+        mode: 'bootstrapArticleRange',
+        nonSplittableComponents: [],
+        overBudgetReason: 'input rows: estimated 250001 > max 250000',
+      },
+      bootstrapChunkCount: 2,
+      bootstrapExecutableChunkCount: 22,
+      childAdmissionEstimate: {estimatedInputRows: 125_021},
+      totalEstimate: {estimatedInputRows: 250_001},
+    },
+  })
+  expect(statements.join('\n')).toContain('NTILE(2)')
+  expect(countChunkInserts(statements, 'selectedImport')).toBe(2)
+  expect(countChunkInserts(statements, 'display')).toBe(2)
+})
+
+test('V4 fresh selected-import dirty work on a snapshotless 18784-article project presplits into six bounded chunks', async () => {
+  const {request, statements} = await requestFreshSelectedImportDirtyWorkBootstrap(
+    getFreshDirtyWorkBootstrapStats({humanJudgmentCount: 18_784, promptCount: 6, scopedArticleCount: 18_784}),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.requestedComponents).toEqual(['selectedImport'])
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: true,
+        chunkCount: 6,
+        chunkEstimate: {estimatedInputRows: 222_301, estimatedOutputRows: 222_301, estimatedSnapshotCount: 1},
+        mode: 'bootstrapArticleRange',
+        nonSplittableComponents: [],
+        overBudgetReason: 'input rows: estimated 1333664 > max 250000',
+      },
+      bootstrapChunkCount: 6,
+      bootstrapExecutableChunkCount: 66,
+      bootstrapSnapshot: true,
+      childAdmissionBudget: {maxInputRows: 250_000},
+      childAdmissionEstimate: {estimatedInputRows: 222_301},
+      totalEstimate: {estimatedInputRows: 1_333_664},
+    },
+  })
+  expect(joined).toContain('NTILE(6)')
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(countChunkInserts(statements, 'selectedImport')).toBe(6)
+  expect(countChunkInserts(statements, 'search')).toBe(6)
+  expect(countChunkInserts(statements, 'display')).toBe(6)
+})
+
+test('V4 non-fresh over-budget rebuild next to an active and a candidate snapshot is admitted as bounded article-range chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    activeSnapshotCount: 1,
+    enabledPromptCount: 0,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount: 100_000,
+    snapshotCount: 2,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary', 'payload'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+  const payloadChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'payload'")
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: true,
+        chunkCount: 4,
+        chunkEstimate: {estimatedInputRows: 200_000, estimatedOutputRows: 200_000, estimatedSnapshotCount: 0},
+        mode: 'defaultArticleRange',
+        nonSplittableComponents: [],
+        overBudgetReason: 'input rows: estimated 800000 > max 250000',
+      },
+      bootstrapChunkCount: null,
+      bootstrapSnapshot: false,
+      childAdmissionEstimate: {estimatedInputRows: 800_000, estimatedSnapshotCount: 0},
+      snapshotCounts: {
+        activeSnapshotCount: 1,
+        candidateSnapshotCount: 1,
+        createdSnapshotCount: 0,
+        queuedSnapshotCount: 2,
+      },
+    },
+  })
+  expect(joined).toContain('NTILE(4)')
+  expect(joined).toContain('NTILE(64)')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(payloadChunkInserts).toHaveLength(4)
+  expect(countChunkInserts(statements, 'summary')).toBe(64)
+  expect(payloadChunkInserts[0]).toContain("'payload:identity-1'")
+  expect(payloadChunkInserts[0]).toContain('article-000-a')
+  expect(payloadChunkInserts[3]).toContain('article-003-z')
+  expect(payloadChunkInserts[0]).toContain('"articleRangeChunkCount":4')
+  expect(payloadChunkInserts[0]).toContain('"admissionPresplit":true')
+  expect(payloadChunkInserts[0]).toContain('200000')
+  expect(payloadChunkInserts[0]).not.toContain("'snapshot:")
+})
+
+test('V4 non-fresh rebuild over the prompt-count budget stays blocked after the article-range split', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 0,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 10_001,
+    scopedArticleCount: 100_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe('prompt count: estimated 10001 > max 10000')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: true,
+        chunkCount: 2,
+        chunkEstimate: {estimatedInputRows: 200_000, estimatedPromptCount: 10_001},
+        mode: 'defaultArticleRange',
+        overBudgetReason: 'input rows: estimated 400000 > max 250000',
+      },
+    },
+  })
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(countChunkInserts(statements, 'summary')).toBe(64)
+})
+
+test('V4 non-fresh rebuild within budget on every scalable dimension records no admission split', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 0,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount: 62_500,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['payload', 'summary'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('admitted')
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {admissionSplit: null, childAdmissionEstimate: {estimatedInputRows: 250_000}},
+  })
+  expect(countChunkInserts(statements, 'payload')).toBe(1)
 })

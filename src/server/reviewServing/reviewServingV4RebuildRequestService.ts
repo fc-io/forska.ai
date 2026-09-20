@@ -40,6 +40,8 @@ import {
   createReviewServingRebuildRequest,
   getActiveReviewServingRebuildRequestForProject,
   getBlockedOverBudgetReviewServingRebuildRequestForProject,
+  getNonSplittableDefaultRebuildComponents,
+  getReviewServingRebuildChunkEstimate,
   getReviewServingRebuildRequestId,
   type ReviewServingRebuildRequest,
   type ReviewServingRebuildRequestBudget,
@@ -204,6 +206,15 @@ type ReviewServingV4BootstrapArticleRange = {
 }
 
 type ReviewServingV4BootstrapDirtyWatermarkRow = {latestSourceHighWaterMark: number | string; sourcePartition: string}
+
+type ReviewServingV4AdmissionSplit = {
+  applied: boolean
+  chunkCount: number
+  chunkEstimate: ReviewServingRebuildRequestEstimate
+  mode: 'bootstrapArticleRange' | 'defaultArticleRange'
+  nonSplittableComponents: readonly ReviewServingProjectionComponent[]
+  overBudgetReason: string
+}
 
 export type RequestReviewServingV4RebuildInput = {
   components?: readonly ReviewServingProjectionComponent[]
@@ -546,6 +557,50 @@ const getReviewServingV4BootstrapChunkCount = (input: {
   const requestedChunkCount = Math.max(1, Math.ceil(scalableRatio))
 
   return Math.max(1, Math.min(input.articleCount, requestedChunkCount))
+}
+
+const getReviewServingV4BootstrapAdmissionSplit = (input: {
+  chunkCount: number
+  chunkEstimate: ReviewServingRebuildRequestEstimate
+  singleChunkOverBudgetReason: string | null
+}): ReviewServingV4AdmissionSplit | null => {
+  return input.chunkCount <= 1 || input.singleChunkOverBudgetReason === null
+    ? null
+    : {
+        applied: true,
+        chunkCount: input.chunkCount,
+        chunkEstimate: input.chunkEstimate,
+        mode: 'bootstrapArticleRange',
+        nonSplittableComponents: [],
+        overBudgetReason: input.singleChunkOverBudgetReason,
+      }
+}
+
+const getReviewServingV4DefaultAdmissionSplit = (input: {
+  articleCount: number
+  budget: typeof defaultRequestBudget
+  components: readonly ReviewServingProjectionComponent[]
+  estimate: ReviewServingRebuildRequestEstimate
+}): ReviewServingV4AdmissionSplit | null => {
+  const chunkCount = getReviewServingV4BootstrapChunkCount({
+    articleCount: input.articleCount,
+    budget: input.budget,
+    fixedEstimate: getReviewServingV4BootstrapZeroEstimate(),
+    scalableEstimate: input.estimate,
+  })
+  const overBudgetReason = getReviewServingV4RebuildOverBudgetReason(input.estimate, input.budget)
+  const nonSplittableComponents = getNonSplittableDefaultRebuildComponents(input.components)
+
+  return chunkCount <= 1 || overBudgetReason === null
+    ? null
+    : {
+        applied: nonSplittableComponents.length === 0,
+        chunkCount,
+        chunkEstimate: getReviewServingRebuildChunkEstimate({chunkCount, estimate: input.estimate}),
+        mode: 'defaultArticleRange',
+        nonSplittableComponents,
+        overBudgetReason,
+      }
 }
 
 const getReviewServingV4BootstrapHash = (label: string, value: ReviewServingIdentityValue) => {
@@ -2036,9 +2091,7 @@ export const requestReviewServingV4RebuildEffect = (
       estimateStats,
       articleRangeBootstrapComponents,
     )
-    const shouldPresplitBootstrap =
-      isFreshBootstrap && (input.reason === 'missingReviewServingSnapshot' || isRequestedComponentBootstrap)
-    const bootstrapChunkCount = shouldPresplitBootstrap
+    const bootstrapChunkCount = isFreshBootstrap
       ? getReviewServingV4BootstrapChunkCount({
           articleCount: getSafeCount(stats.scopedArticleCount),
           budget: defaultRequestBudget,
@@ -2099,6 +2152,21 @@ export const requestReviewServingV4RebuildEffect = (
       isFreshBootstrap,
     })
     const snapshotCounts = getReviewServingV4RebuildSnapshotCounts({admissionEstimate: requestEstimate, stats})
+    const admissionSplit = isFreshBootstrap
+      ? getReviewServingV4BootstrapAdmissionSplit({
+          chunkCount: bootstrapChunkCount,
+          chunkEstimate: requestEstimate,
+          singleChunkOverBudgetReason: getReviewServingV4RebuildOverBudgetReason(
+            getReviewServingV4RebuildAdmissionEstimate({estimate: totalEstimate, isFreshBootstrap}),
+            defaultRequestBudget,
+          ),
+        })
+      : getReviewServingV4DefaultAdmissionSplit({
+          articleCount: getSafeCount(stats.scopedArticleCount),
+          budget: defaultRequestBudget,
+          components: requestComponents,
+          estimate: requestEstimate,
+        })
     const requestOverBudgetReason = getReviewServingV4RebuildOverBudgetReason(requestEstimate, defaultRequestBudget)
 
     if (isFreshBootstrap && requestOverBudgetReason === null && bootstrap === null) {
@@ -2145,9 +2213,12 @@ export const requestReviewServingV4RebuildEffect = (
     return runReviewServingV4RebuildStatsPhase('createRequest', () => {
       return createReviewServingRebuildRequest(
         {
+          articleRangeChunkCount:
+            admissionSplit?.mode === 'defaultArticleRange' ? admissionSplit.chunkCount : undefined,
           budget: defaultRequestBudget,
           chunks,
           diagnostics: {
+            admissionSplit,
             bootstrapSnapshot: isFreshBootstrap,
             childAdmissionBudget: defaultRequestBudget,
             childAdmissionEstimate: requestEstimate,
