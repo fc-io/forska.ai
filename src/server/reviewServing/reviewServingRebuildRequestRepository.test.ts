@@ -2820,21 +2820,23 @@ test('pending rebuild chunks are claimed activation first, then search, then enr
       );
       INSERT INTO app.project (id) VALUES ('project-v4');
       INSERT INTO app.review_serving_snapshot_manifest (project_id, snapshot_id, snapshot_status, required_components_json, optional_components_json)
-      VALUES ('project-v4', 'snapshot-1', 'active', '["display"]', '["search", "posting", "summary"]');
+      VALUES ('project-v4', 'snapshot-1', 'active', '["display"]', '["search", "posting", "summary", "payload"]');
       INSERT INTO app.review_rebuild_request (request_id, project_id, reason, requested_components_json, priority, status, admission_state, created_at, updated_at)
       VALUES
-        ('rebuild:enrichment', 'project-v4', 'postingDirtyWork', '["posting"]', 50, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:00:00.000Z', TIMESTAMPTZ '2026-06-20T10:00:00.000Z'),
+        ('rebuild:facet-enrichment', 'project-v4', 'postingDirtyWork', '["posting"]', 50, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:00:00.000Z', TIMESTAMPTZ '2026-06-20T10:00:00.000Z'),
         ('rebuild:search', 'project-v4', 'searchDirtyWork', '["search"]', 75, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:01:00.000Z', TIMESTAMPTZ '2026-06-20T10:01:00.000Z'),
-        ('rebuild:activation', 'project-v4', 'displayDirtyWork', '["display"]', 10000, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:02:00.000Z', TIMESTAMPTZ '2026-06-20T10:02:00.000Z');
+        ('rebuild:activation', 'project-v4', 'displayDirtyWork', '["display"]', 10000, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:02:00.000Z', TIMESTAMPTZ '2026-06-20T10:02:00.000Z'),
+        ('rebuild:detail-readiness', 'project-v4', 'payloadDirtyWork', '["payload"]', 100, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:04:00.000Z', TIMESTAMPTZ '2026-06-20T10:04:00.000Z');
       INSERT INTO app.review_rebuild_request (request_id, project_id, reason, requested_components_json, status, admission_state, created_at, updated_at)
       VALUES
         ('rebuild:generic-default', 'project-v4', 'requestReviewServingLargeRebuild', '["summary"]', 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:03:00.000Z', TIMESTAMPTZ '2026-06-20T10:03:00.000Z');
       INSERT INTO app.review_rebuild_chunk_manifest (chunk_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key, request_id, snapshot_id, created_at, updated_at)
       VALUES
-        ('chunk:enrichment', 'project-v4', 'posting', 'posting:identity', 'article-a', 'article-z', 'rebuild:enrichment', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:00:00.000Z', TIMESTAMPTZ '2026-06-20T10:00:00.000Z'),
+        ('chunk:facet-enrichment', 'project-v4', 'posting', 'posting:identity', 'article-a', 'article-z', 'rebuild:facet-enrichment', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:00:00.000Z', TIMESTAMPTZ '2026-06-20T10:00:00.000Z'),
         ('chunk:search', 'project-v4', 'search', 'search:identity', 'article-a', 'article-z', 'rebuild:search', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:01:00.000Z', TIMESTAMPTZ '2026-06-20T10:01:00.000Z'),
         ('chunk:activation', 'project-v4', 'display', 'display:identity', 'article-a', 'article-z', 'rebuild:activation', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:02:00.000Z', TIMESTAMPTZ '2026-06-20T10:02:00.000Z'),
-        ('chunk:generic-default', 'project-v4', 'summary', 'summary:identity', 'article-a', 'article-z', 'rebuild:generic-default', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:03:00.000Z', TIMESTAMPTZ '2026-06-20T10:03:00.000Z');
+        ('chunk:generic-default', 'project-v4', 'summary', 'summary:identity', 'article-a', 'article-z', 'rebuild:generic-default', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:03:00.000Z', TIMESTAMPTZ '2026-06-20T10:03:00.000Z'),
+        ('chunk:detail-readiness', 'project-v4', 'payload', 'payload:identity', 'article-a', 'article-z', 'rebuild:detail-readiness', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:04:00.000Z', TIMESTAMPTZ '2026-06-20T10:04:00.000Z');
     `)
     const [genericDefaultRequest] = await database.queryJson<{priority: number}>(`
       SELECT priority FROM app.review_rebuild_request WHERE request_id = 'rebuild:generic-default'
@@ -2842,9 +2844,10 @@ test('pending rebuild chunks are claimed activation first, then search, then enr
 
     expect(Number(genericDefaultRequest?.priority)).toBe(100)
     expect(await claimNextChunk()).toBe('rebuild:activation')
+    expect(await claimNextChunk()).toBe('rebuild:detail-readiness')
     expect(await claimNextChunk()).toBe('rebuild:generic-default')
     expect(await claimNextChunk()).toBe('rebuild:search')
-    expect(await claimNextChunk()).toBe('rebuild:enrichment')
+    expect(await claimNextChunk()).toBe('rebuild:facet-enrichment')
     expect(await claimNextChunk()).toBeNull()
   } finally {
     connection.closeSync()
