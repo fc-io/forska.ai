@@ -11,6 +11,7 @@ import {
   completeReviewServingDirtyWorkClaims,
   completeReviewServingDirtyWorkClaimsAndAdvanceWatermark,
   completeReviewServingDirtyWorkCoveredByRebuild,
+  defaultReviewServingDirtyWorkStaleClaimSeconds,
   failReviewServingDirtyWorkClaims,
   getReviewServingDirtyWork,
   releaseReviewServingDirtyWorkClaims,
@@ -619,20 +620,72 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       updatedAt: row.updatedAt,
     }
   }
+  const compareClaimStateRows = (left: FakeDirtyWorkRow, right: FakeDirtyWorkRow) => {
+    return (
+      left.updatedAt.localeCompare(right.updatedAt)
+      || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
+      || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+    )
+  }
+  const getClaimTargetProjectRows = (statement: string) => {
+    const projectionComponent = getWhereLiteral(statement, 'backlog.projection_component')
+    const componentRows = [...dirtyWork.values()].filter((row) => {
+      return projectionComponent === null || row.projectionComponent === projectionComponent
+    })
+    const oldestEligibleByProject = componentRows
+      .filter((row) => {
+        return isClaimEligibleForStatement(row, statement)
+      })
+      .reduce<Map<string, string>>((oldest, row) => {
+        const projectId = row.projectId ?? ''
+        const existing = oldest.get(projectId)
+
+        return oldest.set(projectId, existing === undefined || row.updatedAt < existing ? row.updatedAt : existing)
+      }, new Map())
+    const lastServedByProject = componentRows
+      .filter((row) => {
+        return row.status !== 'pending'
+      })
+      .reduce<Map<string, string>>((served, row) => {
+        const projectId = row.projectId ?? ''
+        const existing = served.get(projectId)
+
+        return served.set(projectId, existing === undefined || row.updatedAt > existing ? row.updatedAt : existing)
+      }, new Map())
+    const [target] = [...oldestEligibleByProject.entries()].sort(([leftId, leftOldest], [rightId, rightOldest]) => {
+      return (
+        (lastServedByProject.get(leftId) ?? '').localeCompare(lastServedByProject.get(rightId) ?? '')
+        || leftOldest.localeCompare(rightOldest)
+        || leftId.localeCompare(rightId)
+      )
+    })
+
+    return target === undefined ? [] : [{targetProjectId: target[0]}]
+  }
   const getClaimStateRows = (statement: string) => {
     const projectionComponent = getWhereLiteral(statement, 'state.projection_component')
+    const projectId = getWhereLiteral(statement, 'state.project_id')
 
     return [...dirtyWork.values()]
       .filter((row) => {
         return (
           (projectionComponent === null || row.projectionComponent === projectionComponent)
+          && (projectId === null || (row.projectId ?? '') === projectId)
           && isClaimEligibleForStatement(row, statement)
         )
       })
+      .sort(compareClaimStateRows)
       .slice(0, statement.includes('LIMIT 2048') ? 2048 : getLimit(statement))
       .map(getClaimStateRow)
   }
-  const getCoalescableClaimStateRows = () => {
+  const compareHighWaterOrder = (left: FakeDirtyWorkRow, right: FakeDirtyWorkRow) => {
+    return (
+      left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
+      || left.updatedAt.localeCompare(right.updatedAt)
+      || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+    )
+  }
+  const getCoalescableClaimStateRows = (statement: string) => {
     return [...dirtyWork.values()]
       .filter((older) => {
         return (
@@ -641,29 +694,20 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
           && older.dirtyRangeEnd === null
           && [...dirtyWork.values()].some((newer) => {
             return (
-              newer.dirtyWorkId !== older.dirtyWorkId
-              && (newer.status === 'pending' || newer.status === 'running')
+              (newer.status === 'pending' || newer.status === 'running')
               && newer.projectId === older.projectId
               && newer.projectionComponent === older.projectionComponent
               && newer.projectionIdentity === older.projectionIdentity
               && newer.sourcePartition === older.sourcePartition
               && newer.dirtyRangeStart === null
               && newer.dirtyRangeEnd === null
-              && (newer.latestSourceHighWaterMark > older.latestSourceHighWaterMark
-                || newer.updatedAt > older.updatedAt
-                || newer.dirtyWorkId > older.dirtyWorkId)
+              && compareHighWaterOrder(older, newer) < 0
             )
           })
         )
       })
-      .sort((left, right) => {
-        return (
-          left.updatedAt.localeCompare(right.updatedAt)
-          || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
-          || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
-        )
-      })
-      .slice(0, 1)
+      .sort(compareClaimStateRows)
+      .slice(0, getLimit(statement))
       .map(getClaimStateRow)
   }
   const getTargetDirtyWorkRows = (statement: string) => {
@@ -957,6 +1001,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       return (options.barrier === undefined || options.barrier === null ? [] : [options.barrier]) as T[]
     }
 
+    if (statement.includes('AS targetProjectId')) {
+      return getClaimTargetProjectRows(statement) as T[]
+    }
+
     if (
       statement.includes('FROM app.review_serving_dirty_work_claim_state state')
       && statement.includes('state.dirty_work_id AS dirtyWorkId')
@@ -968,7 +1016,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       statement.includes('FROM app.review_serving_dirty_work_claim_state older')
       && statement.includes('older.dirty_range_start IS NULL')
     ) {
-      return getCoalescableClaimStateRows() as T[]
+      return getCoalescableClaimStateRows(statement) as T[]
     }
 
     if (
@@ -1400,13 +1448,16 @@ test('claims pending work from one projection identity per batch', async () => {
   expect(claims[0]?.projectionIdentity).toBe('display:identity-1')
 })
 
-test('claim query keeps candidate discovery bounded to the claim-state window', async () => {
+test('claim query selects the target project in SQL before an ordered project window', async () => {
   const {database, statements} = createFakeDirtyWorkDatabase()
 
   await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
   await upsertDisplayWork(database, {...getBaseScope(2, '2', '2'), scopeId: 'project-1:article-2'}, 'delta-2')
 
   await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+  const projectSelect = statements.find((statement) => {
+    return statement.includes('AS targetProjectId')
+  })
   const claimSelect = statements.find((statement) => {
     return (
       statement.includes('FROM app.review_serving_dirty_work_claim_state state')
@@ -1414,43 +1465,53 @@ test('claim query keeps candidate discovery bounded to the claim-state window', 
     )
   })
 
+  expect(projectSelect).toContain('MIN(backlog.updated_at) AS oldest_eligible_at')
+  expect(projectSelect).toContain('MAX(served.updated_at) AS last_served_at')
+  expect(projectSelect).toContain("served.status <> 'pending'")
+  expect(projectSelect).toContain("backlog.projection_component = 'display'")
+  expect(projectSelect).toContain('GROUP BY backlog.project_id')
+  expect(projectSelect).toContain('FROM app.project project')
+  expect(projectSelect).toContain(
+    'ORDER BY\n        project_service.last_served_at ASC NULLS FIRST,\n        project_backlog.oldest_eligible_at ASC,\n        project_backlog.project_id ASC\n      LIMIT 1',
+  )
+  expect(projectSelect).not.toContain('FROM app.review_serving_dirty_work ')
   expect(claimSelect).toContain('SELECT')
   expect(claimSelect).not.toContain('state.rowid AS claimStateRowId')
   expect(claimSelect).toContain('LIMIT 2048')
-  expect(claimSelect).toContain("WHERE state.projection_component = 'display'")
+  expect(claimSelect).toContain("WHERE state.project_id = 'project-1'")
+  expect(claimSelect).toContain("state.projection_component = 'display'")
   expect(claimSelect).toContain("state.status = 'pending'")
   expect(claimSelect).toContain("state.status IN ('running', 'failed')")
-  expect(claimSelect).not.toContain('ORDER BY')
+  expect(claimSelect).toContain(
+    'ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC',
+  )
   expect(claimSelect).not.toContain('ORDER BY state.rowid')
-  expect(claimSelect).not.toContain('ORDER BY state.updated_at')
+  expect(claimSelect).not.toContain('FROM app.project project')
   expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
   expect(claimSelect).not.toContain('FROM app.review_serving_dirty_work ')
 })
 
-test('claim query samples claim-state without ordered cursor scans', async () => {
+test('claim query skips the project window when no project has eligible work', async () => {
   const {database, statements} = createFakeDirtyWorkDatabase()
 
   await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
   await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
-  await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  const claimSelectCountBefore = statements.filter((statement) => {
+    return statement.includes('state.dirty_work_id AS dirtyWorkId')
+  }).length
 
-  const claimSelects = statements.filter((statement) => {
-    return (
-      statement.includes('FROM app.review_serving_dirty_work_claim_state state')
-      && statement.includes('state.dirty_work_id AS dirtyWorkId')
-    )
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  const projectSelects = statements.filter((statement) => {
+    return statement.includes('AS targetProjectId')
   })
-  const nextBucketSelect = claimSelects.at(-1)
+  const claimSelectCountAfter = statements.filter((statement) => {
+    return statement.includes('state.dirty_work_id AS dirtyWorkId')
+  }).length
 
-  expect(nextBucketSelect).toContain('LIMIT 2048')
-  expect(nextBucketSelect).toContain("WHERE state.projection_component = 'display'")
-  expect(nextBucketSelect).toContain("state.status = 'pending'")
-  expect(nextBucketSelect).toContain("state.status IN ('running', 'failed')")
-  expect(nextBucketSelect).not.toContain('ORDER BY')
-  expect(nextBucketSelect).not.toContain('state.rowid')
-  expect(nextBucketSelect).not.toContain('ORDER BY state.updated_at')
-  expect(nextBucketSelect).not.toContain('FROM app.review_serving_dirty_work_claim_state blocker')
-  expect(nextBucketSelect).not.toContain('FROM app.review_serving_dirty_work ')
+  expect(claims).toEqual([])
+  expect(projectSelects).toHaveLength(2)
+  expect(claimSelectCountBefore).toBe(1)
+  expect(claimSelectCountAfter).toBe(1)
 })
 
 test('claim query ignores completed claim-state rows before pending work', async () => {
@@ -1524,12 +1585,12 @@ test('claims dirty work from bounded per-row claim state with one exact update r
   expect(claimStateSelect).toContain('FROM app.review_serving_dirty_work_claim_state state')
   expect(claimStateSelect).not.toContain('state.rowid AS claimStateRowId')
   expect(claimStateSelect).toContain('LIMIT 2048')
-  expect(claimStateSelect).toContain("WHERE state.projection_component = 'display'")
+  expect(claimStateSelect).toContain("state.projection_component = 'display'")
   expect(claimStateSelect).toContain("state.status = 'pending'")
   expect(claimStateSelect).toContain("state.status IN ('running', 'failed')")
-  expect(claimStateSelect).not.toContain('ORDER BY')
+  expect(claimStateSelect).toContain("WHERE state.project_id = 'project-1'")
+  expect(claimStateSelect).toContain('ORDER BY state.updated_at ASC')
   expect(claimStateSelect).not.toContain('ORDER BY state.rowid')
-  expect(claimStateSelect).not.toContain('ORDER BY state.updated_at')
   expect(claimStateSelect).not.toContain('FROM app.review_serving_dirty_work ')
   expect(claimStateSelect).not.toContain('projection_key')
   expect(claimStateSelect).not.toContain('json_extract_string')
@@ -1808,7 +1869,10 @@ test('blocked rebuild claims wait for rebuild coverage instead of being reclaime
 const insertDuckdbProjectDirtyWork = async (
   database: ReviewServingDirtyWorkDatabase,
   input: {
+    dirtyRangeEnd?: string | null
+    dirtyRangeStart?: string | null
     dirtyWorkId: string
+    latestSourceHighWaterMark?: number
     projectId: string
     projectionComponent?: ReviewServingDirtyWorkRecord['projectionComponent']
     status?: string
@@ -1817,6 +1881,9 @@ const insertDuckdbProjectDirtyWork = async (
 ) => {
   const status = input.status ?? 'pending'
   const projectionComponent = input.projectionComponent ?? 'display'
+  const latestSourceHighWaterMark = input.latestSourceHighWaterMark ?? 1
+  const dirtyRangeStartSql = getSqlLiteral(input.dirtyRangeStart ?? null)
+  const dirtyRangeEndSql = getSqlLiteral(input.dirtyRangeEnd ?? null)
   const updatedAtSql =
     input.updatedAt === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(input.updatedAt)}`
   const projectionIdentity = `${projectionComponent}:${input.projectId}`
@@ -1854,10 +1921,10 @@ const insertDuckdbProjectDirtyWork = async (
       'project.reviewConfig.updated',
       'projectReviewConfig',
       1,
-      1,
+      ${latestSourceHighWaterMark},
       NULL,
-      NULL,
-      NULL,
+      ${dirtyRangeStartSql},
+      ${dirtyRangeEndSql},
       ${getSqlLiteral(status)},
       ${updatedAtSql}
     )
@@ -1884,12 +1951,20 @@ const insertDuckdbProjectDirtyWork = async (
       ${getSqlLiteral(projectionIdentity)},
       'projectReviewConfig',
       ${getSqlLiteral(status)},
-      1,
-      NULL,
-      NULL,
+      ${latestSourceHighWaterMark},
+      ${dirtyRangeStartSql},
+      ${dirtyRangeEndSql},
       ${updatedAtSql}
     )
   `)
+}
+
+const claimDuckdbDisplayDirtyWorkId = async (database: ReviewServingDirtyWorkDatabase, now: Date) => {
+  const claims = await claimReviewServingDirtyWork({limit: 1, now, projectionComponent: 'display'}, database)
+
+  return claims.map((claim) => {
+    return claim.dirtyWorkId
+  })
 }
 
 const claimDuckdbDisplayDirtyWorkIds = async (database: ReviewServingDirtyWorkDatabase) => {
@@ -1963,6 +2038,210 @@ test('claims skip dirty work for archived or delete-pending projects until they 
       {dirtyWorkId: 'dirty-deleting', lifecycleReason: null, status: 'running'},
       {dirtyWorkId: 'dirty-missing-project', lifecycleReason: null, status: 'pending'},
     ])
+  } finally {
+    close()
+  }
+})
+
+test('claims rotate across projects by least recently served instead of global lane age', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const now = new Date('2026-06-16T12:00:00.000Z')
+
+  try {
+    await database.run("INSERT INTO app.project (id) VALUES ('project-a'), ('project-b')")
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'a-1',
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'a-2',
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T10:01:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'a-3',
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T10:02:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'b-1',
+      projectId: 'project-b',
+      updatedAt: '2026-06-16T10:03:00.000Z',
+    })
+
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['a-1'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['b-1'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['a-2'])
+
+    await completeReviewServingDirtyWorkClaims(
+      [
+        {
+          articleId: null,
+          dirtyKind: 'project.reviewConfig.updated',
+          dirtyRangeEnd: null,
+          dirtyRangeStart: null,
+          dirtyWorkId: 'b-1',
+          firstSourceHighWaterMark: 1,
+          latestDeltaId: null,
+          latestSourceHighWaterMark: 1,
+          projectId: 'project-b',
+          projectionComponent: 'display',
+          projectionIdentity: 'display:project-b',
+          scopeId: 'project-b',
+          scopeKind: 'project',
+          sourcePartition: 'projectReviewConfig',
+          status: 'running',
+        },
+      ],
+      database,
+    )
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'b-2',
+      projectId: 'project-b',
+      updatedAt: '2026-06-16T10:04:00.000Z',
+    })
+
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['a-3'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['b-2'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual([])
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([
+      {dirtyWorkId: 'a-1', status: 'running'},
+      {dirtyWorkId: 'a-2', status: 'running'},
+      {dirtyWorkId: 'a-3', status: 'running'},
+      {dirtyWorkId: 'b-1', status: 'completed'},
+      {dirtyWorkId: 'b-2', status: 'running'},
+    ])
+  } finally {
+    close()
+  }
+})
+
+test('claim project rotation breaks never-served ties by oldest eligible row then project id', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const now = new Date('2026-06-16T12:00:00.000Z')
+
+  try {
+    await database.run("INSERT INTO app.project (id) VALUES ('project-a'), ('project-b'), ('project-c')")
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'c-1',
+      projectId: 'project-c',
+      updatedAt: '2026-06-16T09:59:59.999Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'b-1',
+      projectId: 'project-b',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'a-1',
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+    })
+
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['c-1'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['a-1'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['b-1'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual([])
+  } finally {
+    close()
+  }
+})
+
+test('claim project rotation skips projects whose rows are only parked, archived or in another component', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const now = new Date('2026-06-16T12:00:00.000Z')
+
+  try {
+    await database.run(`
+      INSERT INTO app.project (id, archived)
+      VALUES ('project-parked', FALSE), ('project-archived', TRUE), ('project-search', FALSE)
+    `)
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'parked-1',
+      projectId: 'project-parked',
+      status: 'blocked_by_rebuild',
+      updatedAt: '2026-06-16T09:00:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'archived-1',
+      projectId: 'project-archived',
+      updatedAt: '2026-06-16T09:01:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'search-1',
+      projectId: 'project-search',
+      projectionComponent: 'search',
+      updatedAt: '2026-06-16T09:02:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'active-1',
+      projectId: 'project-1',
+      updatedAt: '2026-06-16T11:00:00.000Z',
+    })
+
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual(['active-1'])
+    expect(await claimDuckdbDisplayDirtyWorkId(database, now)).toEqual([])
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([
+      {dirtyWorkId: 'active-1', status: 'running'},
+      {dirtyWorkId: 'archived-1', status: 'pending'},
+      {dirtyWorkId: 'parked-1', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'search-1', status: 'pending'},
+    ])
+  } finally {
+    close()
+  }
+})
+
+test('claim project rotation treats stale running and failed rows as eligible exactly at the stale boundary', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const now = new Date('2026-06-16T12:00:00.000Z')
+  const secondsAgo = (seconds: number) => {
+    return new Date(now.getTime() - seconds * 1000).toISOString()
+  }
+
+  try {
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'running-boundary',
+      projectId: 'project-1',
+      status: 'running',
+      updatedAt: secondsAgo(defaultReviewServingDirtyWorkStaleClaimSeconds),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'running-fresh',
+      projectId: 'project-1',
+      status: 'running',
+      updatedAt: secondsAgo(defaultReviewServingDirtyWorkStaleClaimSeconds - 1),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'failed-boundary',
+      projectId: 'project-1',
+      status: 'failed',
+      updatedAt: secondsAgo(defaultReviewServingDirtyWorkStaleClaimSeconds),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'failed-fresh',
+      projectId: 'project-1',
+      status: 'failed',
+      updatedAt: secondsAgo(defaultReviewServingDirtyWorkStaleClaimSeconds - 1),
+    })
+
+    const claims = await claimReviewServingDirtyWork({limit: 4, now, projectionComponent: 'display'}, database)
+
+    expect(
+      claims
+        .map((claim) => {
+          return claim.dirtyWorkId
+        })
+        .sort(),
+    ).toEqual(['failed-boundary', 'running-boundary'])
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([
+      {dirtyWorkId: 'failed-boundary', status: 'running'},
+      {dirtyWorkId: 'failed-fresh', status: 'failed'},
+      {dirtyWorkId: 'running-boundary', status: 'running'},
+      {dirtyWorkId: 'running-fresh', status: 'running'},
+    ])
+    expect(await claimReviewServingDirtyWork({limit: 4, now, projectionComponent: 'display'}, database)).toEqual([])
   } finally {
     close()
   }
@@ -2185,11 +2464,121 @@ test('retention cleanup requeues stale blocked-by-rebuild rows by default with a
 
     expect(disabled.requeuedBlockedByRebuildCount).toBe(0)
     expect(limited.requeuedBlockedByRebuildCount).toBe(1)
+    expect(limited.coalescedDirtyWorkCount).toBe(0)
     expect(defaulted.requeuedBlockedByRebuildCount).toBe(1)
+    expect(defaulted.coalescedDirtyWorkCount).toBe(1)
     expect(await getDuckdbClaimStateStatuses(database)).toEqual([
-      {dirtyWorkId: 'blocked-stale-1', status: 'pending'},
+      {dirtyWorkId: 'blocked-stale-1', status: 'completed'},
       {dirtyWorkId: 'blocked-stale-2', status: 'pending'},
     ])
+    expect(await getDuckdbDirtyWorkStatuses(database)).toEqual([
+      {dirtyWorkId: 'blocked-stale-1', lifecycleReason: 'superseded_by_high_water', status: 'completed'},
+      {dirtyWorkId: 'blocked-stale-2', lifecycleReason: 'released', status: 'pending'},
+    ])
+  } finally {
+    close()
+  }
+})
+
+test('retention cleanup coalesces superseded high-water rows set-based with exact supersession boundaries', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'lane-a-equal-watermark-older',
+      latestSourceHighWaterMark: 5,
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'lane-a-newest',
+      latestSourceHighWaterMark: 5,
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T10:01:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'lane-a-lower-watermark-newer',
+      latestSourceHighWaterMark: 3,
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T10:02:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyRangeEnd: '1',
+      dirtyRangeStart: '1',
+      dirtyWorkId: 'lane-a-point-row',
+      latestSourceHighWaterMark: 1,
+      projectId: 'project-a',
+      updatedAt: '2026-06-16T09:00:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'lane-b-pending-older',
+      latestSourceHighWaterMark: 5,
+      projectId: 'project-b',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'lane-b-blocked-newer',
+      latestSourceHighWaterMark: 9,
+      projectId: 'project-b',
+      status: 'blocked_by_rebuild',
+      updatedAt: '2026-06-16T10:05:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'lane-c-pending-older',
+      latestSourceHighWaterMark: 5,
+      projectId: 'project-c',
+      updatedAt: '2026-06-16T10:00:30.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'lane-c-running-newer',
+      latestSourceHighWaterMark: 9,
+      projectId: 'project-c',
+      status: 'running',
+      updatedAt: '2026-06-16T10:05:00.000Z',
+    })
+
+    const isolatedCleanupParams = {blockedByRebuildRequeueLimit: 0, laneRepairLimit: 0, laneStateRepairLimit: 0}
+    const bounded = await cleanupReviewServingDirtyWorkRetention(
+      {...isolatedCleanupParams, coalesceDirtyWorkLimit: 1},
+      database,
+    )
+
+    expect(bounded.coalescedDirtyWorkCount).toBe(1)
+    expect(await getDuckdbClaimStateStatuses(database)).toContainEqual({
+      dirtyWorkId: 'lane-a-equal-watermark-older',
+      status: 'completed',
+    })
+    expect(await getDuckdbClaimStateStatuses(database)).toContainEqual({
+      dirtyWorkId: 'lane-c-pending-older',
+      status: 'pending',
+    })
+
+    const defaulted = await cleanupReviewServingDirtyWorkRetention(isolatedCleanupParams, database)
+
+    expect(defaulted.coalescedDirtyWorkCount).toBe(2)
+    expect(await getDuckdbDirtyWorkStatuses(database)).toEqual([
+      {dirtyWorkId: 'lane-a-equal-watermark-older', lifecycleReason: 'superseded_by_high_water', status: 'completed'},
+      {dirtyWorkId: 'lane-a-lower-watermark-newer', lifecycleReason: 'superseded_by_high_water', status: 'completed'},
+      {dirtyWorkId: 'lane-a-newest', lifecycleReason: null, status: 'pending'},
+      {dirtyWorkId: 'lane-a-point-row', lifecycleReason: null, status: 'pending'},
+      {dirtyWorkId: 'lane-b-blocked-newer', lifecycleReason: null, status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'lane-b-pending-older', lifecycleReason: null, status: 'pending'},
+      {dirtyWorkId: 'lane-c-pending-older', lifecycleReason: 'superseded_by_high_water', status: 'completed'},
+      {dirtyWorkId: 'lane-c-running-newer', lifecycleReason: null, status: 'running'},
+    ])
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([
+      {dirtyWorkId: 'lane-a-equal-watermark-older', status: 'completed'},
+      {dirtyWorkId: 'lane-a-lower-watermark-newer', status: 'completed'},
+      {dirtyWorkId: 'lane-a-newest', status: 'pending'},
+      {dirtyWorkId: 'lane-a-point-row', status: 'pending'},
+      {dirtyWorkId: 'lane-b-blocked-newer', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'lane-b-pending-older', status: 'pending'},
+      {dirtyWorkId: 'lane-c-pending-older', status: 'completed'},
+      {dirtyWorkId: 'lane-c-running-newer', status: 'running'},
+    ])
+    expect(
+      (await cleanupReviewServingDirtyWorkRetention(isolatedCleanupParams, database)).coalescedDirtyWorkCount,
+    ).toBe(0)
   } finally {
     close()
   }
@@ -2747,12 +3136,24 @@ test('default retention cleanup avoids broad retention compaction and delete sca
     }) + 1,
   )
 
+  const coalesceSelect = cleanupStatements.find((statement) => {
+    return statement.includes('FROM app.review_serving_dirty_work_claim_state older')
+  })
+
   expect(result).toMatchObject({compactedLaneCount: 0, deletedAcknowledgementCount: 0, deletedDirtyWorkCount: 0})
   expect(result.coalescedDirtyWorkCount).toBe(0)
+  expect(coalesceSelect).toContain('LIMIT 2000')
+  expect(cleanupStatements.join('\n')).not.toContain("lifecycle_reason = 'superseded_by_high_water'")
   expect(cleanupStatements.join('\n')).not.toContain('WITH retention_ready_dirty_work AS')
-  expect(cleanupStatements.join('\n')).not.toContain('FROM app.review_serving_dirty_work_claim_state older')
   expect(cleanupStatements.join('\n')).not.toContain('DELETE FROM app.review_serving_dirty_work')
   expect(cleanupStatements.join('\n')).not.toContain('DELETE FROM app.review_serving_dirty_work_ack')
+
+  const explicitZeroStatementIndex = statements.length
+  const explicitZero = await cleanupReviewServingDirtyWorkRetention({coalesceDirtyWorkLimit: 0}, database)
+  const zeroStatements = statements.slice(explicitZeroStatementIndex)
+
+  expect(explicitZero.coalescedDirtyWorkCount).toBe(0)
+  expect(zeroStatements.join('\n')).not.toContain('FROM app.review_serving_dirty_work_claim_state older')
 })
 
 test('retention cleanup repairs compact lane columns before dirty work drain', async () => {
@@ -2844,13 +3245,31 @@ test('retention cleanup coalesces superseded high-water dirty work by exact sele
     return statement.includes('FROM app.review_serving_dirty_work_claim_state older')
   })
 
+  const coalesceSelects = statements.filter((statement) => {
+    return statement.includes('FROM app.review_serving_dirty_work_claim_state older')
+  })
+  const coalesceUpdates = statements.filter((statement) => {
+    return (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes("lifecycle_reason = 'superseded_by_high_water'")
+    )
+  })
+
   expect(result.coalescedDirtyWorkCount).toBe(1)
   expect(coalesced).toMatchObject({lifecycleReason: 'superseded_by_high_water', status: 'completed'})
+  expect(coalesceSelects).toHaveLength(1)
+  expect(coalesceUpdates).toHaveLength(1)
   expect(coalesceSelect).toContain('older.dirty_range_start IS NULL')
   expect(coalesceSelect).toContain('FROM app.review_serving_dirty_work_claim_state older')
+  expect(coalesceSelect).toContain('WITH lane_newest AS')
+  expect(coalesceSelect).toContain("newer.status IN ('pending', 'running')")
+  expect(coalesceSelect).toContain('GROUP BY newer.project_id, newer.projection_component')
+  expect(coalesceSelect).toContain('< lane_newest.newest_high_water_order')
+  expect(coalesceSelect).toContain('LIMIT 10')
+  expect(coalesceSelect).not.toContain('EXISTS (')
   expect(coalesceSelect).not.toContain('FROM app.review_serving_dirty_work dirty_work')
-  expect(coalesceUpdate).toContain('rowid =')
-  expect(coalesceUpdate).toContain('dirty_work_id =')
+  expect(coalesceUpdate).toContain(`dirty_work_id IN ('${oldHighWater.dirtyWorkId}')`)
+  expect(coalesceUpdate).toContain("AND status = 'pending'")
   expect(coalesceUpdate).not.toContain('EXISTS (')
   expect(coalesceUpdate).not.toContain('projection_component =')
 })

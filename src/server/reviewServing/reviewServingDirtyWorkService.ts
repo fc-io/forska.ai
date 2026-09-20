@@ -231,6 +231,21 @@ const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams
     AND projection_component = ${getSqlLiteral(params.projectionComponent)}`
 }
 
+const getEligibleDirtyWorkClaimStatePredicate = (
+  params: ClaimReviewServingDirtyWorkParams,
+  claimNowSql: string,
+  claimStateSql: string,
+) => {
+  return `${claimStateSql}.projection_component = ${getSqlLiteral(params.projectionComponent)}
+        AND (
+          ${claimStateSql}.status = 'pending'
+          OR (
+            ${claimStateSql}.status IN ('running', 'failed')
+            AND ${claimStateSql}.updated_at <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
+          )
+        )`
+}
+
 const getDirtyWorkId = (input: ReviewServingDirtyWorkInput) => {
   return `dirtyWork:${getReviewServingHash('review-serving-dirty-work', {
     projectionKey: getProjectionKey({
@@ -270,6 +285,7 @@ const getNormalizedLimit = (params: {limit: number; maxWakeCount?: number}) => {
 const defaultLaneRepairLimit = 256
 const defaultLaneStateRepairLimit = 256
 const defaultBlockedByRebuildRequeueLimit = 256
+const defaultCoalesceDirtyWorkLimit = 2_000
 
 const getNormalizedCleanupLimit = (value: number | undefined, fallback: number) => {
   return Math.max(0, Math.floor(value ?? fallback))
@@ -798,6 +814,14 @@ const getDirtyWorkLaneProjectId = (projectId: string | null) => {
   return projectId ?? ''
 }
 
+const getDirtyWorkHighWaterOrderSql = (claimStateSql: string) => {
+  return `struct_pack(
+        latest_source_high_water_mark := ${claimStateSql}.latest_source_high_water_mark,
+        updated_at := ${claimStateSql}.updated_at,
+        dirty_work_id := ${claimStateSql}.dirty_work_id
+      )`
+}
+
 const getDirtyWorkClaimStateValuesSql = (
   claims: readonly Pick<
     ReviewServingDirtyWorkClaim,
@@ -1194,6 +1218,39 @@ export const claimReviewServingDirtyWork = async (
   }
 
   const rows = await database.transaction(async (tx) => {
+    const [targetProject] = await tx.queryJson<{targetProjectId: string}>(`
+      WITH project_backlog AS (
+        SELECT
+          backlog.project_id,
+          MIN(backlog.updated_at) AS oldest_eligible_at
+        FROM app.review_serving_dirty_work_claim_state backlog
+        WHERE ${getEligibleDirtyWorkClaimStatePredicate(params, claimNowSql, 'backlog')}
+          AND ${getReviewServingDirtyWorkActiveProjectPredicate('backlog.project_id')}
+        GROUP BY backlog.project_id
+      ),
+      project_service AS (
+        SELECT
+          served.project_id,
+          MAX(served.updated_at) AS last_served_at
+        FROM app.review_serving_dirty_work_claim_state served
+        WHERE served.projection_component = ${getSqlLiteral(params.projectionComponent)}
+          AND served.status <> 'pending'
+        GROUP BY served.project_id
+      )
+      SELECT project_backlog.project_id AS targetProjectId
+      FROM project_backlog
+      LEFT JOIN project_service ON project_service.project_id = project_backlog.project_id
+      ORDER BY
+        project_service.last_served_at ASC NULLS FIRST,
+        project_backlog.oldest_eligible_at ASC,
+        project_backlog.project_id ASC
+      LIMIT 1
+    `)
+
+    if (targetProject === undefined) {
+      return []
+    }
+
     const claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
       SELECT
         state.dirty_work_id AS dirtyWorkId,
@@ -1208,15 +1265,9 @@ export const claimReviewServingDirtyWork = async (
         state.dirty_range_end AS dirtyRangeEnd,
         state.updated_at AS updatedAt
       FROM app.review_serving_dirty_work_claim_state state
-      WHERE state.projection_component = ${getSqlLiteral(params.projectionComponent)}
-        AND (
-          state.status = 'pending'
-          OR (
-            state.status IN ('running', 'failed')
-            AND state.updated_at <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
-          )
-        )
-        AND ${getReviewServingDirtyWorkActiveProjectPredicate('state.project_id')}
+      WHERE state.project_id = ${getSqlLiteral(targetProject.targetProjectId)}
+        AND ${getEligibleDirtyWorkClaimStatePredicate(params, claimNowSql, 'state')}
+      ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC
       LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
     `)
 
@@ -2020,88 +2071,74 @@ const coalesceReviewServingDirtyWorkHighWaterRows = async (
     return 0
   }
 
-  let coalescedCount = 0
-
-  while (coalescedCount < params.limit) {
-    const [candidate] = await database.queryJson<DirtyWorkClaimStateRow>(`
+  const candidates = await database.queryJson<Pick<DirtyWorkClaimStateRow, 'dirtyWorkId'>>(`
+    WITH lane_newest AS (
       SELECT
-        older.dirty_work_id AS dirtyWorkId,
-        older.storage_row_id AS storageRowId,
-        older.project_id AS projectId,
-        older.projection_component AS projectionComponent,
-        older.projection_identity AS projectionIdentity,
-        older.source_partition AS sourcePartition,
-        older.status,
-        older.latest_source_high_water_mark AS latestSourceHighWaterMark,
-        older.dirty_range_start AS dirtyRangeStart,
-        older.dirty_range_end AS dirtyRangeEnd,
-        older.updated_at AS updatedAt
-      FROM app.review_serving_dirty_work_claim_state older
-      WHERE older.status = 'pending'
-        AND older.dirty_range_start IS NULL
-        AND older.dirty_range_end IS NULL
-        AND EXISTS (
-          SELECT 1
-          FROM app.review_serving_dirty_work_claim_state newer
-          WHERE newer.project_id = older.project_id
-            AND newer.projection_component = older.projection_component
-            AND newer.projection_identity = older.projection_identity
-            AND newer.source_partition = older.source_partition
-            AND newer.status IN ('pending', 'running')
-            AND newer.dirty_range_start IS NULL
-            AND newer.dirty_range_end IS NULL
-            AND (
-              newer.latest_source_high_water_mark > older.latest_source_high_water_mark
-              OR newer.updated_at > older.updated_at
-              OR newer.dirty_work_id > older.dirty_work_id
-            )
-        )
-      ORDER BY older.updated_at ASC, older.latest_source_high_water_mark ASC, older.dirty_work_id ASC
-      LIMIT 1
-    `)
+        newer.project_id,
+        newer.projection_component,
+        newer.projection_identity,
+        newer.source_partition,
+        MAX(${getDirtyWorkHighWaterOrderSql('newer')}) AS newest_high_water_order
+      FROM app.review_serving_dirty_work_claim_state newer
+      WHERE newer.status IN ('pending', 'running')
+        AND newer.dirty_range_start IS NULL
+        AND newer.dirty_range_end IS NULL
+      GROUP BY newer.project_id, newer.projection_component, newer.projection_identity, newer.source_partition
+    )
+    SELECT older.dirty_work_id AS dirtyWorkId
+    FROM app.review_serving_dirty_work_claim_state older
+    JOIN lane_newest
+      ON lane_newest.project_id = older.project_id
+      AND lane_newest.projection_component = older.projection_component
+      AND lane_newest.projection_identity = older.projection_identity
+      AND lane_newest.source_partition = older.source_partition
+    WHERE older.status = 'pending'
+      AND older.dirty_range_start IS NULL
+      AND older.dirty_range_end IS NULL
+      AND ${getDirtyWorkHighWaterOrderSql('older')} < lane_newest.newest_high_water_order
+    ORDER BY older.updated_at ASC, older.latest_source_high_water_mark ASC, older.dirty_work_id ASC
+    LIMIT ${params.limit}
+  `)
 
-    if (candidate === undefined) {
-      return coalescedCount
-    }
-
-    const coalescedRows = await database.queryJson<DirtyWorkRow>(`
-      UPDATE app.review_serving_dirty_work
-      SET status = 'completed', lifecycle_reason = 'superseded_by_high_water', updated_at = current_timestamp
-      WHERE ${getDirtyWorkClaimStatePredicate([candidate])}
-        AND status = 'pending'
-      RETURNING
-        CAST(NULL AS BIGINT) AS storageRowId,
-        dirty_work_id AS dirtyWorkId,
-        project_id AS projectId,
-        scope_kind AS scopeKind,
-        scope_id AS scopeId,
-        article_id AS articleId,
-        projection_key AS projectionKey,
-        dirty_kind AS dirtyKind,
-        source_partition AS sourcePartition,
-        first_source_high_water_mark AS firstSourceHighWaterMark,
-        latest_source_high_water_mark AS latestSourceHighWaterMark,
-        lifecycle_reason AS lifecycleReason,
-        latest_delta_id AS latestDeltaId,
-        dirty_range_start AS dirtyRangeStart,
-        dirty_range_end AS dirtyRangeEnd,
-        projection_component AS projectionComponent,
-        projection_identity AS projectionIdentity,
-        status,
-        created_at AS createdAt,
-        updated_at AS updatedAt
-    `)
-
-    await maintainReviewServingDirtyWorkClaimStates(coalescedRows.map(getDirtyWorkRecordFromRow), database)
-
-    if (coalescedRows.length === 0) {
-      return coalescedCount
-    }
-
-    coalescedCount += coalescedRows.length
+  if (candidates.length === 0) {
+    return 0
   }
 
-  return coalescedCount
+  const coalescedRows = await database.queryJson<DirtyWorkRow>(`
+    UPDATE app.review_serving_dirty_work
+    SET status = 'completed', lifecycle_reason = 'superseded_by_high_water', updated_at = current_timestamp
+    WHERE dirty_work_id IN (${candidates
+      .map((candidate) => {
+        return getSqlLiteral(candidate.dirtyWorkId)
+      })
+      .join(', ')})
+      AND status = 'pending'
+    RETURNING
+      CAST(NULL AS BIGINT) AS storageRowId,
+      dirty_work_id AS dirtyWorkId,
+      project_id AS projectId,
+      scope_kind AS scopeKind,
+      scope_id AS scopeId,
+      article_id AS articleId,
+      projection_key AS projectionKey,
+      dirty_kind AS dirtyKind,
+      source_partition AS sourcePartition,
+      first_source_high_water_mark AS firstSourceHighWaterMark,
+      latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
+      latest_delta_id AS latestDeltaId,
+      dirty_range_start AS dirtyRangeStart,
+      dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
+      status,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+  `)
+
+  await maintainReviewServingDirtyWorkClaimStates(coalescedRows.map(getDirtyWorkRecordFromRow), database)
+
+  return coalescedRows.length
 }
 
 export const cleanupReviewServingDirtyWorkRetention = async (
@@ -2110,7 +2147,7 @@ export const cleanupReviewServingDirtyWorkRetention = async (
 ): Promise<CleanupReviewServingDirtyWorkRetentionResult> => {
   const laneCompactionLimit = getNormalizedCleanupLimit(params.laneCompactionLimit, 0)
   const acknowledgementDeleteLimit = getNormalizedCleanupLimit(params.acknowledgementDeleteLimit, 0)
-  const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, 0)
+  const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, defaultCoalesceDirtyWorkLimit)
   const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(params.dirtyWorkDeleteLimit, 0)
   // Lane column repair backfills projection_component/projection_identity from projection_key for
   // legacy rows. It must run by default (the worker calls cleanup with {}), bounded per cycle like
