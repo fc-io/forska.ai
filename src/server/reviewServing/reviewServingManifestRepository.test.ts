@@ -13,7 +13,7 @@ import {
   getCandidateReviewServingSnapshotSupersessionRows,
   getLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
-  getReviewServingProjectsWithMultipleQueuedSnapshots,
+  getReviewServingProjectsWithStaleCandidateSnapshots,
   getReviewServingSnapshotManifest,
   markCandidateReviewServingSnapshotManifestFailed,
   retireObsoleteReviewServingSnapshotManifests,
@@ -1764,12 +1764,12 @@ test('worker stale candidate cleanup scopes to projects with multiple queued sna
       VALUES ('chunk-pending', 'project-1', 'p1-in-flight', 'request-blocked', 'pending');
     `)
 
-    expect(await getReviewServingProjectsWithMultipleQueuedSnapshots({limit: 10}, database)).toEqual([
-      {activeSnapshotCount: 1, projectId: 'project-1', queuedSnapshotCount: 6, reviewConfigHash: 'config-1'},
-      {activeSnapshotCount: 1, projectId: 'project-4', queuedSnapshotCount: 2, reviewConfigHash: 'config-1'},
+    expect(await getReviewServingProjectsWithStaleCandidateSnapshots({limit: 10}, database)).toEqual([
+      {projectId: 'project-1', reviewConfigHash: 'config-1', staleCandidateCount: 2},
+      {projectId: 'project-4', reviewConfigHash: 'config-1', staleCandidateCount: 1},
     ])
-    expect(await getReviewServingProjectsWithMultipleQueuedSnapshots({limit: 1}, database)).toEqual([
-      {activeSnapshotCount: 1, projectId: 'project-1', queuedSnapshotCount: 6, reviewConfigHash: 'config-1'},
+    expect(await getReviewServingProjectsWithStaleCandidateSnapshots({limit: 1}, database)).toEqual([
+      {projectId: 'project-1', reviewConfigHash: 'config-1', staleCandidateCount: 2},
     ])
 
     const boundedBySnapshots = await cleanupStaleCandidateReviewServingSnapshotManifests(
@@ -1825,9 +1825,9 @@ test('worker stale candidate cleanup scopes to projects with multiple queued sna
 
     expect(unbounded).toEqual({
       failedSnapshots: [{projectId: 'project-4', referenceSnapshotId: 'p4-active', snapshotId: 'p4-stale'}],
-      projectIds: ['project-1', 'project-4'],
+      projectIds: ['project-4'],
       remainingStaleCandidateCount: 0,
-      skippedSnapshotCount: 3,
+      skippedSnapshotCount: 0,
     })
     expect(
       (await getStatuses()).filter((row) => {
@@ -1850,6 +1850,198 @@ test('worker stale candidate cleanup scopes to projects with multiple queued sna
         status: 'failed',
       },
     ])
+    expect(await getReviewServingProjectsWithStaleCandidateSnapshots({limit: 10}, database)).toEqual([])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('worker stale candidate cleanup skips groups with nothing to fail and reaches stale groups beyond the project bound', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+  const getSnapshotRowSql = (input: {
+    activatedAt: string | null
+    createdAt: string
+    projectId: string
+    snapshotId: string
+    status: 'active' | 'candidate'
+  }) => {
+    const activatedAtSql = input.activatedAt === null ? 'NULL' : `TIMESTAMPTZ '${input.activatedAt}'`
+
+    return `('${input.projectId}', '${input.snapshotId}', '${input.status}', 'config-1', TIMESTAMPTZ '${input.createdAt}', TIMESTAMPTZ '${input.createdAt}', ${activatedAtSql})`
+  }
+  const getPinnedProjectRowsSql = (index: number) => {
+    const projectId = `pinned-${String(index).padStart(2, '0')}`
+    const isInFlight = index % 2 === 0
+
+    return [
+      getSnapshotRowSql({
+        activatedAt: '2026-01-10T10:00:00Z',
+        createdAt: '2026-01-10T10:00:00Z',
+        projectId,
+        snapshotId: `${projectId}-active`,
+        status: 'active',
+      }),
+      getSnapshotRowSql({
+        activatedAt: null,
+        createdAt: isInFlight ? '2026-01-01T10:00:00Z' : '2026-01-20T10:00:00Z',
+        projectId,
+        snapshotId: `${projectId}-candidate`,
+        status: 'candidate',
+      }),
+    ]
+  }
+  const getStaleProjectRowsSql = (index: number) => {
+    const projectId = `stale-${String(index).padStart(2, '0')}`
+
+    return [
+      getSnapshotRowSql({
+        activatedAt: '2026-03-10T10:00:00Z',
+        createdAt: '2026-03-10T10:00:00Z',
+        projectId,
+        snapshotId: `${projectId}-active`,
+        status: 'active',
+      }),
+      getSnapshotRowSql({
+        activatedAt: null,
+        createdAt: `2026-03-01T10:${String(index).padStart(2, '0')}:00Z`,
+        projectId,
+        snapshotId: `${projectId}-candidate`,
+        status: 'candidate',
+      }),
+    ]
+  }
+  const pinnedIndexes = Array.from({length: 10}, (_, index) => {
+    return index
+  })
+  const staleIndexes = Array.from({length: 12}, (_, index) => {
+    return index
+  })
+  const getFailedProjectIds = async () => {
+    const rows = await database.queryJson<{projectId: string}>(`
+      SELECT project_id AS projectId
+      FROM app.review_serving_snapshot_manifest
+      WHERE snapshot_status = 'failed'
+      ORDER BY project_id
+    `)
+
+    return rows.map((row) => {
+      return row.projectId
+    })
+  }
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.review_serving_snapshot_manifest (
+        project_id VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        snapshot_status VARCHAR NOT NULL DEFAULT 'candidate',
+        review_config_hash VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        activated_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        last_error VARCHAR
+      );
+      CREATE TABLE app.review_rebuild_chunk_manifest (
+        chunk_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR,
+        snapshot_id VARCHAR,
+        request_id VARCHAR,
+        status VARCHAR NOT NULL DEFAULT 'pending'
+      );
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR NOT NULL,
+        status VARCHAR NOT NULL
+      );
+      INSERT INTO app.review_serving_snapshot_manifest (
+        project_id, snapshot_id, snapshot_status, review_config_hash, created_at, updated_at, activated_at
+      )
+      VALUES
+        ${[...pinnedIndexes.flatMap(getPinnedProjectRowsSql), ...staleIndexes.flatMap(getStaleProjectRowsSql)].join(',\n        ')};
+      INSERT INTO app.review_rebuild_chunk_manifest (chunk_id, project_id, snapshot_id, request_id, status)
+      VALUES
+        ${pinnedIndexes
+          .filter((index) => {
+            return index % 2 === 0
+          })
+          .map((index) => {
+            const projectId = `pinned-${String(index).padStart(2, '0')}`
+
+            return `('${projectId}-chunk', '${projectId}', '${projectId}-candidate', NULL, 'pending')`
+          })
+          .join(',\n        ')};
+    `)
+
+    const selected = await getReviewServingProjectsWithStaleCandidateSnapshots({limit: 10}, database)
+
+    expect(
+      selected.map((row) => {
+        return row.projectId
+      }),
+    ).toEqual(
+      staleIndexes.slice(0, 10).map((index) => {
+        return `stale-${String(index).padStart(2, '0')}`
+      }),
+    )
+
+    const firstCleanup = await cleanupStaleCandidateReviewServingSnapshotManifests(
+      {source: 'worker staleCandidateCleanup'},
+      database,
+    )
+
+    expect(firstCleanup.projectIds).toHaveLength(10)
+    expect(firstCleanup.failedSnapshots).toHaveLength(10)
+    expect(firstCleanup.skippedSnapshotCount).toBe(0)
+
+    const secondCleanup = await cleanupStaleCandidateReviewServingSnapshotManifests(
+      {source: 'worker staleCandidateCleanup'},
+      database,
+    )
+
+    expect(secondCleanup).toEqual({
+      failedSnapshots: [
+        {projectId: 'stale-10', referenceSnapshotId: 'stale-10-active', snapshotId: 'stale-10-candidate'},
+        {projectId: 'stale-11', referenceSnapshotId: 'stale-11-active', snapshotId: 'stale-11-candidate'},
+      ],
+      projectIds: ['stale-10', 'stale-11'],
+      remainingStaleCandidateCount: 0,
+      skippedSnapshotCount: 0,
+    })
+    expect(await getFailedProjectIds()).toEqual(
+      staleIndexes.map((index) => {
+        return `stale-${String(index).padStart(2, '0')}`
+      }),
+    )
+
+    const thirdCleanup = await cleanupStaleCandidateReviewServingSnapshotManifests(
+      {source: 'worker staleCandidateCleanup'},
+      database,
+    )
+
+    expect(thirdCleanup).toEqual({
+      failedSnapshots: [],
+      projectIds: [],
+      remainingStaleCandidateCount: 0,
+      skippedSnapshotCount: 0,
+    })
+    expect(await getReviewServingProjectsWithStaleCandidateSnapshots({limit: 10}, database)).toEqual([])
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()

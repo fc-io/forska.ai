@@ -2930,6 +2930,87 @@ test('V4 non-fresh rebuild over the prompt-count budget stays blocked after the 
   expect(countChunkInserts(statements, 'summary')).toBe(64)
 })
 
+const getPromptlessNonFreshStats = (scopedArticleCount: number) => {
+  return {
+    ...baseStats,
+    enabledPromptCount: 0,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount,
+    summaryHumanJudgmentCount: 0,
+  }
+}
+
+test('V4 non-fresh rebuild that needs exactly the admission split cap is admitted as 64 article-range chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase(getPromptlessNonFreshStats(4_000_000))
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary', 'payload'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: true,
+        chunkCount: 64,
+        chunkEstimate: {estimatedInputRows: 250_000, estimatedSnapshotCount: 0},
+        maxChunkCount: 64,
+        mode: 'defaultArticleRange',
+        nonSplittableComponents: [],
+        overBudgetReason: 'input rows: estimated 16000000 > max 250000',
+        requestedChunkCount: 64,
+      },
+      childAdmissionEstimate: {estimatedInputRows: 16_000_000},
+    },
+  })
+  expect(joined).toContain('NTILE(64)')
+  expect(countChunkInserts(statements, 'payload')).toBe(64)
+  expect(countChunkInserts(statements, 'summary')).toBe(64)
+})
+
+test('V4 non-fresh rebuild that needs one chunk more than the admission split cap stays blocked with the cap reason', async () => {
+  const {database, statements} = createFakeRequestDatabase(getPromptlessNonFreshStats(4_000_001))
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary', 'payload'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe(
+    'input rows: estimated 250001 > max 250000; needs 65 article-range chunks, max 64',
+  )
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      admissionSplit: {
+        applied: true,
+        chunkCount: 64,
+        chunkEstimate: {estimatedInputRows: 250_001, estimatedSnapshotCount: 0},
+        maxChunkCount: 64,
+        mode: 'defaultArticleRange',
+        nonSplittableComponents: [],
+        overBudgetReason: 'input rows: estimated 16000004 > max 250000',
+        requestedChunkCount: 65,
+      },
+      childAdmissionEstimate: {estimatedInputRows: 16_000_004},
+    },
+  })
+  expect(joined).toContain('NTILE(64)')
+  expect(joined).not.toContain('NTILE(65)')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(countChunkInserts(statements, 'payload')).toBe(64)
+})
+
 test('V4 non-fresh rebuild within budget on every scalable dimension records no admission split', async () => {
   const {database, statements} = createFakeRequestDatabase({
     ...baseStats,

@@ -206,6 +206,14 @@ export const getReviewServingDirtyWorkActiveProjectPredicate = (projectIdSql: st
     )`
 }
 
+const getRebuildRequestCoversComponentPredicate = (requestAlias: string, projectionComponentSql: string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM json_each(${requestAlias}.requested_components_json) requested_component
+            WHERE json_extract_string(requested_component.value, '$') = ${projectionComponentSql}
+          )`
+}
+
 const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams, claimNowSql: string) => {
   const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
 
@@ -1367,6 +1375,7 @@ export const requeueReviewServingDirtyWorkBlockedByRebuild = async (
             request.status IN ('pending_admission', 'admitted', 'running')
             OR (request.status = 'blocked_over_budget' AND request.updated_at > ${retryCutoffSql})
           )
+          AND ${getRebuildRequestCoversComponentPredicate('request', 'blocked_state.projection_component')}
       )
     ORDER BY blocked_state.updated_at ASC, blocked_state.dirty_work_id ASC
     LIMIT ${limit}

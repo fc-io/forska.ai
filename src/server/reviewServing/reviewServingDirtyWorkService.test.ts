@@ -157,6 +157,7 @@ const createDuckdbDirtyWorkDatabase = async () => {
     CREATE TABLE app.review_rebuild_request (
       request_id VARCHAR PRIMARY KEY,
       project_id VARCHAR,
+      requested_components_json JSON NOT NULL DEFAULT '[]',
       status VARCHAR NOT NULL,
       admission_state VARCHAR NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
@@ -1806,13 +1807,20 @@ test('blocked rebuild claims wait for rebuild coverage instead of being reclaime
 
 const insertDuckdbProjectDirtyWork = async (
   database: ReviewServingDirtyWorkDatabase,
-  input: {dirtyWorkId: string; projectId: string; status?: string; updatedAt?: string},
+  input: {
+    dirtyWorkId: string
+    projectId: string
+    projectionComponent?: ReviewServingDirtyWorkRecord['projectionComponent']
+    status?: string
+    updatedAt?: string
+  },
 ) => {
   const status = input.status ?? 'pending'
+  const projectionComponent = input.projectionComponent ?? 'display'
   const updatedAtSql =
     input.updatedAt === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(input.updatedAt)}`
-  const projectionIdentity = `display:${input.projectId}`
-  const projectionKey = JSON.stringify({projectionComponent: 'display', projectionIdentity})
+  const projectionIdentity = `${projectionComponent}:${input.projectId}`
+  const projectionKey = JSON.stringify({projectionComponent, projectionIdentity})
 
   await database.run(`
     INSERT INTO app.review_serving_dirty_work (
@@ -1841,7 +1849,7 @@ const insertDuckdbProjectDirtyWork = async (
       ${getSqlLiteral(input.projectId)},
       NULL,
       ${getSqlLiteral(projectionKey)},
-      'display',
+      ${getSqlLiteral(projectionComponent)},
       ${getSqlLiteral(projectionIdentity)},
       'project.reviewConfig.updated',
       'projectReviewConfig',
@@ -1872,7 +1880,7 @@ const insertDuckdbProjectDirtyWork = async (
       ${getSqlLiteral(input.dirtyWorkId)},
       NULL,
       ${getSqlLiteral(input.projectId)},
-      'display',
+      ${getSqlLiteral(projectionComponent)},
       ${getSqlLiteral(projectionIdentity)},
       'projectReviewConfig',
       ${getSqlLiteral(status)},
@@ -2020,12 +2028,14 @@ test('blocked-by-rebuild requeue returns parked rows to pending after the retry 
       updatedAt: secondsAgo(7_200),
     })
     await database.run(`
-      INSERT INTO app.review_rebuild_request (request_id, project_id, status, admission_state, updated_at)
+      INSERT INTO app.review_rebuild_request (
+        request_id, project_id, requested_components_json, status, admission_state, updated_at
+      )
       VALUES
-        ('request-admitted', 'project-admitted', 'admitted', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(7_200))}),
-        ('request-blocked-recent', 'project-request-recent', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_599))}),
-        ('request-blocked-stale', 'project-request-stale', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_600))}),
-        ('request-completed', 'project-completed', 'completed', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(60))})
+        ('request-admitted', 'project-admitted', '["display"]', 'admitted', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(7_200))}),
+        ('request-blocked-recent', 'project-request-recent', '["display"]', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_599))}),
+        ('request-blocked-stale', 'project-request-stale', '["display"]', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_600))}),
+        ('request-completed', 'project-completed', '["display"]', 'completed', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(60))})
     `)
 
     expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 0, now}, database)).toEqual({requeuedCount: 0})
@@ -2052,6 +2062,98 @@ test('blocked-by-rebuild requeue returns parked rows to pending after the retry 
       {dirtyWorkId: 'blocked-request-recent', status: 'blocked_by_rebuild'},
       {dirtyWorkId: 'blocked-request-stale', status: 'pending'},
       {dirtyWorkId: 'pending-old', status: 'pending'},
+    ])
+    expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 10, now}, database)).toEqual({requeuedCount: 0})
+  } finally {
+    close()
+  }
+})
+
+test('blocked-by-rebuild requeue only holds parked rows for rebuild requests that cover the parked component', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const now = new Date('2026-06-16T12:00:00.000Z')
+  const secondsAgo = (seconds: number) => {
+    return new Date(now.getTime() - seconds * 1000).toISOString()
+  }
+
+  try {
+    await database.run(`
+      INSERT INTO app.project (id)
+      VALUES ('project-running-search'), ('project-blocked-selected-import'), ('project-blocked-boundary')
+    `)
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'parked-selected-import-next-to-running-search',
+      projectId: 'project-running-search',
+      projectionComponent: 'selectedImport',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'parked-search-next-to-running-search',
+      projectId: 'project-running-search',
+      projectionComponent: 'search',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'parked-display-next-to-running-multi',
+      projectId: 'project-running-search',
+      projectionComponent: 'display',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'parked-selected-import-next-to-recent-blocked',
+      projectId: 'project-blocked-selected-import',
+      projectionComponent: 'selectedImport',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'parked-search-next-to-recent-blocked',
+      projectId: 'project-blocked-selected-import',
+      projectionComponent: 'search',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'parked-search-next-to-boundary-blocked',
+      projectId: 'project-blocked-boundary',
+      projectionComponent: 'search',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await database.run(`
+      INSERT INTO app.review_rebuild_request (
+        request_id, project_id, requested_components_json, status, admission_state, updated_at
+      )
+      VALUES
+        ('request-running-search', 'project-running-search', '["search"]', 'running', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(172_800))}),
+        ('request-running-multi', 'project-running-search', '["display", "queue"]', 'admitted', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(172_800))}),
+        ('request-blocked-selected-import', 'project-blocked-selected-import', '["selectedImport"]', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_599))}),
+        ('request-blocked-boundary', 'project-blocked-boundary', '["search"]', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_600))})
+    `)
+
+    expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 10, now}, database)).toEqual({requeuedCount: 3})
+    expect(await getDuckdbDirtyWorkStatuses(database)).toEqual([
+      {dirtyWorkId: 'parked-display-next-to-running-multi', lifecycleReason: null, status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'parked-search-next-to-boundary-blocked', lifecycleReason: 'released', status: 'pending'},
+      {dirtyWorkId: 'parked-search-next-to-recent-blocked', lifecycleReason: 'released', status: 'pending'},
+      {dirtyWorkId: 'parked-search-next-to-running-search', lifecycleReason: null, status: 'blocked_by_rebuild'},
+      {
+        dirtyWorkId: 'parked-selected-import-next-to-recent-blocked',
+        lifecycleReason: null,
+        status: 'blocked_by_rebuild',
+      },
+      {dirtyWorkId: 'parked-selected-import-next-to-running-search', lifecycleReason: 'released', status: 'pending'},
+    ])
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([
+      {dirtyWorkId: 'parked-display-next-to-running-multi', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'parked-search-next-to-boundary-blocked', status: 'pending'},
+      {dirtyWorkId: 'parked-search-next-to-recent-blocked', status: 'pending'},
+      {dirtyWorkId: 'parked-search-next-to-running-search', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'parked-selected-import-next-to-recent-blocked', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'parked-selected-import-next-to-running-search', status: 'pending'},
     ])
     expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 10, now}, database)).toEqual({requeuedCount: 0})
   } finally {
