@@ -1,5 +1,13 @@
 # OOM Errors
 
+## 2026-09-20 - Review-Serving Over-Budget Rebuild Splitting
+
+- Error: `input rows: estimated 1333664 > max 250000` kept an 18,784-article project with no review-serving snapshot `blocked_over_budget` indefinitely, and non-fresh multi-component requests over the same per-chunk budget were refused instead of split.
+- Context: `requestReviewServingV4RebuildEffect` admission for dirty-work bootstraps (reason `<component>DirtyWork`) and non-fresh rebuild requests; `createReviewServingRebuildRequest` default chunk expansion.
+- Cause: Bootstrap presplitting only ran for `missingReviewServingSnapshot` and requested-component bootstraps, and the repository default expansion only presplit single-component or native-heavy components, so every other over-budget request was created as one full-range chunk per component and blocked.
+- Fix: Fresh bootstraps presplit whenever the single-chunk estimate exceeds a scalable budget dimension, regardless of reason. Non-fresh requests pass a request-level `articleRangeChunkCount` (ceil of the largest scalable ratio) that the repository applies to every component state as a minimum chunk count; per-chunk estimates remain `estimate / chunkCount` against the unchanged `defaultRequestBudget`, so no chunk is admitted over the per-chunk limits and the worker's admitted-oversized runtime split still applies below them. Components the repository cannot range-chunk (`display`, `judgmentInputContent`, `projectScope`) still block with `; cannot split ... into article-range chunks`; prompt-count and snapshot-count overages still block. Re-admitting a default-chunk request now deletes obsolete non-running chunks so stale blocked chunk rows cannot stall finalization. The split is recorded as `diagnostics.admissionSplit`.
+- Verification: `bun test src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts src/server/reviewServing/reviewServingProjectorService.test.ts` (exact 250,000 / 250,001 boundaries, the 18,784-article case split into six 222,301-row chunks, non-fresh active+candidate split, prompt-count and non-splittable blocks, obsolete-chunk deletion, parked claims draining once admissible); focused ESLint.
+
 ## 2026-09-16 - Data Source Reconciliation Finalization
 
 - Error: Large continuous-tracking reconciliation windows could accumulate every spooled source-record key in memory and emit one oversized finalization predicate, risking owner OOM during stale-source deletion.

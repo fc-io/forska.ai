@@ -10,6 +10,8 @@ import {
   createReviewServingRebuildRequest,
   getActiveReviewServingRebuildRequestForProject,
   getBlockedOverBudgetReviewServingRebuildRequestForProject,
+  getNonSplittableDefaultRebuildComponents,
+  getReviewServingRebuildChunkEstimate,
   releaseFailedRequestlessReviewServingRebuildChunks,
   type ReviewServingRebuildRequestStatus,
   terminalizeStaleZeroChunkReviewServingRebuildRequest,
@@ -2351,4 +2353,169 @@ test('default rebuild request rejects partial chunk expansion', async () => {
   expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_request')
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+})
+
+const countChunkInserts = (statements: readonly string[], component: string) => {
+  return statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes(`'${component}'`)
+  }).length
+}
+
+const fourArticleRangeRows = [
+  {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+  {chunkEndKey: 'article-128', chunkStartKey: 'article-064 ', scopedArticleCount: 64},
+  {chunkEndKey: 'article-192', chunkStartKey: 'article-128 ', scopedArticleCount: 64},
+  {chunkEndKey: 'article-256', chunkStartKey: 'article-192 ', scopedArticleCount: 64},
+]
+
+test('rebuild chunk estimate passes a single chunk through and ceils scalable dimensions per chunk', () => {
+  const estimate = {
+    estimatedInputRows: 250_001,
+    estimatedOutputBytes: 250_001 * 512,
+    estimatedOutputRows: 250_001,
+    estimatedPayloadBytes: 1,
+    estimatedPromptCount: 7,
+    estimatedSnapshotCount: 0,
+    estimatedTempBytes: 0,
+  }
+
+  expect(getReviewServingRebuildChunkEstimate({chunkCount: 1, estimate})).toEqual(estimate)
+  expect(getReviewServingRebuildChunkEstimate({chunkCount: 2, estimate})).toEqual({
+    estimatedInputRows: 125_001,
+    estimatedOutputBytes: 64_000_256,
+    estimatedOutputRows: 125_001,
+    estimatedPayloadBytes: 1,
+    estimatedPromptCount: 7,
+    estimatedSnapshotCount: 0,
+    estimatedTempBytes: 0,
+  })
+})
+
+test('non-splittable default rebuild components are display, judgment input content, and project scope', () => {
+  expect(
+    getNonSplittableDefaultRebuildComponents([
+      'display',
+      'humanStatus',
+      'judgmentInputContent',
+      'llmStatus',
+      'payload',
+      'posting',
+      'projectScope',
+      'queue',
+      'search',
+      'selectedImport',
+      'summary',
+    ]),
+  ).toEqual(['display', 'judgmentInputContent', 'projectScope'])
+})
+
+test('default rebuild request chunks honour a request-level article-range chunk count for every splittable state', async () => {
+  const {database, statements} = createFakeRequestDatabase({articleRangeRows: fourArticleRangeRows})
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      articleRangeChunkCount: 4,
+      budget: {maxInputRows: 250_000, maxOutputBytes: 128 * 1024 * 1024},
+      estimate: {estimatedInputRows: 800_000, estimatedOutputBytes: 800_000 * 512},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['summary', 'payload'],
+      requestId: 'rebuild:article-range-split',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+  const payloadChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'payload'")
+  })
+
+  expect(request).toMatchObject({admissionState: 'admitted', overBudgetReason: null, status: 'admitted'})
+  expect(joined).toContain('NTILE(4)')
+  expect(joined).toContain('NTILE(64)')
+  expect(payloadChunkInserts).toHaveLength(8)
+  expect(countChunkInserts(statements, 'summary')).toBe(8)
+  expect(payloadChunkInserts[0]).toContain("'payload:identity-1'")
+  expect(payloadChunkInserts[4]).toContain("'payload:active-identity-1'")
+  expect(payloadChunkInserts[0]).toContain("'article-001'")
+  expect(payloadChunkInserts[1]).toContain("'article-064 '")
+  expect(payloadChunkInserts[0]).toContain('"articleRangeChunkCount":4')
+  expect(payloadChunkInserts[0]).toContain('"admissionPresplit":true')
+  expect(payloadChunkInserts[0]).toContain('200000')
+  expect(payloadChunkInserts[0]).toContain("'pending'")
+})
+
+test('default rebuild request refuses a request-level article-range split when a component cannot be range-chunked', async () => {
+  const {database, statements} = createFakeRequestDatabase({articleRangeRows: fourArticleRangeRows})
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      articleRangeChunkCount: 2,
+      budget: {maxInputRows: 250_000},
+      estimate: {estimatedInputRows: 400_000},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['display', 'payload'],
+      requestId: 'rebuild:article-range-split-refused',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(request).toMatchObject({
+    admissionState: 'blocked_over_budget',
+    overBudgetReason: 'input rows: estimated 400000 > max 250000; cannot split display into article-range chunks',
+    status: 'blocked_over_budget',
+  })
+  expect(joined).not.toContain('NTILE(')
+  expect(countChunkInserts(statements, 'display')).toBe(1)
+  expect(countChunkInserts(statements, 'payload')).toBe(2)
+  expect(joined).not.toContain('"articleRangeChunkCount"')
+})
+
+test('default rebuild request ignores an article-range chunk count of one and keeps the plain over-budget reason', async () => {
+  const {database, statements} = createFakeRequestDatabase({articleRangeRows: fourArticleRangeRows})
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      articleRangeChunkCount: 1,
+      budget: {maxInputRows: 250_000},
+      estimate: {estimatedInputRows: 400_000},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['display'],
+      requestId: 'rebuild:article-range-split-single',
+    },
+    database,
+  )
+
+  expect(request).toMatchObject({
+    overBudgetReason: 'input rows: estimated 400000 > max 250000',
+    status: 'blocked_over_budget',
+  })
+  expect(statements.join('\n')).not.toContain('NTILE(')
+})
+
+test('default rebuild request re-admission deletes obsolete non-running chunks from an earlier plan', async () => {
+  const {database, statements} = createFakeRequestDatabase({articleRangeRows: fourArticleRangeRows})
+
+  await createReviewServingRebuildRequest(
+    {
+      articleRangeChunkCount: 4,
+      budget: {maxInputRows: 250_000},
+      estimate: {estimatedInputRows: 800_000},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['payload'],
+      requestId: 'rebuild:article-range-readmission',
+    },
+    database,
+  )
+  const deleteStatements = statements.filter((statement) => {
+    return statement.includes('DELETE FROM app.review_rebuild_chunk_manifest')
+  })
+
+  expect(deleteStatements).toHaveLength(1)
+  expect(deleteStatements[0]).toContain("WHERE request_id = 'rebuild:article-range-readmission'")
+  expect(deleteStatements[0]).toContain('AND chunk_id NOT IN (')
+  expect(deleteStatements[0]).toContain("AND status <> 'running'")
 })

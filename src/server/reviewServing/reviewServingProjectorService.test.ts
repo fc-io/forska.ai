@@ -1082,6 +1082,67 @@ test('wake parks chunked dirty work blocked over budget and keeps serving later 
   expect(releasedClaimIds).toEqual([])
 })
 
+test('wake completes formerly parked chunked dirty work once its rebuild request becomes admissible', async () => {
+  const claim = getClaim({
+    articleId: null,
+    component: 'selectedImport',
+    dirtyWorkId: 'selected-import-project-1',
+    scopeId: 'project-1',
+    scopeKind: 'project',
+  })
+  const pending: Partial<Record<ReviewServingProjectionComponent, ReviewServingDirtyWorkClaim[]>> = {
+    selectedImport: [claim],
+  }
+  const {blockedClaimIds, completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} =
+    createDependencyHarness(pending)
+  const wakeInput = {batchSize: 1, componentOrder: ['selectedImport' as const], maxRowsPerWake: 1, maxWakeMs: 1_000}
+
+  dependencies.requestRebuild = () => {
+    return Effect.succeed({
+      overBudgetReason: 'input rows: estimated 1333664 > max 250000',
+      projectId: 'project-1',
+      status: 'blocked_over_budget',
+    } as never)
+  }
+  dependencies.runners = {
+    selectedImport: async () => {
+      throw new Error('runner should not execute')
+    },
+  }
+
+  const blockedWake = await wakeReviewServingProjectorService({...wakeInput, wakeId: 'wake-1'}, dependencies)
+
+  expect(blockedWake.status).toBe('partial')
+  expect(blockedWake.blockedRebuilds).toEqual([
+    {
+      claimIds: ['selected-import-project-1'],
+      component: 'selectedImport',
+      diagnostic: 'input rows: estimated 1333664 > max 250000',
+      status: 'blocked_by_rebuild',
+    },
+  ])
+  expect(blockedClaimIds).toEqual(['selected-import-project-1'])
+  expect(completedClaimIds).toEqual([])
+
+  pending.selectedImport = [claim]
+  dependencies.requestRebuild = () => {
+    return Effect.succeed(getAdmittedRebuildRequest({sourceWatermark: claim.latestSourceHighWaterMark}))
+  }
+
+  const admittedWake = await wakeReviewServingProjectorService({...wakeInput, wakeId: 'wake-2'}, dependencies)
+
+  expect(admittedWake.status).toBe('completed')
+  expect(admittedWake.blockedRebuilds).toEqual([])
+  expect(admittedWake.failures).toEqual([])
+  expect(admittedWake.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'selectedImport', processedCount: 0, status: 'completed'},
+  ])
+  expect(completedClaimIds).toEqual(['selected-import-project-1'])
+  expect(blockedClaimIds).toEqual(['selected-import-project-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
 test('wake counts parked chunked dirty work against the row budget', async () => {
   const {claimedComponents, dependencies} = createDependencyHarness({
     display: [getClaim({component: 'display', dirtyWorkId: 'display-1'})],
