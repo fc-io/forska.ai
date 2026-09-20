@@ -386,7 +386,7 @@ type ReviewServingProjectorWorkerCycleResult = {
   admission: Pick<
     ReviewServingProjectorWorkerAdmissionDecision,
     'appendQueueDepth' | 'foregroundQueueDepth' | 'starvationAdmitted'
-  >
+  > & {ranBeforeChunks: boolean}
   chunk: ReviewServingProjectorWorkerChunkResult
   chunkBatchCount: number
   cleanup: ReviewServingProjectorWorkerCleanupResult
@@ -6856,11 +6856,13 @@ const getReviewServingProjectorWorkerCycleAdmission = async (
 
 const getReviewServingProjectorWorkerAdmissionSnapshot = (
   admission: ReviewServingProjectorWorkerAdmissionDecision,
+  ranBeforeChunks = false,
 ): ReviewServingProjectorWorkerCycleResult['admission'] => {
   return {
     appendQueueDepth: admission.appendQueueDepth,
     foregroundQueueDepth: admission.foregroundQueueDepth,
-    starvationAdmitted: admission.starvationAdmitted,
+    ranBeforeChunks,
+    starvationAdmitted: admission.starvationAdmitted || ranBeforeChunks,
   }
 }
 
@@ -7217,6 +7219,7 @@ export const getReviewServingProjectorWorkerCycleLogAttrs = (result: ReviewServi
     foregroundQueueDepth: result.admission.foregroundQueueDepth,
     rebuildChunkBatchCount: result.chunkBatchCount,
     projectorBlockedReason: result.projector.blockedReason ?? null,
+    projectorRanBeforeChunks: result.admission.ranBeforeChunks,
     projectorStarvationAdmitted: result.admission.starvationAdmitted,
     projectorStatus: result.projector.status,
     status: result.status,
@@ -9786,6 +9789,19 @@ export const runReviewServingProjectorWorkerCycle = async (
           })
         })
       : null
+  const starvedCycle = terminalFailedChunk === null && isReviewServingProjectorWakeStarved(dependencies, options)
+  const preemptedWakeStartedAtMs = getWorkerNowMs(dependencies, options)
+  const preemptedProjector = starvedCycle
+    ? await runReviewServingProjectorWorkerCyclePhase('wakeProjectorsBeforeChunks', () => {
+        return dependencies.wakeProjectors(
+          {
+            ...getWakeInput({dependencies, options, wakeId}),
+            maxWakeMs: getPositiveInteger(options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs),
+          },
+          projectorServiceDependencies,
+        )
+      })
+    : null
 
   const chunkBatch =
     terminalFailedChunk === null
@@ -9815,7 +9831,8 @@ export const runReviewServingProjectorWorkerCycle = async (
   })
   const shouldRunOnlyRebuildChunk =
     terminalFailedChunk !== null || chunk.status === 'failed' || shouldYieldToForegroundDuckdbWork
-  const shouldSkipBackgroundMaintenance = shouldRunOnlyRebuildChunk || shouldDrainNextForegroundActivationChunk
+  const shouldSkipBackgroundMaintenance =
+    shouldRunOnlyRebuildChunk || (!starvedCycle && shouldDrainNextForegroundActivationChunk)
   const deltaIntake = shouldSkipBackgroundMaintenance
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     : await runReviewServingProjectorWorkerCyclePhase('deltaIntake', () => {
@@ -9832,27 +9849,31 @@ export const runReviewServingProjectorWorkerCycle = async (
     : await runReviewServingProjectorWorkerCyclePhase('retentionCleanup', () => {
         return runReviewServingProjectorWorkerCleanup({database, dependencies, options})
       })
-  const backlogProjector = shouldRunOnlyRebuildChunk
-    ? getBlockedReviewServingProjectorWakeResult(foregroundAdmission.blockedReason)
-    : await runReviewServingProjectorWorkerCyclePhase('wakeProjectors', () => {
-        return dependencies.wakeProjectors(
-          {
-            ...getWakeInput({dependencies, options, wakeId}),
-            componentOrder: shouldDrainNextForegroundActivationChunk
-              ? foregroundActivationDirtyWorkComponents
-              : undefined,
-            maxWakeMs: Math.max(0, admissionDeadlineMs - getWorkerNowMs(dependencies, options)),
-          },
-          projectorServiceDependencies,
-        )
-      })
+  const backlogProjector =
+    preemptedProjector
+    ?? (shouldRunOnlyRebuildChunk
+      ? getBlockedReviewServingProjectorWakeResult(foregroundAdmission.blockedReason)
+      : await runReviewServingProjectorWorkerCyclePhase('wakeProjectors', () => {
+          return dependencies.wakeProjectors(
+            {
+              ...getWakeInput({dependencies, options, wakeId}),
+              componentOrder: shouldDrainNextForegroundActivationChunk
+                ? foregroundActivationDirtyWorkComponents
+                : undefined,
+              maxWakeMs: Math.max(0, admissionDeadlineMs - getWorkerNowMs(dependencies, options)),
+            },
+            projectorServiceDependencies,
+          )
+        }))
   const projector = combineReviewServingProjectorWakeResults(jobDrivenLlmStatusProjector, backlogProjector)
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
-  const nextAdmittedWakeAtMs = shouldRunOnlyRebuildChunk ? (options.lastAdmittedWakeAtMs ?? null) : nowMs
+  const wakeAdmittedAtMs = preemptedProjector === null ? nowMs : preemptedWakeStartedAtMs
+  const nextAdmittedWakeAtMs =
+    backlogProjector.status === 'blocked' ? (options.lastAdmittedWakeAtMs ?? null) : wakeAdmittedAtMs
 
   return {
-    admission: getReviewServingProjectorWorkerAdmissionSnapshot(foregroundAdmission),
+    admission: getReviewServingProjectorWorkerAdmissionSnapshot(foregroundAdmission, preemptedProjector !== null),
     chunk,
     chunkBatchCount: finalizedChunkBatch.completedCount,
     cleanup,
