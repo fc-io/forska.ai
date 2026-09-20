@@ -102,7 +102,7 @@ type ReviewServingClaimManifestEnsurer = (
 
 const countReadyRepairComponents = new Set<ReviewServingProjectionComponent>(countReadyReviewServingComponents)
 export const activationReviewServingRebuildPriority = 10_000
-export const searchReviewServingRebuildPriority = 100
+export const searchReviewServingRebuildPriority = 75
 export const enrichmentReviewServingRebuildPriority = 50
 // Only components with bounded article-range rebuild admission belong here; non-presplittable components stay direct.
 const highFanoutDirtyWorkRebuildComponents = new Set<ReviewServingProjectionComponent>([
